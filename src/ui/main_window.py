@@ -198,9 +198,56 @@ class MainWindow(QMainWindow):
         section_start_time = time.perf_counter()
         self._set_view_mode_list()
         logging.info(f"MainWindow.__init__ - _set_view_mode_list done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
+        
+        self._update_image_info_label() # Set initial info label text
+        logging.info(f"MainWindow.__init__ - _update_image_info_label done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
 
         logging.info(f"MainWindow.__init__ - End (Total: {time.perf_counter() - init_start_time:.4f}s)")
 
+    # Helper method to update the image information status label
+    def _update_image_info_label(self, status_message_override: Optional[str] = None):
+        if not hasattr(self, 'image_info_label'): # Widget might not be created yet
+            return
+
+        if status_message_override:
+            self.image_info_label.setText(status_message_override)
+            return
+
+        num_images = 0
+        total_size_mb = 0.0
+        folder_name_display = "N/A"
+        # Default text if no folder is loaded yet
+        status_text = "No folder loaded. Open a folder to begin."
+
+        if self.app_state.current_folder_path:
+            folder_name_display = os.path.basename(self.app_state.current_folder_path)
+            if not folder_name_display: # Handles "C:/"
+                folder_name_display = self.app_state.current_folder_path
+
+            # Determine if scan is considered "active" based on UI elements
+            # open_folder_action is disabled during the scan process.
+            scan_logically_active = not self.open_folder_action.isEnabled()
+
+            if scan_logically_active:
+                # Scan is in progress
+                num_images_found_so_far = len(self.app_state.image_files_data) # Current count during scan
+                status_text = f"Folder: {folder_name_display}  |  Scanning... ({num_images_found_so_far} files found)"
+            elif self.app_state.image_files_data: # Scan is finished and there's data
+                num_images = len(self.app_state.image_files_data)
+                current_files_size_bytes = 0
+                for file_data in self.app_state.image_files_data:
+                    try:
+                        if 'path' in file_data and os.path.exists(file_data['path']):
+                             current_files_size_bytes += os.path.getsize(file_data['path'])
+                    except OSError as e:
+                        # Log lightly, this can be noisy if many files are temporarily unavailable
+                        logging.debug(f"Could not get size for {file_data.get('path')} for info label: {e}")
+                total_size_mb = current_files_size_bytes / (1024 * 1024)
+                status_text = f"Folder: {folder_name_display}  |  Images: {num_images} ({total_size_mb:.2f} MB)"
+            else: # Folder path set, scan finished (or not started if folder just selected), no image data
+                status_text = f"Folder: {folder_name_display}  |  Images: 0 (0.00 MB)"
+        
+        self.image_info_label.setText(status_text)
 
     def _create_loading_overlay(self):
         start_time = time.perf_counter()
@@ -711,11 +758,12 @@ class MainWindow(QMainWindow):
         self.search_input.setPlaceholderText("Filename...")
         self.search_input.setFixedWidth(180) 
         search_layout.addWidget(self.search_input)
-        bottom_layout.addWidget(self.search_widget) 
+        bottom_layout.addWidget(self.search_widget)
 
-        self.thumbnail_status_label = QLabel("Thumbnails: Enabled") 
-        self.thumbnail_status_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        bottom_layout.addWidget(self.thumbnail_status_label, 0, Qt.AlignmentFlag.AlignRight)
+        self.image_info_label = QLabel() # Initial text set by _update_image_info_label in __init__
+        self.image_info_label.setObjectName("imageInfoLabel")
+        self.image_info_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        bottom_layout.addWidget(self.image_info_label, 0, Qt.AlignmentFlag.AlignRight)
 
         self.statusBar().showMessage("Ready")
         logging.debug(f"MainWindow._create_widgets - End: {time.perf_counter() - start_time:.4f}s")
@@ -902,6 +950,8 @@ class MainWindow(QMainWindow):
         section_start_time = time.perf_counter()
         self.app_state.clear_all_file_specific_data()
         self.app_state.current_folder_path = folder_path
+        folder_display_name = os.path.basename(folder_path) if folder_path else "Selected Folder"
+        self._update_image_info_label(status_message_override=f"Folder: {folder_display_name} | Preparing scan...")
         logging.info(f"MainWindow._load_folder - clear_all_file_specific_data & set path done: {time.perf_counter() - section_start_time:.4f}s")
         
         section_start_time = time.perf_counter()
@@ -942,6 +992,7 @@ class MainWindow(QMainWindow):
     def _handle_files_found(self, batch_of_file_data: List[Dict[str, any]]):
         self.app_state.image_files_data.extend(batch_of_file_data)
         self.update_loading_text(f"Scanning... {len(self.app_state.image_files_data)} images found")
+        self._update_image_info_label() # Update bottom bar info
 
 
     # Slot for WorkerManager's file_scan_finished signal
@@ -956,7 +1007,7 @@ class MainWindow(QMainWindow):
         
         # Start background loading of ratings and then previews
         if self.app_state.image_files_data:
-            self.update_loading_text("Loading ratings in background...")
+            self.update_loading_text("Loading Exiftool data...")
             self.worker_manager.start_rating_load(
                 self.app_state.image_files_data.copy(), # Pass a copy of the list
                 self.app_state.rating_disk_cache,
@@ -965,12 +1016,21 @@ class MainWindow(QMainWindow):
             # Preview preloading will be chained after rating loading finishes
         else:
             self.hide_loading_overlay() # No data to load further
+        
+        self._update_image_info_label() # Update with final counts
         # WorkerManager handles file_scanner thread cleanup
  
     # Slot for WorkerManager's file_scan_error signal
     def _handle_scan_error(self, message):
         self.statusBar().showMessage(f"Scan Error: {message}")
         self.open_folder_action.setEnabled(True) # Re-enable in case of error
+        
+        error_folder_display = "N/A"
+        if self.app_state.current_folder_path:
+            error_folder_display = os.path.basename(self.app_state.current_folder_path)
+            if not error_folder_display: error_folder_display = self.app_state.current_folder_path
+        self._update_image_info_label(status_message_override=f"Folder: {error_folder_display} | Scan error.")
+        
         self.hide_loading_overlay()
         # WorkerManager handles thread cleanup
  
@@ -1388,6 +1448,7 @@ class MainWindow(QMainWindow):
                 self.image_view.clear(); self.image_view.setText("No images")
                 self._update_rating_display(0); self._update_label_display(None)
                 self.statusBar().showMessage("No images left or visible.")
+            self._update_image_info_label() # Update count/size after deletion
         except Exception as e:
             QMessageBox.warning(self, "Delete Error", f"Error moving '{file_name}' to trash: {e}")
 
