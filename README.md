@@ -1,6 +1,6 @@
 # PhotoSort: Intelligent Photo Library Management
 
-PhotoSort is a powerful desktop application designed to streamline the management of large photo libraries, making it easier than ever to sort, cull, and organize your images. Its primary goal is to help users efficiently identify unwanted photos—whether they are blurry, redundant, or simply not up to par—and quickly remove them to reclaim disk space and bring order to their collections.
+PhotoSort is a powerful desktop application focused on speed designed to streamline the management of large photo libraries, making it easier than ever to sort, cull, and organize your images. Its primary goal is to help users efficiently identify unwanted photos—whether they are blurry, redundant, or simply not up to par—and quickly remove them to reclaim disk space and bring order to their collections.
 
 ✨ *This project was born out of personal necessity and a whole lot of ~vibe coding~ to finally tackle a chaotic photo library!* ✨
 
