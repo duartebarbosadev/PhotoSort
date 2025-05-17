@@ -2098,6 +2098,7 @@ class MainWindow(QMainWindow):
         self.cluster_filter_combo.addItems(["All Clusters"] + [f"Cluster {cid}" for cid in cluster_ids])
         self.cluster_filter_combo.setEnabled(True)
         self.group_by_similarity_action.setEnabled(True)
+        self.group_by_similarity_action.setChecked(True) # Automatically switch to group by similarity view
         if self.group_by_similarity_action.isChecked() and self.app_state.cluster_results:
             self.cluster_sort_label.setVisible(True)
             self.cluster_sort_combo.setEnabled(True)
