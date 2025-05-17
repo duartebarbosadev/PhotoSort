@@ -43,17 +43,13 @@ class DroppableTreeView(QTreeView):
         super().__init__(parent)
         self.setModel(model)
         self.main_window = main_window # To access AppState
-        self.viewport().setAcceptDrops(True)
-        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.viewport().setAcceptDrops(False) # Disable drag and drop
+        # self.setDefaultDropAction(Qt.DropAction.MoveAction) # Disable drag and drop
         self.highlighted_drop_target_index = None
         self.original_item_brush = None
 
     def dragEnterEvent(self, event: QDragEnterEvent):
-        mime_data = event.mimeData()
-        if self.main_window.show_folders_mode and mime_data.hasUrls() and mime_data.urls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+        event.ignore() # Disable drag and drop
 
     def _clear_drop_highlight(self):
         if self.highlighted_drop_target_index and self.highlighted_drop_target_index.isValid():
@@ -64,38 +60,7 @@ class DroppableTreeView(QTreeView):
         self.original_item_brush = None
 
     def dragMoveEvent(self, event: QDragMoveEvent):
-        mime_data = event.mimeData()
-        valid_drop_target_found = False
-
-        if self.main_window.show_folders_mode and mime_data.hasUrls() and mime_data.urls():
-            index_at_pos = self.indexAt(event.position().toPoint())
-
-            if index_at_pos.isValid():
-                item = self.model().itemFromIndex(index_at_pos) 
-                is_folder_item = item and item.hasChildren()
-                item_data_role = item.data(Qt.ItemDataRole.UserRole) if item else None
-                target_folder_path = item_data_role if isinstance(item_data_role, str) else None
-
-                if is_folder_item and target_folder_path:
-                    try:
-                        source_path = mime_data.urls()[0].toLocalFile()
-                        if os.path.dirname(source_path) != target_folder_path:
-                             valid_drop_target_found = True
-                             if index_at_pos != self.highlighted_drop_target_index:
-                                 self._clear_drop_highlight()
-                                 self.highlighted_drop_target_index = index_at_pos
-                                 self.original_item_brush = item.background()
-                                 highlight_brush = QColor(Qt.GlobalColor.darkCyan)
-                                 highlight_brush.setAlpha(100)
-                                 item.setBackground(highlight_brush)
-                             event.acceptProposedAction()
-                             return
-                    except IndexError:
-                        pass
-
-        if not valid_drop_target_found:
-            self._clear_drop_highlight()
-            event.ignore()
+        event.ignore() # Disable drag and drop
 
     def dragLeaveEvent(self, event):
         self._clear_drop_highlight()
@@ -103,101 +68,7 @@ class DroppableTreeView(QTreeView):
 
 
     def dropEvent(self, event: QDropEvent):
-        target_index = self.highlighted_drop_target_index
-        self._clear_drop_highlight()
-
-        if not self.main_window.show_folders_mode:
-            event.ignore()
-            return
-
-        index_at_pos = self.indexAt(event.position().toPoint())
-        if not index_at_pos.isValid() or index_at_pos != target_index:
-             event.ignore()
-             return
-
-        target_item = self.model().itemFromIndex(index_at_pos)
-        is_folder_item = target_item and target_item.hasChildren()
-        
-        target_item_data_role = target_item.data(Qt.ItemDataRole.UserRole) if target_item else None
-        target_folder_path = target_item_data_role if isinstance(target_item_data_role, str) else None
-
-        if not is_folder_item or not target_folder_path:
-            event.ignore()
-            return
-
-        mime_data = event.mimeData()
-        if mime_data.hasUrls():
-            urls = mime_data.urls()
-            moved_count = 0
-            error_messages = []
-            items_to_move = []
-
-            for url in urls:
-                if url.isLocalFile():
-                    source_path = url.toLocalFile()
-                    if os.path.isfile(source_path) and os.path.dirname(source_path) != target_folder_path:
-                         items_to_move.append(source_path)
-
-            if not items_to_move:
-                 event.ignore()
-                 return
-
-            for source_path in items_to_move:
-                success, result_path_or_msg = self.main_window.image_file_ops.move_image(source_path, target_folder_path)
-
-                if success:
-                    moved_count += 1
-                    new_path = result_path_or_msg
-                    old_item_found = False
-                    model = self.model() # This is the proxy model
-                    source_model = model.sourceModel()
-                    
-                    for r_top in range(source_model.rowCount()):
-                        top_item = source_model.item(r_top)
-                        if top_item and top_item.hasChildren():
-                            for r_child in range(top_item.rowCount()):
-                                child_item = top_item.child(r_child)
-                                child_item_data = child_item.data(Qt.ItemDataRole.UserRole) if child_item else None
-                                if child_item_data and isinstance(child_item_data, dict) and child_item_data.get('path') == source_path:
-                                    top_item.removeRow(r_child)
-                                    old_item_found = True
-                                    break
-                        if old_item_found: break
-                        elif top_item:
-                            top_item_data = top_item.data(Qt.ItemDataRole.UserRole)
-                            if isinstance(top_item_data, dict) and top_item_data.get('path') == source_path:
-                                source_model.removeRow(r_top)
-                                old_item_found = True
-                                break
-                    
-                    if not old_item_found:
-                         print(f"DropEvent: Warning - Could not find source model item for moved file: {source_path}")
-                    
-                    new_file_data = {'path': new_path, 'is_blurred': None}
-                    new_item_for_model = self.main_window._create_standard_item(new_file_data)
-                    
-                    target_source_index = model.mapToSource(index_at_pos)
-                    source_target_item = source_model.itemFromIndex(target_source_index)
-                    if source_target_item:
-                        source_target_item.appendRow(new_item_for_model)
-                    else:
-                        print(f"DropEvent: Error - Could not find source target item for {target_folder_path}")
-
-                    self.main_window.app_state.update_data_for_path_move(source_path, new_path)
-                else:
-                    error_messages.append(result_path_or_msg)
-
-            if moved_count > 0:
-                self.main_window.statusBar().showMessage(f"Moved {moved_count} item(s).", 5000)
-                self.main_window.tree_display_view.expand(index_at_pos)
-
-
-            if error_messages:
-                self.main_window.statusBar().showMessage(f"Errors moving files: {'; '.join(error_messages)}", 8000)
-                print(f"Errors moving files: {error_messages}")
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+        event.ignore() # Disable drag and drop
 
 # --- Custom Proxy Model for Filtering ---
 class CustomFilterProxyModel(QSortFilterProxyModel):
@@ -581,9 +452,9 @@ class MainWindow(QMainWindow):
         self.tree_display_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tree_display_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree_display_view.setMinimumWidth(300)
-        self.tree_display_view.setDragEnabled(True)
-        self.tree_display_view.setAcceptDrops(True)
-        self.tree_display_view.setDropIndicatorShown(True)
+        self.tree_display_view.setDragEnabled(False) # Disable drag and drop
+        self.tree_display_view.setAcceptDrops(False) # Disable drag and drop
+        self.tree_display_view.setDropIndicatorShown(False) # Disable drag and drop
 
         self.grid_display_view = QListView()
         self.grid_display_view.setModel(self.proxy_model)
