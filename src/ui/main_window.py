@@ -29,12 +29,13 @@ from src.core.image_pipeline import ImagePipeline
 from src.core.image_file_ops import ImageFileOperations
 # from src.core.image_features.blur_detector import BlurDetector # Now managed by WorkerManager
 from src.core.rating_handler import MetadataHandler # Renamed from RatingHandler
-from src.core.app_settings import get_preview_cache_size_gb, set_preview_cache_size_gb # Import settings
+from src.core.app_settings import get_preview_cache_size_gb, set_preview_cache_size_gb, get_preview_cache_size_bytes # Import settings
 from PyQt6.QtWidgets import QFormLayout, QComboBox, QSizePolicy # For cache dialog
 from src.ui.app_state import AppState # Import AppState
 from src.core.caching.rating_cache import RatingCache # Import RatingCache for type hinting
 from src.ui.ui_components import LoadingOverlay # PreviewPreloaderWorker, BlurDetectionWorker are used by WorkerManager
 from src.ui.worker_manager import WorkerManager # Import WorkerManager
+from src.core.file_scanner import SUPPORTED_EXTENSIONS # Import from file_scanner
 
 
 # --- Custom Tree View for Drag and Drop ---
@@ -766,10 +767,48 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Folder selection cancelled.")
 
+    def _calculate_folder_image_size(self, folder_path: str) -> int:
+        """Calculates the total size of supported image files in a folder (recursive)."""
+        total_size_bytes = 0
+        try:
+            for root, _, files in os.walk(folder_path):
+                for filename in files:
+                    ext = os.path.splitext(filename)[1].lower()
+                    if ext in SUPPORTED_EXTENSIONS:
+                        try:
+                            full_path = os.path.join(root, filename)
+                            total_size_bytes += os.path.getsize(full_path)
+                        except OSError:
+                            pass # Ignore files that can't be accessed or no longer exist
+        except Exception as e:
+            logging.error(f"Error calculating folder image size for {folder_path}: {e}")
+        return total_size_bytes
+
     def _load_folder(self, folder_path):
         load_folder_start_time = time.perf_counter()
         logging.info(f"MainWindow._load_folder - Start for: {folder_path}")
         self.show_loading_overlay(f"Preparing to scan folder...")
+
+        # Check cache size vs folder size
+        estimated_folder_image_size_bytes = self._calculate_folder_image_size(folder_path)
+        preview_cache_limit_bytes = get_preview_cache_size_bytes()
+
+        PREVIEW_ESTIMATED_SIZE_FACTOR = 0.20 # Estimate previews take 20% of original image size
+        estimated_preview_data_needed_for_folder_bytes = int(estimated_folder_image_size_bytes * PREVIEW_ESTIMATED_SIZE_FACTOR)
+
+        if preview_cache_limit_bytes > 0 and \
+           estimated_preview_data_needed_for_folder_bytes > preview_cache_limit_bytes:
+            warning_msg = (
+                f"The images in the selected folder are estimated to require approximately "
+                f"{estimated_preview_data_needed_for_folder_bytes / (1024*1024):.2f} MB for their previews. "
+                f"Your current preview cache limit is "
+                f"{preview_cache_limit_bytes / (1024*1024*1024):.2f} GB.\n\n"
+                "This might exceed your cache capacity, potentially leading to frequent cache evictions "
+                "and slower performance as previews are regenerated.\n\n"
+                "Consider increasing the 'Preview Image Cache' size in "
+                "Settings > Manage Cache for a smoother experience, or select a smaller folder."
+            )
+            QMessageBox.warning(self, "Potential Cache Overflow", warning_msg)
         
         section_start_time = time.perf_counter()
         self.worker_manager.stop_all_workers() # Use WorkerManager to stop all
