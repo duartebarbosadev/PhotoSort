@@ -16,7 +16,7 @@ import send2trash # <-- Import send2trash for moving files to trash
 import traceback # For detailed error logging
 from datetime import date as date_obj, datetime # For date type hinting and objects
 from typing import List, Dict, Optional, Any # Import List and Dict for type hinting, Optional, Any
-from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex # Import QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex
+from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel # Import QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel
 from PyQt6.QtGui import QColor # Import QColor for highlighting
 from PyQt6.QtGui import QAction, QKeySequence, QPixmap, QKeyEvent, QIcon, QStandardItemModel, QStandardItem, QResizeEvent, QDragEnterEvent, QDropEvent, QDragMoveEvent # Import model classes and event types
 import numpy as np
@@ -1309,7 +1309,13 @@ class MainWindow(QMainWindow):
                             if isinstance(child_item_user_data, dict) and child_item_user_data.get('path') == target_file_path:
                                 target_proxy_idx_to_select = child_proxy_idx; break
                     if target_proxy_idx_to_select.isValid():
-                        active_view.setCurrentIndex(target_proxy_idx_to_select)
+                        active_view.selectionModel().clearSelection()
+                        # QItemSelectionModel.Select will select the item without clearing others if it's part of a range.
+                        # QItemSelectionModel.ClearAndSelect is what we want for a single item focus.
+                        # However, setCurrentIndex typically handles the "current" item concept well.
+                        # Let's try setting current and then ensuring selection.
+                        active_view.setCurrentIndex(target_proxy_idx_to_select) # This makes it the "current"
+                        active_view.selectionModel().select(target_proxy_idx_to_select, QItemSelectionModel.SelectionFlag.ClearAndSelect) # This ensures it's the *only* selected
                         active_view.scrollTo(target_proxy_idx_to_select, QAbstractItemView.ScrollHint.EnsureVisible)
                         event.accept(); return
         super().keyPressEvent(event)
@@ -1321,24 +1327,21 @@ class MainWindow(QMainWindow):
     def _move_current_image_to_trash(self):
         active_view = self._get_active_file_view()
         if not active_view: return
-        current_proxy_idx = active_view.currentIndex()
-        if not current_proxy_idx.isValid(): return
-        source_idx = self.proxy_model.mapToSource(current_proxy_idx)
-        if not source_idx.isValid(): return
-        item = self.file_system_model.itemFromIndex(source_idx) 
-        if not item: return
 
-        item_data = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(item_data, dict) or 'path' not in item_data: return 
-        file_path = item_data['path']
-        
-        if not os.path.isfile(file_path): return
+        selected_file_paths = self._get_selected_file_paths_from_view()
+        if not selected_file_paths:
+            self.statusBar().showMessage("No image(s) selected to delete.", 3000)
+            return
 
-        file_name = os.path.basename(file_path)
+        num_selected = len(selected_file_paths)
         
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Confirm Delete")
-        dialog.setText(f"Are you sure you want to move '{file_name}' to the trash?")
+        if num_selected == 1:
+            file_name = os.path.basename(selected_file_paths[0])
+            dialog.setText(f"Are you sure you want to move '{file_name}' to the trash?")
+        else:
+            dialog.setText(f"Are you sure you want to move {num_selected} images to the trash?")
         dialog.setIcon(QMessageBox.Icon.Warning)
         dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         dialog.setDefaultButton(QMessageBox.StandardButton.Yes) 
@@ -1416,41 +1419,84 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.No:
             return
 
-        try:
-            row_in_proxy_view_before_deletion = current_proxy_idx.row()
-            persistent_parent_proxy_idx = QPersistentModelIndex(current_proxy_idx.parent())
+        # Store the proxy index of the initially focused item to try and select something near it later.
+        # This is tricky with multiple selections across different parents, so we'll simplify.
+        # We'll try to select the item that was *next* to the *first* item in the original selection,
+        # or the first visible item if that fails.
+        
+        first_selected_proxy_idx = QModelIndex()
+        active_selection = active_view.selectionModel().selectedIndexes()
+        if active_selection:
+            first_selected_proxy_idx = active_selection[0] # Assuming column 0 if multiple columns selected
 
-            send2trash.send2trash(file_path)
-            self.app_state.remove_data_for_path(file_path) 
+        # We need to map proxy indices to source indices *before* deleting,
+        # as proxy indices will become invalid once source items are removed.
+        source_indices_to_delete = []
+        for proxy_idx_to_delete in active_view.selectionModel().selectedIndexes():
+            if proxy_idx_to_delete.column() == 0: # Process only one index per row
+                source_idx = self.proxy_model.mapToSource(proxy_idx_to_delete)
+                if source_idx.isValid():
+                    source_indices_to_delete.append(source_idx)
+        
+        # Sort source indices in reverse order by row, then by parent.
+        # This ensures that when we remove items from a parent, the row numbers
+        # of subsequent items in that same parent are not affected.
+        source_indices_to_delete.sort(key=lambda idx: (idx.parent().internalId(), idx.row()), reverse=True)
 
-            source_parent_item = self.file_system_model.itemFromIndex(source_idx.parent()) if source_idx.parent().isValid() else self.file_system_model.invisibleRootItem()
-            if source_parent_item:
-                source_parent_item.takeRow(source_idx.row()) 
+        deleted_count = 0
+        for source_idx_to_delete in source_indices_to_delete:
+            item_to_delete = self.file_system_model.itemFromIndex(source_idx_to_delete)
+            if not item_to_delete: continue
 
-            # Select next item
-            next_item_to_select = QModelIndex()
-            current_parent_for_selection_logic = QModelIndex(persistent_parent_proxy_idx) 
-            num_items_in_group = self.proxy_model.rowCount(current_parent_for_selection_logic)
-
-            if num_items_in_group > 0:
-                if row_in_proxy_view_before_deletion < num_items_in_group:
-                    next_item_to_select = self.proxy_model.index(row_in_proxy_view_before_deletion, 0, current_parent_for_selection_logic)
-                else: # Was the last item
-                    next_item_to_select = self.proxy_model.index(num_items_in_group - 1, 0, current_parent_for_selection_logic)
+            item_data = item_to_delete.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(item_data, dict) or 'path' not in item_data: continue
             
-            if not next_item_to_select.isValid(): # If group became empty or no item found
-                next_item_to_select = self._find_first_visible_item() # Try to find any visible item
+            file_path_to_delete = item_data['path']
+            if not os.path.isfile(file_path_to_delete): continue
+            
+            file_name_to_delete = os.path.basename(file_path_to_delete)
+            try:
+                send2trash.send2trash(file_path_to_delete)
+                self.app_state.remove_data_for_path(file_path_to_delete)
+
+                source_parent_item = self.file_system_model.itemFromIndex(source_idx_to_delete.parent()) if source_idx_to_delete.parent().isValid() else self.file_system_model.invisibleRootItem()
+                if source_parent_item:
+                    source_parent_item.takeRow(source_idx_to_delete.row())
+                deleted_count += 1
+            except Exception as e:
+                QMessageBox.warning(self, "Delete Error", f"Error moving '{file_name_to_delete}' to trash: {e}")
+                # Optionally, break or continue if one file fails
+        
+        if deleted_count > 0:
+            self.statusBar().showMessage(f"{deleted_count} image(s) moved to trash.", 5000)
+            # After deletion, try to select the next sensible item.
+            # This logic is complex when multiple items from different parents are deleted.
+            # A simpler approach: try to select the item at the original focused item's row in its parent,
+            # or the new first visible item.
+            next_item_to_select = QModelIndex()
+            if first_selected_proxy_idx.isValid():
+                original_parent_proxy = first_selected_proxy_idx.parent()
+                original_row = first_selected_proxy_idx.row()
+                
+                if self.proxy_model.rowCount(original_parent_proxy) > original_row:
+                    next_item_to_select = self.proxy_model.index(original_row, 0, original_parent_proxy)
+                elif self.proxy_model.rowCount(original_parent_proxy) > 0: # select last item in original parent
+                    next_item_to_select = self.proxy_model.index(self.proxy_model.rowCount(original_parent_proxy) -1, 0, original_parent_proxy)
+
+            if not next_item_to_select.isValid() or not self.proxy_model.mapToSource(next_item_to_select).isValid():
+                next_item_to_select = self._find_first_visible_item()
 
             if next_item_to_select.isValid():
                 active_view.setCurrentIndex(next_item_to_select)
                 active_view.scrollTo(next_item_to_select, QAbstractItemView.ScrollHint.EnsureVisible)
-            else: # No items left at all or visible
+                self._handle_file_selection_changed() # Refresh preview for the new selection
+            else:
                 self.image_view.clear(); self.image_view.setText("No images")
                 self._update_rating_display(0); self._update_label_display(None)
                 self.statusBar().showMessage("No images left or visible.")
-            self._update_image_info_label() # Update count/size after deletion
-        except Exception as e:
-            QMessageBox.warning(self, "Delete Error", f"Error moving '{file_name}' to trash: {e}")
+            self._update_image_info_label()
+        elif num_selected > 0 : # No items were actually deleted, but some were selected
+             self.statusBar().showMessage("No valid image files were deleted from selection.", 3000)
 
     def closeEvent(self, event):
         self.worker_manager.stop_all_workers() # Use WorkerManager to stop all
