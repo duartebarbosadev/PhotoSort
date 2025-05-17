@@ -1,21 +1,28 @@
 import exiftool
 import os
 import re
-import time # Add time import
+import time
+import logging
+import unicodedata
 from datetime import datetime as dt_parser, date as date_obj
 from typing import Dict, Any, Optional, List
 
 from src.core.caching.rating_cache import RatingCache
-from src.core.caching.exif_cache import ExifCache # Import ExifCache
+from src.core.caching.exif_cache import ExifCache
 
 # Preferred EXIF/XMP date tags in order of preference
 DATE_TAGS_PREFERENCE: List[str] = [
     'EXIF:DateTimeOriginal',
     'XMP:DateCreated',
-    'EXIF:CreateDate', # Often same as DateTimeOriginal, but good fallback
-    'QuickTime:CreateDate', # For MOV files etc.
-    'H264:DateTimeOriginal', # For some video formats
+    'EXIF:CreateDate',
+    'QuickTime:CreateDate',
+    'H264:DateTimeOriginal',
 ]
+
+# Tags to fetch in batch mode
+ALL_RELEVANT_EXIF_TAGS_FOR_BATCH: List[str] = list(dict.fromkeys(
+    ["SourceFile", "XMP:Rating", "XMP:Label", "FileSize", "ImageSize"] + DATE_TAGS_PREFERENCE
+))
 
 def _parse_exif_date(date_string: str) -> Optional[date_obj]:
     """
@@ -26,48 +33,30 @@ def _parse_exif_date(date_string: str) -> Optional[date_obj]:
         return None
 
     date_string = date_string.strip()
-    # Handle potential fractional seconds by splitting before parsing
     date_string_no_frac = date_string.split('.')[0]
-
-    # Handle potential timezone info (simple removal for now)
     date_string_no_tz = date_string_no_frac
-    if 'Z' in date_string_no_tz: # UTC Zulu time
+    if 'Z' in date_string_no_tz:
         date_string_no_tz = date_string_no_tz.split('Z')[0]
-    # Check for timezone offsets like +HH:MM or -HH:MM
-    # Regex to find HH:MM or HHMM at the end of string preceded by + or -
     tz_match = re.search(r'[+-](\d{2}:?\d{2})$', date_string_no_tz)
     if tz_match:
         date_string_no_tz = date_string_no_tz[:tz_match.start()]
 
     formats_to_try = [
-        "%Y:%m:%d %H:%M:%S",  # EXIF standard
-        "%Y-%m-%d %H:%M:%S",  # ISO-like XMP
-        "%Y/%m/%d %H:%M:%S",
-        "%Y.%m.%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",  # ISO 8601 without TZ
-        "%Y:%m:%d",           # Date only
-        "%Y-%m-%d",           # Date only
-        "%Y/%m/%d",           # Date only
-        "%Y.%m.%d",           # Date only
+        "%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+        "%Y.%m.%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y:%m:%d",
+        "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d",
     ]
 
     parsed_date = None
     for fmt in formats_to_try:
         try:
-            # Attempt to parse the string that has had timezone and fractions stripped
-            # Ensure the string is long enough for the format
-            # This is a basic check; more robust would be to try parsing and catch ValueError
-            # For date-only formats, only the date part of string_to_try matters.
             string_to_parse = date_string_no_tz
-            if 'T' not in fmt and ' ' not in fmt: # Date-only format
+            if 'T' not in fmt and ' ' not in fmt:
                  if 'T' in string_to_parse: string_to_parse = string_to_parse.split('T')[0]
                  elif ' ' in string_to_parse: string_to_parse = string_to_parse.split(' ')[0]
-            
             parsed_date = dt_parser.strptime(string_to_parse, fmt).date()
-            break 
-        except ValueError:
-            continue
-        except Exception: # Catch other potential errors during parsing
+            break
+        except (ValueError, Exception):
             continue
     return parsed_date
 
@@ -76,38 +65,31 @@ def _parse_date_from_filename(filename: str) -> Optional[date_obj]:
     Attempts to parse a date (YYYY, MM, DD) from common filename patterns.
     Returns a datetime.date object or None.
     """
-    # Pattern 1: YYYYMMDD (possibly followed by _, -, T, or space, or end of string)
     match1 = re.search(r'(\d{4})(\d{2})(\d{2})(?:[_ \-T]|$)', filename)
-    # Pattern 2: YYYY-MM-DD or YYYY_MM_DD or YYYY.MM.DD
     match2 = re.search(r'(\d{4})[-_\.](\d{2})[-_\.](\d{2})', filename)
-
     year, month, day = None, None, None
 
     def validate_and_assign(y_str, m_str, d_str):
         nonlocal year, month, day
         try:
             y, m, d = int(y_str), int(m_str), int(d_str)
-            # Basic validation for sensibility
             if 1900 <= y <= dt_parser.now().year + 5 and 1 <= m <= 12 and 1 <= d <= 31:
-                 dt_parser(y, m, d) # Will raise ValueError if invalid date like Feb 30
+                 dt_parser(y, m, d)
                  year, month, day = y, m, d
                  return True
         except (ValueError, IndexError):
             pass
         return False
 
-    if match1:
-        if validate_and_assign(match1.group(1), match1.group(2), match1.group(3)):
-            pass # Date assigned
-    
-    if year is None and match2: # Only try pattern 2 if pattern 1 failed
-         if validate_and_assign(match2.group(1), match2.group(2), match2.group(3)):
-            pass # Date assigned
+    if match1 and validate_and_assign(match1.group(1), match1.group(2), match1.group(3)):
+        pass
+    elif match2 and validate_and_assign(match2.group(1), match2.group(2), match2.group(3)):
+        pass
     
     if year and month and day:
         try:
             return date_obj(year, month, day)
-        except ValueError: # Handles cases like Feb 30 that passed initial checks
+        except ValueError:
             return None
     return None
 
@@ -118,9 +100,8 @@ def _parse_rating(value: Any) -> int:
     if value is None:
         return 0
     try:
-        # Handle cases where rating might be a float string like "3.0" or just "3"
-        rating_val = int(float(str(value))) 
-        return max(0, min(5, rating_val)) # Clamp between 0 and 5
+        rating_val = int(float(str(value)))
+        return max(0, min(5, rating_val))
     except (ValueError, TypeError):
         return 0
 
@@ -131,188 +112,140 @@ class MetadataHandler:
     """
 
     @staticmethod
-    def get_display_metadata(image_path: str,
-                             rating_disk_cache: Optional[RatingCache] = None,
-                             exif_disk_cache: Optional[ExifCache] = None) -> Dict[str, Any]:
+    def get_batch_display_metadata(
+        image_paths: List[str],
+        rating_disk_cache: Optional[RatingCache] = None,
+        exif_disk_cache: Optional[ExifCache] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
-        Fetches and parses essential metadata (rating, label, date) for display.
-        Uses exif_disk_cache first, then rating_disk_cache, then ExifTool.
-        Includes fallbacks for date.
+        Fetches and parses essential metadata for a batch of images.
+        Uses ExifCache first, then ExifTool in batch for remaining files.
+        Populates caches and applies date fallbacks.
         """
-        result: Dict[str, Any] = {'rating': 0, 'label': None, 'date': None}
-        filename_only = os.path.basename(image_path)
-        exif_called = False
-        overall_start_time_mdh = time.perf_counter()
+        results: Dict[str, Dict[str, Any]] = {}
+        paths_needing_exiftool: List[str] = []
+        start_time = time.perf_counter()
+        logging.info(f"[MetadataHandler] Starting batch metadata for {len(image_paths)} files.")
 
-        if not os.path.isfile(image_path):
-            print(f"[MetadataHandler] File not found: {image_path}")
-            result['date'] = _parse_date_from_filename(filename_only)
-            return result
+        # 1. Check ExifCache for each file and prepare list for ExifTool
+        for image_path in image_paths:
+            norm_path = unicodedata.normalize('NFC', os.path.normpath(image_path))
+            results[norm_path] = {'rating': 0, 'label': None, 'date': None, 'raw_exif': None} # Store raw_exif temp
 
-        # 1. Try to get full metadata from ExifCache
-        cached_exif_data: Optional[Dict[str, Any]] = None
-        if exif_disk_cache:
-            exif_cache_start_time = time.perf_counter()
-            cached_exif_data = exif_disk_cache.get(image_path)
-            exif_cache_duration = time.perf_counter() - exif_cache_start_time
+            if not os.path.isfile(norm_path):
+                logging.warning(f"[MetadataHandler] File not found: {norm_path}")
+                results[norm_path]['date'] = _parse_date_from_filename(os.path.basename(norm_path))
+                continue
+
+            cached_exif_data: Optional[Dict[str, Any]] = None
+            if exif_disk_cache:
+                cached_exif_data = exif_disk_cache.get(norm_path)
+            
             if cached_exif_data:
-                print(f"[PERF][MetadataHandler] ExifCache HIT for {filename_only} in {exif_cache_duration:.4f}s")
-                # Parse rating, label, date from this cached_exif_data
-                rating_raw = cached_exif_data.get("XMP:Rating")
-                result['rating'] = _parse_rating(rating_raw)
-                
-                # Ensure rating_disk_cache is consistent if EXIF cache had a rating
-                if rating_disk_cache and rating_disk_cache.get(image_path) != result['rating']:
-                    rating_disk_cache.set(image_path, result['rating'])
-
-                label_raw = cached_exif_data.get("XMP:Label")
-                result['label'] = str(label_raw) if label_raw is not None else None
-
-                extracted_date_from_meta = None
-                for date_tag in DATE_TAGS_PREFERENCE:
-                    date_string = cached_exif_data.get(date_tag)
-                    if date_string:
-                        parsed_dt = _parse_exif_date(str(date_string))
-                        if parsed_dt:
-                            extracted_date_from_meta = parsed_dt
-                            break
-                result['date'] = extracted_date_from_meta
-                # If all data is found from exif_cache, no need to proceed to exiftool or rating_cache for individual items
-                # Date fallback will still apply if date wasn't in cached_exif_data
-                if result['date'] is None: # (exif_called and result['date'] is None) or not exif_called:
-                    # Date fallbacks below will handle this
-                    pass
-                else: # Date was found in EXIF cache. If rating and label are also present, we might be done.
-                    # If rating was found, no need to check rating_disk_cache again.
-                    # Fallbacks will still be checked if any essential part is missing.
-                    pass # Fallback logic will handle if parts are missing.
-            else: # ExifCache MISS
-                if exif_disk_cache: # Ensure exif_disk_cache was checked
-                     print(f"[PERF][MetadataHandler] ExifCache MISS for {filename_only} in {exif_cache_duration:.4f}s")
-
-        # 2. If full EXIF not in ExifCache, try to get rating from RatingCache
-        # This section is now secondary to checking ExifCache first.
-        # If cached_exif_data was found, result['rating'] is already set.
-        if cached_exif_data is None and rating_disk_cache:
-            rating_cache_start_time = time.perf_counter()
-            cached_rating_val = rating_disk_cache.get(image_path)
-            rating_cache_duration = time.perf_counter() - rating_cache_start_time
-            if cached_rating_val is not None:
-                result['rating'] = cached_rating_val
-                print(f"[PERF][MetadataHandler] RatingCache HIT for {filename_only} in {rating_cache_duration:.4f}s. Rating: {cached_rating_val}")
+                logging.info(f"[MetadataHandler] ExifCache HIT for {os.path.basename(norm_path)}. Data: {cached_exif_data}")
+                results[norm_path]['raw_exif'] = cached_exif_data
             else:
-                print(f"[PERF][MetadataHandler] RatingCache MISS for {filename_only} in {rating_cache_duration:.4f}s")
-
-
-        # 3. If data (especially if full EXIF wasn't cached) is still needed, call ExifTool
-        # We call ExifTool if cached_exif_data is None.
-        # If cached_exif_data was present, we assume it's sufficient unless parts were missing (e.g. date).
-        # The check for 'tags_to_fetch' ensures we only call exiftool if necessary.
+                logging.info(f"[MetadataHandler] ExifCache MISS for {os.path.basename(norm_path)}")
+                paths_needing_exiftool.append(norm_path)
         
-        # Only proceed to ExifTool if full EXIF was not in exif_disk_cache
-        if cached_exif_data is None:
-            exiftool_call_required = False
-            # Determine if ExifTool call is truly needed based on what's still missing
-            if result['rating'] == 0 and (not rating_disk_cache or rating_disk_cache.get(image_path) is None):
-                exiftool_call_required = True
-            if result['label'] is None:
-                exiftool_call_required = True
-            if result['date'] is None: # If date is still missing after potential cache hits
-                exiftool_call_required = True
+        # 2. Batch ExifTool call for files not in ExifCache
+        if paths_needing_exiftool:
+            logging.info(f"[MetadataHandler] Calling ExifTool for {len(paths_needing_exiftool)} files.")
+            try:
+                with exiftool.ExifToolHelper(common_args=["-charset", "UTF8"], encoding="utf-8") as et:
+                    # Ensure paths sent to exiftool are encoded correctly
+                    encoded_paths = [p.encode('utf-8', errors='surrogateescape') for p in paths_needing_exiftool]
+                    exiftool_results = et.get_tags(encoded_paths, tags=ALL_RELEVANT_EXIF_TAGS_FOR_BATCH)
+                
+                logging.info(f"[MetadataHandler] ExifTool returned {len(exiftool_results)} results.")
 
-            if exiftool_call_required:
-                exiftool_start_time = time.perf_counter()
-                try:
-                    # Fetch all potentially useful tags if we are calling exiftool anyway, then cache them all.
-                    all_relevant_tags = list(dict.fromkeys(["XMP:Rating", "XMP:Label"] + DATE_TAGS_PREFERENCE))
-                    
-                    print(f"[PERF][MetadataHandler] ExifTool CALL for {filename_only}. Tags: {all_relevant_tags}")
-                    with exiftool.ExifToolHelper() as et:
-                        filename_bytes = image_path.encode('utf-8', errors='surrogateescape')
-                        metadata_list = et.get_tags(filename_bytes, tags=all_relevant_tags)
-                    exif_called = True
+                # Map results back to original paths using SourceFile
+                sourcefile_to_meta_map = {}
+                for meta_dict in exiftool_results:
+                    source_file_raw = meta_dict.get("SourceFile")
+                    if source_file_raw:
+                        # Normalize path from ExifTool for consistent matching
+                        norm_source_file = unicodedata.normalize('NFC', os.path.normpath(source_file_raw))
+                        sourcefile_to_meta_map[norm_source_file] = meta_dict
+                    else:
+                        logging.warning(f"[MetadataHandler] ExifTool result missing SourceFile: {meta_dict}")
 
-                    if metadata_list:
-                        raw_exif_data_from_tool = metadata_list[0]
-
-                        # Store all fetched raw metadata in ExifCache
+                for path_processed_by_exiftool in paths_needing_exiftool: # Iterate over paths we sent
+                    raw_meta = sourcefile_to_meta_map.get(path_processed_by_exiftool)
+                    if raw_meta:
+                        logging.info(f"[MetadataHandler] ExifTool data for {os.path.basename(path_processed_by_exiftool)}: {raw_meta}")
+                        results[path_processed_by_exiftool]['raw_exif'] = raw_meta
                         if exif_disk_cache:
-                            exif_cache_set_start = time.perf_counter()
-                            exif_disk_cache.set(image_path, raw_exif_data_from_tool)
-                            exif_cache_set_duration = time.perf_counter() - exif_cache_set_start
-                            print(f"[PERF][MetadataHandler] ExifCache SET for {filename_only} in {exif_cache_set_duration:.4f}s")
+                            exif_disk_cache.set(path_processed_by_exiftool, raw_meta)
+                    else:
+                        logging.warning(f"[MetadataHandler] No ExifTool result mapped for {os.path.basename(path_processed_by_exiftool)}")
 
-                        # Parse rating if it wasn't already set from rating_disk_cache
-                        if "XMP:Rating" in raw_exif_data_from_tool:
-                            rating_raw = raw_exif_data_from_tool.get("XMP:Rating")
-                            parsed_rating = _parse_rating(rating_raw)
-                            if result['rating'] != parsed_rating : # If ExifTool gives a different rating
-                                result['rating'] = parsed_rating
-                                if rating_disk_cache: # Update rating_disk_cache too
-                                    rating_disk_cache.set(image_path, result['rating'])
-                        
-                        # Parse Label if not already set
-                        if result['label'] is None and "XMP:Label" in raw_exif_data_from_tool:
-                            label_raw = raw_exif_data_from_tool.get("XMP:Label")
-                            result['label'] = str(label_raw) if label_raw is not None else None
+            except exiftool.ExifToolExecuteError as ete:
+                logging.error(f"[MetadataHandler] ExifTool execution error: {ete}")
+            except Exception as e:
+                logging.error(f"[MetadataHandler] Error during ExifTool batch processing: {e}", exc_info=True)
 
-                        # Parse Date from metadata if not already set
-                        if result['date'] is None:
-                            extracted_date_from_meta = None
-                            for date_tag in DATE_TAGS_PREFERENCE:
-                                date_string = raw_exif_data_from_tool.get(date_tag)
-                                if date_string:
-                                    parsed_dt = _parse_exif_date(str(date_string))
-                                    if parsed_dt:
-                                        extracted_date_from_meta = parsed_dt
-                                        break
-                            result['date'] = extracted_date_from_meta
-                except FileNotFoundError:
-                    print(f"[MetadataHandler] File disappeared during EXIF metadata fetch: {image_path}")
-                except exiftool.ExifToolExecuteError as ete:
-                    print(f"[MetadataHandler] ExifTool execution error for {filename_only}: {ete}")
-                except Exception as e:
-                    print(f"[MetadataHandler] Error fetching EXIF metadata for {filename_only}: {e} (Type: {type(e).__name__})")
-                finally:
-                    exiftool_duration = time.perf_counter() - exiftool_start_time
-                    if exif_called: # Only print duration if call was actually made
-                         print(f"[PERF][MetadataHandler] ExifTool actual CALL for {filename_only} completed in {exiftool_duration:.4f}s")
+        # 3. Parse data from raw_exif (either from cache or new ExifTool call) and apply fallbacks
+        final_results: Dict[str, Dict[str, Any]] = {}
+        for norm_path, data_dict in results.items():
+            filename_only = os.path.basename(norm_path)
+            parsed_rating = 0
+            parsed_label = None
+            parsed_date = None
+            
+            raw_exif_data = data_dict['raw_exif']
 
+            if raw_exif_data:
+                # Parse Rating - Try "XMP:Rating" first, then "Rating" as a fallback
+                rating_raw_val = raw_exif_data.get("XMP:Rating")
+                log_source_tag = "XMP:Rating"
+                if rating_raw_val is None: # If XMP:Rating is not found or is None
+                    rating_raw_val = raw_exif_data.get("Rating") # Try the general 'Rating' tag
+                    log_source_tag = "Rating" if rating_raw_val is not None else "XMP:Rating (None)"
 
-        # Date fallbacks if not found in metadata (from any cache or ExifTool)
-        if result['date'] is None:
-            # print(f"[MetadataHandler] Date not found in EXIF for {filename_only}, trying fallbacks.")
-            parsed_from_filename = _parse_date_from_filename(filename_only)
-            if parsed_from_filename:
-                result['date'] = parsed_from_filename
-            elif os.path.isfile(image_path): # Only try filesystem if file still exists
-                # Filesystem time fallback
+                logging.info(f"[MetadataHandler] Raw rating value from '{log_source_tag}' for {filename_only}: '{rating_raw_val}' (type: {type(rating_raw_val)})")
+                parsed_rating = _parse_rating(rating_raw_val)
+                logging.info(f"[MetadataHandler] Parsed rating for {filename_only}: {parsed_rating}")
+                
+                if rating_disk_cache: # Keep rating_disk_cache consistent
+                    cached_rating_val = rating_disk_cache.get(norm_path)
+                    if cached_rating_val is None or cached_rating_val != parsed_rating:
+                         logging.info(f"[MetadataHandler] Updating rating_disk_cache for {filename_only} from {cached_rating_val} to {parsed_rating}")
+                         rating_disk_cache.set(norm_path, parsed_rating)
+                
+                # Parse Label
+                label_raw_val = raw_exif_data.get("XMP:Label")
+                parsed_label = str(label_raw_val) if label_raw_val is not None else None
+                
+                # Parse Date from metadata
+                for date_tag in DATE_TAGS_PREFERENCE:
+                    date_string = raw_exif_data.get(date_tag)
+                    if date_string:
+                        dt_obj_val = _parse_exif_date(str(date_string))
+                        if dt_obj_val:
+                            parsed_date = dt_obj_val
+                            break
+            
+            # Date fallbacks
+            if parsed_date is None:
+                parsed_date = _parse_date_from_filename(filename_only)
+            
+            if parsed_date is None and os.path.isfile(norm_path): # Filesystem time fallback
                 try:
-                    # Prefer modification time (st_mtime) as it's more universally available
-                    # and often reflects image content change/creation more reliably than st_ctime on Unix.
-                    # st_birthtime is ideal but not on all platforms/filesystems.
                     fs_timestamp: Optional[float] = None
-                    stat_result = os.stat(image_path)
-                    
-                    if hasattr(stat_result, 'st_birthtime'): # macOS, some BSDs
-                        fs_timestamp = stat_result.st_birthtime
-                    
-                    # If birthtime is not available or seems invalid (e.g., epoch 0), use modification time.
-                    # A very small timestamp might indicate an invalid or uninitialized birthtime.
-                    if fs_timestamp is None or fs_timestamp < 1000000: # Heuristic for old/invalid birthtime
-                        fs_timestamp = stat_result.st_mtime
-                    
-                    if fs_timestamp:
-                        result['date'] = dt_parser.fromtimestamp(fs_timestamp).date()
-
-                except FileNotFoundError: # Should ideally not happen if os.path.isfile check passed
-                    print(f"[MetadataHandler] File disappeared for filesystem date fallback: {image_path}")
+                    stat_result = os.stat(norm_path)
+                    if hasattr(stat_result, 'st_birthtime'): fs_timestamp = stat_result.st_birthtime
+                    if fs_timestamp is None or fs_timestamp < 1000000: fs_timestamp = stat_result.st_mtime
+                    if fs_timestamp: parsed_date = dt_parser.fromtimestamp(fs_timestamp).date()
                 except Exception as e_fs:
-                    print(f"[MetadataHandler] Warning: Could not get filesystem time for {filename_only}: {e_fs}")
-        
-        overall_duration_mdh = time.perf_counter() - overall_start_time_mdh
-        print(f"[PERF][MetadataHandler] get_display_metadata for {filename_only} took {overall_duration_mdh:.4f}s. EXIF called: {exif_called}")
-        return result
+                    logging.warning(f"[MetadataHandler] Filesystem date error for {filename_only}: {e_fs}")
+
+            final_results[norm_path] = {'rating': parsed_rating, 'label': parsed_label, 'date': parsed_date}
+            logging.debug(f"[MetadataHandler] Processed {filename_only}: R={parsed_rating}, L='{parsed_label}', D={parsed_date}")
+
+        duration = time.perf_counter() - start_time
+        logging.info(f"[MetadataHandler] Finished batch metadata for {len(image_paths)} files in {duration:.4f}s.")
+        return final_results
 
     @staticmethod
     def set_rating(image_path: str, rating: int,
@@ -321,45 +254,38 @@ class MetadataHandler:
         """
         Sets the rating (0-5) using ExifToolHelper.
         Updates rating_disk_cache and invalidates exif_disk_cache if provided.
-        Rating 0 means "no stars".
         Returns True on apparent success, False on failure.
         """
         if not (0 <= rating <= 5):
-            print(f"Error: Invalid rating value {rating}. Must be 0-5.")
+            logging.error(f"Invalid rating value {rating}. Must be 0-5.")
             return False
-
         if not os.path.isfile(image_path):
-            print(f"Error: File not found when setting rating: {image_path}")
+            logging.error(f"File not found when setting rating: {image_path}")
             return False
             
+        norm_path = unicodedata.normalize('NFC', os.path.normpath(image_path))
         exif_success = False
+        logging.info(f"[MetadataHandler] Setting rating for {os.path.basename(norm_path)} to {rating}")
         try:
             rating_str = str(rating)
             param = f"-XMP:Rating={rating_str}".encode('utf-8')
-            filename_bytes = image_path.encode('utf-8', errors='surrogateescape')
+            filename_bytes = norm_path.encode('utf-8', errors='surrogateescape')
 
-            with exiftool.ExifToolHelper() as et:
+            with exiftool.ExifToolHelper(common_args=["-charset", "UTF8"], encoding="utf-8") as et:
                 et.execute(param, b"-overwrite_original", filename_bytes)
                 exif_success = True
+                logging.info(f"[MetadataHandler] ExifTool successfully set rating for {os.path.basename(norm_path)}")
         except Exception as e:
-            print(f"Error setting rating for {os.path.basename(image_path)} via ExifTool: {e} (Type: {type(e).__name__})")
+            logging.error(f"Error setting rating for {os.path.basename(norm_path)}: {e}", exc_info=True)
             exif_success = False
         
         if exif_success:
             if rating_disk_cache:
-                try:
-                    rating_disk_cache.set(image_path, rating)
-                    # print(f"[MetadataHandler] Rating for {os.path.basename(image_path)} updated in rating_disk_cache: {rating}")
-                except Exception as ce_rating:
-                    print(f"Error updating rating_disk_cache for {os.path.basename(image_path)}: {ce_rating}")
-            
+                logging.info(f"[MetadataHandler] Updating rating_disk_cache for {os.path.basename(norm_path)} to {rating}")
+                rating_disk_cache.set(norm_path, rating)
             if exif_disk_cache:
-                try:
-                    exif_disk_cache.delete(image_path)
-                    # print(f"[MetadataHandler] EXIF data for {os.path.basename(image_path)} invalidated in exif_disk_cache.")
-                except Exception as ce_exif:
-                    print(f"Error invalidating exif_disk_cache for {os.path.basename(image_path)}: {ce_exif}")
-        
+                logging.info(f"[MetadataHandler] Deleting from exif_disk_cache for {os.path.basename(norm_path)} due to rating change.")
+                exif_disk_cache.delete(norm_path) # Invalidate specific entry
         return exif_success
 
     @staticmethod
@@ -371,112 +297,121 @@ class MetadataHandler:
         Returns True on apparent success, False on failure.
         """
         if not os.path.isfile(image_path):
-            print(f"Error: File not found when setting label: {image_path}")
+            logging.error(f"File not found when setting label: {image_path}")
             return False
 
+        norm_path = unicodedata.normalize('NFC', os.path.normpath(image_path))
         success = False
         try:
-            label_str = label if label else "" # Empty string to clear the label
+            label_str = label if label else "" 
             param = f"-XMP:Label={label_str}".encode('utf-8')
-            filename_bytes = image_path.encode('utf-8', errors='surrogateescape')
+            filename_bytes = norm_path.encode('utf-8', errors='surrogateescape')
 
-            with exiftool.ExifToolHelper() as et:
+            with exiftool.ExifToolHelper(common_args=["-charset", "UTF8"], encoding="utf-8") as et:
                 et.execute(param, b"-overwrite_original", filename_bytes)
-                # print(f"Executed set label '{label_str}' for {os.path.basename(image_path)}.")
                 success = True
         except Exception as e:
-            print(f"Error setting label for {os.path.basename(image_path)}: {e} (Type: {type(e).__name__})")
+            logging.error(f"Error setting label for {os.path.basename(norm_path)}: {e}", exc_info=True)
             success = False
         
         if success and exif_disk_cache:
-            try:
-                exif_disk_cache.delete(image_path)
-                # print(f"[MetadataHandler] EXIF data for {os.path.basename(image_path)} invalidated in exif_disk_cache due to label change.")
-            except Exception as ce_exif_label:
-                print(f"Error invalidating exif_disk_cache for {os.path.basename(image_path)} after label set: {ce_exif_label}")
+            exif_disk_cache.delete(norm_path) # Invalidate specific entry
         return success
 
 if __name__ == '__main__':
-    # Create a dummy image file for testing (requires Pillow)
-    test_image_path = "test_metadata_handler_image.jpg"
+    # Setup basic logging for testing
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # Create dummy image files for testing (requires Pillow)
+    test_dir = "test_metadata_temp_dir"
+    os.makedirs(test_dir, exist_ok=True)
+    test_image_path1 = os.path.join(test_dir, "test_image1_20230101.jpg")
+    test_image_path2 = os.path.join(test_dir, "test_image2_20230202.jpg")
+    
     try:
         from PIL import Image as PILImage
-        img = PILImage.new('RGB', (60, 30), color = 'red')
-        img.save(test_image_path, quality=90)
-        print(f"Created test image: {test_image_path}")
-
-        # Test 1: Set and Get Metadata
-        print("\n--- Test: Set and Get Metadata ---")
-        set_rating_ok = MetadataHandler.set_rating(test_image_path, 4)
-        print(f"Set rating to 4: {'Success' if set_rating_ok else 'Failed'}")
-        set_label_ok = MetadataHandler.set_label(test_image_path, "Green")
-        print(f"Set label to Green: {'Success' if set_label_ok else 'Failed'}")
-
-        metadata = MetadataHandler.get_display_metadata(test_image_path)
-        print(f"Fetched metadata: {metadata}")
-        assert metadata['rating'] == 4
-        assert metadata['label'] == "Green"
-        # Date might be from filesystem for a new file
-        if metadata['date']:
-            print(f"Date found: {metadata['date']}")
-        else:
-            print("Date not found (as expected for new file without EXIF date).")
+        img1 = PILImage.new('RGB', (60, 30), color = 'red')
+        img1.save(test_image_path1, quality=90)
+        # Forcing a date into exif for image1
+        with exiftool.ExifToolHelper() as et_setup:
+            et_setup.execute(b"-EXIF:DateTimeOriginal=2023:01:01 10:00:00", test_image_path1.encode('utf-8', errors='surrogateescape'))
+            et_setup.execute(b"-XMP:Rating=1", test_image_path1.encode('utf-8', errors='surrogateescape'))
 
 
-        # Test 2: Clear Metadata
-        print("\n--- Test: Clear Metadata ---")
-        set_rating_ok_clear = MetadataHandler.set_rating(test_image_path, 0) # Set to 0 stars
-        print(f"Set rating to 0: {'Success' if set_rating_ok_clear else 'Failed'}")
-        set_label_ok_clear = MetadataHandler.set_label(test_image_path, None) # Clear label
-        print(f"Cleared label: {'Success' if set_label_ok_clear else 'Failed'}")
+        img2 = PILImage.new('RGB', (60, 30), color = 'blue')
+        img2.save(test_image_path2, quality=90)
+        # No EXIF date for image2, should use filename
+        logging.info(f"Created test images: {test_image_path1}, {test_image_path2}")
+
+        # Test Caches (Optional for this direct test, but good practice)
+        exif_cache_test_dir = os.path.join(test_dir, "exif_cache")
+        rating_cache_test_dir = os.path.join(test_dir, "rating_cache")
+        exif_cache_instance = ExifCache(cache_dir=exif_cache_test_dir, size_limit_mb=1)
+        rating_cache_instance = RatingCache(cache_dir=rating_cache_test_dir, size_limit_mb=1)
+
+        # Test 1: Batch Get Metadata (first time, should use ExifTool)
+        logging.info("\n--- Test 1: Batch Get Metadata (Cache Miss) ---")
+        image_list = [test_image_path1, test_image_path2, "non_existent_file.jpg"]
+        batch_meta = MetadataHandler.get_batch_display_metadata(image_list, rating_cache_instance, exif_cache_instance)
         
-        metadata_cleared = MetadataHandler.get_display_metadata(test_image_path)
-        print(f"Fetched metadata after clearing: {metadata_cleared}")
-        assert metadata_cleared['rating'] == 0
-        assert metadata_cleared['label'] is None
-        
-        # Test 3: Date parsing from filename
-        print("\n--- Test: Date Parsing from Filename ---")
-        filenames_dates = {
-            "IMG_20230515_103000.jpg": date_obj(2023, 5, 15),
-            "MyPhoto_2022-11-01.png": date_obj(2022, 11, 1),
-            "Vacation 2021.12.25 Highlights.tif": date_obj(2021, 12, 25),
-            "NoDateHere.gif": None,
-            "20231231.jpg": date_obj(2023,12,31),
-            "Screenshot 20240105T142010.png": date_obj(2024,1,5),
-            "X20200229_valid_leap.jpg": date_obj(2020,2,29),
-            "IMG20210229_invalid_leap.jpg": None, # 2021 not leap
-        }
-        for fname, expected_date in filenames_dates.items():
-            parsed = _parse_date_from_filename(fname)
-            print(f"File: '{fname}', Expected: {expected_date}, Got: {parsed} -> {'OK' if parsed == expected_date else 'FAIL'}")
-            assert parsed == expected_date
+        norm_path1 = unicodedata.normalize('NFC', os.path.normpath(test_image_path1))
+        norm_path2 = unicodedata.normalize('NFC', os.path.normpath(test_image_path2))
+        norm_path_non_existent = unicodedata.normalize('NFC', os.path.normpath("non_existent_file.jpg"))
 
-        # Test 4: EXIF Date String Parsing
-        print("\n--- Test: EXIF Date String Parsing ---")
-        exif_dates_strings = {
-            "2023:05:16 10:30:45": date_obj(2023, 5, 16),
-            "2022-11-01 23:15:00": date_obj(2022, 11, 1),
-            "2021-12-25T08:00:30": date_obj(2021, 12, 25),
-            "2020:01:20": date_obj(2020, 1, 20),
-            "2019-07-04": date_obj(2019, 7, 4),
-            "2023:02:28 12:00:00.795659": date_obj(2023,2,28), # Fractional seconds
-            "2024-03-10T10:00:00Z": date_obj(2024,3,10), # Zulu time
-            "2024-03-10T05:00:00-05:00": date_obj(2024,3,10), # Timezone offset
-            "Invalid Date String": None,
-            "2023:13:01 10:00:00": None, # Invalid month
-        }
-        for date_str, expected_dt_obj in exif_dates_strings.items():
-            parsed_dt = _parse_exif_date(date_str)
-            print(f"String: '{date_str}', Expected: {expected_dt_obj}, Got: {parsed_dt} -> {'OK' if parsed_dt == expected_dt_obj else 'FAIL'}")
-            assert parsed_dt == expected_dt_obj
+        logging.info(f"Batch metadata results: {batch_meta}")
+        assert norm_path1 in batch_meta
+        assert batch_meta[norm_path1]['rating'] == 1
+        assert batch_meta[norm_path1]['date'] == date_obj(2023, 1, 1)
+        
+        assert norm_path2 in batch_meta
+        assert batch_meta[norm_path2]['rating'] == 0 # Default
+        assert batch_meta[norm_path2]['date'] == date_obj(2023, 2, 2) # From filename
+
+        assert norm_path_non_existent in batch_meta
+        assert batch_meta[norm_path_non_existent]['date'] is None # Parsed from filename which fails for this
+        
+        # Test 2: Batch Get Metadata (Cache Hit)
+        logging.info("\n--- Test 2: Batch Get Metadata (Cache Hit) ---")
+        batch_meta_cached = MetadataHandler.get_batch_display_metadata(image_list, rating_cache_instance, exif_cache_instance)
+        logging.info(f"Cached batch metadata results: {batch_meta_cached}")
+        assert batch_meta_cached[norm_path1]['rating'] == 1
+        assert batch_meta_cached[norm_path1]['date'] == date_obj(2023, 1, 1)
+        assert batch_meta_cached[norm_path2]['date'] == date_obj(2023, 2, 2)
+
+
+        # Test 3: Set Rating and Label
+        logging.info("\n--- Test 3: Set Rating and Label ---")
+        set_rating_ok = MetadataHandler.set_rating(test_image_path1, 4, rating_cache_instance, exif_cache_instance)
+        logging.info(f"Set rating for {os.path.basename(test_image_path1)} to 4: {'Success' if set_rating_ok else 'Failed'}")
+        assert set_rating_ok
+        assert rating_cache_instance.get(norm_path1) == 4 # Check rating cache
+        assert exif_cache_instance.get(norm_path1) is None # Check EXIF cache was invalidated
+
+        set_label_ok = MetadataHandler.set_label(test_image_path1, "Green", exif_cache_instance)
+        logging.info(f"Set label for {os.path.basename(test_image_path1)} to Green: {'Success' if set_label_ok else 'Failed'}")
+        assert set_label_ok
+        assert exif_cache_instance.get(norm_path1) is None # Check EXIF cache was invalidated again
+
+        # Re-fetch to confirm changes
+        meta_after_set = MetadataHandler.get_batch_display_metadata([test_image_path1], rating_cache_instance, exif_cache_instance)
+        logging.info(f"Metadata after set: {meta_after_set}")
+        assert meta_after_set[norm_path1]['rating'] == 4
+        assert meta_after_set[norm_path1]['label'] == "Green"
+
+        # Test Clear Label
+        clear_label_ok = MetadataHandler.set_label(test_image_path1, None, exif_cache_instance)
+        assert clear_label_ok
+        meta_after_clear_label = MetadataHandler.get_batch_display_metadata([test_image_path1], rating_cache_instance, exif_cache_instance)
+        assert meta_after_clear_label[norm_path1]['label'] is None
+
 
     except ImportError:
-        print("Pillow (PIL) or ExifTool is not installed. Skipping MetadataHandler tests.")
+        logging.error("Pillow (PIL) or ExifTool is not installed. Skipping MetadataHandler tests.")
     except Exception as e:
-        print(f"An error occurred during MetadataHandler tests: {e}")
+        logging.error(f"An error occurred during MetadataHandler tests: {e}", exc_info=True)
     finally:
-        if os.path.exists(test_image_path):
-            os.remove(test_image_path)
-            print(f"Cleaned up test image: {test_image_path}")
-        print("\n--- MetadataHandler Tests Complete ---")
+        import shutil
+        if os.path.exists(test_dir):
+            shutil.rmtree(test_dir)
+            logging.info(f"Cleaned up test directory: {test_dir}")
+        logging.info("\n--- MetadataHandler Tests Complete ---")

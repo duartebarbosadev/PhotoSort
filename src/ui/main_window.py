@@ -806,7 +806,7 @@ class MainWindow(QMainWindow):
 
         # Connect signals from WorkerManager for RatingLoader
         self.worker_manager.rating_load_progress.connect(self._handle_rating_load_progress)
-        self.worker_manager.rating_load_rating_loaded.connect(self._handle_rating_loaded)
+        self.worker_manager.rating_load_metadata_loaded.connect(self._handle_metadata_loaded) # Changed signal name
         self.worker_manager.rating_load_finished.connect(self._handle_rating_load_finished)
         self.worker_manager.rating_load_error.connect(self._handle_rating_load_error)
         logging.debug(f"MainWindow._connect_signals - End: {time.perf_counter() - start_time:.4f}s")
@@ -1578,36 +1578,33 @@ class MainWindow(QMainWindow):
                                     selected_file_paths.append(file_path)
         return selected_file_paths
 
-    def _fetch_and_update_metadata_for_selection(self, file_path: str) -> Optional[Dict[str, Any]]:
-        """Fetches metadata, updates AppState, and returns the metadata."""
-        if not os.path.isfile(file_path): 
+    def _get_cached_metadata_for_selection(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """Gets metadata from AppState caches. Assumes caches are populated by RatingLoaderWorker."""
+        if not os.path.isfile(file_path):
+            logging.warning(f"[_get_cached_metadata_for_selection] File not found: {file_path}")
             return None
             
-        # Pass both rating_disk_cache and exif_disk_cache to get_display_metadata
-        metadata = MetadataHandler.get_display_metadata(file_path, self.app_state.rating_disk_cache, self.app_state.exif_disk_cache)
-        current_rating = metadata['rating'] # This rating is now from disk cache or EXIF
-        current_label = metadata['label']
-        current_date = metadata['date']
+        # Data should have been populated by RatingLoaderWorker into AppState caches
+        # os.path.normpath is important for cache key consistency.
+        # RatingLoaderWorker stores with normalized paths.
+        normalized_path = os.path.normpath(file_path)
 
-        # Update in-memory AppState caches (rating_cache is the one primarily used by UI for filtering/display)
-        self.app_state.rating_cache[file_path] = current_rating
-        self.app_state.label_cache[file_path] = current_label
-        if current_date:
-            self.app_state.date_cache[file_path] = current_date
-        else:
-            self.app_state.date_cache.pop(file_path, None)
-        
-        return metadata
+        current_rating = self.app_state.rating_cache.get(normalized_path, 0)
+        current_label = self.app_state.label_cache.get(normalized_path)
+        current_date = self.app_state.date_cache.get(normalized_path)
+
+        return {'rating': current_rating, 'label': current_label, 'date': current_date}
 
     def _display_single_image_preview(self, file_path: str, file_data_from_model: Optional[Dict[str, Any]]):
         """Handles displaying preview and info for a single selected image."""
         overall_start_time = time.perf_counter()
-        print(f"[PERF] _display_single_image_preview START for: {os.path.basename(file_path)}")
+        logging.debug(f"[PERF] _display_single_image_preview START for: {os.path.basename(file_path)}")
 
         metadata_start_time = time.perf_counter()
-        metadata = self._fetch_and_update_metadata_for_selection(file_path)
+        # Get metadata from AppState caches
+        metadata = self._get_cached_metadata_for_selection(file_path)
         metadata_end_time = time.perf_counter()
-        print(f"[PERF] Metadata fetch took: {metadata_end_time - metadata_start_time:.4f}s")
+        logging.debug(f"[PERF] Metadata retrieval from cache took: {metadata_end_time - metadata_start_time:.4f}s")
 
         if not metadata:
             self.image_view.setText(f"File not found or metadata error:\n{os.path.basename(file_path)}")
@@ -1830,18 +1827,31 @@ class MainWindow(QMainWindow):
 
 
     def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
+        logging.info(f"[MainWindow] <<< ENTRY >>> _start_preview_preloader called with {len(image_data_list)} items.")
         if not image_data_list:
+            logging.info("[MainWindow] _start_preview_preloader: image_data_list is empty. Hiding overlay.")
             self.hide_loading_overlay()
             return
         
-        paths_for_preloader = [fd['path'] for fd in image_data_list]
+        paths_for_preloader = [fd['path'] for fd in image_data_list if fd and isinstance(fd, dict) and 'path' in fd]
+        logging.info(f"[MainWindow] _start_preview_preloader: Extracted {len(paths_for_preloader)} paths for preloader.")
+
         if not paths_for_preloader:
+            logging.info("[MainWindow] _start_preview_preloader: No valid paths_for_preloader. Hiding overlay.")
             self.hide_loading_overlay()
             return
  
-        self.update_loading_text("Preloading previews (thumbnails done)...")
-        self.worker_manager.start_preview_preload(paths_for_preloader, self.apply_auto_edits_enabled)
- 
+        self.update_loading_text(f"Preloading previews ({len(paths_for_preloader)} images)...")
+        logging.info(f"[MainWindow] _start_preview_preloader: Calling worker_manager.start_preview_preload for {len(paths_for_preloader)} paths.")
+        try:
+            logging.info(f"[MainWindow] _start_preview_preloader: --- CALLING --- worker_manager.start_preview_preload for {len(paths_for_preloader)} paths.")
+            self.worker_manager.start_preview_preload(paths_for_preloader, self.apply_auto_edits_enabled)
+            logging.info("[MainWindow] _start_preview_preloader: --- RETURNED --- worker_manager.start_preview_preload call successful.")
+        except Exception as e_preview_preload:
+            logging.error(f"[MainWindow] _start_preview_preloader: Error calling worker_manager.start_preview_preload: {e_preview_preload}", exc_info=True)
+            self.hide_loading_overlay() # Ensure overlay is hidden on error
+        logging.info(f"[MainWindow] <<< EXIT >>> _start_preview_preloader.")
+  
     # Slot for WorkerManager's file_scan_thumbnail_preload_finished signal
     # This signal is now deprecated in favor of chaining after rating load.
     # Keeping the method signature for now in case it's used elsewhere, but logic is changed.
@@ -1856,10 +1866,13 @@ class MainWindow(QMainWindow):
     # --- Rating Loader Worker Handlers ---
     def _handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0
+        logging.debug(f"[MainWindow] Rating load progress: {percentage}% ({current}/{total}) - {basename}")
         self.update_loading_text(f"Loading ratings: {percentage}% ({current}/{total}) - {basename}")
 
-    def _handle_rating_loaded(self, image_path: str, rating: int):
-        # AppState.rating_cache is already updated by the worker.
+    def _handle_metadata_loaded(self, image_path: str, metadata: Dict[str, Any]):
+        logging.debug(f"[MainWindow] Metadata loaded for {os.path.basename(image_path)}: {metadata}")
+        # AppState caches (rating_cache, label_cache, date_cache) are already updated by RatingLoaderWorker.
+        
         # If the currently selected item is this one, update its display.
         active_view = self._get_active_file_view()
         if active_view and active_view.currentIndex().isValid():
@@ -1869,20 +1882,38 @@ class MainWindow(QMainWindow):
             if item:
                 item_data = item.data(Qt.ItemDataRole.UserRole)
                 if isinstance(item_data, dict) and item_data.get('path') == image_path:
-                    self._update_rating_display(rating) # Update star buttons if this image is selected
-                    # Status bar might also need an update if this is the selected image
-                    self._handle_file_selection_changed() # Re-trigger to update status bar correctly
+                    logging.debug(f"[MainWindow] Updating display for selected item: {os.path.basename(image_path)}")
+                    # Update rating buttons, label buttons, and potentially status bar.
+                    # _fetch_and_update_metadata_for_selection has similar logic but re-fetches,
+                    # here we use the already fetched `metadata` from the worker.
+                    self._update_rating_display(metadata.get('rating', 0))
+                    self._update_label_display(metadata.get('label'))
+                    # Re-trigger full selection change handler to update status bar and potentially preview
+                    # if other aspects (like date for status bar) might have changed.
+                    self._handle_file_selection_changed()
 
     def _handle_rating_load_finished(self):
+        logging.info("[MainWindow] _handle_rating_load_finished: Received RatingLoaderWorker.finished signal.")
         self.statusBar().showMessage("Background rating loading finished.", 3000)
-        # Now that ratings are loaded, start preview preloading
-        if self.app_state.image_files_data:
-            self.update_loading_text("Ratings loaded. Preloading previews...")
-            self._start_preview_preloader(self.app_state.image_files_data.copy())
-        else:
+        
+        if not self.app_state.image_files_data:
+            logging.info("[MainWindow] _handle_rating_load_finished: No image files data found in app_state. Hiding loading overlay.")
             self.hide_loading_overlay()
+            return
+
+        logging.info("[MainWindow] _handle_rating_load_finished: image_files_data found. Preparing to start preview preloader.")
+        self.update_loading_text("Ratings loaded. Preloading previews...")
+        try:
+            logging.info("[MainWindow] _handle_rating_load_finished: --- CALLING --- _start_preview_preloader.")
+            self._start_preview_preloader(self.app_state.image_files_data.copy())
+            logging.info("[MainWindow] _handle_rating_load_finished: --- RETURNED --- _start_preview_preloader call completed.")
+        except Exception as e_start_preview:
+            logging.error(f"[MainWindow] _handle_rating_load_finished: Error calling _start_preview_preloader: {e_start_preview}", exc_info=True)
+            self.hide_loading_overlay() # Ensure overlay is hidden on error
+        logging.info("[MainWindow] <<< EXIT >>> _handle_rating_load_finished.")
 
     def _handle_rating_load_error(self, message: str):
+        logging.error(f"[MainWindow] Rating Load Error: {message}")
         self.statusBar().showMessage(f"Rating Load Error: {message}", 5000)
         # Still proceed to preview preloading even if rating load had errors for some files
         if self.app_state.image_files_data:
@@ -1894,19 +1925,27 @@ class MainWindow(QMainWindow):
 
     # Slot for WorkerManager's preview_preload_progress signal
     def _handle_preview_progress(self, percentage: int, message: str):
+        logging.info(f"[MainWindow] <<< ENTRY >>> _handle_preview_progress: {percentage}% - {message}")
         self.update_loading_text(message)
+        logging.info(f"[MainWindow] <<< EXIT >>> _handle_preview_progress.")
 
     # Slot for WorkerManager's preview_preload_finished signal
     def _handle_preview_finished(self):
+        logging.info("[MainWindow] <<< ENTRY >>> _handle_preview_finished: Received PreviewPreloaderWorker.finished signal.")
         self.statusBar().showMessage("Preview preloading finished.", 5000)
         self.hide_loading_overlay()
+        logging.info("[MainWindow] _handle_preview_finished: Loading overlay hidden.")
         # WorkerManager handles thread cleanup
+        logging.info("[MainWindow] <<< EXIT >>> _handle_preview_finished.")
 
     # Slot for WorkerManager's preview_preload_error signal
     def _handle_preview_error(self, message: str):
+        logging.info(f"[MainWindow] <<< ENTRY >>> _handle_preview_error: {message}")
+        logging.error(f"[MainWindow] Preview Preload Error: {message}")
         self.statusBar().showMessage(f"Preview Preload Error: {message}", 5000)
         self.hide_loading_overlay()
         # WorkerManager handles thread cleanup
+        logging.info(f"[MainWindow] <<< EXIT >>> _handle_preview_error.")
  
     def _set_label_from_button(self):
         sender_button = self.sender()
