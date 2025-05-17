@@ -98,21 +98,3 @@ class AppState:
             if file_data.get('path') == file_path:
                 return file_data
         return None
-
-if __name__ == '__main__':
-    app_state = AppState()
-    app_state.image_files_data.append({'path': '/img/a.jpg', 'is_blurred': False})
-    app_state.rating_cache['/img/a.jpg'] = 5
-    print(f"Initial state: {app_state.image_files_data}, {app_state.rating_cache}")
-
-    app_state.update_data_for_path_move('/img/a.jpg', '/img_new/a_moved.jpg')
-    print(f"After move: {app_state.image_files_data}, {app_state.rating_cache}")
-    
-    app_state.update_blur_status('/img_new/a_moved.jpg', True)
-    print(f"After blur update: {app_state.get_file_data_by_path('/img_new/a_moved.jpg')}")
-
-    app_state.remove_data_for_path('/img_new/a_moved.jpg')
-    print(f"After remove: {app_state.image_files_data}, {app_state.rating_cache}")
-
-    app_state.clear_all_file_specific_data()
-    print(f"After clear all: {app_state.image_files_data}")
