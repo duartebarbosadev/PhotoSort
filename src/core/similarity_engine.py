@@ -244,12 +244,6 @@ class SimilarityEngine(QObject):
         embedding_matrix = np.array(list(embeddings.values()), dtype=np.float32)
         num_samples, _ = embedding_matrix.shape
 
-        if num_samples < 2: # DBSCAN needs at least 2 samples to potentially form a cluster
-            print(f"[SimilarityEngine] Not enough samples ({num_samples}) for DBSCAN clustering. Assigning all to cluster 0.")
-            results = {filepath: 0 for filepath in filepaths}
-            self.clustering_complete.emit(results)
-            return
-
         labels = None
         try:
             print(f"[SimilarityEngine] Attempting DBSCAN clustering: {num_samples} samples, eps={DBSCAN_EPS}, min_samples={DBSCAN_MIN_SAMPLES}.")
@@ -260,45 +254,44 @@ class SimilarityEngine(QObject):
             dbscan = DBSCAN(eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES, metric='cosine')
             dbscan_labels = dbscan.fit_predict(embedding_matrix)
             
-            # Map DBSCAN's -1 (noise) labels to 0, and shift other labels up by 1
-            # to maintain non-negative cluster IDs and keep 0 for noise/unclustered.
-            # Or, if you want to keep -1 as a distinct "noise" group that the UI might handle differently:
-            # labels = dbscan_labels
-            # For now, let's map noise to 0 and shift others.
-            
-            # Find the number of actual clusters found (excluding noise)
-            unique_labels = set(dbscan_labels)
-            num_discovered_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
-            
-            # Create a mapping for labels: noise (-1) -> 0, cluster 0 -> 1, cluster 1 -> 2, etc.
-            # This ensures cluster IDs are 0-indexed for noise, and 1-indexed for actual clusters.
-            # However, the UI currently expects 0-indexed clusters.
-            # Let's re-think: if -1 is noise, we can keep it as -1 or map it to a high number
-            # or simply treat it as a special cluster.
-            # For simplicity with current UI, let's map noise (-1) to 0, and actual clusters 0, 1, 2... to 1, 2, 3...
-            # Then, when emitting, we can shift them back if UI expects 0-indexed clusters for actual groups.
-            # The current UI seems to handle "Group 0", "Group 1", etc.
-            # Let's make noise cluster 0, and other clusters start from 1.
-            
-            final_labels = np.zeros_like(dbscan_labels)
-            current_new_label = 1 # Start actual clusters from label 1
-            label_map = {} # To map original dbscan labels to new sequential ones
-            
-            # Sort original cluster labels (excluding -1) to assign new labels consistently
-            sorted_original_cluster_indices = sorted([l for l in unique_labels if l != -1])
+            final_labels = np.zeros_like(dbscan_labels, dtype=int) # Array to store new group IDs
+            unique_dbscan_labels = set(dbscan_labels)
 
-            for original_label in sorted_original_cluster_indices:
-                label_map[original_label] = current_new_label
-                current_new_label += 1
+            label_map_for_actual_clusters = {}
+            current_new_label_id = 1 # Start actual clusters from ID 1
             
-            for i, l in enumerate(dbscan_labels):
-                if l == -1:
-                    final_labels[i] = 0 # Noise points go to cluster 0
-                else:
-                    final_labels[i] = label_map[l] # Mapped actual clusters
+            # Sort original non-noise cluster indices from DBSCAN to assign new IDs consistently
+            sorted_original_actual_cluster_indices = sorted([l for l in unique_dbscan_labels if l != -1])
 
-            labels = final_labels
-            print(f"[SimilarityEngine] DBSCAN clustering successful. Found {num_discovered_clusters} clusters (plus noise group 0).")
+            for original_cluster_idx in sorted_original_actual_cluster_indices:
+                label_map_for_actual_clusters[original_cluster_idx] = current_new_label_id
+                current_new_label_id += 1
+            
+            # next_available_group_id_for_noise will start from where actual cluster IDs left off
+            next_available_group_id_for_noise = current_new_label_id
+            
+            noise_points_count = 0
+            
+            for i, original_label in enumerate(dbscan_labels):
+                if original_label == -1: # This is a noise point
+                    final_labels[i] = next_available_group_id_for_noise
+                    next_available_group_id_for_noise += 1 # Each noise point gets a new, unique ID
+                    noise_points_count += 1
+                else: # This point belongs to an actual cluster
+                    final_labels[i] = label_map_for_actual_clusters[original_label]
+            
+            labels = final_labels # Use these new labels for results
+            
+            num_actual_clusters_formed = len(label_map_for_actual_clusters)
+            
+            log_message_parts = []
+            if num_actual_clusters_formed > 0:
+                log_message_parts.append(f"{num_actual_clusters_formed} actual cluster(s)")
+            if noise_points_count > 0:
+                log_message_parts.append(f"{noise_points_count} image(s) assigned to individual groups")
+            
+            clustering_summary_log_message = ", ".join(log_message_parts) if log_message_parts else "No distinct groups formed"
+            print(f"[SimilarityEngine] DBSCAN clustering processed. {clustering_summary_log_message}.")
 
         except Exception as e_dbscan:
             error_msg = f"Error during DBSCAN clustering: {e_dbscan}"
