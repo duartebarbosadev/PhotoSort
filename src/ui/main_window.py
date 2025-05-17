@@ -29,10 +29,11 @@ from src.core.image_pipeline import ImagePipeline
 from src.core.image_file_ops import ImageFileOperations
 # from src.core.image_features.blur_detector import BlurDetector # Now managed by WorkerManager
 from src.core.rating_handler import MetadataHandler # Renamed from RatingHandler
-from src.core.app_settings import get_preview_cache_size_gb, set_preview_cache_size_gb, get_preview_cache_size_bytes # Import settings
+from src.core.app_settings import get_preview_cache_size_gb, set_preview_cache_size_gb, get_preview_cache_size_bytes, get_exif_cache_size_mb, set_exif_cache_size_mb # Import settings
 from PyQt6.QtWidgets import QFormLayout, QComboBox, QSizePolicy # For cache dialog
 from src.ui.app_state import AppState # Import AppState
 from src.core.caching.rating_cache import RatingCache # Import RatingCache for type hinting
+from src.core.caching.exif_cache import ExifCache # Import ExifCache for type hinting and methods
 from src.ui.ui_components import LoadingOverlay # PreviewPreloaderWorker, BlurDetectionWorker are used by WorkerManager
 from src.ui.worker_manager import WorkerManager # Import WorkerManager
 from src.core.file_scanner import SUPPORTED_EXTENSIONS # Import from file_scanner
@@ -360,6 +361,50 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(delete_preview_cache_button, 4, 0, 1, 2)
 
         main_layout.addWidget(preview_frame)
+
+        # --- EXIF Cache Section ---
+        exif_section_title = QLabel("EXIF Metadata Cache")
+        exif_section_title.setObjectName("cacheSectionTitle")
+        main_layout.addWidget(exif_section_title)
+
+        exif_frame = QFrame()
+        exif_frame.setObjectName("cacheSectionFrame")
+        exif_layout = QGridLayout(exif_frame)
+
+        self.exif_cache_configured_limit_label = QLabel()
+        exif_layout.addWidget(QLabel("Configured Size Limit:"), 0, 0)
+        exif_layout.addWidget(self.exif_cache_configured_limit_label, 0, 1)
+
+        self.exif_cache_usage_label = QLabel()
+        exif_layout.addWidget(QLabel("Current Disk Usage:"), 1, 0)
+        exif_layout.addWidget(self.exif_cache_usage_label, 1, 1)
+
+        exif_layout.addWidget(QLabel("Set New Limit (MB):"), 2, 0)
+        self.exif_cache_size_combo = QComboBox()
+        self.exif_cache_size_combo.setObjectName("exifCacheSizeCombo") # Unique object name
+        self.exif_cache_size_options_mb = [64, 128, 256, 512, 1024] # MB options
+        self.exif_cache_size_combo.addItems([f"{size} MB" for size in self.exif_cache_size_options_mb])
+
+        current_exif_conf_mb = get_exif_cache_size_mb()
+        try:
+            current_exif_index = self.exif_cache_size_options_mb.index(current_exif_conf_mb)
+            self.exif_cache_size_combo.setCurrentIndex(current_exif_index)
+        except ValueError:
+            self.exif_cache_size_combo.addItem(f"{current_exif_conf_mb} MB (Custom)")
+            self.exif_cache_size_combo.setCurrentIndex(self.exif_cache_size_combo.count() - 1)
+        exif_layout.addWidget(self.exif_cache_size_combo, 2, 1)
+
+        apply_exif_limit_button = QPushButton("Apply New EXIF Limit")
+        apply_exif_limit_button.setObjectName("applyExifLimitButton")
+        apply_exif_limit_button.clicked.connect(self._apply_exif_cache_limit_action)
+        exif_layout.addWidget(apply_exif_limit_button, 3, 0, 1, 2)
+
+        delete_exif_cache_button = QPushButton("Clear EXIF Cache")
+        delete_exif_cache_button.setObjectName("deleteExifCacheButton") # Unique object name
+        delete_exif_cache_button.clicked.connect(self._clear_exif_cache_action)
+        exif_layout.addWidget(delete_exif_cache_button, 4, 0, 1, 2)
+
+        main_layout.addWidget(exif_frame)
         
         main_layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
         close_button = QPushButton("Close")
@@ -380,6 +425,16 @@ class MainWindow(QMainWindow):
         
         preview_usage_bytes = self.image_pipeline.preview_cache.volume()
         self.preview_cache_usage_label.setText(f"{preview_usage_bytes / (1024*1024):.2f} MB")
+
+        # Update EXIF cache labels
+        if hasattr(self, 'app_state') and self.app_state.exif_disk_cache:
+            exif_configured_mb = self.app_state.exif_disk_cache.get_current_size_limit_mb()
+            self.exif_cache_configured_limit_label.setText(f"{exif_configured_mb} MB")
+            exif_usage_bytes = self.app_state.exif_disk_cache.volume()
+            self.exif_cache_usage_label.setText(f"{exif_usage_bytes / (1024*1024):.2f} MB")
+        else: # Fallback if app_state or exif_disk_cache is not yet fully initialized
+            self.exif_cache_configured_limit_label.setText("N/A")
+            self.exif_cache_usage_label.setText("N/A")
 
     def _clear_thumbnail_cache_action(self):
         self.image_pipeline.thumbnail_cache.clear()
@@ -411,6 +466,36 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Preview cache limit set to {new_size_gb:.2f} GB. Cache reinitialized.", 5000)
         else:
             self.statusBar().showMessage(f"Preview cache limit is already {new_size_gb:.2f} GB.", 3000)
+        self._update_cache_dialog_labels()
+
+    def _clear_exif_cache_action(self):
+        if self.app_state.exif_disk_cache:
+            self.app_state.exif_disk_cache.clear()
+            self.statusBar().showMessage("EXIF cache cleared.", 5000)
+            self._update_cache_dialog_labels()
+            # No direct visual refresh needed for EXIF data itself in list/grid,
+            # but metadata display for current image might need update
+            self._refresh_current_selection_preview() # This will re-fetch metadata
+
+    def _apply_exif_cache_limit_action(self):
+        selected_index = self.exif_cache_size_combo.currentIndex()
+        new_size_mb = 0
+        if self.exif_cache_size_combo.itemText(selected_index).endswith("(Custom)"):
+            new_size_mb = int(self.exif_cache_size_combo.itemText(selected_index).split(" ")[0])
+        elif 0 <= selected_index < len(self.exif_cache_size_options_mb):
+            new_size_mb = self.exif_cache_size_options_mb[selected_index]
+        else:
+            self.statusBar().showMessage("Invalid selection for EXIF cache size.", 3000)
+            return
+
+        if self.app_state.exif_disk_cache:
+            current_size_mb = self.app_state.exif_disk_cache.get_current_size_limit_mb()
+            if new_size_mb != current_size_mb:
+                set_exif_cache_size_mb(new_size_mb) # Update app_settings
+                self.app_state.exif_disk_cache.reinitialize_from_settings() # Reinitialize ExifCache
+                self.statusBar().showMessage(f"EXIF cache limit set to {new_size_mb} MB. Cache reinitialized.", 5000)
+            else:
+                self.statusBar().showMessage(f"EXIF cache limit is already {new_size_mb} MB.", 3000)
         self._update_cache_dialog_labels()
         
     def _refresh_visible_items_icons(self):

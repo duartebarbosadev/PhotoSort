@@ -4,32 +4,38 @@ import logging # Added for startup logging
 import time # Added for startup timing
 from typing import Optional, Dict, Any
 
+# Import the settings functions to get the cache size limit
+from src.core.app_settings import get_exif_cache_size_bytes, get_exif_cache_size_mb, DEFAULT_EXIF_CACHE_SIZE_MB
+
 # Default path for the EXIF metadata cache
 DEFAULT_EXIF_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'phototagger_exif_data')
-DEFAULT_EXIF_CACHE_SIZE_LIMIT_MB = 256  # Default 256MB limit
+# DEFAULT_EXIF_CACHE_SIZE_LIMIT_MB is now managed by app_settings
 
 class ExifCache:
     """
     Manages a disk-based cache for image EXIF metadata (dictionaries).
+    The cache size is configurable via app_settings.
     """
-    def __init__(self, cache_dir: str = DEFAULT_EXIF_CACHE_DIR, size_limit_mb: int = DEFAULT_EXIF_CACHE_SIZE_LIMIT_MB):
+    def __init__(self, cache_dir: str = DEFAULT_EXIF_CACHE_DIR):
         init_start_time = time.perf_counter()
-        logging.info(f"ExifCache.__init__ - Start, dir: {cache_dir}, size_limit: {size_limit_mb:.2f} MB")
+        # size_limit_mb is now fetched from app_settings
+        self._size_limit_mb = get_exif_cache_size_mb()
+        logging.info(f"ExifCache.__init__ - Start, dir: {cache_dir}, configured size_limit: {self._size_limit_mb} MB")
         """
         Initializes the EXIF metadata cache.
+        The size limit is read from app_settings.
 
         Args:
             cache_dir (str): The directory where the cache will be stored.
-            size_limit_mb (int): The maximum size of the cache in megabytes.
         """
         os.makedirs(cache_dir, exist_ok=True)
         self._cache_dir = cache_dir
-        size_limit_bytes = size_limit_mb * 1024 * 1024
+        self._size_limit_bytes = get_exif_cache_size_bytes() # Use function from app_settings
         
         # disk_min_file_size=0 means all entries go to disk files immediately.
         # For potentially larger dicts, this might be reasonable.
-        self._cache = diskcache.Cache(directory=cache_dir, size_limit=size_limit_bytes, disk_min_file_size=4096) # Store larger items on disk
-        log_msg = f"[ExifCache] Initialized at {cache_dir} with size limit {size_limit_mb:.2f} MB"
+        self._cache = diskcache.Cache(directory=cache_dir, size_limit=self._size_limit_bytes, disk_min_file_size=4096) # Store larger items on disk
+        log_msg = f"[ExifCache] Initialized at {cache_dir} with size limit {self._size_limit_bytes / (1024*1024):.2f} MB"
         # print(log_msg) # Replaced by logging
         logging.info(f"ExifCache.__init__ - DiskCache instantiated. {log_msg}")
         logging.info(f"ExifCache.__init__ - End: {time.perf_counter() - init_start_time:.4f}s")
@@ -106,6 +112,22 @@ class ExifCache:
             print(f"Error getting exif_cache volume: {e}")
             return 0
 
+    def get_current_size_limit_mb(self) -> int:
+        """Returns the current configured size limit in MB."""
+        return self._size_limit_mb
+
+    def reinitialize_from_settings(self) -> None:
+        """
+        Closes and reinitializes the cache with the current size limit from app_settings.
+        """
+        print("[ExifCache] Reinitializing EXIF cache...")
+        self.close() # Close the existing cache
+        
+        self._size_limit_mb = get_exif_cache_size_mb()
+        self._size_limit_bytes = get_exif_cache_size_bytes()
+        self._cache = diskcache.Cache(directory=self._cache_dir, size_limit=self._size_limit_bytes, disk_min_file_size=4096)
+        print(f"[ExifCache] Reinitialized. New size limit: {self._size_limit_mb} MB.")
+
     def close(self) -> None:
         """Closes the cache."""
         try:
@@ -121,10 +143,17 @@ class ExifCache:
         self.close()
 
 if __name__ == '__main__':
+    from src.core.app_settings import set_exif_cache_size_mb # For testing
     # Example Usage
     test_cache_dir_exif = os.path.join(os.path.expanduser('~'), '.cache', 'test_phototagger_exif_data')
-    exif_c = ExifCache(cache_dir=test_cache_dir_exif, size_limit_mb=1) # 1MB limit for test
+    
+    # Set a specific size for testing via app_settings
+    original_size_mb = get_exif_cache_size_mb()
+    set_exif_cache_size_mb(1) # 1MB limit for test
+    
+    exif_c = ExifCache(cache_dir=test_cache_dir_exif) # Now reads from app_settings
     print(f"Initial EXIF cache volume: {exif_c.volume() / 1024:.2f} KB")
+    print(f"Configured EXIF cache limit: {exif_c.get_current_size_limit_mb()} MB")
 
     test_image_path_exif = "/test/image_exif.jpg"
     test_metadata_exif: Dict[str, Any] = {
@@ -178,13 +207,28 @@ if __name__ == '__main__':
         # Test getting non-existent key
         print(f"Getting non-existent key from EXIF cache: {exif_c.get('/path/to/nonexistent_exif.jpg')}")
 
+        # Test reinitialize
+        print("\nTesting EXIF cache reinitialization (simulating settings change)...")
+        set_exif_cache_size_mb(2) # Change setting to 2MB
+        exif_c.reinitialize_from_settings()
+        print(f"EXIF Cache limit after reinit: {exif_c.get_current_size_limit_mb()} MB")
+        assert exif_c.get_current_size_limit_mb() == 2
+        
+        # Create a new item to check if the reinitialized cache works
+        exif_c.set("/test/after_reinit.jpg", {"test": "data"})
+        assert "/test/after_reinit.jpg" in exif_c
+
     except Exception as e_exif:
         print(f"Error during ExifCache test: {e_exif}")
     finally:
         # Clean up test cache
-        exif_c.clear()
-        exif_c.close()
+        if 'exif_c' in locals() and exif_c._cache is not None : # Ensure cache was initialized
+            exif_c.clear()
+            exif_c.close()
         import shutil
         if os.path.exists(test_cache_dir_exif):
              shutil.rmtree(test_cache_dir_exif)
+        # Reset app settings to original
+        if 'original_size_mb' in locals():
+            set_exif_cache_size_mb(original_size_mb)
         print("Test ExifCache cleaned up.")

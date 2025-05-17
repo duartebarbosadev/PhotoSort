@@ -127,6 +127,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 *   **Advanced AI Object/Scene Detections & Grouping**:
     *   **Car Model Recognition**: Identify and allow grouping by specific car models in photos.
     *   **Face Recognition/Clustering**: Detect faces and group photos by the people present.
+*   **Side by Side** Select Multiple images and see them side by side, with zoom lock etc.
 
 ## Contributing
 

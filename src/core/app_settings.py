@@ -9,6 +9,10 @@ APPLICATION_NAME = "PhotoRanker"
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 1.0
 PREVIEW_CACHE_SIZE_KEY = "preview_cache_size_gb"
 
+# --- EXIF Cache Settings ---
+DEFAULT_EXIF_CACHE_SIZE_MB = 256  # Default EXIF cache size in Megabytes (MB)
+EXIF_CACHE_SIZE_MB_KEY = "exif_cache_size_mb"
+
 # --- Model Settings ---
 DEFAULT_CLIP_MODEL = "sentence-transformers/clip-ViT-B-32" # Common default, adjust if different
 
@@ -53,21 +57,52 @@ def get_preview_cache_size_bytes() -> int:
     size_gb = get_preview_cache_size_gb()
     return int(size_gb * 1024 * 1024 * 1024)
 
+# --- EXIF Cache Size Functions ---
+def get_exif_cache_size_mb() -> int:
+    """Gets the configured EXIF cache size in Megabytes (MB)."""
+    settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
+    size_mb_str = settings.value(EXIF_CACHE_SIZE_MB_KEY, str(DEFAULT_EXIF_CACHE_SIZE_MB))
+    try:
+        if isinstance(size_mb_str, (int, float)): # QSettings might return int/float
+            return int(float(size_mb_str))
+        return int(str(size_mb_str)) # Convert to str first for safety then int
+    except ValueError:
+        return DEFAULT_EXIF_CACHE_SIZE_MB
+
+def set_exif_cache_size_mb(size_mb: int):
+    """Sets the EXIF cache size in Megabytes (MB)."""
+    settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
+    settings.setValue(EXIF_CACHE_SIZE_MB_KEY, int(size_mb)) # Store as int
+    print(f"[AppSettings] EXIF cache size set to: {size_mb} MB")
+
+def get_exif_cache_size_bytes() -> int:
+    """Gets the configured EXIF cache size in bytes."""
+    size_mb = get_exif_cache_size_mb()
+    return int(size_mb * 1024 * 1024)
+
 if __name__ == '__main__':
-    # Test functions
+    # Test functions for Preview Cache
+    print("--- Preview Cache Settings Test ---")
     print(f"Initial preview cache size: {get_preview_cache_size_gb()} GB ({get_preview_cache_size_bytes()} bytes)")
     set_preview_cache_size_gb(2.5)
     print(f"Set preview cache size to: {get_preview_cache_size_gb()} GB")
-    # QSettings stores it as double if float is passed, or string if string is passed.
-    # Let's test reading it back after setting to ensure type consistency.
     settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
-    print(f"Raw value from QSettings: {settings.value(PREVIEW_CACHE_SIZE_KEY)}, type: {type(settings.value(PREVIEW_CACHE_SIZE_KEY))}")
-
+    print(f"Raw preview value from QSettings: {settings.value(PREVIEW_CACHE_SIZE_KEY)}, type: {type(settings.value(PREVIEW_CACHE_SIZE_KEY))}")
     set_preview_cache_size_gb(DEFAULT_PREVIEW_CACHE_SIZE_GB) # Reset to default
     print(f"Reset preview cache size to: {get_preview_cache_size_gb()} GB")
-    print(f"Raw value after reset: {settings.value(PREVIEW_CACHE_SIZE_KEY)}, type: {type(settings.value(PREVIEW_CACHE_SIZE_KEY))}")
+    print(f"Raw preview value after reset: {settings.value(PREVIEW_CACHE_SIZE_KEY)}, type: {type(settings.value(PREVIEW_CACHE_SIZE_KEY))}")
 
-    print(f"Default CLIP Model: {DEFAULT_CLIP_MODEL}")
+    # Test functions for EXIF Cache
+    print("\n--- EXIF Cache Settings Test ---")
+    print(f"Initial EXIF cache size: {get_exif_cache_size_mb()} MB ({get_exif_cache_size_bytes()} bytes)")
+    set_exif_cache_size_mb(512)
+    print(f"Set EXIF cache size to: {get_exif_cache_size_mb()} MB")
+    print(f"Raw EXIF value from QSettings: {settings.value(EXIF_CACHE_SIZE_MB_KEY)}, type: {type(settings.value(EXIF_CACHE_SIZE_MB_KEY))}")
+    set_exif_cache_size_mb(DEFAULT_EXIF_CACHE_SIZE_MB) # Reset to default
+    print(f"Reset EXIF cache size to: {get_exif_cache_size_mb()} MB")
+    print(f"Raw EXIF value after reset: {settings.value(EXIF_CACHE_SIZE_MB_KEY)}, type: {type(settings.value(EXIF_CACHE_SIZE_MB_KEY))}")
+
+    print(f"\nDefault CLIP Model: {DEFAULT_CLIP_MODEL}")
     print(f"PyTorch CUDA Available: {is_pytorch_cuda_available()}")
     # Call it again to test caching
     print(f"PyTorch CUDA Available (cached): {is_pytorch_cuda_available()}")

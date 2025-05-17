@@ -17,7 +17,7 @@ class AppState:
         self.cluster_results: Dict[str, int] = {} # {image_path: cluster_id}
         self.embeddings_cache: Dict[str, List[float]] = {} # {image_path: embedding_vector}
         self.rating_disk_cache = RatingCache() # Instance of the new disk cache for ratings
-        self.exif_disk_cache = ExifCache() # Instance of the new disk cache for EXIF data
+        self.exif_disk_cache = ExifCache() # Instance of the new disk cache for EXIF data, now reads size from app_settings
         
         # Could also hold current folder path, filter states, etc. if desired.
         self.current_folder_path: Optional[str] = None
