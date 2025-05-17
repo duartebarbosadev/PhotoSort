@@ -229,8 +229,10 @@ class WorkerManager(QObject):
     def start_blur_detection(self, image_data_list: List[Dict[str, Any]], blur_threshold: float, apply_auto_edits_for_raw: bool):
         self.stop_blur_detection()
         self.blur_detection_thread = QThread()
+        # Ensure image_paths is a list of strings, not list of dicts
+        image_paths = [data['path'] for data in image_data_list if isinstance(data, dict) and 'path' in data]
         self.blur_detection_worker = BlurDetectionWorker(
-            image_data_list, blur_threshold, apply_auto_edits_for_raw
+            image_paths, blur_threshold, apply_auto_edits_for_raw
         )
         self.blur_detection_worker.moveToThread(self.blur_detection_thread)
 

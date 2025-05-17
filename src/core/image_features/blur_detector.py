@@ -2,7 +2,8 @@ import os
 import cv2
 import numpy as np
 from PIL import Image, UnidentifiedImageError
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict, Callable, Any
+import concurrent.futures
 
 # Assuming these processors are in the new structure
 from src.core.image_processing.raw_image_processor import RawImageProcessor, is_raw_extension
@@ -10,6 +11,7 @@ from src.core.image_processing.standard_image_processor import StandardImageProc
 
 # Default size for the image used in blur detection
 BLUR_DETECTION_PREVIEW_SIZE: Tuple[int, int] = (640, 480)
+DEFAULT_NUM_WORKERS = min(os.cpu_count() or 4, 8) # Default number of workers for batch processing
 
 class BlurDetector:
     """Detects blurriness in images."""
@@ -125,6 +127,90 @@ class BlurDetector:
             print(f"[BlurDetector] Error during blur detection for {normalized_path}: {e} (Type: {type(e).__name__})")
             return None
 
+    @staticmethod
+    def _detect_blur_task(
+        image_path: str,
+        threshold: float,
+        apply_auto_edits_for_raw_preview: bool,
+        target_size: Tuple[int, int],
+        status_update_callback: Optional[Callable[[str, Optional[bool]], None]]
+    ) -> None:
+        """
+        Worker task for detecting blur in a single image and calling the status callback.
+        """
+        try:
+            is_blurred = BlurDetector.is_image_blurred(
+                image_path,
+                threshold,
+                apply_auto_edits_for_raw_preview,
+                target_size
+            )
+            if status_update_callback:
+                status_update_callback(image_path, is_blurred)
+        except Exception as e:
+            print(f"[BlurDetectorTask] Error processing {image_path}: {e}")
+            if status_update_callback:
+                status_update_callback(image_path, None) # Report error as None
+
+    @staticmethod
+    def detect_blur_in_batch(
+        image_paths: List[str],
+        threshold: float = 100.0,
+        apply_auto_edits_for_raw_preview: bool = False,
+        target_size: Tuple[int, int] = BLUR_DETECTION_PREVIEW_SIZE,
+        status_update_callback: Optional[Callable[[str, Optional[bool]], None]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        should_continue_callback: Optional[Callable[[], bool]] = None,
+        num_workers: Optional[int] = None
+    ) -> None:
+        """
+        Detects blurriness for a batch of images in parallel.
+        Invokes status_update_callback for each image result and progress_callback periodically.
+        """
+        total_files = len(image_paths)
+        processed_count = 0
+        
+        effective_num_workers = num_workers if num_workers is not None else DEFAULT_NUM_WORKERS
+        print(f"[BlurDetectorBatch] Starting for {total_files} files, workers: {effective_num_workers}")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=effective_num_workers) as executor:
+            futures_map: Dict[concurrent.futures.Future, str] = {}
+            for image_path in image_paths:
+                if should_continue_callback and not should_continue_callback():
+                    print("[BlurDetectorBatch] Cancellation requested, stopping new tasks.")
+                    break
+                
+                future = executor.submit(
+                    BlurDetector._detect_blur_task,
+                    image_path,
+                    threshold,
+                    apply_auto_edits_for_raw_preview,
+                    target_size,
+                    status_update_callback # Pass the callback to the task
+                )
+                futures_map[future] = image_path
+            
+            for future in concurrent.futures.as_completed(futures_map):
+                path_for_future = futures_map[future]
+                try:
+                    future.result() # _detect_blur_task doesn't return, it calls callback. Wait for completion/exception.
+                except Exception as e:
+                    print(f"[BlurDetectorBatch] Error processing future for {path_for_future}: {e}")
+                    if status_update_callback: # Ensure callback for error if task itself didn't catch it
+                        status_update_callback(path_for_future, None)
+                
+                processed_count += 1
+                if progress_callback:
+                    progress_callback(processed_count, total_files, os.path.basename(path_for_future))
+                
+                if should_continue_callback and not should_continue_callback():
+                    for f_cancel in futures_map: # Cancel remaining futures
+                        if not f_cancel.done(): f_cancel.cancel()
+                    print("[BlurDetectorBatch] Processing cancelled during completion.")
+                    break
+        print(f"[BlurDetectorBatch] Finished. Processed {processed_count}/{total_files} files.")
+
+
 if __name__ == '__main__':
     # Example Usage:
     # Ensure you have sample RAW and standard image files.
@@ -169,13 +255,52 @@ if __name__ == '__main__':
             print(f"  Could not determine blurriness for '{sample_raw_file}'. (Expected if dummy file)")
     else:
         print(f"\nSkipping RAW test, file not found: {sample_raw_file}")
+
+    print("\n--- Testing BlurDetector Batch ---")
+    
+    all_samples = []
+    if os.path.exists(sample_jpg_file): all_samples.append(sample_jpg_file)
+    if os.path.exists(sample_raw_file): all_samples.append(sample_raw_file)
+    # Add more files for a more realistic batch test
+    # For simplicity, we'll use the same files if they exist.
+    
+    if not all_samples:
+        print("No sample files found for batch test. Skipping.")
+    else:
+        batch_results: Dict[str, Optional[bool]] = {}
+
+        def _status_update(path: str, blurred_status: Optional[bool]):
+            print(f"  Batch Status Update: {os.path.basename(path)} -> Blurred: {blurred_status}")
+            batch_results[path] = blurred_status
+
+        def _progress_update(current: int, total: int, basename: str):
+            print(f"  Batch Progress: {current}/{total} - {basename}")
+
+        print(f"Testing batch blur detection for {len(all_samples)} file(s)...")
+        BlurDetector.detect_blur_in_batch(
+            image_paths=all_samples,
+            threshold=100.0,
+            apply_auto_edits_for_raw_preview=False,
+            status_update_callback=_status_update,
+            progress_callback=_progress_update
+        )
+        print("Batch blur detection complete. Results:")
+        for path, status in batch_results.items():
+            print(f"  - {os.path.basename(path)}: {'Blurred' if status else 'Not Blurred' if status is False else 'Error/Unknown'}")
         
     print("\n--- BlurDetector Tests Complete ---")
 
     # Cleanup dummy files if they were created by this test script
-    # if "test_image.jpg" in sample_jpg_file and os.path.exists(sample_jpg_file):
-    #     if Image.open(sample_jpg_file).size == (600,400) : # Basic check it's our dummy
-    #         os.remove(sample_jpg_file)
-    # if "test_image.arw" in sample_raw_file and os.path.exists(sample_raw_file):
-    #     if os.path.getsize(sample_raw_file) == 0: # Basic check it's our dummy
-    #         os.remove(sample_raw_file)
+    # Consider making cleanup more robust if real files are used for testing
+    files_to_remove_at_end = []
+    if "test_image.jpg" in sample_jpg_file and os.path.exists(sample_jpg_file): files_to_remove_at_end.append(sample_jpg_file)
+    if "test_image.arw" in sample_raw_file and os.path.exists(sample_raw_file): files_to_remove_at_end.append(sample_raw_file)
+
+    # for f_path in files_to_remove_at_end:
+    #     try:
+    #         # Add more specific checks if these are not dummy files created by the script
+    #         # For now, assuming they are the ones created above
+    #         print(f"Attempting to remove: {f_path}")
+    #         os.remove(f_path)
+    #     except Exception as e:
+    #         print(f"Could not remove {f_path}: {e}")

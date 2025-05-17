@@ -105,9 +105,9 @@ class BlurDetectionWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, image_data_list: List[Dict[str, Any]], blur_threshold: float, apply_auto_edits_for_raw: bool, parent=None):
+    def __init__(self, image_paths: List[str], blur_threshold: float, apply_auto_edits_for_raw: bool, parent=None):
         super().__init__(parent)
-        self._image_data_list = image_data_list
+        self._image_paths = image_paths # Changed from image_data_list
         self._blur_threshold = blur_threshold
         self._apply_auto_edits = apply_auto_edits_for_raw
         self._is_running = True
@@ -115,35 +115,28 @@ class BlurDetectionWorker(QObject):
     def stop(self):
         self._is_running = False
 
+    def _should_continue(self) -> bool:
+        return self._is_running
+
     def run_detection(self):
         self._is_running = True
-        total_files = len(self._image_data_list)
-        processed_count = 0
-
-        for i, file_data in enumerate(self._image_data_list):
-            if not self._is_running:
-                self.error.emit("Blur detection cancelled.")
-                break
-            
-            path = file_data['path']
-            # Emit progress for each file being processed
-            self.progress_update.emit(processed_count + 1, total_files, os.path.basename(path))
-            
-            try:
-                is_blurred_val = BlurDetector.is_image_blurred(
-                    path,
-                    threshold=self._blur_threshold,
-                    apply_auto_edits_for_raw_preview=self._apply_auto_edits
-                )
-                if is_blurred_val is not None:
-                    self.blur_status_updated.emit(path, is_blurred_val)
-                else:
-                    # This case might occur if BlurDetector returns None (e.g., file not found, unsupported type)
-                    print(f"[BlurDetectionWorker] Could not determine blur status for {path}")
-            except Exception as e:
-                # Catch any unexpected errors during blur detection for a single file
-                print(f"[BlurDetectionWorker] Error detecting blur for {path}: {e}")
-            
-            processed_count += 1
-        
-        self.finished.emit()
+        try:
+            BlurDetector.detect_blur_in_batch(
+                image_paths=self._image_paths,
+                threshold=self._blur_threshold,
+                apply_auto_edits_for_raw_preview=self._apply_auto_edits,
+                status_update_callback=self.blur_status_updated.emit, # Pass signal emitter directly
+                progress_callback=self.progress_update.emit,       # Pass signal emitter directly
+                should_continue_callback=self._should_continue
+            )
+        except Exception as e:
+            err_msg = f"Error during batch blur detection: {e}"
+            print(f"[BlurDetectionWorker] {err_msg}")
+            self.error.emit(err_msg)
+        finally:
+            if not self._is_running and not self.signalsBlocked(): # If stopped, error might have been emitted by batch
+                pass # Avoid double emitting error if already cancelled and handled by batch
+            elif self.signalsBlocked(): # If signals were blocked (e.g. due to deletion)
+                pass
+            else: # Normal finish
+                self.finished.emit()
