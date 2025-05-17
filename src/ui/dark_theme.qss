@@ -1,0 +1,497 @@
+/* Modern Dark Theme for PhotoRanker - V2 (Less Boxy) */
+
+/* Global Settings */
+QWidget {
+    background-color: #2B2B2B; /* Main background - slightly adjusted for overall feel */
+    color: #D1D1D1; /* Main text color */
+    font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 9pt;
+    border: none; /* Remove default borders globally */
+}
+
+QMainWindow {
+    background-color: #202020; /* Darkest background for the window frame */
+}
+
+/* Menu Bar */
+QMenuBar {
+    background-color: #202020;
+    color: #D1D1D1;
+    padding: 4px; /* Slightly less padding */
+    border-bottom: 1px solid #383838; /* Subtler border */
+}
+QMenuBar::item {
+    background-color: transparent;
+    padding: 5px 10px; /* Adjusted padding */
+    border-radius: 4px;
+}
+QMenuBar::item:selected { /* Hover/Selection */
+    background-color: #0078D4; /* Brighter accent for menu selection */
+    color: #FFFFFF;
+}
+QMenu {
+    background-color: #2D2D2D; /* Slightly lighter than menubar for dropdown */
+    border: 1px solid #404040; /* Border for menu popup */
+    border-radius: 4px;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 5px 20px 5px 20px; /* Consistent padding */
+    border-radius: 3px;
+}
+QMenu::item:selected {
+    background-color: #0078D4;
+    color: #FFFFFF;
+}
+QMenu::separator {
+    height: 1px;
+    background: #404040;
+    margin: 4px 0px;
+}
+
+/* Status Bar */
+QStatusBar {
+    background-color: #202020;
+    color: #A0A0A0; /* Dimmer text for status */
+    border-top: 1px solid #383838;
+    padding: 3px 8px;
+    font-size: 8pt;
+}
+QStatusBar QLabel {
+    color: #888888; /* Even dimmer for sub-labels */
+}
+
+
+/* --- Left Pane (File Lists) --- */
+QWidget#left_pane_widget {
+    background-color: #252525; /* Distinct background for the file list area */
+    /* No border needed here, splitter handles separation */
+}
+
+QTreeView, QListView {
+    background-color: transparent; /* Transparent to show left_pane_widget bg */
+    border: none;
+    padding: 4px; /* Minimal padding */
+    alternate-background-color: #2A2A2A; /* Subtle alternation */
+    outline: 0; /* Remove focus outline */
+}
+QTreeView::item {
+    background-color: transparent;
+    color: #D1D1D1; /* Main text color for TreeView */
+    padding: 4px;
+    border-radius: 3px;
+    margin: 0px;
+}
+
+QListView::item { /* Specifically for Grid View items */
+    background-color: transparent;
+    /* color property removed to allow item.setForeground() to take effect,
+       will inherit default text color from QWidget if not set by item. */
+    padding: 4px;
+    border-radius: 3px;
+    margin: 0px;
+}
+QTreeView::item:selected, QListView::item:selected {
+    background-color: #0078D4; /* Consistent accent */
+    color: #FFFFFF;
+}
+QTreeView::item:hover:!selected, QListView::item:hover:!selected {
+    background-color: #3A3A3A; /* Hover color */
+    color: #FFFFFF;
+}
+QTreeView::branch {
+    background: transparent;
+    /* Consider using SVGs for arrows if default ones look bad */
+}
+/* Default branch arrows are usually fine with dark themes */
+
+
+/* --- Center Pane (Image and its Controls) --- */
+QWidget#center_pane_container {
+    background-color: #1E1E1E; /* Darkest area for image focus */
+}
+
+QLabel#image_view {
+    background-color: #1E1E1E; /* Match parent */
+    padding: 0px; /* Image should fill this */
+    color: #777777; /* Placeholder text color */
+}
+
+/* Image Action Bar (Ratings & Colors) */
+QWidget#image_action_bar {
+    background-color: #272727; /* Slightly lighter than image view bg */
+    border-top: 1px solid #1A1A1A; /* Very dark, subtle separator */
+    min-height: 42px; /* Compact height */
+    max-height: 42px;
+    padding: 0 10px; /* Horizontal padding for the bar content */
+}
+
+/* Buttons within image_action_bar: Stars, Color Squares, Clear Icons */
+QWidget#rating_widget QPushButton,
+QWidget#color_widget QPushButton {
+    background-color: transparent; /* Make them "ghost" buttons */
+    color: #A0A0A0; /* Dimmer icon/text color */
+    border: none; /* No border by default */
+    border-radius: 4px; /* Soften edges */
+    padding: 3px;
+}
+QWidget#rating_widget QPushButton:hover,
+QWidget#color_widget QPushButton:hover {
+    background-color: #3D3D3D; /* Subtle background on hover */
+    color: #FFFFFF;
+}
+QWidget#rating_widget QPushButton:pressed, /* No distinct pressed, hover is enough */
+QWidget#color_widget QPushButton:pressed {
+    background-color: #353535;
+}
+
+/* Star Buttons specifics */
+QWidget#rating_widget QPushButton {
+    font-size: 15pt; /* Slightly larger stars */
+    min-width: 26px;
+    min-height: 26px;
+    /* Text color (★ vs ☆) set in Python */
+}
+
+/* Color Label Buttons specifics */
+QWidget#color_widget QPushButton {
+    min-width: 18px;
+    min-height: 18px;
+    max-width: 18px;
+    max-height: 18px;
+    border: 1px solid transparent; /* Transparent border, becomes visible on selection */
+    /* Background color set in Python */
+}
+/* Selected state for color buttons is handled in Python by changing border */
+QWidget#color_widget QPushButton:hover {
+    border: 1px solid #555555; /* Subtle border on hover if not selected */
+}
+
+
+/* --- Bottom Bar (Navigation, Filters, etc.) --- */
+QWidget#bottom_bar {
+    background-color: #202020; /* Matches menubar */
+    border-top: 1px solid #383838;
+    min-height: 38px; /* Compact bar */
+    max-height: 38px;
+    padding: 0 5px; /* Padding for the bar itself */
+}
+
+/* General Buttons in bottom_bar (Text buttons like View modes) */
+QWidget#bottom_bar QPushButton {
+    background-color: #333333; /* Darker base for text buttons */
+    color: #C0C0C0;
+    border: 1px solid #404040;
+    padding: 4px 8px;
+    border-radius: 4px;
+    min-height: 24px;
+}
+QWidget#bottom_bar QPushButton:hover {
+    background-color: #3D3D3D;
+    border-color: #505050;
+    color: #FFFFFF;
+}
+QWidget#bottom_bar QPushButton:pressed {
+    background-color: #2A2A2A;
+}
+QWidget#bottom_bar QPushButton:disabled {
+    background-color: #2C2C2C;
+    color: #666666;
+    border-color: #353535;
+}
+
+/* Navigation Buttons (Icon-only) in bottom_bar */
+QWidget#nav_widget QPushButton {
+    background-color: transparent; /* Ghost buttons for icons */
+    color: #A0A0A0;
+    border: none;
+    border-radius: 4px;
+    padding: 4px;
+    min-width: 26px;
+    min-height: 26px;
+}
+QWidget#nav_widget QPushButton:hover {
+    background-color: #3D3D3D;
+    color: #FFFFFF;
+}
+
+/* Labels in bottom_bar (e.g., "Filter:", "View:") */
+QWidget#bottom_bar QLabel {
+    color: #909090; /* Dimmer text for labels */
+    padding: 0px 2px 0px 5px; /* Left padding for spacing from previous element */
+    font-size: 8.5pt;
+    background-color: transparent; /* Ensure no inherited background */
+}
+
+/* Combo Box (Filter) in bottom_bar */
+QWidget#bottom_bar QComboBox {
+    background-color: #2D2D2D;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    padding: 4px 6px;
+    min-width: 5em;
+    min-height: 22px; /* Match other controls */
+    color: #C0C0C0;
+}
+QWidget#bottom_bar QComboBox:hover {
+    background-color: #353535;
+    border-color: #505050;
+}
+QWidget#bottom_bar QComboBox:focus {
+    border: 1px solid #0078D4; /* Accent border on focus */
+}
+QWidget#bottom_bar QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 16px;
+    border-left: 1px solid #404040; /* Separator for arrow */
+}
+QWidget#bottom_bar QComboBox::down-arrow {
+    image: url(:/qt-project.org/styles/commonstyle/images/downarraow-16.png); /* Keep default for now */
+    width: 9px;
+    height: 9px;
+}
+/* QComboBox QAbstractItemView (dropdown list) - uses global QMenu styling mostly */
+QComboBox QAbstractItemView {
+    background-color: #2D2D2D;
+    border: 1px solid #484848;
+    border-radius: 4px; /* Matches QMenu */
+    selection-background-color: #0078D4;
+    color: #D1D1D1;
+    padding: 2px; /* Minimal padding for dropdown items */
+    outline: 0;
+}
+
+/* Line Edit (Search) in bottom_bar */
+QWidget#bottom_bar QLineEdit {
+    background-color: #2D2D2D;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    padding: 4px 6px;
+    color: #D1D1D1;
+    min-height: 22px; /* Match other controls */
+}
+QWidget#bottom_bar QLineEdit:focus {
+    border: 1px solid #0078D4;
+    background-color: #353535;
+}
+QWidget#bottom_bar QLineEdit::placeholder-text {
+    color: #777777;
+}
+
+
+/* Splitter Handle */
+QSplitter#main_splitter::handle {
+    background-color: #2B2B2B; /* Match main background */
+}
+QSplitter#main_splitter::handle:horizontal {
+    width: 2px; /* Very thin handle */
+    margin: 0 2px; /* Minimal margin */
+}
+QSplitter#main_splitter::handle:vertical {
+    height: 2px;
+    margin: 2px 0;
+}
+QSplitter#main_splitter::handle:hover {
+    background-color: #0078D4; /* Accent on hover */
+}
+QSplitter#main_splitter::handle:pressed {
+    background-color: #005A9E; /* Darker accent when pressed */
+}
+
+/* Scroll Bars */
+QScrollBar:vertical {
+    border: none;
+    background: #252525; /* Match left pane background or slightly darker */
+    width: 8px; /* Slimmer scrollbar */
+    margin: 0px;
+}
+QScrollBar::handle:vertical {
+    background: #4D4D4D; /* Handle color */
+    min-height: 20px;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover { background: #5A5A5A; }
+QScrollBar::handle:vertical:pressed { background: #404040; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px; background: none;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+
+QScrollBar:horizontal {
+    border: none;
+    background: #252525;
+    height: 8px;
+    margin: 0px;
+}
+QScrollBar::handle:horizontal {
+    background: #4D4D4D;
+    min-width: 20px;
+    border-radius: 4px;
+}
+QScrollBar::handle:horizontal:hover { background: #5A5A5A; }
+QScrollBar::handle:horizontal:pressed { background: #404040; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px; background: none;
+}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
+
+/* Tooltip Styling */
+QToolTip {
+    background-color: #1C1C1C; /* Very dark for tooltips */
+    color: #E0E0E0;
+    border: 1px solid #0078D4; /* Accent border */
+    padding: 5px;
+    border-radius: 4px;
+    opacity: 235; /* Standard opacity */
+}
+
+/* HeaderView (often hidden in your app, but good to have a style) */
+QHeaderView::section {
+    background-color: #2D2D2D;
+    color: #C0C0C0;
+    padding: 4px;
+    border: 1px solid #383838;
+}
+
+/* --- Loading Overlay --- */
+LoadingOverlay { /* Target the class name */
+    /* The overlay itself is transparent, its child bg_widget provides the visible background */
+}
+
+LoadingOverlay > QWidget { /* Targets the bg_widget directly inside LoadingOverlay */
+    background-color: rgba(32, 32, 32, 0.85); /* Slightly lighter than pure black, 85% opacity */
+    border-radius: 10px; /* Rounded corners for the entire overlay box */
+}
+
+LoadingOverlay QLabel#loading_text_label { /* Target the QLabel by object name */
+    color: #E5E5E5; /* Bright text */
+    font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15pt;
+    font-weight: bold;
+    background-color: transparent; /* Text background is transparent */
+    padding: 25px; /* Generous padding around the text */
+    border: none; /* No border for the label itself */
+    border-radius: 0px; /* No specific radius for label, parent QWidget has it */
+}
+
+/* Optional: Style for an animation label if you add one */
+/*
+LoadingOverlay QLabel#loading_animation_label {
+    background-color: transparent;
+    padding-bottom: 10px;
+}
+*/
+
+/* --- Cache Management Dialog --- */
+QDialog#cacheManagementDialog {
+    background-color: #2B2B2B;
+    border: 1px solid #3A3A3A; /* Subtle border for the dialog itself */
+}
+
+QDialog#cacheManagementDialog QLabel {
+    color: #C0C0C0; /* Standard text color for labels within this dialog */
+    background-color: transparent; /* Ensure labels don't pick up strange backgrounds */
+    padding: 2px 0; /* Add some vertical padding */
+}
+
+QLabel#cacheSectionTitle {
+    font-size: 11pt;
+    font-weight: bold;
+    color: #0090D0; /* Accent color for titles */
+    padding-top: 5px;
+    padding-bottom: 3px;
+    border-bottom: 1px solid #383838;
+    margin-bottom: 5px;
+}
+
+QFrame#cacheSectionFrame {
+    background-color: #252525; /* Slightly darker than dialog bg for grouping */
+    border: 1px solid #333333;
+    border-radius: 5px;
+    padding: 10px; /* Padding inside the frame */
+}
+
+/* Buttons within the Cache Dialog */
+QDialog#cacheManagementDialog QPushButton {
+    background-color: #383838;
+    color: #D1D1D1;
+    border: 1px solid #454545;
+    padding: 6px 12px;
+    border-radius: 4px;
+    min-height: 26px;
+}
+QDialog#cacheManagementDialog QPushButton:hover {
+    background-color: #4A4A4A;
+    border-color: #555555;
+    color: #FFFFFF;
+}
+QDialog#cacheManagementDialog QPushButton:pressed {
+    background-color: #303030;
+}
+
+/* Specific Buttons */
+QPushButton#deleteThumbnailCacheButton,
+QPushButton#deletePreviewCacheButton {
+    background-color: #C92C2C; /* Destructive action red */
+    color: #FFFFFF;
+    font-weight: bold;
+    border-color: #A02020;
+}
+QPushButton#deleteThumbnailCacheButton:hover,
+QPushButton#deletePreviewCacheButton:hover {
+    background-color: #E04040;
+    border-color: #B03030;
+}
+QPushButton#deleteThumbnailCacheButton:pressed,
+QPushButton#deletePreviewCacheButton:pressed {
+    background-color: #B02020;
+}
+
+QPushButton#applyPreviewLimitButton {
+    background-color: #0078D4; /* Accent blue for apply */
+    color: #FFFFFF;
+    font-weight: bold;
+    border-color: #005A9E;
+}
+QPushButton#applyPreviewLimitButton:hover {
+    background-color: #0088F0;
+    border-color: #006AB0;
+}
+QPushButton#applyPreviewLimitButton:pressed {
+    background-color: #005A9E;
+}
+
+QPushButton#cacheDialogCloseButton {
+    /* Uses default QDialog#cacheManagementDialog QPushButton style or can be more specific */
+    min-width: 80px; /* Give close button a decent width */
+}
+
+/* ComboBox for Cache Size Limit */
+QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo {
+    background-color: #2D2D2D;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    padding: 5px 8px; /* Slightly more padding */
+    min-height: 24px;
+    color: #D1D1D1;
+}
+QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo:hover {
+    background-color: #353535;
+    border-color: #505050;
+}
+QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo:focus {
+    border: 1px solid #0078D4;
+}
+QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 18px; /* Slightly wider dropdown arrow area */
+    border-left: 1px solid #404040;
+}
+QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo::down-arrow {
+    image: url(:/qt-project.org/styles/commonstyle/images/downarraow-16.png); /* Standard arrow */
+    width: 10px; /* Adjust size as needed */
+    height: 10px;
+}
+/* Dropdown list for the ComboBox uses global QMenu/QAbstractItemView styling, which should be fine */

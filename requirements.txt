@@ -1,0 +1,12 @@
+PyQt6
+rawpy
+PyExifTool
+Pillow
+pyqtdarktheme
+pyexiftool
+sentence-transformers
+scikit-learn
+torch
+diskcache
+send2trash
+opencv-python
