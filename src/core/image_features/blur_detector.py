@@ -116,7 +116,7 @@ class BlurDetector:
             gray = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
             laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
             
-            # print(f"[BlurDetector] Blur detection for {os.path.basename(normalized_path)}: Laplacian Variance = {laplacian_var:.2f}, Threshold = {threshold}, Blurred = {laplacian_var < threshold}")
+            print(f"[BlurDetector] Blur detection for {os.path.basename(normalized_path)}: Laplacian Variance = {laplacian_var:.2f}, Threshold = {threshold}, Blurred = {laplacian_var < threshold}")
 
             return laplacian_var < threshold
 

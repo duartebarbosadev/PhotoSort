@@ -65,13 +65,13 @@ class SimilarityEngine(QObject):
                 from sentence_transformers import SentenceTransformer # Local import
                 model_load_start_time = time.perf_counter()
                 logging.info(f"SimilarityEngine._load_model - Loading model: {self.model_name}...")
-                # print(f"[SimilarityEngine] Loading model: {self.model_name}...") # Replaced by logging
+                print(f"[SimilarityEngine] Loading model: {self.model_name}...") # Replaced by logging
                 self.progress_update.emit(0, f"Loading model: {self.model_name}...")
                 
                 # Let SentenceTransformer auto-select device based on PyTorch's CUDA availability
                 model_device = 'cuda' if is_pytorch_cuda_available() else 'cpu' # Use imported function
                 logging.info(f"SimilarityEngine._load_model - Attempting to load model on device: {model_device}")
-                # print(f"[SimilarityEngine] Attempting to load model on device: {model_device}") # Replaced by logging
+                print(f"[SimilarityEngine] Attempting to load model on device: {model_device}") # Replaced by logging
                 self.model = SentenceTransformer(self.model_name, device=model_device)
                 
                 # Log actual device model is on
@@ -81,7 +81,7 @@ class SimilarityEngine(QObject):
                 elif hasattr(self.model, 'device') and self.model.device is not None: # Older sentence-transformers
                      actual_device_str = str(self.model.device)
                 logging.info(f"SimilarityEngine._load_model - Model loaded. Actual device: {actual_device_str}")
-                # print(f"[SimilarityEngine] Model loaded. Actual device: {actual_device_str}") # Replaced by logging
+                print(f"[SimilarityEngine] Model loaded. Actual device: {actual_device_str}") # Replaced by logging
 
                 # Attempt to set use_fast=True (this part is optional, might not apply to all CLIP models)
                 if hasattr(self.model, 'tokenizer') and \
@@ -96,7 +96,7 @@ class SimilarityEngine(QObject):
             except Exception as e:
                 error_msg = f"Error loading SentenceTransformer model '{self.model_name}': {e}"
                 logging.error(f"SimilarityEngine._load_model - {error_msg}")
-                # print(f"[SimilarityEngine] {error_msg}") # Replaced by logging
+                print(f"[SimilarityEngine] {error_msg}") # Replaced by logging
                 self.error.emit(error_msg)
                 self.model = None
         return self.model is not None
@@ -106,29 +106,29 @@ class SimilarityEngine(QObject):
             try:
                 cache_load_start_time = time.perf_counter()
                 logging.info(f"SimilarityEngine._load_cached_embeddings - Loading from: {self._cache_path}")
-                # print(f"[SimilarityEngine] Loading embeddings cache from: {self._cache_path}") # Replaced by logging
+                print(f"[SimilarityEngine] Loading embeddings cache from: {self._cache_path}") # Replaced by logging
                 with open(self._cache_path, 'rb') as f:
                     cache_data = pickle.load(f)
                     logging.info(f"SimilarityEngine._load_cached_embeddings - Loaded {len(cache_data)} embeddings from cache in {time.perf_counter() - cache_load_start_time:.4f}s")
-                    # print(f"[SimilarityEngine] Loaded {len(cache_data)} embeddings from cache.") # Replaced by logging
+                    print(f"[SimilarityEngine] Loaded {len(cache_data)} embeddings from cache.") # Replaced by logging
                     return cache_data
             except Exception as e:
                 logging.warning(f"SimilarityEngine._load_cached_embeddings - Error loading cache file '{self._cache_path}': {e}. Starting fresh.")
-                # print(f"[SimilarityEngine] Error loading cache file '{self._cache_path}': {e}. Starting fresh.") # Replaced by logging
+                print(f"[SimilarityEngine] Error loading cache file '{self._cache_path}': {e}. Starting fresh.") # Replaced by logging
         return {}
 
     def _save_embeddings_to_cache(self, embeddings: Dict[str, List[float]]):
         try:
             cache_save_start_time = time.perf_counter()
             logging.info(f"SimilarityEngine._save_embeddings_to_cache - Saving {len(embeddings)} embeddings to: {self._cache_path}")
-            # print(f"[SimilarityEngine] Saving {len(embeddings)} embeddings to cache: {self._cache_path}") # Replaced by logging
+            print(f"[SimilarityEngine] Saving {len(embeddings)} embeddings to cache: {self._cache_path}") # Replaced by logging
             with open(self._cache_path, 'wb') as f:
                 pickle.dump(embeddings, f)
             logging.info(f"SimilarityEngine._save_embeddings_to_cache - Embeddings saved in {time.perf_counter() - cache_save_start_time:.4f}s")
             # print("[SimilarityEngine] Embeddings saved.") # Replaced by logging
         except Exception as e:
             logging.error(f"SimilarityEngine._save_embeddings_to_cache - Error saving cache file '{self._cache_path}': {e}")
-            # print(f"[SimilarityEngine] Error saving cache file '{self._cache_path}': {e}") # Replaced by logging
+            print(f"[SimilarityEngine] Error saving cache file '{self._cache_path}': {e}") # Replaced by logging
             self.error.emit(f"Could not save embeddings cache: {e}")
 
     def generate_embeddings_for_files(self, file_paths: List[str], apply_auto_edits: bool = False):

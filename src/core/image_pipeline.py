@@ -166,7 +166,7 @@ class ImagePipeline:
         # 1. Check if display-sized version is already cached
         cached_display_pil = self.preview_cache.get(display_cache_key)
         if cached_display_pil:
-            # print(f"[ImagePipeline] Preview cache HIT for DISPLAY size: {normalized_path}")
+            print(f"[ImagePipeline] Preview cache HIT for DISPLAY size: {normalized_path}")
             return QPixmap.fromImage(ImageQt(cached_display_pil))
 
         # 2. Check if a high-resolution PRELOADED version is cached
@@ -175,7 +175,7 @@ class ImagePipeline:
         cached_high_res_pil = self.preview_cache.get(preload_cache_key)
         
         if cached_high_res_pil:
-            # print(f"[ImagePipeline] Preview cache HIT for PRELOADED high-res: {normalized_path}. Resizing...")
+            print(f"[ImagePipeline] Preview cache HIT for PRELOADED high-res: {normalized_path}. Resizing...")
             display_pil_img = cached_high_res_pil.copy()
             if display_max_size:
                 display_pil_img.thumbnail(display_max_size, Image.Resampling.LANCZOS)
@@ -184,7 +184,7 @@ class ImagePipeline:
             return QPixmap.fromImage(ImageQt(display_pil_img))
 
         # 3. Generate fresh for display size, then cache
-        # print(f"[ImagePipeline] Preview cache MISS for ALL: {normalized_path}. Generating for display...")
+        print(f"[ImagePipeline] Preview cache MISS for ALL: {normalized_path}. Generating for display...")
         generated_display_pil = self._generate_pil_preview_for_display(normalized_path, display_max_size, apply_auto_edits)
         if generated_display_pil:
             self.preview_cache.set(display_cache_key, generated_display_pil)
@@ -259,17 +259,17 @@ class ImagePipeline:
         elif ext in SUPPORTED_STANDARD_EXTENSIONS:
             pil_img = StandardImageProcessor.process_for_preview(normalized_path, PRELOAD_MAX_RESOLUTION)
         else:
-            # print(f"[ImagePipeline PREVIEW_PRELOAD] Unsupported extension: {ext} for {normalized_path}")
+            print(f"[ImagePipeline PREVIEW_PRELOAD] Unsupported extension: {ext} for {normalized_path}")
             return False # Or log error
         
         if pil_img:
             # pil_img = self.image_orientation_handler.exif_transpose(pil_img) # Processors should handle this.
             self.preview_cache.set(preload_cache_key, pil_img)
             duration = time.time() - start_time
-            # print(f"[ImagePipeline PREVIEW_PRELOAD] Generated/cached preview for {normalized_path} in {duration:.2f}s")
+            print(f"[ImagePipeline PREVIEW_PRELOAD] Generated/cached preview for {normalized_path} in {duration:.2f}s")
             return True
         else:
-            # print(f"[ImagePipeline PREVIEW_PRELOAD] Failed to generate preview for {normalized_path}")
+            print(f"[ImagePipeline PREVIEW_PRELOAD] Failed to generate preview for {normalized_path}")
             return False
 
 
@@ -331,11 +331,11 @@ class ImagePipeline:
             preload_key = (normalized_path, PRELOAD_MAX_RESOLUTION, apply_auto_edits)
             cached_preview = self.preview_cache.get(preload_key)
             if cached_preview:
-                # print(f"[ImagePipeline] Using preloaded preview for processing: {normalized_path}")
+                print(f"[ImagePipeline] Using preloaded preview for processing: {normalized_path}")
                 return cached_preview.convert(target_mode) if cached_preview.mode != target_mode else cached_preview
 
         # Fallback to loading directly
-        # print(f"[ImagePipeline] No suitable preloaded preview, loading directly for processing: {normalized_path}")
+        print(f"[ImagePipeline] No suitable preloaded preview, loading directly for processing: {normalized_path}")
         pil_img: Optional[Image.Image] = None
         ext = os.path.splitext(normalized_path)[1].lower()
 

@@ -118,7 +118,7 @@ class FileScanner(QObject):
                         thumbnail_paths_only.append(full_path) # Keep a list of paths for thumbnail preloader
                         
                         self.files_found.emit([file_info])  # Emit file info immediately
-                        # print(f"[Scanner] Found: {full_path}, Blurred: {is_blurred}")
+                        print(f"[Scanner] Found: {full_path}, Blurred: {is_blurred}")
 
 
             if not self._is_running:

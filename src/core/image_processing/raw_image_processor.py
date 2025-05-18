@@ -2,9 +2,10 @@ import rawpy
 from PIL import Image, ImageOps, UnidentifiedImageError
 import io
 import os
-import logging # Added for startup logging
-import time # Added for startup timing
+import logging
+import time
 from typing import Optional, Set
+from PIL import ImageEnhance # Added for brightness adjustment on PIL images
 
 # Define a reasonable max size for thumbnails to avoid using too much memory
 # These might be passed in by an orchestrator class later, but for now,
@@ -38,7 +39,6 @@ def is_raw_extension(ext: str) -> bool:
             # print("Warning: rawpy.supported_formats() not available. Using a fallback list of RAW extensions.") # Replaced
         except Exception as e:
             logging.error(f"raw_image_processor.is_raw_extension - Error getting rawpy supported formats: {e}. Using fallback list.")
-            # print(f"Error getting rawpy supported formats: {e}. Using fallback list.") # Replaced
             _rawpy_supported_set = {'.arw', '.cr2', '.cr3', '.nef', '.dng', '.orf', '.raf', '.rw2', '.pef', '.srw', '.raw'}
         _rawpy_formats_checked = True
         logging.info(f"raw_image_processor.is_raw_extension - rawpy supported formats set initialization complete: {time.perf_counter() - check_start_time:.4f}s. Count: {len(_rawpy_supported_set)}")
@@ -69,11 +69,18 @@ class RawImageProcessor:
                     # Attempt to use embedded thumbnail first
                     thumb = raw.extract_thumb()
                     if thumb.format == rawpy.ThumbFormat.JPEG and thumb.data is not None:
+                        logging.debug(f"[RawImageProcessor THUMB] Using embedded JPEG thumbnail for: {normalized_path}")
                         temp_pil_img = Image.open(io.BytesIO(thumb.data))
                         temp_pil_img = ImageOps.exif_transpose(temp_pil_img) # Correct orientation
+                        if apply_auto_edits:
+                            logging.info(f"[RawImageProcessor THUMB] Applying auto-edits (autocontrast, brightness) to embedded JPEG for: {normalized_path}")
+                            temp_pil_img = ImageOps.autocontrast(temp_pil_img)
+                            enhancer = ImageEnhance.Brightness(temp_pil_img)
+                            temp_pil_img = enhancer.enhance(1.1)
                     if temp_pil_img is None:
                        raise rawpy.LibRawNoThumbnailError("No suitable (JPEG) embedded thumbnail found.")
                 except (rawpy.LibRawNoThumbnailError, rawpy.LibRawUnsupportedThumbnailError):
+                    logging.debug(f"[RawImageProcessor THUMB] No suitable embedded thumbnail for {normalized_path}, postprocessing RAW.")
                     # Fallback to processing the main image, optimized with half_size=True
                     postprocess_params = {
                         'use_camera_wb': True,
@@ -81,16 +88,17 @@ class RawImageProcessor:
                         'half_size': True
                     }
                     if apply_auto_edits:
-                        # print(f"DEBUG: Applying auto_edits (bright=1.15) for RAW thumbnail: {normalized_path}")
+                        logging.info(f"[RawImageProcessor THUMB] Applying auto_edits (bright=1.15) via rawpy for: {normalized_path}")
                         postprocess_params['bright'] = 1.15
+                        postprocess_params['no_auto_bright'] = False
                     else:
-                        # print(f"DEBUG: NOT applying auto_edits (no_auto_bright=True) for RAW thumbnail: {normalized_path}")
+                        logging.info(f"[RawImageProcessor THUMB] NOT applying auto_edits (no_auto_bright=True) via rawpy for: {normalized_path}")
                         postprocess_params['no_auto_bright'] = True
                     
                     rgb = raw.postprocess(**postprocess_params)
                     temp_pil_img = Image.fromarray(rgb)
                     if apply_auto_edits:
-                        # print(f"DEBUG: Applying autocontrast for RAW thumbnail: {normalized_path}")
+                        logging.info(f"[RawImageProcessor THUMB] Applying ImageOps.autocontrast post-rawpy for: {normalized_path}")
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
                 
                 if temp_pil_img:
@@ -135,36 +143,43 @@ class RawImageProcessor:
                         MIN_EMBEDDED_WIDTH = preview_max_resolution[0] // 2
                         MIN_EMBEDDED_HEIGHT = preview_max_resolution[1] // 2
                         if temp_img.width >= MIN_EMBEDDED_WIDTH and temp_img.height >= MIN_EMBEDDED_HEIGHT:
-                            # print(f"[RawImageProcessor PRELOAD] Using embedded JPEG preview ({temp_img.width}x{temp_img.height}) for: {normalized_path}")
+                            logging.info(f"[RawImageProcessor PRELOAD] Using embedded JPEG preview ({temp_img.width}x{temp_img.height}) for: {normalized_path}")
+                            if apply_auto_edits:
+                                logging.info(f"[RawImageProcessor PRELOAD] Applying auto-edits (autocontrast, brightness) to embedded JPEG for: {normalized_path}")
+                                temp_img = ImageOps.autocontrast(temp_img)
+                                enhancer = ImageEnhance.Brightness(temp_img)
+                                temp_img = enhancer.enhance(1.1) # Example brightness factor
                             pil_img = temp_img.convert("RGBA")
                             if pil_img.width > preview_max_resolution[0] or pil_img.height > preview_max_resolution[1]:
                                 pil_img.thumbnail(preview_max_resolution, Image.Resampling.LANCZOS)
                 except (rawpy.LibRawNoThumbnailError, rawpy.LibRawUnsupportedThumbnailError):
-                    # print(f"[RawImageProcessor PRELOAD] No suitable embedded thumbnail for: {normalized_path}")
-                    pass
+                    logging.debug(f"[RawImageProcessor PRELOAD] No suitable embedded thumbnail for {normalized_path}, will postprocess.")
+                    pass # Fall through to postprocessing
                 except Exception as e_thumb:
-                    print(f"[RawImageProcessor PRELOAD] Error processing embedded thumbnail for {normalized_path}: {e_thumb}")
+                    logging.warning(f"[RawImageProcessor PRELOAD] Error processing embedded thumbnail for {normalized_path}: {e_thumb}")
+                    pass # Fall through to postprocessing
 
                 # Attempt 2: Fallback to postprocessing (half_size for speed)
                 if pil_img is None:
-                    # print(f"[RawImageProcessor PRELOAD] Falling back to raw.postprocess for: {normalized_path}")
+                    logging.info(f"[RawImageProcessor PRELOAD] Falling back to raw.postprocess for: {normalized_path}")
                     postprocess_params = {
                         'use_camera_wb': True,
                         'output_bps': 8,
                         'half_size': True
                     }
                     if apply_auto_edits:
-                        # print(f"DEBUG: Applying auto_edits (bright=1.15) for RAW process_raw_for_preview: {normalized_path}")
+                        logging.info(f"[RawImageProcessor PRELOAD] Applying auto_edits (bright=1.15) via rawpy for: {normalized_path}")
                         postprocess_params['bright'] = 1.15
+                        postprocess_params['no_auto_bright'] = False
                     else:
-                        # print(f"DEBUG: NOT applying auto_edits (no_auto_bright=True) for RAW process_raw_for_preview: {normalized_path}")
+                        logging.info(f"[RawImageProcessor PRELOAD] NOT applying auto_edits (no_auto_bright=True) via rawpy for: {normalized_path}")
                         postprocess_params['no_auto_bright'] = True
                     
                     rgb_array = raw.postprocess(**postprocess_params)
                     img_from_raw = Image.fromarray(rgb_array)
 
                     if apply_auto_edits:
-                        # print(f"DEBUG: Applying autocontrast for RAW process_raw_for_preview: {normalized_path}")
+                        logging.info(f"[RawImageProcessor PRELOAD] Applying ImageOps.autocontrast post-rawpy for: {normalized_path}")
                         img_from_raw = ImageOps.autocontrast(img_from_raw)
                     
                     img_from_raw.thumbnail(preview_max_resolution, Image.Resampling.LANCZOS)
@@ -206,9 +221,7 @@ class RawImageProcessor:
                     'use_camera_wb': use_camera_wb,
                     'output_bps': output_bps,
                     'half_size': half_size,
-                    # Default no_auto_bright to True if not applying auto_edits,
-                    # and bright is not explicitly set by apply_auto_edits.
-                    'no_auto_bright': not apply_auto_edits 
+                    'no_auto_bright': False # Default to False, allow rawpy's auto brightening
                 }
                 if demosaic_algorithm:
                     postprocess_params['demosaic_algorithm'] = demosaic_algorithm
@@ -216,16 +229,32 @@ class RawImageProcessor:
                     postprocess_params['user_wb'] = custom_whitebalance
                     postprocess_params.pop('use_camera_wb', None)
 
-
                 if apply_auto_edits:
-                    postprocess_params['bright'] = 1.15 # Example brightness adjustment
-                    postprocess_params['no_auto_bright'] = False # Allow rawpy's auto brightening if bright param is also used
+                    logging.info(f"[RawImageProcessor.load_raw_as_pil] Applying auto-edits (bright=1.25) via rawpy for: {normalized_path}")
+                    postprocess_params['bright'] = 1.25 # Increased brightness
+                    postprocess_params['no_auto_bright'] = False # Ensure rawpy's auto bright is not disabled
+                    # Other params like 'gamma' can be added if specific adjustments are needed
+                else:
+                    # When auto_edits are OFF, we still want basic rawpy auto-brightening.
+                    # So, 'no_auto_bright' remains False (its default in rawpy or explicit here).
+                    # We don't set 'bright' here, letting rawpy manage it.
+                    logging.info(f"[RawImageProcessor.load_raw_as_pil] Auto-edits OFF. Using rawpy default auto-bright for: {normalized_path}")
 
                 rgb_array = raw.postprocess(**postprocess_params)
                 pil_img = Image.fromarray(rgb_array)
 
-                if apply_auto_edits: # Apply autocontrast after PIL conversion
+                if apply_auto_edits: # Apply PIL enhancements if auto_edits are on
+                    logging.info(f"[RawImageProcessor.load_raw_as_pil] Applying PIL ImageOps.autocontrast for: {normalized_path}")
                     pil_img = ImageOps.autocontrast(pil_img)
+                    
+                    logging.info(f"[RawImageProcessor.load_raw_as_pil] Applying PIL ImageEnhance.Color (1.2) for: {normalized_path}")
+                    color_enhancer = ImageEnhance.Color(pil_img)
+                    pil_img = color_enhancer.enhance(1.2) # Enhance color saturation
+
+                    # Optional: Further brightness with PIL if rawpy's `bright` isn't enough
+                    # logging.info(f"[RawImageProcessor.load_raw_as_pil] Applying PIL ImageEnhance.Brightness (1.1) for: {normalized_path}")
+                    # brightness_enhancer = ImageEnhance.Brightness(pil_img)
+                    # pil_img = brightness_enhancer.enhance(1.1)
                 
                 return pil_img.convert(target_mode)
         except UnidentifiedImageError:
@@ -269,17 +298,28 @@ class RawImageProcessor:
                         'use_camera_wb': True, 'output_bps': 8, 'half_size': True
                     }
                     if apply_auto_edits:
+                        logging.info(f"[RawImageProcessor BLUR_LOAD] Applying auto_edits (bright=1.15) via rawpy for: {normalized_path}")
                         postprocess_params['bright'] = 1.15
                         postprocess_params['no_auto_bright'] = False
                     else:
+                        logging.info(f"[RawImageProcessor BLUR_LOAD] NOT applying auto_edits (no_auto_bright=True) via rawpy for: {normalized_path}")
                         postprocess_params['no_auto_bright'] = True
                     
                     rgb_array = raw.postprocess(**postprocess_params)
                     temp_pil_img = Image.fromarray(rgb_array)
                     if apply_auto_edits:
+                        logging.info(f"[RawImageProcessor BLUR_LOAD] Applying ImageOps.autocontrast post-rawpy for: {normalized_path}")
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
                 
                 if temp_pil_img:
+                    # If embedded thumbnail was used and auto-edits applied, do it here too
+                    if apply_auto_edits and raw.extract_thumb().format == rawpy.ThumbFormat.JPEG : # A bit of a simplification
+                        logging.info(f"[RawImageProcessor BLUR_LOAD] Applying auto-edits (autocontrast, brightness) to embedded JPEG for blur detection: {normalized_path}")
+                        temp_pil_img = ImageOps.autocontrast(temp_pil_img)
+                        enhancer = ImageEnhance.Brightness(temp_pil_img)
+                        temp_pil_img = enhancer.enhance(1.1)
+
+
                     temp_pil_img.thumbnail(target_size, Image.Resampling.LANCZOS)
                     pil_img = temp_pil_img.convert("RGB")
             return pil_img
