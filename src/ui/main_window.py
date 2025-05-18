@@ -1500,6 +1500,8 @@ class MainWindow(QMainWindow):
         source_indices_to_delete.sort(key=lambda idx: (idx.parent().internalId(), idx.row()), reverse=True)
 
         deleted_count = 0
+        affected_source_parent_items = [] # Store unique QStandardItem objects of parents
+
         for source_idx_to_delete in source_indices_to_delete:
             item_to_delete = self.file_system_model.itemFromIndex(source_idx_to_delete)
             if not item_to_delete: continue
@@ -1515,82 +1517,93 @@ class MainWindow(QMainWindow):
                 send2trash.send2trash(file_path_to_delete)
                 self.app_state.remove_data_for_path(file_path_to_delete)
 
-                source_parent_item = self.file_system_model.itemFromIndex(source_idx_to_delete.parent()) if source_idx_to_delete.parent().isValid() else self.file_system_model.invisibleRootItem()
+                source_parent_idx = source_idx_to_delete.parent()
+                source_parent_item = self.file_system_model.itemFromIndex(source_parent_idx) \
+                    if source_parent_idx.isValid() else self.file_system_model.invisibleRootItem()
+                
                 if source_parent_item:
                     source_parent_item.takeRow(source_idx_to_delete.row())
+                    if source_parent_item not in affected_source_parent_items:
+                        affected_source_parent_items.append(source_parent_item) # Add if unique
                 deleted_count += 1
             except Exception as e:
+                # Log the error to terminal as well for easier debugging
+                logging.error(f"Error moving '{file_name_to_delete}' to trash: {e}", exc_info=True)
                 QMessageBox.warning(self, "Delete Error", f"Error moving '{file_name_to_delete}' to trash: {e}")
                 # Optionally, break or continue if one file fails
         
         if deleted_count > 0:
+            # Check and remove empty group headers
+            # Iterate over a list copy as we might modify the underlying structure
+            parents_to_check_for_emptiness = list(affected_source_parent_items)
+            logging.debug(f"MDIT: Checking {len(parents_to_check_for_emptiness)} parent items for emptiness after deletions.")
+
+            for parent_item_candidate in parents_to_check_for_emptiness:
+                if parent_item_candidate == self.file_system_model.invisibleRootItem(): # Skip root
+                    continue
+                if parent_item_candidate.model() is None: # Already removed (e.g. child of another removed empty group)
+                    logging.debug(f"MDIT: Parent candidate '{parent_item_candidate.text()}' no longer in model, skipping.")
+                    continue
+
+                is_eligible_group_header = False
+                parent_user_data = parent_item_candidate.data(Qt.ItemDataRole.UserRole)
+
+                if isinstance(parent_user_data, str):
+                    if parent_user_data.startswith("cluster_header_") or \
+                       parent_user_data.startswith("date_header_"):
+                        is_eligible_group_header = True
+                    elif self.show_folders_mode and not self.group_by_similarity_mode and os.path.isdir(parent_user_data): # Folder item
+                        is_eligible_group_header = True
+                
+                if is_eligible_group_header and parent_item_candidate.rowCount() == 0:
+                    item_row = parent_item_candidate.row() # Get row before potential parent() call alters context
+                    # parent() of a QStandardItem returns its QStandardItem parent, or None if it's a top-level item.
+                    actual_parent_qstandarditem = parent_item_candidate.parent()
+
+                    parent_to_operate_on = None
+                    parent_display_name_for_log = ""
+
+                    if actual_parent_qstandarditem is None: # It's a top-level item in the model
+                        parent_to_operate_on = self.file_system_model.invisibleRootItem()
+                        parent_display_name_for_log = "invisibleRootItem"
+                    else: # It's a child of another QStandardItem
+                        parent_to_operate_on = actual_parent_qstandarditem
+                        parent_display_name_for_log = f"'{actual_parent_qstandarditem.text()}'"
+                    
+                    logging.debug(f"MDIT: Attempting to remove empty group header: '{parent_item_candidate.text()}' (item_row {item_row}) from parent {parent_display_name_for_log}")
+                    
+                    # Use takeRow on the QStandardItem that is the actual parent in the model hierarchy
+                    removed_items_list = parent_to_operate_on.takeRow(item_row)
+                    
+                    if removed_items_list: # takeRow returns a list of QStandardItems removed
+                        logging.debug(f"MDIT: Successfully removed '{parent_item_candidate.text()}'.")
+                    else:
+                        logging.warning(f"MDIT: takeRow failed to remove '{parent_item_candidate.text()}' from parent {parent_display_name_for_log} at row {item_row}.")
+            
             self.statusBar().showMessage(f"{deleted_count} image(s) moved to trash.", 5000)
             active_view.selectionModel().clearSelection() # Clear old selection to avoid issues
 
-            logging.debug(f"MDIT: --- Post Deletion Selection Logic ---")
-            logging.debug(f"MDIT: Initial first_selected_proxy_idx (before deletion): {self._log_qmodelindex(first_selected_proxy_idx, 'first_selected_proxy_idx')}")
-
+            logging.debug(f"MDIT: --- Post Deletion Selection Logic (Simplified) ---")
+            
             next_item_to_select = QModelIndex()
-            
-            # Determine a starting point for navigation: usually the item effectively *before* the first deleted item's original position.
-            navigation_start_point_idx = QModelIndex() # Default to invalid (causes _navigate_next to start from beginning)
-            
-            if first_selected_proxy_idx.isValid():
-                parent_of_deleted = first_selected_proxy_idx.parent()
-                original_row_of_deleted = first_selected_proxy_idx.row()
-                logging.debug(f"MDIT: Original deleted item was at row {original_row_of_deleted} in parent {self._log_qmodelindex(parent_of_deleted, 'parent_of_deleted')}")
 
-                # If the deleted item was not the first in its parent, try to set navigation start point
-                # to the item that is now at the row *before* the original deleted item's row.
-                if original_row_of_deleted > 0:
-                    # This index now points to the item that was just before the one deleted (if it still exists and is valid)
-                    navigation_start_point_idx = self.proxy_model.index(original_row_of_deleted - 1, 0, parent_of_deleted)
-                # If original_row_of_deleted was 0 (first item in parent), navigation_start_point_idx remains invalid.
-                # This tells _navigate_next (when called after setting current to invalid) to find the *actual* first valid image.
-            
-            logging.debug(f"MDIT: Setting current index for navigation start: {self._log_qmodelindex(navigation_start_point_idx, 'nav_start_pt_idx')}")
-            active_view.setCurrentIndex(navigation_start_point_idx) # Set current, even if invalid. _navigate_next handles invalid current.
-            
-            logging.debug(f"MDIT: Calling _navigate_next(). Current index before call: {self._log_qmodelindex(active_view.currentIndex(), 'active_view.currentIndex()')}")
-            self._navigate_next() # This method finds the next *valid image item*.
-            candidate_after_nav_next = active_view.currentIndex()
-            logging.debug(f"MDIT: _navigate_next() resulted in selection: {self._log_qmodelindex(candidate_after_nav_next, 'candidate_after_nav_next')}")
-
-            if self._is_valid_image_item(candidate_after_nav_next):
-                next_item_to_select = candidate_after_nav_next
+            logging.debug(f"MDIT: Attempting to find last visible item.")
+            candidate_last = self._find_last_visible_item()
+            if self._is_valid_image_item(candidate_last):
+                logging.debug(f"MDIT: Found last valid image: {self._log_qmodelindex(candidate_last)}")
+                next_item_to_select = candidate_last
             else:
-                # Fallback 1: If _navigate_next didn't find a valid image (e.g., end of list, or only non-image items remain),
-                # try selecting the item that is now at the original_row_of_deleted, if it's a valid image.
-                # This covers cases where _navigate_next might overshoot if all subsequent items are invalid.
-                if first_selected_proxy_idx.isValid():
-                    parent_of_deleted = first_selected_proxy_idx.parent()
-                    original_row_of_deleted = first_selected_proxy_idx.row()
-                    candidate_at_original_pos = self.proxy_model.index(original_row_of_deleted, 0, parent_of_deleted)
-                    logging.debug(f"MDIT: _navigate_next failed. Checking item now at original deleted spot: {self._log_qmodelindex(candidate_at_original_pos, 'candidate_at_original_pos')}")
-                    if self._is_valid_image_item(candidate_at_original_pos):
-                        next_item_to_select = candidate_at_original_pos
-
-                # Fallback 2: If still no valid image, try finding the last visible image item.
-                # This handles deleting items where the "next" logic doesn't find anything, but previous items might exist.
-                if not next_item_to_select.isValid():
-                    logging.debug(f"MDIT: Still no valid image. Trying _find_last_visible_item().")
-                    last_visible_item = self._find_last_visible_item()
-                    logging.debug(f"MDIT: _find_last_visible_item() result: {self._log_qmodelindex(last_visible_item, 'last_visible_item')}")
-                    if self._is_valid_image_item(last_visible_item):
-                        next_item_to_select = last_visible_item
-                
-                # Fallback 3: As a very last resort, if even last is not an image, try first.
-                # (e.g., if the list had one item which was deleted, now empty, or only non-image items left)
-                if not next_item_to_select.isValid():
-                    logging.debug(f"MDIT: Still no valid image. Trying _find_first_visible_item().")
-                    first_visible_item = self._find_first_visible_item()
-                    logging.debug(f"MDIT: _find_first_visible_item() result: {self._log_qmodelindex(first_visible_item, 'first_visible_item')}")
-                    if self._is_valid_image_item(first_visible_item):
-                         next_item_to_select = first_visible_item
-
-            logging.debug(f"MDIT: Final next_item_to_select for UI update: {self._log_qmodelindex(next_item_to_select, 'final_next_item_to_select')}")
+                logging.debug(f"MDIT: Last visible item is not a valid image (or no items). Trying first visible item.")
+                candidate_first = self._find_first_visible_item()
+                if self._is_valid_image_item(candidate_first):
+                    logging.debug(f"MDIT: Found first valid image: {self._log_qmodelindex(candidate_first)}")
+                    next_item_to_select = candidate_first
+                else:
+                    logging.debug(f"MDIT: First visible item is also not a valid image (or no items).")
             
-            if self._is_valid_image_item(next_item_to_select):
+            logging.debug(f"MDIT: Final next_item_to_select for UI update: {self._log_qmodelindex(next_item_to_select, 'final_next_item_to_select')}")
+
+            if next_item_to_select.isValid() and self._is_valid_image_item(next_item_to_select): # Double check validity before use
                 active_view.setCurrentIndex(next_item_to_select)
                 active_view.selectionModel().select(next_item_to_select, QItemSelectionModel.SelectionFlag.ClearAndSelect)
                 active_view.scrollTo(next_item_to_select, QAbstractItemView.ScrollHint.EnsureVisible)
