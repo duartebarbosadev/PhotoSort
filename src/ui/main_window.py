@@ -1384,17 +1384,27 @@ class MainWindow(QMainWindow):
         active_view = self._get_active_file_view()
         if not active_view: return
 
-        selected_file_paths = self._get_selected_file_paths_from_view()
-        if not selected_file_paths:
+        # --- Pre-deletion information gathering ---
+        active_view = self._get_active_file_view() # Get active_view once
+        if not active_view: return
+
+        visible_paths_before_delete = self._get_all_visible_image_paths()
+        logging.debug(f"MDIT: Visible paths before delete ({len(visible_paths_before_delete)}): {visible_paths_before_delete[:5]}...")
+        
+        # This uses selectionModel, which is fine before deletions alter the model structure too much.
+        # It's important this is called BEFORE items are removed from the model.
+        deleted_file_paths = self._get_selected_file_paths_from_view()
+        
+        if not deleted_file_paths: # Renamed from selected_file_paths for clarity post-selection
             self.statusBar().showMessage("No image(s) selected to delete.", 3000)
             return
 
-        num_selected = len(selected_file_paths)
+        num_selected = len(deleted_file_paths) # Corrected variable name here
         
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Confirm Delete")
         if num_selected == 1:
-            file_name = os.path.basename(selected_file_paths[0])
+            file_name = os.path.basename(deleted_file_paths[0]) # Use deleted_file_paths here
             dialog.setText(f"Are you sure you want to move '{file_name}' to the trash?")
         else:
             dialog.setText(f"Are you sure you want to move {num_selected} images to the trash?")
@@ -1583,36 +1593,63 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"{deleted_count} image(s) moved to trash.", 5000)
             active_view.selectionModel().clearSelection() # Clear old selection to avoid issues
 
-            logging.debug(f"MDIT: --- Post Deletion Selection Logic (Simplified) ---")
-            
-            next_item_to_select = QModelIndex()
+            logging.debug(f"MDIT: --- New Post Deletion Selection Logic ---")
+            visible_paths_after_delete = self._get_all_visible_image_paths()
+            logging.debug(f"MDIT: Visible paths after delete ({len(visible_paths_after_delete)}): {visible_paths_after_delete[:5]}...")
 
-            logging.debug(f"MDIT: Attempting to find last visible item.")
-            candidate_last = self._find_last_visible_item()
-            if self._is_valid_image_item(candidate_last):
-                logging.debug(f"MDIT: Found last valid image: {self._log_qmodelindex(candidate_last)}")
-                next_item_to_select = candidate_last
-            else:
-                logging.debug(f"MDIT: Last visible item is not a valid image (or no items). Trying first visible item.")
-                candidate_first = self._find_first_visible_item()
-                if self._is_valid_image_item(candidate_first):
-                    logging.debug(f"MDIT: Found first valid image: {self._log_qmodelindex(candidate_first)}")
-                    next_item_to_select = candidate_first
-                else:
-                    logging.debug(f"MDIT: First visible item is also not a valid image (or no items).")
-            
-            logging.debug(f"MDIT: Final next_item_to_select for UI update: {self._log_qmodelindex(next_item_to_select, 'final_next_item_to_select')}")
+            next_item_to_select_proxy_idx = QModelIndex()
 
-            if next_item_to_select.isValid() and self._is_valid_image_item(next_item_to_select): # Double check validity before use
-                active_view.setCurrentIndex(next_item_to_select)
-                active_view.selectionModel().select(next_item_to_select, QItemSelectionModel.SelectionFlag.ClearAndSelect)
-                active_view.scrollTo(next_item_to_select, QAbstractItemView.ScrollHint.EnsureVisible)
-                self._handle_file_selection_changed() # Explicit call to ensure UI updates
-            else:
-                logging.debug("MDIT: No valid image item to select after deletion and fallbacks.")
+            if not visible_paths_after_delete:
+                logging.debug("MDIT: No visible image items left after deletion.")
                 self.image_view.clear(); self.image_view.setText("No images")
                 self._update_rating_display(0); self._update_label_display(None)
                 self.statusBar().showMessage("No images left or visible.")
+            else:
+                # Determine the index in the *original* visible list of the first deleted item
+                first_deleted_path_idx_in_visible_list = -1
+                if visible_paths_before_delete and deleted_file_paths: # deleted_file_paths from earlier
+                    try:
+                        first_deleted_path_idx_in_visible_list = visible_paths_before_delete.index(deleted_file_paths[0])
+                    except ValueError:
+                        logging.warning(f"MDIT: First deleted path {deleted_file_paths[0]} not found in pre-delete visible list. Defaulting to 0.")
+                        first_deleted_path_idx_in_visible_list = 0 # Fallback
+                elif visible_paths_before_delete: # If deleted_file_paths was empty for some reason, but we had original paths
+                    first_deleted_path_idx_in_visible_list = 0
+                else: # No visible items before, or no deleted items tracked (should not happen if deleted_count > 0)
+                    first_deleted_path_idx_in_visible_list = 0
+                
+                logging.debug(f"MDIT: Index of first deleted item in original visible list: {first_deleted_path_idx_in_visible_list}")
+
+                # Target index in the new list: try to select item at same original visual position, or new last if original was last
+                target_idx_in_new_list = min(first_deleted_path_idx_in_visible_list, len(visible_paths_after_delete) - 1)
+                # Ensure target_idx is non-negative
+                target_idx_in_new_list = max(0, target_idx_in_new_list)
+
+
+                logging.debug(f"MDIT: Target index in new visible list: {target_idx_in_new_list}")
+
+                if 0 <= target_idx_in_new_list < len(visible_paths_after_delete):
+                    path_to_select = visible_paths_after_delete[target_idx_in_new_list]
+                    logging.debug(f"MDIT: Path to select: {os.path.basename(path_to_select)}")
+                    next_item_to_select_proxy_idx = self._find_proxy_index_for_path(path_to_select)
+                    logging.debug(f"MDIT: Proxy index for path: {self._log_qmodelindex(next_item_to_select_proxy_idx)}")
+                else:
+                    logging.warning(f"MDIT: target_idx_in_new_list ({target_idx_in_new_list}) is out of bounds for visible_paths_after_delete (len {len(visible_paths_after_delete)}).")
+
+
+            if next_item_to_select_proxy_idx.isValid() and self._is_valid_image_item(next_item_to_select_proxy_idx):
+                logging.debug(f"MDIT: Selecting item: {self._log_qmodelindex(next_item_to_select_proxy_idx)}")
+                active_view.setCurrentIndex(next_item_to_select_proxy_idx)
+                active_view.selectionModel().select(next_item_to_select_proxy_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                active_view.scrollTo(next_item_to_select_proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible)
+                self._handle_file_selection_changed()
+            else:
+                # This case handles if visible_paths_after_delete was empty OR find_proxy_index_for_path failed
+                logging.debug("MDIT: No valid image item to select after deletion based on new logic. Clearing UI.")
+                self.image_view.clear(); self.image_view.setText("No images")
+                self._update_rating_display(0); self._update_label_display(None)
+                if not visible_paths_after_delete : self.statusBar().showMessage("No images left or visible.")
+                else: self.statusBar().showMessage("Could not determine next item to select.")
             
             self._update_image_info_label()
         elif num_selected > 0 : # No items were actually deleted, but some were selected
@@ -1851,6 +1888,90 @@ class MainWindow(QMainWindow):
             
         logging.debug("FIND_LAST: Unknown view type or scenario.")
         return QModelIndex()
+
+    def _get_all_visible_image_paths(self) -> List[str]:
+        """Gets an ordered list of file paths for all currently visible image items."""
+        paths = []
+        active_view = self._get_active_file_view()
+        if not active_view: return paths
+        
+        proxy_model = active_view.model()
+        # Ensure model is a QSortFilterProxyModel, as it holds the filtered/sorted view
+        if not isinstance(proxy_model, QSortFilterProxyModel):
+            logging.warning("_get_all_visible_image_paths: Active view's model is not QSortFilterProxyModel.")
+            return paths
+
+        # Traversal logic needs to handle both QTreeView (hierarchical) and QListView (flat)
+        # We build a queue of proxy indices to visit in display order.
+        queue = []
+        root_proxy_parent_idx = QModelIndex() # Parent for top-level items in the proxy model
+
+        for r in range(proxy_model.rowCount(root_proxy_parent_idx)):
+            queue.append(proxy_model.index(r, 0, root_proxy_parent_idx))
+
+        head = 0
+        while head < len(queue):
+            current_proxy_idx = queue[head]; head += 1
+            if not current_proxy_idx.isValid(): continue
+
+            # Check if the item itself is a valid image item
+            if self._is_valid_image_item(current_proxy_idx):
+                source_idx = proxy_model.mapToSource(current_proxy_idx)
+                item = self.file_system_model.itemFromIndex(source_idx) # Use source_model here
+                if item:
+                    item_data = item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(item_data, dict) and 'path' in item_data:
+                        paths.append(item_data['path'])
+            
+            # If it's a QTreeView and the current item is expanded and has children, add them to the queue
+            if isinstance(active_view, QTreeView):
+                # We need to check against the source item for hasChildren, but expansion against proxy index
+                source_idx_for_children_check = proxy_model.mapToSource(current_proxy_idx)
+                # Ensure source_idx is valid before using it with source model
+                if source_idx_for_children_check.isValid():
+                    item_for_children_check = self.file_system_model.itemFromIndex(source_idx_for_children_check)
+                    if item_for_children_check and item_for_children_check.hasChildren() and active_view.isExpanded(current_proxy_idx):
+                        for child_row in range(proxy_model.rowCount(current_proxy_idx)): # Children from proxy model
+                            queue.append(proxy_model.index(child_row, 0, current_proxy_idx))
+        return paths
+
+    def _find_proxy_index_for_path(self, target_path: str) -> QModelIndex:
+        """Finds the QModelIndex in the current proxy model for a given file path."""
+        active_view = self._get_active_file_view()
+        if not active_view: return QModelIndex()
+        
+        proxy_model = active_view.model()
+        if not isinstance(proxy_model, QSortFilterProxyModel):
+            logging.warning("_find_proxy_index_for_path: Active view's model is not QSortFilterProxyModel.")
+            return QModelIndex()
+
+        # Similar traversal as _get_all_visible_image_paths
+        queue = []
+        root_proxy_parent_idx = QModelIndex()
+        for r in range(proxy_model.rowCount(root_proxy_parent_idx)):
+            queue.append(proxy_model.index(r, 0, root_proxy_parent_idx))
+        
+        head = 0
+        while head < len(queue):
+            current_proxy_idx = queue[head]; head += 1
+            if not current_proxy_idx.isValid(): continue
+
+            if self._is_valid_image_item(current_proxy_idx):
+                source_idx = proxy_model.mapToSource(current_proxy_idx)
+                item = self.file_system_model.itemFromIndex(source_idx) # Use source_model
+                if item:
+                    item_data = item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(item_data, dict) and item_data.get('path') == target_path:
+                        return current_proxy_idx # Found it
+
+            if isinstance(active_view, QTreeView):
+                source_idx_for_children_check = proxy_model.mapToSource(current_proxy_idx)
+                if source_idx_for_children_check.isValid():
+                    item_for_children_check = self.file_system_model.itemFromIndex(source_idx_for_children_check)
+                    if item_for_children_check and item_for_children_check.hasChildren() and active_view.isExpanded(current_proxy_idx):
+                        for child_row in range(proxy_model.rowCount(current_proxy_idx)): # Children from proxy model
+                            queue.append(proxy_model.index(child_row, 0, current_proxy_idx))
+        return QModelIndex() # Not found
 
     def _update_rating_display(self, rating: int):
         for i, btn in enumerate(self.star_buttons):
