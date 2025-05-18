@@ -148,7 +148,7 @@ class RawImageProcessor:
                                 logging.info(f"[RawImageProcessor PRELOAD] Applying auto-edits (autocontrast, brightness) to embedded JPEG for: {normalized_path}")
                                 temp_img = ImageOps.autocontrast(temp_img)
                                 enhancer = ImageEnhance.Brightness(temp_img)
-                                temp_img = enhancer.enhance(1.1) # Example brightness factor
+                                temp_img = enhancer.enhance(1.2) # Example brightness factor
                             pil_img = temp_img.convert("RGBA")
                             if pil_img.width > preview_max_resolution[0] or pil_img.height > preview_max_resolution[1]:
                                 pil_img.thumbnail(preview_max_resolution, Image.Resampling.LANCZOS)
