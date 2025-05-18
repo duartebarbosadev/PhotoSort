@@ -1205,6 +1205,62 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage(f"Failed to set rating for {os.path.basename(file_path)}", 5000)
 
+    def _log_qmodelindex(self, index: QModelIndex, prefix: str = "") -> str:
+        if not hasattr(self, 'proxy_model') or not hasattr(self, 'file_system_model'): # Models might not be initialized yet
+            if not index.isValid():
+                return f"{prefix} Invalid QModelIndex (models not ready)"
+            return f"{prefix} QModelIndex(row={index.row()}, col={index.column()}, valid={index.isValid()}) (models not ready)"
+
+        if not index.isValid():
+            return f"{prefix} Invalid QModelIndex"
+        
+        source_index = self.proxy_model.mapToSource(index)
+        item_text = "N/A (source invalid)"
+        user_data_str = "N/A (source invalid)"
+
+        if source_index.isValid():
+            item = self.file_system_model.itemFromIndex(source_index)
+            if item:
+                item_text = item.text()
+                user_data = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(user_data, dict) and 'path' in user_data:
+                    user_data_str = f"path: {os.path.basename(user_data['path'])}"
+                elif isinstance(user_data, str): # For group headers etc.
+                    user_data_str = f"str_data: '{user_data}'"
+                elif user_data is None:
+                    user_data_str = "None"
+                else:
+                    user_data_str = f"type: {type(user_data)}"
+            else: # item is None
+                item_text = "N/A (item is None)"
+                user_data_str = "N/A (item is None)"
+        
+        return f"{prefix} QModelIndex(proxy_row={index.row()}, proxy_col={index.column()}, text='{item_text}', user_data='{user_data_str}', proxy_valid={index.isValid()}, source_valid={source_index.isValid()})"
+
+    def _is_valid_image_item(self, proxy_index: QModelIndex) -> bool:
+        # logging.debug(f"IS_VALID_IMAGE_ITEM: Checking {self._log_qmodelindex(proxy_index)}")
+        if not proxy_index.isValid():
+            # logging.debug(f"IS_VALID_IMAGE_ITEM: Proxy index invalid.")
+            return False
+        
+        source_index = self.proxy_model.mapToSource(proxy_index)
+        if not source_index.isValid():
+            # logging.debug(f"IS_VALID_IMAGE_ITEM: Source index invalid for proxy {proxy_index.row()}.")
+            return False
+            
+        item = self.file_system_model.itemFromIndex(source_index)
+        if not item:
+            # logging.debug(f"IS_VALID_IMAGE_ITEM: Item from source index is None.")
+            return False
+            
+        item_user_data = item.data(Qt.ItemDataRole.UserRole)
+        is_image = isinstance(item_user_data, dict) and \
+                   'path' in item_user_data and \
+                   os.path.isfile(item_user_data['path'])
+        
+        # logging.debug(f"IS_VALID_IMAGE_ITEM: Result for {os.path.basename(item_user_data.get('path', 'N/A')) if isinstance(item_user_data, dict) else 'NonDictUserData'}: {is_image}")
+        return is_image
+
     def _get_active_file_view(self):
         # Simplified: Grid view is only active if NOT grouping by similarity
         if hasattr(self, 'current_view_mode') and self.current_view_mode == "grid" and not self.group_by_similarity_mode:
@@ -1469,192 +1525,318 @@ class MainWindow(QMainWindow):
         
         if deleted_count > 0:
             self.statusBar().showMessage(f"{deleted_count} image(s) moved to trash.", 5000)
-            # After deletion, try to select the next sensible item.
-            # This logic is complex when multiple items from different parents are deleted.
-            # A simpler approach: try to select the item at the original focused item's row in its parent,
-            # or the new first visible item.
+            active_view.selectionModel().clearSelection() # Clear old selection to avoid issues
+
+            logging.debug(f"MDIT: --- Post Deletion Selection Logic ---")
+            logging.debug(f"MDIT: Initial first_selected_proxy_idx (before deletion): {self._log_qmodelindex(first_selected_proxy_idx, 'first_selected_proxy_idx')}")
+
             next_item_to_select = QModelIndex()
+            
+            # Determine a starting point for navigation: usually the item effectively *before* the first deleted item's original position.
+            navigation_start_point_idx = QModelIndex() # Default to invalid (causes _navigate_next to start from beginning)
+            
             if first_selected_proxy_idx.isValid():
-                original_parent_proxy = first_selected_proxy_idx.parent()
-                original_row = first_selected_proxy_idx.row()
-                
-                if self.proxy_model.rowCount(original_parent_proxy) > original_row:
-                    next_item_to_select = self.proxy_model.index(original_row, 0, original_parent_proxy)
-                elif self.proxy_model.rowCount(original_parent_proxy) > 0: # select last item in original parent
-                    next_item_to_select = self.proxy_model.index(self.proxy_model.rowCount(original_parent_proxy) -1, 0, original_parent_proxy)
+                parent_of_deleted = first_selected_proxy_idx.parent()
+                original_row_of_deleted = first_selected_proxy_idx.row()
+                logging.debug(f"MDIT: Original deleted item was at row {original_row_of_deleted} in parent {self._log_qmodelindex(parent_of_deleted, 'parent_of_deleted')}")
 
-            if not next_item_to_select.isValid() or not self.proxy_model.mapToSource(next_item_to_select).isValid():
-                next_item_to_select = self._find_first_visible_item()
+                # If the deleted item was not the first in its parent, try to set navigation start point
+                # to the item that is now at the row *before* the original deleted item's row.
+                if original_row_of_deleted > 0:
+                    # This index now points to the item that was just before the one deleted (if it still exists and is valid)
+                    navigation_start_point_idx = self.proxy_model.index(original_row_of_deleted - 1, 0, parent_of_deleted)
+                # If original_row_of_deleted was 0 (first item in parent), navigation_start_point_idx remains invalid.
+                # This tells _navigate_next (when called after setting current to invalid) to find the *actual* first valid image.
+            
+            logging.debug(f"MDIT: Setting current index for navigation start: {self._log_qmodelindex(navigation_start_point_idx, 'nav_start_pt_idx')}")
+            active_view.setCurrentIndex(navigation_start_point_idx) # Set current, even if invalid. _navigate_next handles invalid current.
+            
+            logging.debug(f"MDIT: Calling _navigate_next(). Current index before call: {self._log_qmodelindex(active_view.currentIndex(), 'active_view.currentIndex()')}")
+            self._navigate_next() # This method finds the next *valid image item*.
+            candidate_after_nav_next = active_view.currentIndex()
+            logging.debug(f"MDIT: _navigate_next() resulted in selection: {self._log_qmodelindex(candidate_after_nav_next, 'candidate_after_nav_next')}")
 
-            if next_item_to_select.isValid():
-                active_view.setCurrentIndex(next_item_to_select)
-                active_view.scrollTo(next_item_to_select, QAbstractItemView.ScrollHint.EnsureVisible)
-                self._handle_file_selection_changed() # Refresh preview for the new selection
+            if self._is_valid_image_item(candidate_after_nav_next):
+                next_item_to_select = candidate_after_nav_next
             else:
+                # Fallback 1: If _navigate_next didn't find a valid image (e.g., end of list, or only non-image items remain),
+                # try selecting the item that is now at the original_row_of_deleted, if it's a valid image.
+                # This covers cases where _navigate_next might overshoot if all subsequent items are invalid.
+                if first_selected_proxy_idx.isValid():
+                    parent_of_deleted = first_selected_proxy_idx.parent()
+                    original_row_of_deleted = first_selected_proxy_idx.row()
+                    candidate_at_original_pos = self.proxy_model.index(original_row_of_deleted, 0, parent_of_deleted)
+                    logging.debug(f"MDIT: _navigate_next failed. Checking item now at original deleted spot: {self._log_qmodelindex(candidate_at_original_pos, 'candidate_at_original_pos')}")
+                    if self._is_valid_image_item(candidate_at_original_pos):
+                        next_item_to_select = candidate_at_original_pos
+
+                # Fallback 2: If still no valid image, try finding the last visible image item.
+                # This handles deleting items where the "next" logic doesn't find anything, but previous items might exist.
+                if not next_item_to_select.isValid():
+                    logging.debug(f"MDIT: Still no valid image. Trying _find_last_visible_item().")
+                    last_visible_item = self._find_last_visible_item()
+                    logging.debug(f"MDIT: _find_last_visible_item() result: {self._log_qmodelindex(last_visible_item, 'last_visible_item')}")
+                    if self._is_valid_image_item(last_visible_item):
+                        next_item_to_select = last_visible_item
+                
+                # Fallback 3: As a very last resort, if even last is not an image, try first.
+                # (e.g., if the list had one item which was deleted, now empty, or only non-image items left)
+                if not next_item_to_select.isValid():
+                    logging.debug(f"MDIT: Still no valid image. Trying _find_first_visible_item().")
+                    first_visible_item = self._find_first_visible_item()
+                    logging.debug(f"MDIT: _find_first_visible_item() result: {self._log_qmodelindex(first_visible_item, 'first_visible_item')}")
+                    if self._is_valid_image_item(first_visible_item):
+                         next_item_to_select = first_visible_item
+
+            logging.debug(f"MDIT: Final next_item_to_select for UI update: {self._log_qmodelindex(next_item_to_select, 'final_next_item_to_select')}")
+            
+            if self._is_valid_image_item(next_item_to_select):
+                active_view.setCurrentIndex(next_item_to_select)
+                active_view.selectionModel().select(next_item_to_select, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                active_view.scrollTo(next_item_to_select, QAbstractItemView.ScrollHint.EnsureVisible)
+                self._handle_file_selection_changed() # Explicit call to ensure UI updates
+            else:
+                logging.debug("MDIT: No valid image item to select after deletion and fallbacks.")
                 self.image_view.clear(); self.image_view.setText("No images")
                 self._update_rating_display(0); self._update_label_display(None)
                 self.statusBar().showMessage("No images left or visible.")
+            
             self._update_image_info_label()
         elif num_selected > 0 : # No items were actually deleted, but some were selected
              self.statusBar().showMessage("No valid image files were deleted from selection.", 3000)
 
     def closeEvent(self, event):
+        logging.info("MainWindow.closeEvent - Stopping all workers.")
         self.worker_manager.stop_all_workers() # Use WorkerManager to stop all
         event.accept()
 
     def _navigate_previous(self):
         active_view = self._get_active_file_view()
-        if not active_view: return
+        if not active_view:
+            logging.debug("NAV_PREV: No active view.")
+            return
+        
         current_index = active_view.currentIndex()
+        logging.debug(f"NAV_PREV: Start. Current Index: {self._log_qmodelindex(current_index, 'current_index')}")
+
         if not current_index.isValid():
             last_item_index = self._find_last_visible_item()
+            logging.debug(f"NAV_PREV: Current index invalid, found last item: {self._log_qmodelindex(last_item_index, 'last_item_index')}")
             if last_item_index.isValid():
                 active_view.setCurrentIndex(last_item_index)
                 active_view.scrollTo(last_item_index, QAbstractItemView.ScrollHint.EnsureVisible)
             return
+
         prev_item_index = QModelIndex()
         temp_index = current_index
-        while temp_index.isValid():
+        iteration_count = 0
+        while temp_index.isValid() and iteration_count < self.proxy_model.rowCount() * 2: # Safety break
+            iteration_count +=1
             temp_index = active_view.indexAbove(temp_index)
-            if not temp_index.isValid(): break
-            source_index = self.proxy_model.mapToSource(temp_index) 
-            item = self.file_system_model.itemFromIndex(source_index) 
+            # logging.debug(f"NAV_PREV: Loop iteration {iteration_count}. IndexAbove gave: {self._log_qmodelindex(temp_index, 'temp_index')}")
+            if not temp_index.isValid():
+                logging.debug("NAV_PREV: temp_index became invalid (top of list/parent).")
+                break
             
-            is_image_item = False
-            if item:
-                item_data = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(item_data, dict) and 'path' in item_data and os.path.exists(item_data['path']):
-                    is_image_item = True
-            
+            is_image_item = self._is_valid_image_item(temp_index)
+            # logging.debug(f"NAV_PREV: Checking temp_index {temp_index.row()}, is_image_item: {is_image_item}")
+
             is_hidden = False
             if isinstance(active_view, QTreeView):
-                # For TreeView, check if the row itself is hidden within its parent
                 is_hidden = active_view.isRowHidden(temp_index.row(), temp_index.parent())
+                # logging.debug(f"NAV_PREV: For QTreeView, is_hidden: {is_hidden}")
             
             if not is_hidden and is_image_item:
-                prev_item_index = temp_index; break
+                prev_item_index = temp_index
+                logging.debug(f"NAV_PREV: Found valid previous image item: {self._log_qmodelindex(prev_item_index, 'prev_item_index')}")
+                break
+            # else:
+                # logging.debug(f"NAV_PREV: Item {temp_index.row()} skipped (hidden: {is_hidden}, not_image: {not is_image_item}).")
+        
         if prev_item_index.isValid():
             active_view.setCurrentIndex(prev_item_index)
             active_view.scrollTo(prev_item_index, QAbstractItemView.ScrollHint.EnsureVisible)
+            logging.debug(f"NAV_PREV: Set current index to {self._log_qmodelindex(prev_item_index)}")
+        else:
+            logging.debug("NAV_PREV: No valid previous image item found.")
 
     def _navigate_next(self):
         active_view = self._get_active_file_view()
-        if not active_view: return
+        if not active_view:
+            logging.debug("NAV_NEXT: No active view.")
+            return
+
         current_index = active_view.currentIndex()
+        logging.debug(f"NAV_NEXT: Start. Current Index: {self._log_qmodelindex(current_index, 'current_index')}")
+
         if not current_index.isValid():
             first_item_index = self._find_first_visible_item()
+            logging.debug(f"NAV_NEXT: Current index invalid, found first item: {self._log_qmodelindex(first_item_index, 'first_item_index')}")
             if first_item_index.isValid():
                 active_view.setCurrentIndex(first_item_index)
                 active_view.scrollTo(first_item_index, QAbstractItemView.ScrollHint.EnsureVisible)
             return
+            
         next_item_index = QModelIndex()
         temp_index = current_index
-        while temp_index.isValid():
+        iteration_count = 0
+        # Safety break: estimate max iterations. In a flat list, it's rowCount. In a tree, it could be more.
+        # Heuristic: rowCount of proxy model * average depth (e.g., 2-3 levels for safety)
+        # For now, using a large enough constant or a multiple of total proxy items if available.
+        # If proxy_model.sourceModel() is self.file_system_model, then self.file_system_model.rowCount() for root items.
+        # Max items could be total number of items if flat.
+        # Let's use self.proxy_model.rowCount() as a rough upper bound on iterations for flat parts.
+        # Since indexBelow can traverse into children, this is complex.
+        # A simple large number or total_items_in_model might be better.
+        # Let's assume max_iterations as a large number or related to total items if easily accessible
+        # For now, a fixed reasonably large number might be simpler for this example.
+        safety_iteration_limit = self.proxy_model.rowCount(QModelIndex()) * 5 # Heuristic for tree depth
+        if safety_iteration_limit == 0 and self.app_state.image_files_data: safety_iteration_limit = len(self.app_state.image_files_data) * 2
+        if safety_iteration_limit == 0 : safety_iteration_limit = 5000 # Absolute fallback
+
+        while temp_index.isValid() and iteration_count < safety_iteration_limit:
+            iteration_count +=1
             temp_index = active_view.indexBelow(temp_index)
-            if not temp_index.isValid(): break
-            source_index = self.proxy_model.mapToSource(temp_index) 
-            item = self.file_system_model.itemFromIndex(source_index) 
-            
-            is_image_item = False
-            if item:
-                item_data = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(item_data, dict) and 'path' in item_data and os.path.exists(item_data['path']):
-                    is_image_item = True
+            # logging.debug(f"NAV_NEXT: Loop iteration {iteration_count}. IndexBelow gave: {self._log_qmodelindex(temp_index, 'temp_index')}")
+            if not temp_index.isValid():
+                logging.debug("NAV_NEXT: temp_index became invalid (end of list/parent).")
+                break
+
+            is_image_item = self._is_valid_image_item(temp_index)
+            # logging.debug(f"NAV_NEXT: Checking temp_index {temp_index.row()}, is_image_item: {is_image_item}")
             
             if is_image_item: # For both QTreeView and QListView, indexBelow gives visible items
-                is_hidden = False # Assume visible unless proven otherwise for QTreeView (though indexBelow should handle this)
+                is_hidden = False
                 if isinstance(active_view, QTreeView):
+                    # This check might be redundant if indexBelow truly gives only visible items,
+                    # but can be a safeguard or for specific TreeView behaviors.
                     is_hidden = active_view.isRowHidden(temp_index.row(), temp_index.parent())
+                    # logging.debug(f"NAV_NEXT: For QTreeView, is_hidden: {is_hidden}")
                 if not is_hidden:
-                    next_item_index = temp_index; break
+                    next_item_index = temp_index
+                    logging.debug(f"NAV_NEXT: Found valid next image item: {self._log_qmodelindex(next_item_index, 'next_item_index')}")
+                    break
+            # else:
+                # logging.debug(f"NAV_NEXT: Item {temp_index.row()} skipped (not_image: {not is_image_item}).")
+        
+        if iteration_count >= safety_iteration_limit:
+            logging.warning(f"NAV_NEXT: Hit safety iteration limit ({safety_iteration_limit}). This might indicate an issue or a very large/deep model.")
+
         if next_item_index.isValid():
             active_view.setCurrentIndex(next_item_index)
             active_view.scrollTo(next_item_index, QAbstractItemView.ScrollHint.EnsureVisible)
+            logging.debug(f"NAV_NEXT: Set current index to {self._log_qmodelindex(next_item_index)}")
+        else:
+            logging.debug("NAV_NEXT: No valid next image item found.")
 
     def _find_first_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
         if not active_view: return QModelIndex()
+        logging.debug("FIND_FIRST: Start")
         proxy_model = active_view.model()
-        if not isinstance(proxy_model, QSortFilterProxyModel): return QModelIndex()
-        source_model = proxy_model.sourceModel()
-        root_proxy_index = QModelIndex() # Represents the root for the proxy model
+        if not isinstance(proxy_model, QSortFilterProxyModel):
+            logging.debug("FIND_FIRST: Model is not QSortFilterProxyModel.")
+            return QModelIndex()
+        
+        root_proxy_index = QModelIndex()
 
         if isinstance(active_view, QTreeView):
-            # BFS-like approach for TreeView to find the first visible image item
             q = [proxy_model.index(r, 0, root_proxy_index) for r in range(proxy_model.rowCount(root_proxy_index))]
+            # logging.debug(f"FIND_FIRST (Tree): Initial queue size: {len(q)}")
             head = 0
             while head < len(q):
                 current_proxy_idx = q[head]; head += 1
                 if not current_proxy_idx.isValid(): continue
                 
-                # Check if the item itself is hidden (e.g. by filter, not just collapsed parent)
+                # logging.debug(f"FIND_FIRST (Tree): Dequeued {self._log_qmodelindex(current_proxy_idx)}")
                 if not active_view.isRowHidden(current_proxy_idx.row(), current_proxy_idx.parent()):
-                    source_idx = proxy_model.mapToSource(current_proxy_idx)
-                    item = source_model.itemFromIndex(source_idx) 
-                    is_image_item_flag = False
-                    if item:
-                        item_data = item.data(Qt.ItemDataRole.UserRole)
-                        if isinstance(item_data, dict) and 'path' in item_data and os.path.exists(item_data['path']):
-                            is_image_item_flag = True
+                    if self._is_valid_image_item(current_proxy_idx):
+                        logging.debug(f"FIND_FIRST (Tree): Found first: {self._log_qmodelindex(current_proxy_idx)}")
+                        return current_proxy_idx
                     
-                    if is_image_item_flag: return current_proxy_idx # Found first visible image item
-                    
-                    # If it's a (potentially visible) folder and expanded, add its children
-                    if not is_image_item_flag and item and item.hasChildren() and active_view.isExpanded(current_proxy_idx):
+                    # Check if source item exists before calling hasChildren / isExpanded
+                    source_idx_for_children_check = proxy_model.mapToSource(current_proxy_idx)
+                    item_for_children_check = None
+                    if source_idx_for_children_check.isValid():
+                        item_for_children_check = proxy_model.sourceModel().itemFromIndex(source_idx_for_children_check)
+
+                    if item_for_children_check and proxy_model.hasChildren(current_proxy_idx) and active_view.isExpanded(current_proxy_idx):
+                        # logging.debug(f"FIND_FIRST (Tree): Item {current_proxy_idx.row()} is expanded, adding children.")
                         for child_row in range(proxy_model.rowCount(current_proxy_idx)):
                              q.append(proxy_model.index(child_row, 0, current_proxy_idx))
-            return QModelIndex() # No visible image item found
+                # else:
+                    # logging.debug(f"FIND_FIRST (Tree): Item {current_proxy_idx.row()} is hidden.")
+            logging.debug("FIND_FIRST (Tree): No visible image item found after BFS.")
+            return QModelIndex()
         elif isinstance(active_view, QListView):
-            # For QListView, items are flat, so the first valid index in proxy is the first visible
             for r in range(proxy_model.rowCount(root_proxy_index)):
                 proxy_idx = proxy_model.index(r, 0, root_proxy_index)
-                if proxy_idx.isValid(): return proxy_idx 
+                # logging.debug(f"FIND_FIRST (List): Checking row {r}: {self._log_qmodelindex(proxy_idx)}")
+                if self._is_valid_image_item(proxy_idx):
+                    logging.debug(f"FIND_FIRST (List): Found first at row {r}: {self._log_qmodelindex(proxy_idx)}")
+                    return proxy_idx
+            logging.debug("FIND_FIRST (List): No visible image item found.")
             return QModelIndex()
+        
+        logging.debug("FIND_FIRST: Unknown view type or scenario.")
         return QModelIndex()
 
     def _find_last_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
         if not active_view: return QModelIndex()
+        logging.debug("FIND_LAST: Start")
         proxy_model = active_view.model()
-        if not isinstance(proxy_model, QSortFilterProxyModel): return QModelIndex()
-        source_model = proxy_model.sourceModel()
+        if not isinstance(proxy_model, QSortFilterProxyModel):
+            logging.debug("FIND_LAST: Model is not QSortFilterProxyModel.")
+            return QModelIndex()
+        
         root_proxy_index = QModelIndex()
 
         if isinstance(active_view, QTreeView):
-            last_visible_image_proxy_idx = QModelIndex()
-            # Iterate backwards through top-level items and their expanded children
-            for r_top in range(proxy_model.rowCount(root_proxy_index) - 1, -1, -1):
-                top_proxy_idx = proxy_model.index(r_top, 0, root_proxy_index)
-                if not top_proxy_idx.isValid() or active_view.isRowHidden(top_proxy_idx.row(), top_proxy_idx.parent()):
-                    continue
+            # DFS-like approach, exploring last children first
+            # Stack stores (index_to_visit, has_been_expanded_and_children_queued)
+            # This is a bit complex to do purely iteratively backwards for DFS.
+            # Let's try a simpler reversed BFS-like approach on expanded items.
+            
+            # Iterate all items in display order and pick the last valid one.
+            # This is less efficient but simpler to implement correctly than reverse DFS.
+            # We can optimize if needed, but correctness first.
+            
+            last_found_valid_image = QModelIndex()
+            
+            # Queue for BFS-like traversal
+            q = [proxy_model.index(r, 0, root_proxy_index) for r in range(proxy_model.rowCount(root_proxy_index))]
+            head = 0
+            while head < len(q):
+                current_proxy_idx = q[head]; head += 1
+                if not current_proxy_idx.isValid(): continue
 
-                # Check children of expanded folders first (in reverse)
-                if active_view.isExpanded(top_proxy_idx) and proxy_model.hasChildren(top_proxy_idx):
-                    for r_child in range(proxy_model.rowCount(top_proxy_idx) - 1, -1, -1):
-                        child_proxy_idx = proxy_model.index(r_child, 0, top_proxy_idx)
-                        if not child_proxy_idx.isValid() or active_view.isRowHidden(child_proxy_idx.row(), child_proxy_idx.parent()):
-                            continue
-                        child_source_idx = proxy_model.mapToSource(child_proxy_idx)
-                        child_item = source_model.itemFromIndex(child_source_idx)
-                        if child_item:
-                            child_item_data = child_item.data(Qt.ItemDataRole.UserRole)
-                            if isinstance(child_item_data, dict) and 'path' in child_item_data and os.path.exists(child_item_data['path']):
-                                return child_proxy_idx # Found last visible image item
+                if not active_view.isRowHidden(current_proxy_idx.row(), current_proxy_idx.parent()):
+                    if self._is_valid_image_item(current_proxy_idx):
+                        last_found_valid_image = current_proxy_idx # Update if this one is valid
+                    
+                    source_idx_for_children_check = proxy_model.mapToSource(current_proxy_idx)
+                    item_for_children_check = None
+                    if source_idx_for_children_check.isValid():
+                        item_for_children_check = proxy_model.sourceModel().itemFromIndex(source_idx_for_children_check)
 
-                # Check the top-level item itself if it's an image
-                top_source_idx = proxy_model.mapToSource(top_proxy_idx)
-                top_item = source_model.itemFromIndex(top_source_idx)
-                if top_item:
-                    top_item_data = top_item.data(Qt.ItemDataRole.UserRole)
-                    if isinstance(top_item_data, dict) and 'path' in top_item_data and os.path.exists(top_item_data['path']):
-                        return top_proxy_idx # This top-level item is the last visible image
-            return QModelIndex() # No visible image found
+                    if item_for_children_check and proxy_model.hasChildren(current_proxy_idx) and active_view.isExpanded(current_proxy_idx):
+                        for child_row in range(proxy_model.rowCount(current_proxy_idx)):
+                             q.append(proxy_model.index(child_row, 0, current_proxy_idx))
+            logging.debug(f"FIND_LAST (Tree): Traversed all, last valid found: {self._log_qmodelindex(last_found_valid_image)}")
+            return last_found_valid_image
+
         elif isinstance(active_view, QListView):
-             # For QListView, the last valid index in proxy is the last visible
-            for r in range(proxy_model.rowCount(root_proxy_index) - 1, -1, -1):
+            for r in range(proxy_model.rowCount(root_proxy_index) - 1, -1, -1): # Iterate backwards
                 proxy_idx = proxy_model.index(r, 0, root_proxy_index)
-                if proxy_idx.isValid(): return proxy_idx
+                # logging.debug(f"FIND_LAST (List): Checking row {r}: {self._log_qmodelindex(proxy_idx)}")
+                if self._is_valid_image_item(proxy_idx):
+                    logging.debug(f"FIND_LAST (List): Found last at row {r}: {self._log_qmodelindex(proxy_idx)}")
+                    return proxy_idx
+            logging.debug("FIND_LAST (List): No visible image item found.")
             return QModelIndex()
+            
+        logging.debug("FIND_LAST: Unknown view type or scenario.")
         return QModelIndex()
 
     def _update_rating_display(self, rating: int):
