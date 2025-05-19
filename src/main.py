@@ -2,7 +2,8 @@ import sys
 import os
 import logging # Added for startup logging
 import time # Added for startup timing
-from PyQt6.QtWidgets import QApplication
+import traceback # For global exception handler
+from PyQt6.QtWidgets import QApplication, QMessageBox # QMessageBox for global exception handler
 from src.ui.main_window import MainWindow
 # from src.core.rating_fetcher import clear_metadata_cache # Removed: No longer used
 from src.core.image_pipeline import ImagePipeline # For clearing image caches
@@ -65,6 +66,47 @@ def clear_application_caches():
     logging.info(f"clear_application_caches - End: {time.perf_counter() - start_time:.4f}s")
     # print("Application caches cleared.") # Replaced by logging
 
+# --- Global Exception Handler ---
+def global_exception_handler(exc_type, exc_value, exc_traceback):
+    """Handles any unhandled exception, logs it, and shows an error dialog."""
+    # Format the traceback
+    error_message_details = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    
+    # Log the critical error
+    logging.critical(f"Unhandled Exception:\n{error_message_details}")
+    
+    # Attempt to show a user-friendly dialog
+    app_instance = QApplication.instance() # Check if QApplication exists
+    
+    # Construct a simpler message for the main part of the dialog
+    main_error_text = f"A critical error occurred: {str(exc_value)}\n\n" \
+                      "The application may become unstable or need to close.\n" \
+                      "Please report this error with the details provided."
+
+    if app_instance:
+        try:
+            # QMessageBox is imported at the top level
+            error_box = QMessageBox()
+            error_box.setIcon(QMessageBox.Icon.Critical)
+            error_box.setWindowTitle("Application Error")
+            error_box.setText(main_error_text)
+            error_box.setDetailedText(error_message_details) # Full traceback for expert users/reporting
+            error_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            error_box.exec()
+        except Exception as e_msgbox:
+            logging.error(f"Failed to show QMessageBox for unhandled exception: {str(e_msgbox)}\n"
+                          f"Original error was:\n{error_message_details}")
+            # Fallback to stderr if QMessageBox fails
+            print(f"CRITICAL UNHANDLED EXCEPTION (QMessageBox failed):\n{error_message_details}", file=sys.stderr)
+    else:
+        # QApplication not yet initialized or already destroyed, print to stderr
+        print(f"CRITICAL UNHANDLED EXCEPTION (QApplication not available to show dialog):\n{main_error_text}\n"
+              f"Details:\n{error_message_details}", file=sys.stderr)
+    
+    # Python will typically terminate after an unhandled exception and its excepthook.
+
+# --- End Global Exception Handler ---
+
 def main():
     """Main application entry point."""
     # --- Aggressive Logging Setup ---
@@ -93,6 +135,12 @@ def main():
     # Individual handlers can have their own higher levels.
     root_logger.setLevel(logging.INFO)
     # --- End Aggressive Logging Setup ---
+
+    # --- Setup Global Exception Hook ---
+    sys.excepthook = global_exception_handler # Assign the function
+    logging.info("Global exception hook (sys.excepthook) set.")
+    # --- End Global Exception Hook Setup ---
+
     
     main_start_time = time.perf_counter()
     logging.info("Application main - Start")
