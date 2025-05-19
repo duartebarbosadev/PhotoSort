@@ -1987,7 +1987,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Error accessing file: {os.path.basename(file_path)}", 5000)
             self._update_rating_display(0)
             self._update_label_display(None)
-            print(f"[PERF] _display_single_image_preview END (metadata error) for: {os.path.basename(file_path)} in {time.perf_counter() - overall_start_time:.4f}s")
+            logging.error(f"[PERF] _display_single_image_preview END (metadata error) for: {os.path.basename(file_path)} in {time.perf_counter() - overall_start_time:.4f}s")
             return
 
         current_rating = metadata['rating']
@@ -2007,7 +2007,7 @@ class MainWindow(QMainWindow):
         self._update_rating_display(current_rating)
         self._update_label_display(current_label)
         ui_update_end_time = time.perf_counter()
-        print(f"[PERF] Rating/label display update took: {ui_update_end_time - ui_update_start_time:.4f}s")
+        logging.debug(f"[PERF] Rating/label display update took: {ui_update_end_time - ui_update_start_time:.4f}s")
 
         pixmap_load_start_time = time.perf_counter()
         label_size = self.image_view.size()
@@ -2023,35 +2023,35 @@ class MainWindow(QMainWindow):
                 apply_auto_edits=self.apply_auto_edits_enabled
             )
             get_preview_end_time = time.perf_counter()
-            print(f"[PERF] get_preview_qpixmap took: {get_preview_end_time - get_preview_start_time:.4f}s")
+            logging.debug(f"[PERF] get_preview_qpixmap for {os.path.basename(file_path)} took: {get_preview_end_time - get_preview_start_time:.4f}s. Pixmap is None: {preview_pixmap is None}")
 
             if preview_pixmap:
                 set_pixmap_start_time = time.perf_counter()
                 self.image_view.setPixmap(preview_pixmap)
                 set_pixmap_end_time = time.perf_counter()
-                print(f"[PERF] setPixmap (preview) took: {set_pixmap_end_time - set_pixmap_start_time:.4f}s")
+                logging.debug(f"[PERF] setPixmap (preview) for {os.path.basename(file_path)} took: {set_pixmap_end_time - set_pixmap_start_time:.4f}s")
                 pixmap_set = True
             else:
-                print(f"[PERF] Preview pixmap was None for {os.path.basename(file_path)}. Trying thumbnail.")
+                logging.warning(f"[PERF] Preview pixmap was None for {os.path.basename(file_path)}. Trying thumbnail.")
                 get_thumb_start_time = time.perf_counter()
                 thumbnail_pixmap = self.image_pipeline.get_thumbnail_qpixmap(
                     file_path, apply_auto_edits=self.apply_auto_edits_enabled
                 )
                 get_thumb_end_time = time.perf_counter()
-                print(f"[PERF] get_thumbnail_qpixmap took: {get_thumb_end_time - get_thumb_start_time:.4f}s")
+                logging.debug(f"[PERF] get_thumbnail_qpixmap for {os.path.basename(file_path)} took: {get_thumb_end_time - get_thumb_start_time:.4f}s. Thumbnail is None: {thumbnail_pixmap is None}")
 
                 if thumbnail_pixmap:
                     set_pixmap_start_time = time.perf_counter()
                     self.image_view.setPixmap(thumbnail_pixmap)
                     set_pixmap_end_time = time.perf_counter()
-                    print(f"[PERF] setPixmap (thumbnail) took: {set_pixmap_end_time - set_pixmap_start_time:.4f}s")
+                    logging.debug(f"[PERF] setPixmap (thumbnail) for {os.path.basename(file_path)} took: {set_pixmap_end_time - set_pixmap_start_time:.4f}s")
                     pixmap_set = True
                 else:
                     self.image_view.setText(f"Failed to load preview/thumbnail:\n{os.path.basename(file_path)}")
-                    print(f"[PERF] Both preview and thumbnail failed for {os.path.basename(file_path)}")
+                    logging.error(f"[PERF] Both preview and thumbnail failed for {os.path.basename(file_path)}")
 
             pixmap_load_end_time = time.perf_counter()
-            print(f"[PERF] Total pixmap loading and setting took: {pixmap_load_end_time - pixmap_load_start_time:.4f}s")
+            logging.debug(f"[PERF] Total pixmap loading and setting for {os.path.basename(file_path)} took: {pixmap_load_end_time - pixmap_load_start_time:.4f}s")
 
             status_bar_start_time = time.perf_counter()
             label_text = current_label if current_label else "None"
@@ -2060,24 +2060,25 @@ class MainWindow(QMainWindow):
             try:
                 original_size = os.path.getsize(file_path) // 1024
                 size_text = f"Size: {original_size} KB"
-            except OSError:
+            except OSError as ose:
                 size_text = "Size: N/A"
+                logging.warning(f"Could not get size for {file_path}: {ose}")
+
 
             status_message = (f"{os.path.basename(file_path)} | R: {current_rating} | "
                               f"L: {label_text} | D: {date_text} {cluster_text} | "
                               f"{size_text}{blur_status_text}")
             self.statusBar().showMessage(status_message)
             status_bar_end_time = time.perf_counter()
-            print(f"[PERF] Status bar update took: {status_bar_end_time - status_bar_start_time:.4f}s")
+            logging.debug(f"[PERF] Status bar update took: {status_bar_end_time - status_bar_start_time:.4f}s")
 
-        except Exception as e:
-            error_message = f"Error loading image {os.path.basename(file_path)}: {e}"
-            print(f"[MainWindow] _display_single_image_preview: {error_message}")
-            traceback.print_exc()
-            self.image_view.setText(f"Error loading image:\n{os.path.basename(file_path)}")
-            self.statusBar().showMessage(error_message, 5000)
+        except Exception as e: # Catch any exception during pixmap handling or UI update
+            error_message = f"Critical error displaying image {os.path.basename(file_path)}: {e}"
+            logging.error(f"[MainWindow] _display_single_image_preview: {error_message}", exc_info=True)
+            self.image_view.setText(f"Error displaying image:\n{os.path.basename(file_path)}")
+            self.statusBar().showMessage(error_message, 7000)
         
-        print(f"[PERF] _display_single_image_preview END for: {os.path.basename(file_path)} in {time.perf_counter() - overall_start_time:.4f}s\n")
+        logging.debug(f"[PERF] _display_single_image_preview END for: {os.path.basename(file_path)} in {time.perf_counter() - overall_start_time:.4f}s\n")
 
     def _display_multi_selection_info(self, selected_paths: List[str]):
         """Handles UI updates when multiple (2 or more) images are selected."""
@@ -2099,7 +2100,7 @@ class MainWindow(QMainWindow):
                     self.statusBar().showMessage(f"Similarity between {os.path.basename(path1)} and {os.path.basename(path2)}: {similarity:.4f}")
                 except Exception as e:
                     self.statusBar().showMessage(f"Error calculating similarity: {e}", 5000)
-                    print(f"[MainWindow] Error calculating similarity: {e}")
+                    logging.error(f"[MainWindow] Error calculating similarity: {e}", exc_info=True)
             else:
                 missing_msg_parts = []
                 if emb1 is None: missing_msg_parts.append(f"{os.path.basename(path1)}")
@@ -2235,7 +2236,7 @@ class MainWindow(QMainWindow):
         # Now, preview preloading is kicked off after rating loading finishes.
         # self.update_loading_text("Thumbnails preloaded. Starting preview preloading...")
         # self._start_preview_preloader(all_file_data)
-        print("[MainWindow] _handle_thumbnail_preload_finished called (now largely deprecated by rating load chain)")
+        logging.debug("[MainWindow] _handle_thumbnail_preload_finished called (now largely deprecated by rating load chain)")
         pass # Intentionally do nothing here, preview starts after rating load now
 
     # --- Rating Loader Worker Handlers ---
@@ -2280,7 +2281,7 @@ class MainWindow(QMainWindow):
         self.update_loading_text("Ratings loaded. Preloading previews...")
         try:
             logging.info("[MainWindow] _handle_rating_load_finished: --- CALLING --- _start_preview_preloader.")
-            self._start_preview_preloader(self.app_state.image_files_data.copy())
+            self._start_preview_preloader(self.app_state.image_files_data.copy()) # Pass a copy
             logging.info("[MainWindow] _handle_rating_load_finished: --- RETURNED --- _start_preview_preloader call completed.")
         except Exception as e_start_preview:
             logging.error(f"[MainWindow] _handle_rating_load_finished: Error calling _start_preview_preloader: {e_start_preview}", exc_info=True)
@@ -2293,7 +2294,7 @@ class MainWindow(QMainWindow):
         # Still proceed to preview preloading even if rating load had errors for some files
         if self.app_state.image_files_data:
             self.update_loading_text("Rating load errors. Preloading previews...")
-            self._start_preview_preloader(self.app_state.image_files_data.copy())
+            self._start_preview_preloader(self.app_state.image_files_data.copy()) # Pass a copy
         else:
             self.hide_loading_overlay()
 
@@ -2552,7 +2553,7 @@ class MainWindow(QMainWindow):
         return item
 
     def _start_similarity_analysis(self):
-        print("[MainWindow] _start_similarity_analysis called.")
+        logging.info("[MainWindow] _start_similarity_analysis called.")
         if self.worker_manager.is_similarity_worker_running():
             self.statusBar().showMessage("Similarity analysis is already in progress.", 3000)
             return
@@ -2742,7 +2743,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Auto RAW edits {'enabled' if checked else 'disabled'}. Caches cleared, view refreshed.", 3000)
 
     def _start_blur_detection_analysis(self):
-        print("[MainWindow] _start_blur_detection_analysis called.")
+        logging.info("[MainWindow] _start_blur_detection_analysis called.")
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("No images loaded to analyze for blurriness.", 3000)
             return
@@ -2840,7 +2841,7 @@ class MainWindow(QMainWindow):
                 if selected_item == item_to_update:
                     self._handle_file_selection_changed() # Re-process selection to update main view
         else:
-            print(f"Warning: Could not find QStandardItem for {image_path} to update blur status in UI.")
+            logging.warning(f"Could not find QStandardItem for {image_path} to update blur status in UI.")
 
 
     # Slot for WorkerManager's blur_detection_finished signal
