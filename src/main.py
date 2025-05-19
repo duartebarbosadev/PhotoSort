@@ -127,13 +127,27 @@ def main():
     # Create a new stream handler (outputs to console)
     console_handler = logging.StreamHandler(sys.stderr) # or sys.stdout
     console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.INFO) # Set level for this handler
-
-    # Add the new handler to the root logger
+    console_handler.setLevel(logging.INFO) # Set level for console
     root_logger.addHandler(console_handler)
-    # Set the root logger's level. This acts as a global minimum.
-    # Individual handlers can have their own higher levels.
-    root_logger.setLevel(logging.INFO)
+
+    # Conditionally create and add a file handler
+    enable_file_logging_env = os.environ.get("PHOTORANKER_ENABLE_FILE_LOGGING", "false")
+    if enable_file_logging_env.lower() == "true":
+        try:
+            log_file_path = os.path.join(os.path.expanduser('~'), '.photoranker_logs', 'photoranker_app.log')
+            os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+            file_handler = logging.FileHandler(log_file_path, mode='a') # Append mode
+            file_handler.setFormatter(formatter)
+            file_handler.setLevel(logging.DEBUG) # Log DEBUG and above to file
+            root_logger.addHandler(file_handler)
+            root_logger.setLevel(logging.DEBUG) # Ensure root logger captures DEBUG for file handler
+            logging.info(f"File logging ENABLED and initialized at: {log_file_path}")
+        except Exception as e_file_log:
+            logging.error(f"Failed to initialize file logging: {e_file_log}")
+            root_logger.setLevel(logging.INFO) # Fallback to INFO if file logging fails
+    else:
+        root_logger.setLevel(logging.INFO) # Default to INFO if file logging is not enabled
+        logging.info("File logging is DISABLED (set PHOTORANKER_ENABLE_FILE_LOGGING=true to enable).")
     # --- End Aggressive Logging Setup ---
 
     # --- Setup Global Exception Hook ---
