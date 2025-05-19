@@ -142,56 +142,71 @@ class MetadataHandler:
                 cached_exif_data = exif_disk_cache.get(norm_path)
             
             if cached_exif_data:
-                logging.info(f"[MetadataHandler] ExifCache HIT for {os.path.basename(norm_path)}. Data: {cached_exif_data}")
+                logging.debug(f"[MetadataHandler] ExifCache HIT for {os.path.basename(norm_path)}.")
                 results[norm_path]['raw_exif'] = cached_exif_data
             else:
-                logging.info(f"[MetadataHandler] ExifCache MISS for {os.path.basename(norm_path)}")
+                logging.debug(f"[MetadataHandler] ExifCache MISS for {os.path.basename(norm_path)}")
                 paths_needing_exiftool.append(norm_path)
         
-        # 2. Batch ExifTool call for files not in ExifCache
-        CHUNK_SIZE = 200 # Process 200 files per exiftool call
+        # 2. Parallel Batch ExifTool call for files not in ExifCache
+        CHUNK_SIZE = 50 # Smaller chunk size for parallel processing to avoid too many concurrent exiftool processes
+        MAX_WORKERS = min(8, (os.cpu_count() or 1) * 2) # Adjust max workers based on CPU, up to a limit
+
         if paths_needing_exiftool:
-            logging.info(f"[MetadataHandler] Need to call ExifTool for {len(paths_needing_exiftool)} files. Processing in chunks of {CHUNK_SIZE}.")
+            logging.info(f"[MetadataHandler] Need to call ExifTool for {len(paths_needing_exiftool)} files. Processing in parallel chunks of {CHUNK_SIZE} with up to {MAX_WORKERS} workers.")
             
-            for i in range(0, len(paths_needing_exiftool), CHUNK_SIZE):
-                chunk_paths = paths_needing_exiftool[i:i + CHUNK_SIZE]
-                logging.info(f"[MetadataHandler] Processing ExifTool chunk {i//CHUNK_SIZE + 1}/{(len(paths_needing_exiftool) + CHUNK_SIZE - 1)//CHUNK_SIZE}, {len(chunk_paths)} files.")
-                
+            all_chunk_exiftool_results: List[List[Dict[str, Any]]] = []
+
+            def process_chunk(chunk_paths_to_process: List[str]) -> List[Dict[str, Any]]:
+                chunk_results_list = []
                 try:
                     with exiftool.ExifToolHelper(common_args=["-charset", "UTF8"], encoding="utf-8") as et:
-                        encoded_chunk_paths = [p.encode('utf-8', errors='surrogateescape') for p in chunk_paths]
-                        chunk_exiftool_results = et.get_tags(encoded_chunk_paths, tags=ALL_RELEVANT_EXIF_TAGS_FOR_BATCH)
-                    
-                    logging.info(f"[MetadataHandler] ExifTool chunk returned {len(chunk_exiftool_results)} results.")
+                        encoded_chunk_paths = [p.encode('utf-8', errors='surrogateescape') for p in chunk_paths_to_process]
+                        # et.get_tags can return List[Dict[str, Any]]
+                        chunk_results_list = et.get_tags(encoded_chunk_paths, tags=ALL_RELEVANT_EXIF_TAGS_FOR_BATCH)
+                        logging.info(f"[MetadataHandler Worker] ExifTool chunk ({len(chunk_paths_to_process)} files) returned {len(chunk_results_list)} results.")
+                except exiftool.ExifToolExecuteError as ete_thread:
+                    logging.error(f"[MetadataHandler Worker] ExifTool execution error on chunk: {ete_thread}")
+                except Exception as e_thread:
+                    logging.error(f"[MetadataHandler Worker] Error during ExifTool chunk processing: {e_thread}", exc_info=True)
+                return chunk_results_list or [] # Ensure it always returns a list
 
-                    sourcefile_to_meta_map_chunk = {}
-                    for meta_dict in chunk_exiftool_results:
-                        source_file_raw = meta_dict.get("SourceFile")
-                        if source_file_raw:
-                            norm_source_file = unicodedata.normalize('NFC', os.path.normpath(source_file_raw))
-                            sourcefile_to_meta_map_chunk[norm_source_file] = meta_dict
-                        else:
-                            logging.warning(f"[MetadataHandler] ExifTool result in chunk missing SourceFile: {meta_dict}")
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                future_to_chunk = {
+                    executor.submit(process_chunk, paths_needing_exiftool[i:i + CHUNK_SIZE]): paths_needing_exiftool[i:i + CHUNK_SIZE]
+                    for i in range(0, len(paths_needing_exiftool), CHUNK_SIZE)
+                }
+                for future in concurrent.futures.as_completed(future_to_chunk):
+                    chunk_data = future_to_chunk[future]
+                    try:
+                        chunk_exif_results = future.result() # This is List[Dict[str, Any]]
+                        all_chunk_exiftool_results.extend(chunk_exif_results)
+                    except Exception as exc:
+                        logging.error(f"[MetadataHandler] Chunk (first file: {os.path.basename(chunk_data[0]) if chunk_data else 'N/A'}) generated an exception: {exc}")
+            
+            # Process aggregated results
+            if all_chunk_exiftool_results:
+                sourcefile_to_meta_map_aggregated = {}
+                for meta_dict in all_chunk_exiftool_results:
+                    source_file_raw = meta_dict.get("SourceFile")
+                    if source_file_raw:
+                        norm_source_file = unicodedata.normalize('NFC', os.path.normpath(source_file_raw))
+                        sourcefile_to_meta_map_aggregated[norm_source_file] = meta_dict
+                    else:
+                        logging.warning(f"[MetadataHandler] Aggregated ExifTool result missing SourceFile: {meta_dict}")
 
-                    for path_in_chunk in chunk_paths:
-                        raw_meta = sourcefile_to_meta_map_chunk.get(path_in_chunk)
-                        if raw_meta:
-                            logging.debug(f"[MetadataHandler] ExifTool data for {os.path.basename(path_in_chunk)}: {raw_meta}")
-                            results[path_in_chunk]['raw_exif'] = raw_meta
-                            if exif_disk_cache:
-                                exif_disk_cache.set(path_in_chunk, raw_meta)
-                        else:
-                            logging.warning(f"[MetadataHandler] No ExifTool result mapped in chunk for {os.path.basename(path_in_chunk)}")
-                
-                except exiftool.ExifToolExecuteError as ete:
-                    logging.error(f"[MetadataHandler] ExifTool execution error on chunk: {ete}")
-                    # Mark files in this chunk as failed to get raw_exif to avoid issues later
-                    for path_in_chunk_error in chunk_paths:
-                        results[path_in_chunk_error]['raw_exif'] = None
-                except Exception as e:
-                    logging.error(f"[MetadataHandler] Error during ExifTool chunk processing: {e}", exc_info=True)
-                    for path_in_chunk_error in chunk_paths:
-                        results[path_in_chunk_error]['raw_exif'] = None
+                for path_processed_by_exiftool in paths_needing_exiftool: # Iterate over original list of paths needing exiftool
+                    raw_meta = sourcefile_to_meta_map_aggregated.get(path_processed_by_exiftool)
+                    if raw_meta:
+                        # logging.debug(f"[MetadataHandler] ExifTool data for {os.path.basename(path_processed_by_exiftool)}: {raw_meta}")
+                        results[path_processed_by_exiftool]['raw_exif'] = raw_meta
+                        if exif_disk_cache:
+                            exif_disk_cache.set(path_processed_by_exiftool, raw_meta)
+                    else:
+                        # This path might have failed in its chunk or not returned by exiftool
+                        logging.warning(f"[MetadataHandler] No ExifTool result mapped for {os.path.basename(path_processed_by_exiftool)} after parallel processing.")
+                        results[path_processed_by_exiftool]['raw_exif'] = None # Ensure it's None if processing failed for it
 
         # 3. Parse data from raw_exif (either from cache or new ExifTool call) and apply fallbacks
         final_results: Dict[str, Dict[str, Any]] = {}

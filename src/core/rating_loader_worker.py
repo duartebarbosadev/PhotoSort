@@ -17,8 +17,8 @@ class RatingLoaderWorker(QObject):
     Metadata fetching is now done in a single batch call.
     """
     progress_update = pyqtSignal(int, int, str)  # current, total, basename
-    # Emit the full metadata dictionary for flexibility, though currently only rating is primary
-    metadata_loaded = pyqtSignal(str, dict)      # image_path, metadata_dict {'rating': int, 'label': Optional[str], 'date': Optional[date_obj]}
+    # Emit a batch of metadata dictionaries
+    metadata_batch_loaded = pyqtSignal(list)     # List of tuples: [(image_path, metadata_dict), ...]
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
@@ -68,7 +68,13 @@ class RatingLoaderWorker(QObject):
                 self._rating_disk_cache,
                 self._app_state.exif_disk_cache
             )
-
+         
+            METADATA_EMIT_BATCH_SIZE = 50
+            PROGRESS_EMIT_INTERVAL = 20 # Emit progress every 20 files, or if it's the last one
+            
+            metadata_batch_to_emit = []
+            last_progress_emit_count = 0
+        
             for i, image_path_norm in enumerate(image_paths_to_process):
                 if not self._is_running:
                     logging.info(f"[RatingLoaderWorker] Processing stopped during result iteration at index {i}. Path: {image_path_norm}")
@@ -77,27 +83,43 @@ class RatingLoaderWorker(QObject):
                 metadata = batch_results.get(image_path_norm)
                 basename = os.path.basename(image_path_norm)
                 processed_count += 1
-
+        
+                current_metadata_tuple = None
                 if metadata:
-                    # Update AppState's in-memory caches
+                    # Update AppState's in-memory caches directly here
                     self._app_state.rating_cache[image_path_norm] = metadata.get('rating', 0)
                     self._app_state.label_cache[image_path_norm] = metadata.get('label')
                     if metadata.get('date'):
                         self._app_state.date_cache[image_path_norm] = metadata['date']
                     else:
                         self._app_state.date_cache.pop(image_path_norm, None)
-                    
-                    logging.debug(f"[RatingLoaderWorker] Emitting metadata_loaded for {image_path_norm}")
-                    self.metadata_loaded.emit(image_path_norm, metadata)
+                    current_metadata_tuple = (image_path_norm, metadata)
                 else:
                     logging.warning(f"[RatingLoaderWorker] No metadata returned for {image_path_norm} from batch call.")
-                    # Emit with default/empty metadata if necessary, or skip
-                    self.metadata_loaded.emit(image_path_norm, {'rating': 0, 'label': None, 'date': None})
-
-
-                self.progress_update.emit(processed_count, total_files, basename)
-                logging.info(f"[RatingLoaderWorker] Processed {processed_count}/{total_files}: {basename}")
-
+                    # Still add to batch for UI to know it was processed, with default values
+                    current_metadata_tuple = (image_path_norm, {'rating': 0, 'label': None, 'date': None})
+                
+                if current_metadata_tuple:
+                    metadata_batch_to_emit.append(current_metadata_tuple)
+        
+                if len(metadata_batch_to_emit) >= METADATA_EMIT_BATCH_SIZE or processed_count == total_files:
+                    if metadata_batch_to_emit:
+                        logging.debug(f"[RatingLoaderWorker] Emitting metadata_batch_loaded with {len(metadata_batch_to_emit)} items.")
+                        self.metadata_batch_loaded.emit(list(metadata_batch_to_emit)) # Emit a copy
+                        metadata_batch_to_emit.clear()
+        
+                if processed_count % PROGRESS_EMIT_INTERVAL == 0 or processed_count == total_files or processed_count == 1:
+                    self.progress_update.emit(processed_count, total_files, basename)
+                    last_progress_emit_count = processed_count
+                
+                logging.debug(f"[RatingLoaderWorker] Processed {processed_count}/{total_files}: {basename}")
+        
+            # Ensure any remaining items in metadata_batch_to_emit are sent
+            if metadata_batch_to_emit:
+                logging.debug(f"[RatingLoaderWorker] Emitting remaining metadata_batch_loaded with {len(metadata_batch_to_emit)} items.")
+                self.metadata_batch_loaded.emit(list(metadata_batch_to_emit))
+                metadata_batch_to_emit.clear()
+        
         except Exception as e:
             error_msg = f"Error during batch metadata loading: {e}\n{traceback.format_exc()}"
             logging.error(f"[RatingLoaderWorker] {error_msg}")

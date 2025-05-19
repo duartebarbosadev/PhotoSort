@@ -859,7 +859,7 @@ class MainWindow(QMainWindow):
 
         # Connect signals from WorkerManager for RatingLoader
         self.worker_manager.rating_load_progress.connect(self._handle_rating_load_progress)
-        self.worker_manager.rating_load_metadata_loaded.connect(self._handle_metadata_loaded) # Changed signal name
+        self.worker_manager.rating_load_metadata_batch_loaded.connect(self._handle_metadata_batch_loaded) # New batched signal
         self.worker_manager.rating_load_finished.connect(self._handle_rating_load_finished)
         self.worker_manager.rating_load_error.connect(self._handle_rating_load_error)
         logging.debug(f"MainWindow._connect_signals - End: {time.perf_counter() - start_time:.4f}s")
@@ -2245,28 +2245,40 @@ class MainWindow(QMainWindow):
         logging.debug(f"[MainWindow] Rating load progress: {percentage}% ({current}/{total}) - {basename}")
         self.update_loading_text(f"Loading ratings: {percentage}% ({current}/{total}) - {basename}")
 
-    def _handle_metadata_loaded(self, image_path: str, metadata: Dict[str, Any]):
-        logging.debug(f"[MainWindow] Metadata loaded for {os.path.basename(image_path)}: {metadata}")
+    def _handle_metadata_batch_loaded(self, metadata_batch: List[Dict[str, Any]]):
+        logging.debug(f"[MainWindow] Metadata batch loaded with {len(metadata_batch)} items.")
         # AppState caches (rating_cache, label_cache, date_cache) are already updated by RatingLoaderWorker.
         
-        # If the currently selected item is this one, update its display.
         active_view = self._get_active_file_view()
+        currently_selected_path = None
         if active_view and active_view.currentIndex().isValid():
             current_proxy_idx = active_view.currentIndex()
             source_idx = self.proxy_model.mapToSource(current_proxy_idx)
             item = self.file_system_model.itemFromIndex(source_idx)
             if item:
                 item_data = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(item_data, dict) and item_data.get('path') == image_path:
-                    logging.debug(f"[MainWindow] Updating display for selected item: {os.path.basename(image_path)}")
-                    # Update rating buttons, label buttons, and potentially status bar.
-                    # _fetch_and_update_metadata_for_selection has similar logic but re-fetches,
-                    # here we use the already fetched `metadata` from the worker.
-                    self._update_rating_display(metadata.get('rating', 0))
-                    self._update_label_display(metadata.get('label'))
-                    # Re-trigger full selection change handler to update status bar and potentially preview
-                    # if other aspects (like date for status bar) might have changed.
-                    self._handle_file_selection_changed()
+                if isinstance(item_data, dict) and 'path' in item_data:
+                    currently_selected_path = item_data.get('path')
+
+        needs_active_selection_refresh = False
+        for image_path, metadata in metadata_batch:
+            logging.debug(f"[MainWindow] Processing metadata from batch for {os.path.basename(image_path)}: {metadata}")
+            if image_path == currently_selected_path:
+                logging.debug(f"[MainWindow] Batch contains currently selected item: {os.path.basename(image_path)}. Marking for UI refresh.")
+                # Update rating buttons, label buttons directly using the new metadata
+                self._update_rating_display(metadata.get('rating', 0))
+                self._update_label_display(metadata.get('label'))
+                # Mark that the full selection handler needs to be called once after the loop
+                # to update status bar and potentially preview if other aspects changed.
+                needs_active_selection_refresh = True
+        
+        if needs_active_selection_refresh:
+            logging.debug(f"[MainWindow] Triggering _handle_file_selection_changed after processing batch due to active item update.")
+            self._handle_file_selection_changed()
+            
+        # Optionally, if items being visible depends on metadata (e.g. rating filter),
+        # you might need to call self._apply_filter() here or after all batches are done.
+        # For now, individual item updates are prioritized.
 
     def _handle_rating_load_finished(self):
         logging.info("[MainWindow] _handle_rating_load_finished: Received RatingLoaderWorker.finished signal.")

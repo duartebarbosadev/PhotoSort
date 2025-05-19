@@ -42,7 +42,7 @@ class WorkerManager(QObject):
 
     # Rating Loader Signals
     rating_load_progress = pyqtSignal(int, int, str)  # current, total, basename
-    rating_load_metadata_loaded = pyqtSignal(str, dict)  # image_path, metadata_dict
+    rating_load_metadata_batch_loaded = pyqtSignal(list)  # List of tuples: [(image_path, metadata_dict), ...]
     rating_load_finished = pyqtSignal()
     rating_load_error = pyqtSignal(str)
 
@@ -280,7 +280,7 @@ class WorkerManager(QObject):
         self.rating_loader_worker.moveToThread(self.rating_loader_thread)
 
         self.rating_loader_worker.progress_update.connect(self.rating_load_progress)
-        self.rating_loader_worker.metadata_loaded.connect(self.rating_load_metadata_loaded)
+        self.rating_loader_worker.metadata_batch_loaded.connect(self.rating_load_metadata_batch_loaded) # Connect to the new batched signal
         self.rating_loader_worker.finished.connect(self.rating_load_finished)
         self.rating_loader_worker.error.connect(self.rating_load_error)
 
