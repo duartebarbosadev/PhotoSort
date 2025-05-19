@@ -147,8 +147,8 @@ def main():
 
     # Clear caches on startup
     clear_application_caches_start_time = time.perf_counter()
-    clear_application_caches()
-    logging.info(f"Application main - clear_application_caches (startup) done: {time.perf_counter() - clear_application_caches_start_time:.4f}s")
+    # clear_application_caches() # Prevent clearing caches on startup for persistence
+    logging.info(f"Application main - clear_application_caches (startup) SKIPPED for persistence: {time.perf_counter() - clear_application_caches_start_time:.4f}s")
 
     app_instantiation_start_time = time.perf_counter()
     app = QApplication(sys.argv)
@@ -180,8 +180,8 @@ def main():
     logging.info(f"Application main - window.show() called: {time.perf_counter() - window_show_start_time:.4f}s")
 
     # Clear caches on exit
-    app.aboutToQuit.connect(clear_application_caches)
-    logging.info("Application main - aboutToQuit connected to clear_application_caches")
+    # app.aboutToQuit.connect(clear_application_caches) # Prevent clearing caches on exit for persistence
+    logging.info("Application main - aboutToQuit connection to clear_application_caches SKIPPED for persistence")
 
     # --- Stop ExifTool Process on Exit ---
     # Ensure clean shutdown (if using persistent handler)
