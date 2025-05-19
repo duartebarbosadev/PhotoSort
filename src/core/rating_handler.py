@@ -149,41 +149,49 @@ class MetadataHandler:
                 paths_needing_exiftool.append(norm_path)
         
         # 2. Batch ExifTool call for files not in ExifCache
+        CHUNK_SIZE = 200 # Process 200 files per exiftool call
         if paths_needing_exiftool:
-            logging.info(f"[MetadataHandler] Calling ExifTool for {len(paths_needing_exiftool)} files.")
-            try:
-                with exiftool.ExifToolHelper(common_args=["-charset", "UTF8"], encoding="utf-8") as et:
-                    # Ensure paths sent to exiftool are encoded correctly
-                    encoded_paths = [p.encode('utf-8', errors='surrogateescape') for p in paths_needing_exiftool]
-                    exiftool_results = et.get_tags(encoded_paths, tags=ALL_RELEVANT_EXIF_TAGS_FOR_BATCH)
+            logging.info(f"[MetadataHandler] Need to call ExifTool for {len(paths_needing_exiftool)} files. Processing in chunks of {CHUNK_SIZE}.")
+            
+            for i in range(0, len(paths_needing_exiftool), CHUNK_SIZE):
+                chunk_paths = paths_needing_exiftool[i:i + CHUNK_SIZE]
+                logging.info(f"[MetadataHandler] Processing ExifTool chunk {i//CHUNK_SIZE + 1}/{(len(paths_needing_exiftool) + CHUNK_SIZE - 1)//CHUNK_SIZE}, {len(chunk_paths)} files.")
                 
-                logging.info(f"[MetadataHandler] ExifTool returned {len(exiftool_results)} results.")
+                try:
+                    with exiftool.ExifToolHelper(common_args=["-charset", "UTF8"], encoding="utf-8") as et:
+                        encoded_chunk_paths = [p.encode('utf-8', errors='surrogateescape') for p in chunk_paths]
+                        chunk_exiftool_results = et.get_tags(encoded_chunk_paths, tags=ALL_RELEVANT_EXIF_TAGS_FOR_BATCH)
+                    
+                    logging.info(f"[MetadataHandler] ExifTool chunk returned {len(chunk_exiftool_results)} results.")
 
-                # Map results back to original paths using SourceFile
-                sourcefile_to_meta_map = {}
-                for meta_dict in exiftool_results:
-                    source_file_raw = meta_dict.get("SourceFile")
-                    if source_file_raw:
-                        # Normalize path from ExifTool for consistent matching
-                        norm_source_file = unicodedata.normalize('NFC', os.path.normpath(source_file_raw))
-                        sourcefile_to_meta_map[norm_source_file] = meta_dict
-                    else:
-                        logging.warning(f"[MetadataHandler] ExifTool result missing SourceFile: {meta_dict}")
+                    sourcefile_to_meta_map_chunk = {}
+                    for meta_dict in chunk_exiftool_results:
+                        source_file_raw = meta_dict.get("SourceFile")
+                        if source_file_raw:
+                            norm_source_file = unicodedata.normalize('NFC', os.path.normpath(source_file_raw))
+                            sourcefile_to_meta_map_chunk[norm_source_file] = meta_dict
+                        else:
+                            logging.warning(f"[MetadataHandler] ExifTool result in chunk missing SourceFile: {meta_dict}")
 
-                for path_processed_by_exiftool in paths_needing_exiftool: # Iterate over paths we sent
-                    raw_meta = sourcefile_to_meta_map.get(path_processed_by_exiftool)
-                    if raw_meta:
-                        logging.info(f"[MetadataHandler] ExifTool data for {os.path.basename(path_processed_by_exiftool)}: {raw_meta}")
-                        results[path_processed_by_exiftool]['raw_exif'] = raw_meta
-                        if exif_disk_cache:
-                            exif_disk_cache.set(path_processed_by_exiftool, raw_meta)
-                    else:
-                        logging.warning(f"[MetadataHandler] No ExifTool result mapped for {os.path.basename(path_processed_by_exiftool)}")
-
-            except exiftool.ExifToolExecuteError as ete:
-                logging.error(f"[MetadataHandler] ExifTool execution error: {ete}")
-            except Exception as e:
-                logging.error(f"[MetadataHandler] Error during ExifTool batch processing: {e}", exc_info=True)
+                    for path_in_chunk in chunk_paths:
+                        raw_meta = sourcefile_to_meta_map_chunk.get(path_in_chunk)
+                        if raw_meta:
+                            logging.debug(f"[MetadataHandler] ExifTool data for {os.path.basename(path_in_chunk)}: {raw_meta}")
+                            results[path_in_chunk]['raw_exif'] = raw_meta
+                            if exif_disk_cache:
+                                exif_disk_cache.set(path_in_chunk, raw_meta)
+                        else:
+                            logging.warning(f"[MetadataHandler] No ExifTool result mapped in chunk for {os.path.basename(path_in_chunk)}")
+                
+                except exiftool.ExifToolExecuteError as ete:
+                    logging.error(f"[MetadataHandler] ExifTool execution error on chunk: {ete}")
+                    # Mark files in this chunk as failed to get raw_exif to avoid issues later
+                    for path_in_chunk_error in chunk_paths:
+                        results[path_in_chunk_error]['raw_exif'] = None
+                except Exception as e:
+                    logging.error(f"[MetadataHandler] Error during ExifTool chunk processing: {e}", exc_info=True)
+                    for path_in_chunk_error in chunk_paths:
+                        results[path_in_chunk_error]['raw_exif'] = None
 
         # 3. Parse data from raw_exif (either from cache or new ExifTool call) and apply fallbacks
         final_results: Dict[str, Dict[str, Any]] = {}
