@@ -2002,7 +2002,6 @@ class MainWindow(QMainWindow):
         blur_status_text = ""
         if is_blurred_val is True: blur_status_text = " | Blurred: Yes"
         elif is_blurred_val is False: blur_status_text = " | Blurred: No"
-        else: blur_status_text = " | Blurred: Unknown"
 
         ui_update_start_time = time.perf_counter()
         self._update_rating_display(current_rating)
