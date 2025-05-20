@@ -45,8 +45,11 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 * **Python 3.x**: Download from [python.org](https://www.python.org/).
 * **ExifTool**: Essential for reading and writing metadata (ratings, labels).
   * Download the ExifTool executable from the [official ExifTool website](https://exiftool.org/).
-  * **Windows**: Rename the downloaded `exiftool(-k).exe` to `exiftool.exe` and place it in a directory that is part of your system's PATH (e.g., `C:\Windows`), or add its directory to the PATH environment variable.
-  * **macOS/Linux**: Place the `exiftool` executable in a directory included in your system's PATH (e.g., `/usr/local/bin/`). Ensure it's executable (`chmod +x exiftool`).
+  * **Configuration**:
+    * **Option 1: Set Path in Application**: Go to "Settings" > "Set ExifTool Path..." within PhotoRanker to directly specify the location of your `exiftool` (or `exiftool.exe`) executable.
+    * **Option 2 (System PATH)**:
+      * **Windows**: Rename the downloaded `exiftool(-k).exe` to `exiftool.exe` and place it in a directory that is part of your system's PATH (e.g., `C:\Windows`), or add its directory to the PATH environment variable.
+      * **macOS/Linux**: Place the `exiftool` executable in a directory included in your system's PATH (e.g., `/usr/local/bin/`). Ensure it's executable (`chmod +x exiftool`).
 * **CUDA (Optional, for GPU Acceleration)**:
   * For significantly faster image embedding generation (used in Similarity Analysis), a CUDA-enabled NVIDIA GPU is beneficial.
   * You'll need:
@@ -106,6 +109,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
    * Access "Settings" > "Manage Cache" to clear thumbnail/preview caches or adjust the preview cache size limit.
    * Toggle "Enable Auto RAW Edits" for automatic adjustments to RAW previews.
+   * Set the path to your ExifTool executable via "Settings" > "Set ExifTool Path...".
 9. **Keyboard Shortcuts**: Speed up your workflow with these shortcuts:
 
    * **Rating**:

@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox # QMessageBox for global e
 from src.ui.main_window import MainWindow
 # from src.core.rating_fetcher import clear_metadata_cache # Removed: No longer used
 from src.core.image_pipeline import ImagePipeline # For clearing image caches
+from src.core.rating_handler import MetadataHandler # For ExifTool check
 # from src.core.similarity_engine import SimilarityEngine # For clearing embedding cache <-- Removed top-level import
 
 def load_stylesheet(filename="src/ui/dark_theme.qss"):
@@ -188,6 +189,48 @@ def main():
     mainwindow_instantiation_start_time = time.perf_counter()
     window = MainWindow()
     logging.info(f"Application main - MainWindow instantiated: {time.perf_counter() - mainwindow_instantiation_start_time:.4f}s")
+
+    # --- ExifTool Availability Check ---
+    exiftool_check_start_time = time.perf_counter()
+    exiftool_available = False
+    while not exiftool_available:
+        exiftool_available = MetadataHandler.check_exiftool_availability()
+        if exiftool_available:
+            logging.info("ExifTool found and working.")
+            break
+        else:
+            logging.warning("ExifTool not found or not working correctly.")
+            msg_box = QMessageBox(window) # Parent to window
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("ExifTool Not Found")
+            msg_box.setText(
+                "PhotoRanker requires ExifTool for reading and writing image metadata (ratings, labels).\n"
+                "Without it, these features will not work correctly.\n\n"
+                "Please ensure ExifTool is installed and in your system PATH, "
+                "or set the path to its executable in the application."
+            )
+            set_path_button = msg_box.addButton("Set ExifTool Path...", QMessageBox.ButtonRole.ActionRole)
+            continue_button = msg_box.addButton("Continue (Limited Functionality)", QMessageBox.ButtonRole.ActionRole)
+            exit_button = msg_box.addButton("Exit Application", QMessageBox.ButtonRole.RejectRole)
+            
+            msg_box.exec()
+
+            if msg_box.clickedButton() == set_path_button:
+                window._show_set_exiftool_path_dialog() # Call MainWindow's method
+                # Loop will re-check availability
+            elif msg_box.clickedButton() == continue_button:
+                logging.warning("User chose to continue without a working ExifTool. Metadata features will be affected.")
+                # Optionally, set a flag in AppState or MainWindow to disable related UI
+                # window.app_state.exiftool_is_functional = False (example)
+                break # Exit the check loop and continue application startup
+            elif msg_box.clickedButton() == exit_button:
+                logging.info("User chose to exit because ExifTool is not available.")
+                sys.exit(0) # Clean exit
+            else: # Dialog closed without button click (e.g. Escape key)
+                logging.info("ExifTool dialog closed. Exiting application.")
+                sys.exit(0) # Treat as exit
+    logging.info(f"Application main - ExifTool check completed: {time.perf_counter() - exiftool_check_start_time:.4f}s")
+    # --- End ExifTool Check ---
 
     window_show_start_time = time.perf_counter()
     window.show()

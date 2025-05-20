@@ -1,4 +1,5 @@
 import exiftool
+from exiftool.exceptions import ExifToolExecuteError # Import the specific exception
 import os
 import re
 import time
@@ -9,6 +10,7 @@ from typing import Dict, Any, Optional, List
 
 from src.core.caching.rating_cache import RatingCache
 from src.core.caching.exif_cache import ExifCache
+from src.core.app_settings import get_exiftool_executable_path # Added import
 
 # Preferred EXIF/XMP date tags in order of preference
 DATE_TAGS_PREFERENCE: List[str] = [
@@ -112,6 +114,23 @@ class MetadataHandler:
     """
 
     @staticmethod
+    def _get_exiftool_helper_instance() -> exiftool.ExifToolHelper:
+        """Creates an ExifToolHelper instance, using configured executable path if available."""
+        executable_path = get_exiftool_executable_path()
+        common_args = ["-charset", "UTF8"] # Common args for all instances
+        encoding = "utf-8"
+
+        if executable_path and os.path.isfile(executable_path):
+            logging.info(f"[MetadataHandler] Using ExifTool executable from settings: {executable_path}")
+            return exiftool.ExifToolHelper(executable=executable_path, common_args=common_args, encoding=encoding)
+        else:
+            if executable_path: # Path was set but not valid
+                logging.warning(f"[MetadataHandler] ExifTool path from settings ('{executable_path}') is not a valid file. Falling back to PATH.")
+            else: # Path not set in settings
+                logging.info("[MetadataHandler] ExifTool executable path not set in settings. Using ExifTool from system PATH.")
+            return exiftool.ExifToolHelper(common_args=common_args, encoding=encoding)
+
+    @staticmethod
     def get_batch_display_metadata(
         image_paths: List[str],
         rating_disk_cache: Optional[RatingCache] = None,
@@ -160,7 +179,8 @@ class MetadataHandler:
             def process_chunk(chunk_paths_to_process: List[str]) -> List[Dict[str, Any]]:
                 chunk_results_list = []
                 try:
-                    with exiftool.ExifToolHelper(common_args=["-charset", "UTF8"], encoding="utf-8") as et:
+                    # Use the helper method to get ExifToolHelper instance
+                    with MetadataHandler._get_exiftool_helper_instance() as et:
                         encoded_chunk_paths = [p.encode('utf-8', errors='surrogateescape') for p in chunk_paths_to_process]
                         # et.get_tags can return List[Dict[str, Any]]
                         chunk_results_list = et.get_tags(encoded_chunk_paths, tags=ALL_RELEVANT_EXIF_TAGS_FOR_BATCH)
@@ -294,7 +314,8 @@ class MetadataHandler:
             param = f"-XMP:Rating={rating_str}".encode('utf-8')
             filename_bytes = norm_path.encode('utf-8', errors='surrogateescape')
 
-            with exiftool.ExifToolHelper(common_args=["-charset", "UTF8"], encoding="utf-8") as et:
+            # Use the helper method to get ExifToolHelper instance
+            with MetadataHandler._get_exiftool_helper_instance() as et:
                 et.execute(param, b"-overwrite_original", filename_bytes)
                 exif_success = True
                 logging.info(f"[MetadataHandler] ExifTool successfully set rating for {os.path.basename(norm_path)}")
@@ -330,7 +351,8 @@ class MetadataHandler:
             param = f"-XMP:Label={label_str}".encode('utf-8')
             filename_bytes = norm_path.encode('utf-8', errors='surrogateescape')
 
-            with exiftool.ExifToolHelper(common_args=["-charset", "UTF8"], encoding="utf-8") as et:
+            # Use the helper method to get ExifToolHelper instance
+            with MetadataHandler._get_exiftool_helper_instance() as et:
                 et.execute(param, b"-overwrite_original", filename_bytes)
                 success = True
         except Exception as e:
@@ -340,3 +362,44 @@ class MetadataHandler:
         if success and exif_disk_cache:
             exif_disk_cache.delete(norm_path) # Invalidate specific entry
         return success
+
+    @staticmethod
+    def check_exiftool_availability() -> bool:
+        """
+        Checks if ExifTool is available and executable.
+        Tries to get its version as a simple test.
+        Returns True if ExifTool is found and works, False otherwise.
+        """
+        try:
+            with MetadataHandler._get_exiftool_helper_instance() as et:
+                # Execute a simple command like -ver to check if exiftool is running
+                version_output = et.execute(b"-ver") # Renamed variable
+                if version_output:
+                    version_output_str = ""
+                    if isinstance(version_output, bytes):
+                        version_output_str = version_output.decode('utf-8', errors='ignore').strip()
+                    elif isinstance(version_output, str):
+                        version_output_str = version_output.strip()
+                    else:
+                        logging.warning(f"[MetadataHandler] ExifTool -ver returned unexpected type: {type(version_output)}")
+                        return False
+
+                    if re.match(r"^\d+\.\d+$", version_output_str): # Check if output looks like a version number
+                        logging.info(f"[MetadataHandler] ExifTool check successful. Version: {version_output_str}")
+                        return True
+                    else:
+                        logging.warning(f"[MetadataHandler] ExifTool check: -ver command returned unexpected output: {version_output_str}")
+                        return False
+                else:
+                    logging.warning("[MetadataHandler] ExifTool check: -ver command returned no output.")
+                    return False
+        except ExifToolExecuteError as e: # Use the imported exception
+            logging.error(f"[MetadataHandler] ExifTool availability check failed: ExifToolExecuteError - {e}. "
+                          "This usually means ExifTool was not found in PATH or the configured path is incorrect/not executable.")
+            return False
+        except FileNotFoundError: # This will be raised by ExifToolHelper if executable is not found
+            logging.error("[MetadataHandler] ExifTool availability check failed: FileNotFoundError. ExifTool executable not found (either in PATH or specified location).")
+            return False
+        except Exception as e:
+            logging.error(f"[MetadataHandler] ExifTool availability check failed with an unexpected error: {e}", exc_info=True)
+            return False
