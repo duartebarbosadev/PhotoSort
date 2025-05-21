@@ -115,8 +115,8 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
    * **Rating**:
      * `CTRL+0` - `CTRL+5`: Assign 0 to 5 stars to the selected image.
    * **Navigation**:
-     * `Left Arrow/Up Arrow` / `A`: Navigate to the previous image.
-     * `Right Arrow/Down Arrow` / `D`: Navigate to the next image.
+     * `Down Arrow/Up Arrow`: Navigate to the next/previous image.
+     * `Left Arrow/Right Arrow`: Navigate to the previous/next image of the same group (doesn't jump groups automatically).
    * **File Operations**:
      * `Delete`: Move the selected image to the system trash.
    * **Interface**:

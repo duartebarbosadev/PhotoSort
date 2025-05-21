@@ -15,7 +15,7 @@ import os # <-- Add import os at the top level
 import send2trash # <-- Import send2trash for moving files to trash
 import traceback # For detailed error logging
 from datetime import date as date_obj, datetime # For date type hinting and objects
-from typing import List, Dict, Optional, Any # Import List and Dict for type hinting, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple # Import List and Dict for type hinting, Optional, Any, Tuple
 from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent # Import QEvent for eventFilter
 from PyQt6.QtGui import QColor # Import QColor for highlighting
 from PyQt6.QtGui import QAction, QKeySequence, QPixmap, QKeyEvent, QIcon, QStandardItemModel, QStandardItem, QResizeEvent, QDragEnterEvent, QDropEvent, QDragMoveEvent # Import model classes and event types
@@ -873,8 +873,8 @@ class MainWindow(QMainWindow):
         for btn in self.color_buttons.values():
             btn.clicked.connect(self._set_label_from_button)
         self.clear_color_label_button.clicked.connect(self._clear_label)
-        self.prev_button.clicked.connect(self._navigate_previous)
-        self.next_button.clicked.connect(self._navigate_next)
+        self.prev_button.clicked.connect(self._navigate_up_sequential) # Renamed
+        self.next_button.clicked.connect(self._navigate_down_sequential) # Renamed
         self.filter_combo.currentIndexChanged.connect(self._apply_filter)
         self.cluster_filter_combo.currentIndexChanged.connect(self._apply_filter)
         self.cluster_sort_combo.currentIndexChanged.connect(self._cluster_sort_changed)
@@ -1343,47 +1343,24 @@ class MainWindow(QMainWindow):
         # event.accept() # Not needed for resizeEvent in QMainWindow from my recall
 
     def keyPressEvent(self, event: QKeyEvent):
+        # Arrow key and Delete navigation is now handled by the eventFilter for the views.
+        # MainWindow.keyPressEvent will handle other application-wide shortcuts
+        # or fallbacks if focus is not on the views.
+
         key = event.key()
-        navigate = 0
-        if key == Qt.Key.Key_Left or key == Qt.Key.Key_A: navigate = -1
-        elif key == Qt.Key.Key_Right or key == Qt.Key.Key_D: navigate = 1
-        elif key == Qt.Key.Key_Delete:
-            self._move_current_image_to_trash()
-            event.accept(); return
+        
+        # Escape key to clear focus from search input (if it has focus)
         if key == Qt.Key.Key_Escape:
             if self.search_input.hasFocus():
                 self.search_input.clearFocus()
                 active_view = self._get_active_file_view()
-                if (active_view): active_view.setFocus()
+                if (active_view): active_view.setFocus() # Return focus to the view
                 event.accept(); return
-        if navigate != 0:
-            if self.search_input.hasFocus(): # Don't navigate if search input has focus
-                super().keyPressEvent(event) # Pass to QLineEdit
-                return
-            if navigate < 0: self._navigate_previous()
-            else: self._navigate_next()
-            event.accept(); return
         
-        # Group selection (1-9) is now handled by eventFilter to catch it from views.
-        # If MainWindow has focus and no child view, this keyPressEvent would be called.
-        # We can leave a leaner version here or assume focus is usually on a child.
-        # For safety, if the event filter doesn't catch it (e.g. MainWindow has focus directly),
-        # this can be a fallback.
-        if event.modifiers() == Qt.KeyboardModifier.NoModifier and \
-           self.group_by_similarity_mode and \
-           not self.search_input.hasFocus() and \
-           key >= Qt.Key.Key_1 and key <= Qt.Key.Key_9:
-            active_view = self._get_active_file_view()
-            if active_view: # If there's an active view, it should have been handled by eventFilter
-                 # If we reach here, it means MainWindow itself has focus, and there's an active_view
-                 # This scenario is less common.
-                 if self._perform_group_selection_from_key(key, active_view):
-                    event.accept()
-                    return
-            # If no active_view, or _perform_group_selection_from_key returns False,
-            # let super handle it.
+        # Other global shortcuts for MainWindow could be here.
+        # e.g. Ctrl+F is handled by QAction self.find_action
 
-        super().keyPressEvent(event)
+        super().keyPressEvent(event) # Pass to super for any other default handling
 
     def _focus_search_input(self):
         self.search_input.setFocus()
@@ -1663,74 +1640,218 @@ class MainWindow(QMainWindow):
             self._update_image_info_label()
         elif num_selected > 0 : # No items were actually deleted, but some were selected
              self.statusBar().showMessage("No valid image files were deleted from selection.", 3000)
+ 
+    def _is_row_hidden_in_tree_if_applicable(self, active_view, proxy_idx: QModelIndex) -> bool:
+        if isinstance(active_view, QTreeView):
+            # Ensure proxy_idx is valid and has a valid parent for isRowHidden
+            if proxy_idx.isValid() and proxy_idx.parent().isValid():
+                 return active_view.isRowHidden(proxy_idx.row(), proxy_idx.parent())
+            elif proxy_idx.isValid(): # Top-level item
+                 return active_view.isRowHidden(proxy_idx.row(), QModelIndex()) # Parent is root
+        return False
+
+    def _is_expanded_group_header(self, active_view, proxy_idx: QModelIndex) -> bool:
+        if not proxy_idx.isValid() or not isinstance(active_view, QTreeView):
+            return False
+        
+        source_idx = self.proxy_model.mapToSource(proxy_idx)
+        item = self.file_system_model.itemFromIndex(source_idx)
+        if not item: return False
+
+        user_data = item.data(Qt.ItemDataRole.UserRole)
+        is_group = False
+        if isinstance(user_data, str):
+            if user_data.startswith("cluster_header_") or user_data.startswith("date_header_"):
+                is_group = True
+            elif self.show_folders_mode and not self.group_by_similarity_mode and os.path.isdir(user_data):
+                 is_group = True
+        
+        return is_group and active_view.isExpanded(proxy_idx)
+
+    def _find_last_visible_image_item_in_subtree(self, parent_proxy_idx: QModelIndex) -> QModelIndex:
+        active_view = self._get_active_file_view()
+        # Ensure active_view and its model are valid
+        if not active_view or not active_view.model() or not isinstance(active_view.model(), QSortFilterProxyModel):
+            return QModelIndex()
+        
+        proxy_model = active_view.model() # This should be self.proxy_model
+
+        for i in range(proxy_model.rowCount(parent_proxy_idx) - 1, -1, -1): # Iterate children in reverse
+            child_proxy_idx = proxy_model.index(i, 0, parent_proxy_idx)
+            if not child_proxy_idx.isValid():
+                continue
+
+            # If this child is an expanded group (QTreeView only), recurse
+            if isinstance(active_view, QTreeView) and self._is_expanded_group_header(active_view, child_proxy_idx):
+                found_in_child_group = self._find_last_visible_image_item_in_subtree(child_proxy_idx)
+                if found_in_child_group.isValid():
+                    return found_in_child_group
+            
+            # If not an expanded group where an item was found, check if the child itself is a visible image
+            if self._is_valid_image_item(child_proxy_idx) and \
+               not self._is_row_hidden_in_tree_if_applicable(active_view, child_proxy_idx):
+                return child_proxy_idx
+                     
+        return QModelIndex() # No visible image item found in this subtree
 
     def closeEvent(self, event):
         logging.info("MainWindow.closeEvent - Stopping all workers.")
         self.worker_manager.stop_all_workers() # Use WorkerManager to stop all
         event.accept()
 
-    def _navigate_previous(self):
+    def _get_current_group_sibling_images(self, current_image_proxy_idx: QModelIndex) -> Tuple[Optional[QModelIndex], List[QModelIndex], int]:
+        """
+        Finds the parent group of the current image and all its visible sibling image items.
+        Returns (parent_group_proxy_idx, list_of_sibling_image_proxy_indices, local_idx_of_current_image).
+        If not in a group (top-level), parent_group_proxy_idx is root QModelIndex().
+        """
+        active_view = self._get_active_file_view()
+        if not active_view or not current_image_proxy_idx.isValid():
+            return QModelIndex(), [], -1
+
+        proxy_model = active_view.model()
+        if not isinstance(proxy_model, QSortFilterProxyModel): # Should be self.proxy_model
+            return QModelIndex(), [], -1
+
+        parent_proxy_idx = current_image_proxy_idx.parent() 
+
+        sibling_image_items = []
+        current_item_local_idx = -1
+
+        for i in range(proxy_model.rowCount(parent_proxy_idx)):
+            sibling_idx = proxy_model.index(i, 0, parent_proxy_idx)
+            if not sibling_idx.isValid():
+                continue
+            
+            if self._is_valid_image_item(sibling_idx) and \
+               not self._is_row_hidden_in_tree_if_applicable(active_view, sibling_idx):
+                sibling_image_items.append(sibling_idx)
+                if sibling_idx == current_image_proxy_idx:
+                    current_item_local_idx = len(sibling_image_items) - 1
+        
+        return parent_proxy_idx, sibling_image_items, current_item_local_idx
+
+    def _navigate_left_in_group(self):
+        active_view = self._get_active_file_view()
+        if not active_view: return
+        current_proxy_idx = active_view.currentIndex()
+        if not current_proxy_idx.isValid() or not self._is_valid_image_item(current_proxy_idx):
+            # If no valid image selected, try to select the first one in view
+            first_item = self._find_first_visible_item()
+            if first_item.isValid(): active_view.setCurrentIndex(first_item)
+            return
+
+        _parent_group_idx, group_images, local_idx = self._get_current_group_sibling_images(current_proxy_idx)
+
+        if not group_images or local_idx == -1:
+            logging.debug("NAV_LEFT_IN_GROUP: No group images or current item not found in its group.")
+            return 
+
+        new_local_idx = local_idx - 1
+        if new_local_idx < 0: # Was first, wrap to last
+            new_local_idx = len(group_images) - 1
+        
+        if 0 <= new_local_idx < len(group_images):
+            new_selection_candidate = group_images[new_local_idx]
+            active_view.setCurrentIndex(new_selection_candidate)
+            active_view.scrollTo(new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible)
+            logging.debug(f"NAV_LEFT_IN_GROUP: Set current index to {self._log_qmodelindex(new_selection_candidate)}")
+        else:
+            logging.debug(f"NAV_LEFT_IN_GROUP: Failed to select new item. local_idx={local_idx}, new_local_idx={new_local_idx}, group_size={len(group_images)}")
+
+
+    def _navigate_right_in_group(self):
+        active_view = self._get_active_file_view()
+        if not active_view: return
+        current_proxy_idx = active_view.currentIndex()
+        if not current_proxy_idx.isValid() or not self._is_valid_image_item(current_proxy_idx):
+            first_item = self._find_first_visible_item()
+            if first_item.isValid(): active_view.setCurrentIndex(first_item)
+            return
+
+        _parent_group_idx, group_images, local_idx = self._get_current_group_sibling_images(current_proxy_idx)
+
+        if not group_images or local_idx == -1:
+            logging.debug("NAV_RIGHT_IN_GROUP: No group images or current item not found in its group.")
+            return
+
+        new_local_idx = local_idx + 1
+        if new_local_idx >= len(group_images): # Was last, wrap to first
+            new_local_idx = 0
+            
+        if 0 <= new_local_idx < len(group_images): # Ensure index is still valid after wrap
+            new_selection_candidate = group_images[new_local_idx]
+            active_view.setCurrentIndex(new_selection_candidate)
+            active_view.scrollTo(new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible)
+            logging.debug(f"NAV_RIGHT_IN_GROUP: Set current index to {self._log_qmodelindex(new_selection_candidate)}")
+        else:
+             logging.debug(f"NAV_RIGHT_IN_GROUP: Failed to select new item. local_idx={local_idx}, new_local_idx={new_local_idx}, group_size={len(group_images)}")
+
+    def _navigate_up_sequential(self): # Renamed from _navigate_previous
         active_view = self._get_active_file_view()
         if not active_view:
-            logging.debug("NAV_PREV: No active view.")
+            logging.debug("NAV_UP_SEQ: No active view.")
             return
         
-        current_index = active_view.currentIndex()
-        logging.debug(f"NAV_PREV: Start. Current Index: {self._log_qmodelindex(current_index, 'current_index')}")
+        current_proxy_idx = active_view.currentIndex()
+        logging.debug(f"NAV_UP_SEQ: Start. Current Index: {self._log_qmodelindex(current_proxy_idx, 'current_proxy_idx')}")
 
-        if not current_index.isValid():
+        if not current_proxy_idx.isValid():
             last_item_index = self._find_last_visible_item()
-            logging.debug(f"NAV_PREV: Current index invalid, found last item: {self._log_qmodelindex(last_item_index, 'last_item_index')}")
             if last_item_index.isValid():
                 active_view.setCurrentIndex(last_item_index)
                 active_view.scrollTo(last_item_index, QAbstractItemView.ScrollHint.EnsureVisible)
             return
 
-        prev_item_index = QModelIndex()
-        temp_index = current_index
-        iteration_count = 0
-        while temp_index.isValid() and iteration_count < self.proxy_model.rowCount() * 2: # Safety break
-            iteration_count +=1
-            temp_index = active_view.indexAbove(temp_index)
-            # logging.debug(f"NAV_PREV: Loop iteration {iteration_count}. IndexAbove gave: {self._log_qmodelindex(temp_index, 'temp_index')}")
-            if not temp_index.isValid():
-                logging.debug("NAV_PREV: temp_index became invalid (top of list/parent).")
-                break
-            
-            is_image_item = self._is_valid_image_item(temp_index)
-            # logging.debug(f"NAV_PREV: Checking temp_index {temp_index.row()}, is_image_item: {is_image_item}")
+        new_selection_candidate = QModelIndex()
+        iter_idx = current_proxy_idx
 
-            is_hidden = False
-            if isinstance(active_view, QTreeView):
-                is_hidden = active_view.isRowHidden(temp_index.row(), temp_index.parent())
-                # logging.debug(f"NAV_PREV: For QTreeView, is_hidden: {is_hidden}")
-            
-            if not is_hidden and is_image_item:
-                prev_item_index = temp_index
-                logging.debug(f"NAV_PREV: Found valid previous image item: {self._log_qmodelindex(prev_item_index, 'prev_item_index')}")
+        max_iterations = (self.proxy_model.rowCount(QModelIndex()) + sum(self.proxy_model.rowCount(self.proxy_model.index(r,0,QModelIndex())) for r in range(self.proxy_model.rowCount(QModelIndex())))) * 2
+        if max_iterations == 0 and self.app_state and self.app_state.image_files_data: max_iterations = len(self.app_state.image_files_data) * 5
+        if max_iterations == 0: max_iterations = 5000
+
+        for iteration_count in range(max_iterations):
+            prev_visual_idx = active_view.indexAbove(iter_idx)
+
+            if not prev_visual_idx.isValid():
+                logging.debug("NAV_UP_SEQ: Reached top of view (indexAbove returned invalid).")
                 break
-            # else:
-                # logging.debug(f"NAV_PREV: Item {temp_index.row()} skipped (hidden: {is_hidden}, not_image: {not is_image_item}).")
-        
-        if prev_item_index.isValid():
-            active_view.setCurrentIndex(prev_item_index)
-            active_view.scrollTo(prev_item_index, QAbstractItemView.ScrollHint.EnsureVisible)
-            logging.debug(f"NAV_PREV: Set current index to {self._log_qmodelindex(prev_item_index)}")
+
+            if self._is_valid_image_item(prev_visual_idx) and \
+               not self._is_row_hidden_in_tree_if_applicable(active_view, prev_visual_idx):
+                new_selection_candidate = prev_visual_idx
+                logging.debug(f"NAV_UP_SEQ: Found image item directly above: {self._log_qmodelindex(new_selection_candidate)}")
+                break
+            elif isinstance(active_view, QTreeView) and self._is_expanded_group_header(active_view, prev_visual_idx):
+                last_in_group = self._find_last_visible_image_item_in_subtree(prev_visual_idx)
+                if last_in_group.isValid():
+                    new_selection_candidate = last_in_group
+                    logging.debug(f"NAV_UP_SEQ: Found last image in group above: {self._log_qmodelindex(new_selection_candidate)}")
+                    break
+            
+            iter_idx = prev_visual_idx
+            if iteration_count == max_iterations -1:
+                logging.warning("NAV_UP_SEQ: Max iterations reached during search.")
+
+        if new_selection_candidate.isValid():
+            active_view.setCurrentIndex(new_selection_candidate)
+            active_view.scrollTo(new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible)
+            logging.debug(f"NAV_UP_SEQ: Set current index to {self._log_qmodelindex(new_selection_candidate)}")
         else:
-            logging.debug("NAV_PREV: No valid previous image item found.")
+            logging.debug("NAV_UP_SEQ: No valid previous image item found after search.")
 
-    def _navigate_next(self):
+    def _navigate_down_sequential(self): # Renamed from _navigate_next
         active_view = self._get_active_file_view()
         if not active_view:
-            logging.debug("NAV_NEXT: No active view.")
+            logging.debug("NAV_DOWN_SEQ: No active view.")
             return
 
         current_index = active_view.currentIndex()
-        logging.debug(f"NAV_NEXT: Start. Current Index: {self._log_qmodelindex(current_index, 'current_index')}")
+        logging.debug(f"NAV_DOWN_SEQ: Start. Current Index: {self._log_qmodelindex(current_index, 'current_index')}")
 
         if not current_index.isValid():
             first_item_index = self._find_first_visible_item()
-            logging.debug(f"NAV_NEXT: Current index invalid, found first item: {self._log_qmodelindex(first_item_index, 'first_item_index')}")
+            logging.debug(f"NAV_DOWN_SEQ: Current index invalid, found first item: {self._log_qmodelindex(first_item_index, 'first_item_index')}")
             if first_item_index.isValid():
                 active_view.setCurrentIndex(first_item_index)
                 active_view.scrollTo(first_item_index, QAbstractItemView.ScrollHint.EnsureVisible)
@@ -1739,54 +1860,39 @@ class MainWindow(QMainWindow):
         next_item_index = QModelIndex()
         temp_index = current_index
         iteration_count = 0
-        # Safety break: estimate max iterations. In a flat list, it's rowCount. In a tree, it could be more.
-        # Heuristic: rowCount of proxy model * average depth (e.g., 2-3 levels for safety)
-        # For now, using a large enough constant or a multiple of total proxy items if available.
-        # If proxy_model.sourceModel() is self.file_system_model, then self.file_system_model.rowCount() for root items.
-        # Max items could be total number of items if flat.
-        # Let's use self.proxy_model.rowCount() as a rough upper bound on iterations for flat parts.
-        # Since indexBelow can traverse into children, this is complex.
-        # A simple large number or total_items_in_model might be better.
-        # Let's assume max_iterations as a large number or related to total items if easily accessible
-        # For now, a fixed reasonably large number might be simpler for this example.
-        safety_iteration_limit = self.proxy_model.rowCount(QModelIndex()) * 5 # Heuristic for tree depth
-        if safety_iteration_limit == 0 and self.app_state.image_files_data: safety_iteration_limit = len(self.app_state.image_files_data) * 2
-        if safety_iteration_limit == 0 : safety_iteration_limit = 5000 # Absolute fallback
+        
+        max_iterations = (self.proxy_model.rowCount(QModelIndex()) + sum(self.proxy_model.rowCount(self.proxy_model.index(r,0,QModelIndex())) for r in range(self.proxy_model.rowCount(QModelIndex())))) * 2
+        if max_iterations == 0 and self.app_state.image_files_data: safety_iteration_limit = len(self.app_state.image_files_data) * 2
+        if max_iterations == 0 : safety_iteration_limit = 5000
+        else: safety_iteration_limit = max_iterations
+
 
         while temp_index.isValid() and iteration_count < safety_iteration_limit:
             iteration_count +=1
             temp_index = active_view.indexBelow(temp_index)
-            # logging.debug(f"NAV_NEXT: Loop iteration {iteration_count}. IndexBelow gave: {self._log_qmodelindex(temp_index, 'temp_index')}")
             if not temp_index.isValid():
-                logging.debug("NAV_NEXT: temp_index became invalid (end of list/parent).")
+                logging.debug("NAV_DOWN_SEQ: temp_index became invalid (end of list/parent).")
                 break
 
             is_image_item = self._is_valid_image_item(temp_index)
-            # logging.debug(f"NAV_NEXT: Checking temp_index {temp_index.row()}, is_image_item: {is_image_item}")
-            
-            if is_image_item: # For both QTreeView and QListView, indexBelow gives visible items
+            if is_image_item:
                 is_hidden = False
                 if isinstance(active_view, QTreeView):
-                    # This check might be redundant if indexBelow truly gives only visible items,
-                    # but can be a safeguard or for specific TreeView behaviors.
                     is_hidden = active_view.isRowHidden(temp_index.row(), temp_index.parent())
-                    # logging.debug(f"NAV_NEXT: For QTreeView, is_hidden: {is_hidden}")
                 if not is_hidden:
                     next_item_index = temp_index
-                    logging.debug(f"NAV_NEXT: Found valid next image item: {self._log_qmodelindex(next_item_index, 'next_item_index')}")
+                    logging.debug(f"NAV_DOWN_SEQ: Found valid next image item: {self._log_qmodelindex(next_item_index, 'next_item_index')}")
                     break
-            # else:
-                # logging.debug(f"NAV_NEXT: Item {temp_index.row()} skipped (not_image: {not is_image_item}).")
         
         if iteration_count >= safety_iteration_limit:
-            logging.warning(f"NAV_NEXT: Hit safety iteration limit ({safety_iteration_limit}). This might indicate an issue or a very large/deep model.")
+            logging.warning(f"NAV_DOWN_SEQ: Hit safety iteration limit ({safety_iteration_limit}).")
 
         if next_item_index.isValid():
             active_view.setCurrentIndex(next_item_index)
             active_view.scrollTo(next_item_index, QAbstractItemView.ScrollHint.EnsureVisible)
-            logging.debug(f"NAV_NEXT: Set current index to {self._log_qmodelindex(next_item_index)}")
+            logging.debug(f"NAV_DOWN_SEQ: Set current index to {self._log_qmodelindex(next_item_index)}")
         else:
-            logging.debug("NAV_NEXT: No valid next image item found.")
+            logging.debug("NAV_DOWN_SEQ: No valid next image item found.")
 
     def _find_first_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
@@ -3029,29 +3135,45 @@ class MainWindow(QMainWindow):
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
-            # Ensure the event is for one of our views and search input does NOT have focus
-            if (obj is self.tree_display_view or obj is self.grid_display_view) and \
-               not self.search_input.hasFocus():
+            # Ensure the event is for one of our views
+            if (obj is self.tree_display_view or obj is self.grid_display_view):
                 
-                # The event object is already a QKeyEvent if type is KeyPress
-                key_event: QKeyEvent = event
+                key_event: QKeyEvent = event # Cast event to QKeyEvent
                 key = key_event.key()
+                
+                search_has_focus = self.search_input.hasFocus()
 
-                if key_event.modifiers() == Qt.KeyboardModifier.NoModifier and \
+                # Handle Arrow Keys & Delete for navigation (if search input doesn't have focus on the view itself)
+                if not search_has_focus: # Only act if search input doesn't have focus
+                    if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
+                        self._navigate_left_in_group()
+                        return True
+                    elif key == Qt.Key.Key_Right or key == Qt.Key.Key_D:
+                        self._navigate_right_in_group()
+                        return True
+                    elif key == Qt.Key.Key_Up or key == Qt.Key.Key_W:
+                        self._navigate_up_sequential()
+                        return True
+                    elif key == Qt.Key.Key_Down or key == Qt.Key.Key_S:
+                        self._navigate_down_sequential()
+                        return True
+                    elif key == Qt.Key.Key_Delete:
+                        self._move_current_image_to_trash()
+                        return True
+
+                # Handle 1-9 for group selection (existing logic, also conditional on search_input focus)
+                if not search_has_focus and \
+                   key_event.modifiers() == Qt.KeyboardModifier.NoModifier and \
                    self.group_by_similarity_mode and \
                    key >= Qt.Key.Key_1 and key <= Qt.Key.Key_9:
                     
-                    # Ensure the obj is the currently "active" view for this logic
-                    # This check is important if multiple views might have the filter installed
-                    # but only one should respond to this shortcut at a time.
                     current_active_view_for_logic = self._get_active_file_view()
-                    if obj is not current_active_view_for_logic:
-                        return super().eventFilter(obj, event) # Not for this view in this context
-
-                    if self._perform_group_selection_from_key(key, obj): # obj is the QTreeView/QListView
-                        return True # Event consumed
+                    # Ensure the event source is the logically active view for this specific shortcut
+                    if obj is current_active_view_for_logic:
+                        if self._perform_group_selection_from_key(key, obj):
+                            return True # Event consumed
         
-        # Pass the event to the base class if not handled or not relevant
+        # Pass unhandled events to the base class
         return super().eventFilter(obj, event)
 
     # Slot for WorkerManager's blur_detection_error signal
