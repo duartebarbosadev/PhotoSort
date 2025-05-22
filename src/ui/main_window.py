@@ -1823,22 +1823,31 @@ class MainWindow(QMainWindow):
                 logging.debug(f"NAV_UP_SEQ: Found image item directly above: {self._log_qmodelindex(new_selection_candidate)}")
                 break
             elif isinstance(active_view, QTreeView) and self._is_expanded_group_header(active_view, prev_visual_idx):
-                last_in_group = self._find_last_visible_image_item_in_subtree(prev_visual_idx)
-                if last_in_group.isValid():
-                    new_selection_candidate = last_in_group
-                    logging.debug(f"NAV_UP_SEQ: Found last image in group above: {self._log_qmodelindex(new_selection_candidate)}")
-                    break
+                # If prev_visual_idx is an expanded group header.
+                # We enter it ONLY IF it's not the immediate parent of iter_idx (the item we are moving up from).
+                # If it IS the parent of iter_idx, we are trying to navigate *out* of iter_idx's group,
+                # so we should skip this header and let iter_idx become this header to search above it.
+                if iter_idx.parent() != prev_visual_idx:
+                    last_in_group = self._find_last_visible_image_item_in_subtree(prev_visual_idx)
+                    if last_in_group.isValid():
+                        new_selection_candidate = last_in_group
+                        # logging.debug(f"NAV_UP_SEQ: Found last image in a NEW group above: {self._log_qmodelindex(new_selection_candidate)}")
+                        break
+                # Else (iter_idx.parent() == prev_visual_idx), prev_visual_idx is the header of the group iter_idx is in.
+                # We are moving out of this group. So, we don't enter it again from the bottom.
+                # The iter_idx = prev_visual_idx line below will handle moving past this header.
             
             iter_idx = prev_visual_idx
-            if iteration_count == max_iterations -1:
+            if iteration_count == max_iterations -1: # Safety break
                 logging.warning("NAV_UP_SEQ: Max iterations reached during search.")
 
         if new_selection_candidate.isValid():
             active_view.setCurrentIndex(new_selection_candidate)
             active_view.scrollTo(new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible)
-            logging.debug(f"NAV_UP_SEQ: Set current index to {self._log_qmodelindex(new_selection_candidate)}")
+            # logging.debug(f"NAV_UP_SEQ: Set current index to {self._log_qmodelindex(new_selection_candidate)}")
         else:
-            logging.debug("NAV_UP_SEQ: No valid previous image item found after search.")
+            # logging.debug("NAV_UP_SEQ: No valid previous image item found after search.")
+            pass
 
     def _navigate_down_sequential(self): # Renamed from _navigate_next
         active_view = self._get_active_file_view()
