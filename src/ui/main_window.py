@@ -8,15 +8,16 @@ from PyQt6.QtWidgets import (
     QPushButton, QListView, QComboBox,
     QLineEdit, # For search input
     QStyle, # For standard icons
-    QAbstractItemView, QMessageBox, QApplication # For selection and edit triggersor dialogs
+    QAbstractItemView, QMessageBox, QApplication, QMenu # For selection and edit triggersor dialogs
 )
 import re # For regular expressions in filtering
 import os # <-- Add import os at the top level
 import send2trash # <-- Import send2trash for moving files to trash
+import subprocess # For opening file explorer
 import traceback # For detailed error logging
 from datetime import date as date_obj, datetime # For date type hinting and objects
 from typing import List, Dict, Optional, Any, Tuple # Import List and Dict for type hinting, Optional, Any, Tuple
-from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent # Import QEvent for eventFilter
+from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent, QPoint # Import QEvent for eventFilter and QPoint
 from PyQt6.QtGui import QColor # Import QColor for highlighting
 from PyQt6.QtGui import QAction, QKeySequence, QPixmap, QKeyEvent, QIcon, QStandardItemModel, QStandardItem, QResizeEvent, QDragEnterEvent, QDropEvent, QDragMoveEvent # Import model classes and event types
 import numpy as np
@@ -864,6 +865,9 @@ class MainWindow(QMainWindow):
         # Install event filters on views
         self.tree_display_view.installEventFilter(self)
         self.grid_display_view.installEventFilter(self)
+
+        self.tree_display_view.customContextMenuRequested.connect(self._show_image_context_menu)
+        self.grid_display_view.customContextMenuRequested.connect(self._show_image_context_menu)
 
         self.tree_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
         self.grid_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
@@ -3191,3 +3195,54 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Blur Detection Error: {message}", 8000)
         self.detect_blur_action.setEnabled(bool(self.app_state.image_files_data)) # Re-enable
         # WorkerManager handles thread cleanup
+
+    def _show_image_context_menu(self, position: QPoint):
+        active_view = self.sender() # Get the view that emitted the signal
+        if not isinstance(active_view, (QTreeView, QListView)):
+            return
+
+        proxy_index = active_view.indexAt(position)
+        if not proxy_index.isValid():
+            return
+
+        if self._is_valid_image_item(proxy_index):
+            source_index = self.proxy_model.mapToSource(proxy_index)
+            item = self.file_system_model.itemFromIndex(source_index)
+            if not item: return
+
+            item_data = item.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(item_data, dict) or 'path' not in item_data: return
+            file_path = item_data['path']
+            
+            if not os.path.exists(file_path): return
+
+            menu = QMenu(self)
+            show_in_explorer_action = QAction(QIcon.fromTheme("folder-open", self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)), "Show in Explorer", self)
+            
+            # Use a lambda to pass the file_path to the slot
+            show_in_explorer_action.triggered.connect(lambda checked=False, path=file_path: self._open_image_in_explorer(path))
+            menu.addAction(show_in_explorer_action)
+            
+            menu.exec(active_view.viewport().mapToGlobal(position))
+
+    def _open_image_in_explorer(self, file_path: str):
+        try:
+            # Ensure the path is normalized for the explorer command
+            normalized_path = os.path.normpath(file_path)
+            if os.name == 'nt': # Windows
+                subprocess.run(['explorer', '/select,', normalized_path], check=False)
+            elif os.name == 'posix': # macOS or Linux
+                # For macOS, 'open -R' reveals in Finder
+                # For Linux, 'xdg-open' on the directory might work, or specific file manager commands.
+                # This is a simplification; more robust cross-platform handling might be needed.
+                folder = os.path.dirname(normalized_path)
+                if os.uname().sysname == "Darwin": # macOS
+                     subprocess.run(['open', '-R', normalized_path], check=False)
+                else: # Linux (generic)
+                     subprocess.run(['xdg-open', folder], check=False)
+            else:
+                logging.warning(f"Unsupported OS for 'Show in Explorer': {os.name}")
+                self.statusBar().showMessage(f"Show in Explorer not supported on this OS: {os.name}", 3000)
+        except Exception as e:
+            logging.error(f"Error opening image in explorer '{file_path}': {e}", exc_info=True)
+            self.statusBar().showMessage(f"Error showing file in explorer: {e}", 5000)
