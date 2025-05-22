@@ -776,7 +776,7 @@ class MainWindow(QMainWindow):
 
         self.cluster_sort_label = QLabel("Sort Clusters By:")
         self.cluster_sort_combo = QComboBox()
-        self.cluster_sort_combo.addItems(["Default", "Time", "Similarity then Time"])
+        self.cluster_sort_combo.addItems(["Time", "Similarity then Time"]) # "Default" removed, "Time" is now default
         self.cluster_sort_combo.setEnabled(False)
         self.cluster_sort_combo.setToolTip("Order of clusters when 'Group by Similarity' is active")
         bottom_layout.addWidget(self.cluster_sort_label)
