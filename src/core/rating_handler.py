@@ -26,6 +26,17 @@ ALL_RELEVANT_EXIF_TAGS_FOR_BATCH: List[str] = list(dict.fromkeys(
     ["SourceFile", "XMP:Rating", "XMP:Label", "FileSize", "ImageSize"] + DATE_TAGS_PREFERENCE
 ))
 
+# Extended tags for detailed metadata display
+EXTENDED_EXIF_TAGS: List[str] = list(dict.fromkeys([
+    "SourceFile", "XMP:Rating", "XMP:Label", "XMP:Keywords", "FileSize", "ImageSize",
+    "EXIF:Make", "EXIF:Model", "EXIF:LensModel", "EXIF:LensInfo",
+    "EXIF:FocalLength", "EXIF:FNumber", "EXIF:ApertureValue",
+    "EXIF:ShutterSpeedValue", "EXIF:ExposureTime", "EXIF:ISO", "EXIF:ISOSpeedRatings",
+    "EXIF:Flash", "EXIF:ImageWidth", "EXIF:ImageHeight", "EXIF:ColorSpace",
+    "EXIF:Orientation", "EXIF:BitsPerSample", "EXIF:ExposureCompensation",
+    "EXIF:MeteringMode", "EXIF:WhiteBalance", "EXIF:GPSLatitude", "EXIF:GPSLongitude"
+] + DATE_TAGS_PREFERENCE))
+
 def _parse_exif_date(date_string: str) -> Optional[date_obj]:
     """
     Attempts to parse various EXIF/XMP date string formats.
@@ -403,3 +414,45 @@ class MetadataHandler:
         except Exception as e:
             logging.error(f"[MetadataHandler] ExifTool availability check failed with an unexpected error: {e}", exc_info=True)
             return False
+
+    @staticmethod
+    def get_detailed_metadata(image_path: str, exif_disk_cache: Optional[ExifCache] = None) -> Optional[Dict[str, Any]]:
+        """
+        Fetches detailed metadata for a single image for sidebar display.
+        Uses ExifCache first, then ExifTool with extended tags if not cached.
+        """
+        if not os.path.isfile(image_path):
+            logging.warning(f"[MetadataHandler] File not found for detailed metadata: {image_path}")
+            return None
+
+        norm_path = unicodedata.normalize('NFC', os.path.normpath(image_path))
+        
+        # Try cache first
+        if exif_disk_cache:
+            cached_data = exif_disk_cache.get(norm_path)
+            if cached_data:
+                logging.debug(f"[MetadataHandler] ExifCache HIT for detailed metadata: {os.path.basename(norm_path)}")
+                return cached_data
+        
+        # Fetch with ExifTool using extended tags
+        try:
+            with MetadataHandler._get_exiftool_helper_instance() as et:
+                encoded_path = norm_path.encode('utf-8', errors='surrogateescape')
+                result = et.get_tags([encoded_path], tags=EXTENDED_EXIF_TAGS)
+                
+                if result and len(result) > 0:
+                    metadata = result[0]
+                    
+                    # Cache the result
+                    if exif_disk_cache:
+                        exif_disk_cache.set(norm_path, metadata)
+                        logging.debug(f"[MetadataHandler] Cached detailed metadata for: {os.path.basename(norm_path)}")
+                    
+                    return metadata
+                else:
+                    logging.warning(f"[MetadataHandler] No metadata returned for: {os.path.basename(norm_path)}")
+                    return None
+                    
+        except Exception as e:
+            logging.error(f"[MetadataHandler] Error fetching detailed metadata for {os.path.basename(norm_path)}: {e}", exc_info=True)
+            return None
