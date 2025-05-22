@@ -3336,16 +3336,21 @@ class MainWindow(QMainWindow):
     
     def _update_sidebar_with_current_selection(self):
         """Update sidebar with the currently selected image metadata"""
+        logging.info("[MainWindow] _update_sidebar_with_current_selection called")
+        
         if not self.metadata_sidebar or not self.sidebar_visible:
+            logging.info("[MainWindow] Sidebar not available or not visible")
             return
         
         active_view = self._get_active_file_view()
         if not active_view:
+            logging.info("[MainWindow] No active view available")
             self.metadata_sidebar.show_placeholder()
             return
         
         current_proxy_idx = active_view.currentIndex()
         if not current_proxy_idx.isValid() or not self._is_valid_image_item(current_proxy_idx):
+            logging.info("[MainWindow] No valid image item selected")
             self.metadata_sidebar.show_placeholder()
             return
         
@@ -3353,26 +3358,41 @@ class MainWindow(QMainWindow):
         source_idx = self.proxy_model.mapToSource(current_proxy_idx)
         item = self.file_system_model.itemFromIndex(source_idx)
         if not item:
+            logging.warning("[MainWindow] Could not get item from source index")
             return
         
         item_data = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(item_data, dict) or 'path' not in item_data:
+            logging.warning("[MainWindow] Item data is not valid or missing path")
             return
         
         file_path = item_data['path']
+        logging.info(f"[MainWindow] Updating sidebar for: {os.path.basename(file_path)}")
+        
         if not os.path.exists(file_path):
+            logging.warning(f"[MainWindow] File does not exist: {file_path}")
             return
         
         # Get cached metadata
         metadata = self._get_cached_metadata_for_selection(file_path)
         if not metadata:
+            logging.warning(f"[MainWindow] Could not get cached metadata for: {os.path.basename(file_path)}")
             return
         
+        logging.info(f"[MainWindow] Got cached metadata: {metadata}")
+        
         # Get detailed EXIF data for sidebar
+        logging.info(f"[MainWindow] Calling MetadataHandler.get_detailed_metadata for: {os.path.basename(file_path)}")
         raw_exif = MetadataHandler.get_detailed_metadata(file_path, self.app_state.exif_disk_cache)
+        
         if not raw_exif:
+            logging.warning(f"[MainWindow] No raw EXIF data returned for: {os.path.basename(file_path)}")
             raw_exif = {}
+        else:
+            logging.info(f"[MainWindow] Got raw EXIF data with {len(raw_exif)} keys: {list(raw_exif.keys())}")
+            logging.info(f"[MainWindow] Raw EXIF sample: {dict(list(raw_exif.items())[:10])}")
         
         # Update sidebar
+        logging.info(f"[MainWindow] Calling sidebar.update_metadata")
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
 

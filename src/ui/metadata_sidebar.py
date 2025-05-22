@@ -263,15 +263,14 @@ class MetadataSidebar(QWidget):
             if child.widget():
                 child.widget().deleteLater()
     
-    def update_metadata(self, image_path: str, metadata: Dict[str, Any], 
+    def update_metadata(self, image_path: str, metadata: Dict[str, Any],
                        raw_exif: Dict[str, Any] = None):
         """Update the sidebar with new metadata"""
         self.current_image_path = image_path
         self.raw_metadata = raw_exif or {}
         
-        # Delay update to avoid rapid changes during navigation
-        self.update_timer.stop()
-        self.update_timer.start(100)  # 100ms delay
+        # Update immediately - no artificial delay needed since data is pre-cached
+        self._delayed_update()
     
     def _delayed_update(self):
         """Perform the actual metadata update"""
@@ -331,11 +330,14 @@ class MetadataSidebar(QWidget):
     
     def add_camera_settings_card(self):
         """Add camera and capture settings card"""
+        logging.info(f"[MetadataSidebar] add_camera_settings_card called")
         card = MetadataCard("Camera & Settings", "📷")
         
         # Camera make and model
         make = self.raw_metadata.get("EXIF:Make") or self.raw_metadata.get("Make")
         model = self.raw_metadata.get("EXIF:Model") or self.raw_metadata.get("Model")
+        
+        logging.info(f"[MetadataSidebar] Camera make: '{make}', model: '{model}'")
         
         if make and model:
             camera = f"{make} {model}"
@@ -346,6 +348,7 @@ class MetadataSidebar(QWidget):
         else:
             camera = None
         
+        logging.info(f"[MetadataSidebar] Final camera string: '{camera}'")
         card.add_info_row("Camera", camera or "Unknown")
         
         # Lens information
@@ -488,6 +491,34 @@ class MetadataSidebar(QWidget):
             else:
                 keywords_str = str(keywords)
             card.add_info_row("Keywords", keywords_str)
+        
+        self.content_layout.insertWidget(-1, card)
+    
+    def add_debug_metadata_card(self):
+        """Add debug card showing raw metadata - for troubleshooting"""
+        if not self.raw_metadata:
+            return
+            
+        logging.info(f"[MetadataSidebar] add_debug_metadata_card called with {len(self.raw_metadata)} keys")
+        card = MetadataCard("Debug: Raw Metadata", "🔍")
+        
+        # Show first 15 key-value pairs for debugging
+        items_shown = 0
+        for key, value in self.raw_metadata.items():
+            if items_shown >= 15:  # Limit to avoid UI clutter
+                card.add_info_row("...", f"(showing {items_shown} of {len(self.raw_metadata)} total)")
+                break
+            
+            # Truncate very long values
+            value_str = str(value)
+            if len(value_str) > 50:
+                value_str = value_str[:47] + "..."
+            
+            card.add_info_row(key, value_str)
+            items_shown += 1
+        
+        if items_shown == 0:
+            card.add_info_row("Status", "No metadata keys found")
         
         self.content_layout.insertWidget(-1, card)
     
