@@ -495,3 +495,103 @@ QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo::down-arrow {
     height: 10px;
 }
 /* Dropdown list for the ComboBox uses global QMenu/QAbstractItemView styling, which should be fine */
+
+/* --- Metadata Sidebar --- */
+QWidget#metadataSidebar {
+    background-color: #1A1A1A; /* Darker than main for distinction */
+    border-left: 1px solid #333333;
+    /* Ensure sidebar appears above other widgets */
+}
+
+QFrame#sidebarHeader {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                stop: 0 #2D2D2D, stop: 1 #252525);
+    border-bottom: 1px solid #383838;
+}
+
+QLabel#closeButton {
+    background-color: transparent;
+    border-radius: 12px;
+    color: #888888;
+}
+
+QLabel#closeButton:hover {
+    background-color: #C92C2C;
+    color: #FFFFFF;
+}
+
+QScrollArea#metadataScrollArea {
+    background-color: transparent;
+    border: none;
+}
+
+QScrollArea#metadataScrollArea QScrollBar:vertical {
+    background: #1A1A1A;
+    width: 6px;
+    margin: 0;
+    border: none;
+}
+
+QScrollArea#metadataScrollArea QScrollBar::handle:vertical {
+    background: #404040;
+    border-radius: 3px;
+    min-height: 20px;
+}
+
+QScrollArea#metadataScrollArea QScrollBar::handle:vertical:hover {
+    background: #505050;
+}
+
+/* Metadata Cards */
+QFrame#metadataCard {
+    background-color: #252525;
+    border: 1px solid #333333;
+    border-radius: 8px;
+    margin: 2px 0;
+}
+
+QFrame#cardHeader {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                stop: 0 #2A2A2A, stop: 1 #252525);
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+    border-bottom: 1px solid #333333;
+}
+
+QFrame#cardHeader:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                stop: 0 #2F2F2F, stop: 1 #2A2A2A);
+}
+
+QWidget#cardContent {
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#metadataLabel {
+    color: #888888;
+    font-size: 8.5pt;
+    font-weight: bold;
+}
+
+QLabel#metadataValue {
+    color: #D1D1D1;
+    font-size: 8.5pt;
+}
+
+QProgressBar#metadataProgress {
+    background-color: #333333;
+    border: none;
+    border-radius: 3px;
+}
+
+QProgressBar#metadataProgress::chunk {
+    background-color: #0078D4;
+    border-radius: 3px;
+}
+
+/* Placeholder and error text */
+QLabel#placeholderText, QLabel#errorText {
+    background-color: transparent;
+    border: none;
+}
