@@ -1266,28 +1266,48 @@ class MainWindow(QMainWindow):
         self._apply_rating(0)
 
     def _apply_rating(self, rating: int):
+        """Apply rating using refactored handler"""
         active_view = self._get_active_file_view()
-        if not active_view: return
+        if not active_view: 
+            return
+            
         current_index = active_view.currentIndex()
-        if not current_index.isValid(): return
+        if not current_index.isValid(): 
+            return
+            
         source_index = self.proxy_model.mapToSource(current_index)
-        if not source_index.isValid(): return
+        if not source_index.isValid(): 
+            return
+            
         item = self.file_system_model.itemFromIndex(source_index) 
-        if not item: return
+        if not item: 
+            return
         
         item_data = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(item_data, dict) or 'path' not in item_data: return 
+        if not isinstance(item_data, dict) or 'path' not in item_data: 
+            return 
+            
         file_path = item_data['path']
         
-        if not os.path.exists(file_path): return
+        if not os.path.exists(file_path): 
+            return
 
-        success = MetadataHandler.set_rating(file_path, rating, self.app_state.rating_disk_cache, self.app_state.exif_disk_cache)
+        # Use instance method instead of static method
+        metadata_handler = MetadataHandler()
+        success = metadata_handler.set_rating(
+            file_path, 
+            rating, 
+            self.app_state.rating_disk_cache, 
+            self.app_state.exif_disk_cache
+        )
+        
         if success:
             self._update_rating_display(rating)
-            self.app_state.rating_cache[file_path] = rating # Update in-memory cache as well
-            self._apply_filter() # Re-apply filter in case rating affects visibility
+            self.app_state.rating_cache[file_path] = rating
+            self._apply_filter()
         else:
             self.statusBar().showMessage(f"Failed to set rating for {os.path.basename(file_path)}", 5000)
+
 
     def _log_qmodelindex(self, index: QModelIndex, prefix: str = "") -> str:
         if not hasattr(self, 'proxy_model') or not hasattr(self, 'file_system_model'): # Models might not be initialized yet
@@ -2551,22 +2571,36 @@ class MainWindow(QMainWindow):
         self._apply_label(None)
 
     def _apply_label(self, label: str | None):
+        """Apply label using refactored handler"""
         active_view = self._get_active_file_view()
-        if not active_view: return
+        if not active_view: 
+            return
+            
         current_index = active_view.currentIndex()
-        if not current_index.isValid(): return
+        if not current_index.isValid(): 
+            return
+            
         source_index = self.proxy_model.mapToSource(current_index)
-        if not source_index.isValid(): return
+        if not source_index.isValid(): 
+            return
+            
         item = self.file_system_model.itemFromIndex(source_index) 
-        if not item: return
+        if not item: 
+            return
 
         item_data = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(item_data, dict) or 'path' not in item_data: return 
+        if not isinstance(item_data, dict) or 'path' not in item_data: 
+            return 
+            
         file_path = item_data['path']
         
-        if not os.path.exists(file_path): return
+        if not os.path.exists(file_path): 
+            return
 
-        success = MetadataHandler.set_label(file_path, label, self.app_state.exif_disk_cache)
+        # Use instance method instead of static method
+        metadata_handler = MetadataHandler()
+        success = metadata_handler.set_label(file_path, label, self.app_state.exif_disk_cache)
+        
         if success:
             self.app_state.label_cache[file_path] = label
             self._update_label_display(label)
@@ -3336,21 +3370,17 @@ class MainWindow(QMainWindow):
     
     def _update_sidebar_with_current_selection(self):
         """Update sidebar with the currently selected image metadata"""
-        logging.info("[MainWindow] _update_sidebar_with_current_selection called")
         
         if not self.metadata_sidebar or not self.sidebar_visible:
-            logging.info("[MainWindow] Sidebar not available or not visible")
             return
         
         active_view = self._get_active_file_view()
         if not active_view:
-            logging.info("[MainWindow] No active view available")
             self.metadata_sidebar.show_placeholder()
             return
         
         current_proxy_idx = active_view.currentIndex()
         if not current_proxy_idx.isValid() or not self._is_valid_image_item(current_proxy_idx):
-            logging.info("[MainWindow] No valid image item selected")
             self.metadata_sidebar.show_placeholder()
             return
         
@@ -3358,41 +3388,28 @@ class MainWindow(QMainWindow):
         source_idx = self.proxy_model.mapToSource(current_proxy_idx)
         item = self.file_system_model.itemFromIndex(source_idx)
         if not item:
-            logging.warning("[MainWindow] Could not get item from source index")
             return
         
         item_data = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(item_data, dict) or 'path' not in item_data:
-            logging.warning("[MainWindow] Item data is not valid or missing path")
             return
         
         file_path = item_data['path']
-        logging.info(f"[MainWindow] Updating sidebar for: {os.path.basename(file_path)}")
         
         if not os.path.exists(file_path):
-            logging.warning(f"[MainWindow] File does not exist: {file_path}")
             return
         
         # Get cached metadata
         metadata = self._get_cached_metadata_for_selection(file_path)
         if not metadata:
-            logging.warning(f"[MainWindow] Could not get cached metadata for: {os.path.basename(file_path)}")
             return
         
-        logging.info(f"[MainWindow] Got cached metadata: {metadata}")
-        
-        # Get detailed EXIF data for sidebar
-        logging.info(f"[MainWindow] Calling MetadataHandler.get_detailed_metadata for: {os.path.basename(file_path)}")
-        raw_exif = MetadataHandler.get_detailed_metadata(file_path, self.app_state.exif_disk_cache)
+        # Get detailed EXIF data for sidebar - now much cleaner
+        metadata_handler = MetadataHandler()  # Create instance
+        raw_exif = metadata_handler.get_detailed_metadata(file_path, self.app_state.exif_disk_cache)
         
         if not raw_exif:
-            logging.warning(f"[MainWindow] No raw EXIF data returned for: {os.path.basename(file_path)}")
             raw_exif = {}
-        else:
-            logging.info(f"[MainWindow] Got raw EXIF data with {len(raw_exif)} keys: {list(raw_exif.keys())}")
-            logging.info(f"[MainWindow] Raw EXIF sample: {dict(list(raw_exif.items())[:10])}")
         
         # Update sidebar
-        logging.info(f"[MainWindow] Calling sidebar.update_metadata")
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
-
