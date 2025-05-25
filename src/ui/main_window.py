@@ -3335,8 +3335,8 @@ class MainWindow(QMainWindow):
         # Update sidebar with current selection
         self._update_sidebar_with_current_selection()
         
-        # Show sidebar by animating splitter sizes
-        self._animate_sidebar_visibility(True)
+        # Show sidebar instantly
+        self._set_sidebar_visibility(True)
         
         self.statusBar().showMessage("Image details sidebar shown. Press I to toggle.", 3000)
     
@@ -3351,74 +3351,36 @@ class MainWindow(QMainWindow):
         self.toggle_metadata_sidebar_action.setChecked(False)
         self.toggle_metadata_sidebar_action.blockSignals(False)
         
-        # Hide sidebar by animating splitter sizes
-        self._animate_sidebar_visibility(False)
+        # Hide sidebar instantly
+        self._set_sidebar_visibility(False)
     
-    def _animate_sidebar_visibility(self, show: bool):
-        """Animate the sidebar visibility using splitter sizes"""
-        if not hasattr(self, 'main_splitter'):
+    def _set_sidebar_visibility(self, show: bool):
+        """Show or hide the sidebar instantly"""
+        if not hasattr(self, 'main_splitter') or not self.metadata_sidebar:
             return
-            
-        current_sizes = self.main_splitter.sizes()
-        if len(current_sizes) < 3:
-            return
-            
-        # Create property animation for smooth transition
-        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
         
-        if hasattr(self, '_sidebar_animation'):
-            self._sidebar_animation.stop()
-            
-        self._sidebar_animation = QPropertyAnimation()
-        self._sidebar_animation.setDuration(250)
-        self._sidebar_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        current_sizes = self.main_splitter.sizes()
+        if len(current_sizes) != 3:
+            return
         
         if show:
             # Show sidebar with 320px width
-            target_sidebar_width = 320
-            # Adjust other panes proportionally
-            total_available = sum(current_sizes) + target_sidebar_width
-            left_width = max(250, int(total_available * 0.25))  # Min 250px for file list
-            center_width = total_available - left_width - target_sidebar_width
-            target_sizes = [left_width, center_width, target_sidebar_width]
+            target_width = 320
+            total_width = sum(current_sizes)
+            new_sizes = [
+                max(300, int((total_width - target_width) * 0.3)),  # Left pane
+                total_width - max(300, int((total_width - target_width) * 0.3)) - target_width,  # Center pane
+                target_width  # Sidebar
+            ]
+            self.main_splitter.setSizes(new_sizes)
         else:
-            # Hide sidebar (set width to 0)
-            total_available = sum(current_sizes)
-            left_width = max(250, int(total_available * 0.3))  # 30% for file list
-            center_width = total_available - left_width
-            target_sizes = [left_width, center_width, 0]
-        
-        # Custom animation by interpolating between current and target sizes
-        def update_sizes(progress):
-            interpolated_sizes = []
-            for i in range(3):
-                start_size = current_sizes[i] if i < len(current_sizes) else 0
-                end_size = target_sizes[i]
-                interpolated_size = int(start_size + (end_size - start_size) * progress)
-                interpolated_sizes.append(interpolated_size)
-            self.main_splitter.setSizes(interpolated_sizes)
-        
-        # Use QTimer for smooth animation
-        self._animation_step = 0
-        self._animation_steps = 25  # 250ms / 10ms per step
-        self._animation_timer = QTimer()
-        self._animation_timer.timeout.connect(lambda: self._animate_step(update_sizes))
-        self._animation_timer.start(10)  # 10ms intervals
-        
-    def _animate_step(self, update_callback):
-        """Single step of the sidebar animation"""
-        self._animation_step += 1
-        progress = self._animation_step / self._animation_steps
-        
-        # Apply easing curve (simple ease-out)
-        eased_progress = 1 - (1 - progress) ** 3
-        
-        update_callback(eased_progress)
-        
-        if self._animation_step >= self._animation_steps:
-            self._animation_timer.stop()
-            del self._animation_timer
-            del self._animation_step
+            # Hide sidebar
+            new_sizes = [
+                current_sizes[0],  # Left pane unchanged
+                current_sizes[1] + current_sizes[2],  # Center gets sidebar space
+                0  # Sidebar hidden
+            ]
+            self.main_splitter.setSizes(new_sizes)
     
     def _update_sidebar_with_current_selection(self):
         """Update sidebar with the currently selected image metadata"""

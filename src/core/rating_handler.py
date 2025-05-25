@@ -21,21 +21,8 @@ DATE_TAGS_PREFERENCE: List[str] = [
     'H264:DateTimeOriginal',
 ]
 
-# Tags to fetch in batch mode - now includes all detailed EXIF tags
-ALL_RELEVANT_EXIF_TAGS_FOR_BATCH: List[str] = list(dict.fromkeys(
-    ["SourceFile", "XMP:Rating", "XMP:Label", "XMP:Keywords", "FileSize", "ImageSize",
-     "EXIF:Make", "EXIF:Model", "EXIF:LensModel", "EXIF:LensInfo",
-     "EXIF:FocalLength", "EXIF:FNumber", "EXIF:ApertureValue",
-     "EXIF:ShutterSpeedValue", "EXIF:ExposureTime", "EXIF:ISO", "EXIF:ISOSpeedRatings",
-     "EXIF:Flash", "EXIF:ImageWidth", "EXIF:ImageHeight", "EXIF:ColorSpace",
-     "EXIF:Orientation", "EXIF:BitsPerSample", "EXIF:ExposureCompensation",
-     "EXIF:MeteringMode", "EXIF:WhiteBalance", "EXIF:GPSLatitude", "EXIF:GPSLongitude",
-     # Add some alternative tag names that might be used
-     "Make", "Model", "LensModel", "FocalLength", "FNumber", "ExposureTime", "ISO"] + DATE_TAGS_PREFERENCE
-))
-
-# Extended tags for detailed metadata display
-EXTENDED_EXIF_TAGS: List[str] = list(dict.fromkeys([
+# Comprehensive EXIF tags for metadata extraction (used for both batch and detailed fetching)
+COMPREHENSIVE_EXIF_TAGS: List[str] = list(dict.fromkeys([
     "SourceFile", "XMP:Rating", "XMP:Label", "XMP:Keywords", "FileSize", "ImageSize",
     "EXIF:Make", "EXIF:Model", "EXIF:LensModel", "EXIF:LensInfo",
     "EXIF:FocalLength", "EXIF:FNumber", "EXIF:ApertureValue",
@@ -48,7 +35,7 @@ EXTENDED_EXIF_TAGS: List[str] = list(dict.fromkeys([
 ] + DATE_TAGS_PREFERENCE))
 
 # Log the tags being used for debugging
-logging.info(f"[MetadataHandler] EXTENDED_EXIF_TAGS defined with {len(EXTENDED_EXIF_TAGS)} tags: {EXTENDED_EXIF_TAGS}")
+logging.info(f"[MetadataHandler] COMPREHENSIVE_EXIF_TAGS defined with {len(COMPREHENSIVE_EXIF_TAGS)} tags: {COMPREHENSIVE_EXIF_TAGS}")
 
 def _parse_exif_date(date_string: str) -> Optional[date_obj]:
     """
@@ -207,7 +194,7 @@ class MetadataHandler:
                     with MetadataHandler._get_exiftool_helper_instance() as et:
                         encoded_chunk_paths = [p.encode('utf-8', errors='surrogateescape') for p in chunk_paths_to_process]
                         # et.get_tags can return List[Dict[str, Any]]
-                        chunk_results_list = et.get_tags(encoded_chunk_paths, tags=ALL_RELEVANT_EXIF_TAGS_FOR_BATCH)
+                        chunk_results_list = et.get_tags(encoded_chunk_paths, tags=COMPREHENSIVE_EXIF_TAGS)
                         logging.info(f"[MetadataHandler Worker] ExifTool chunk ({len(chunk_paths_to_process)} files) returned {len(chunk_results_list)} results.")
                 except exiftool.ExifToolExecuteError as ete_thread:
                     logging.error(f"[MetadataHandler Worker] ExifTool execution error on chunk: {ete_thread}")
@@ -457,7 +444,16 @@ class MetadataHandler:
         try:
             with MetadataHandler._get_exiftool_helper_instance() as et:
                 encoded_path = norm_path.encode('utf-8', errors='surrogateescape')
-                result = et.get_tags([encoded_path], tags=EXTENDED_EXIF_TAGS)
+                
+                # First try with comprehensive tags, if that fails, try with basic tags
+                try:
+                    result = et.get_tags([encoded_path], tags=COMPREHENSIVE_EXIF_TAGS)
+                except ExifToolExecuteError as ete:
+                    logging.warning(f"[MetadataHandler] Comprehensive EXIF fetch failed for {os.path.basename(norm_path)}, trying basic tags: {ete}")
+                    # Fallback to basic tags that are more likely to work
+                    basic_tags = ["SourceFile", "XMP:Rating", "XMP:Label", "XMP:Keywords", "FileSize",
+                                "EXIF:Make", "EXIF:Model", "EXIF:ImageWidth", "EXIF:ImageHeight"] + DATE_TAGS_PREFERENCE
+                    result = et.get_tags([encoded_path], tags=basic_tags)
                 
                 if result and len(result) > 0:
                     metadata = result[0]
@@ -470,8 +466,8 @@ class MetadataHandler:
                     return metadata
                 else:
                     logging.warning(f"[MetadataHandler] No metadata returned for: {os.path.basename(norm_path)}")
-                    return None
+                    return {}  # Return empty dict instead of None so sidebar can still show file info
                     
         except Exception as e:
             logging.error(f"[MetadataHandler] Error fetching detailed metadata for {os.path.basename(norm_path)}: {e}", exc_info=True)
-            return None
+            return {}  # Return empty dict instead of None so sidebar can still show file info

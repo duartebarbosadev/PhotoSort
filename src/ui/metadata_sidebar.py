@@ -295,9 +295,6 @@ class MetadataSidebar(QWidget):
             # Technical Details Card
             self.add_technical_details_card()
             
-            # PhotoRanker Data Card
-            self.add_photoranker_data_card()
-            
             # Add stretch at the end to push all content up
             self.content_layout.addStretch()
             
@@ -467,37 +464,6 @@ class MetadataSidebar(QWidget):
         
         self.content_layout.insertWidget(-1, card)
     
-    def add_photoranker_data_card(self):
-        """Add PhotoRanker specific data card"""
-        card = MetadataCard("PhotoRanker Data", "⭐")
-        
-        # Rating
-        rating = self.raw_metadata.get("XMP:Rating")
-        if rating is not None:
-            stars = "★" * int(rating) + "☆" * (5 - int(rating))
-            card.add_info_row("Rating", f"{stars} ({rating}/5)")
-            card.add_progress_bar("Rating Progress", float(rating), 5.0, "#FFD700")
-        
-        # Label
-        label = self.raw_metadata.get("XMP:Label")
-        if label:
-            color_map = {
-                "Red": "#C92C2C", "Yellow": "#E1C340", "Green": "#3F9142",
-                "Blue": "#3478BC", "Purple": "#8E44AD"
-            }
-            label_color = color_map.get(label, "#D1D1D1")
-            card.add_info_row("Label", label, label_color)
-        
-        # Keywords
-        keywords = self.raw_metadata.get("XMP:Keywords")
-        if keywords:
-            if isinstance(keywords, list):
-                keywords_str = ", ".join(keywords)
-            else:
-                keywords_str = str(keywords)
-            card.add_info_row("Keywords", keywords_str)
-        
-        self.content_layout.insertWidget(-1, card)
     
     def add_debug_metadata_card(self):
         """Add debug card showing raw metadata - for troubleshooting"""
