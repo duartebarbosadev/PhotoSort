@@ -32,7 +32,7 @@ class MetadataCard(QFrame):
     def setup_ui(self):
         """Setup the card UI structure"""
         self.setFrameStyle(QFrame.Shape.Box)
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -65,6 +65,7 @@ class MetadataCard(QFrame):
         # Content area
         self.content_widget = QWidget()
         self.content_widget.setObjectName("cardContent")
+        self.content_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(12, 8, 12, 12)
         self.content_layout.setSpacing(6)
@@ -169,8 +170,9 @@ class MetadataSidebar(QWidget):
     
     def setup_ui(self):
         """Setup the sidebar UI"""
-        self.setFixedWidth(320)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(400)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -192,7 +194,7 @@ class MetadataSidebar(QWidget):
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(8, 8, 8, 8)
         self.content_layout.setSpacing(8)
-        self.content_layout.addStretch()  # Push content to top
+        # Don't add stretch here - we'll add it after all cards
         
         scroll_area.setWidget(self.content_widget)
         main_layout.addWidget(scroll_area)
@@ -258,7 +260,7 @@ class MetadataSidebar(QWidget):
     
     def clear_content(self):
         """Clear all content from the sidebar"""
-        while self.content_layout.count() > 1:  # Keep the stretch
+        while self.content_layout.count() > 0:  # Clear everything
             child = self.content_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
@@ -295,6 +297,9 @@ class MetadataSidebar(QWidget):
             
             # PhotoRanker Data Card
             self.add_photoranker_data_card()
+            
+            # Add stretch at the end to push all content up
+            self.content_layout.addStretch()
             
         except Exception as e:
             logging.error(f"Error updating metadata sidebar: {e}", exc_info=True)
@@ -539,60 +544,3 @@ class MetadataSidebar(QWidget):
         """)
         
         self.content_layout.insertWidget(0, error_label)
-    
-    def slide_in(self, parent_geometry: QRect):
-        """Animate sliding in from the right"""
-        start_geometry = QRect(
-            parent_geometry.right(),
-            parent_geometry.top(),
-            self.width(),
-            parent_geometry.height()
-        )
-        
-        end_geometry = QRect(
-            parent_geometry.right() - self.width(),
-            parent_geometry.top(),
-            self.width(),
-            parent_geometry.height()
-        )
-        
-        self.setGeometry(start_geometry)
-        self.show()
-        self.raise_()  # Ensure sidebar is on top
-        
-        self.slide_animation.setStartValue(start_geometry)
-        self.slide_animation.setEndValue(end_geometry)
-        self.slide_animation.start()
-    
-    def slide_out(self, parent_geometry: QRect):
-        """Animate sliding out to the right"""
-        start_geometry = self.geometry()
-        end_geometry = QRect(
-            parent_geometry.right(),
-            parent_geometry.top(),
-            self.width(),
-            parent_geometry.height()
-        )
-        
-        # Disconnect any existing connections to avoid accumulation
-        try:
-            self.slide_animation.finished.disconnect()
-        except TypeError:
-            pass  # No connections to disconnect
-        
-        # Use a dedicated method for slide-out completion
-        self.slide_animation.finished.connect(self._on_slide_out_complete)
-        
-        self.slide_animation.setStartValue(start_geometry)
-        self.slide_animation.setEndValue(end_geometry)
-        self.slide_animation.start()
-    
-    def _on_slide_out_complete(self):
-        """Handle slide-out animation completion"""
-        # Disconnect the signal first
-        try:
-            self.slide_animation.finished.disconnect(self._on_slide_out_complete)
-        except TypeError:
-            pass
-        # Then hide
-        self.hide()

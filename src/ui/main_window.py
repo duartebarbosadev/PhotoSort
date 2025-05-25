@@ -17,7 +17,7 @@ import subprocess # For opening file explorer
 import traceback # For detailed error logging
 from datetime import date as date_obj, datetime # For date type hinting and objects
 from typing import List, Dict, Optional, Any, Tuple # Import List and Dict for type hinting, Optional, Any, Tuple
-from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent, QPoint, QRect # Import QEvent for eventFilter and QPoint, QRect
+from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent, QPoint, QRect, QPropertyAnimation, QEasingCurve # Import QEvent for eventFilter and QPoint, QRect
 from PyQt6.QtGui import QColor # Import QColor for highlighting
 from PyQt6.QtGui import QAction, QKeySequence, QPixmap, QKeyEvent, QIcon, QStandardItemModel, QStandardItem, QResizeEvent, QDragEnterEvent, QDropEvent, QDragMoveEvent # Import model classes and event types
 import numpy as np
@@ -330,7 +330,7 @@ class MainWindow(QMainWindow):
         self.toggle_metadata_sidebar_action = QAction("Show Image Details Sidebar", self)
         self.toggle_metadata_sidebar_action.setCheckable(True)
         self.toggle_metadata_sidebar_action.setChecked(False)
-        self.toggle_metadata_sidebar_action.setShortcut("F12")
+        self.toggle_metadata_sidebar_action.setShortcut("I")
         view_menu.addAction(self.toggle_metadata_sidebar_action)
         
         self._create_settings_menu()
@@ -846,7 +846,7 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_splitter.setObjectName("main_splitter") 
+        main_splitter.setObjectName("main_splitter")
 
         self.left_pane_widget = QWidget()
         self.left_pane_widget.setObjectName("left_pane_widget")
@@ -854,19 +854,24 @@ class MainWindow(QMainWindow):
         left_pane_layout.setContentsMargins(0,0,0,0)
         left_pane_layout.setSpacing(0)
         left_pane_layout.addWidget(self.tree_display_view)
-        left_pane_layout.addWidget(self.grid_display_view) 
+        left_pane_layout.addWidget(self.grid_display_view)
         main_splitter.addWidget(self.left_pane_widget)
 
         main_splitter.addWidget(self.center_pane_container)
 
-        main_splitter.setStretchFactor(0, 1)
-        main_splitter.setStretchFactor(1, 3)
-        main_splitter.setSizes([350, 850])
-        
-        # Create metadata sidebar (initially hidden)
+        # Create metadata sidebar and add to splitter
         self.metadata_sidebar = MetadataSidebar(self)
-        self.metadata_sidebar.hide()
         self.metadata_sidebar.hide_requested.connect(self._hide_metadata_sidebar)
+        main_splitter.addWidget(self.metadata_sidebar)
+
+        # Set stretch factors: left=1, center=3, right=1 (when visible)
+        main_splitter.setStretchFactor(0, 1)  # Left pane
+        main_splitter.setStretchFactor(1, 3)  # Center pane
+        main_splitter.setStretchFactor(2, 1)  # Right pane (sidebar)
+        
+        # Initially hide the sidebar by setting its size to 0
+        main_splitter.setSizes([350, 850, 0])
+        self.main_splitter = main_splitter  # Store reference for sidebar toggling
 
         main_layout.addWidget(main_splitter)
         main_layout.addWidget(self.bottom_bar)
@@ -1382,11 +1387,8 @@ class MainWindow(QMainWindow):
         if self.loading_overlay:
             self.loading_overlay.update_position()
         
-        # Update metadata sidebar position if visible
-        if self.sidebar_visible and self.metadata_sidebar:
-            self._update_sidebar_position()
-        
-        # event.accept() # Not needed for resizeEvent in QMainWindow from my recall
+        # Sidebar positioning is now handled by the splitter automatically
+        # No need for manual position updates
 
     def keyPressEvent(self, event: QKeyEvent):
         # Arrow key and Delete navigation is now handled by the eventFilter for the views.
@@ -3333,13 +3335,10 @@ class MainWindow(QMainWindow):
         # Update sidebar with current selection
         self._update_sidebar_with_current_selection()
         
-        # Ensure sidebar is on top of all other widgets
-        self.metadata_sidebar.raise_()
+        # Show sidebar by animating splitter sizes
+        self._animate_sidebar_visibility(True)
         
-        # Show sidebar
-        self.metadata_sidebar.slide_in(self.geometry())
-        
-        self.statusBar().showMessage("Image details sidebar shown. Press F12 to toggle.", 3000)
+        self.statusBar().showMessage("Image details sidebar shown. Press I to toggle.", 3000)
     
     def _hide_metadata_sidebar(self):
         """Hide the metadata sidebar"""
@@ -3352,21 +3351,74 @@ class MainWindow(QMainWindow):
         self.toggle_metadata_sidebar_action.setChecked(False)
         self.toggle_metadata_sidebar_action.blockSignals(False)
         
-        # Hide sidebar
-        self.metadata_sidebar.slide_out(self.geometry())
+        # Hide sidebar by animating splitter sizes
+        self._animate_sidebar_visibility(False)
     
-    def _update_sidebar_position(self):
-        """Update sidebar position when window is resized"""
-        if self.sidebar_visible and self.metadata_sidebar:
-            sidebar_geometry = QRect(
-                self.width() - self.metadata_sidebar.width(),
-                0,
-                self.metadata_sidebar.width(),
-                self.height()
-            )
-            self.metadata_sidebar.setGeometry(sidebar_geometry)
-            # Ensure sidebar stays on top after resize
-            self.metadata_sidebar.raise_()
+    def _animate_sidebar_visibility(self, show: bool):
+        """Animate the sidebar visibility using splitter sizes"""
+        if not hasattr(self, 'main_splitter'):
+            return
+            
+        current_sizes = self.main_splitter.sizes()
+        if len(current_sizes) < 3:
+            return
+            
+        # Create property animation for smooth transition
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+        
+        if hasattr(self, '_sidebar_animation'):
+            self._sidebar_animation.stop()
+            
+        self._sidebar_animation = QPropertyAnimation()
+        self._sidebar_animation.setDuration(250)
+        self._sidebar_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        
+        if show:
+            # Show sidebar with 320px width
+            target_sidebar_width = 320
+            # Adjust other panes proportionally
+            total_available = sum(current_sizes) + target_sidebar_width
+            left_width = max(250, int(total_available * 0.25))  # Min 250px for file list
+            center_width = total_available - left_width - target_sidebar_width
+            target_sizes = [left_width, center_width, target_sidebar_width]
+        else:
+            # Hide sidebar (set width to 0)
+            total_available = sum(current_sizes)
+            left_width = max(250, int(total_available * 0.3))  # 30% for file list
+            center_width = total_available - left_width
+            target_sizes = [left_width, center_width, 0]
+        
+        # Custom animation by interpolating between current and target sizes
+        def update_sizes(progress):
+            interpolated_sizes = []
+            for i in range(3):
+                start_size = current_sizes[i] if i < len(current_sizes) else 0
+                end_size = target_sizes[i]
+                interpolated_size = int(start_size + (end_size - start_size) * progress)
+                interpolated_sizes.append(interpolated_size)
+            self.main_splitter.setSizes(interpolated_sizes)
+        
+        # Use QTimer for smooth animation
+        self._animation_step = 0
+        self._animation_steps = 25  # 250ms / 10ms per step
+        self._animation_timer = QTimer()
+        self._animation_timer.timeout.connect(lambda: self._animate_step(update_sizes))
+        self._animation_timer.start(10)  # 10ms intervals
+        
+    def _animate_step(self, update_callback):
+        """Single step of the sidebar animation"""
+        self._animation_step += 1
+        progress = self._animation_step / self._animation_steps
+        
+        # Apply easing curve (simple ease-out)
+        eased_progress = 1 - (1 - progress) ** 3
+        
+        update_callback(eased_progress)
+        
+        if self._animation_step >= self._animation_steps:
+            self._animation_timer.stop()
+            del self._animation_timer
+            del self._animation_step
     
     def _update_sidebar_with_current_selection(self):
         """Update sidebar with the currently selected image metadata"""
