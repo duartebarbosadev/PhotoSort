@@ -39,6 +39,7 @@ from src.ui.ui_components import LoadingOverlay # PreviewPreloaderWorker, BlurDe
 from src.ui.worker_manager import WorkerManager # Import WorkerManager
 from src.ui.metadata_sidebar import MetadataSidebar # Import MetadataSidebar
 from src.core.file_scanner import SUPPORTED_EXTENSIONS # Import from file_scanner
+from src.core.image_rotation_handler import ImageRotationHandler, RotationVisualFeedback # Import rotation functionality
 
 
 # --- Custom Tree View for Drag and Drop ---
@@ -160,6 +161,11 @@ class MainWindow(QMainWindow):
         logging.info(f"MainWindow.__init__ - AppState instantiated: {time.perf_counter() - init_start_time:.4f}s")
         self.worker_manager = WorkerManager(image_pipeline_instance=self.image_pipeline, parent=self)
         logging.info(f"MainWindow.__init__ - WorkerManager instantiated: {time.perf_counter() - init_start_time:.4f}s")
+        
+        # Initialize rotation handler
+        self.rotation_handler = ImageRotationHandler(parent=self)
+        self._connect_rotation_signals()
+        logging.info(f"MainWindow.__init__ - ImageRotationHandler instantiated: {time.perf_counter() - init_start_time:.4f}s")
         
         self.setWindowTitle("PhotoRanker")
         self.setGeometry(100, 100, 1200, 800)
@@ -319,6 +325,43 @@ class MainWindow(QMainWindow):
         self.detect_blur_action.setToolTip("Analyze images for blurriness (can be slow for many images)")
         self.detect_blur_action.setEnabled(False) 
         view_menu.addAction(self.detect_blur_action)
+
+        # Add Image menu
+        image_menu = menu_bar.addMenu("&Image")
+        
+        # Rotation submenu
+        rotation_menu = image_menu.addMenu("🔄 &Rotate")
+        
+        self.rotate_clockwise_action = QAction("Rotate 90° &Clockwise", self)
+        self.rotate_clockwise_action.setShortcut("R")
+        self.rotate_clockwise_action.setToolTip("Rotate the selected image 90° clockwise")
+        self.rotate_clockwise_action.setEnabled(False)
+        rotation_menu.addAction(self.rotate_clockwise_action)
+        
+        self.rotate_counter_clockwise_action = QAction("Rotate 90° &Counter-Clockwise", self)
+        self.rotate_counter_clockwise_action.setShortcut("Ctrl+Shift+R")
+        self.rotate_counter_clockwise_action.setToolTip("Rotate the selected image 90° counter-clockwise")
+        self.rotate_counter_clockwise_action.setEnabled(False)
+        rotation_menu.addAction(self.rotate_counter_clockwise_action)
+        
+        self.rotate_180_action = QAction("Rotate &180°", self)
+        self.rotate_180_action.setToolTip("Rotate the selected image 180°")
+        self.rotate_180_action.setEnabled(False)
+        rotation_menu.addAction(self.rotate_180_action)
+        
+        rotation_menu.addSeparator()
+        
+        self.auto_correct_orientation_action = QAction("&Auto-Correct Orientation", self)
+        self.auto_correct_orientation_action.setToolTip("Auto-correct image orientation based on EXIF data")
+        self.auto_correct_orientation_action.setEnabled(False)
+        rotation_menu.addAction(self.auto_correct_orientation_action)
+        
+        # Batch operations
+        image_menu.addSeparator()
+        self.batch_auto_correct_action = QAction("Auto-Correct All &Orientations", self)
+        self.batch_auto_correct_action.setToolTip("Auto-correct orientation for all images in folder")
+        self.batch_auto_correct_action.setEnabled(False)
+        image_menu.addAction(self.batch_auto_correct_action)
 
         help_menu = menu_bar.addMenu("&Help")
         about_action = QAction("&About", self)
@@ -919,6 +962,7 @@ class MainWindow(QMainWindow):
         self.toggle_auto_edits_action.toggled.connect(self._handle_toggle_auto_edits)
         self.set_exiftool_path_action.triggered.connect(self._show_set_exiftool_path_dialog) # Connect new action
         self.toggle_metadata_sidebar_action.toggled.connect(self._toggle_metadata_sidebar)
+        self.rotate_clockwise_action.triggered.connect(self._rotate_current_image)
 
         # Connect signals from WorkerManager
         self.worker_manager.file_scan_found_files.connect(self._handle_files_found)
@@ -945,7 +989,17 @@ class MainWindow(QMainWindow):
         self.worker_manager.rating_load_metadata_batch_loaded.connect(self._handle_metadata_batch_loaded) # New batched signal
         self.worker_manager.rating_load_finished.connect(self._handle_rating_load_finished)
         self.worker_manager.rating_load_error.connect(self._handle_rating_load_error)
+        
+        # Connect rotation handler signals
+        self._connect_rotation_signals()
+        
         logging.debug(f"MainWindow._connect_signals - End: {time.perf_counter() - start_time:.4f}s")
+        
+    def _connect_rotation_signals(self):
+        """Connect rotation handler signals."""
+        self.rotation_handler.rotation_applied.connect(self._handle_rotation_applied)
+        self.rotation_handler.exif_rotation_complete.connect(self._handle_exif_rotation_complete)
+        self.rotation_handler.rotation_error.connect(self._handle_rotation_error)
     def _create_actions(self):
         start_time = time.perf_counter()
         logging.debug("MainWindow._create_actions - Start")
@@ -2246,7 +2300,14 @@ class MainWindow(QMainWindow):
 
             if preview_pixmap:
                 set_pixmap_start_time = time.perf_counter()
-                self.image_view.setPixmap(preview_pixmap)
+                # Apply any pending UI rotation before displaying
+                rotated_preview = self.rotation_handler.apply_ui_rotation_to_pixmap(preview_pixmap, file_path)
+                
+                # Debug: Check if rotation was actually applied
+                current_rotation = self.rotation_handler.get_ui_rotation_for_file(file_path)
+                logging.debug(f"[MainWindow] Setting preview pixmap for {os.path.basename(file_path)} with rotation: {current_rotation}°")
+                
+                self.image_view.setPixmap(rotated_preview)
                 set_pixmap_end_time = time.perf_counter()
                 logging.debug(f"[PERF] setPixmap (preview) for {os.path.basename(file_path)} took: {set_pixmap_end_time - set_pixmap_start_time:.4f}s")
                 pixmap_set = True
@@ -2261,7 +2322,14 @@ class MainWindow(QMainWindow):
 
                 if thumbnail_pixmap:
                     set_pixmap_start_time = time.perf_counter()
-                    self.image_view.setPixmap(thumbnail_pixmap)
+                    # Apply any pending UI rotation before displaying
+                    rotated_thumbnail = self.rotation_handler.apply_ui_rotation_to_pixmap(thumbnail_pixmap, file_path)
+                    
+                    # Debug: Check if rotation was actually applied
+                    current_rotation = self.rotation_handler.get_ui_rotation_for_file(file_path)
+                    logging.debug(f"[MainWindow] Setting thumbnail pixmap for {os.path.basename(file_path)} with rotation: {current_rotation}°")
+                    
+                    self.image_view.setPixmap(rotated_thumbnail)
                     set_pixmap_end_time = time.perf_counter()
                     logging.debug(f"[PERF] setPixmap (thumbnail) for {os.path.basename(file_path)} took: {set_pixmap_end_time - set_pixmap_start_time:.4f}s")
                     pixmap_set = True
@@ -2393,6 +2461,9 @@ class MainWindow(QMainWindow):
             # Show placeholder in sidebar for no selection
             if self.sidebar_visible and self.metadata_sidebar:
                 self.metadata_sidebar.show_placeholder()
+        
+        # Update rotation action state - only enable for single image selection
+        self.rotate_clockwise_action.setEnabled(len(selected_file_paths) == 1)
 
     def _apply_filter(self):
         search_text = self.search_input.text().lower()
@@ -3240,6 +3311,9 @@ class MainWindow(QMainWindow):
                     elif key == Qt.Key.Key_Delete:
                         self._move_current_image_to_trash()
                         return True
+                    elif key == Qt.Key.Key_R:
+                        self._rotate_current_image()
+                        return True
 
                 # Handle 1-9 for group selection (existing logic, also conditional on search_input focus)
                 if not search_has_focus and \
@@ -3427,3 +3501,168 @@ class MainWindow(QMainWindow):
         
         # Update sidebar
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
+
+    # ============================================================================
+    # IMAGE ROTATION FUNCTIONALITY
+    # ============================================================================
+    
+    def _rotate_current_image(self):
+        """Rotate the currently selected image 90 degrees clockwise."""
+        selected_paths = self._get_selected_file_paths_from_view()
+        
+        if not selected_paths:
+            self.statusBar().showMessage("No image selected for rotation.", 3000)
+            return
+            
+        if len(selected_paths) > 1:
+            self.statusBar().showMessage("Please select only one image to rotate.", 3000)
+            return
+            
+        file_path = selected_paths[0]
+        
+        # Check if image can be rotated
+        from src.core.image_processing.image_orientation_handler import ImageOrientationHandler
+        if not ImageOrientationHandler.is_image_rotatable(file_path):
+            self.statusBar().showMessage("❌ This image format cannot be rotated", 3000)
+            return
+        
+        # Show immediate feedback
+        self.statusBar().showMessage("🔄 Rotating image...", 2000)
+        
+        # Apply physical rotation directly
+        success = ImageOrientationHandler.rotate_image_file_physically(file_path, 90)
+        
+        if success:
+            # Clear caches to force regeneration
+            self.image_pipeline.preview_cache.clear()  # Simple clear for now
+            self.image_pipeline.thumbnail_cache.clear()  # Simple clear for now
+            # Refresh the current view
+            self._refresh_current_image_preview()
+        
+        if not success:
+            self.statusBar().showMessage("❌ Failed to rotate image.", 3000)
+    
+    def _handle_rotation_applied(self, file_path: str, degrees: int):
+        """Handle immediate rotation feedback - update current preview."""
+        logging.debug(f"[MainWindow] _handle_rotation_applied called for {os.path.basename(file_path)} ({degrees}°)")
+        
+        # Update the currently displayed image if it matches the rotated file
+        selected_paths = self._get_selected_file_paths_from_view()
+        logging.debug(f"[MainWindow] Selected paths: {[os.path.basename(p) for p in selected_paths] if selected_paths else 'None'}")
+        
+        if selected_paths and file_path in selected_paths:
+            logging.debug(f"[MainWindow] File matches selection, refreshing preview")
+            # Debug: Check rotation state
+            self.rotation_handler.debug_rotation_state()
+            # Refresh the current preview with rotation applied
+            self._refresh_current_image_preview()
+        else:
+            logging.debug(f"[MainWindow] File does not match current selection, skipping refresh")
+        
+        # Show cool status message
+        status_msg = RotationVisualFeedback.get_rotation_status_message(degrees)
+        self.statusBar().showMessage(status_msg, 2000)
+        
+        logging.info(f"[MainWindow] Rotation applied to UI: {os.path.basename(file_path)} ({degrees}°)")
+    
+    def _handle_exif_rotation_complete(self, file_path: str, success: bool):
+        """Handle completion of EXIF rotation update."""
+        if success:
+            # Refresh thumbnail and preview for the rotated image
+            self._refresh_image_caches_for_file(file_path)
+            
+            # Update the current preview if this file is selected
+            selected_paths = self._get_selected_file_paths_from_view()
+            if selected_paths and file_path in selected_paths:
+                self._refresh_current_image_preview()
+            
+            status_msg = f"✅ Rotation saved to {os.path.basename(file_path)}"
+            self.statusBar().showMessage(status_msg, 3000)
+            
+            logging.info(f"[MainWindow] EXIF rotation completed successfully: {os.path.basename(file_path)}")
+        else:
+            status_msg = f"⚠️ Could not save rotation to {os.path.basename(file_path)}"
+            self.statusBar().showMessage(status_msg, 4000)
+            
+            logging.warning(f"[MainWindow] EXIF rotation failed: {os.path.basename(file_path)}")
+    
+    def _handle_rotation_error(self, file_path: str, error_message: str):
+        """Handle rotation errors."""
+        status_msg = f"❌ Rotation error: {error_message}"
+        self.statusBar().showMessage(status_msg, 5000)
+        
+        logging.error(f"[MainWindow] Rotation error for {os.path.basename(file_path)}: {error_message}")
+    
+    def _refresh_current_image_preview(self):
+        """Refresh the currently displayed image preview."""
+        logging.debug(f"[MainWindow] _refresh_current_image_preview called")
+        
+        selected_paths = self._get_selected_file_paths_from_view()
+        if selected_paths and len(selected_paths) == 1:
+            file_path = selected_paths[0]
+            file_data = None
+            
+            logging.debug(f"[MainWindow] Refreshing preview for {os.path.basename(file_path)}")
+            
+            # Try to get file data from the model
+            proxy_idx = self._find_proxy_index_for_path(file_path)
+            if proxy_idx.isValid():
+                source_idx = self.proxy_model.mapToSource(proxy_idx)
+                if source_idx.isValid():
+                    item = self.file_system_model.itemFromIndex(source_idx)
+                    if item:
+                        file_data = item.data(Qt.ItemDataRole.UserRole)
+            
+            # Display the image with any pending UI rotations applied
+            self._display_single_image_preview(file_path, file_data)
+        else:
+            logging.debug(f"[MainWindow] No single selection found for refresh")
+    
+    def _refresh_image_caches_for_file(self, file_path: str):
+        """Refresh caches for a specific file after rotation."""
+        try:
+            # Clear caches to force regeneration with new orientation
+            if hasattr(self.image_pipeline, 'preview_cache'):
+                self.image_pipeline.preview_cache.invalidate_file(file_path)
+            
+            if hasattr(self.image_pipeline, 'thumbnail_cache'):
+                self.image_pipeline.thumbnail_cache.invalidate_file(file_path)
+            
+            # Force thumbnail regeneration in the view
+            self._refresh_thumbnail_for_file(file_path)
+            
+        except Exception as e:
+            logging.error(f"[MainWindow] Error refreshing caches for {os.path.basename(file_path)}: {e}")
+    
+    def _refresh_thumbnail_for_file(self, file_path: str):
+        """Refresh thumbnail display for a specific file in the views."""
+        try:
+            logging.debug(f"[MainWindow] Refreshing thumbnail for {os.path.basename(file_path)}")
+            
+            # Find the item in the model and refresh its icon
+            proxy_idx = self._find_proxy_index_for_path(file_path)
+            if proxy_idx.isValid():
+                source_idx = self.proxy_model.mapToSource(proxy_idx)
+                if source_idx.isValid():
+                    item = self.file_system_model.itemFromIndex(source_idx)
+                    if item:
+                        # Generate new thumbnail
+                        new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(file_path, self.apply_auto_edits_enabled)
+                        if new_thumbnail:
+                            # Apply any pending UI rotation
+                            current_rotation = self.rotation_handler.get_ui_rotation_for_file(file_path)
+                            logging.debug(f"[MainWindow] Applying {current_rotation}° rotation to thumbnail")
+                            rotated_thumbnail = self.rotation_handler.apply_ui_rotation_to_pixmap(new_thumbnail, file_path)
+                            item.setIcon(QIcon(rotated_thumbnail))
+                            logging.debug(f"[MainWindow] Thumbnail updated with rotation")
+                        else:
+                            logging.debug(f"[MainWindow] Failed to generate new thumbnail")
+                    else:
+                        logging.debug(f"[MainWindow] Could not find item in model")
+                else:
+                    logging.debug(f"[MainWindow] Invalid source index")
+            else:
+                logging.debug(f"[MainWindow] Invalid proxy index for path")
+                            
+        except Exception as e:
+            logging.error(f"[MainWindow] Error refreshing thumbnail for {os.path.basename(file_path)}: {e}")

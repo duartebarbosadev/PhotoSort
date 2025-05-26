@@ -85,6 +85,36 @@ class ThumbnailCache:
                 del self._cache[key]
         except Exception as e:
             print(f"Error deleting item from thumbnail_cache for key {key}: {e}")
+
+    def invalidate_file(self, file_path: str) -> None:
+        """
+        Invalidates all cache entries for a specific file path.
+        This removes all cached versions (different edit settings) of the file.
+        
+        Args:
+            file_path: The normalized file path to invalidate
+        """
+        try:
+            normalized_path = os.path.normpath(file_path)
+            keys_to_delete = []
+            
+            # Find all keys that match this file path
+            for key in self._cache:
+                if isinstance(key, tuple) and len(key) >= 1 and key[0] == normalized_path:
+                    keys_to_delete.append(key)
+            
+            # Delete matching keys
+            for key in keys_to_delete:
+                try:
+                    del self._cache[key]
+                except Exception as e:
+                    print(f"Error deleting cache key {key}: {e}")
+            
+            if keys_to_delete:
+                print(f"[ThumbnailCache] Invalidated {len(keys_to_delete)} cache entries for {os.path.basename(file_path)}")
+                
+        except Exception as e:
+            print(f"Error invalidating thumbnail cache for {file_path}: {e}")
     
     def clear(self) -> None:
         """Clears all items from the cache."""

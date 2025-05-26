@@ -595,3 +595,27 @@ QLabel#placeholderText, QLabel#errorText {
     background-color: transparent;
     border: none;
 }
+
+/* --- Image Rotation Visual Feedback --- */
+QLabel#rotationFeedbackLabel {
+    background-color: rgba(0, 120, 212, 0.9); /* Semi-transparent blue */
+    color: #FFFFFF;
+    border: 2px solid #0078D4;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 12pt;
+    font-weight: bold;
+    qproperty-alignment: AlignCenter;
+}
+
+/* Rotation status in status bar gets special styling when active */
+QStatusBar[rotation-active="true"] {
+    background-color: #1A4A6B; /* Darker blue background when rotation is active */
+    border-top: 2px solid #0078D4; /* Accent border */
+}
+
+/* Image view gets a subtle highlight when rotation is applied */
+QLabel#image_view[rotation-pending="true"] {
+    border: 2px solid #0078D4;
+    border-radius: 4px;
+}
