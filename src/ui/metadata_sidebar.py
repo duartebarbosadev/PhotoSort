@@ -335,23 +335,30 @@ class MetadataSidebar(QWidget):
         logging.info(f"[MetadataSidebar] add_camera_settings_card called")
         card = MetadataCard("Camera & Settings", "📷")
         
-        # Camera make and model
+        # Check if we have any camera-related metadata
         make = self.raw_metadata.get("EXIF:Make") or self.raw_metadata.get("Make")
         model = self.raw_metadata.get("EXIF:Model") or self.raw_metadata.get("Model")
         
         logging.info(f"[MetadataSidebar] Camera make: '{make}', model: '{model}'")
         
-        if make and model:
-            camera = f"{make} {model}"
-        elif model:
-            camera = model
-        elif make:
-            camera = make
+        # Only add camera info if we have some data, or show that it's not available
+        if make or model:
+            if make and model:
+                camera = f"{make} {model}"
+            elif model:
+                camera = model
+            elif make:
+                camera = make
+            
+            logging.info(f"[MetadataSidebar] Final camera string: '{camera}'")
+            card.add_info_row("Camera", camera)
         else:
-            camera = None
-        
-        logging.info(f"[MetadataSidebar] Final camera string: '{camera}'")
-        card.add_info_row("Camera", camera or "Unknown")
+            # Check if this might be a screenshot or non-camera image
+            filename = os.path.basename(self.current_image_path) if self.current_image_path else ""
+            if any(term in filename.lower() for term in ["screenshot", "captura", "screen", "desktop"]):
+                card.add_info_row("Source", "Screen capture")
+            else:
+                card.add_info_row("Camera", "No camera data available")
         
         # Lens information
         lens = (self.raw_metadata.get("EXIF:LensModel") or 
@@ -393,14 +400,23 @@ class MetadataSidebar(QWidget):
         """Add image properties card"""
         card = MetadataCard("Image Properties", "🖼️")
         
-        # Dimensions
-        width = self.raw_metadata.get("EXIF:ImageWidth") or self.raw_metadata.get("ImageWidth")
-        height = self.raw_metadata.get("EXIF:ImageHeight") or self.raw_metadata.get("ImageHeight")
+        # Dimensions - try multiple possible tag names
+        width = (self.raw_metadata.get("EXIF:ImageWidth") or
+                self.raw_metadata.get("ImageWidth") or
+                self.raw_metadata.get("EXIF:ExifImageWidth"))
+        height = (self.raw_metadata.get("EXIF:ImageHeight") or
+                 self.raw_metadata.get("ImageHeight") or
+                 self.raw_metadata.get("EXIF:ExifImageHeight"))
         
         if width and height:
-            megapixels = (int(width) * int(height)) / 1_000_000
-            card.add_info_row("Dimensions", f"{width} × {height}")
-            card.add_info_row("Megapixels", f"{megapixels:.1f} MP")
+            try:
+                width_int = int(width)
+                height_int = int(height)
+                megapixels = (width_int * height_int) / 1_000_000
+                card.add_info_row("Dimensions", f"{width_int} × {height_int}")
+                card.add_info_row("Megapixels", f"{megapixels:.1f} MP")
+            except (ValueError, TypeError):
+                card.add_info_row("Dimensions", f"{width} × {height}")
         
         # Color space
         color_space = (self.raw_metadata.get("EXIF:ColorSpace") or
