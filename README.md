@@ -81,7 +81,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
    The main entry point is [`src/main.py`](src/main.py:147).
 
    ```bash
-   python src/main.py
+   python -m src.main
    ```
 
 ## Usage
@@ -131,7 +131,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 * **AI-Driven Exposure Analysis**: Introduce a feature to detect and flag images with potentially good or problematic exposure (e.g., under/overexposed).
 * **Automated Best Shot Selection in Clusters**:
   * Within similarity clusters, automatically suggest or select the "best" image(s).
-  * Criteria could include: lowest blurriness score, optimal exposure, AI composition analysis, etc.
+  * Criteria could include: lowest blurriness score, optimal exposure, AI composition analysis, no one with eyes close etc.
 * **Advanced AI Object/Scene Detections & Grouping**:
   * **Car Model Recognition**: Identify and allow grouping by specific car models in photos.
   * **Face Recognition/Clustering**: Detect faces and group photos by the people present.
