@@ -17,7 +17,7 @@ import subprocess # For opening file explorer
 import traceback # For detailed error logging
 from datetime import date as date_obj, datetime # For date type hinting and objects
 from typing import List, Dict, Optional, Any, Tuple # Import List and Dict for type hinting, Optional, Any, Tuple
-from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent, QPoint # Import QEvent for eventFilter and QPoint
+from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent, QPoint, QRect, QPropertyAnimation, QEasingCurve # Import QEvent for eventFilter and QPoint, QRect
 from PyQt6.QtGui import QColor # Import QColor for highlighting
 from PyQt6.QtGui import QAction, QKeySequence, QPixmap, QKeyEvent, QIcon, QStandardItemModel, QStandardItem, QResizeEvent, QDragEnterEvent, QDropEvent, QDragMoveEvent # Import model classes and event types
 import numpy as np
@@ -37,6 +37,7 @@ from src.core.caching.rating_cache import RatingCache # Import RatingCache for t
 from src.core.caching.exif_cache import ExifCache # Import ExifCache for type hinting and methods
 from src.ui.ui_components import LoadingOverlay # PreviewPreloaderWorker, BlurDetectionWorker are used by WorkerManager
 from src.ui.worker_manager import WorkerManager # Import WorkerManager
+from src.ui.metadata_sidebar import MetadataSidebar # Import MetadataSidebar
 from src.core.file_scanner import SUPPORTED_EXTENSIONS # Import from file_scanner
 
 
@@ -164,6 +165,8 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1200, 800)
  
         self.loading_overlay = None
+        self.metadata_sidebar = None
+        self.sidebar_visible = False
         
         self.thumbnail_delegate = None
         self.current_view_mode = None
@@ -321,6 +324,15 @@ class MainWindow(QMainWindow):
         about_action = QAction("&About", self)
         about_action.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_action)
+        
+        # Add metadata sidebar toggle to View menu
+        view_menu.addSeparator()
+        self.toggle_metadata_sidebar_action = QAction("Show Image Details Sidebar", self)
+        self.toggle_metadata_sidebar_action.setCheckable(True)
+        self.toggle_metadata_sidebar_action.setChecked(False)
+        self.toggle_metadata_sidebar_action.setShortcut("I")
+        view_menu.addAction(self.toggle_metadata_sidebar_action)
+        
         self._create_settings_menu()
         logging.debug(f"MainWindow._create_menu - End: {time.perf_counter() - start_time:.4f}s")
 
@@ -834,7 +846,7 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_splitter.setObjectName("main_splitter") 
+        main_splitter.setObjectName("main_splitter")
 
         self.left_pane_widget = QWidget()
         self.left_pane_widget.setObjectName("left_pane_widget")
@@ -842,14 +854,24 @@ class MainWindow(QMainWindow):
         left_pane_layout.setContentsMargins(0,0,0,0)
         left_pane_layout.setSpacing(0)
         left_pane_layout.addWidget(self.tree_display_view)
-        left_pane_layout.addWidget(self.grid_display_view) 
+        left_pane_layout.addWidget(self.grid_display_view)
         main_splitter.addWidget(self.left_pane_widget)
 
-        main_splitter.addWidget(self.center_pane_container) 
+        main_splitter.addWidget(self.center_pane_container)
 
-        main_splitter.setStretchFactor(0, 1) 
-        main_splitter.setStretchFactor(1, 3) 
-        main_splitter.setSizes([350, 850]) 
+        # Create metadata sidebar and add to splitter
+        self.metadata_sidebar = MetadataSidebar(self)
+        self.metadata_sidebar.hide_requested.connect(self._hide_metadata_sidebar)
+        main_splitter.addWidget(self.metadata_sidebar)
+
+        # Set stretch factors: left=1, center=3, right=1 (when visible)
+        main_splitter.setStretchFactor(0, 1)  # Left pane
+        main_splitter.setStretchFactor(1, 3)  # Center pane
+        main_splitter.setStretchFactor(2, 1)  # Right pane (sidebar)
+        
+        # Initially hide the sidebar by setting its size to 0
+        main_splitter.setSizes([350, 850, 0])
+        self.main_splitter = main_splitter  # Store reference for sidebar toggling
 
         main_layout.addWidget(main_splitter)
         main_layout.addWidget(self.bottom_bar)
@@ -896,6 +918,7 @@ class MainWindow(QMainWindow):
         self.detect_blur_action.triggered.connect(self._start_blur_detection_analysis)
         self.toggle_auto_edits_action.toggled.connect(self._handle_toggle_auto_edits)
         self.set_exiftool_path_action.triggered.connect(self._show_set_exiftool_path_dialog) # Connect new action
+        self.toggle_metadata_sidebar_action.toggled.connect(self._toggle_metadata_sidebar)
 
         # Connect signals from WorkerManager
         self.worker_manager.file_scan_found_files.connect(self._handle_files_found)
@@ -1248,28 +1271,48 @@ class MainWindow(QMainWindow):
         self._apply_rating(0)
 
     def _apply_rating(self, rating: int):
+        """Apply rating using refactored handler"""
         active_view = self._get_active_file_view()
-        if not active_view: return
+        if not active_view: 
+            return
+            
         current_index = active_view.currentIndex()
-        if not current_index.isValid(): return
+        if not current_index.isValid(): 
+            return
+            
         source_index = self.proxy_model.mapToSource(current_index)
-        if not source_index.isValid(): return
+        if not source_index.isValid(): 
+            return
+            
         item = self.file_system_model.itemFromIndex(source_index) 
-        if not item: return
+        if not item: 
+            return
         
         item_data = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(item_data, dict) or 'path' not in item_data: return 
+        if not isinstance(item_data, dict) or 'path' not in item_data: 
+            return 
+            
         file_path = item_data['path']
         
-        if not os.path.exists(file_path): return
+        if not os.path.exists(file_path): 
+            return
 
-        success = MetadataHandler.set_rating(file_path, rating, self.app_state.rating_disk_cache, self.app_state.exif_disk_cache)
+        # Use instance method instead of static method
+        metadata_handler = MetadataHandler()
+        success = metadata_handler.set_rating(
+            file_path, 
+            rating, 
+            self.app_state.rating_disk_cache, 
+            self.app_state.exif_disk_cache
+        )
+        
         if success:
             self._update_rating_display(rating)
-            self.app_state.rating_cache[file_path] = rating # Update in-memory cache as well
-            self._apply_filter() # Re-apply filter in case rating affects visibility
+            self.app_state.rating_cache[file_path] = rating
+            self._apply_filter()
         else:
             self.statusBar().showMessage(f"Failed to set rating for {os.path.basename(file_path)}", 5000)
+
 
     def _log_qmodelindex(self, index: QModelIndex, prefix: str = "") -> str:
         if not hasattr(self, 'proxy_model') or not hasattr(self, 'file_system_model'): # Models might not be initialized yet
@@ -1341,10 +1384,11 @@ class MainWindow(QMainWindow):
             if hasattr(self, '_update_grid_view_layout'):
                 self._update_grid_view_layout()
         
-        if self.loading_overlay: 
+        if self.loading_overlay:
             self.loading_overlay.update_position()
-
-        # event.accept() # Not needed for resizeEvent in QMainWindow from my recall
+        
+        # Sidebar positioning is now handled by the splitter automatically
+        # No need for manual position updates
 
     def keyPressEvent(self, event: QKeyEvent):
         # Arrow key and Delete navigation is now handled by the eventFilter for the views.
@@ -2336,10 +2380,19 @@ class MainWindow(QMainWindow):
 
         if len(selected_file_paths) == 1:
             self._display_single_image_preview(selected_file_paths[0], file_data_from_model)
+            # Update metadata sidebar if visible
+            if self.sidebar_visible:
+                self._update_sidebar_with_current_selection()
         elif len(selected_file_paths) >= 2:
             self._display_multi_selection_info(selected_file_paths)
-        else: 
+            # Show placeholder in sidebar for multiple selection
+            if self.sidebar_visible and self.metadata_sidebar:
+                self.metadata_sidebar.show_placeholder()
+        else:
             self._handle_no_selection_or_non_image()
+            # Show placeholder in sidebar for no selection
+            if self.sidebar_visible and self.metadata_sidebar:
+                self.metadata_sidebar.show_placeholder()
 
     def _apply_filter(self):
         search_text = self.search_input.text().lower()
@@ -2520,22 +2573,36 @@ class MainWindow(QMainWindow):
         self._apply_label(None)
 
     def _apply_label(self, label: str | None):
+        """Apply label using refactored handler"""
         active_view = self._get_active_file_view()
-        if not active_view: return
+        if not active_view: 
+            return
+            
         current_index = active_view.currentIndex()
-        if not current_index.isValid(): return
+        if not current_index.isValid(): 
+            return
+            
         source_index = self.proxy_model.mapToSource(current_index)
-        if not source_index.isValid(): return
+        if not source_index.isValid(): 
+            return
+            
         item = self.file_system_model.itemFromIndex(source_index) 
-        if not item: return
+        if not item: 
+            return
 
         item_data = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(item_data, dict) or 'path' not in item_data: return 
+        if not isinstance(item_data, dict) or 'path' not in item_data: 
+            return 
+            
         file_path = item_data['path']
         
-        if not os.path.exists(file_path): return
+        if not os.path.exists(file_path): 
+            return
 
-        success = MetadataHandler.set_label(file_path, label, self.app_state.exif_disk_cache)
+        # Use instance method instead of static method
+        metadata_handler = MetadataHandler()
+        success = metadata_handler.set_label(file_path, label, self.app_state.exif_disk_cache)
+        
         if success:
             self.app_state.label_cache[file_path] = label
             self._update_label_display(label)
@@ -3246,3 +3313,117 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logging.error(f"Error opening image in explorer '{file_path}': {e}", exc_info=True)
             self.statusBar().showMessage(f"Error showing file in explorer: {e}", 5000)
+
+    def _toggle_metadata_sidebar(self, checked: bool):
+        """Toggle the metadata sidebar visibility"""
+        if checked:
+            self._show_metadata_sidebar()
+        else:
+            self._hide_metadata_sidebar()
+    
+    def _show_metadata_sidebar(self):
+        """Show the metadata sidebar"""
+        if not self.metadata_sidebar:
+            return
+        
+        self.sidebar_visible = True
+        # Block signals to avoid signal loop
+        self.toggle_metadata_sidebar_action.blockSignals(True)
+        self.toggle_metadata_sidebar_action.setChecked(True)
+        self.toggle_metadata_sidebar_action.blockSignals(False)
+        
+        # Update sidebar with current selection
+        self._update_sidebar_with_current_selection()
+        
+        # Show sidebar instantly
+        self._set_sidebar_visibility(True)
+        
+        self.statusBar().showMessage("Image details sidebar shown. Press I to toggle.", 3000)
+    
+    def _hide_metadata_sidebar(self):
+        """Hide the metadata sidebar"""
+        if not self.metadata_sidebar or not self.sidebar_visible:
+            return
+        
+        self.sidebar_visible = False
+        # Block signals to avoid signal loop
+        self.toggle_metadata_sidebar_action.blockSignals(True)
+        self.toggle_metadata_sidebar_action.setChecked(False)
+        self.toggle_metadata_sidebar_action.blockSignals(False)
+        
+        # Hide sidebar instantly
+        self._set_sidebar_visibility(False)
+    
+    def _set_sidebar_visibility(self, show: bool):
+        """Show or hide the sidebar instantly"""
+        if not hasattr(self, 'main_splitter') or not self.metadata_sidebar:
+            return
+        
+        current_sizes = self.main_splitter.sizes()
+        if len(current_sizes) != 3:
+            return
+        
+        if show:
+            # Show sidebar with 320px width
+            target_width = 320
+            total_width = sum(current_sizes)
+            new_sizes = [
+                max(300, int((total_width - target_width) * 0.3)),  # Left pane
+                total_width - max(300, int((total_width - target_width) * 0.3)) - target_width,  # Center pane
+                target_width  # Sidebar
+            ]
+            self.main_splitter.setSizes(new_sizes)
+        else:
+            # Hide sidebar
+            new_sizes = [
+                current_sizes[0],  # Left pane unchanged
+                current_sizes[1] + current_sizes[2],  # Center gets sidebar space
+                0  # Sidebar hidden
+            ]
+            self.main_splitter.setSizes(new_sizes)
+    
+    def _update_sidebar_with_current_selection(self):
+        """Update sidebar with the currently selected image metadata"""
+        
+        if not self.metadata_sidebar or not self.sidebar_visible:
+            return
+        
+        active_view = self._get_active_file_view()
+        if not active_view:
+            self.metadata_sidebar.show_placeholder()
+            return
+        
+        current_proxy_idx = active_view.currentIndex()
+        if not current_proxy_idx.isValid() or not self._is_valid_image_item(current_proxy_idx):
+            self.metadata_sidebar.show_placeholder()
+            return
+        
+        # Get the selected file path and metadata
+        source_idx = self.proxy_model.mapToSource(current_proxy_idx)
+        item = self.file_system_model.itemFromIndex(source_idx)
+        if not item:
+            return
+        
+        item_data = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(item_data, dict) or 'path' not in item_data:
+            return
+        
+        file_path = item_data['path']
+        
+        if not os.path.exists(file_path):
+            return
+        
+        # Get cached metadata
+        metadata = self._get_cached_metadata_for_selection(file_path)
+        if not metadata:
+            return
+        
+        # Get detailed EXIF data for sidebar - now much cleaner
+        metadata_handler = MetadataHandler()  # Create instance
+        raw_exif = metadata_handler.get_detailed_metadata(file_path, self.app_state.exif_disk_cache)
+        
+        if not raw_exif:
+            raw_exif = {}
+        
+        # Update sidebar
+        self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
