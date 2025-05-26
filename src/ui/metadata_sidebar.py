@@ -307,22 +307,27 @@ class MetadataSidebar(QWidget):
         card = MetadataCard("File Information", "📁")
         
         if os.path.exists(self.current_image_path):
-            stat = os.stat(self.current_image_path)
-            
             # File name
             card.add_info_row("Name", os.path.basename(self.current_image_path))
             
-            # File size
-            size_mb = stat.st_size / (1024 * 1024)
-            if size_mb < 1:
-                size_str = f"{stat.st_size / 1024:.1f} KB"
+            # File size - prefer from metadata if available
+            file_size = self.raw_metadata.get("FileSize")
+            if file_size and file_size != "Unknown":
+                card.add_info_row("Size", str(file_size))
             else:
-                size_str = f"{size_mb:.2f} MB"
-            card.add_info_row("Size", size_str)
+                # Fallback to filesystem size
+                stat = os.stat(self.current_image_path)
+                size_mb = stat.st_size / (1024 * 1024)
+                if size_mb < 1:
+                    size_str = f"{stat.st_size / 1024:.1f} KB"
+                else:
+                    size_str = f"{size_mb:.2f} MB"
+                card.add_info_row("Size", size_str)
             
             # Modified date
+            stat = os.stat(self.current_image_path)
             mod_time = datetime.fromtimestamp(stat.st_mtime)
-            card.add_info_row("Modified", mod_time.strftime("%Y-%m-%d %H:%M"))
+            card.add_info_row("Modified", mod_time.strftime("%B %d, %Y"))
             
             # File extension
             ext = os.path.splitext(self.current_image_path)[1].upper()
@@ -360,39 +365,56 @@ class MetadataSidebar(QWidget):
             else:
                 card.add_info_row("Camera", "No camera data available")
         
-        # Lens information
-        lens = (self.raw_metadata.get("EXIF:LensModel") or 
-                self.raw_metadata.get("LensModel") or
-                self.raw_metadata.get("EXIF:LensInfo"))
-        card.add_info_row("Lens", lens or "Unknown")
-        
-        # Capture settings
-        focal_length = self.raw_metadata.get("EXIF:FocalLength")
-        if focal_length:
-            card.add_info_row("Focal Length", f"{focal_length}mm")
-        
-        aperture = (self.raw_metadata.get("EXIF:FNumber") or 
-                   self.raw_metadata.get("EXIF:ApertureValue"))
-        if aperture:
-            if isinstance(aperture, str) and aperture.startswith('f/'):
-                card.add_info_row("Aperture", aperture)
-            else:
-                card.add_info_row("Aperture", f"f/{aperture}")
-        
-        shutter_speed = (self.raw_metadata.get("EXIF:ShutterSpeedValue") or
-                        self.raw_metadata.get("EXIF:ExposureTime"))
-        if shutter_speed:
-            card.add_info_row("Shutter", str(shutter_speed))
-        
-        iso = (self.raw_metadata.get("EXIF:ISO") or 
-               self.raw_metadata.get("EXIF:ISOSpeedRatings"))
-        if iso:
-            card.add_info_row("ISO", str(iso))
-        
-        # Flash
-        flash = self.raw_metadata.get("EXIF:Flash")
-        if flash:
-            card.add_info_row("Flash", str(flash))
+        # Only show lens and camera settings if we have camera data
+        if make or model:
+            # Lens information
+            lens = (self.raw_metadata.get("LensModel") or
+                    self.raw_metadata.get("EXIF:LensModel") or
+                    self.raw_metadata.get("LensInfo") or
+                    self.raw_metadata.get("EXIF:LensInfo"))
+            if lens:
+                card.add_info_row("Lens", lens)
+            
+            # Capture settings
+            focal_length = (self.raw_metadata.get("FocalLength") or
+                          self.raw_metadata.get("EXIF:FocalLength"))
+            if focal_length:
+                # Clean up focal length display (remove 'mm' if already present)
+                fl_str = str(focal_length)
+                if not fl_str.endswith('mm'):
+                    fl_str += "mm"
+                card.add_info_row("Focal Length", fl_str)
+            
+            aperture = (self.raw_metadata.get("FNumber") or
+                       self.raw_metadata.get("EXIF:FNumber") or
+                       self.raw_metadata.get("EXIF:ApertureValue"))
+            if aperture:
+                if isinstance(aperture, str) and aperture.startswith('f/'):
+                    card.add_info_row("Aperture", aperture)
+                else:
+                    card.add_info_row("Aperture", f"f/{aperture}")
+            
+            shutter_speed = (self.raw_metadata.get("ExposureTime") or
+                           self.raw_metadata.get("EXIF:ExposureTime") or
+                           self.raw_metadata.get("EXIF:ShutterSpeedValue"))
+            if shutter_speed:
+                # Format shutter speed nicely
+                ss_str = str(shutter_speed)
+                if not ss_str.endswith('s') and '/' in ss_str:
+                    ss_str += "s"
+                card.add_info_row("Shutter Speed", ss_str)
+            
+            iso = (self.raw_metadata.get("ISO") or
+                   self.raw_metadata.get("EXIF:ISO") or
+                   self.raw_metadata.get("EXIF:ISOSpeedRatings"))
+            if iso:
+                card.add_info_row("ISO", f"ISO {iso}")
+            
+            # Flash
+            flash = (self.raw_metadata.get("Flash") or
+                    self.raw_metadata.get("EXIF:Flash"))
+            if flash:
+                card.add_info_row("Flash", str(flash))
         
         self.content_layout.insertWidget(-1, card)
     
@@ -419,20 +441,22 @@ class MetadataSidebar(QWidget):
                 card.add_info_row("Dimensions", f"{width} × {height}")
         
         # Color space
-        color_space = (self.raw_metadata.get("EXIF:ColorSpace") or
-                      self.raw_metadata.get("ColorSpace"))
+        color_space = (self.raw_metadata.get("ColorSpace") or
+                      self.raw_metadata.get("EXIF:ColorSpace"))
         if color_space:
             card.add_info_row("Color Space", str(color_space))
         
         # Orientation
-        orientation = self.raw_metadata.get("EXIF:Orientation")
+        orientation = (self.raw_metadata.get("Orientation") or
+                      self.raw_metadata.get("EXIF:Orientation"))
         if orientation:
             card.add_info_row("Orientation", str(orientation))
         
         # Bit depth
-        bits_per_sample = self.raw_metadata.get("EXIF:BitsPerSample")
+        bits_per_sample = (self.raw_metadata.get("BitsPerSample") or
+                          self.raw_metadata.get("EXIF:BitsPerSample"))
         if bits_per_sample:
-            card.add_info_row("Bit Depth", f"{bits_per_sample} bits")
+            card.add_info_row("Bit Depth", f"{bits_per_sample}-bit")
         
         self.content_layout.insertWidget(-1, card)
     
@@ -442,7 +466,7 @@ class MetadataSidebar(QWidget):
         
         # Date taken
         date_taken = None
-        for tag in ["EXIF:DateTimeOriginal", "EXIF:CreateDate", "XMP:DateCreated"]:
+        for tag in ["DateTimeOriginal", "EXIF:DateTimeOriginal", "CreateDate", "EXIF:CreateDate", "XMP:DateCreated"]:
             date_str = self.raw_metadata.get(tag)
             if date_str:
                 try:
@@ -455,28 +479,39 @@ class MetadataSidebar(QWidget):
                     continue
         
         if date_taken:
-            card.add_info_row("Date Taken", date_taken.strftime("%Y-%m-%d %H:%M:%S"))
-        
-        # GPS coordinates
-        gps_lat = self.raw_metadata.get("EXIF:GPSLatitude")
-        gps_lon = self.raw_metadata.get("EXIF:GPSLongitude")
-        if gps_lat and gps_lon:
-            card.add_info_row("GPS", f"{gps_lat}, {gps_lon}")
+            card.add_info_row("Date Taken", date_taken.strftime("%B %d, %Y at %H:%M"))
         
         # Exposure compensation
-        exposure_comp = self.raw_metadata.get("EXIF:ExposureCompensation")
+        exposure_comp = (self.raw_metadata.get("ExposureCompensation") or
+                        self.raw_metadata.get("EXIF:ExposureCompensation"))
         if exposure_comp:
-            card.add_info_row("Exposure Comp", f"{exposure_comp} EV")
+            exp_val = float(exposure_comp)
+            if exp_val > 0:
+                card.add_info_row("Exposure Comp", f"+{exp_val} EV")
+            elif exp_val < 0:
+                card.add_info_row("Exposure Comp", f"{exp_val} EV")
+            else:
+                card.add_info_row("Exposure Comp", "0 EV")
         
         # Metering mode
-        metering = self.raw_metadata.get("EXIF:MeteringMode")
+        metering = (self.raw_metadata.get("MeteringMode") or
+                   self.raw_metadata.get("EXIF:MeteringMode"))
         if metering:
-            card.add_info_row("Metering", str(metering))
+            card.add_info_row("Metering Mode", str(metering))
         
         # White balance
-        white_balance = self.raw_metadata.get("EXIF:WhiteBalance")
+        white_balance = (self.raw_metadata.get("WhiteBalance") or
+                        self.raw_metadata.get("EXIF:WhiteBalance"))
         if white_balance:
             card.add_info_row("White Balance", str(white_balance))
+        
+        # GPS coordinates
+        gps_lat = (self.raw_metadata.get("GPSLatitude") or
+                  self.raw_metadata.get("EXIF:GPSLatitude"))
+        gps_lon = (self.raw_metadata.get("GPSLongitude") or
+                  self.raw_metadata.get("EXIF:GPSLongitude"))
+        if gps_lat and gps_lon:
+            card.add_info_row("GPS Location", f"{gps_lat}, {gps_lon}")
         
         self.content_layout.insertWidget(-1, card)
     
