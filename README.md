@@ -81,7 +81,15 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
    The main entry point is [`src/main.py`](src/main.py:147).
 
    ```bash
-   python -m src.main
+   python -m src.main [--folder FOLDER_PATH] [--clear-cache]
+   
+   # Examples:
+   #   Open a specific folder at startup:
+   #       python -m src.main --folder "C:/Users/MyUser/Pictures"
+   #   Clear all caches before starting:
+   #       python -m src.main --clear-cache
+   #   Open folder and clear caches:
+   #       python -m src.main --folder "C:/Users/MyUser/Pictures" --clear-cache
    ```
 
 ## Usage
@@ -124,6 +132,9 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
      * `Esc`: If the search input is focused, unfocus it and return focus to the image list/grid.
    * **Similarity Group Navigation** (when "Group by Similarity" is active):
      * `1` through `9`: Jump to the 1st through 9th image within the currently selected/viewed similarity cluster.
+   * **Command-line Arguments**:
+     * `--folder FOLDER_PATH`: Open the specified folder immediately after startup
+     * `--clear-cache`: Clear all image and metadata caches before starting
 
 ## Future Enhancements (Ideas)
 

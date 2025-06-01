@@ -64,6 +64,16 @@ def clear_application_caches():
         SimilarityEngine.clear_embedding_cache()
     except Exception as e:
         print(f"Error clearing similarity cache: {e}")
+    
+    # Clear EXIF metadata cache using the existing ExifCache class
+    try:
+        from src.core.caching.exif_cache import ExifCache
+        exif_cache = ExifCache()
+        exif_cache.clear()
+        logging.info("EXIF metadata cache cleared.")
+    except Exception as e:
+        logging.error(f"Error clearing EXIF metadata cache: {e}")
+    
     logging.info(f"clear_application_caches - End: {time.perf_counter() - start_time:.4f}s")
     # print("Application caches cleared.") # Replaced by logging
 
@@ -108,8 +118,16 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 
 # --- End Global Exception Handler ---
 
+import argparse
+
 def main():
     """Main application entry point."""
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='PhotoRanker')
+    parser.add_argument('--folder', type=str, help='Open specified folder at startup')
+    parser.add_argument('--clear-cache', action='store_true', help='Clear all caches before starting')
+    args = parser.parse_args()
+
     # --- Aggressive Logging Setup ---
     # Get the root logger
     root_logger = logging.getLogger()
@@ -160,10 +178,12 @@ def main():
     main_start_time = time.perf_counter()
     logging.info("Application main - Start")
 
-    # Clear caches on startup
-    clear_application_caches_start_time = time.perf_counter()
-    # clear_application_caches() # Prevent clearing caches on startup for persistence
-    logging.info(f"Application main - clear_application_caches (startup) SKIPPED for persistence: {time.perf_counter() - clear_application_caches_start_time:.4f}s")
+    # Handle clear-cache argument
+    if args.clear_cache:
+        clear_application_caches_start_time = time.perf_counter()
+        clear_application_caches()
+        logging.info(f"Application main - clear_application_caches (via --clear-cache): {time.perf_counter() - clear_application_caches_start_time:.4f}s")
+
 
     app_instantiation_start_time = time.perf_counter()
     app = QApplication(sys.argv)
@@ -187,7 +207,7 @@ def main():
     # RatingHandler.start_exiftool() # Uncomment if using persistent handler
 
     mainwindow_instantiation_start_time = time.perf_counter()
-    window = MainWindow()
+    window = MainWindow(initial_folder=args.folder)
     logging.info(f"Application main - MainWindow instantiated: {time.perf_counter() - mainwindow_instantiation_start_time:.4f}s")
 
     # --- ExifTool Availability Check ---

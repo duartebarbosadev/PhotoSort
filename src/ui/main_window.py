@@ -147,10 +147,11 @@ class CustomFilterProxyModel(QSortFilterProxyModel):
 class MainWindow(QMainWindow):
     """Main application window."""
 
-    def __init__(self):
+    def __init__(self, initial_folder=None):
         super().__init__()
         init_start_time = time.perf_counter()
         logging.info("MainWindow.__init__ - Start")
+        self.initial_folder = initial_folder
 
         self.image_pipeline = ImagePipeline()
         logging.info(f"MainWindow.__init__ - ImagePipeline instantiated: {time.perf_counter() - init_start_time:.4f}s")
@@ -207,6 +208,10 @@ class MainWindow(QMainWindow):
         logging.info(f"MainWindow.__init__ - _update_image_info_label done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
 
         logging.info(f"MainWindow.__init__ - End (Total: {time.perf_counter() - init_start_time:.4f}s)")
+        
+        # Load initial folder if provided
+        if self.initial_folder and os.path.isdir(self.initial_folder):
+            QTimer.singleShot(0, lambda: self._load_folder(self.initial_folder))
 
     # Helper method to update the image information status label
     def _update_image_info_label(self, status_message_override: Optional[str] = None):
