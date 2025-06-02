@@ -30,7 +30,7 @@ from src.core.image_pipeline import ImagePipeline
 from src.core.image_file_ops import ImageFileOperations
 # from src.core.image_features.blur_detector import BlurDetector # Now managed by WorkerManager
 from src.core.metadata_processor import MetadataProcessor # New metadata processor
-from src.core.app_settings import get_preview_cache_size_gb, set_preview_cache_size_gb, get_preview_cache_size_bytes, get_exif_cache_size_mb, set_exif_cache_size_mb, get_exiftool_executable_path, set_exiftool_executable_path, get_default_exiftool_name # Import settings
+from src.core.app_settings import get_preview_cache_size_gb, set_preview_cache_size_gb, get_preview_cache_size_bytes, get_exif_cache_size_mb, set_exif_cache_size_mb # Import settings
 from PyQt6.QtWidgets import QFormLayout, QComboBox, QSizePolicy # For cache dialog
 from src.ui.app_state import AppState # Import AppState
 from src.core.caching.rating_cache import RatingCache # Import RatingCache for type hinting
@@ -354,53 +354,7 @@ class MainWindow(QMainWindow):
         self.toggle_auto_edits_action.setChecked(self.apply_auto_edits_enabled)
         self.toggle_auto_edits_action.setToolTip("Apply automatic brightness, contrast, and color adjustments to RAW previews and thumbnails.")
         settings_menu.addAction(self.toggle_auto_edits_action)
-        settings_menu.addSeparator() # Separator before ExifTool path setting
-        self.set_exiftool_path_action = QAction("Set ExifTool Path...", self)
-        self.set_exiftool_path_action.setToolTip("Specify the location of the ExifTool executable.")
-        settings_menu.addAction(self.set_exiftool_path_action)
         logging.debug(f"MainWindow._create_settings_menu - End: {time.perf_counter() - start_time:.4f}s")
-
-    def _show_set_exiftool_path_dialog(self):
-        current_path = get_exiftool_executable_path()
-        default_name = get_default_exiftool_name()
-
-        dialog_text = "Select the ExifTool executable.\n"
-        if current_path:
-            dialog_text += f"Current: {current_path}\n"
-        else:
-            dialog_text += "Current: Using system PATH (ExifTool not explicitly set).\n"
-        dialog_text += "If cleared, PhotoRanker will try to find ExifTool in your system's PATH."
-
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select ExifTool Executable",
-            os.path.dirname(current_path) if current_path else "", # Start in current dir if set
-            f"ExifTool Executable ({default_name});;All Files (*)"
-        )
-
-        if file_path:
-            if os.path.isfile(file_path) and (os.access(file_path, os.X_OK) or file_path.endswith(".exe")):
-                set_exiftool_executable_path(file_path)
-                self.statusBar().showMessage(f"ExifTool path set to: {file_path}", 5000)
-                logging.info(f"[MainWindow] ExifTool path set to: {file_path}")
-                # Optional: Ping ExifTool or re-verify functionality if critical
-            else:
-                QMessageBox.warning(self, "Invalid ExifTool Path",
-                                    f"The selected file '{file_path}' is not a valid or executable file.")
-                logging.warning(f"[MainWindow] Invalid ExifTool path selected: {file_path}")
-        elif file_path == "": # User pressed cancel or closed dialog
-            # Offer to clear the path if one was set
-            if current_path:
-                reply = QMessageBox.question(self, "Clear ExifTool Path?",
-                                             "No file selected. Do you want to clear the current ExifTool path and revert to using the system PATH?",
-                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                             QMessageBox.StandardButton.No)
-                if reply == QMessageBox.StandardButton.Yes:
-                    set_exiftool_executable_path(None)
-                    self.statusBar().showMessage("ExifTool path cleared. Will use system PATH.", 5000)
-                    logging.info("[MainWindow] ExifTool path cleared by user.")
-            else:
-                self.statusBar().showMessage("ExifTool path selection cancelled. No changes made.", 3000)
 
 
     def _show_cache_management_dialog(self):
@@ -623,14 +577,9 @@ class MainWindow(QMainWindow):
             self._handle_file_selection_changed() 
 
     def _show_about_dialog(self):
-        from src.core.app_settings import is_pytorch_cuda_available, get_exiftool_executable_path # <-- IMPORT FROM APP_SETTINGS
+        from src.core.app_settings import is_pytorch_cuda_available # <-- IMPORT FROM APP_SETTINGS
         clustering_info = "Clustering Algorithm: DBSCAN (scikit-learn)"
-        
-        exiftool_path_status = "Using system PATH"
-        configured_exiftool_path = get_exiftool_executable_path()
-        if configured_exiftool_path:
-            exiftool_path_status = f"Configured: {configured_exiftool_path}"
-        
+
         about_text = (
             "PhotoRanker\n"
             "Version: 1.0b\n"
@@ -638,7 +587,7 @@ class MainWindow(QMainWindow):
             "Technology Used:\n"
             f"  - Embeddings: SentenceTransformer (CLIP) on {'GPU (CUDA)' if is_pytorch_cuda_available() else 'CPU'}\n"
             f"  - {clustering_info}\n"
-            f"  - ExifTool: {exiftool_path_status}"
+            f"  - Metadata: pyexiv2"
         )
         QMessageBox.information(self, "About PhotoRanker", about_text)
 
@@ -922,7 +871,6 @@ class MainWindow(QMainWindow):
         self.analyze_similarity_action.triggered.connect(self._start_similarity_analysis)
         self.detect_blur_action.triggered.connect(self._start_blur_detection_analysis)
         self.toggle_auto_edits_action.toggled.connect(self._handle_toggle_auto_edits)
-        self.set_exiftool_path_action.triggered.connect(self._show_set_exiftool_path_dialog) # Connect new action
         self.toggle_metadata_sidebar_action.toggled.connect(self._toggle_metadata_sidebar)
 
         # Connect signals from WorkerManager
