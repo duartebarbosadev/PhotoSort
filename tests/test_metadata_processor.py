@@ -1,3 +1,4 @@
+import pyexiv2 # Must be first import
 import pytest
 import os
 import sys
