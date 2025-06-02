@@ -85,7 +85,38 @@ class ThumbnailCache:
                 del self._cache[key]
         except Exception as e:
             print(f"Error deleting item from thumbnail_cache for key {key}: {e}")
-    
+
+    def delete_all_for_path(self, file_path: str) -> None:
+        """
+        Deletes all cache entries for a specific file path.
+        
+        Args:
+            file_path: The file path to clear from cache.
+        """
+        try:
+            import unicodedata
+            import os
+            normalized_path = unicodedata.normalize('NFC', os.path.normpath(file_path))
+            
+            # Find all keys that match this file path
+            keys_to_delete = []
+            for key in self._cache:
+                if isinstance(key, tuple) and len(key) >= 1:
+                    # Normalize both paths for comparison to handle Unicode differences
+                    key_path = unicodedata.normalize('NFC', os.path.normpath(key[0]))
+                    if key_path == normalized_path:
+                        keys_to_delete.append(key)
+            
+            # Delete the matching keys
+            for key in keys_to_delete:
+                del self._cache[key]
+                
+            if keys_to_delete:
+                print(f"Deleted {len(keys_to_delete)} thumbnail cache entries for {os.path.basename(file_path)}")
+                
+        except Exception as e:
+            print(f"Error deleting thumbnail cache entries for path {file_path}: {e}")
+
     def clear(self) -> None:
         """Clears all items from the cache."""
         try:

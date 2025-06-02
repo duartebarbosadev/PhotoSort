@@ -10,6 +10,7 @@ import concurrent.futures
 
 from src.core.caching.rating_cache import RatingCache
 from src.core.caching.exif_cache import ExifCache
+from src.core.image_processing.image_rotator import ImageRotator, RotationDirection
 
 # Preferred EXIF/XMP date tags in order of preference
 DATE_TAGS_PREFERENCE: List[str] = [
@@ -546,3 +547,73 @@ class MetadataProcessor:
                exif_disk_cache.set(norm_path, empty_result)
                logging.warning(f"[MetadataProcessor] Cached empty result for {os.path.basename(norm_path)}")
            return empty_result
+
+   @staticmethod
+   def rotate_image(image_path: str, direction: RotationDirection,
+                   update_metadata_only: bool = False,
+                   exif_disk_cache: Optional[ExifCache] = None) -> bool:
+       """
+       Rotate an image using the ImageRotator.
+       Invalidates exif_disk_cache after rotation.
+       
+       Args:
+           image_path: Path to the image file
+           direction: Rotation direction ('clockwise', 'counterclockwise', '180')
+           update_metadata_only: If True, only update orientation metadata without rotating pixels
+           exif_disk_cache: Optional cache to invalidate after rotation
+       
+       Returns:
+           True if rotation was successful, False otherwise
+       """
+       if not os.path.isfile(image_path):
+           logging.error(f"File not found when rotating: {image_path}")
+           return False
+           
+       norm_path = unicodedata.normalize('NFC', os.path.normpath(image_path))
+       
+       try:
+           rotator = ImageRotator()
+           success, message = rotator.rotate_image(norm_path, direction, update_metadata_only)
+           
+           if success:
+               logging.info(f"[MetadataProcessor] {message}")
+               # Invalidate cache since image metadata has changed
+               if exif_disk_cache:
+                   exif_disk_cache.delete(norm_path)
+                   logging.debug(f"[MetadataProcessor] Invalidated cache for rotated image: {os.path.basename(norm_path)}")
+           else:
+               logging.error(f"[MetadataProcessor] {message}")
+           
+           return success
+           
+       except Exception as e:
+           logging.error(f"[MetadataProcessor] Error rotating {os.path.basename(norm_path)}: {e}", exc_info=True)
+           return False
+
+   @staticmethod
+   def rotate_clockwise(image_path: str, update_metadata_only: bool = False,
+                       exif_disk_cache: Optional[ExifCache] = None) -> bool:
+       """Rotate image 90° clockwise."""
+       return MetadataProcessor.rotate_image(image_path, 'clockwise', update_metadata_only, exif_disk_cache)
+
+   @staticmethod
+   def rotate_counterclockwise(image_path: str, update_metadata_only: bool = False,
+                              exif_disk_cache: Optional[ExifCache] = None) -> bool:
+       """Rotate image 90° counterclockwise."""
+       return MetadataProcessor.rotate_image(image_path, 'counterclockwise', update_metadata_only, exif_disk_cache)
+
+   @staticmethod
+   def rotate_180(image_path: str, update_metadata_only: bool = False,
+                 exif_disk_cache: Optional[ExifCache] = None) -> bool:
+       """Rotate image 180°."""
+       return MetadataProcessor.rotate_image(image_path, '180', update_metadata_only, exif_disk_cache)
+
+   @staticmethod
+   def is_rotation_supported(image_path: str) -> bool:
+       """Check if rotation is supported for the given image format."""
+       try:
+           rotator = ImageRotator()
+           return rotator.is_rotation_supported(image_path)
+       except Exception as e:
+           logging.error(f"[MetadataProcessor] Error checking rotation support for {os.path.basename(image_path)}: {e}")
+           return False

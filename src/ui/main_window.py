@@ -356,6 +356,35 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(self.toggle_auto_edits_action)
         logging.debug(f"MainWindow._create_settings_menu - End: {time.perf_counter() - start_time:.4f}s")
 
+    def _create_image_menu(self):
+        """Create the Image menu with rotation actions (called after actions are created)."""
+        start_time = time.perf_counter()
+        logging.debug("MainWindow._create_image_menu - Start")
+        
+        # Insert Image menu before Help menu
+        menu_bar = self.menuBar()
+        help_menu = None
+        
+        # Find the Help menu to insert before it
+        for action in menu_bar.actions():
+            if action.text() == "&Help":
+                help_menu = action
+                break
+        
+        if help_menu:
+            image_menu = QMenu("&Image", self)
+            menu_bar.insertMenu(help_menu, image_menu)
+        else:
+            # Fallback: add at the end
+            image_menu = menu_bar.addMenu("&Image")
+        
+        # Add rotation actions to menu
+        image_menu.addAction(self.rotate_clockwise_action)
+        image_menu.addAction(self.rotate_counterclockwise_action)
+        image_menu.addAction(self.rotate_180_action)
+        
+        logging.debug(f"MainWindow._create_image_menu - End: {time.perf_counter() - start_time:.4f}s")
+
 
     def _show_cache_management_dialog(self):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QFrame, QGridLayout, QSpacerItem
@@ -919,7 +948,30 @@ class MainWindow(QMainWindow):
         self.find_action.setShortcut(QKeySequence.StandardKey.Find)
         self.find_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self.addAction(self.find_action)
+        
+        # Rotation shortcuts
+        self.rotate_clockwise_action = QAction("Rotate Clockwise", self)
+        self.rotate_clockwise_action.setShortcut(QKeySequence("Ctrl+R"))
+        self.rotate_clockwise_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.rotate_clockwise_action.triggered.connect(self._rotate_current_image_clockwise)
+        self.addAction(self.rotate_clockwise_action)
+        
+        self.rotate_counterclockwise_action = QAction("Rotate Counterclockwise", self)
+        self.rotate_counterclockwise_action.setShortcut(QKeySequence("Ctrl+Shift+R"))
+        self.rotate_counterclockwise_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.rotate_counterclockwise_action.triggered.connect(self._rotate_current_image_counterclockwise)
+        self.addAction(self.rotate_counterclockwise_action)
+        
+        self.rotate_180_action = QAction("Rotate 180°", self)
+        self.rotate_180_action.setShortcut(QKeySequence("Ctrl+Alt+R"))
+        self.rotate_180_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.rotate_180_action.triggered.connect(self._rotate_current_image_180)
+        self.addAction(self.rotate_180_action)
+        
         logging.debug(f"MainWindow._create_actions - End: {time.perf_counter() - start_time:.4f}s")
+        
+        # Create Image menu now that actions are available
+        self._create_image_menu()
 
     def _connect_rating_actions(self):
         for rating_value, action in self.rating_actions.items():
@@ -3235,6 +3287,79 @@ class MainWindow(QMainWindow):
             if not os.path.exists(file_path): return
 
             menu = QMenu(self)
+            
+            # Check if rotation is supported for this image
+            rotation_supported = MetadataProcessor.is_rotation_supported(file_path)
+            
+            if rotation_supported:
+                file_ext = os.path.splitext(file_path)[1].lower()
+                raw_formats = ['.arw', '.cr2', '.nef', '.dng', '.orf', '.raf', '.rw2', '.pef', '.srw']
+                is_raw_format = file_ext in raw_formats
+                
+                # Add rotation submenu
+                rotate_menu = menu.addMenu("Rotate Image")
+                
+                if is_raw_format:
+                    # For RAW files, only show metadata-only rotation
+                    rotate_cw_action = QAction("Rotate 90° Clockwise (Metadata Only)", self)
+                    rotate_cw_action.setShortcut("Ctrl+R")
+                    rotate_cw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_clockwise(path))
+                    rotate_menu.addAction(rotate_cw_action)
+                    
+                    rotate_ccw_action = QAction("Rotate 90° Counterclockwise (Metadata Only)", self)
+                    rotate_ccw_action.setShortcut("Ctrl+Shift+R")
+                    rotate_ccw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_counterclockwise(path))
+                    rotate_menu.addAction(rotate_ccw_action)
+                    
+                    rotate_180_action = QAction("Rotate 180° (Metadata Only)", self)
+                    rotate_180_action.setShortcut("Ctrl+Alt+R")
+                    rotate_180_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_180(path))
+                    rotate_menu.addAction(rotate_180_action)
+                else:
+                    # For non-RAW files, show pixel rotation options
+                    if file_ext in ['.jpg', '.jpeg']:
+                        cw_text = "Rotate 90° Clockwise (Lossless if possible)"
+                        ccw_text = "Rotate 90° Counterclockwise (Lossless if possible)"
+                        r180_text = "Rotate 180° (Lossless if possible)"
+                    else:
+                        cw_text = "Rotate 90° Clockwise (Re-encodes image)"
+                        ccw_text = "Rotate 90° Counterclockwise (Re-encodes image)"
+                        r180_text = "Rotate 180° (Re-encodes image)"
+                    
+                    rotate_cw_action = QAction(cw_text, self)
+                    rotate_cw_action.setShortcut("Ctrl+R")
+                    rotate_cw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_clockwise(path))
+                    rotate_menu.addAction(rotate_cw_action)
+                    
+                    rotate_ccw_action = QAction(ccw_text, self)
+                    rotate_ccw_action.setShortcut("Ctrl+Shift+R")
+                    rotate_ccw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_counterclockwise(path))
+                    rotate_menu.addAction(rotate_ccw_action)
+                    
+                    rotate_180_action = QAction(r180_text, self)
+                    rotate_180_action.setShortcut("Ctrl+Alt+R")
+                    rotate_180_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_180(path))
+                    rotate_menu.addAction(rotate_180_action)
+                    
+                    rotate_menu.addSeparator()
+                    
+                    # Metadata-only rotation option for non-RAW files
+                    rotate_meta_menu = rotate_menu.addMenu("Update Orientation Metadata Only")
+                    
+                    meta_cw_action = QAction("Mark as Rotated 90° Clockwise", self)
+                    meta_cw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_metadata_only(path, 'clockwise'))
+                    rotate_meta_menu.addAction(meta_cw_action)
+                    
+                    meta_ccw_action = QAction("Mark as Rotated 90° Counterclockwise", self)
+                    meta_ccw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_metadata_only(path, 'counterclockwise'))
+                    rotate_meta_menu.addAction(meta_ccw_action)
+                    
+                    meta_180_action = QAction("Mark as Rotated 180°", self)
+                    meta_180_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_metadata_only(path, '180'))
+                    rotate_meta_menu.addAction(meta_180_action)
+                
+                menu.addSeparator()
+            
             show_in_explorer_action = QAction(QIcon.fromTheme("folder-open", self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)), "Show in Explorer", self)
             
             # Use a lambda to pass the file_path to the slot
@@ -3394,3 +3519,148 @@ class MainWindow(QMainWindow):
         # Update sidebar
         logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Updating sidebar for {os.path.basename(file_path)}")
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
+
+    def _rotate_image_clockwise(self, file_path: str):
+        """Rotate the selected image 90° clockwise."""
+        self._perform_image_rotation(file_path, 'clockwise')
+
+    def _rotate_image_counterclockwise(self, file_path: str):
+        """Rotate the selected image 90° counterclockwise."""
+        self._perform_image_rotation(file_path, 'counterclockwise')
+
+    def _rotate_image_180(self, file_path: str):
+        """Rotate the selected image 180°."""
+        self._perform_image_rotation(file_path, '180')
+
+    def _rotate_image_metadata_only(self, file_path: str, direction: str):
+        """Update only the orientation metadata without rotating pixels."""
+        self._perform_image_rotation(file_path, direction, metadata_only=True)
+
+    def _perform_image_rotation(self, file_path: str, direction: str, metadata_only: bool = False):
+        """
+        Perform image rotation with UI feedback and cache invalidation.
+        
+        Args:
+            file_path: Path to the image file
+            direction: Rotation direction ('clockwise', 'counterclockwise', '180')
+            metadata_only: If True, only update metadata without rotating pixels
+        """
+        if not os.path.exists(file_path):
+            self.statusBar().showMessage("Error: File not found", 3000)
+            return
+
+        filename = os.path.basename(file_path)
+        operation = "Updating orientation metadata" if metadata_only else "Rotating image"
+        
+        # Show progress
+        self.statusBar().showMessage(f"{operation}: {filename}...", 0)
+        QApplication.processEvents()
+
+        try:
+            # Perform rotation
+            success = MetadataProcessor.rotate_image(
+                file_path,
+                direction,
+                update_metadata_only=metadata_only,
+                exif_disk_cache=self.app_state.exif_disk_cache
+            )
+
+            if success:
+                # Clear relevant caches
+                if hasattr(self.app_state, 'rating_cache'):
+                    # Rating cache doesn't need clearing, but preview/thumbnail caches do
+                    pass
+                
+                # Clear image caches so the rotated image will be reloaded
+                self.image_pipeline.preview_cache.delete_all_for_path(file_path)
+                self.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
+                
+                # Force refresh of thumbnails in the view
+                self._refresh_visible_items_icons()
+                
+                # Refresh the current preview if this is the selected image
+                active_view = self._get_active_file_view()
+                if active_view:
+                    current_proxy_idx = active_view.currentIndex()
+                    if current_proxy_idx.isValid() and self._is_valid_image_item(current_proxy_idx):
+                        source_idx = self.proxy_model.mapToSource(current_proxy_idx)
+                        item = self.file_system_model.itemFromIndex(source_idx)
+                        if item:
+                            item_data = item.data(Qt.ItemDataRole.UserRole)
+                            if isinstance(item_data, dict) and item_data.get('path') == file_path:
+                                # This is the currently selected image, refresh the preview immediately
+                                self._refresh_current_selection_preview()
+                                # Also trigger a fresh load of the preview with a slight delay to ensure cache is cleared
+                                QTimer.singleShot(100, lambda: self._display_single_image_preview(file_path, item_data))
+                
+                # Update sidebar if visible and showing this image
+                if self.sidebar_visible and hasattr(self, 'metadata_sidebar'):
+                    self._update_sidebar_with_current_selection()
+                
+                # Success message
+                rotation_desc = {
+                    'clockwise': '90° clockwise',
+                    'counterclockwise': '90° counterclockwise',
+                    '180': '180°'
+                }.get(direction, direction)
+                
+                if metadata_only:
+                    message = f"Updated orientation metadata for {filename} ({rotation_desc})"
+                else:
+                    message = f"Rotated {filename} {rotation_desc}"
+                
+                self.statusBar().showMessage(message, 5000)
+                logging.info(f"[MainWindow] {message}")
+
+            else:
+                error_msg = f"Failed to rotate {filename}"
+                self.statusBar().showMessage(error_msg, 5000)
+                logging.error(f"[MainWindow] {error_msg}")
+
+        except Exception as e:
+            error_msg = f"Error rotating {filename}: {str(e)}"
+            self.statusBar().showMessage(error_msg, 5000)
+            logging.error(f"[MainWindow] {error_msg}", exc_info=True)
+
+    def _rotate_current_image_clockwise(self):
+        """Rotate the currently selected image 90° clockwise (for keyboard shortcut)."""
+        file_path = self._get_current_selected_image_path()
+        if file_path:
+            self._rotate_image_clockwise(file_path)
+
+    def _rotate_current_image_counterclockwise(self):
+        """Rotate the currently selected image 90° counterclockwise (for keyboard shortcut)."""
+        file_path = self._get_current_selected_image_path()
+        if file_path:
+            self._rotate_image_counterclockwise(file_path)
+
+    def _rotate_current_image_180(self):
+        """Rotate the currently selected image 180° (for keyboard shortcut)."""
+        file_path = self._get_current_selected_image_path()
+        if file_path:
+            self._rotate_image_180(file_path)
+
+    def _get_current_selected_image_path(self) -> Optional[str]:
+        """Get the file path of the currently selected image."""
+        active_view = self._get_active_file_view()
+        if not active_view:
+            return None
+
+        current_proxy_idx = active_view.currentIndex()
+        if not current_proxy_idx.isValid() or not self._is_valid_image_item(current_proxy_idx):
+            return None
+
+        source_idx = self.proxy_model.mapToSource(current_proxy_idx)
+        item = self.file_system_model.itemFromIndex(source_idx)
+        if not item:
+            return None
+
+        item_data = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(item_data, dict) or 'path' not in item_data:
+            return None
+
+        file_path = item_data['path']
+        if not os.path.exists(file_path):
+            return None
+
+        return file_path
