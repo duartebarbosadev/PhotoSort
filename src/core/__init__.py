@@ -1,4 +1,10 @@
 # Core logic package
+# Initialize pyexiv2 before anything else
+try:
+    import pyexiv2
+    pyexiv2.set_log_level(0)
+except ImportError:
+    pass
 
 from .app_settings import (
     get_preview_cache_size_gb,

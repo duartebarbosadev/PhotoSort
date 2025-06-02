@@ -197,6 +197,11 @@ class ImageRotator:
         if not os.path.isfile(image_path):
             return False, f"File not found: {image_path}"
         
+        # Validate rotation direction
+        valid_directions = ['clockwise', 'counterclockwise', '180']
+        if direction not in valid_directions:
+            return False, f"Invalid rotation direction: {direction}. Must be one of {valid_directions}"
+        
         file_ext = Path(image_path).suffix.lower()
         filename = os.path.basename(image_path)
         
