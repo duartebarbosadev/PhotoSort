@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox # QMessageBox for global e
 from src.ui.main_window import MainWindow
 # from src.core.rating_fetcher import clear_metadata_cache # Removed: No longer used
 from src.core.image_pipeline import ImagePipeline # For clearing image caches
-from src.core.rating_handler import MetadataHandler # For ExifTool check
+from src.core.metadata_processor import MetadataProcessor # For metadata processing
 # from src.core.similarity_engine import SimilarityEngine # For clearing embedding cache <-- Removed top-level import
 
 def load_stylesheet(filename="src/ui/dark_theme.qss"):
@@ -214,7 +214,7 @@ def main():
     exiftool_check_start_time = time.perf_counter()
     exiftool_available = False
     while not exiftool_available:
-        exiftool_available = MetadataHandler.check_exiftool_availability()
+        exiftool_available = MetadataProcessor.check_availability()
         if exiftool_available:
             logging.info("ExifTool found and working.")
             break

@@ -29,7 +29,7 @@ from sklearn.metrics.pairwise import cosine_similarity # Add cosine_similarity i
 from src.core.image_pipeline import ImagePipeline
 from src.core.image_file_ops import ImageFileOperations
 # from src.core.image_features.blur_detector import BlurDetector # Now managed by WorkerManager
-from src.core.rating_handler import MetadataHandler # Renamed from RatingHandler
+from src.core.metadata_processor import MetadataProcessor # New metadata processor
 from src.core.app_settings import get_preview_cache_size_gb, set_preview_cache_size_gb, get_preview_cache_size_bytes, get_exif_cache_size_mb, set_exif_cache_size_mb, get_exiftool_executable_path, set_exiftool_executable_path, get_default_exiftool_name # Import settings
 from PyQt6.QtWidgets import QFormLayout, QComboBox, QSizePolicy # For cache dialog
 from src.ui.app_state import AppState # Import AppState
@@ -1303,8 +1303,7 @@ class MainWindow(QMainWindow):
             return
 
         # Use instance method instead of static method
-        metadata_handler = MetadataHandler()
-        success = metadata_handler.set_rating(
+        success = MetadataProcessor.set_rating(
             file_path, 
             rating, 
             self.app_state.rating_disk_cache, 
@@ -2605,8 +2604,7 @@ class MainWindow(QMainWindow):
             return
 
         # Use instance method instead of static method
-        metadata_handler = MetadataHandler()
-        success = metadata_handler.set_label(file_path, label, self.app_state.exif_disk_cache)
+        success = MetadataProcessor.set_label(file_path, label, self.app_state.exif_disk_cache)
         
         if success:
             self.app_state.label_cache[file_path] = label
@@ -3391,15 +3389,18 @@ class MainWindow(QMainWindow):
         """Update sidebar with the currently selected image metadata"""
         
         if not self.metadata_sidebar or not self.sidebar_visible:
+            logging.debug("[MainWindow] _update_sidebar_with_current_selection: Sidebar not available or not visible")
             return
         
         active_view = self._get_active_file_view()
         if not active_view:
+            logging.debug("[MainWindow] _update_sidebar_with_current_selection: No active view")
             self.metadata_sidebar.show_placeholder()
             return
         
         current_proxy_idx = active_view.currentIndex()
         if not current_proxy_idx.isValid() or not self._is_valid_image_item(current_proxy_idx):
+            logging.debug("[MainWindow] _update_sidebar_with_current_selection: No valid image item selected")
             self.metadata_sidebar.show_placeholder()
             return
         
@@ -3407,28 +3408,41 @@ class MainWindow(QMainWindow):
         source_idx = self.proxy_model.mapToSource(current_proxy_idx)
         item = self.file_system_model.itemFromIndex(source_idx)
         if not item:
+            logging.warning("[MainWindow] _update_sidebar_with_current_selection: No item from source index")
             return
         
         item_data = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(item_data, dict) or 'path' not in item_data:
+            logging.warning("[MainWindow] _update_sidebar_with_current_selection: Invalid item data")
             return
         
         file_path = item_data['path']
+        file_ext = os.path.splitext(file_path)[1].lower()
+        
+        logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Processing {os.path.basename(file_path)} (extension: {file_ext})")
         
         if not os.path.exists(file_path):
+            logging.error(f"[MainWindow] _update_sidebar_with_current_selection: File does not exist: {file_path}")
             return
         
         # Get cached metadata
         metadata = self._get_cached_metadata_for_selection(file_path)
         if not metadata:
+            logging.warning(f"[MainWindow] _update_sidebar_with_current_selection: No cached metadata for {os.path.basename(file_path)}")
             return
         
+        logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Got cached metadata for {os.path.basename(file_path)}: {metadata}")
+        
         # Get detailed EXIF data for sidebar - now much cleaner
-        metadata_handler = MetadataHandler()  # Create instance
-        raw_exif = metadata_handler.get_detailed_metadata(file_path, self.app_state.exif_disk_cache)
+        logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Calling get_detailed_metadata for {os.path.basename(file_path)}")
+        raw_exif = MetadataProcessor.get_detailed_metadata(file_path, self.app_state.exif_disk_cache)
         
         if not raw_exif:
+            logging.warning(f"[MainWindow] _update_sidebar_with_current_selection: No raw EXIF data returned for {os.path.basename(file_path)}")
             raw_exif = {}
+        else:
+            logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Got {len(raw_exif)} raw EXIF keys for {os.path.basename(file_path)}")
         
         # Update sidebar
+        logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Updating sidebar for {os.path.basename(file_path)}")
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)

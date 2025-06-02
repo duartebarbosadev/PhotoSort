@@ -11,7 +11,7 @@ from .app_settings import (
 )
 
 from .file_scanner import FileScanner, SUPPORTED_EXTENSIONS
-from .rating_handler import MetadataHandler # Renamed from RatingHandler
+from .metadata_processor import MetadataProcessor # New metadata processor
 from .app_settings import DEFAULT_CLIP_MODEL, is_pytorch_cuda_available # Import from app_settings
 
 # Image processing and caching sub-packages/modules
@@ -39,8 +39,8 @@ __all__ = [
     # file_scanner
     "FileScanner",
     "SUPPORTED_EXTENSIONS",
-    # rating_handler (now metadata_handler)
-    "MetadataHandler",
+    # metadata_processor (was rating_handler)
+    "MetadataProcessor",
     # similarity_engine
     # "SimilarityEngine", # Removed as it's no longer directly imported here
     "DEFAULT_CLIP_MODEL",

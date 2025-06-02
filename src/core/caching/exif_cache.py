@@ -73,12 +73,15 @@ class ExifCache:
             value (Dict[str, Any]): The metadata dictionary to cache.
         """
         if not isinstance(value, dict):
-            print(f"Error: Attempted to cache non-dictionary object for key {key}. Type: {type(value)}")
+            logging.error(f"[ExifCache] Attempted to cache non-dictionary object for key {os.path.basename(key)}. Type: {type(value)}")
             return
         try:
+            file_ext = os.path.splitext(key)[1].lower()
+            if file_ext == '.arw':
+                logging.info(f"[ExifCache] Caching ARW metadata for {os.path.basename(key)}: {len(value)} keys")
             self._cache.set(key, value)
         except Exception as e:
-            print(f"Error setting item in exif_cache for key {key}: {e}")
+            logging.error(f"[ExifCache] Error setting item in exif_cache for key {os.path.basename(key)}: {e}")
 
     def delete(self, key: str) -> None:
         """

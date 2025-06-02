@@ -5,11 +5,11 @@ import traceback # Keep for error logging in run_load
 from PyQt6.QtCore import QObject, pyqtSignal
 from typing import List, Dict, Any, Optional
 
-from src.core.rating_handler import MetadataHandler
+from src.core.metadata_processor import MetadataProcessor
 from src.core.caching.rating_cache import RatingCache
 from src.ui.app_state import AppState
 
-# DEFAULT_METADATA_WORKERS is no longer needed as batching is handled by MetadataHandler
+# DEFAULT_METADATA_WORKERS is no longer needed as batching is handled by MetadataProcessor
 
 class RatingLoaderWorker(QObject):
     """
@@ -63,7 +63,7 @@ class RatingLoaderWorker(QObject):
 
         try:
             # Single batch call to the refactored MetadataHandler
-            batch_results = MetadataHandler.get_batch_display_metadata(
+            batch_results = MetadataProcessor.get_batch_display_metadata(
                 image_paths_to_process,
                 self._rating_disk_cache,
                 self._app_state.exif_disk_cache
