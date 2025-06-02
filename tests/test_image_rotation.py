@@ -39,7 +39,7 @@ class TestImageRotator:
     @classmethod
     def setup_class(cls):
         """Setup test environment with sample images."""
-        cls.test_folder = "tests/sample"
+        cls.test_folder = "tests/samples"
         cls.sample_images = []
         
         # Find test images
@@ -190,7 +190,7 @@ class TestMetadataProcessorRotation:
     @classmethod
     def setup_class(cls):
         """Setup test environment."""
-        cls.test_folder = "tests/sample"
+        cls.test_folder = "tests/samples"
         cls.sample_images = []
         
         if os.path.exists(cls.test_folder):
@@ -337,7 +337,7 @@ class TestRotationIntegration:
     @classmethod
     def setup_class(cls):
         """Setup test environment."""
-        cls.test_folder = "tests/sample"
+        cls.test_folder = "tests/samples"
         cls.sample_images = []
         
         if os.path.exists(cls.test_folder):

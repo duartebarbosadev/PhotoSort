@@ -57,7 +57,7 @@ class TestMetadataProcessor:
     @classmethod
     def setup_class(cls):
         """Setup test environment with sample images."""
-        cls.test_folder = "tests/sample"
+        cls.test_folder = "tests/samples"
         cls.sample_images = []
         
         # Find all images in the test folder

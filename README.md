@@ -41,13 +41,6 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 ### Prerequisites
 
 * **Python 3.x**: Download from [python.org](https://www.python.org/).
-* **ExifTool**: Essential for reading and writing metadata (ratings, labels).
-  * Download the ExifTool executable from the [official ExifTool website](https://exiftool.org/).
-  * **Configuration**:
-    * **Option 1: Set Path in Application**: Go to "Settings" > "Set ExifTool Path..." within PhotoRanker to directly specify the location of your `exiftool` (or `exiftool.exe`) executable.
-    * **Option 2 (System PATH)**:
-      * **Windows**: Rename the downloaded `exiftool(-k).exe` to `exiftool.exe` and place it in a directory that is part of your system's PATH (e.g., `C:\Windows`), or add its directory to the PATH environment variable.
-      * **macOS/Linux**: Place the `exiftool` executable in a directory included in your system's PATH (e.g., `/usr/local/bin/`). Ensure it's executable (`chmod +x exiftool`).
 * **jpegtran (Optional, for Lossless JPEG Rotation)**:
   * **Windows**: Download from [jpegclub.org](http://jpegclub.org/jpegtran/) or install via Chocolatey: `choco install libjpeg-turbo`
   * **macOS**: `brew install jpeg-turbo`
@@ -74,7 +67,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 3. **Install dependencies:**
-   Ensure your [`requirements.txt`](requirements.txt) is up-to-date with all necessary packages (PyQt6, Pillow, rawpy, opencv-python, sentence-transformers, scikit-learn, numpy, send2trash, exiftool (PyExifTool).
+   Ensure your [`requirements.txt`](requirements.txt) is up-to-date with all necessary packages (PyQt6, Pillow, rawpy, opencv-python, sentence-transformers, scikit-learn, numpy, send2trash, pyexiv2
 
    ```bash
    pip install -r requirements.txt
@@ -84,7 +77,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
    ```bash
    python -m src.main [--folder FOLDER_PATH] [--clear-cache]
-   
+
    # Examples:
    #   Open a specific folder at startup:
    #       python -m src.main --folder "C:/Users/MyUser/Pictures"
@@ -129,28 +122,28 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
    * Access "Settings" > "Manage Cache" to clear thumbnail/preview caches or adjust the preview cache size limit.
    * Toggle "Enable Auto RAW Edits" for automatic adjustments to RAW previews.
-9. **Keyboard Shortcuts**: Speed up your workflow with these shortcuts:
+10. **Keyboard Shortcuts**: Speed up your workflow with these shortcuts:
 
-   * **Rating**:
-     * `CTRL+0` - `CTRL+5`: Assign 0 to 5 stars to the selected image.
-   * **Navigation**:
-     * `Down Arrow/Up Arrow`: Navigate to the next/previous image.
-     * `Left Arrow/Right Arrow`: Navigate to the previous/next image of the same group (doesn't jump groups automatically).
-   * **File Operations**:
-     * `Delete`: Move the selected image to the system trash.
-   * **Image Rotation**:
-     * `Ctrl+R`: Rotate selected image 90° clockwise.
-     * `Ctrl+Shift+R`: Rotate selected image 90° counterclockwise.
-     * `Ctrl+Alt+R`: Rotate selected image 180°.
-   * **Interface**:
-     * `Ctrl+F` (or `Cmd+F` on macOS): Focus the search input field.
-     * `Esc`: If the search input is focused, unfocus it and return focus to the image list/grid.
-     * `I`: Toggle image details sidebar.
-   * **Similarity Group Navigation** (when "Group by Similarity" is active):
-     * `1` through `9`: Jump to the 1st through 9th image within the currently selected/viewed similarity cluster.
-   * **Command-line Arguments**:
-     * `--folder FOLDER_PATH`: Open the specified folder immediately after startup
-     * `--clear-cache`: Clear all image and metadata caches before starting
+    * **Rating**:
+      * `CTRL+0` - `CTRL+5`: Assign 0 to 5 stars to the selected image.
+    * **Navigation**:
+      * `Down Arrow/Up Arrow`: Navigate to the next/previous image.
+      * `Left Arrow/Right Arrow`: Navigate to the previous/next image of the same group (doesn't jump groups automatically).
+    * **File Operations**:
+      * `Delete`: Move the selected image to the system trash.
+    * **Image Rotation**:
+      * `Ctrl+R`: Rotate selected image 90° clockwise.
+      * `Ctrl+Shift+R`: Rotate selected image 90° counterclockwise.
+      * `Ctrl+Alt+R`: Rotate selected image 180°.
+    * **Interface**:
+      * `Ctrl+F` (or `Cmd+F` on macOS): Focus the search input field.
+      * `Esc`: If the search input is focused, unfocus it and return focus to the image list/grid.
+      * `I`: Toggle image details sidebar.
+    * **Similarity Group Navigation** (when "Group by Similarity" is active):
+      * `1` through `9`: Jump to the 1st through 9th image within the currently selected/viewed similarity cluster.
+    * **Command-line Arguments**:
+      * `--folder FOLDER_PATH`: Open the specified folder immediately after startup
+      * `--clear-cache`: Clear all image and metadata caches before starting
 
 ## Future Enhancements (Ideas)
 
