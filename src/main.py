@@ -1,3 +1,4 @@
+import pyexiv2 # This must be the first import or else it will cause a silent crash on windows - Don't ask me how many hours I spent until I found this...
 import sys
 import os
 import logging # Added for startup logging
