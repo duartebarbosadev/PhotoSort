@@ -21,6 +21,9 @@ EXIF_CACHE_SIZE_MB_KEY = "Cache/ExifCacheSizeMB" # For EXIF metadata cache
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0 # Default to 2 GB for preview cache
 DEFAULT_EXIF_CACHE_SIZE_MB = 256 # Default to 256 MB for EXIF cache
 
+# --- Model Settings ---
+DEFAULT_CLIP_MODEL = "sentence-transformers/clip-ViT-B-32" # Common default, adjust if different
+
 def _get_settings() -> QSettings:
     """Get a QSettings instance with the application's organization and name."""
     return QSettings(SETTINGS_ORGANIZATION, SETTINGS_APPLICATION)
