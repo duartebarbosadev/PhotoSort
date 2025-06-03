@@ -3292,71 +3292,20 @@ class MainWindow(QMainWindow):
             rotation_supported = MetadataProcessor.is_rotation_supported(file_path)
             
             if rotation_supported:
-                file_ext = os.path.splitext(file_path)[1].lower()
-                raw_formats = ['.arw', '.cr2', '.nef', '.dng', '.orf', '.raf', '.rw2', '.pef', '.srw']
-                is_raw_format = file_ext in raw_formats
+                rotate_cw_action = QAction("Rotate 90° Clockwise", self)
+                rotate_cw_action.setShortcut("Ctrl+R")
+                rotate_cw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_clockwise(path))
+                menu.addAction(rotate_cw_action)
                 
-                # Add rotation submenu
-                rotate_menu = menu.addMenu("Rotate Image")
+                rotate_ccw_action = QAction("Rotate 90° Counterclockwise", self)
+                rotate_ccw_action.setShortcut("Ctrl+Shift+R")
+                rotate_ccw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_counterclockwise(path))
+                menu.addAction(rotate_ccw_action)
                 
-                if is_raw_format:
-                    # For RAW files, only show metadata-only rotation
-                    rotate_cw_action = QAction("Rotate 90° Clockwise (Metadata Only)", self)
-                    rotate_cw_action.setShortcut("Ctrl+R")
-                    rotate_cw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_clockwise(path))
-                    rotate_menu.addAction(rotate_cw_action)
-                    
-                    rotate_ccw_action = QAction("Rotate 90° Counterclockwise (Metadata Only)", self)
-                    rotate_ccw_action.setShortcut("Ctrl+Shift+R")
-                    rotate_ccw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_counterclockwise(path))
-                    rotate_menu.addAction(rotate_ccw_action)
-                    
-                    rotate_180_action = QAction("Rotate 180° (Metadata Only)", self)
-                    rotate_180_action.setShortcut("Ctrl+Alt+R")
-                    rotate_180_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_180(path))
-                    rotate_menu.addAction(rotate_180_action)
-                else:
-                    # For non-RAW files, show pixel rotation options
-                    if file_ext in ['.jpg', '.jpeg']:
-                        cw_text = "Rotate 90° Clockwise (Lossless if possible)"
-                        ccw_text = "Rotate 90° Counterclockwise (Lossless if possible)"
-                        r180_text = "Rotate 180° (Lossless if possible)"
-                    else:
-                        cw_text = "Rotate 90° Clockwise (Re-encodes image)"
-                        ccw_text = "Rotate 90° Counterclockwise (Re-encodes image)"
-                        r180_text = "Rotate 180° (Re-encodes image)"
-                    
-                    rotate_cw_action = QAction(cw_text, self)
-                    rotate_cw_action.setShortcut("Ctrl+R")
-                    rotate_cw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_clockwise(path))
-                    rotate_menu.addAction(rotate_cw_action)
-                    
-                    rotate_ccw_action = QAction(ccw_text, self)
-                    rotate_ccw_action.setShortcut("Ctrl+Shift+R")
-                    rotate_ccw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_counterclockwise(path))
-                    rotate_menu.addAction(rotate_ccw_action)
-                    
-                    rotate_180_action = QAction(r180_text, self)
-                    rotate_180_action.setShortcut("Ctrl+Alt+R")
-                    rotate_180_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_180(path))
-                    rotate_menu.addAction(rotate_180_action)
-                    
-                    rotate_menu.addSeparator()
-                    
-                    # Metadata-only rotation option for non-RAW files
-                    rotate_meta_menu = rotate_menu.addMenu("Update Orientation Metadata Only")
-                    
-                    meta_cw_action = QAction("Mark as Rotated 90° Clockwise", self)
-                    meta_cw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_metadata_only(path, 'clockwise'))
-                    rotate_meta_menu.addAction(meta_cw_action)
-                    
-                    meta_ccw_action = QAction("Mark as Rotated 90° Counterclockwise", self)
-                    meta_ccw_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_metadata_only(path, 'counterclockwise'))
-                    rotate_meta_menu.addAction(meta_ccw_action)
-                    
-                    meta_180_action = QAction("Mark as Rotated 180°", self)
-                    meta_180_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_metadata_only(path, '180'))
-                    rotate_meta_menu.addAction(meta_180_action)
+                rotate_180_action = QAction("Rotate 180°", self)
+                rotate_180_action.setShortcut("Ctrl+Alt+R")
+                rotate_180_action.triggered.connect(lambda checked=False, path=file_path: self._rotate_image_180(path))
+                menu.addAction(rotate_180_action)
                 
                 menu.addSeparator()
             
@@ -3520,6 +3469,161 @@ class MainWindow(QMainWindow):
         logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Updating sidebar for {os.path.basename(file_path)}")
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
 
+    def _show_lossy_rotation_confirmation_dialog(self, filename: str, rotation_type: str) -> Tuple[bool, bool]:
+        """
+        Show a confirmation dialog for lossy rotation with 'never ask again' option.
+        
+        Args:
+            filename: Name of the file being rotated
+            rotation_type: Description of the rotation (e.g., "90° clockwise")
+            
+        Returns:
+            Tuple of (proceed_with_rotation: bool, never_ask_again: bool)
+        """
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox
+        from src.core.app_settings import get_rotation_confirm_lossy
+        
+        # Check if user has disabled this confirmation
+        if not get_rotation_confirm_lossy():
+            return True, False  # Proceed without asking
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Confirm Lossy Rotation")
+        dialog.setObjectName("lossyRotationDialog")
+        dialog.setModal(True)
+        dialog.setFixedSize(480, 200)
+        
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(20)
+        layout.setContentsMargins(25, 25, 25, 25)
+        
+        # Main message
+        message_label = QLabel(f"Lossless rotation failed for:\n{filename}")
+        message_label.setObjectName("lossyRotationMessageLabel")
+        message_label.setWordWrap(True)
+        layout.addWidget(message_label)
+        
+        # Warning text
+        warning_label = QLabel(f"Proceed with lossy rotation {rotation_type}?\nThis will re-encode the image and may reduce quality.")
+        warning_label.setObjectName("lossyRotationWarningLabel")
+        warning_label.setWordWrap(True)
+        layout.addWidget(warning_label)
+        
+        # Never ask again checkbox
+        never_ask_checkbox = QCheckBox("Don't ask again for lossy rotations")
+        never_ask_checkbox.setObjectName("neverAskAgainCheckbox")
+        layout.addWidget(never_ask_checkbox)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("lossyRotationCancelButton")
+        cancel_button.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_button)
+        
+        proceed_button = QPushButton("Proceed with Lossy Rotation")
+        proceed_button.setObjectName("lossyRotationProceedButton")
+        proceed_button.clicked.connect(dialog.accept)
+        proceed_button.setDefault(True)
+        button_layout.addWidget(proceed_button)
+        
+        layout.addLayout(button_layout)
+        
+        # Apply dark theme styling
+        dialog.setStyleSheet("""
+            QDialog#lossyRotationDialog {
+                background-color: #2B2B2B;
+                color: #D1D1D1;
+                border: 2px solid #0078D4;
+                border-radius: 8px;
+            }
+            
+            QLabel#lossyRotationMessageLabel {
+                color: #E5E5E5;
+                font-size: 11pt;
+                font-weight: bold;
+                background-color: transparent;
+                padding: 10px;
+                border: 1px solid #404040;
+                border-radius: 6px;
+                background-color: #1E1E1E;
+            }
+            
+            QLabel#lossyRotationWarningLabel {
+                color: #FFB366;
+                font-size: 10pt;
+                background-color: transparent;
+                padding: 8px;
+            }
+            
+            QCheckBox#neverAskAgainCheckbox {
+                color: #C0C0C0;
+                font-size: 9pt;
+                background-color: transparent;
+                spacing: 8px;
+            }
+            QCheckBox#neverAskAgainCheckbox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 2px solid #404040;
+                border-radius: 3px;
+                background-color: #2D2D2D;
+            }
+            QCheckBox#neverAskAgainCheckbox::indicator:checked {
+                background-color: #0078D4;
+                border-color: #005A9E;
+                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTkuNSAzLjVMNC43NSA4LjI1TDIuNSA2IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
+            }
+            QCheckBox#neverAskAgainCheckbox::indicator:hover {
+                border-color: #505050;
+            }
+            
+            QPushButton#lossyRotationCancelButton {
+                background-color: #383838;
+                color: #D1D1D1;
+                border: 1px solid #484848;
+                padding: 8px 16px;
+                border-radius: 4px;
+                min-width: 80px;
+                font-size: 9pt;
+            }
+            QPushButton#lossyRotationCancelButton:hover {
+                background-color: #454545;
+                border-color: #555555;
+                color: #FFFFFF;
+            }
+            QPushButton#lossyRotationCancelButton:pressed {
+                background-color: #303030;
+            }
+            
+            QPushButton#lossyRotationProceedButton {
+                background-color: #FF8C42;
+                color: #FFFFFF;
+                border: 1px solid #E67A35;
+                padding: 8px 16px;
+                border-radius: 4px;
+                min-width: 140px;
+                font-weight: bold;
+                font-size: 9pt;
+            }
+            QPushButton#lossyRotationProceedButton:hover {
+                background-color: #FF9D5C;
+                border-color: #FF8C42;
+            }
+            QPushButton#lossyRotationProceedButton:pressed {
+                background-color: #E67A35;
+            }
+        """)
+        
+        # Show dialog and get result
+        result = dialog.exec()
+        proceed = result == QDialog.DialogCode.Accepted
+        never_ask_again = never_ask_checkbox.isChecked()
+        
+        return proceed, never_ask_again
+
     def _rotate_image_clockwise(self, file_path: str):
         """Rotate the selected image 90° clockwise."""
         self._perform_image_rotation(file_path, 'clockwise')
@@ -3532,88 +3636,73 @@ class MainWindow(QMainWindow):
         """Rotate the selected image 180°."""
         self._perform_image_rotation(file_path, '180')
 
-    def _rotate_image_metadata_only(self, file_path: str, direction: str):
-        """Update only the orientation metadata without rotating pixels."""
-        self._perform_image_rotation(file_path, direction, metadata_only=True)
 
-    def _perform_image_rotation(self, file_path: str, direction: str, metadata_only: bool = False):
+    def _perform_image_rotation(self, file_path: str, direction: str):
         """
-        Perform image rotation with UI feedback and cache invalidation.
+        Perform image rotation with the approach: try metadata first, ask for lossy if needed.
         
         Args:
             file_path: Path to the image file
             direction: Rotation direction ('clockwise', 'counterclockwise', '180')
-            metadata_only: If True, only update metadata without rotating pixels
         """
         if not os.path.exists(file_path):
             self.statusBar().showMessage("Error: File not found", 3000)
             return
 
         filename = os.path.basename(file_path)
-        operation = "Updating orientation metadata" if metadata_only else "Rotating image"
         
         # Show progress
-        self.statusBar().showMessage(f"{operation}: {filename}...", 0)
+        self.statusBar().showMessage(f"Rotating {filename}...", 0)
         QApplication.processEvents()
 
         try:
-            # Perform rotation
+            # First, try metadata-only rotation (lossless)
+            metadata_success, needs_lossy, message = MetadataProcessor.try_metadata_rotation_first(
+                file_path, direction, self.app_state.exif_disk_cache
+            )
+            
+            if metadata_success:
+                # Metadata rotation succeeded - we're done!
+                self._handle_successful_rotation(file_path, direction, message, is_lossy=False)
+                return
+            
+            if not needs_lossy:
+                # Metadata rotation failed and no lossy option available
+                self.statusBar().showMessage(message, 5000)
+                logging.warning(f"[MainWindow] {message}")
+                return
+            
+            # Metadata rotation failed but lossy rotation is available
+            # Ask user for confirmation
+            rotation_desc = {
+                'clockwise': '90° clockwise',
+                'counterclockwise': '90° counterclockwise',
+                '180': '180°'
+            }.get(direction, direction)
+            
+            proceed, never_ask_again = self._show_lossy_rotation_confirmation_dialog(filename, rotation_desc)
+            
+            # Handle "never ask again" setting
+            if never_ask_again:
+                from src.core.app_settings import set_rotation_confirm_lossy
+                set_rotation_confirm_lossy(False)
+                self.statusBar().showMessage("Lossy rotation confirmations disabled for future operations.", 3000)
+            
+            if not proceed:
+                self.statusBar().showMessage("Rotation cancelled by user.", 3000)
+                return
+            
+            # Perform lossy rotation
             success = MetadataProcessor.rotate_image(
-                file_path,
-                direction,
-                update_metadata_only=metadata_only,
+                file_path, direction, update_metadata_only=False,
                 exif_disk_cache=self.app_state.exif_disk_cache
             )
-
+            
             if success:
-                # Clear relevant caches
-                if hasattr(self.app_state, 'rating_cache'):
-                    # Rating cache doesn't need clearing, but preview/thumbnail caches do
-                    pass
-                
-                # Clear image caches so the rotated image will be reloaded
-                self.image_pipeline.preview_cache.delete_all_for_path(file_path)
-                self.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
-                
-                # Force refresh of thumbnails in the view
-                self._refresh_visible_items_icons()
-                
-                # Refresh the current preview if this is the selected image
-                active_view = self._get_active_file_view()
-                if active_view:
-                    current_proxy_idx = active_view.currentIndex()
-                    if current_proxy_idx.isValid() and self._is_valid_image_item(current_proxy_idx):
-                        source_idx = self.proxy_model.mapToSource(current_proxy_idx)
-                        item = self.file_system_model.itemFromIndex(source_idx)
-                        if item:
-                            item_data = item.data(Qt.ItemDataRole.UserRole)
-                            if isinstance(item_data, dict) and item_data.get('path') == file_path:
-                                # This is the currently selected image, refresh the preview immediately
-                                self._refresh_current_selection_preview()
-                                # Also trigger a fresh load of the preview with a slight delay to ensure cache is cleared
-                                QTimer.singleShot(100, lambda: self._display_single_image_preview(file_path, item_data))
-                
-                # Update sidebar if visible and showing this image
-                if self.sidebar_visible and hasattr(self, 'metadata_sidebar'):
-                    self._update_sidebar_with_current_selection()
-                
-                # Success message
-                rotation_desc = {
-                    'clockwise': '90° clockwise',
-                    'counterclockwise': '90° counterclockwise',
-                    '180': '180°'
-                }.get(direction, direction)
-                
-                if metadata_only:
-                    message = f"Updated orientation metadata for {filename} ({rotation_desc})"
-                else:
-                    message = f"Rotated {filename} {rotation_desc}"
-                
-                self.statusBar().showMessage(message, 5000)
-                logging.info(f"[MainWindow] {message}")
-
+                lossy_message = f"Rotated {filename} {rotation_desc} (lossy)"
+                self._handle_successful_rotation(file_path, direction, lossy_message, is_lossy=True)
             else:
-                error_msg = f"Failed to rotate {filename}"
+                error_msg = f"Failed to perform lossy rotation for {filename}"
                 self.statusBar().showMessage(error_msg, 5000)
                 logging.error(f"[MainWindow] {error_msg}")
 
@@ -3621,6 +3710,40 @@ class MainWindow(QMainWindow):
             error_msg = f"Error rotating {filename}: {str(e)}"
             self.statusBar().showMessage(error_msg, 5000)
             logging.error(f"[MainWindow] {error_msg}", exc_info=True)
+
+    def _handle_successful_rotation(self, file_path: str, direction: str, message: str, is_lossy: bool):
+        """Handle successful rotation - update caches and UI."""
+        filename = os.path.basename(file_path)
+        
+        # Clear image caches so the rotated image will be reloaded
+        self.image_pipeline.preview_cache.delete_all_for_path(file_path)
+        self.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
+        
+        # Force refresh of thumbnails in the view
+        self._refresh_visible_items_icons()
+        
+        # Refresh the current preview if this is the selected image
+        active_view = self._get_active_file_view()
+        if active_view:
+            current_proxy_idx = active_view.currentIndex()
+            if current_proxy_idx.isValid() and self._is_valid_image_item(current_proxy_idx):
+                source_idx = self.proxy_model.mapToSource(current_proxy_idx)
+                item = self.file_system_model.itemFromIndex(source_idx)
+                if item:
+                    item_data = item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(item_data, dict) and item_data.get('path') == file_path:
+                        # This is the currently selected image, refresh the preview immediately
+                        self._refresh_current_selection_preview()
+                        # Also trigger a fresh load of the preview with a slight delay
+                        QTimer.singleShot(100, lambda: self._display_single_image_preview(file_path, item_data))
+        
+        # Update sidebar if visible and showing this image
+        if self.sidebar_visible and hasattr(self, 'metadata_sidebar'):
+            self._update_sidebar_with_current_selection()
+        
+        # Show success message
+        self.statusBar().showMessage(message, 5000)
+        logging.info(f"[MainWindow] {message}")
 
     def _rotate_current_image_clockwise(self):
         """Rotate the currently selected image 90° clockwise (for keyboard shortcut)."""

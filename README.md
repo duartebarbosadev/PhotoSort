@@ -18,7 +18,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
 * **File Management**:
   * Move unwanted photos to the system trash.
-  * **Image Rotation**: Comprehensive rotation support with lossless JPEG rotation, lossy re-encoding for PNG/TIFF, and metadata-only rotation for RAW formats.
+  * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed. Supports all major formats with format-specific optimization.
 
 ## Technology Stack
 
@@ -107,14 +107,18 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 6. **Filter**: Use the filters and search bar at the bottom to narrow down the displayed images.
 7. **Rotate Images**:
 
-   * **Via Context Menu**: Right-click any image → "Rotate Image" → choose rotation direction.
+   * **Via Context Menu**: Right-click any image → choose rotation direction (90° clockwise, counterclockwise, or 180°).
    * **Via Keyboard**: Use `Ctrl+R` (clockwise), `Ctrl+Shift+R` (counterclockwise), or `Ctrl+Alt+R` (180°).
    * **Via Image Menu**: Access rotation commands through the "Image" menu.
-   * **Rotation Types**:
-     * **JPEG**: Lossless rotation when `jpegtran` is available, lossy re-encoding as fallback
-     * **PNG/TIFF/BMP**: Lossy re-encoding (warns user in context menu)
-     * **RAW formats**: Metadata-only rotation (no pixel changes, preserves original data)
-   * **Smart Format Detection**: Automatically selects appropriate rotation method based on file format.
+   * **Intelligent Rotation Process**:
+     1. **Metadata-First**: Always attempts lossless XMP orientation metadata update first
+     2. **Smart Fallback**: If metadata rotation fails, offers appropriate alternatives based on format:
+        * **JPEG**: Lossless `jpegtran` rotation → Lossy re-encoding (with user confirmation)
+        * **PNG/TIFF/BMP**: Metadata -> Lossy re-encoding (with user confirmation)
+        * **RAW formats**: Metadata-only
+     3. **User Control**: Asks for confirmation before quality-reducing operations
+   * **Quality Preservation**: Maximizes image quality by prioritizing lossless methods
+   * **Transparent Feedback**: Clear messages indicate whether rotation was lossless or lossy
 8. **Delete**:
 
    * Select an image and press `Delete` to move it to the trash.
@@ -139,6 +143,8 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
       * `Ctrl+F` (or `Cmd+F` on macOS): Focus the search input field.
       * `Esc`: If the search input is focused, unfocus it and return focus to the image list/grid.
       * `I`: Toggle image details sidebar.
+    * **Settings**:
+      * Rotation confirmation preferences can be disabled via the lossy rotation dialog's "Don't ask again" checkbox.
     * **Similarity Group Navigation** (when "Group by Similarity" is active):
       * `1` through `9`: Jump to the 1st through 9th image within the currently selected/viewed similarity cluster.
     * **Command-line Arguments**:

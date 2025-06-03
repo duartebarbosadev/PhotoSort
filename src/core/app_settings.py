@@ -16,10 +16,12 @@ SETTINGS_APPLICATION = "PhotoRanker"
 # Settings keys
 PREVIEW_CACHE_SIZE_GB_KEY = "Cache/PreviewCacheSizeGB"
 EXIF_CACHE_SIZE_MB_KEY = "Cache/ExifCacheSizeMB" # For EXIF metadata cache
+ROTATION_CONFIRM_LOSSY_KEY = "UI/RotationConfirmLossy" # Ask before lossy rotation
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0 # Default to 2 GB for preview cache
 DEFAULT_EXIF_CACHE_SIZE_MB = 256 # Default to 256 MB for EXIF cache
+DEFAULT_ROTATION_CONFIRM_LOSSY = True # Default to asking before lossy rotation
 
 # --- Model Settings ---
 DEFAULT_CLIP_MODEL = "sentence-transformers/clip-ViT-B-32" # Common default, adjust if different
@@ -59,6 +61,17 @@ def get_exif_cache_size_bytes() -> int:
     return get_exif_cache_size_mb() * 1024 * 1024
 
 # --- PyTorch/CUDA Information ---
+# --- Rotation Settings ---
+def get_rotation_confirm_lossy() -> bool:
+    """Get whether to confirm lossy rotations."""
+    settings = _get_settings()
+    return settings.value(ROTATION_CONFIRM_LOSSY_KEY, DEFAULT_ROTATION_CONFIRM_LOSSY, type=bool)
+
+def set_rotation_confirm_lossy(confirm: bool):
+    """Set whether to confirm lossy rotations."""
+    settings = _get_settings()
+    settings.setValue(ROTATION_CONFIRM_LOSSY_KEY, confirm)
+
 def is_pytorch_cuda_available() -> bool:
     """Check if PyTorch with CUDA support is available."""
     try:

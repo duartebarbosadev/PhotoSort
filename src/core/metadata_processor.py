@@ -535,6 +535,40 @@ class MetadataProcessor:
        return MetadataProcessor.rotate_image(image_path, '180', update_metadata_only, exif_disk_cache)
 
    @staticmethod
+   def try_metadata_rotation_first(image_path: str, direction: RotationDirection,
+                                 exif_disk_cache: Optional[ExifCache] = None) -> Tuple[bool, bool, str]:
+       """
+       Try metadata-only rotation first (preferred lossless method).
+       
+       Args:
+           image_path: Path to the image file
+           direction: Rotation direction
+           exif_disk_cache: Optional cache to invalidate if successful
+           
+       Returns:
+           Tuple of (metadata_rotation_succeeded: bool, needs_lossy_rotation: bool, message: str)
+       """
+       resolved = MetadataProcessor._resolve_path_forms(image_path)
+       if not resolved:
+           return False, False, f"Could not resolve path: {image_path}"
+       
+       operational_path, cache_key_path = resolved
+       
+       try:
+           rotator = ImageRotator()
+           success, needs_lossy, message = rotator.try_metadata_rotation_first(operational_path, direction)
+           
+           if success and exif_disk_cache:
+               # Invalidate cache after successful metadata rotation
+               exif_disk_cache.delete(cache_key_path)
+               
+           return success, needs_lossy, message
+       except Exception as e:
+           error_msg = f"Error during metadata rotation attempt for {os.path.basename(operational_path)}: {e}"
+           logging.error(f"[MetadataProcessor] {error_msg}", exc_info=True)
+           return False, False, error_msg
+
+   @staticmethod
    def is_rotation_supported(image_path: str) -> bool:
        """Check if rotation is supported for the given image format."""
 

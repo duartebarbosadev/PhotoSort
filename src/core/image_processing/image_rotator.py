@@ -277,6 +277,55 @@ class ImageRotator:
             formats.append('.jpg (lossless)')
         return formats
     
+    def try_metadata_rotation_first(self, image_path: str, direction: RotationDirection) -> Tuple[bool, bool, str]:
+        """
+        Try metadata-only rotation first (the preferred lossless method).
+        
+        Args:
+            image_path: Path to the image file
+            direction: Rotation direction
+            
+        Returns:
+            Tuple of (metadata_rotation_succeeded: bool, needs_lossy_rotation: bool, message: str)
+        """
+        if not os.path.isfile(image_path):
+            return False, False, f"File not found: {image_path}"
+        
+        file_ext = Path(image_path).suffix.lower()
+        filename = os.path.basename(image_path)
+        
+        # Get current orientation
+        current_orientation = self._get_current_orientation(image_path)
+        new_orientation = self._calculate_new_orientation(current_orientation, direction)
+        
+        # Try metadata-only rotation first
+        success = self._update_xmp_orientation(image_path, new_orientation)
+        
+        if success:
+            message = f"Successfully rotated {filename} {direction} using metadata-only (lossless)"
+            logging.info(f"[ImageRotator] {message}")
+            return True, False, message
+        else:
+            # Check if this format supports pixel rotation
+            pixel_rotation_formats = ['.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp']
+            raw_formats = ['.arw', '.cr2', '.nef', '.dng', '.orf', '.raf', '.rw2', '.pef', '.srw']
+            
+            if file_ext in pixel_rotation_formats:
+                # Pixel rotation is possible but will be lossy (except lossless JPEG)
+                if file_ext in ['.jpg', '.jpeg'] and self.jpegtran_available:
+                    message = f"Metadata rotation failed for {filename}. Lossless JPEG rotation available."
+                else:
+                    message = f"Metadata rotation failed for {filename}. Lossy pixel rotation available."
+                return False, True, message
+            elif file_ext in raw_formats:
+                # RAW files should only use metadata rotation
+                message = f"Metadata rotation failed for {filename} (RAW format). No other rotation method available."
+                return False, False, message
+            else:
+                # Unsupported format
+                message = f"Rotation not supported for {filename} (format: {file_ext})"
+                return False, False, message
+
     def is_rotation_supported(self, image_path: str) -> bool:
         """Check if rotation is supported for the given image format."""
         file_ext = Path(image_path).suffix.lower()
