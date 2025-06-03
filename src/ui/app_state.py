@@ -31,11 +31,9 @@ class AppState:
         self.cluster_results.clear()
         self.embeddings_cache.clear()
         if self.rating_disk_cache:
-            # self.rating_disk_cache.clear() # Decide if folder clear should wipe the whole disk cache
-            pass
+            self.rating_disk_cache.clear() # Decide if folder clear should wipe the whole disk cache
         if self.exif_disk_cache:
-            # self.exif_disk_cache.clear() # Decide if folder clear should wipe the whole disk cache
-            pass # For now, let's assume clearing a folder doesn't wipe persistent disk caches
+            self.exif_disk_cache.clear() # Decide if folder clear should wipe the whole disk cache
         # self.current_folder_path = None # Optionally reset current folder path
 
     def remove_data_for_path(self, file_path: str):

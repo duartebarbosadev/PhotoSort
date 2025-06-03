@@ -8,13 +8,18 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
 * **Advanced Sorting & Viewing**:
   * Flexible view modes: List, Icons, Grid, and Chronological by Date.
+  * **Real-time Search**: Instantly filter images by filename with live search results.
 * **Intelligent Culling Tools**:
   * **Ratings & Labels**: Assign star ratings and color labels for quick categorization.
   * **Blur Detection**: Automatically identify and flag blurry photos.
   * **Similarity Analysis**: Group visually similar images to easily spot duplicates or near-duplicates.
 * **Efficient Workflow**:
-  * **Robust Filtering**: Filter images by ratings, similarity clusters, or filenames.
-  * **Fast Processing**: Intensive operations (scanning, thumbnailing, analysis) will run once in batch to make sure that image scrolling is fast.
+  * **Advanced Filtering System**: 
+    * Filter images by ratings (Show All, 1+ Stars, 2+ Stars, etc.)
+    * Filter by similarity clusters when grouping is active
+    * Combine text search with rating and cluster filters
+    * Real-time filtering with immediate visual feedback
+  * **Fast Processing**: Intensive operations (scanning, thumbnailing, analysis) run once in batch to ensure fast image scrolling.
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
 * **File Management**:
   * Move unwanted photos to the system trash.
@@ -104,7 +109,11 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
    * **Detect Blurriness**: Go to "View" > "Detect Blurriness" to analyze images. Blurred images will be visually indicated.
    * **Analyze Similarity**: Go to "View" > "Analyze Similarity" to generate embeddings and cluster similar photos. Use the "Group by Similarity" option and cluster filters to explore groups.
-6. **Filter**: Use the filters and search bar at the bottom to narrow down the displayed images.
+6. **Search & Filter**: 
+   * **Real-time Search**: Use the search bar at the bottom to instantly filter images by filename. Results update as you type.
+   * **Rating Filters**: Use the rating dropdown to show only images with specific star ratings (Show All, 1+ Stars, 2+ Stars, etc.).
+   * **Similarity Filters**: When "Group by Similarity" is active, use the cluster filter to view specific similarity groups.
+   * **Combined Filtering**: All filters work together - combine search text with rating and cluster filters for precise results.
 7. **Rotate Images**:
 
    * **Via Context Menu**: Right-click any image → choose rotation direction (90° clockwise, counterclockwise, or 180°).
@@ -140,7 +149,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
       * `Ctrl+Shift+R`: Rotate selected image 90° counterclockwise.
       * `Ctrl+Alt+R`: Rotate selected image 180°.
     * **Interface**:
-      * `Ctrl+F` (or `Cmd+F` on macOS): Focus the search input field.
+      * `Ctrl+F` (or `Cmd+F` on macOS): Focus the search input field for instant filename filtering.
       * `Esc`: If the search input is focused, unfocus it and return focus to the image list/grid.
       * `I`: Toggle image details sidebar.
     * **Settings**:
@@ -153,6 +162,10 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
 ## Future Enhancements (Ideas)
 
+* **Enhanced Search Capabilities**:
+  * Search by EXIF metadata (camera model, settings, date ranges)
+  * Search by color labels and custom tags
+  * Saved search presets
 * **Sort/Order by Rating**: Implement functionality to sort or reorder images directly based on their assigned star ratings.
 * **AI-Driven Exposure Analysis**: Introduce a feature to detect and flag images with potentially good or problematic exposure (e.g., under/overexposed).
 * **Automated Best Shot Selection in Clusters**:

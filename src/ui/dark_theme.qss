@@ -595,3 +595,117 @@ QLabel#placeholderText, QLabel#errorText {
     background-color: transparent;
     border: none;
 }
+
+
+/* Advanced Viewer Styles */
+QWidget#advancedViewerControls {
+    background-color: #2D2D2D;
+    border-bottom: 1px solid #404040;
+    border-radius: 5px;
+    margin: 2px;
+}
+
+QWidget#advancedViewerControls QPushButton {
+    background-color: #383838;
+    color: #D1D1D1;
+    border: 1px solid #454545;
+    padding: 4px 8px;
+    border-radius: 3px;
+    min-height: 22px;
+    min-width: 40px;
+}
+
+QWidget#advancedViewerControls QPushButton:hover {
+    background-color: #4A4A4A;
+    border-color: #555555;
+    color: #FFFFFF;
+}
+
+QWidget#advancedViewerControls QPushButton:pressed {
+    background-color: #303030;
+}
+
+QWidget#advancedViewerControls QPushButton:checked {
+    background-color: #0078D4;
+    color: #FFFFFF;
+    border-color: #005A9E;
+}
+
+QWidget#advancedViewerControls QSlider::groove:horizontal {
+    border: 1px solid #404040;
+    height: 6px;
+    background-color: #2D2D2D;
+    border-radius: 3px;
+}
+
+QWidget#advancedViewerControls QSlider::handle:horizontal {
+    background-color: #0078D4;
+    border: 1px solid #005A9E;
+    width: 16px;
+    margin: -5px 0;
+    border-radius: 8px;
+}
+
+QWidget#advancedViewerControls QSlider::handle:horizontal:hover {
+    background-color: #0088F0;
+}
+
+QWidget#advancedViewerControls QCheckBox {
+    color: #C0C0C0;
+    spacing: 8px;
+}
+
+QWidget#advancedViewerControls QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #404040;
+    border-radius: 3px;
+    background-color: #2D2D2D;
+}
+
+QWidget#advancedViewerControls QCheckBox::indicator:checked {
+    background-color: #0078D4;
+    border-color: #005A9E;
+}
+
+QLabel#coordinatesLabel {
+    color: #888888;
+    font-size: 8pt;
+    background-color: transparent;
+    padding: 2px 5px;
+}
+
+/* Integrated Advanced Viewer */
+SynchronizedImageViewer {
+    background-color: #1E1E1E;
+    border: none;
+}
+
+SynchronizedImageViewer QWidget#advancedViewerControls {
+    background-color: #272727;
+    border-top: 1px solid #1A1A1A;
+    border-bottom: none;
+    border-radius: 0px;
+    margin: 0px;
+    padding: 5px;
+}
+
+/* Make controls more compact for integration */
+SynchronizedImageViewer QWidget#advancedViewerControls {
+    min-height: 35px;
+    max-height: 35px;
+}
+
+SynchronizedImageViewer QWidget#advancedViewerControls QPushButton {
+    min-height: 20px;
+    padding: 2px 6px;
+    font-size: 8pt;
+}
+
+SynchronizedImageViewer QWidget#advancedViewerControls QSlider {
+    max-width: 150px;
+}
+
+SynchronizedImageViewer QLabel#coordinatesLabel {
+    font-size: 7pt;
+}

@@ -6,10 +6,8 @@ import time # Added for startup timing
 import traceback # For global exception handler
 from PyQt6.QtWidgets import QApplication, QMessageBox # QMessageBox for global exception handler
 from src.ui.main_window import MainWindow
-# from src.core.rating_fetcher import clear_metadata_cache # Removed: No longer used
 from src.core.image_pipeline import ImagePipeline # For clearing image caches
 from src.core.metadata_processor import MetadataProcessor # For metadata processing
-# from src.core.similarity_engine import SimilarityEngine # For clearing embedding cache <-- Removed top-level import
 
 def load_stylesheet(filename="src/ui/dark_theme.qss"):
     """Loads an external QSS stylesheet."""
