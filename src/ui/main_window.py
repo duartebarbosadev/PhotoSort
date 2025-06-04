@@ -1340,6 +1340,7 @@ class MainWindow(QMainWindow):
             self.app_state.rating_cache[file_path] = rating
             self._apply_filter()
             self._update_image_info_label()  # Update status bar with new rating
+            self._handle_file_selection_changed()  # Refresh status bar with current image's updated rating
         else:
             self.statusBar().showMessage(f"Failed to set rating for {os.path.basename(file_path)}", 5000)
 
@@ -1467,11 +1468,26 @@ class MainWindow(QMainWindow):
         
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Confirm Delete")
+        def get_truncated_path(path):
+            # Show up to 3 parent folders in the path
+            parts = path.replace('\\', '/').split('/')
+            if len(parts) <= 4:  # File + up to 3 folders
+                return path
+            return f".../{'/'.join(parts[-4:])}"  # Last 4 parts (3 folders + file)
+
         if num_selected == 1:
-            file_name = os.path.basename(deleted_file_paths[0]) # Use deleted_file_paths here
-            dialog.setText(f"Are you sure you want to move '{file_name}' to the trash?")
+            truncated_path = get_truncated_path(deleted_file_paths[0])
+            dialog.setText(f"Are you sure you want to move '{truncated_path}' to the trash?")
         else:
-            dialog.setText(f"Are you sure you want to move {num_selected} images to the trash?")
+            # Show up to 10 paths, then "and X more"
+            if num_selected <= 10:
+                file_list = "\n".join([get_truncated_path(p) for p in deleted_file_paths])
+                message = f"Are you sure you want to move {num_selected} images to the trash?\n\n{file_list}"
+            else:
+                file_list = "\n".join([get_truncated_path(p) for p in deleted_file_paths[:10]])
+                message = f"Are you sure you want to move {num_selected} images to the trash?\n\n{file_list}\n\n... and {num_selected-10} more"
+            dialog.setText(message)
+            dialog.setMinimumSize(600, 400)  # Ensure dialog can show the file list
         dialog.setIcon(QMessageBox.Icon.Warning)
         dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         dialog.setDefaultButton(QMessageBox.StandardButton.Yes) 
