@@ -25,6 +25,12 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * Move unwanted photos to the system trash.
   * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed. Supports all major formats with format-specific optimization.
 
+### Sidebar Features
+
+The sidebar provides quick access to image metadata and organizational tools:
+
+- **Metadata Display**: Shows detailed EXIF information (camera model, exposure settings, etc.) and user-assigned ratings/labels for the currently selected image.
+
 ## Technology Stack
 
 * **Core Language**: Python

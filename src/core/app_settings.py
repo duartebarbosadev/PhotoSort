@@ -17,11 +17,13 @@ SETTINGS_APPLICATION = "PhotoRanker"
 PREVIEW_CACHE_SIZE_GB_KEY = "Cache/PreviewCacheSizeGB"
 EXIF_CACHE_SIZE_MB_KEY = "Cache/ExifCacheSizeMB" # For EXIF metadata cache
 ROTATION_CONFIRM_LOSSY_KEY = "UI/RotationConfirmLossy" # Ask before lossy rotation
+AUTO_EDIT_PHOTOS_KEY = "UI/AutoEditPhotos"  # Key for auto edit photos setting
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0 # Default to 2 GB for preview cache
 DEFAULT_EXIF_CACHE_SIZE_MB = 256 # Default to 256 MB for EXIF cache
 DEFAULT_ROTATION_CONFIRM_LOSSY = True # Default to asking before lossy rotation
+DEFAULT_AUTO_EDIT_PHOTOS = False      # Default auto edit photos setting
 
 # --- Model Settings ---
 DEFAULT_CLIP_MODEL = "sentence-transformers/clip-ViT-B-32" # Common default, adjust if different
@@ -71,6 +73,17 @@ def set_rotation_confirm_lossy(confirm: bool):
     """Set whether to confirm lossy rotations."""
     settings = _get_settings()
     settings.setValue(ROTATION_CONFIRM_LOSSY_KEY, confirm)
+
+# --- Auto Edit Photos Setting ---
+def get_auto_edit_photos() -> bool:
+    """Get whether auto edit photos is enabled."""
+    settings = _get_settings()
+    return settings.value(AUTO_EDIT_PHOTOS_KEY, DEFAULT_AUTO_EDIT_PHOTOS, type=bool)
+
+def set_auto_edit_photos(enabled: bool):
+    """Set whether auto edit photos is enabled."""
+    settings = _get_settings()
+    settings.setValue(AUTO_EDIT_PHOTOS_KEY, enabled)
 
 def is_pytorch_cuda_available() -> bool:
     """Check if PyTorch with CUDA support is available."""

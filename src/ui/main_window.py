@@ -31,7 +31,11 @@ from src.core.image_pipeline import ImagePipeline
 from src.core.image_file_ops import ImageFileOperations
 # from src.core.image_features.blur_detector import BlurDetector # Now managed by WorkerManager
 from src.core.metadata_processor import MetadataProcessor # New metadata processor
-from src.core.app_settings import get_preview_cache_size_gb, set_preview_cache_size_gb, get_preview_cache_size_bytes, get_exif_cache_size_mb, set_exif_cache_size_mb # Import settings
+from src.core.app_settings import (
+    get_preview_cache_size_gb, set_preview_cache_size_gb, get_preview_cache_size_bytes,
+    get_exif_cache_size_mb, set_exif_cache_size_mb,
+    get_auto_edit_photos, set_auto_edit_photos
+) # Import settings
 from PyQt6.QtWidgets import QFormLayout, QComboBox, QSizePolicy # For cache dialog
 from src.ui.app_state import AppState # Import AppState
 from src.core.caching.rating_cache import RatingCache # Import RatingCache for type hinting
@@ -174,7 +178,7 @@ class MainWindow(QMainWindow):
         self.current_view_mode = None
         self.show_folders_mode = False
         self.group_by_similarity_mode = False
-        self.apply_auto_edits_enabled = False
+        self.apply_auto_edits_enabled = get_auto_edit_photos()
         self.blur_detection_threshold = 100.0
  
         section_start_time = time.perf_counter()
@@ -228,6 +232,7 @@ class MainWindow(QMainWindow):
         folder_name_display = "N/A"
         # Default text if no folder is loaded yet
         status_text = "No folder loaded. Open a folder to begin."
+        scan_logically_active = False  # Initialize to avoid UnboundLocalError
 
         if self.app_state.current_folder_path:
             folder_name_display = os.path.basename(self.app_state.current_folder_path)
@@ -1334,6 +1339,7 @@ class MainWindow(QMainWindow):
             self._update_rating_display(rating)
             self.app_state.rating_cache[file_path] = rating
             self._apply_filter()
+            self._update_image_info_label()  # Update status bar with new rating
         else:
             self.statusBar().showMessage(f"Failed to set rating for {os.path.basename(file_path)}", 5000)
 
@@ -3118,8 +3124,9 @@ class MainWindow(QMainWindow):
 
     def _handle_toggle_auto_edits(self, checked: bool):
         self.apply_auto_edits_enabled = checked
-        self.image_pipeline.clear_all_image_caches() 
-        self._rebuild_model_view() 
+        set_auto_edit_photos(checked)   # Save to persistent settings
+        self.image_pipeline.clear_all_image_caches()
+        self._rebuild_model_view()
         
         if self.app_state.image_files_data:
             self.worker_manager.start_preview_preload(
@@ -3844,7 +3851,8 @@ class MainWindow(QMainWindow):
 
         filename = os.path.basename(file_path)
         
-        # Show progress
+        # Show progress with loading overlay
+        self.show_loading_overlay(f"Rotating {filename}...")
         self.statusBar().showMessage(f"Rotating {filename}...", 0)
         QApplication.processEvents()
 
@@ -3903,6 +3911,8 @@ class MainWindow(QMainWindow):
             error_msg = f"Error rotating {filename}: {str(e)}"
             self.statusBar().showMessage(error_msg, 5000)
             logging.error(f"[MainWindow] {error_msg}", exc_info=True)
+        finally:
+            self.hide_loading_overlay()
 
     def _handle_successful_rotation(self, file_path: str, direction: str, message: str, is_lossy: bool):
         """Handle successful rotation - update caches and UI."""
@@ -3955,6 +3965,14 @@ class MainWindow(QMainWindow):
         file_path = self._get_current_selected_image_path()
         if file_path:
             self._rotate_image_180(file_path)
+
+    def changeEvent(self, event: QEvent):
+        """Handle window state changes to auto-fit images on maximize."""
+        if event.type() == QEvent.Type.WindowStateChange:
+            #if self.isMaximized():
+                # Fit images to view when window is maximized
+            self.advanced_image_viewer.fit_to_viewport()
+        super().changeEvent(event)
 
     def _get_current_selected_image_path(self) -> Optional[str]:
         """Get the file path of the currently selected image."""

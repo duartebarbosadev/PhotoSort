@@ -683,6 +683,17 @@ class SynchronizedImageViewer(QWidget):
                 viewer.centerOn(center_point)
         self._updating_sync = False
         
+    def fit_to_viewport(self):
+        """Fit the visible images to the viewport while maintaining aspect ratio."""
+        for i, viewer in enumerate(self.image_viewers):
+            if viewer.isVisible() and viewer.has_image():
+                # For side-by-side mode, adjust viewer width to half the available space
+                if self._get_current_view_mode() == "side_by_side" and i < 2:
+                    # Set viewer size to half the splitter width
+                    total_width = self.viewer_splitter.width()
+                    viewer.setFixedWidth(total_width // 2)
+                viewer.fit_in_view()
+
     def setText(self, text: str):
         """Set text display (for backward compatibility)"""
         if self.image_viewers:
