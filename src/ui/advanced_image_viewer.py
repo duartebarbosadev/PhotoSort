@@ -78,7 +78,7 @@ class ZoomableImageView(QGraphicsView):
             # Only auto-fit if the view is properly initialized and visible
             if self.isVisible() and self.viewport().width() > 0 and self.viewport().height() > 0:
                 # Minimal delay to ensure pixmap is rendered before fitting
-                QTimer.singleShot(1, self.fit_in_view)
+                self.fit_in_view()
         else:
             # Only clear if we're actually setting an empty image
             if not self._empty:
@@ -545,9 +545,7 @@ class SynchronizedImageViewer(QWidget):
             # CRITICAL: Set image directly without clearing - prevents black flash
             viewer.set_image(pixmap)
             
-            # Fit image with minimal delay if UI is ready
-            if self._ui_initialized() and viewer.isVisible():
-                QTimer.singleShot(1, lambda: viewer.fit_in_view())
+            # Fitting is now handled within viewer.set_image()
         
         # Update view mode buttons only for primary viewer
         if viewer_index == 0 and self._ui_initialized():

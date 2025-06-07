@@ -2555,7 +2555,10 @@ class MainWindow(QMainWindow):
             if hasattr(self.advanced_image_viewer, '_set_view_mode'):
                 self.advanced_image_viewer._set_view_mode("single")
             
-            self._display_single_image_preview(selected_file_paths[0], file_data_from_model)
+            # Use a zero-delay timer to allow the event loop to process pending events (like selection)
+            # before we start the potentially slow operation of loading and displaying a new preview.
+            # This can lead to a more responsive feel.
+            QTimer.singleShot(0, lambda: self._display_single_image_preview(selected_file_paths[0], file_data_from_model))
             # Update metadata sidebar if visible
             if self.sidebar_visible:
                 self._update_sidebar_with_current_selection()
