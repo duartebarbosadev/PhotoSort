@@ -258,7 +258,16 @@ class MainWindow(QMainWindow):
                         # Log lightly, this can be noisy if many files are temporarily unavailable
                         logging.debug(f"Could not get size for {file_data.get('path')} for info label: {e}")
                 total_size_mb = current_files_size_bytes / (1024 * 1024)
-                status_text = f"Folder: {folder_name_display}  |  Images: {num_images} ({total_size_mb:.2f} MB)"
+                
+                # Add cache size information to the status text
+                preview_cache_size_bytes = self.image_pipeline.preview_cache.volume()
+                preview_cache_size_mb = preview_cache_size_bytes / (1024 * 1024)
+                
+                status_text = (
+                    f"Folder: {folder_name_display} | "
+                    f"Images: {num_images} ({total_size_mb:.2f} MB) | "
+                    f"Preview Cache: {preview_cache_size_mb:.2f} MB"
+                )
             else: # Folder path set, scan finished (or not started if folder just selected), no image data
                 status_text = f"Folder: {folder_name_display}  |  Images: 0 (0.00 MB)"
         
@@ -1045,7 +1054,13 @@ class MainWindow(QMainWindow):
         estimated_folder_image_size_bytes = self._calculate_folder_image_size(folder_path)
         preview_cache_limit_bytes = get_preview_cache_size_bytes()
 
-        PREVIEW_ESTIMATED_SIZE_FACTOR = 0.20 # Estimate previews take 20% of original image size
+        # Log the sizes for diagnostics
+        logging.info(f"Folder Size (Images): {estimated_folder_image_size_bytes / (1024*1024):.2f} MB")
+        logging.info(f"Preview Cache Limit: {preview_cache_limit_bytes / (1024*1024*1024):.2f} GB")
+        logging.info(f"Current Preview Cache Usage: {self.image_pipeline.preview_cache.volume() / (1024*1024):.2f} MB")
+
+        # Use a more conservative estimate for the preview size factor
+        PREVIEW_ESTIMATED_SIZE_FACTOR = 0.50
         estimated_preview_data_needed_for_folder_bytes = int(estimated_folder_image_size_bytes * PREVIEW_ESTIMATED_SIZE_FACTOR)
 
         if preview_cache_limit_bytes > 0 and \
@@ -2726,6 +2741,21 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Preview preloading finished.", 5000)
         self.hide_loading_overlay()
         logging.info("[MainWindow] _handle_preview_finished: Loading overlay hidden.")
+        
+        # Log final cache vs image size
+        if self.app_state.current_folder_path:
+            total_image_size_bytes = self._calculate_folder_image_size(self.app_state.current_folder_path)
+            preview_cache_size_bytes = self.image_pipeline.preview_cache.volume()
+            logging.info("--- Cache vs. Image Size Diagnostics (Post-Preload) ---")
+            logging.info(f"Total Original Image Size: {total_image_size_bytes / (1024*1024):.2f} MB")
+            logging.info(f"Final Preview Cache Size: {preview_cache_size_bytes / (1024*1024):.2f} MB")
+            if total_image_size_bytes > 0:
+                ratio = (preview_cache_size_bytes / total_image_size_bytes) * 100
+                logging.info(f"Cache-to-Image Size Ratio: {ratio:.2f}%")
+            logging.info("---------------------------------------------------------")
+        
+        self._update_image_info_label() # Update UI with final cache size
+        
         # WorkerManager handles thread cleanup
         logging.info("[MainWindow] <<< EXIT >>> _handle_preview_finished.")
 
