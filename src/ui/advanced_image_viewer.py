@@ -63,6 +63,17 @@ class ZoomableImageView(QGraphicsView):
         # Enable mouse tracking for coordinate display
         self.setMouseTracking(True)
         
+        # Timer for debouncing resize events
+        self._resize_timer = QTimer()
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self.fit_in_view)
+        
+    def resizeEvent(self, event):
+        """Refit image to view on resize, with debouncing."""
+        if self.has_image():
+            self._resize_timer.start(50)  # 50ms debounce delay
+        super().resizeEvent(event)
+
     def has_image(self) -> bool:
         """Check if an image is loaded"""
         return not self._empty
