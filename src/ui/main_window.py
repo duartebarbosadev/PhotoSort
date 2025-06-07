@@ -2312,7 +2312,7 @@ class MainWindow(QMainWindow):
             get_preview_start_time = time.perf_counter()
             preview_pixmap = self.image_pipeline.get_preview_qpixmap(
                 file_path,
-                display_max_size=(2000, 2000),  # High resolution for zoom capability
+                display_max_size=(8000, 8000),  # High resolution for zoom capability
                 apply_auto_edits=self.apply_auto_edits_enabled
             )
             get_preview_end_time = time.perf_counter()
@@ -2448,7 +2448,7 @@ class MainWindow(QMainWindow):
                 print(f"[DEBUG] Loading pixmap {i} for {os.path.basename(path)}")
                 pixmap = self.image_pipeline.get_preview_qpixmap(
                     path,
-                    display_max_size=(2000, 2000),
+                    display_max_size=(8000, 8000),
                     apply_auto_edits=self.apply_auto_edits_enabled
                 )
                 if pixmap:
@@ -3601,7 +3601,7 @@ class MainWindow(QMainWindow):
             # Single image mode
             pixmap = self.image_pipeline.get_preview_qpixmap(
                 selected_paths[0],
-                display_max_size=(2000, 2000),  # High resolution for zoom
+                display_max_size=(8000, 8000),  # High resolution for zoom
                 apply_auto_edits=self.apply_auto_edits_enabled
             )
             if pixmap:
@@ -3612,7 +3612,7 @@ class MainWindow(QMainWindow):
             for path in selected_paths[:2]:  # Max 2 images
                 pixmap = self.image_pipeline.get_preview_qpixmap(
                     path,
-                    display_max_size=(2000, 2000),
+                    display_max_size=(8000, 8000),
                     apply_auto_edits=self.apply_auto_edits_enabled
                 )
                 if pixmap:

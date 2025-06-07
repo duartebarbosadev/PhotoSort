@@ -34,6 +34,7 @@ class ZoomableImageView(QGraphicsView):
         # Setup scene and view
         self._scene = QGraphicsScene(self)
         self._photo_item = QGraphicsPixmapItem()
+        self._photo_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self._scene.addItem(self._photo_item)
         self.setScene(self._scene)
         
@@ -131,17 +132,10 @@ class ZoomableImageView(QGraphicsView):
         rect = QRectF(self._photo_item.pixmap().rect())
         if not rect.isNull():
             self.setSceneRect(rect)
-            unity = self.transform().mapRect(QRectF(0, 0, 1, 1))
-            self.scale(1 / unity.width(), 1 / unity.height())
-            
-            view_rect = self.viewport().rect()
-            scene_rect = self.transform().mapRect(rect)
-            
-            factor = min(view_rect.width() / scene_rect.width(),
-                        view_rect.height() / scene_rect.height())
-            self.scale(factor, factor)
-            self._zoom_factor = factor
-            self.centerOn(rect.center())
+            # Use the built-in fitInView for robust fitting
+            self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            # Update internal zoom factor to match the new transform
+            self._zoom_factor = self.transform().m11()
             self.zoom_changed.emit(self._zoom_factor)
             
     def zoom_to_actual_size(self):
@@ -687,11 +681,6 @@ class SynchronizedImageViewer(QWidget):
         """Fit the visible images to the viewport while maintaining aspect ratio."""
         for i, viewer in enumerate(self.image_viewers):
             if viewer.isVisible() and viewer.has_image():
-                # For side-by-side mode, adjust viewer width to half the available space
-                if self._get_current_view_mode() == "side_by_side" and i < 2:
-                    # Set viewer size to half the splitter width
-                    total_width = self.viewer_splitter.width()
-                    viewer.setFixedWidth(total_width // 2)
                 viewer.fit_in_view()
 
     def setText(self, text: str):
