@@ -1060,7 +1060,7 @@ class MainWindow(QMainWindow):
         logging.info(f"Current Preview Cache Usage: {self.image_pipeline.preview_cache.volume() / (1024*1024):.2f} MB")
 
         # Use a more conservative estimate for the preview size factor
-        PREVIEW_ESTIMATED_SIZE_FACTOR = 0.50
+        PREVIEW_ESTIMATED_SIZE_FACTOR = 1.35
         estimated_preview_data_needed_for_folder_bytes = int(estimated_folder_image_size_bytes * PREVIEW_ESTIMATED_SIZE_FACTOR)
 
         if preview_cache_limit_bytes > 0 and \
