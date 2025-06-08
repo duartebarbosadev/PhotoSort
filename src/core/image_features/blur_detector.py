@@ -73,18 +73,20 @@ class BlurDetector:
     def is_image_blurred(
         image_path: str,
         threshold: float = 100.0,
-        apply_auto_edits_for_raw_preview: bool = False,
+        apply_auto_edits_for_raw_preview: bool = False, # Kept for compatibility, but ignored
         target_size: Tuple[int, int] = BLUR_DETECTION_PREVIEW_SIZE
     ) -> Optional[bool]:
         """
         Detects if an image is blurred using the variance of the Laplacian method.
         Operates on a smaller, efficiently loaded preview of the image.
+        For RAW files, auto-edits are intentionally disabled for blur detection to
+        analyze the original state of the image capture.
 
         Args:
             image_path (str): The path to the image file.
             threshold (float): The threshold for blur detection. Lower values indicate more blur.
-            apply_auto_edits_for_raw_preview (bool): If RAW, whether to apply auto edits
-                                                     to the preview used for blur detection.
+            apply_auto_edits_for_raw_preview (bool): This parameter is ignored. Auto-edits are
+                                                     always disabled for blur detection on RAW files.
             target_size (Tuple[int, int]): The target size for the image used in blur detection.
 
         Returns:
@@ -96,10 +98,12 @@ class BlurDetector:
             return None
 
         try:
+            # For blur detection, always load the image without auto-edits to get the
+            # raw sensor data's sharpness, not the edited preview's sharpness.
             pil_image_rgb = BlurDetector._load_image_for_detection(
                 normalized_path,
                 target_size=target_size,
-                apply_auto_edits_for_raw=apply_auto_edits_for_raw_preview
+                apply_auto_edits_for_raw=False
             )
 
             if pil_image_rgb is None:
