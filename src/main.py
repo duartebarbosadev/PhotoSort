@@ -121,6 +121,11 @@ import argparse
 
 def main():
     """Main application entry point."""
+
+    # --- Enable Faulthandler for crash analysis ---
+    import faulthandler
+    faulthandler.enable()
+
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='PhotoRanker')
     parser.add_argument('--folder', type=str, help='Open specified folder at startup')
