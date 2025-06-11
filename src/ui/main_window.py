@@ -357,20 +357,8 @@ class MainWindow(QMainWindow):
 
         # Add to view menu after other view options
         view_menu.addSeparator()
-        self.toggle_side_by_side_action = QAction("Enable Side-by-Side Comparison", self)
-        self.toggle_side_by_side_action.setCheckable(True)
-        self.toggle_side_by_side_action.setChecked(False)
-        self.toggle_side_by_side_action.toggled.connect(self._toggle_side_by_side_mode)
-        view_menu.addAction(self.toggle_side_by_side_action)
-
+        # Side-by-side toggle is now handled within the viewer's own controls
         logging.debug(f"MainWindow._create_menu - End: {time.perf_counter() - start_time:.4f}s")
-
-    def _toggle_side_by_side_mode(self, enabled: bool):
-        """Toggle side-by-side mode for the advanced viewer"""
-        if enabled:
-            self.advanced_image_viewer._set_view_mode("side_by_side")
-        else:
-            self.advanced_image_viewer._set_view_mode("single")
 
     def _create_settings_menu(self):
         start_time = time.perf_counter()
@@ -696,64 +684,12 @@ class MainWindow(QMainWindow):
         self.advanced_image_viewer.setMinimumSize(400, 300)
         center_pane_layout.addWidget(self.advanced_image_viewer, 1)
 
-        # Keep a reference to the first viewer for backward compatibility
-        self.image_view = self.advanced_image_viewer.image_viewers[0]
-
-        self.star_buttons = []
-        self.rating_widget = QWidget() 
-        self.rating_widget.setObjectName("rating_widget")
-        rating_layout = QHBoxLayout(self.rating_widget)
-        rating_layout.setContentsMargins(0,0,0,0) 
-        rating_layout.setSpacing(2) 
-
-        for i in range(1, 6):
-            btn = QPushButton("☆")
-            btn.setProperty("ratingValue", i)
-            font = btn.font()
-            font.setPointSize(14) 
-            btn.setFont(font)
-            rating_layout.addWidget(btn)
-            self.star_buttons.append(btn)
-
-        self.clear_rating_button = QPushButton("X")
-        self.clear_rating_button.setToolTip("Clear rating (0 stars)")
-        rating_layout.addWidget(self.clear_rating_button)
-
-        self.color_buttons = {}
-        self.color_widget = QWidget() 
-        self.color_widget.setObjectName("color_widget")
-        color_layout = QHBoxLayout(self.color_widget)
-        color_layout.setContentsMargins(0,0,0,0) 
-        color_layout.setSpacing(3) 
-        colors = ["Red", "Yellow", "Green", "Blue", "Purple"]
-        color_map = {"Red": "#C92C2C", "Yellow": "#E1C340", "Green": "#3F9142", "Blue": "#3478BC", "Purple": "#8E44AD"}
-
-        for color_name in colors:
-            btn = QPushButton("")
-            btn.setToolTip(f"Set label to {color_name}")
-            btn.setProperty("labelValue", color_name)
-            hex_color = color_map.get(color_name, "#FFFFFF")
-            btn.setProperty("originalHexColor", hex_color)
-            btn.setStyleSheet(f"QPushButton {{ background-color: {hex_color}; }}") 
-            color_layout.addWidget(btn)
-            self.color_buttons[color_name] = btn
-
-        self.clear_color_label_button = QPushButton("X")
-        self.clear_color_label_button.setToolTip("Clear color label")
-        color_layout.addWidget(self.clear_color_label_button)
-
-        self.image_action_bar = QWidget()
-        self.image_action_bar.setObjectName("image_action_bar")
-        image_action_bar_layout = QHBoxLayout(self.image_action_bar)
-        image_action_bar_layout.setContentsMargins(10, 8, 10, 8) 
-        image_action_bar_layout.setSpacing(15) 
-
-        image_action_bar_layout.addStretch(1) 
-        image_action_bar_layout.addWidget(self.rating_widget)
-        image_action_bar_layout.addWidget(self.color_widget)
-        image_action_bar_layout.addStretch(1) 
-
-        center_pane_layout.addWidget(self.image_action_bar) 
+        # Keep a reference to the first viewer for backward compatibility if needed,
+        # but primary interaction is now with the SynchronizedImageViewer itself.
+        self.image_view = self.advanced_image_viewer.image_viewers[0].image_view
+        
+        # The rating and color controls are now part of the IndividualViewer
+        # widgets inside SynchronizedImageViewer, so they are no longer created here.
 
         self.bottom_bar = QWidget()
         self.bottom_bar.setObjectName("bottom_bar")
@@ -910,19 +846,18 @@ class MainWindow(QMainWindow):
 
         self.tree_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
         self.grid_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
-        for btn in self.star_buttons:
-            btn.clicked.connect(self._set_rating_from_button)
-        self.clear_rating_button.clicked.connect(self._clear_rating)
-        for btn in self.color_buttons.values():
-            btn.clicked.connect(self._set_label_from_button)
-        self.clear_color_label_button.clicked.connect(self._clear_label)
+        
+        # Connect to the new signals from the advanced viewer
+        self.advanced_image_viewer.ratingChanged.connect(self._apply_rating)
+        self.advanced_image_viewer.labelChanged.connect(self._apply_label)
+        
         self.prev_button.clicked.connect(self._navigate_up_sequential) # Renamed
         self.next_button.clicked.connect(self._navigate_down_sequential) # Renamed
         self.filter_combo.currentIndexChanged.connect(self._apply_filter)
         self.cluster_filter_combo.currentIndexChanged.connect(self._apply_filter)
         self.cluster_sort_combo.currentIndexChanged.connect(self._cluster_sort_changed)
         self.search_input.textChanged.connect(self._apply_filter)
-        self._connect_rating_actions()
+        # self._connect_rating_actions() # Obsolete, handled by advanced viewer
         self.tree_display_view.collapsed.connect(self._handle_item_collapsed)
         self.view_list_button.clicked.connect(self._set_view_mode_list)
         self.view_icons_button.clicked.connect(self._set_view_mode_icons)
@@ -1007,16 +942,18 @@ class MainWindow(QMainWindow):
         # Create Image menu now that actions are available
         self._create_image_menu()
 
-    def _connect_rating_actions(self):
-        for rating_value, action in self.rating_actions.items():
-            action.triggered.connect(self._apply_rating_from_action)
+    # def _connect_rating_actions(self):
+    #     for rating_value, action in self.rating_actions.items():
+    #         action.triggered.connect(self._apply_rating_from_action)
 
     def _apply_rating_from_action(self):
         sender_action = self.sender()
         if isinstance(sender_action, QAction):
             rating = sender_action.data()
             if rating is not None:
-                self._apply_rating(rating)
+                # In side-by-side mode, this keyboard shortcut could apply to one or both images.
+                # For now, we apply it to all selected images for simplicity.
+                self._apply_rating_to_selection(rating)
 
     def _open_folder_dialog(self):
         folder_path = QFileDialog.getExistingDirectory(
@@ -1257,7 +1194,8 @@ class MainWindow(QMainWindow):
                         active_view.expand(idx_to_expand)
             else: # No items visible after filter
                  self.image_view.clear(); self.image_view.setText("No items match filter")
-                 self._update_rating_display(0); self._update_label_display(None)
+                 # self._update_rating_display(0); self._update_label_display(None)
+                 self.advanced_image_viewer.clear()
                  self.statusBar().showMessage("No items match current filter.")
 
     def _group_images_by_cluster(self) -> Dict[int, List[Dict[str, any]]]:
@@ -1305,59 +1243,36 @@ class MainWindow(QMainWindow):
                  image_item = self._create_standard_item(file_data) 
                  parent_item.appendRow(image_item)
 
-    def _set_rating_from_button(self):
-        sender_button = self.sender()
-        if sender_button:
-            rating = sender_button.property("ratingValue")
-            if rating is not None:
-                self._apply_rating(rating)
-    
-    def _clear_rating(self):
-        self._apply_rating(0)
+    def _apply_rating(self, file_path: str, rating: int):
+        """Apply rating to a specific file path, called by signal."""
+        if not os.path.exists(file_path): return
 
-    def _apply_rating(self, rating: int):
-        """Apply rating using refactored handler"""
-        active_view = self._get_active_file_view()
-        if not active_view: 
-            return
-            
-        current_index = active_view.currentIndex()
-        if not current_index.isValid(): 
-            return
-            
-        source_index = self.proxy_model.mapToSource(current_index)
-        if not source_index.isValid(): 
-            return
-            
-        item = self.file_system_model.itemFromIndex(source_index) 
-        if not item: 
-            return
-        
-        item_data = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(item_data, dict) or 'path' not in item_data: 
-            return 
-            
-        file_path = item_data['path']
-        
-        if not os.path.exists(file_path): 
-            return
-
-        # Use instance method instead of static method
         success = MetadataProcessor.set_rating(
-            file_path, 
-            rating, 
-            self.app_state.rating_disk_cache, 
-            self.app_state.exif_disk_cache
+            file_path, rating, self.app_state.rating_disk_cache, self.app_state.exif_disk_cache
         )
         
         if success:
-            self._update_rating_display(rating)
             self.app_state.rating_cache[file_path] = rating
             self._apply_filter()
-            self._update_image_info_label()  # Update status bar with new rating
-            self._handle_file_selection_changed()  # Refresh status bar with current image's updated rating
         else:
             self.statusBar().showMessage(f"Failed to set rating for {os.path.basename(file_path)}", 5000)
+
+    def _apply_rating_to_selection(self, rating: int):
+        """Applies a rating to all currently selected images."""
+        selected_paths = self._get_selected_file_paths_from_view()
+        if not selected_paths:
+            # If no selection, apply to the currently displayed image(s) in the advanced viewer
+            for viewer in self.advanced_image_viewer.image_viewers:
+                if viewer.isVisible() and viewer._file_path:
+                    self._apply_rating(viewer._file_path, rating)
+                    viewer.update_rating_display(rating)
+            return
+
+        for path in selected_paths:
+            self._apply_rating(path, rating)
+            for viewer in self.advanced_image_viewer.image_viewers:
+                if viewer.isVisible() and viewer._file_path == path:
+                    viewer.update_rating_display(rating)
 
 
     def _log_qmodelindex(self, index: QModelIndex, prefix: str = "") -> str:
@@ -1696,8 +1611,8 @@ class MainWindow(QMainWindow):
 
             if not visible_paths_after_delete:
                 logging.debug("MDIT: No visible image items left after deletion.")
-                self.image_view.clear(); self.image_view.setText("No images")
-                self._update_rating_display(0); self._update_label_display(None)
+                self.advanced_image_viewer.clear()
+                self.advanced_image_viewer.setText("No images left to display.")
                 self.statusBar().showMessage("No images left or visible.")
             else:
                 # Determine the index in the *original* visible list of the first deleted item
@@ -1741,8 +1656,8 @@ class MainWindow(QMainWindow):
             else:
                 # This case handles if visible_paths_after_delete was empty OR find_proxy_index_for_path failed
                 logging.debug("MDIT: No valid image item to select after deletion based on new logic. Clearing UI.")
-                self.image_view.clear(); self.image_view.setText("No images")
-                self._update_rating_display(0); self._update_label_display(None)
+                self.advanced_image_viewer.clear()
+                self.advanced_image_viewer.setText("No valid image to select.")
                 if not visible_paths_after_delete : self.statusBar().showMessage("No images left or visible.")
                 else: self.statusBar().showMessage("Could not determine next item to select.")
             
@@ -2221,12 +2136,6 @@ class MainWindow(QMainWindow):
                             queue.append(proxy_model.index(child_row, 0, current_proxy_idx))
         return QModelIndex() # Not found
 
-    def _update_rating_display(self, rating: int):
-        for i, btn in enumerate(self.star_buttons):
-            star_value = i + 1
-            if star_value <= rating: btn.setText("★")
-            else: btn.setText("☆")
-
     def _get_selected_file_paths_from_view(self) -> List[str]:
         """Helper to get valid, unique, existing file paths from the current selection."""
         active_view = self._get_active_file_view()
@@ -2267,328 +2176,135 @@ class MainWindow(QMainWindow):
         return {'rating': current_rating, 'label': current_label, 'date': current_date}
 
     def _display_single_image_preview(self, file_path: str, file_data_from_model: Optional[Dict[str, Any]]):
-        """Handles displaying preview and info for a single selected image with smooth transitions."""
-        overall_start_time = time.perf_counter()
-        logging.debug(f"[PERF] _display_single_image_preview START for: {os.path.basename(file_path)}")
-
-        # Early validation to avoid unnecessary work
+        """Handles displaying preview and info for a single selected image."""
         if not os.path.exists(file_path):
-            logging.error(f"[PERF] File does not exist: {file_path}")
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage(f"Error: File not found - {os.path.basename(file_path)}", 5000)
-            self._update_rating_display(0)
-            self._update_label_display(None)
             return
 
-        metadata_start_time = time.perf_counter()
-        # Get metadata from AppState caches
         metadata = self._get_cached_metadata_for_selection(file_path)
-        metadata_end_time = time.perf_counter()
-        logging.debug(f"[PERF] Metadata retrieval from cache took: {metadata_end_time - metadata_start_time:.4f}s")
-
         if not metadata:
-            logging.error(f"[PERF] No metadata available for: {os.path.basename(file_path)}")
-            # Show error state but don't clear abruptly
             self.advanced_image_viewer.setText("Metadata unavailable")
             self.statusBar().showMessage(f"Error accessing metadata: {os.path.basename(file_path)}", 5000)
-            self._update_rating_display(0)
-            self._update_label_display(None)
             return
 
-        # Extract metadata
-        current_rating = metadata['rating']
-        current_label = metadata['label']
-        current_date = metadata['date']
-        current_cluster = self.app_state.cluster_results.get(file_path, "N/A")
-        
-        # Get blur status from model data
-        is_blurred_val = None
-        if file_data_from_model and isinstance(file_data_from_model, dict):
-            is_blurred_val = file_data_from_model.get('is_blurred')
+        pixmap = self.image_pipeline.get_preview_qpixmap(
+            file_path,
+            display_max_size=(8000, 8000),
+            apply_auto_edits=self.apply_auto_edits_enabled
+        )
 
-        blur_status_text = ""
-        if is_blurred_val is True: 
-            blur_status_text = " | Blurred: Yes"
-        elif is_blurred_val is False: 
-            blur_status_text = " | Blurred: No"
+        if not pixmap or pixmap.isNull():
+            pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path, apply_auto_edits=self.apply_auto_edits_enabled)
 
-        # Update UI controls immediately for responsive feel
-        ui_update_start_time = time.perf_counter()
-        self._update_rating_display(current_rating)
-        self._update_label_display(current_label)
-        ui_update_end_time = time.perf_counter()
-        logging.debug(f"[PERF] Rating/label display update took: {ui_update_end_time - ui_update_start_time:.4f}s")
+        if pixmap and not pixmap.isNull():
+            image_data = {
+                'pixmap': pixmap,
+                'path': file_path,
+                'rating': metadata.get('rating', 0),
+                'label': metadata.get('label')
+            }
+            self.advanced_image_viewer.set_image_data(image_data)
+            self._update_status_bar_for_image(file_path, metadata, pixmap, file_data_from_model)
+        else:
+            self.advanced_image_viewer.setText("Failed to load image")
+            self.statusBar().showMessage(f"Error: Could not load image data for {os.path.basename(file_path)}", 7000)
 
-        # Load and display image with smooth transition
-        pixmap_load_start_time = time.perf_counter()
-        
+        if self.sidebar_visible:
+            self._update_sidebar_with_current_selection()
+
+    def _update_status_bar_for_image(self, file_path, metadata, pixmap, file_data_from_model):
+        """Helper to compose and set the status bar message for an image."""
+        filename = os.path.basename(file_path)
+        rating_text = f"R: {metadata.get('rating', 0)}"
+        label_text = f"L: {metadata.get('label', 'None')}"
+        date_obj = metadata.get('date')
+        date_text = f"D: {date_obj.strftime('%Y-%m-%d')}" if date_obj else "D: Unknown"
+        cluster = self.app_state.cluster_results.get(file_path)
+        cluster_text = f" | C: {cluster}" if cluster is not None else ""
         try:
-            # Try to get high-resolution preview first
-            get_preview_start_time = time.perf_counter()
-            preview_pixmap = self.image_pipeline.get_preview_qpixmap(
-                file_path,
-                display_max_size=(8000, 8000),  # High resolution for zoom capability
-                apply_auto_edits=self.apply_auto_edits_enabled
-            )
-            get_preview_end_time = time.perf_counter()
-            logging.debug(f"[PERF] get_preview_qpixmap for {os.path.basename(file_path)} took: {get_preview_end_time - get_preview_start_time:.4f}s")
-
-            pixmap_to_display = None
-            image_source = ""
-
-            if preview_pixmap and not preview_pixmap.isNull():
-                pixmap_to_display = preview_pixmap
-                image_source = "preview"
-                logging.debug(f"[PERF] Using preview pixmap for {os.path.basename(file_path)}")
-            else:
-                # Fallback to thumbnail if preview fails
-                logging.warning(f"[PERF] Preview failed for {os.path.basename(file_path)}, trying thumbnail")
-                get_thumb_start_time = time.perf_counter()
-                thumbnail_pixmap = self.image_pipeline.get_thumbnail_qpixmap(
-                    file_path, 
-                    apply_auto_edits=self.apply_auto_edits_enabled
-                )
-                get_thumb_end_time = time.perf_counter()
-                logging.debug(f"[PERF] get_thumbnail_qpixmap for {os.path.basename(file_path)} took: {get_thumb_end_time - get_thumb_start_time:.4f}s")
-
-                if thumbnail_pixmap and not thumbnail_pixmap.isNull():
-                    pixmap_to_display = thumbnail_pixmap
-                    image_source = "thumbnail"
-                    logging.debug(f"[PERF] Using thumbnail pixmap for {os.path.basename(file_path)}")
-                else:
-                    logging.error(f"[PERF] Both preview and thumbnail failed for {os.path.basename(file_path)}")
-
-            # Display the image with smooth transition
-            set_pixmap_start_time = time.perf_counter()
-            
-            if pixmap_to_display:
-                # CRITICAL: Use set_image directly - this prevents black flash
-                # The advanced viewer will handle the transition smoothly
-                self.advanced_image_viewer.set_image(pixmap_to_display, 0)
-                
-                set_pixmap_end_time = time.perf_counter()
-                logging.debug(f"[PERF] set_image ({image_source}) for {os.path.basename(file_path)} took: {set_pixmap_end_time - set_pixmap_start_time:.4f}s")
-                
-                pixmap_load_end_time = time.perf_counter()
-                logging.debug(f"[PERF] Total pixmap loading and setting for {os.path.basename(file_path)} took: {pixmap_load_end_time - pixmap_load_start_time:.4f}s")
-                
-                # Update status bar with comprehensive info
-                status_bar_start_time = time.perf_counter()
-                
-                # Prepare status message components
-                filename = os.path.basename(file_path)
-                label_text = current_label if current_label else "None"
-                date_text = current_date.strftime("%Y-%m-%d") if current_date else "Unknown"
-                cluster_text = f" | C: {current_cluster}" if current_cluster != "N/A" else ""
-                
-                # Get file size safely
-                try:
-                    file_size_kb = os.path.getsize(file_path) // 1024
-                    size_text = f" | Size: {file_size_kb} KB"
-                except OSError as e:
-                    size_text = " | Size: N/A"
-                    logging.warning(f"Could not get size for {file_path}: {e}")
-                
-                # Get image dimensions from pixmap
-                dimensions_text = f" | {pixmap_to_display.width()}x{pixmap_to_display.height()}"
-                
-                # Compose final status message
-                status_message = (
-                    f"{filename} | R: {current_rating} | L: {label_text} | "
-                    f"D: {date_text}{cluster_text}{size_text}{dimensions_text}"
-                    f"{blur_status_text}"
-                )
-                
-                self.statusBar().showMessage(status_message)
-                
-                status_bar_end_time = time.perf_counter()
-                logging.debug(f"[PERF] Status bar update took: {status_bar_end_time - status_bar_start_time:.4f}s")
-                
-            else:
-                # Handle case where no image could be loaded
-                logging.error(f"[PERF] Failed to load any image data for {os.path.basename(file_path)}")
-                
-                # Show error message in viewer instead of just clearing
-                error_message = "Failed to load image"
-                self.advanced_image_viewer.setText(error_message)
-                
-                # Update status bar with error info
-                filename = os.path.basename(file_path)
-                status_message = f"{filename} | Error: Could not load image data"
-                self.statusBar().showMessage(status_message, 7000)
-
-            # Update metadata sidebar if visible
-            if self.sidebar_visible and hasattr(self, 'metadata_sidebar') and self.metadata_sidebar:
-                sidebar_start_time = time.perf_counter()
-                self._update_sidebar_with_current_selection()
-                sidebar_end_time = time.perf_counter()
-                logging.debug(f"[PERF] Sidebar update took: {sidebar_end_time - sidebar_start_time:.4f}s")
-
-        except Exception as e:
-            # Handle any unexpected errors gracefully
-            error_message = f"Critical error displaying image {os.path.basename(file_path)}: {e}"
-            logging.error(f"[MainWindow] _display_single_image_preview: {error_message}", exc_info=True)
-            
-            # Show error in viewer instead of clearing abruptly
-            self.advanced_image_viewer.setText("Error loading image")
-            self.statusBar().showMessage(error_message, 7000)
-            
-            # Reset UI controls to safe state
-            self._update_rating_display(0)
-            self._update_label_display(None)
+            size_text = f" | Size: {os.path.getsize(file_path) // 1024} KB"
+        except OSError:
+            size_text = " | Size: N/A"
+        dimensions_text = f" | {pixmap.width()}x{pixmap.height()}"
+        is_blurred = file_data_from_model.get('is_blurred') if file_data_from_model else None
+        blur_status_text = " | Blurred: Yes" if is_blurred is True else (" | Blurred: No" if is_blurred is False else "")
         
-        # Log performance summary
-        total_time = time.perf_counter() - overall_start_time
-        logging.debug(f"[PERF] _display_single_image_preview END for: {os.path.basename(file_path)} in {total_time:.4f}s")
-        
-        # Optional: Clear any previous error states if we successfully loaded an image
-        if pixmap_to_display:
-            # This helps ensure the UI is in a consistent state
-            pass
+        status_message = f"{filename} | {rating_text} | {label_text} | {date_text}{cluster_text}{size_text}{dimensions_text}{blur_status_text}"
+        self.statusBar().showMessage(status_message)
 
     def _display_multi_selection_info(self, selected_paths: List[str]):
         """Handles UI updates when multiple (2 or more) images are selected."""
-        print(f"[DEBUG] _display_multi_selection_info called with {len(selected_paths)} paths")
-        
-        # Clear the advanced viewer first
-        self.advanced_image_viewer.clear()
-        self._update_rating_display(0) 
-        self._update_label_display(None)
-
-        if len(selected_paths) == 2:
-            print("[DEBUG] Processing 2 selected images for side-by-side")
-            # Load both images for side-by-side comparison
-            pixmaps = []
-            for i, path in enumerate(selected_paths):
-                print(f"[DEBUG] Loading pixmap {i} for {os.path.basename(path)}")
-                pixmap = self.image_pipeline.get_preview_qpixmap(
-                    path,
-                    display_max_size=(8000, 8000),
-                    apply_auto_edits=self.apply_auto_edits_enabled
-                )
-                if pixmap:
-                    pixmaps.append(pixmap)
-                    print(f"[DEBUG] Successfully loaded pixmap {i}, size: {pixmap.size()}")
-                else:
-                    print(f"[DEBUG] Failed to load pixmap {i}")
-            
-            print(f"[DEBUG] Total pixmaps loaded: {len(pixmaps)}")
-            
-            if len(pixmaps) == 2:
-                print("[DEBUG] Calling set_images with 2 pixmaps")
-                # This will automatically show view mode buttons and switch to side-by-side
-                self.advanced_image_viewer.set_images(pixmaps)
-                
-                # Calculate similarity if embeddings are available
-                path1, path2 = selected_paths[0], selected_paths[1]
-                emb1 = self.app_state.embeddings_cache.get(path1)
-                emb2 = self.app_state.embeddings_cache.get(path2)
-
-                if emb1 is not None and emb2 is not None:
-                    try:
-                        import numpy as np
-                        from sklearn.metrics.pairwise import cosine_similarity
-                        emb1_np = np.array(emb1).reshape(1, -1)
-                        emb2_np = np.array(emb2).reshape(1, -1)
-                        similarity = cosine_similarity(emb1_np, emb2_np)[0][0]
-                        self.statusBar().showMessage(f"Similarity between {os.path.basename(path1)} and {os.path.basename(path2)}: {similarity:.4f}")
-                    except Exception as e:
-                        self.statusBar().showMessage(f"Error calculating similarity: {e}", 5000)
-                        logging.error(f"[MainWindow] Error calculating similarity: {e}", exc_info=True)
-                else:
-                    missing_msg_parts = []
-                    if emb1 is None: missing_msg_parts.append(f"{os.path.basename(path1)}")
-                    if emb2 is None: missing_msg_parts.append(f"{os.path.basename(path2)}")
-                    self.statusBar().showMessage(f"Embeddings not found for: {', '.join(missing_msg_parts)}. Analyze similarity first.", 5000)
-            else:
-                print("[DEBUG] Failed to load both pixmaps")
-                self.statusBar().showMessage("Comparing 2 images... (failed to load)", 3000)
-        else:
-            # More than 2 items selected - just clear and show message
-            print(f"[DEBUG] More than 2 items selected: {len(selected_paths)}")
+        if len(selected_paths) < 2:
             self.statusBar().showMessage(f"{len(selected_paths)} items selected. Select 1 for preview or 2 for side-by-side comparison.")
+            self.advanced_image_viewer.clear()
+            return
+            
+        images_data = []
+        for path in selected_paths[:2]: # Max 2 images
+            pixmap = self.image_pipeline.get_preview_qpixmap(
+                path,
+                display_max_size=(8000, 8000),
+                apply_auto_edits=self.apply_auto_edits_enabled
+            )
+            if not pixmap or pixmap.isNull():
+                pixmap = self.image_pipeline.get_thumbnail_qpixmap(path, apply_auto_edits=self.apply_auto_edits_enabled)
+
+            if pixmap:
+                metadata = self._get_cached_metadata_for_selection(path)
+                images_data.append({
+                    'pixmap': pixmap,
+                    'path': path,
+                    'rating': metadata.get('rating', 0) if metadata else 0,
+                    'label': metadata.get('label') if metadata else None
+                })
+        
+        if len(images_data) == 2:
+            self.advanced_image_viewer.set_images_data(images_data)
+            # Show similarity score in status bar
+            path1, path2 = images_data[0]['path'], images_data[1]['path']
+            emb1, emb2 = self.app_state.embeddings_cache.get(path1), self.app_state.embeddings_cache.get(path2)
+            if emb1 is not None and emb2 is not None:
+                try:
+                    similarity = cosine_similarity([emb1], [emb2])[0][0]
+                    self.statusBar().showMessage(f"Similarity between selected: {similarity:.4f}")
+                except Exception as e:
+                    logging.error(f"Error calculating similarity: {e}")
+            else:
+                 self.statusBar().showMessage(f"Comparing {os.path.basename(path1)} and {os.path.basename(path2)}")
+        else:
+            self.statusBar().showMessage("Could not load one or more images for comparison.", 3000)
+            self.advanced_image_viewer.clear()
             
     def _handle_no_selection_or_non_image(self):
-        """Handles UI updates when no valid image is selected or focus is on a non-image item."""
-        
-        # Don't show messages if no images are loaded
-        if not self.app_state.image_files_data:
-            return
-            
-        active_view = self._get_active_file_view()
-        if not active_view:
-            self.advanced_image_viewer.set_image(QPixmap(), 0)
-            self._update_rating_display(0)
-            self._update_label_display(None)
-            self.statusBar().showMessage("Ready")
-            return
-
-        current_focused_index = active_view.currentIndex()
-        if current_focused_index.isValid():
-            source_index = self.proxy_model.mapToSource(current_focused_index)
-            item = self.file_system_model.itemFromIndex(source_index)
-            if item:
-                item_user_data = item.data(Qt.ItemDataRole.UserRole)
-                is_image_item = isinstance(item_user_data, dict) and \
-                                'path' in item_user_data and \
-                                os.path.isfile(item_user_data['path'])
-                if not is_image_item:
-                    self.advanced_image_viewer.set_image(QPixmap(), 0)
-                    self.statusBar().showMessage(f"{item.text()} selected.")
-                    self._update_rating_display(0)
-                    self._update_label_display(None)
-                    return
-        
-        # Default state - but only if we have images loaded
-        if self.app_state.image_files_data:
-            self.advanced_image_viewer.set_image(QPixmap(), 0)
-            self._update_rating_display(0)
-            self._update_label_display(None)
-            self.statusBar().showMessage("Ready")
+        """Handles UI updates when no valid image is selected."""
+        if not self.app_state.image_files_data: return
+        self.advanced_image_viewer.clear()
+        self.advanced_image_viewer.setText("Select an image to view details.")
+        self.statusBar().showMessage("Ready")
 
     def _handle_file_selection_changed(self, selected=None, deselected=None):
         selected_file_paths = self._get_selected_file_paths_from_view()
         
-        # Don't show "no selection" messages if we haven't loaded any images yet
-        if not self.app_state.image_files_data:
-            return
+        if not self.app_state.image_files_data: return
         
-        file_data_from_model = None
         if len(selected_file_paths) == 1:
+            file_data_from_model = None
             active_view = self._get_active_file_view()
-            if active_view:
-                current_proxy_idx = active_view.currentIndex()
-                if current_proxy_idx.isValid():
-                    source_idx = self.proxy_model.mapToSource(current_proxy_idx)
-                    item = self.file_system_model.itemFromIndex(source_idx)
-                    if item:
-                        file_data_from_model = item.data(Qt.ItemDataRole.UserRole)
+            if active_view and active_view.currentIndex().isValid():
+                source_idx = self.proxy_model.mapToSource(active_view.currentIndex())
+                item = self.file_system_model.itemFromIndex(source_idx)
+                if item: file_data_from_model = item.data(Qt.ItemDataRole.UserRole)
 
-        if len(selected_file_paths) == 1:
-            # Ensure we exit side-by-side mode when selecting a single image
-            # Force the advanced viewer back to single mode
-            if hasattr(self.advanced_image_viewer, '_set_view_mode'):
-                self.advanced_image_viewer._set_view_mode("single")
-            
-            # Use a zero-delay timer to allow the event loop to process pending events (like selection)
-            # before we start the potentially slow operation of loading and displaying a new preview.
-            # This can lead to a more responsive feel.
             QTimer.singleShot(0, lambda: self._display_single_image_preview(selected_file_paths[0], file_data_from_model))
-            # Update metadata sidebar if visible
-            if self.sidebar_visible:
-                self._update_sidebar_with_current_selection()
+            if self.sidebar_visible: self._update_sidebar_with_current_selection()
+
         elif len(selected_file_paths) >= 2:
             self._display_multi_selection_info(selected_file_paths)
-            # Show placeholder in sidebar for multiple selection
             if self.sidebar_visible and self.metadata_sidebar:
                 self.metadata_sidebar.show_placeholder()
         else:
-            # Also ensure we exit side-by-side mode when no selection
-            if hasattr(self.advanced_image_viewer, '_set_view_mode'):
-                self.advanced_image_viewer._set_view_mode("single")
-            
             self._handle_no_selection_or_non_image()
-            # Show placeholder in sidebar for no selection
             if self.sidebar_visible and self.metadata_sidebar:
                 self.metadata_sidebar.show_placeholder()
                 
@@ -2663,40 +2379,37 @@ class MainWindow(QMainWindow):
         logging.debug(f"[MainWindow] Rating load progress: {percentage}% ({current}/{total}) - {basename}")
         self.update_loading_text(f"Loading ratings: {percentage}% ({current}/{total}) - {basename}")
 
-    def _handle_metadata_batch_loaded(self, metadata_batch: List[Dict[str, Any]]):
+    def _handle_metadata_batch_loaded(self, metadata_batch: List[Tuple[str, Dict[str, Any]]]):
         logging.debug(f"[MainWindow] Metadata batch loaded with {len(metadata_batch)} items.")
-        # AppState caches (rating_cache, label_cache, date_cache) are already updated by RatingLoaderWorker.
         
         active_view = self._get_active_file_view()
-        currently_selected_path = None
-        if active_view and active_view.currentIndex().isValid():
-            current_proxy_idx = active_view.currentIndex()
-            source_idx = self.proxy_model.mapToSource(current_proxy_idx)
-            item = self.file_system_model.itemFromIndex(source_idx)
-            if item:
-                item_data = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(item_data, dict) and 'path' in item_data:
-                    currently_selected_path = item_data.get('path')
+        currently_selected_paths = self._get_selected_file_paths_from_view()
 
         needs_active_selection_refresh = False
         for image_path, metadata in metadata_batch:
+            if not metadata:
+                continue
+
             logging.debug(f"[MainWindow] Processing metadata from batch for {os.path.basename(image_path)}: {metadata}")
-            if image_path == currently_selected_path:
-                logging.debug(f"[MainWindow] Batch contains currently selected item: {os.path.basename(image_path)}. Marking for UI refresh.")
-                # Update rating buttons, label buttons directly using the new metadata
-                self._update_rating_display(metadata.get('rating', 0))
-                self._update_label_display(metadata.get('label'))
-                # Mark that the full selection handler needs to be called once after the loop
-                # to update status bar and potentially preview if other aspects changed.
+            
+            # Update any visible viewer showing this image
+            for viewer in self.advanced_image_viewer.image_viewers:
+                if viewer.isVisible() and viewer._file_path == image_path:
+                    logging.debug(f"[MainWindow] Updating viewer for {os.path.basename(image_path)}.")
+                    viewer.update_rating_display(metadata.get('rating', 0))
+                    viewer.update_label_display(metadata.get('label'))
+
+            # Check if the processed image is part of the current selection
+            if image_path in currently_selected_paths:
+                logging.debug(f"[MainWindow] Batch contains a selected item: {os.path.basename(image_path)}. Marking for UI refresh.")
                 needs_active_selection_refresh = True
         
         if needs_active_selection_refresh:
             logging.debug(f"[MainWindow] Triggering _handle_file_selection_changed after processing batch due to active item update.")
             self._handle_file_selection_changed()
             
-        # Optionally, if items being visible depends on metadata (e.g. rating filter),
-        # you might need to call self._apply_filter() here or after all batches are done.
-        # For now, individual item updates are prioritized.
+        # After a batch, it's good practice to re-apply the filter in case ratings changed
+        self._apply_filter()
 
     def _handle_rating_load_finished(self):
         logging.info("[MainWindow] _handle_rating_load_finished: Received RatingLoaderWorker.finished signal.")
@@ -2768,68 +2481,16 @@ class MainWindow(QMainWindow):
         # WorkerManager handles thread cleanup
         logging.info(f"[MainWindow] <<< EXIT >>> _handle_preview_error.")
  
-    def _set_label_from_button(self):
-        sender_button = self.sender()
-        if sender_button:
-            label = sender_button.property("labelValue")
-            if label: self._apply_label(label)
+    def _apply_label(self, file_path: str, label: Optional[str]):
+        """Apply label to a specific file path, called by signal."""
+        if not os.path.exists(file_path): return
 
-    def _clear_label(self):
-        self._apply_label(None)
-
-    def _apply_label(self, label: str | None):
-        """Apply label using refactored handler"""
-        active_view = self._get_active_file_view()
-        if not active_view: 
-            return
-            
-        current_index = active_view.currentIndex()
-        if not current_index.isValid(): 
-            return
-            
-        source_index = self.proxy_model.mapToSource(current_index)
-        if not source_index.isValid(): 
-            return
-            
-        item = self.file_system_model.itemFromIndex(source_index) 
-        if not item: 
-            return
-
-        item_data = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(item_data, dict) or 'path' not in item_data: 
-            return 
-            
-        file_path = item_data['path']
-        
-        if not os.path.exists(file_path): 
-            return
-
-        # Use instance method instead of static method
         success = MetadataProcessor.set_label(file_path, label, self.app_state.exif_disk_cache)
         
         if success:
             self.app_state.label_cache[file_path] = label
-            self._update_label_display(label)
         else:
             self.statusBar().showMessage(f"Failed to set label for {os.path.basename(file_path)}", 5000)
-
-    def _update_label_display(self, label: str | None):
-        selected_border_style = "border: 2px solid #FFFFFF;" 
-        default_border_style = "border: 1px solid #33353a;" 
-
-        for color_name, btn in self.color_buttons.items():
-            original_hex = btn.property("originalHexColor")
-            base_style = f"background-color: {original_hex};" 
-            if color_name == label:
-                btn.setStyleSheet(base_style + selected_border_style)
-            else:
-                btn.setStyleSheet(base_style + default_border_style)
-        
-        clear_button_base_style = self.clear_color_label_button.styleSheet().split("border:")[0] 
-        if label is None:
-            self.clear_color_label_button.setStyleSheet(clear_button_base_style + selected_border_style)
-        else:
-             self.clear_color_label_button.setStyleSheet(clear_button_base_style + default_border_style)
 
 
     def _set_view_mode_list(self):

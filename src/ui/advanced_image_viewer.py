@@ -242,11 +242,6 @@ class ZoomableImageView(QGraphicsView):
         """Set text display with improved rendering"""
         import traceback
         
-        # Debug: Print who's calling this method
-        print(f"[DEBUG] setText called with: '{text}'")
-        print("Call stack:")
-        for line in traceback.format_stack()[-3:-1]:
-            print(f"  {line.strip()}")
         
         # Only proceed if we actually want to show text
         if not text or text.strip() == "":
@@ -295,432 +290,389 @@ class ZoomableImageView(QGraphicsView):
         self._zoom_factor = 1.0
         self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
-class SynchronizedImageViewer(QWidget):
+class IndividualViewer(QWidget):
     """
-    Container for synchronized image viewers with controls
+    A self-contained widget that holds a ZoomableImageView and its own
+    rating/color controls. This allows for per-image controls in side-by-side view.
     """
-    
+    # Signals to bubble up to the main window/controller
+    ratingChanged = pyqtSignal(str, int)  # file_path, rating
+    labelChanged = pyqtSignal(str, str)   # file_path, label
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        
-        # Zoom settings
-        self._zoom_factor = 1.0
-        self._min_zoom = 0.1
-        self._max_zoom = 20.0
-        self._zoom_step = 1.15
-        
-        self.image_viewers: List[ZoomableImageView] = []
-        self.sync_enabled = True
-        self._updating_sync = False
+        self._file_path = None
         
         self._setup_ui()
         self._connect_signals()
         
     def _setup_ui(self):
-        """Setup the user interface"""
+        """Setup the layout with image view and control bar."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
+        layout.setSpacing(0)
         
-        # Controls
-        controls_frame = QFrame()
-        controls_frame.setObjectName("advancedViewerControls")
-        controls_frame.setFixedHeight(40)
-        controls_frame.setStyleSheet("""
-            QFrame#advancedViewerControls {
-                background-color: #2B2B2B;
-                border-bottom: 1px solid #404040;
-                padding: 5px;
-            }
-            QPushButton {
-                background-color: #333333;
-                color: #C0C0C0;
-                border: 1px solid #404040;
-                padding: 4px 8px;
-                border-radius: 3px;
-                min-width: 60px;
-            }
-            QPushButton:hover {
-                background-color: #3D3D3D;
-                border-color: #505050;
-            }
-            QPushButton:checked {
-                background-color: #0078D4;
-                border-color: #005A9E;
-                color: white;
-            }
-        """)
-        controls_layout = QHBoxLayout(controls_frame)
-        controls_layout.setContentsMargins(5, 5, 5, 5)
-        controls_layout.setSpacing(5)
+        self.image_view = ZoomableImageView()
+        layout.addWidget(self.image_view, 1) # Image view takes up all available space
         
-        print("[DEBUG] Creating controls frame")
+        # --- Control Bar ---
+        self.control_bar = QFrame()
+        self.control_bar.setObjectName("imageActionControls") # Use a specific object name for styling
+        self.control_bar.setFixedHeight(35)
         
-        # Sync checkbox
-        self.sync_checkbox = QCheckBox("Synchronize Views")
-        self.sync_checkbox.setChecked(True)
-        self.sync_checkbox.toggled.connect(self._toggle_sync)
-        controls_layout.addWidget(self.sync_checkbox)
-        print("[DEBUG] Added sync checkbox")
+        control_layout = QHBoxLayout(self.control_bar)
+        control_layout.setContentsMargins(10, 0, 10, 0)
+        control_layout.setSpacing(15)
         
-        # Zoom controls
-        controls_layout.addWidget(QLabel("Zoom:"))
+        control_layout.addStretch()
         
-        self.zoom_out_btn = QPushButton("-")
-        self.zoom_out_btn.setMaximumWidth(30)
-        self.zoom_out_btn.clicked.connect(self._zoom_out_all)
-        controls_layout.addWidget(self.zoom_out_btn)
+        # Rating controls
+        self.rating_widget = self._create_rating_controls()
+        control_layout.addWidget(self.rating_widget)
         
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setMinimum(10)  # 0.1x zoom
-        self.zoom_slider.setMaximum(2000)  # 20x zoom
-        self.zoom_slider.setValue(100)  # 1x zoom
-        self.zoom_slider.setMaximumWidth(200)
-        self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
-        controls_layout.addWidget(self.zoom_slider)
+        # Color label controls
+        self.color_widget = self._create_color_controls()
+        control_layout.addWidget(self.color_widget)
         
-        self.zoom_in_btn = QPushButton("+")
-        self.zoom_in_btn.setMaximumWidth(30)
-        self.zoom_in_btn.clicked.connect(self._zoom_in_all)
-        controls_layout.addWidget(self.zoom_in_btn)
+        control_layout.addStretch()
         
-        self.zoom_label = QLabel("100%")
-        self.zoom_label.setMinimumWidth(50)
-        controls_layout.addWidget(self.zoom_label)
-        print("[DEBUG] Added zoom controls")
+        layout.addWidget(self.control_bar)
+
+    def _create_rating_controls(self) -> QWidget:
+        """Creates the star rating buttons widget."""
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
         
-        # View controls
-        controls_layout.addStretch()
+        self.star_buttons = []
+        for i in range(1, 6):
+            btn = QPushButton("☆")
+            btn.setProperty("ratingValue", i)
+            layout.addWidget(btn)
+            self.star_buttons.append(btn)
+            
+        self.clear_rating_button = QPushButton("X")
+        self.clear_rating_button.setToolTip("Clear rating (0 stars)")
+        layout.addWidget(self.clear_rating_button)
         
-        self.fit_btn = QPushButton("Fit")
-        self.fit_btn.clicked.connect(self._fit_all)
-        controls_layout.addWidget(self.fit_btn)
+        return widget
+
+    def _create_color_controls(self) -> QWidget:
+        """Creates the color label buttons widget."""
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
         
-        self.actual_size_btn = QPushButton("100%")
-        self.actual_size_btn.clicked.connect(self._actual_size_all)
-        controls_layout.addWidget(self.actual_size_btn)
+        self.color_buttons = {}
+        colors = ["Red", "Yellow", "Green", "Blue", "Purple"]
         
-        # View mode buttons - ALWAYS create them
-        self.view_mode_group = QButtonGroup()
+        for color_name in colors:
+            btn = QPushButton("")
+            btn.setToolTip(f"Set label to {color_name}")
+            btn.setProperty("labelValue", color_name)
+            layout.addWidget(btn)
+            self.color_buttons[color_name] = btn
+            
+        self.clear_color_label_button = QPushButton("X")
+        self.clear_color_label_button.setToolTip("Clear color label")
+        layout.addWidget(self.clear_color_label_button)
         
+        return widget
+        
+    def _connect_signals(self):
+        """Connect button signals to handlers."""
+        for btn in self.star_buttons:
+            btn.clicked.connect(self._on_rating_button_clicked)
+        self.clear_rating_button.clicked.connect(lambda: self._on_rating_button_clicked(0))
+        
+        for btn in self.color_buttons.values():
+            btn.clicked.connect(self._on_color_button_clicked)
+        self.clear_color_label_button.clicked.connect(lambda: self._on_color_button_clicked(None))
+        
+    def _on_rating_button_clicked(self, rating_override=None):
+        """Handle rating button clicks and emit signal."""
+        if self._file_path is None: return
+        
+        rating = rating_override
+        if rating is None:
+            sender = self.sender()
+            rating = sender.property("ratingValue")
+        
+        if rating is not None:
+            self.ratingChanged.emit(self._file_path, rating)
+            self.update_rating_display(rating) # Update own display immediately
+
+    def _on_color_button_clicked(self, label_override=None):
+        """Handle color button clicks and emit signal."""
+        if self._file_path is None: return
+        
+        label = label_override
+        if label is None and label_override is not False: # Distinguish None from clear button
+            sender = self.sender()
+            label = sender.property("labelValue")
+
+        self.labelChanged.emit(self._file_path, label)
+        self.update_label_display(label) # Update own display immediately
+
+    def set_data(self, pixmap: QPixmap, file_path: str, rating: int, label: Optional[str]):
+        """Set all data for the viewer at once."""
+        self._file_path = file_path
+        self.image_view.set_image(pixmap)
+        self.update_rating_display(rating)
+        self.update_label_display(label)
+
+    def update_rating_display(self, rating: int):
+        """Update the star buttons to reflect the current rating."""
+        for i, btn in enumerate(self.star_buttons):
+            btn.setText("★" if i < rating else "☆")
+
+    def update_label_display(self, label: Optional[str]):
+        """Update the color buttons to reflect the current label."""
+        for color_name, btn in self.color_buttons.items():
+            is_selected = (color_name == label)
+            btn.setProperty("selected", is_selected)
+            # Re-polish to apply stylesheet changes
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+            
+        self.clear_color_label_button.setProperty("selected", label is None)
+        self.clear_color_label_button.style().unpolish(self.clear_color_label_button)
+        self.clear_color_label_button.style().polish(self.clear_color_label_button)
+
+    def clear(self):
+        """Clear the viewer and its associated data."""
+        self._file_path = None
+        self.image_view.clear()
+        self.update_rating_display(0)
+        self.update_label_display(None)
+
+    def has_image(self) -> bool:
+        """Check if the internal image view has an image."""
+        return self.image_view.has_image()
+
+class SynchronizedImageViewer(QWidget):
+    """
+    Container for synchronized IndividualViewers with a central toolbar.
+    """
+    # Forward signals from IndividualViewer instances
+    ratingChanged = pyqtSignal(str, int)
+    labelChanged = pyqtSignal(str, str)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        self.image_viewers: List[IndividualViewer] = []
+        self.sync_enabled = True
+        self._updating_sync = False
+        
+        self._setup_ui()
+        
+    def _setup_ui(self):
+        """Setup the user interface with a more modern, compact toolbar."""
+        from PyQt6.QtGui import QIcon
+        from PyQt6.QtWidgets import QStyle
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # --- Toolbar ---
+        self.controls_frame = QFrame()
+        self.controls_frame.setObjectName("advancedViewerToolbar")
+        controls_layout = QHBoxLayout(self.controls_frame)
+        controls_layout.setContentsMargins(5, 0, 5, 0)
+        controls_layout.setSpacing(8)
+
+        # -- View Mode Buttons --
+        self.view_mode_group = QButtonGroup(self)
         self.single_view_btn = QPushButton("Single")
         self.single_view_btn.setCheckable(True)
         self.single_view_btn.setChecked(True)
         self.single_view_btn.clicked.connect(lambda: self._set_view_mode("single"))
         self.view_mode_group.addButton(self.single_view_btn)
         controls_layout.addWidget(self.single_view_btn)
-        
+
         self.side_by_side_btn = QPushButton("Side by Side")
         self.side_by_side_btn.setCheckable(True)
         self.side_by_side_btn.clicked.connect(lambda: self._set_view_mode("side_by_side"))
         self.view_mode_group.addButton(self.side_by_side_btn)
         controls_layout.addWidget(self.side_by_side_btn)
         
-        print("[DEBUG] Added view mode buttons")
-        
-        # ALWAYS show the controls frame initially
-        controls_frame.show()
-        layout.addWidget(controls_frame)
-        print(f"[DEBUG] Added controls frame to layout, height: {controls_frame.height()}")
-        
-        # Image viewer container
-        self.viewer_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.viewer_splitter.splitterMoved.connect(self._on_splitter_moved)
-        layout.addWidget(self.viewer_splitter)
-        print("[DEBUG] Added viewer splitter")
-        
-        # Create initial viewer
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.VLine)
+        separator.setFrameShadow(QFrame.Shadow.Sunken)
+        controls_layout.addWidget(separator)
+
+        # -- Zoom Controls --
+        self.zoom_out_btn = QPushButton(); self.zoom_out_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowLeft)); self.zoom_out_btn.setToolTip("Zoom Out (-)"); self.zoom_out_btn.clicked.connect(self._zoom_out_all); controls_layout.addWidget(self.zoom_out_btn)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal); self.zoom_slider.setRange(10, 2000); self.zoom_slider.setValue(100); self.zoom_slider.setToolTip("Zoom"); self.zoom_slider.valueChanged.connect(self._zoom_slider_changed); controls_layout.addWidget(self.zoom_slider)
+        self.zoom_in_btn = QPushButton(); self.zoom_in_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight)); self.zoom_in_btn.setToolTip("Zoom In (+)"); self.zoom_in_btn.clicked.connect(self._zoom_in_all); controls_layout.addWidget(self.zoom_in_btn)
+        self.zoom_label = QLabel("100%"); self.zoom_label.setMinimumWidth(45); controls_layout.addWidget(self.zoom_label)
+
+        # -- Fit Buttons --
+        self.fit_btn = QPushButton(); self.fit_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogToParent)); self.fit_btn.setToolTip("Fit to View (0)"); self.fit_btn.clicked.connect(self._fit_all); controls_layout.addWidget(self.fit_btn)
+        self.actual_size_btn = QPushButton("1:1"); self.actual_size_btn.setToolTip("Actual Size (100%) (1)"); self.actual_size_btn.clicked.connect(self._actual_size_all); controls_layout.addWidget(self.actual_size_btn)
+        controls_layout.addStretch()
+
+        # -- Sync Button --
+        self.sync_button = QPushButton("Sync"); self.sync_button.setCheckable(True); self.sync_button.setChecked(True); self.sync_button.setToolTip("Synchronize Pan & Zoom"); self.sync_button.toggled.connect(self._toggle_sync); controls_layout.addWidget(self.sync_button)
+        layout.addWidget(self.controls_frame)
+
+        # --- Image Viewer Container ---
+        self.viewer_splitter = QSplitter(Qt.Orientation.Horizontal); self.viewer_splitter.setObjectName("advancedViewerSplitter"); self.viewer_splitter.setHandleWidth(2); self.viewer_splitter.splitterMoved.connect(self._on_splitter_moved); layout.addWidget(self.viewer_splitter, 1)
+
         self._create_viewer()
-        print("[DEBUG] Created initial viewer")
-        
-        # Force the layout to update
-        self.updateGeometry()
-        print("[DEBUG] UI setup complete")
+        self._update_controls_visibility()
         
     def _on_splitter_moved(self, pos, index):
-        """Handle splitter movement to refit images"""
-        print(f"[DEBUG] Splitter moved to position {pos}, index {index}")
-        QTimer.singleShot(100, self._fit_visible_images_after_layout_change)
+        QTimer.singleShot(50, self._fit_visible_images_after_layout_change)
 
-    def _create_viewer(self) -> ZoomableImageView:
-        """Create a new image viewer"""
-        viewer = ZoomableImageView()
-        viewer.zoom_changed.connect(self._on_zoom_changed)
-        viewer.pan_changed.connect(self._on_pan_changed)
+    def _create_viewer(self) -> IndividualViewer:
+        viewer = IndividualViewer()
+        viewer.image_view.zoom_changed.connect(self._on_zoom_changed)
+        viewer.image_view.pan_changed.connect(self._on_pan_changed)
+        viewer.ratingChanged.connect(self.ratingChanged)
+        viewer.labelChanged.connect(self.labelChanged)
         
         self.image_viewers.append(viewer)
         self.viewer_splitter.addWidget(viewer)
-        
         return viewer
 
-    def _update_view_mode_buttons(self, num_images: int):
-        """Update view mode button visibility based on number of images and current mode"""
-        print(f"[DEBUG] _update_view_mode_buttons called with num_images: {num_images}")
-        
-        if not hasattr(self, 'single_view_btn') or not hasattr(self, 'side_by_side_btn'):
-            print("[DEBUG] View mode buttons not yet initialized, skipping update")
-            return
-        
-        # Show buttons only when we have 2+ images AND we're actually in side-by-side mode
-        current_mode = self._get_current_view_mode()
-        should_show_buttons = num_images >= 2 and current_mode == "side_by_side"
-        
-        if should_show_buttons:
-            print("[DEBUG] Showing view mode buttons (side-by-side mode active)")
-            self.single_view_btn.show()
-            self.side_by_side_btn.show()
-        else:
-            print("[DEBUG] Hiding view mode buttons (not in side-by-side mode)")
-            self.single_view_btn.hide()
-            self.side_by_side_btn.hide()
-
-    
     def _get_current_view_mode(self):
-        """Get the current view mode"""
-        if hasattr(self, 'side_by_side_btn') and self.side_by_side_btn.isChecked():
-            return "side_by_side"
-        return "single"
+        return "side_by_side" if self.side_by_side_btn.isChecked() else "single"
 
-    def _connect_signals(self):
-        """Connect internal signals"""
-        pass
+    def _toggle_sync(self, checked: bool):
+        self.sync_enabled = checked
+
+    def _update_controls_visibility(self):
+        visible_viewers = sum(1 for v in self.image_viewers if v.isVisible())
+        self.sync_button.setVisible(visible_viewers > 1)
         
-    def _toggle_sync(self, enabled: bool):
-        """Toggle synchronization between viewers"""
-        self.sync_enabled = enabled
-        
+        num_images_loaded = sum(1 for v in self.image_viewers if v.has_image())
+        self.side_by_side_btn.setEnabled(num_images_loaded >= 2)
+
     def _set_view_mode(self, mode: str):
-        """Set the view mode (single or side-by-side)"""
-        print(f"[DEBUG] _set_view_mode called with mode: {mode}")
-        
-        if not hasattr(self, 'single_view_btn') or not hasattr(self, 'side_by_side_btn'):
-            print("[DEBUG] View mode buttons not initialized, skipping button state update")
-            buttons_available = False
-        else:
-            buttons_available = True
-        
         if mode == "single":
-            # Hide all but first viewer
             for i, viewer in enumerate(self.image_viewers):
                 viewer.setVisible(i == 0)
-            if buttons_available:
-                self.single_view_btn.setChecked(True)
-                self.side_by_side_btn.setChecked(False)
-            print("[DEBUG] Set to single view mode")
-            
-            # Hide buttons when switching to single mode
-            if buttons_available:
-                self.single_view_btn.hide()
-                self.side_by_side_btn.hide()
-                
+            self.single_view_btn.setChecked(True)
         elif mode == "side_by_side":
-            # Show two viewers
-            while len(self.image_viewers) < 2:
-                self._create_viewer()
-            
-            for i, viewer in enumerate(self.image_viewers):
-                viewer.setVisible(i < 2)
-            if buttons_available:
-                self.single_view_btn.setChecked(False)
-                self.side_by_side_btn.setChecked(True)
-            print("[DEBUG] Set to side-by-side view mode")
-            
-            # Show buttons when switching to side-by-side mode
-            if buttons_available:
-                self.single_view_btn.show()
-                self.side_by_side_btn.show()
+            while len(self.image_viewers) < 2: self._create_viewer()
+            for i, viewer in enumerate(self.image_viewers): viewer.setVisible(i < 2)
+            self.side_by_side_btn.setChecked(True)
         
-        # Force the splitter to update its layout
         if hasattr(self, 'viewer_splitter'):
-            self.viewer_splitter.updateGeometry()
-            
             if mode == "side_by_side" and len(self.image_viewers) >= 2:
                 total_width = self.viewer_splitter.width()
-                if total_width > 0:
-                    self.viewer_splitter.setSizes([total_width // 2, total_width // 2])
-                    print(f"[DEBUG] Set splitter sizes to equal: [{total_width // 2}, {total_width // 2}]")
-                else:
-                    self.viewer_splitter.setSizes([1, 1])
-                    print("[DEBUG] Set splitter sizes to [1, 1] (fallback)")
-            elif mode == "single":
-                self.viewer_splitter.setSizes([1, 0])
-                print("[DEBUG] Set splitter sizes to [1, 0] for single view")
-            
-            from PyQt6.QtWidgets import QApplication
-            QApplication.processEvents()
-            self._fit_visible_images_after_layout_change()
+                self.viewer_splitter.setSizes([total_width // 2, total_width // 2] if total_width > 0 else [1, 1])
+            else: self.viewer_splitter.setSizes([1] + [0] * (len(self.image_viewers) - 1))
+
+        self._update_controls_visibility()
+        QTimer.singleShot(0, self._fit_visible_images_after_layout_change)
         
     def _fit_visible_images_after_layout_change(self):
-        """Fit visible images to their new view sizes after a layout change"""
-        print("[DEBUG] _fit_visible_images_after_layout_change called")
-        for i, viewer in enumerate(self.image_viewers):
+        for viewer in self.image_viewers:
             if viewer.isVisible() and viewer.has_image():
-                print(f"[DEBUG] Fitting image in viewer {i} to new layout")
-                viewer.fit_in_view()
+                viewer.image_view.fit_in_view()
             
-    def set_image(self, pixmap: QPixmap, viewer_index: int = 0):
-        """Set image for specific viewer with smooth transition"""
-        print(f"[DEBUG] set_image called with viewer_index: {viewer_index}")
+    def set_image_data(self, image_data: Dict[str, Any], viewer_index: int = 0):
         if viewer_index < len(self.image_viewers):
-            viewer = self.image_viewers[viewer_index]
-            
-            # CRITICAL: Set image directly without clearing - prevents black flash
-            viewer.set_image(pixmap)
-            
-            # Fitting is now handled within viewer.set_image()
-        
-        # Update view mode buttons only for primary viewer
-        if viewer_index == 0 and self._ui_initialized():
-            # Always switch to single mode when setting a single image
-            self._set_view_mode("single")
+            pixmap = image_data.get('pixmap')
+            if pixmap:
+                self.image_viewers[viewer_index].set_data(
+                    pixmap,
+                    image_data.get('path'),
+                    image_data.get('rating', 0),
+                    image_data.get('label')
+                )
+        self._set_view_mode("single")
+        self._update_controls_visibility()
 
-    def set_images(self, pixmaps: List[QPixmap]):
-        """Set images for side-by-side comparison with smooth transition"""
-        print(f"[DEBUG] set_images called with {len(pixmaps)} pixmaps")
-        
-        if len(pixmaps) >= 2:
-            # Switch to side-by-side mode and show buttons
+    def set_images_data(self, images_data: List[Dict[str, Any]]):
+        if len(images_data) >= 2:
             self._set_view_mode("side_by_side")
-            
-            # Set images simultaneously to avoid flashing
-            for i, pixmap in enumerate(pixmaps[:2]):  # Max 2 images
-                if i < len(self.image_viewers):
-                    self.image_viewers[i].set_image(pixmap)
-                print(f"[DEBUG] Set pixmap {i} in viewer {i}")
-                
-            # Clear any additional viewers
-            for i in range(2, len(self.image_viewers)):
-                QTimer.singleShot(i, self.image_viewers[i].clear)
-        else:
-            # Single image mode - hide buttons
-            self._set_view_mode("single")
-            if pixmaps and len(self.image_viewers) > 0:
-                self.image_viewers[0].set_image(pixmaps[0])
-            
-            # Clear secondary viewers with tiny delays to prevent simultaneous flashing
-            for i in range(1, len(self.image_viewers)):
-                QTimer.singleShot(i, self.image_viewers[i].clear)
+            for i, data in enumerate(images_data[:2]):
+                if i < len(self.image_viewers) and data.get('pixmap'):
+                    self.image_viewers[i].set_data(
+                        data['pixmap'], data['path'], data.get('rating', 0), data.get('label')
+                    )
+            for i in range(2, len(self.image_viewers)): self.image_viewers[i].clear()
+        elif images_data:
+            self.set_image_data(images_data[0], 0)
+        self._update_controls_visibility()
 
     def clear(self):
-        """Clear the image display with smooth transition"""
-        print("[DEBUG] clear() called")
-        
-        # Clear primary viewer immediately, others with tiny delays
-        for i, viewer in enumerate(self.image_viewers):
-            if i == 0:
-                viewer.clear()
-            else:
-                QTimer.singleShot(i, viewer.clear)
-            print(f"[DEBUG] Cleared viewer {i}")
-        
-        # Hide buttons when clearing and set to single mode
+        for viewer in self.image_viewers: viewer.clear()
         self._set_view_mode("single")
             
     def _zoom_in_all(self):
-        """Zoom in all visible viewers"""
         for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.zoom_in()
+            if viewer.isVisible(): viewer.image_view.zoom_in()
                 
     def _zoom_out_all(self):
-        """Zoom out all visible viewers"""
         for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.zoom_out()
+            if viewer.isVisible(): viewer.image_view.zoom_out()
                 
     def _fit_all(self):
-        """Fit all visible viewers"""
         for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.fit_in_view()
+            if viewer.isVisible(): viewer.image_view.fit_in_view()
                 
     def _actual_size_all(self):
-        """Set all visible viewers to actual size"""
         for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.zoom_to_actual_size()
+            if viewer.isVisible(): viewer.image_view.zoom_to_actual_size()
     
     def _ui_initialized(self) -> bool:
-        """Check if the UI components are initialized"""
-        return (hasattr(self, 'zoom_label') and 
-                hasattr(self, 'zoom_slider') and
-                hasattr(self, 'single_view_btn') and 
-                hasattr(self, 'side_by_side_btn') and
-                hasattr(self, 'viewer_splitter'))
+        return hasattr(self, 'viewer_splitter')
                 
     def _zoom_slider_changed(self, value: int):
-        """Handle zoom slider changes"""
-        if self._updating_sync:
-            return
-            
+        if self._updating_sync: return
         zoom_factor = value / 100.0
         for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.set_zoom_factor(zoom_factor)
+            if viewer.isVisible(): viewer.image_view.set_zoom_factor(zoom_factor)
                 
     def _on_zoom_changed(self, zoom_factor: float, center_point: QPointF):
-        """Handle zoom changes from viewers"""
-        if self._updating_sync:
-            return
+        if self._updating_sync: return
+        sender_view = self.sender()
+        if not isinstance(sender_view, ZoomableImageView): return
 
-        sender = self.sender()
-        if not isinstance(sender, ZoomableImageView):
-            return
-
-        # Normalize the center point from the sender
-        sender_scene_rect = sender.sceneRect()
-        normalized_pos = QPointF(0.5, 0.5)
-        if center_point and sender_scene_rect.width() > 0 and sender_scene_rect.height() > 0:
-            norm_x = (center_point.x() - sender_scene_rect.left()) / sender_scene_rect.width()
-            norm_y = (center_point.y() - sender_scene_rect.top()) / sender_scene_rect.height()
+        self.zoom_label.setText(f"{int(zoom_factor * 100)}%")
+        self._updating_sync = True
+        self.zoom_slider.setValue(int(zoom_factor * 100))
+        self._updating_sync = False
+        
+        if self.sync_enabled:
+            sender_scene_rect = sender_view.sceneRect()
+            norm_x = (center_point.x() - sender_scene_rect.left()) / sender_scene_rect.width() if sender_scene_rect.width() > 0 else 0.5
+            norm_y = (center_point.y() - sender_scene_rect.top()) / sender_scene_rect.height() if sender_scene_rect.height() > 0 else 0.5
             normalized_pos = QPointF(norm_x, norm_y)
 
-        # Update zoom label and slider
-        if hasattr(self, 'zoom_label') and self.zoom_label is not None:
-            self.zoom_label.setText(f"{int(zoom_factor * 100)}%")
-        
-        if hasattr(self, 'zoom_slider') and self.zoom_slider is not None:
-            self._updating_sync = True
-            self.zoom_slider.setValue(int(zoom_factor * 100))
-            self._updating_sync = False
-        
-        # Sync other viewers if enabled
-        if self.sync_enabled:
             self._updating_sync = True
             for viewer in self.image_viewers:
-                if viewer != sender and viewer.isVisible() and viewer.has_image():
-                    # Un-normalize for the target viewer
-                    target_scene_rect = viewer.sceneRect()
-                    if target_scene_rect.width() > 0 and target_scene_rect.height() > 0:
+                if viewer.image_view != sender_view and viewer.isVisible() and viewer.has_image():
+                    target_scene_rect = viewer.image_view.sceneRect()
+                    if target_scene_rect.width() > 0:
                         target_x = target_scene_rect.left() + normalized_pos.x() * target_scene_rect.width()
                         target_y = target_scene_rect.top() + normalized_pos.y() * target_scene_rect.height()
-                        target_center = QPointF(target_x, target_y)
-                        viewer.set_zoom_factor(zoom_factor, target_center)
+                        viewer.image_view.set_zoom_factor(zoom_factor, QPointF(target_x, target_y))
                     else:
-                        viewer.set_zoom_factor(zoom_factor)  # Fallback
+                        viewer.image_view.set_zoom_factor(zoom_factor)
             self._updating_sync = False
 
     def _on_pan_changed(self, center_point: QPointF):
-        """Handle pan changes from viewers"""
-        if not self.sync_enabled or self._updating_sync:
-            return
-            
-        sender = self.sender()
-        
-        # Sync other viewers
+        if not self.sync_enabled or self._updating_sync: return
+        sender_view = self.sender()
         self._updating_sync = True
         for viewer in self.image_viewers:
-            if viewer != sender and viewer.isVisible():
-                viewer.centerOn(center_point)
+            if viewer.image_view != sender_view and viewer.isVisible():
+                viewer.image_view.centerOn(center_point)
         self._updating_sync = False
         
     def fit_to_viewport(self):
-        """Fit the visible images to the viewport while maintaining aspect ratio."""
-        for i, viewer in enumerate(self.image_viewers):
+        for viewer in self.image_viewers:
             if viewer.isVisible() and viewer.has_image():
-                viewer.fit_in_view()
+                viewer.image_view.fit_in_view()
 
     def setText(self, text: str):
-        """Set text display (for backward compatibility)"""
-        if self.image_viewers:
-            self.image_viewers[0].setText(text)
+        if self.image_viewers: self.image_viewers[0].image_view.setText(text)

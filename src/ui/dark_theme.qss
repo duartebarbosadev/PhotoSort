@@ -681,31 +681,121 @@ SynchronizedImageViewer {
     border: none;
 }
 
-SynchronizedImageViewer QWidget#advancedViewerControls {
-    background-color: #272727;
-    border-top: 1px solid #1A1A1A;
-    border-bottom: none;
-    border-radius: 0px;
-    margin: 0px;
-    padding: 5px;
+/* Main Toolbar at the top of the viewer */
+QWidget#advancedViewerToolbar {
+    background-color: #202020;
+    border-bottom: 1px solid #383838;
 }
 
-/* Make controls more compact for integration */
-SynchronizedImageViewer QWidget#advancedViewerControls {
+QWidget#advancedViewerToolbar QPushButton {
+    background-color: #333333;
+    color: #C0C0C0;
+    border: 1px solid #404040;
+    padding: 3px 7px;
+    border-radius: 4px;
+    min-height: 22px;
+}
+QWidget#advancedViewerToolbar QPushButton:hover {
+    background-color: #3D3D3D;
+    border-color: #505050;
+    color: #FFFFFF;
+}
+QWidget#advancedViewerToolbar QPushButton:checked {
+    background-color: #0078D4;
+    border-color: #005A9E;
+    color: #FFFFFF;
+}
+QWidget#advancedViewerToolbar QPushButton:disabled {
+    background-color: #2C2C2C;
+    color: #666666;
+    border-color: #353535;
+}
+
+/* Icon-only buttons on the toolbar */
+QWidget#advancedViewerToolbar QPushButton[icon-only="true"] {
+    min-width: 26px;
+}
+
+/* Zoom Slider on the toolbar */
+QWidget#advancedViewerToolbar QSlider {
+    min-height: 22px;
+}
+QWidget#advancedViewerToolbar QSlider::groove:horizontal {
+    border: 1px solid #404040;
+    height: 4px;
+    background-color: #2D2D2D;
+    border-radius: 2px;
+}
+QWidget#advancedViewerToolbar QSlider::handle:horizontal {
+    background-color: #0078D4;
+    border: 1px solid #005A9E;
+    width: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+QWidget#advancedViewerToolbar QSlider::handle:horizontal:hover {
+    background-color: #0088F0;
+}
+
+
+/* --- Per-Image Controls (inside IndividualViewer) --- */
+QFrame#imageActionControls {
+    background-color: rgba(40, 40, 40, 0.85); /* Semi-transparent background */
+    border-top: 1px solid #1A1A1A;
     min-height: 35px;
     max-height: 35px;
 }
 
-SynchronizedImageViewer QWidget#advancedViewerControls QPushButton {
-    min-height: 20px;
-    padding: 2px 6px;
-    font-size: 8pt;
+QFrame#imageActionControls QPushButton {
+    background-color: transparent;
+    color: #A0A0A0;
+    border: none;
+    border-radius: 4px;
+    padding: 3px;
+}
+QFrame#imageActionControls QPushButton:hover {
+    background-color: #3D3D3D;
+    color: #FFFFFF;
 }
 
-SynchronizedImageViewer QWidget#advancedViewerControls QSlider {
-    max-width: 150px;
+/* Star Buttons */
+QFrame#imageActionControls QWidget > QPushButton { /* Target star buttons */
+    font-size: 15pt;
+    min-width: 26px;
+    min-height: 26px;
 }
 
-SynchronizedImageViewer QLabel#coordinatesLabel {
-    font-size: 7pt;
+/* Color Buttons */
+QFrame#imageActionControls QWidget > QPushButton[labelValue] {
+    min-width: 18px;
+    min-height: 18px;
+    max-width: 18px;
+    max-height: 18px;
+    border: 1px solid #33353a;
+}
+QFrame#imageActionControls QWidget > QPushButton[labelValue]:hover {
+     border: 1px solid #777777;
+}
+
+/* Style for selected state (set via Python property) */
+QFrame#imageActionControls QWidget > QPushButton[selected="true"] {
+    border: 2px solid #FFFFFF;
+}
+
+/* Color button specific backgrounds */
+QPushButton[labelValue="Red"]    { background-color: #C92C2C; }
+QPushButton[labelValue="Yellow"] { background-color: #E1C340; }
+QPushButton[labelValue="Green"]  { background-color: #3F9142; }
+QPushButton[labelValue="Blue"]   { background-color: #3478BC; }
+QPushButton[labelValue="Purple"] { background-color: #8E44AD; }
+
+/* Splitter handle within the viewer */
+QSplitter#advancedViewerSplitter::handle {
+    background-color: #2B2B2B;
+}
+QSplitter#advancedViewerSplitter::handle:horizontal {
+    width: 2px;
+}
+QSplitter#advancedViewerSplitter::handle:hover {
+    background-color: #0078D4;
 }
