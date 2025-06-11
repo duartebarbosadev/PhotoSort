@@ -2239,9 +2239,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"{len(selected_paths)} items selected. Select 1 for preview or 2 for side-by-side comparison.")
             self.advanced_image_viewer.clear()
             return
-            
-        images_data = []
-        for path in selected_paths[:2]: # Max 2 images
+
+        images_data_for_viewer = []
+        metadata_for_sidebar = []
+
+        for path in selected_paths[:2]:  # Max 2 images
             pixmap = self.image_pipeline.get_preview_qpixmap(
                 path,
                 display_max_size=(8000, 8000),
@@ -2251,18 +2253,33 @@ class MainWindow(QMainWindow):
                 pixmap = self.image_pipeline.get_thumbnail_qpixmap(path, apply_auto_edits=self.apply_auto_edits_enabled)
 
             if pixmap:
-                metadata = self._get_cached_metadata_for_selection(path)
-                images_data.append({
+                basic_metadata = self._get_cached_metadata_for_selection(path)
+                raw_exif = MetadataProcessor.get_detailed_metadata(path, self.app_state.exif_disk_cache)
+                
+                # Data for the viewer
+                images_data_for_viewer.append({
                     'pixmap': pixmap,
                     'path': path,
-                    'rating': metadata.get('rating', 0) if metadata else 0,
-                    'label': metadata.get('label') if metadata else None
+                    'rating': basic_metadata.get('rating', 0) if basic_metadata else 0,
+                    'label': basic_metadata.get('label') if basic_metadata else None
                 })
-        
-        if len(images_data) == 2:
-            self.advanced_image_viewer.set_images_data(images_data)
-            # Show similarity score in status bar
-            path1, path2 = images_data[0]['path'], images_data[1]['path']
+                
+                # Combine all metadata for the sidebar
+                combined_meta = (basic_metadata or {}).copy()
+                combined_meta['raw_exif'] = (raw_exif or {}).copy()
+                metadata_for_sidebar.append(combined_meta)
+
+        if len(images_data_for_viewer) == 2:
+            self.advanced_image_viewer.set_images_data(images_data_for_viewer)
+            
+            # Update sidebar for comparison
+            if self.sidebar_visible:
+                self.metadata_sidebar.update_comparison(
+                    [d['path'] for d in images_data_for_viewer],
+                    metadata_for_sidebar
+                )
+
+            path1, path2 = images_data_for_viewer[0]['path'], images_data_for_viewer[1]['path']
             emb1, emb2 = self.app_state.embeddings_cache.get(path1), self.app_state.embeddings_cache.get(path2)
             if emb1 is not None and emb2 is not None:
                 try:
@@ -2271,10 +2288,12 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     logging.error(f"Error calculating similarity: {e}")
             else:
-                 self.statusBar().showMessage(f"Comparing {os.path.basename(path1)} and {os.path.basename(path2)}")
+                self.statusBar().showMessage(f"Comparing {os.path.basename(path1)} and {os.path.basename(path2)}")
         else:
             self.statusBar().showMessage("Could not load one or more images for comparison.", 3000)
             self.advanced_image_viewer.clear()
+            if self.sidebar_visible:
+                self.metadata_sidebar.show_placeholder()
             
     def _handle_no_selection_or_non_image(self):
         """Handles UI updates when no valid image is selected."""
@@ -2301,7 +2320,7 @@ class MainWindow(QMainWindow):
 
         elif len(selected_file_paths) >= 2:
             self._display_multi_selection_info(selected_file_paths)
-            if self.sidebar_visible and self.metadata_sidebar:
+            if self.sidebar_visible and self.metadata_sidebar and len(selected_file_paths) > 2:
                 self.metadata_sidebar.show_placeholder()
         else:
             self._handle_no_selection_or_non_image()
@@ -2451,7 +2470,8 @@ class MainWindow(QMainWindow):
     # Slot for WorkerManager's preview_preload_finished signal
     def _handle_preview_finished(self):
         logging.info("[MainWindow] <<< ENTRY >>> _handle_preview_finished: Received PreviewPreloaderWorker.finished signal.")
-        self.statusBar().showMessage("Preview preloading finished.", 5000)
+        auto_edits_status = "enabled" if self.apply_auto_edits_enabled else "disabled"
+        self.statusBar().showMessage(f"Previews regenerated with Auto RAW edits {auto_edits_status}.", 5000)
         self.hide_loading_overlay()
         logging.info("[MainWindow] _handle_preview_finished: Loading overlay hidden.")
         
@@ -2835,10 +2855,20 @@ class MainWindow(QMainWindow):
     def _handle_toggle_auto_edits(self, checked: bool):
         self.apply_auto_edits_enabled = checked
         set_auto_edit_photos(checked)   # Save to persistent settings
+
+        # If no images are loaded, just set the preference and exit.
+        if not self.app_state.image_files_data:
+            self.statusBar().showMessage(f"Auto RAW edits has been {'enabled' if checked else 'disabled'}.", 4000)
+            return
+
+        self.show_loading_overlay("Applying new edit settings...")
+        QApplication.processEvents() # Ensure overlay appears immediately
+
         self.image_pipeline.clear_all_image_caches()
         self._rebuild_model_view()
         
         if self.app_state.image_files_data:
+            # The loading overlay text will be updated by the preview worker's progress signals
             self.worker_manager.start_preview_preload(
                 [fd['path'] for fd in self.app_state.image_files_data],
                 self.apply_auto_edits_enabled
@@ -2850,17 +2880,20 @@ class MainWindow(QMainWindow):
             if current_proxy_idx.isValid():
                 try:
                     active_view.selectionModel().selectionChanged.disconnect(self._handle_file_selection_changed)
-                except TypeError: pass 
+                except TypeError: pass
                 
-                self._handle_file_selection_changed() 
+                self._handle_file_selection_changed()
                 
                 try:
                     active_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
-                except TypeError: pass 
+                except TypeError: pass
             else:
                 first_visible_item = self._find_first_visible_item()
                 if first_visible_item.isValid(): active_view.setCurrentIndex(first_visible_item)
-            self.statusBar().showMessage(f"Auto RAW edits {'enabled' if checked else 'disabled'}. Caches cleared, view refreshed.", 3000)
+        
+        # The final status bar message is now handled by _handle_preview_finished
+        # We can update the status bar here to show that the process has started.
+        self.statusBar().showMessage(f"Regenerating previews with Auto RAW edits {'enabled' if checked else 'disabled'}...", 0)
 
     def _start_blur_detection_analysis(self):
         logging.info("[MainWindow] _start_blur_detection_analysis called.")
@@ -3211,22 +3244,25 @@ class MainWindow(QMainWindow):
             self._hide_metadata_sidebar()
     
     def _show_metadata_sidebar(self):
-        """Show the metadata sidebar"""
+        """Show the metadata sidebar, ensuring it reflects the current selection state."""
         if not self.metadata_sidebar:
             return
-        
+
         self.sidebar_visible = True
-        # Block signals to avoid signal loop
         self.toggle_metadata_sidebar_action.blockSignals(True)
         self.toggle_metadata_sidebar_action.setChecked(True)
         self.toggle_metadata_sidebar_action.blockSignals(False)
-        
-        # Update sidebar with current selection
-        self._update_sidebar_with_current_selection()
-        
-        # Show sidebar instantly
+
+        # Explicitly check selection state before showing
+        selected_paths = self._get_selected_file_paths_from_view()
+        if len(selected_paths) == 2:
+            # If two images are selected, force the comparison view
+            self._display_multi_selection_info(selected_paths)
+        else:
+            # Otherwise, update with the single selection (or placeholder)
+            self._update_sidebar_with_current_selection()
+
         self._set_sidebar_visibility(True)
-        
         self.statusBar().showMessage("Image details sidebar shown. Press I to toggle.", 3000)
     
     def _hide_metadata_sidebar(self):
