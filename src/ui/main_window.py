@@ -281,7 +281,7 @@ class MainWindow(QMainWindow):
             self.loading_overlay = LoadingOverlay(parent_for_overlay)
             self.loading_overlay.hide()
         else:
-            print("Warning: Could not create loading overlay, parent widget not available yet.")
+            logging.warning("Could not create loading overlay, parent widget not available yet.")
         logging.debug(f"MainWindow._create_loading_overlay - End: {time.perf_counter() - start_time:.4f}s")
 
     def show_loading_overlay(self, text="Loading..."):
@@ -1930,14 +1930,14 @@ class MainWindow(QMainWindow):
     def _find_first_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
         if not active_view:
-            print("[DEBUG] _find_first_visible_item: No active view")
+            logging.debug("_find_first_visible_item: No active view")
             return QModelIndex()
         
-        print(f"[DEBUG] _find_first_visible_item: Start, active_view type: {type(active_view).__name__}")
+        logging.debug(f"_find_first_visible_item: Start, active_view type: {type(active_view).__name__}")
         
         proxy_model = active_view.model()
         if not isinstance(proxy_model, QSortFilterProxyModel):
-            print(f"[DEBUG] _find_first_visible_item: Model is not QSortFilterProxyModel: {type(proxy_model)}")
+            logging.debug(f"_find_first_visible_item: Model is not QSortFilterProxyModel: {type(proxy_model)}")
             return QModelIndex()
         
         root_proxy_index = QModelIndex()
@@ -1945,9 +1945,9 @@ class MainWindow(QMainWindow):
         print(f"[DEBUG] _find_first_visible_item: {proxy_row_count} top-level rows in proxy model")
 
         if isinstance(active_view, QTreeView):
-            print("[DEBUG] _find_first_visible_item: Using TreeView logic")
+            logging.debug("_find_first_visible_item: Using TreeView logic")
             q = [proxy_model.index(r, 0, root_proxy_index) for r in range(proxy_row_count)]
-            print(f"[DEBUG] _find_first_visible_item: Initial queue size: {len(q)}")
+            logging.debug(f"_find_first_visible_item: Initial queue size: {len(q)}")
             
             head = 0
             while head < len(q):
@@ -1956,7 +1956,7 @@ class MainWindow(QMainWindow):
                 if not current_proxy_idx.isValid():
                     continue
                 
-                print(f"[DEBUG] _find_first_visible_item: Checking row {current_proxy_idx.row()}")
+                logging.debug(f"_find_first_visible_item: Checking row {current_proxy_idx.row()}")
                 
                 if not active_view.isRowHidden(current_proxy_idx.row(), current_proxy_idx.parent()):
                     if self._is_valid_image_item(current_proxy_idx):
@@ -2356,30 +2356,30 @@ class MainWindow(QMainWindow):
         
         # Rest of your existing code...
     def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
-        logging.info(f"[MainWindow] <<< ENTRY >>> _start_preview_preloader called with {len(image_data_list)} items.")
+        logging.info(f"<<< ENTRY >>> _start_preview_preloader called with {len(image_data_list)} items.")
         if not image_data_list:
-            logging.info("[MainWindow] _start_preview_preloader: image_data_list is empty. Hiding overlay.")
+            logging.info("_start_preview_preloader: image_data_list is empty. Hiding overlay.")
             self.hide_loading_overlay()
             return
         
         paths_for_preloader = [fd['path'] for fd in image_data_list if fd and isinstance(fd, dict) and 'path' in fd]
-        logging.info(f"[MainWindow] _start_preview_preloader: Extracted {len(paths_for_preloader)} paths for preloader.")
+        logging.info(f"_start_preview_preloader: Extracted {len(paths_for_preloader)} paths for preloader.")
 
         if not paths_for_preloader:
-            logging.info("[MainWindow] _start_preview_preloader: No valid paths_for_preloader. Hiding overlay.")
+            logging.info("_start_preview_preloader: No valid paths_for_preloader. Hiding overlay.")
             self.hide_loading_overlay()
             return
  
         self.update_loading_text(f"Preloading previews ({len(paths_for_preloader)} images)...")
-        logging.info(f"[MainWindow] _start_preview_preloader: Calling worker_manager.start_preview_preload for {len(paths_for_preloader)} paths.")
+        logging.info(f"_start_preview_preloader: Calling worker_manager.start_preview_preload for {len(paths_for_preloader)} paths.")
         try:
-            logging.info(f"[MainWindow] _start_preview_preloader: --- CALLING --- worker_manager.start_preview_preload for {len(paths_for_preloader)} paths.")
+            logging.info(f"_start_preview_preloader: --- CALLING --- worker_manager.start_preview_preload for {len(paths_for_preloader)} paths.")
             self.worker_manager.start_preview_preload(paths_for_preloader, self.apply_auto_edits_enabled)
-            logging.info("[MainWindow] _start_preview_preloader: --- RETURNED --- worker_manager.start_preview_preload call successful.")
+            logging.info("_start_preview_preloader: --- RETURNED --- worker_manager.start_preview_preload call successful.")
         except Exception as e_preview_preload:
-            logging.error(f"[MainWindow] _start_preview_preloader: Error calling worker_manager.start_preview_preload: {e_preview_preload}", exc_info=True)
+            logging.error(f"_start_preview_preloader: Error calling worker_manager.start_preview_preload: {e_preview_preload}", exc_info=True)
             self.hide_loading_overlay() # Ensure overlay is hidden on error
-        logging.info(f"[MainWindow] <<< EXIT >>> _start_preview_preloader.")
+        logging.info(f"<<< EXIT >>> _start_preview_preloader.")
   
     # Slot for WorkerManager's file_scan_thumbnail_preload_finished signal
     # This signal is now deprecated in favor of chaining after rating load.
@@ -2389,17 +2389,17 @@ class MainWindow(QMainWindow):
         # Now, preview preloading is kicked off after rating loading finishes.
         # self.update_loading_text("Thumbnails preloaded. Starting preview preloading...")
         # self._start_preview_preloader(all_file_data)
-        logging.debug("[MainWindow] _handle_thumbnail_preload_finished called (now largely deprecated by rating load chain)")
+        logging.debug("_handle_thumbnail_preload_finished called (now largely deprecated by rating load chain)")
         pass # Intentionally do nothing here, preview starts after rating load now
 
     # --- Rating Loader Worker Handlers ---
     def _handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0
-        logging.debug(f"[MainWindow] Rating load progress: {percentage}% ({current}/{total}) - {basename}")
+        logging.debug(f"Rating load progress: {percentage}% ({current}/{total}) - {basename}")
         self.update_loading_text(f"Loading ratings: {percentage}% ({current}/{total}) - {basename}")
 
     def _handle_metadata_batch_loaded(self, metadata_batch: List[Tuple[str, Dict[str, Any]]]):
-        logging.debug(f"[MainWindow] Metadata batch loaded with {len(metadata_batch)} items.")
+        logging.debug(f"Metadata batch loaded with {len(metadata_batch)} items.")
         
         active_view = self._get_active_file_view()
         currently_selected_paths = self._get_selected_file_paths_from_view()
@@ -2409,49 +2409,49 @@ class MainWindow(QMainWindow):
             if not metadata:
                 continue
 
-            logging.debug(f"[MainWindow] Processing metadata from batch for {os.path.basename(image_path)}: {metadata}")
+            logging.debug(f"Processing metadata from batch for {os.path.basename(image_path)}: {metadata}")
             
             # Update any visible viewer showing this image
             for viewer in self.advanced_image_viewer.image_viewers:
                 if viewer.isVisible() and viewer._file_path == image_path:
-                    logging.debug(f"[MainWindow] Updating viewer for {os.path.basename(image_path)}.")
+                    logging.debug(f"Updating viewer for {os.path.basename(image_path)}.")
                     viewer.update_rating_display(metadata.get('rating', 0))
                     viewer.update_label_display(metadata.get('label'))
 
             # Check if the processed image is part of the current selection
             if image_path in currently_selected_paths:
-                logging.debug(f"[MainWindow] Batch contains a selected item: {os.path.basename(image_path)}. Marking for UI refresh.")
+                logging.debug(f"Batch contains a selected item: {os.path.basename(image_path)}. Marking for UI refresh.")
                 needs_active_selection_refresh = True
         
         if needs_active_selection_refresh:
-            logging.debug(f"[MainWindow] Triggering _handle_file_selection_changed after processing batch due to active item update.")
+            logging.debug(f"Triggering _handle_file_selection_changed after processing batch due to active item update.")
             self._handle_file_selection_changed()
             
         # After a batch, it's good practice to re-apply the filter in case ratings changed
         self._apply_filter()
 
     def _handle_rating_load_finished(self):
-        logging.info("[MainWindow] _handle_rating_load_finished: Received RatingLoaderWorker.finished signal.")
+        logging.info("_handle_rating_load_finished: Received RatingLoaderWorker.finished signal.")
         self.statusBar().showMessage("Background rating loading finished.", 3000)
         
         if not self.app_state.image_files_data:
-            logging.info("[MainWindow] _handle_rating_load_finished: No image files data found in app_state. Hiding loading overlay.")
+            logging.info("_handle_rating_load_finished: No image files data found in app_state. Hiding loading overlay.")
             self.hide_loading_overlay()
             return
 
-        logging.info("[MainWindow] _handle_rating_load_finished: image_files_data found. Preparing to start preview preloader.")
+        logging.info("_handle_rating_load_finished: image_files_data found. Preparing to start preview preloader.")
         self.update_loading_text("Ratings loaded. Preloading previews...")
         try:
-            logging.info("[MainWindow] _handle_rating_load_finished: --- CALLING --- _start_preview_preloader.")
+            logging.info("_handle_rating_load_finished: --- CALLING --- _start_preview_preloader.")
             self._start_preview_preloader(self.app_state.image_files_data.copy()) # Pass a copy
-            logging.info("[MainWindow] _handle_rating_load_finished: --- RETURNED --- _start_preview_preloader call completed.")
+            logging.info("_handle_rating_load_finished: --- RETURNED --- _start_preview_preloader call completed.")
         except Exception as e_start_preview:
-            logging.error(f"[MainWindow] _handle_rating_load_finished: Error calling _start_preview_preloader: {e_start_preview}", exc_info=True)
+            logging.error(f"_handle_rating_load_finished: Error calling _start_preview_preloader: {e_start_preview}", exc_info=True)
             self.hide_loading_overlay() # Ensure overlay is hidden on error
-        logging.info("[MainWindow] <<< EXIT >>> _handle_rating_load_finished.")
+        logging.info("<<< EXIT >>> _handle_rating_load_finished.")
 
     def _handle_rating_load_error(self, message: str):
-        logging.error(f"[MainWindow] Rating Load Error: {message}")
+        logging.error(f"Rating Load Error: {message}")
         self.statusBar().showMessage(f"Rating Load Error: {message}", 5000)
         # Still proceed to preview preloading even if rating load had errors for some files
         if self.app_state.image_files_data:
@@ -2463,17 +2463,17 @@ class MainWindow(QMainWindow):
 
     # Slot for WorkerManager's preview_preload_progress signal
     def _handle_preview_progress(self, percentage: int, message: str):
-        logging.info(f"[MainWindow] <<< ENTRY >>> _handle_preview_progress: {percentage}% - {message}")
+        logging.info(f"<<< ENTRY >>> _handle_preview_progress: {percentage}% - {message}")
         self.update_loading_text(message)
-        logging.info(f"[MainWindow] <<< EXIT >>> _handle_preview_progress.")
+        logging.info(f"<<< EXIT >>> _handle_preview_progress.")
 
     # Slot for WorkerManager's preview_preload_finished signal
     def _handle_preview_finished(self):
-        logging.info("[MainWindow] <<< ENTRY >>> _handle_preview_finished: Received PreviewPreloaderWorker.finished signal.")
+        logging.info("<<< ENTRY >>> _handle_preview_finished: Received PreviewPreloaderWorker.finished signal.")
         auto_edits_status = "enabled" if self.apply_auto_edits_enabled else "disabled"
         self.statusBar().showMessage(f"Previews regenerated with Auto RAW edits {auto_edits_status}.", 5000)
         self.hide_loading_overlay()
-        logging.info("[MainWindow] _handle_preview_finished: Loading overlay hidden.")
+        logging.info("_handle_preview_finished: Loading overlay hidden.")
         
         # Log final cache vs image size
         if self.app_state.current_folder_path:
@@ -2490,16 +2490,16 @@ class MainWindow(QMainWindow):
         self._update_image_info_label() # Update UI with final cache size
         
         # WorkerManager handles thread cleanup
-        logging.info("[MainWindow] <<< EXIT >>> _handle_preview_finished.")
+        logging.info("<<< EXIT >>> _handle_preview_finished.")
 
     # Slot for WorkerManager's preview_preload_error signal
     def _handle_preview_error(self, message: str):
-        logging.info(f"[MainWindow] <<< ENTRY >>> _handle_preview_error: {message}")
-        logging.error(f"[MainWindow] Preview Preload Error: {message}")
+        logging.info(f"<<< ENTRY >>> _handle_preview_error: {message}")
+        logging.error(f"Preview Preload Error: {message}")
         self.statusBar().showMessage(f"Preview Preload Error: {message}", 5000)
         self.hide_loading_overlay()
         # WorkerManager handles thread cleanup
-        logging.info(f"[MainWindow] <<< EXIT >>> _handle_preview_error.")
+        logging.info(f"<<< EXIT >>> _handle_preview_error.")
  
     def _apply_label(self, file_path: str, label: Optional[str]):
         """Apply label to a specific file path, called by signal."""
@@ -2692,7 +2692,7 @@ class MainWindow(QMainWindow):
         return item
 
     def _start_similarity_analysis(self):
-        logging.info("[MainWindow] _start_similarity_analysis called.")
+        logging.info("_start_similarity_analysis called.")
         if self.worker_manager.is_similarity_worker_running():
             self.statusBar().showMessage("Similarity analysis is already in progress.", 3000)
             return
@@ -2804,7 +2804,7 @@ class MainWindow(QMainWindow):
                              # Explicitly cast to float32 if not already, for consistency
                             centroids[cluster_id] = np.mean(np.array(cluster_embeddings, dtype=np.float32), axis=0)
                 except Exception as e: # Catch potential errors in np.mean, like empty list or dtype issues
-                    print(f"[MainWindow] Error calculating centroid for cluster {cluster_id}: {e}")
+                    print(f"Error calculating centroid for cluster {cluster_id}: {e}")
                     pass 
         return centroids
 
@@ -2896,7 +2896,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Regenerating previews with Auto RAW edits {'enabled' if checked else 'disabled'}...", 0)
 
     def _start_blur_detection_analysis(self):
-        logging.info("[MainWindow] _start_blur_detection_analysis called.")
+        logging.info("_start_blur_detection_analysis called.")
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("No images loaded to analyze for blurriness.", 3000)
             return
@@ -3357,18 +3357,18 @@ class MainWindow(QMainWindow):
         """Update sidebar with the currently selected image metadata"""
         
         if not self.metadata_sidebar or not self.sidebar_visible:
-            logging.debug("[MainWindow] _update_sidebar_with_current_selection: Sidebar not available or not visible")
+            logging.debug("_update_sidebar_with_current_selection: Sidebar not available or not visible")
             return
         
         active_view = self._get_active_file_view()
         if not active_view:
-            logging.debug("[MainWindow] _update_sidebar_with_current_selection: No active view")
+            logging.debug("_update_sidebar_with_current_selection: No active view")
             self.metadata_sidebar.show_placeholder()
             return
         
         current_proxy_idx = active_view.currentIndex()
         if not current_proxy_idx.isValid() or not self._is_valid_image_item(current_proxy_idx):
-            logging.debug("[MainWindow] _update_sidebar_with_current_selection: No valid image item selected")
+            logging.debug("_update_sidebar_with_current_selection: No valid image item selected")
             self.metadata_sidebar.show_placeholder()
             return
         
@@ -3376,43 +3376,43 @@ class MainWindow(QMainWindow):
         source_idx = self.proxy_model.mapToSource(current_proxy_idx)
         item = self.file_system_model.itemFromIndex(source_idx)
         if not item:
-            logging.warning("[MainWindow] _update_sidebar_with_current_selection: No item from source index")
+            logging.warning("_update_sidebar_with_current_selection: No item from source index")
             return
         
         item_data = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(item_data, dict) or 'path' not in item_data:
-            logging.warning("[MainWindow] _update_sidebar_with_current_selection: Invalid item data")
+            logging.warning("_update_sidebar_with_current_selection: Invalid item data")
             return
         
         file_path = item_data['path']
         file_ext = os.path.splitext(file_path)[1].lower()
         
-        logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Processing {os.path.basename(file_path)} (extension: {file_ext})")
+        logging.info(f"_update_sidebar_with_current_selection: Processing {os.path.basename(file_path)} (extension: {file_ext})")
         
         if not os.path.exists(file_path):
-            logging.error(f"[MainWindow] _update_sidebar_with_current_selection: File does not exist: {file_path}")
+            logging.error(f"_update_sidebar_with_current_selection: File does not exist: {file_path}")
             return
         
         # Get cached metadata
         metadata = self._get_cached_metadata_for_selection(file_path)
         if not metadata:
-            logging.warning(f"[MainWindow] _update_sidebar_with_current_selection: No cached metadata for {os.path.basename(file_path)}")
+            logging.warning(f"_update_sidebar_with_current_selection: No cached metadata for {os.path.basename(file_path)}")
             return
         
-        logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Got cached metadata for {os.path.basename(file_path)}: {metadata}")
+        logging.info(f"_update_sidebar_with_current_selection: Got cached metadata for {os.path.basename(file_path)}: {metadata}")
         
         # Get detailed EXIF data for sidebar - now much cleaner
-        logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Calling get_detailed_metadata for {os.path.basename(file_path)}")
+        logging.info(f"_update_sidebar_with_current_selection: Calling get_detailed_metadata for {os.path.basename(file_path)}")
         raw_exif = MetadataProcessor.get_detailed_metadata(file_path, self.app_state.exif_disk_cache)
         
         if not raw_exif:
-            logging.warning(f"[MainWindow] _update_sidebar_with_current_selection: No raw EXIF data returned for {os.path.basename(file_path)}")
+            logging.warning(f"_update_sidebar_with_current_selection: No raw EXIF data returned for {os.path.basename(file_path)}")
             raw_exif = {}
         else:
-            logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Got {len(raw_exif)} raw EXIF keys for {os.path.basename(file_path)}")
+            logging.info(f"_update_sidebar_with_current_selection: Got {len(raw_exif)} raw EXIF keys for {os.path.basename(file_path)}")
         
         # Update sidebar
-        logging.info(f"[MainWindow] _update_sidebar_with_current_selection: Updating sidebar for {os.path.basename(file_path)}")
+        logging.info(f"_update_sidebar_with_current_selection: Updating sidebar for {os.path.basename(file_path)}")
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
 
     def _show_lossy_rotation_confirmation_dialog(self, filename: str, rotation_type: str) -> Tuple[bool, bool]:
@@ -3616,7 +3616,7 @@ class MainWindow(QMainWindow):
             if not needs_lossy:
                 # Metadata rotation failed and no lossy option available
                 self.statusBar().showMessage(message, 5000)
-                logging.warning(f"[MainWindow] {message}")
+                logging.warning(f"{message}")
                 return
             
             # Metadata rotation failed but lossy rotation is available
@@ -3651,12 +3651,12 @@ class MainWindow(QMainWindow):
             else:
                 error_msg = f"Failed to perform lossy rotation for {filename}"
                 self.statusBar().showMessage(error_msg, 5000)
-                logging.error(f"[MainWindow] {error_msg}")
+                logging.error(f"{error_msg}")
 
         except Exception as e:
             error_msg = f"Error rotating {filename}: {str(e)}"
             self.statusBar().showMessage(error_msg, 5000)
-            logging.error(f"[MainWindow] {error_msg}", exc_info=True)
+            logging.error(f"{error_msg}", exc_info=True)
         finally:
             self.hide_loading_overlay()
 
@@ -3692,7 +3692,7 @@ class MainWindow(QMainWindow):
         
         # Show success message
         self.statusBar().showMessage(message, 5000)
-        logging.info(f"[MainWindow] {message}")
+        logging.info(f"{message}")
 
     def _rotate_current_image_clockwise(self):
         """Rotate the currently selected image 90° clockwise (for keyboard shortcut)."""

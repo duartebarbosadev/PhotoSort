@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 from typing import Optional, Tuple, List, Dict, Callable, Any
 import concurrent.futures
+import logging
 
 # Assuming these processors are in the new structure
 from src.core.image_processing.raw_image_processor import RawImageProcessor, is_raw_extension
@@ -48,7 +49,7 @@ class BlurDetector:
                 # This part might be redundant if StandardImageProcessor handles more or
                 # if we decide unsupported types are not processed for blur.
                 try:
-                    print(f"[BlurDetector] Unknown extension '{ext}', attempting to load with Pillow for blur detection.")
+                    logging.warning(f"Unknown extension '{ext}', attempting to load with Pillow for blur detection.")
                     img = Image.open(normalized_path)
                     # StandardImageProcessor.load_for_blur_detection already handles exif_transpose
                     # So, if we directly use Image.open, we should also apply it.
@@ -57,16 +58,16 @@ class BlurDetector:
                     img.thumbnail(target_size, Image.Resampling.LANCZOS)
                     pil_img = img.convert("RGB")
                 except UnidentifiedImageError:
-                    print(f"[BlurDetector] Pillow could not identify unknown image type for blur: {normalized_path}")
+                    logging.error(f"Pillow could not identify unknown image type for blur: {normalized_path}")
                     return None
                 except FileNotFoundError:
-                    print(f"[BlurDetector] File not found for unknown type blur detection: {normalized_path}")
+                    logging.error(f"File not found for unknown type blur detection: {normalized_path}")
                     return None
             
             return pil_img
 
         except Exception as e:
-            print(f"[BlurDetector] Error in _load_image_for_detection for {normalized_path}: {e}")
+            logging.error(f"Error in _load_image_for_detection for {normalized_path}: {e}")
             return None
 
     @staticmethod
@@ -94,7 +95,7 @@ class BlurDetector:
         """
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):
-            print(f"[BlurDetector] Error: File does not exist for blur detection: {normalized_path}")
+            logging.error(f"File does not exist for blur detection: {normalized_path}")
             return None
 
         try:
@@ -114,21 +115,21 @@ class BlurDetector:
             open_cv_image = cv2.cvtColor(np.array(pil_image_rgb), cv2.COLOR_RGB2BGR)
 
             if open_cv_image is None: # Should not happen if pil_image_rgb is valid
-                print(f"[BlurDetector] OpenCV could not convert PIL data for {normalized_path}")
+                logging.error(f"OpenCV could not convert PIL data for {normalized_path}")
                 return None
 
             gray = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
             laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
             
-            print(f"[BlurDetector] Blur detection for {os.path.basename(normalized_path)}: Laplacian Variance = {laplacian_var:.2f}, Threshold = {threshold}, Blurred = {laplacian_var < threshold}")
+            logging.debug(f"Blur detection for {os.path.basename(normalized_path)}: Laplacian Variance = {laplacian_var:.2f}, Threshold = {threshold}, Blurred = {laplacian_var < threshold}")
 
             return laplacian_var < threshold
 
         except UnidentifiedImageError: # Should be caught by _load_image_for_detection
-            print(f"[BlurDetector] Pillow could not identify image file: {normalized_path}")
+            logging.error(f"Pillow could not identify image file: {normalized_path}")
             return None
         except Exception as e:
-            print(f"[BlurDetector] Error during blur detection for {normalized_path}: {e} (Type: {type(e).__name__})")
+            logging.error(f"Error during blur detection for {normalized_path}: {e} (Type: {type(e).__name__})")
             return None
 
     @staticmethod
@@ -152,7 +153,7 @@ class BlurDetector:
             if status_update_callback:
                 status_update_callback(image_path, is_blurred)
         except Exception as e:
-            print(f"[BlurDetectorTask] Error processing {image_path}: {e}")
+            logging.error(f"Error processing {image_path}: {e}")
             if status_update_callback:
                 status_update_callback(image_path, None) # Report error as None
 
@@ -175,13 +176,13 @@ class BlurDetector:
         processed_count = 0
         
         effective_num_workers = num_workers if num_workers is not None else DEFAULT_NUM_WORKERS
-        print(f"[BlurDetectorBatch] Starting for {total_files} files, workers: {effective_num_workers}")
+        logging.info(f"Starting for {total_files} files, workers: {effective_num_workers}")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=effective_num_workers) as executor:
             futures_map: Dict[concurrent.futures.Future, str] = {}
             for image_path in image_paths:
                 if should_continue_callback and not should_continue_callback():
-                    print("[BlurDetectorBatch] Cancellation requested, stopping new tasks.")
+                    logging.info("Cancellation requested, stopping new tasks.")
                     break
                 
                 future = executor.submit(
@@ -199,7 +200,7 @@ class BlurDetector:
                 try:
                     future.result() # _detect_blur_task doesn't return, it calls callback. Wait for completion/exception.
                 except Exception as e:
-                    print(f"[BlurDetectorBatch] Error processing future for {path_for_future}: {e}")
+                    logging.error(f"Error processing future for {path_for_future}: {e}")
                     if status_update_callback: # Ensure callback for error if task itself didn't catch it
                         status_update_callback(path_for_future, None)
                 
@@ -210,6 +211,6 @@ class BlurDetector:
                 if should_continue_callback and not should_continue_callback():
                     for f_cancel in futures_map: # Cancel remaining futures
                         if not f_cancel.done(): f_cancel.cancel()
-                    print("[BlurDetectorBatch] Processing cancelled during completion.")
+                    logging.info("Processing cancelled during completion.")
                     break
-        print(f"[BlurDetectorBatch] Finished. Processed {processed_count}/{total_files} files.")
+        logging.info(f"Finished. Processed {processed_count}/{total_files} files.")

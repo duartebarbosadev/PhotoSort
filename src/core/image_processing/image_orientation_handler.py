@@ -1,5 +1,6 @@
 from PIL import Image, ImageOps
 from typing import Optional
+import logging
 
 class ImageOrientationHandler:
     """Handles EXIF-based image orientation correction."""
@@ -17,5 +18,5 @@ class ImageOrientationHandler:
             return ImageOps.exif_transpose(image)
         except Exception as e:
             # Log error or handle as appropriate, for now, return original image
-            print(f"Warning: Could not apply EXIF transpose: {e}")
+            logging.warning(f"Could not apply EXIF transpose: {e}")
             return image

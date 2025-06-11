@@ -1,3 +1,4 @@
+import logging
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
@@ -71,13 +72,13 @@ class WorkerManager(QObject):
                 try:
                     worker_stop_method()
                 except Exception as e:
-                    print(f"[WorkerManager] Error calling worker stop method: {e}")
+                    logging.error(f"Error calling worker stop method: {e}")
             thread.quit()
             if not thread.wait(5000):  # Wait 5 seconds
-                print(f"[WorkerManager] Thread {thread} did not quit gracefully, terminating.")
+                logging.warning(f"Thread {thread} did not quit gracefully, terminating.")
                 thread.terminate()
                 thread.wait()  # Wait for termination
-            print(f"[WorkerManager] Thread {thread} stopped.")
+            logging.debug(f"Thread {thread} stopped.")
         # Even if not running, or None, ensure we return None for reassignment
         return None, None
 
@@ -88,7 +89,7 @@ class WorkerManager(QObject):
         if self.scanner_thread:
             self.scanner_thread.deleteLater()
             self.scanner_thread = None
-        print("[WorkerManager] Scanner thread and worker references cleaned up.")
+        logging.debug("Scanner thread and worker references cleaned up.")
 
     # --- File Scanner Management ---
     def start_file_scan(self, folder_path: str, apply_auto_edits: bool, perform_blur_detection: bool, blur_threshold: float):
@@ -118,7 +119,7 @@ class WorkerManager(QObject):
         self.scanner_thread.finished.connect(self._cleanup_scanner_refs)
         
         self.scanner_thread.start()
-        print("[WorkerManager] File scanner thread started.")
+        logging.info("File scanner thread started.")
 
     def stop_file_scan(self):
         worker_stop = self.file_scanner.stop if self.file_scanner else None
@@ -139,7 +140,7 @@ class WorkerManager(QObject):
         if self.similarity_thread:
             self.similarity_thread.deleteLater()
             self.similarity_thread = None
-        print("[WorkerManager] Similarity engine thread and worker references cleaned up.")
+        logging.debug("Similarity engine thread and worker references cleaned up.")
 
     # --- Similarity Engine Management ---
     def start_similarity_analysis(self, file_paths: List[str], apply_auto_edits: bool):
@@ -164,7 +165,7 @@ class WorkerManager(QObject):
         self.similarity_thread.finished.connect(self._cleanup_similarity_refs)
 
         self.similarity_thread.start()
-        print("[WorkerManager] Similarity engine thread started.")
+        logging.info("Similarity engine thread started.")
 
     def stop_similarity_analysis(self):
         worker_stop = self.similarity_engine.stop if self.similarity_engine else None
@@ -182,7 +183,7 @@ class WorkerManager(QObject):
         if self.preview_preloader_thread:
             self.preview_preloader_thread.deleteLater()
             self.preview_preloader_thread = None
-        print("[WorkerManager] Preview preloader thread and worker references cleaned up.")
+        logging.debug("Preview preloader thread and worker references cleaned up.")
 
     # --- Preview Preloader Management ---
     def start_preview_preload(self, image_paths: List[str], apply_auto_edits: bool):
@@ -204,7 +205,7 @@ class WorkerManager(QObject):
         self.preview_preloader_thread.finished.connect(self._cleanup_preview_preloader_refs)
 
         self.preview_preloader_thread.start()
-        print("[WorkerManager] Preview preloader thread started.")
+        logging.info("Preview preloader thread started.")
 
     def stop_preview_preload(self):
         worker_stop = self.preview_preloader_worker.stop if self.preview_preloader_worker else None
@@ -223,7 +224,7 @@ class WorkerManager(QObject):
         if self.blur_detection_thread:
             self.blur_detection_thread.deleteLater()
             self.blur_detection_thread = None
-        print("[WorkerManager] Blur detection thread and worker references cleaned up.")
+        logging.debug("Blur detection thread and worker references cleaned up.")
 
     # --- Blur Detection Management ---
     def start_blur_detection(self, image_data_list: List[Dict[str, Any]], blur_threshold: float, apply_auto_edits_for_raw: bool):
@@ -248,7 +249,7 @@ class WorkerManager(QObject):
         self.blur_detection_thread.finished.connect(self._cleanup_blur_detection_refs)
 
         self.blur_detection_thread.start()
-        print("[WorkerManager] Blur detection thread started.")
+        logging.info("Blur detection thread started.")
 
     def stop_blur_detection(self):
         worker_stop = self.blur_detection_worker.stop if self.blur_detection_worker else None
@@ -266,7 +267,7 @@ class WorkerManager(QObject):
         if self.rating_loader_thread:
             self.rating_loader_thread.deleteLater()
             self.rating_loader_thread = None
-        print("[WorkerManager] Rating loader thread and worker references cleaned up.")
+        logging.debug("Rating loader thread and worker references cleaned up.")
 
     # --- Rating Loader Management ---
     def start_rating_load(self, image_data_list: List[Dict[str, Any]], rating_disk_cache: RatingCache, app_state: AppState):
@@ -291,7 +292,7 @@ class WorkerManager(QObject):
         self.rating_loader_thread.finished.connect(self._cleanup_rating_loader_refs)
 
         self.rating_loader_thread.start()
-        print("[WorkerManager] Rating loader thread started.")
+        logging.info("Rating loader thread started.")
 
     def stop_rating_load(self):
         worker_stop = self.rating_loader_worker.stop if self.rating_loader_worker else None
@@ -303,13 +304,13 @@ class WorkerManager(QObject):
             self.rating_loader_thread = temp_thread
 
     def stop_all_workers(self):
-        print("[WorkerManager] Stopping all workers...")
+        logging.info("Stopping all workers...")
         self.stop_file_scan()
         self.stop_similarity_analysis()
         self.stop_preview_preload()
         self.stop_blur_detection()
         self.stop_rating_load() # Add rating loader stop
-        print("[WorkerManager] All workers stop requested.")
+        logging.info("All workers stop requested.")
 
     def is_file_scanner_running(self) -> bool:
         return self.scanner_thread is not None and self.scanner_thread.isRunning()

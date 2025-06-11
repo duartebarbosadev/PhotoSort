@@ -36,7 +36,6 @@ class ExifCache:
         # For potentially larger dicts, this might be reasonable.
         self._cache = diskcache.Cache(directory=cache_dir, size_limit=self._size_limit_bytes, disk_min_file_size=4096) # Store larger items on disk
         log_msg = f"[ExifCache] Initialized at {cache_dir} with size limit {self._size_limit_bytes / (1024*1024):.2f} MB"
-        # print(log_msg) # Replaced by logging
         logging.info(f"ExifCache.__init__ - DiskCache instantiated. {log_msg}")
         logging.info(f"ExifCache.__init__ - End: {time.perf_counter() - init_start_time:.4f}s")
 
@@ -56,11 +55,11 @@ class ExifCache:
             if isinstance(cached_item, dict):
                 return cached_item
             elif cached_item is not None:
-                print(f"Warning: Unexpected item type in exif_cache for key {key}. Type: {type(cached_item)}")
+                logging.warning(f"Unexpected item type in exif_cache for key {key}. Type: {type(cached_item)}")
                 # self.delete(key) # Optionally delete malformed entry
             return None
         except Exception as e:
-            print(f"Error accessing exif_cache for key {key}: {e}.")
+            logging.error(f"Error accessing exif_cache for key {key}: {e}")
             return None
 
     def set(self, key: str, value: Dict[str, Any]) -> None:
@@ -94,16 +93,16 @@ class ExifCache:
             if key in self._cache:
                 del self._cache[key]
         except Exception as e:
-            print(f"Error deleting item from exif_cache for key {key}: {e}")
+            logging.error(f"Error deleting item from exif_cache for key {key}: {e}")
     
     def clear(self) -> None:
         """Clears all items from the cache."""
         try:
             count = len(self._cache)
             self._cache.clear()
-            print(f"[ExifCache] Cleared {count} items.")
+            logging.info(f"Cleared {count} items.")
         except Exception as e:
-            print(f"Error clearing exif_cache: {e}")
+            logging.error(f"Error clearing exif_cache: {e}")
 
     def volume(self) -> int:
         """
@@ -112,7 +111,7 @@ class ExifCache:
         try:
             return self._cache.volume()
         except Exception as e:
-            print(f"Error getting exif_cache volume: {e}")
+            logging.error(f"Error getting exif_cache volume: {e}")
             return 0
 
     def get_current_size_limit_mb(self) -> int:
@@ -123,21 +122,21 @@ class ExifCache:
         """
         Closes and reinitializes the cache with the current size limit from app_settings.
         """
-        print("[ExifCache] Reinitializing EXIF cache...")
+        logging.info("Reinitializing EXIF cache...")
         self.close() # Close the existing cache
         
         self._size_limit_mb = get_exif_cache_size_mb()
         self._size_limit_bytes = get_exif_cache_size_bytes()
         self._cache = diskcache.Cache(directory=self._cache_dir, size_limit=self._size_limit_bytes, disk_min_file_size=4096)
-        print(f"[ExifCache] Reinitialized. New size limit: {self._size_limit_mb} MB.")
+        logging.info(f"Reinitialized. New size limit: {self._size_limit_mb} MB.")
 
     def close(self) -> None:
         """Closes the cache."""
         try:
             self._cache.close()
-            print("[ExifCache] Cache closed.")
+            logging.info("Cache closed.")
         except Exception as e:
-            print(f"Error closing exif_cache: {e}")
+            logging.error(f"Error closing exif_cache: {e}")
 
     def __contains__(self, key: str) -> bool:
         return key in self._cache

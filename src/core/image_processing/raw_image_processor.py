@@ -36,7 +36,7 @@ def is_raw_extension(ext: str) -> bool:
                 '.kdc', '.dcs', '.dcr', '.x3f', '.rwl'
             }
             logging.warning("raw_image_processor.is_raw_extension - rawpy.supported_formats() not available. Using a fallback list of RAW extensions.")
-            # print("Warning: rawpy.supported_formats() not available. Using a fallback list of RAW extensions.") # Replaced
+            logging.warning("rawpy.supported_formats() not available. Using a fallback list of RAW extensions.")
         except Exception as e:
             logging.error(f"raw_image_processor.is_raw_extension - Error getting rawpy supported formats: {e}. Using fallback list.")
             _rawpy_supported_set = {'.arw', '.cr2', '.cr3', '.nef', '.dng', '.orf', '.raf', '.rw2', '.pef', '.srw', '.raw'}
@@ -69,18 +69,18 @@ class RawImageProcessor:
                     # Attempt to use embedded thumbnail first
                     thumb = raw.extract_thumb()
                     if thumb.format == rawpy.ThumbFormat.JPEG and thumb.data is not None:
-                        logging.debug(f"[RawImageProcessor THUMB] Using embedded JPEG thumbnail for: {normalized_path}")
+                        logging.debug(f"Using embedded JPEG thumbnail for: {normalized_path}")
                         temp_pil_img = Image.open(io.BytesIO(thumb.data))
                         temp_pil_img = ImageOps.exif_transpose(temp_pil_img) # Correct orientation
                         if apply_auto_edits:
-                            logging.info(f"[RawImageProcessor THUMB] Applying auto-edits (autocontrast, brightness) to embedded JPEG for: {normalized_path}")
+                            logging.info(f"Applying auto-edits (autocontrast, brightness) to embedded JPEG for: {normalized_path}")
                             temp_pil_img = ImageOps.autocontrast(temp_pil_img)
                             enhancer = ImageEnhance.Brightness(temp_pil_img)
                             temp_pil_img = enhancer.enhance(1.1)
                     if temp_pil_img is None:
                        raise rawpy.LibRawNoThumbnailError("No suitable (JPEG) embedded thumbnail found.")
                 except (rawpy.LibRawNoThumbnailError, rawpy.LibRawUnsupportedThumbnailError):
-                    logging.debug(f"[RawImageProcessor THUMB] No suitable embedded thumbnail for {normalized_path}, postprocessing RAW.")
+                    logging.debug(f"No suitable embedded thumbnail for {normalized_path}, postprocessing RAW.")
                     # Fallback to processing the main image, optimized with half_size=True
                     postprocess_params = {
                         'use_camera_wb': True,
@@ -88,17 +88,17 @@ class RawImageProcessor:
                         'half_size': True
                     }
                     if apply_auto_edits:
-                        logging.info(f"[RawImageProcessor THUMB] Applying auto_edits (bright=1.15) via rawpy for: {normalized_path}")
+                        logging.info(f"Applying auto_edits (bright=1.15) via rawpy for: {normalized_path}")
                         postprocess_params['bright'] = 1.15
                         postprocess_params['no_auto_bright'] = False
                     else:
-                        logging.info(f"[RawImageProcessor THUMB] NOT applying auto_edits (no_auto_bright=True) via rawpy for: {normalized_path}")
+                        logging.info(f"NOT applying auto_edits (no_auto_bright=True) via rawpy for: {normalized_path}")
                         postprocess_params['no_auto_bright'] = True
                     
                     rgb = raw.postprocess(**postprocess_params)
                     temp_pil_img = Image.fromarray(rgb)
                     if apply_auto_edits:
-                        logging.info(f"[RawImageProcessor THUMB] Applying ImageOps.autocontrast post-rawpy for: {normalized_path}")
+                        logging.info(f"Applying ImageOps.autocontrast post-rawpy for: {normalized_path}")
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
                 
                 if temp_pil_img:
@@ -106,16 +106,16 @@ class RawImageProcessor:
                     final_pil_img = temp_pil_img.convert("RGBA") # Ensure RGBA
             return final_pil_img
         except UnidentifiedImageError:
-            print(f"Error: Pillow could not identify image file (raw thumbnail gen): {normalized_path}")
+            logging.error(f"Pillow could not identify image file (raw thumbnail gen): {normalized_path}")
             return None
         except rawpy.LibRawIOError as e:
-            print(f"Error: rawpy I/O error for {normalized_path} (thumbnail): {e}")
+            logging.error(f"rawpy I/O error for {normalized_path} (thumbnail): {e}")
             return None
         except rawpy.LibRawUnspecifiedError as e:
-            print(f"Error: rawpy unspecified error for {normalized_path} (thumbnail): {e}")
+            logging.error(f"rawpy unspecified error for {normalized_path} (thumbnail): {e}")
             return None
         except Exception as e:
-            print(f"Error in process_raw_for_thumbnail for {normalized_path}: {e} (Type: {type(e).__name__})")
+            logging.error(f"Error in process_raw_for_thumbnail for {normalized_path}: {e} (Type: {type(e).__name__})")
             return None
 
     @staticmethod
@@ -186,16 +186,16 @@ class RawImageProcessor:
                     pil_img = img_from_raw.convert("RGBA")
             return pil_img
         except UnidentifiedImageError:
-            print(f"Error: Pillow could not identify image file (raw preview gen): {normalized_path}")
+            logging.error(f"Pillow could not identify image file (raw preview gen): {normalized_path}")
             return None
         except rawpy.LibRawIOError as e:
-            print(f"Error: rawpy I/O error for {normalized_path} (preview): {e}")
+            logging.error(f"rawpy I/O error for {normalized_path} (preview): {e}")
             return None
         except rawpy.LibRawUnspecifiedError as e:
-            print(f"Error: rawpy unspecified error for {normalized_path} (preview): {e}")
+            logging.error(f"rawpy unspecified error for {normalized_path} (preview): {e}")
             return None
         except Exception as e:
-            print(f"Error in process_raw_for_preview for {normalized_path}: {e} (Type: {type(e).__name__})")
+            logging.error(f"Error in process_raw_for_preview for {normalized_path}: {e} (Type: {type(e).__name__})")
             return None
 
     @staticmethod
@@ -258,16 +258,16 @@ class RawImageProcessor:
                 
                 return pil_img.convert(target_mode)
         except UnidentifiedImageError:
-            print(f"Error: Pillow could not process data from rawpy (load_raw_as_pil): {normalized_path}")
+            logging.error(f"Pillow could not process data from rawpy (load_raw_as_pil): {normalized_path}")
             return None
         except rawpy.LibRawIOError as e:
-            print(f"Error: rawpy I/O error for {normalized_path} (load_raw_as_pil): {e}")
+            logging.error(f"rawpy I/O error for {normalized_path} (load_raw_as_pil): {e}")
             return None
         except rawpy.LibRawUnspecifiedError as e:
-            print(f"Error: rawpy unspecified error for {normalized_path} (load_raw_as_pil): {e}")
+            logging.error(f"rawpy unspecified error for {normalized_path} (load_raw_as_pil): {e}")
             return None
         except Exception as e:
-            print(f"Error in load_raw_as_pil for {normalized_path}: {e} (Type: {type(e).__name__})")
+            logging.error(f"Error in load_raw_as_pil for {normalized_path}: {e} (Type: {type(e).__name__})")
             return None
 
     @staticmethod
@@ -324,14 +324,14 @@ class RawImageProcessor:
                     pil_img = temp_pil_img.convert("RGB")
             return pil_img
         except UnidentifiedImageError:
-            print(f"Error: Pillow could not process data from rawpy (blur detection): {normalized_path}")
+            logging.error(f"Pillow could not process data from rawpy (blur detection): {normalized_path}")
             return None
         except rawpy.LibRawIOError as e:
-            print(f"Error: rawpy I/O error for {normalized_path} (blur detection): {e}")
+            logging.error(f"rawpy I/O error for {normalized_path} (blur detection): {e}")
             return None
         except rawpy.LibRawUnspecifiedError as e:
-            print(f"Error: rawpy unspecified error for {normalized_path} (blur detection): {e}")
+            logging.error(f"rawpy unspecified error for {normalized_path} (blur detection): {e}")
             return None
         except Exception as e:
-            print(f"Error in load_raw_for_blur_detection for {normalized_path}: {e} (Type: {type(e).__name__})")
+            logging.error(f"Error in load_raw_for_blur_detection for {normalized_path}: {e} (Type: {type(e).__name__})")
             return None

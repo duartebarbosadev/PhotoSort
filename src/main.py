@@ -21,14 +21,14 @@ def load_stylesheet(filename="src/ui/dark_theme.qss"):
              # Fallback if running from src directory itself? Less likely.
              style_path = filename
              if not os.path.exists(style_path):
-                  print(f"Warning: Stylesheet '{filename}' not found at expected paths.")
+                  logging.warning(f"Stylesheet '{filename}' not found at expected paths.")
                   return "" # Return empty string if not found
 
-        print(f"Loading stylesheet from: {style_path}")
+        logging.info(f"Loading stylesheet from: {style_path}")
         with open(style_path, "r") as f:
             return f.read()
     except Exception as e:
-        print(f"Error loading stylesheet '{filename}': {e}")
+        logging.error(f"Error loading stylesheet '{filename}': {e}")
         return "" # Return empty on error
 
 def clear_application_caches():
@@ -39,30 +39,16 @@ def clear_application_caches():
     try:
         pipeline = ImagePipeline()
         pipeline.clear_all_image_caches()
-        # It's good practice to explicitly close caches if they are opened by the instance
-        # However, ThumbnailCache and PreviewCache in ImagePipeline are designed to close on __del__
-        # or when their diskcache.Cache instances are garbage collected.
-        # If explicit closing is needed, ImagePipeline would need a close_caches() method.
+        logging.info("Image pipeline caches cleared.")
     except Exception as e:
-        print(f"Error clearing image pipeline caches: {e}")
-    # clear_metadata_cache() # Removed as the function and its specific cache are gone
-    # For similarity engine, we need an instance if its cache clear is not static
-    # Or, if the cache is just a directory, we can clear it directly.
-    # The current implementation of clear_embedding_cache is a method,
-    # but it operates on a known directory. We can make it a static method
-    # or call it on a temporary instance if needed, or replicate its logic here.
-    # For simplicity, let's assume we can call it statically or make it so.
-    # If SimilarityEngine.clear_embedding_cache is not static, this needs adjustment.
-    # Let's adjust similarity_engine to have a static method for cache clearing.
-    # For now, we'll call it as if it's available.
-    # We will create a temporary instance of SimilarityEngine to call clear_embedding_cache.
-    # This is not ideal, a static method in SimilarityEngine would be better.
+        logging.error(f"Error clearing image pipeline caches: {e}")
+
     try:
         from src.core.similarity_engine import SimilarityEngine # <-- Local import
         # Call the static method directly
         SimilarityEngine.clear_embedding_cache()
     except Exception as e:
-        print(f"Error clearing similarity cache: {e}")
+        logging.error(f"Error clearing similarity cache: {e}")
     
     # Clear EXIF metadata cache using the existing ExifCache class
     try:
@@ -107,11 +93,10 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
             logging.error(f"Failed to show QMessageBox for unhandled exception: {str(e_msgbox)}\n"
                           f"Original error was:\n{error_message_details}")
             # Fallback to stderr if QMessageBox fails
-            print(f"CRITICAL UNHANDLED EXCEPTION (QMessageBox failed):\n{error_message_details}", file=sys.stderr)
+            logging.critical(f"Unhandled exception (QMessageBox failed):\n{error_message_details}")
     else:
         # QApplication not yet initialized or already destroyed, print to stderr
-        print(f"CRITICAL UNHANDLED EXCEPTION (QApplication not available to show dialog):\n{main_error_text}\n"
-              f"Details:\n{error_message_details}", file=sys.stderr)
+        logging.critical(f"Unhandled exception (QApplication not available):\n{main_error_text}\nDetails:\n{error_message_details}")
     
     # Python will typically terminate after an unhandled exception and its excepthook.
 
@@ -200,7 +185,6 @@ def main():
         app.setStyleSheet(stylesheet)
         logging.info(f"Application main - Stylesheet loaded and applied: {time.perf_counter() - stylesheet_load_start_time:.4f}s")
     else:
-        # print("Stylesheet not loaded, using default application style.") # Replaced by logging
         logging.warning("Stylesheet not loaded, using default application style.")
         logging.info(f"Application main - Stylesheet loading attempted (not found/error): {time.perf_counter() - stylesheet_load_start_time:.4f}s")
 

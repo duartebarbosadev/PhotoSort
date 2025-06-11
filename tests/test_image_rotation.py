@@ -7,6 +7,7 @@ import shutil
 import unicodedata
 from unittest.mock import Mock, patch
 from typing import Dict, Any
+import logging
 
 # Add the project root to Python path so we can import src modules
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -142,7 +143,7 @@ class TestImageRotator:
         
         # Test clockwise rotation
         success, message = self.rotator.rotate_clockwise(temp_image)
-        print(f"Clockwise rotation: {success}, {message}")
+        logging.info(f"Clockwise rotation: {success}, {message}")
         
         if success:
             # Verify file still exists and is valid
@@ -162,7 +163,7 @@ class TestImageRotator:
         
         # Perform metadata-only rotation
         success, message = self.rotator.rotate_image(temp_image, 'clockwise', update_metadata_only=True)
-        print(f"Metadata-only rotation: {success}, {message}")
+        logging.info(f"Metadata-only rotation: {success}, {message}")
         
         # File should still exist with same or very similar size
         assert os.path.exists(temp_image)
@@ -239,7 +240,7 @@ class TestMetadataProcessorRotation:
             ext = os.path.splitext(image_path)[1].lower()
             if ext in ['.jpg', '.jpeg', '.png', '.tiff', '.tif']:
                 assert supported == True
-            print(f"Rotation support for {os.path.basename(image_path)} ({ext}): {supported}")
+            logging.info(f"Rotation support for {os.path.basename(image_path)} ({ext}): {supported}")
     
     def test_rotate_clockwise(self):
         """Test MetadataProcessor.rotate_clockwise method."""
@@ -272,7 +273,7 @@ class TestMetadataProcessorRotation:
             assert os.path.exists(temp_image)
             self.exif_cache.delete.assert_called_once()
         
-        print(f"Counterclockwise rotation of {os.path.basename(source_image)}: {success}")
+        logging.info(f"Counterclockwise rotation of {os.path.basename(source_image)}: {success}")
     
     def test_rotate_180(self):
         """Test MetadataProcessor.rotate_180 method."""
@@ -288,7 +289,7 @@ class TestMetadataProcessorRotation:
             assert os.path.exists(temp_image)
             self.exif_cache.delete.assert_called_once()
         
-        print(f"180° rotation of {os.path.basename(source_image)}: {success}")
+        logging.info(f"180° rotation of {os.path.basename(source_image)}: {success}")
     
     def test_rotation_with_metadata_only(self):
         """Test rotation with metadata_only flag."""
@@ -318,7 +319,7 @@ class TestMetadataProcessorRotation:
             new_size = os.path.getsize(temp_image)
             assert abs(new_size - original_size) < 1024  # Less than 1KB difference
         
-        print(f"Metadata-only rotation of {os.path.basename(source_image)}: {success}")
+        logging.info(f"Metadata-only rotation of {os.path.basename(source_image)}: {success}")
     
     def test_error_handling(self):
         """Test error handling in MetadataProcessor rotation methods."""
@@ -398,7 +399,7 @@ class TestRotationIntegration:
         assert final_metadata is not None
         assert final_detailed is not None
         
-        print(f"Full rotation cycle completed for {os.path.basename(source_image)}")
+        logging.info(f"Full rotation cycle completed for {os.path.basename(source_image)}")
     
     def test_mixed_rotations(self):
         """Test different rotation combinations."""
@@ -425,7 +426,7 @@ class TestRotationIntegration:
             metadata = MetadataProcessor.get_detailed_metadata(temp_image)
             assert metadata is not None, f"Cannot read metadata after {description} rotation"
         
-        print(f"Mixed rotation sequence completed for {os.path.basename(source_image)}")
+        logging.info(f"Mixed rotation sequence completed for {os.path.basename(source_image)}")
 
 
 if __name__ == "__main__":

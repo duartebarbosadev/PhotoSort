@@ -33,7 +33,6 @@ class PreviewCache:
         # Using a relatively small disk_min_file_size to ensure even smaller previews are disk-backed if desired.
         self._cache = diskcache.Cache(directory=cache_dir, size_limit=self._size_limit_bytes, disk_min_file_size=256*1024) # 256KB
         log_msg = f"[PreviewCache] Initialized at {cache_dir} with size limit {self._size_limit_bytes / (1024*1024*1024):.2f} GB"
-        # print(log_msg) # Replaced by logging
         logging.info(f"PreviewCache.__init__ - DiskCache instantiated. {log_msg}")
         logging.info(f"PreviewCache.__init__ - End: {time.perf_counter() - init_start_time:.4f}s")
 
@@ -53,7 +52,7 @@ class PreviewCache:
             if isinstance(cached_item, Image.Image):
                 return cached_item
             elif cached_item is not None:
-                print(f"Warning: Unexpected item type in preview_cache for key {key}. Type: {type(cached_item)}")
+                logging.warning(f"Unexpected item type in preview_cache for key {key}. Type: {type(cached_item)}")
                 # self.delete(key)
             return None
         except Exception as e:
@@ -70,12 +69,12 @@ class PreviewCache:
             value (Image.Image): The PIL Image to cache.
         """
         if not isinstance(value, Image.Image):
-            print(f"Error: Attempted to cache non-Image object for key {key}. Type: {type(value)}")
+            logging.error(f"Attempted to cache non-Image object for key {key}. Type: {type(value)}")
             return
         try:
             self._cache.set(key, value)
         except Exception as e:
-            print(f"Error setting item in preview_cache for key {key}: {e}")
+            logging.error(f"Error setting item in preview_cache for key {key}: {e}")
             
     def delete(self, key: Tuple[str, Tuple[int, int], bool]) -> None:
         """
@@ -88,7 +87,7 @@ class PreviewCache:
             if key in self._cache:
                 del self._cache[key]
         except Exception as e:
-            print(f"Error deleting item from preview_cache for key {key}: {e}")
+            logging.error(f"极Error deleting item from preview_cache for key {key}: {e}")
 
     def delete_all_for_path(self, file_path: str) -> None:
         """
@@ -103,8 +102,8 @@ class PreviewCache:
             normalized_path = unicodedata.normalize('NFC', os.path.normpath(file_path))
             
             # Debug: show what we're looking for and what's in cache
-            print(f"[PreviewCache] Looking to delete entries for: '{normalized_path}'")
-            print(f"[PreviewCache] Current cache has {len(self._cache)} entries")
+            logging.debug(f"Looking to delete entries for: '{normalized_path}'")
+            logging.debug(f"Current cache has {len(self._cache)} entries")
             
             # Find all keys that match this file path
             keys_to_delete = []
@@ -112,33 +111,33 @@ class PreviewCache:
                 if isinstance(key, tuple) and len(key) >= 1:
                     # Normalize both paths for comparison to handle Unicode differences
                     key_path = unicodedata.normalize('NFC', os.path.normpath(key[0]))
-                    print(f"[PreviewCache] Checking key: '{key_path}' == '{normalized_path}' ? {key_path == normalized_path}")
-                    print(f"[PreviewCache] Key bytes: {key_path.encode('utf-8')}")
-                    print(f"[PreviewCache] Target bytes: {normalized_path.encode('utf-8')}")
+                    logging.debug(f"Checking key: '{key_path}' == '{normalized_path}' ? {key_path == normalized_path}")
+                    logging.debug(f"Key bytes: {key_path.encode('utf-8')}")
+                    logging.debug(f"Target bytes: {normalized_path.encode('utf-8')}")
                     if key_path == normalized_path:
                         keys_to_delete.append(key)
             
             # Delete the matching keys
             for key in keys_to_delete:
                 del self._cache[key]
-                print(f"[PreviewCache] Deleted cache entry: {key}")
+                logging.debug(f"Deleted cache entry: {key}")
                 
             if keys_to_delete:
-                print(f"[PreviewCache] Deleted {len(keys_to_delete)} preview cache entries for {os.path.basename(file_path)}")
+                logging.info(f"Deleted {len(keys_to_delete)} preview cache entries for {os.path.basename(file_path)}")
             else:
-                print(f"[PreviewCache] No cache entries found to delete for {os.path.basename(file_path)}")
+                logging.info(f"No cache entries found to delete for {os.path.basename(file_path)}")
                 
         except Exception as e:
-            print(f"Error deleting preview cache entries for path {file_path}: {e}")
+            logging.error(f"Error deleting preview cache entries for path {file_path}: {e}")
 
     def clear(self) -> None:
         """Clears all items from the cache."""
         try:
             count = len(self._cache)
             self._cache.clear()
-            print(f"[PreviewCache] Cleared {count} items.")
+            logging.info(f"Cleared {count} items.")
         except Exception as e:
-            print(f"Error clearing preview_cache: {e}")
+            logging.error(f"Error clearing preview_cache: {e}")
 
     def volume(self) -> int:
         """
@@ -147,7 +146,7 @@ class PreviewCache:
         try:
             return self._cache.volume()
         except Exception as e:
-            print(f"Error getting preview_cache volume: {e}")
+            logging.error(f"Error getting preview_cache volume: {e}")
             return 0
             
     def get_current_size_limit_gb(self) -> float:
@@ -158,20 +157,20 @@ class PreviewCache:
         """
         Closes and reinitializes the cache with the current size limit from app_settings.
         """
-        print("[PreviewCache] Reinitializing preview PIL cache...")
+        logging.info("Reinitializing preview PIL cache...")
         self.close() # Close the existing cache
         
         self._size_limit_bytes = get_preview_cache_size_bytes()
         self._cache = diskcache.Cache(directory=self._cache_dir, size_limit=self._size_limit_bytes, disk_min_file_size=256*1024)
-        print(f"[PreviewCache] Reinitialized. New size limit: {self._size_limit_bytes / (1024*1024*1024):.2f} GB.")
+        logging.info(f"Reinitialized. New size limit: {self._size_limit_bytes / (1024*1024*1024):.2f} GB.")
 
     def close(self) -> None:
         """Closes the cache."""
         try:
             self._cache.close()
-            print("[PreviewCache] Cache closed.")
+            logging.info("Cache closed.")
         except Exception as e:
-            print(f"Error closing preview_cache: {e}")
+            logging.error(f"Error closing preview_cache: {e}")
 
     def __contains__(self, key: Tuple[str, Tuple[int, int], bool]) -> bool:
         return key in self._cache

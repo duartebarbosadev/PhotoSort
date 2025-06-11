@@ -8,6 +8,7 @@ import unicodedata
 from datetime import date
 from unittest.mock import Mock, patch
 from typing import Dict, Any
+import logging
 
 # Add the project root to Python path so we can import src modules
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -71,9 +72,9 @@ class TestMetadataProcessor:
         expected_extensions = ['.png', '.jpg', '.arw']
         found_extensions = [os.path.splitext(img)[1].lower() for img in cls.sample_images]
         
-        print(f"Found test images: {cls.sample_images}")
-        print(f"Expected extensions: {expected_extensions}")
-        print(f"Found extensions: {found_extensions}")
+        logging.info(f"Found test images: {cls.sample_images}")
+        logging.info(f"Expected extensions: {expected_extensions}")
+        logging.info(f"Found extensions: {found_extensions}")
         
         if len(cls.sample_images) == 0:
             pytest.skip(f"No test images found in {cls.test_folder}", allow_module_level=True)
@@ -142,10 +143,10 @@ class TestMetadataProcessor:
         
         # Test that each file type returns valid metadata
         for ext, metadata in by_extension.items():
-            print(f"Testing {ext} file metadata:")
-            print(f"  Rating: {metadata['rating']}")
-            print(f"  Label: {metadata['label']}")
-            print(f"  Date: {metadata['date']}")
+            logging.info(f"Testing {ext} file metadata:")
+            logging.info(f"  Rating: {metadata['rating']}")
+            logging.info(f"  Label: {metadata['label']}")
+            logging.info(f"  Date: {metadata['date']}")
             
             assert isinstance(metadata['rating'], int)
             assert 0 <= metadata['rating'] <= 5
@@ -156,7 +157,7 @@ class TestMetadataProcessor:
             pytest.skip("No sample images available")
         
         for image_path in self.sample_images:
-            print(f"\nTesting detailed metadata for: {os.path.basename(image_path)}")
+            logging.info(f"\nTesting detailed metadata for: {os.path.basename(image_path)}")
             
             metadata = MetadataProcessor.get_detailed_metadata(
                 image_path, 
@@ -171,14 +172,14 @@ class TestMetadataProcessor:
             assert metadata['file_path'] == unicodedata.normalize('NFC', os.path.normpath(image_path))
             
             # Print some metadata for inspection
-            print(f"  File size: {metadata.get('file_size', 'Unknown')}")
-            print(f"  Dimensions: {metadata.get('pixel_width', '?')}x{metadata.get('pixel_height', '?')}")
-            print(f"  MIME type: {metadata.get('mime_type', 'Unknown')}")
+            logging.info(f"  File size: {metadata.get('file_size', 'Unknown')}")
+            logging.info(f"  Dimensions: {metadata.get('pixel_width', '?')}x{metadata.get('pixel_height', '?')}")
+            logging.info(f"  MIME type: {metadata.get('mime_type', 'Unknown')}")
             
             # Check for common EXIF fields if present
             common_fields = ['Exif.Image.Make', 'Exif.Image.Model', 'Exif.Photo.DateTimeOriginal']
             found_fields = [field for field in common_fields if field in metadata]
-            print(f"  Common EXIF fields found: {found_fields}")
+            logging.info(f"  Common EXIF fields found: {found_fields}")
     
     def test_set_and_get_rating(self):
         """Test setting and getting ratings on sample images."""
@@ -210,7 +211,7 @@ class TestMetadataProcessor:
                 norm_path = os.path.normpath(temp_image_path)
                 assert results[norm_path]['rating'] == rating
                 
-                print(f"Successfully set and verified rating {rating}")
+                logging.info(f"Successfully set and verified rating {rating}")
         
         finally:
             # Clean up temporary file
@@ -253,7 +254,7 @@ class TestMetadataProcessor:
                 else:
                     assert results[norm_path]['label'] == label
                 
-                print(f"Successfully set and verified label '{label}'")
+                logging.info(f"Successfully set and verified label '{label}'")
         
         finally:
             # Clean up temporary file

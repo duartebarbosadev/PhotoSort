@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 
 from src.core.image_pipeline import ImagePipeline # For PreviewPreloaderWorker
 from src.core.image_features.blur_detector import BlurDetector # For BlurDetectionWorker
+import logging
 import os # For BlurDetectionWorker path.basename
 
 # --- Loading Overlay ---
@@ -88,7 +89,7 @@ class PreviewPreloaderWorker(QObject):
             )
         except Exception as e:
             err_msg = f"Error during preview preloading thread: {e}"
-            print(f"[PreviewPreloaderWorker] {err_msg}")
+            logging.error(err_msg)
             self.error.emit(err_msg)
         finally:
             if self._is_running:
@@ -131,7 +132,7 @@ class BlurDetectionWorker(QObject):
             )
         except Exception as e:
             err_msg = f"Error during batch blur detection: {e}"
-            print(f"[BlurDetectionWorker] {err_msg}")
+            logging.error(err_msg)
             self.error.emit(err_msg)
         finally:
             if not self._is_running and not self.signalsBlocked(): # If stopped, error might have been emitted by batch

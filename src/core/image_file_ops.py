@@ -1,5 +1,6 @@
 import os
 import shutil
+import logging
 from typing import Tuple
 
 class ImageFileOperations:
@@ -24,7 +25,7 @@ class ImageFileOperations:
             # Attempt to create destination folder if it doesn't exist
             try:
                 os.makedirs(destination_folder, exist_ok=True)
-                print(f"Created destination folder: {destination_folder}")
+                logging.info(f"Created destination folder: {destination_folder}")
             except OSError as e:
                 return False, f"Destination is not a valid folder and could not be created: {destination_folder}. Error: {e}"
         
@@ -39,14 +40,14 @@ class ImageFileOperations:
             while os.path.exists(destination_path):
                 destination_path = os.path.join(destination_folder, f"{base}_{counter}{ext}")
                 counter += 1
-            print(f"File already exists at original destination. New destination path: {destination_path}")
+            logging.info(f"File already exists at original destination. New destination path: {destination_path}")
 
 
         try:
             shutil.move(source_path, destination_path)
-            print(f"Successfully moved '{source_path}' to '{destination_path}'")
+            logging.info(f"Successfully moved '{source_path}' to '{destination_path}'")
             return True, destination_path
         except Exception as e:
             error_msg = f"Error moving file '{source_path}' to '{destination_path}': {e}"
-            print(error_msg)
+            logging.error(error_msg)
             return False, error_msg

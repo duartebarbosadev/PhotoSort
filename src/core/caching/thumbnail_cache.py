@@ -27,7 +27,6 @@ class ThumbnailCache:
         # Settings for general PIL images, can be adjusted
         self._cache = diskcache.Cache(directory=cache_dir, size_limit=size_limit, disk_min_file_size=1024*1024)
         log_msg = f"[ThumbnailCache] Initialized at {cache_dir} with size limit {size_limit / (1024*1024):.2f} MB"
-        # print(log_msg) # Replaced by logging
         logging.info(f"ThumbnailCache.__init__ - DiskCache instantiated. {log_msg}")
         logging.info(f"ThumbnailCache.__init__ - End: {time.perf_counter() - init_start_time:.4f}s")
 
@@ -48,12 +47,12 @@ class ThumbnailCache:
                 return cached_item
             elif cached_item is not None:
                 # This case should ideally not happen if we consistently cache PIL.Image
-                print(f"Warning: Unexpected item type in thumbnail_cache for key {key}. Type: {type(cached_item)}")
+                logging.warning(f"Unexpected item type in thumbnail_cache for key {key}. Type: {type(cached_item)}")
                 # Optionally delete the malformed entry
                 # self.delete(key) 
             return None
         except Exception as e:
-            print(f"Error accessing thumbnail_cache for key {key}: {e}.")
+            logging.error(f"Error accessing thumbnail_cache for key {key}: {e}")
             return None
 
     def set(self, key: Tuple[str, bool], value: Image.Image) -> None:
@@ -66,12 +65,12 @@ class ThumbnailCache:
             value (Image.Image): The PIL Image to cache.
         """
         if not isinstance(value, Image.Image):
-            print(f"Error: Attempted to cache non-Image object for key {key}. Type: {type(value)}")
+            logging.error(f"Attempted to cache non-Image object for key {key}. Type: {type(value)}")
             return
         try:
             self._cache.set(key, value)
         except Exception as e:
-            print(f"Error setting item in thumbnail_cache for key {key}: {e}")
+            logging.error(f"Error setting item in thumbnail_cache for key {key}: {e}")
 
     def delete(self, key: Tuple[str, bool]) -> None:
         """
@@ -84,7 +83,7 @@ class ThumbnailCache:
             if key in self._cache:
                 del self._cache[key]
         except Exception as e:
-            print(f"Error deleting item from thumbnail_cache for key {key}: {e}")
+            logging.error(f"Error deleting item from thumbnail_cache for key {key}: {e}")
 
     def delete_all_for_path(self, file_path: str) -> None:
         """
@@ -112,19 +111,19 @@ class ThumbnailCache:
                 del self._cache[key]
                 
             if keys_to_delete:
-                print(f"Deleted {len(keys_to_delete)} thumbnail cache entries for {os.path.basename(file_path)}")
+                logging.info(f"Deleted {len(keys_to_delete)} thumbnail cache entries for {os.path.basename(file_path)}")
                 
         except Exception as e:
-            print(f"Error deleting thumbnail cache entries for path {file_path}: {e}")
+            logging.error(f"Error deleting thumbnail cache entries for path {file_path}: {e}")
 
     def clear(self) -> None:
         """Clears all items from the cache."""
         try:
             count = len(self._cache)
             self._cache.clear()
-            print(f"[ThumbnailCache] Cleared {count} items.")
+            logging.info(f"Cleared {count} items.")
         except Exception as e:
-            print(f"Error clearing thumbnail_cache: {e}")
+            logging.error(f"Error clearing thumbnail_cache: {e}")
 
     def volume(self) -> int:
         """
@@ -133,16 +132,16 @@ class ThumbnailCache:
         try:
             return self._cache.volume()
         except Exception as e:
-            print(f"Error getting thumbnail_cache volume: {e}")
+            logging.error(f"Error getting thumbnail_cache volume: {e}")
             return 0
 
     def close(self) -> None:
         """Closes the cache."""
         try:
             self._cache.close()
-            print("[ThumbnailCache] Cache closed.")
+            logging.info("Cache closed.")
         except Exception as e:
-            print(f"Error closing thumbnail_cache: {e}")
+            logging.error(f"Error closing thumbnail_cache: {e}")
 
     def __contains__(self, key: Tuple[str, bool]) -> bool:
         return key in self._cache
