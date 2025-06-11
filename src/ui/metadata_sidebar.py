@@ -146,6 +146,35 @@ class MetadataCard(QFrame):
         row.addWidget(progress)
         
         self.content_layout.addLayout(row)
+    def add_comparison_row(self, label: str, value1: str, value2: str,
+                             highlight_diff: bool = True):
+        """Add a row for comparing two values."""
+        row_widget = QWidget()
+        row = QHBoxLayout(row_widget)
+        row.setContentsMargins(0, 2, 0, 2)
+
+        label_widget = QLabel(label + ":")
+        label_widget.setObjectName("metadataLabel")
+        label_widget.setFixedWidth(80)
+
+        value1_widget = QLabel(str(value1) if value1 is not None else "N/A")
+        value1_widget.setObjectName("metadataValue")
+        value1_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        value2_widget = QLabel(str(value2) if value2 is not None else "N/A")
+        value2_widget.setObjectName("metadataValue")
+        value2_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Highlight differences
+        if highlight_diff and value1 != value2:
+            value1_widget.setObjectName("metadataValueDiff")
+            value2_widget.setObjectName("metadataValueDiff")
+
+        row.addWidget(label_widget)
+        row.addWidget(value1_widget, 1)
+        row.addWidget(value2_widget, 1)
+
+        self.content_layout.addWidget(row_widget)
 
 class MetadataSidebar(QWidget):
     """Modern sidebar widget displaying comprehensive image metadata"""
@@ -158,6 +187,9 @@ class MetadataSidebar(QWidget):
         self.setObjectName("metadataSidebar")
         self.current_image_path = None
         self.raw_metadata = {}
+        self.comparison_mode = False
+        self.current_image_paths_for_comparison: List[str] = []
+        self.raw_metadata_for_comparison: List[Dict[str, Any]] = []
         
         self.setup_ui()
         self.setup_animations()
@@ -215,8 +247,8 @@ class MetadataSidebar(QWidget):
         icon_label = QLabel("📋")
         icon_label.setFont(QFont("Segoe UI Emoji", 16))
         
-        title_label = QLabel("Image Details")
-        title_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        self.title_label = QLabel("Image Details")
+        self.title_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         
         # Close button
         close_button = QLabel("✕")
@@ -228,7 +260,7 @@ class MetadataSidebar(QWidget):
         close_button.mousePressEvent = lambda e: self.hide_requested.emit()
         
         layout.addWidget(icon_label)
-        layout.addWidget(title_label)
+        layout.addWidget(self.title_label)
         layout.addStretch()
         layout.addWidget(close_button)
         
@@ -242,21 +274,18 @@ class MetadataSidebar(QWidget):
     
     def show_placeholder(self):
         """Show placeholder content when no image is selected"""
-        self.clear_content()
+    def update_comparison(self, image_paths: List[str], metadatas: List[Dict[str, Any]]):
+        """Update the sidebar to show a comparison of two images."""
+        if len(image_paths) != 2 or len(metadatas) != 2:
+            self.show_placeholder()
+            return
         
-        placeholder = QLabel("Select an image to view detailed metadata")
-        placeholder.setObjectName("placeholderText")
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setWordWrap(True)
-        placeholder.setStyleSheet("""
-            QLabel#placeholderText {
-                color: #777777;
-                font-size: 11pt;
-                padding: 40px 20px;
-            }
-        """)
-        
-        self.content_layout.insertWidget(0, placeholder)
+        self.comparison_mode = True
+        self.current_image_paths_for_comparison = image_paths
+        self.raw_metadata_for_comparison = metadatas
+        self.title_label.setText("Compare Details")
+
+        self._delayed_update()
     
     def clear_content(self):
         """Clear all content from the sidebar"""
@@ -267,11 +296,12 @@ class MetadataSidebar(QWidget):
     
     def update_metadata(self, image_path: str, metadata: Dict[str, Any],
                        raw_exif: Dict[str, Any] = None):
-        """Update the sidebar with new metadata"""
+        """Update the sidebar with new metadata, resetting to single-image view."""
+        self.comparison_mode = False
         self.current_image_path = image_path
         self.raw_metadata = raw_exif or {}
-        
-        # Update immediately - no artificial delay needed since data is pre-cached
+        self.title_label.setText("Image Details")
+
         self._delayed_update()
     
     def _delayed_update(self):
@@ -283,17 +313,20 @@ class MetadataSidebar(QWidget):
         self.clear_content()
         
         try:
-            # File Information Card
-            self.add_file_info_card()
-            
-            # Camera & Capture Settings Card
-            self.add_camera_settings_card()
-            
-            # Image Properties Card
-            self.add_image_properties_card()
-            
-            # Technical Details Card
-            self.add_technical_details_card()
+            if self.comparison_mode:
+                self.add_comparison_cards()
+            else:
+                # File Information Card
+                self.add_file_info_card()
+                
+                # Camera & Capture Settings Card
+                self.add_camera_settings_card()
+                
+                # Image Properties Card
+                self.add_image_properties_card()
+                
+                # Technical Details Card
+                self.add_technical_details_card()
             
             # Add stretch at the end to push all content up
             self.content_layout.addStretch()
@@ -301,6 +334,112 @@ class MetadataSidebar(QWidget):
         except Exception as e:
             logging.error(f"Error updating metadata sidebar: {e}", exc_info=True)
             self.show_error_message(str(e))
+    def add_comparison_cards(self):
+        """Add cards for comparing two images."""
+        if not self.current_image_paths_for_comparison or len(self.current_image_paths_for_comparison) != 2:
+            return
+
+        # Helper to get a value from one of the two metadata dictionaries
+        def get_val(key, image_index):
+            if self.raw_metadata_for_comparison and len(self.raw_metadata_for_comparison) > image_index:
+                metadata_dict = self.raw_metadata_for_comparison[image_index]
+                
+                # Direct keys from basic metadata
+                if key in ['FileSize', 'pixel_width', 'pixel_height']:
+                    return metadata_dict.get(key)
+                
+                # Keys from the nested raw_exif dictionary
+                raw_exif = metadata_dict.get('raw_exif', {})
+                return raw_exif.get(key)
+            return None
+
+        # --- File Info Card ---
+        file_card = MetadataCard("File Information", "📁")
+        
+        # Add a header for the two image columns
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 2, 0, 2)
+        header_layout.addWidget(QLabel(""), 1)  # Spacer for the row label
+
+        img1_name = os.path.basename(self.current_image_paths_for_comparison[0])
+        img2_name = os.path.basename(self.current_image_paths_for_comparison[1])
+        
+        # Use rich text for bolding
+        name1_label = QLabel(f"<b>{img1_name}</b>")
+        name1_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name2_label = QLabel(f"<b>{img2_name}</b>")
+        name2_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        header_layout.addWidget(name1_label, 1)
+        header_layout.addWidget(name2_label, 1)
+        file_card.content_layout.addWidget(header_widget)
+
+        # File info rows
+        size1 = get_val("FileSize", 0)
+        size2 = get_val("FileSize", 1)
+        file_card.add_comparison_row("Size", size1, size2)
+
+        mod1_ts = os.stat(self.current_image_paths_for_comparison[0]).st_mtime
+        mod2_ts = os.stat(self.current_image_paths_for_comparison[1]).st_mtime
+        mod1_str = datetime.fromtimestamp(mod1_ts).strftime("%Y-%m-%d %H:%M")
+        mod2_str = datetime.fromtimestamp(mod2_ts).strftime("%Y-%m-%d %H:%M")
+        file_card.add_comparison_row("Modified", mod1_str, mod2_str)
+
+        self.content_layout.insertWidget(-1, file_card)
+        
+        # --- Camera & Settings Card ---
+        camera_card = MetadataCard("Camera & Settings", "📷")
+        
+        # Camera
+        make1 = get_val("Exif.Image.Make", 0)
+        model1 = get_val("Exif.Image.Model", 0)
+        camera1 = f"{make1} {model1}".strip() or "N/A"
+        make2 = get_val("Exif.Image.Make", 1)
+        model2 = get_val("Exif.Image.Model", 1)
+        camera2 = f"{make2} {model2}".strip() or "N/A"
+        camera_card.add_comparison_row("Camera", camera1, camera2)
+        
+        # Lens
+        lens1 = get_val("Exif.Photo.LensModel", 0)
+        lens2 = get_val("Exif.Photo.LensModel", 1)
+        camera_card.add_comparison_row("Lens", lens1, lens2)
+        
+        # Focal Length
+        focal1 = get_val("Exif.Photo.FocalLength", 0)
+        focal2 = get_val("Exif.Photo.FocalLength", 1)
+        camera_card.add_comparison_row("Focal Length", f"{focal1}mm" if focal1 else "N/A", f"{focal2}mm" if focal2 else "N/A")
+
+        # Aperture
+        aperture1 = get_val("Exif.Photo.FNumber", 0)
+        aperture2 = get_val("Exif.Photo.FNumber", 1)
+        camera_card.add_comparison_row("Aperture", f"f/{aperture1}" if aperture1 else "N/A", f"f/{aperture2}" if aperture2 else "N/A")
+
+        # Shutter Speed
+        shutter1 = get_val("ExposureTime", 0)
+        shutter2 = get_val("ExposureTime", 1)
+        camera_card.add_comparison_row("Shutter", f"{shutter1}s" if shutter1 else "N/A", f"{shutter2}s" if shutter2 else "N/A")
+
+        # ISO
+        iso1 = get_val("Exif.Photo.ISOSpeedRatings", 0)
+        iso2 = get_val("Exif.Photo.ISOSpeedRatings", 1)
+        camera_card.add_comparison_row("ISO", iso1, iso2)
+
+        self.content_layout.insertWidget(-1, camera_card)
+
+        # --- Image Properties Card ---
+        props_card = MetadataCard("Image Properties", "🖼️")
+        
+        w1 = get_val("pixel_width", 0) or get_val("Exif.Photo.PixelXDimension", 0)
+        h1 = get_val("pixel_height", 0) or get_val("Exif.Photo.PixelYDimension", 0)
+        dims1 = f"{w1} × {h1}" if w1 and h1 else "N/A"
+
+        w2 = get_val("pixel_width", 1) or get_val("Exif.Photo.PixelXDimension", 1)
+        h2 = get_val("pixel_height", 1) or get_val("Exif.Photo.PixelYDimension", 1)
+        dims2 = f"{w2} × {h2}" if w2 and h2 else "N/A"
+        props_card.add_comparison_row("Dimensions", dims1, dims2)
+        
+        self.content_layout.insertWidget(-1, props_card)
     
     def add_file_info_card(self):
         """Add file information card"""

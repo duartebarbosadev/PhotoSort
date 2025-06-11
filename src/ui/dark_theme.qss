@@ -578,6 +578,10 @@ QLabel#metadataValue {
     color: #D1D1D1;
     font-size: 8.5pt;
 }
+QLabel#metadataValueDiff {
+    color: #FFB366; /* A warm orange/yellow to indicate a difference */
+    font-weight: bold;
+}
 
 QProgressBar#metadataProgress {
     background-color: #333333;
