@@ -12,7 +12,7 @@ class ZoomableImageView(QGraphicsView):
     Advanced image view with smooth zoom, pan, and coordinate tracking
     """
     # Signals
-    zoom_changed = pyqtSignal(float)  # zoom_factor
+    zoom_changed = pyqtSignal(float, QPointF)  # zoom_factor, center_on
     pan_changed = pyqtSignal(QPointF)  # center_point
     coordinates_changed = pyqtSignal(QPointF)  # mouse coordinates in scene
     
@@ -125,15 +125,24 @@ class ZoomableImageView(QGraphicsView):
         # Center on the specified point
         self.centerOn(center_point)
         
-        self.zoom_changed.emit(self._zoom_factor)
+        self.zoom_changed.emit(self._zoom_factor, center_point)
         
     def zoom_in(self, center_point: Optional[QPointF] = None):
         """Zoom in by zoom step"""
         self.set_zoom_factor(self._zoom_factor * self._zoom_step, center_point)
         
     def zoom_out(self, center_point: Optional[QPointF] = None):
-        """Zoom out by zoom step"""
-        self.set_zoom_factor(self._zoom_factor / self._zoom_step, center_point)
+        """Zoom out by zoom step, snapping to the minimum zoom level."""
+        # Calculate the potential new zoom factor
+        new_factor = self._zoom_factor / self._zoom_step
+        
+        # If the new factor is below the minimum, clamp it to the minimum
+        if new_factor < self._min_zoom:
+            new_factor = self._min_zoom
+            
+        # Apply the zoom only if it results in a change
+        if new_factor != self._zoom_factor:
+            self.set_zoom_factor(new_factor, center_point)
         
     def fit_in_view(self):
         """Fit image to view while maintaining aspect ratio"""
@@ -147,7 +156,9 @@ class ZoomableImageView(QGraphicsView):
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
             # Update internal zoom factor to match the new transform
             self._zoom_factor = self.transform().m11()
-            self.zoom_changed.emit(self._zoom_factor)
+            self._min_zoom = self._zoom_factor
+            center_point = self.mapToScene(self.viewport().rect().center())
+            self.zoom_changed.emit(self._zoom_factor, center_point)
             
     def zoom_to_actual_size(self):
         """Zoom to 100% (actual size)"""
@@ -647,18 +658,27 @@ class SynchronizedImageViewer(QWidget):
             if viewer.isVisible():
                 viewer.set_zoom_factor(zoom_factor)
                 
-    def _on_zoom_changed(self, zoom_factor: float):
+    def _on_zoom_changed(self, zoom_factor: float, center_point: QPointF):
         """Handle zoom changes from viewers"""
         if self._updating_sync:
             return
-            
+
         sender = self.sender()
-        
-        # Update zoom label
+        if not isinstance(sender, ZoomableImageView):
+            return
+
+        # Normalize the center point from the sender
+        sender_scene_rect = sender.sceneRect()
+        normalized_pos = QPointF(0.5, 0.5)
+        if center_point and sender_scene_rect.width() > 0 and sender_scene_rect.height() > 0:
+            norm_x = (center_point.x() - sender_scene_rect.left()) / sender_scene_rect.width()
+            norm_y = (center_point.y() - sender_scene_rect.top()) / sender_scene_rect.height()
+            normalized_pos = QPointF(norm_x, norm_y)
+
+        # Update zoom label and slider
         if hasattr(self, 'zoom_label') and self.zoom_label is not None:
             self.zoom_label.setText(f"{int(zoom_factor * 100)}%")
         
-        # Update slider
         if hasattr(self, 'zoom_slider') and self.zoom_slider is not None:
             self._updating_sync = True
             self.zoom_slider.setValue(int(zoom_factor * 100))
@@ -668,8 +688,16 @@ class SynchronizedImageViewer(QWidget):
         if self.sync_enabled:
             self._updating_sync = True
             for viewer in self.image_viewers:
-                if viewer != sender and viewer.isVisible():
-                    viewer.set_zoom_factor(zoom_factor)
+                if viewer != sender and viewer.isVisible() and viewer.has_image():
+                    # Un-normalize for the target viewer
+                    target_scene_rect = viewer.sceneRect()
+                    if target_scene_rect.width() > 0 and target_scene_rect.height() > 0:
+                        target_x = target_scene_rect.left() + normalized_pos.x() * target_scene_rect.width()
+                        target_y = target_scene_rect.top() + normalized_pos.y() * target_scene_rect.height()
+                        target_center = QPointF(target_x, target_y)
+                        viewer.set_zoom_factor(zoom_factor, target_center)
+                    else:
+                        viewer.set_zoom_factor(zoom_factor)  # Fallback
             self._updating_sync = False
 
     def _on_pan_changed(self, center_point: QPointF):
