@@ -471,62 +471,146 @@ class SynchronizedImageViewer(QWidget):
         self._setup_ui()
         
     def _setup_ui(self):
-        """Setup the user interface with a more modern, compact toolbar."""
-        from PyQt6.QtGui import QIcon
+        """Setup the user interface with a modern, sleek toolbar."""
+        from PyQt6.QtGui import QIcon, QFont
         from PyQt6.QtWidgets import QStyle
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # --- Toolbar ---
+        # --- Modern Toolbar ---
         self.controls_frame = QFrame()
         self.controls_frame.setObjectName("advancedViewerToolbar")
         controls_layout = QHBoxLayout(self.controls_frame)
-        controls_layout.setContentsMargins(5, 0, 5, 0)
-        controls_layout.setSpacing(8)
+        controls_layout.setContentsMargins(12, 6, 12, 6)
+        controls_layout.setSpacing(16)
 
-        # -- View Mode Buttons --
+        # -- View Mode Section --
+        view_mode_container = QFrame()
+        view_mode_container.setObjectName("viewModeContainer")
+        view_mode_layout = QHBoxLayout(view_mode_container)
+        view_mode_layout.setContentsMargins(4, 2, 4, 2)
+        view_mode_layout.setSpacing(0)
+        
         self.view_mode_group = QButtonGroup(self)
-        self.single_view_btn = QPushButton("Single")
+        
+        # Single View Button
+        self.single_view_btn = QPushButton("▢")
+        self.single_view_btn.setToolTip("Single View")
         self.single_view_btn.setCheckable(True)
         self.single_view_btn.setChecked(True)
+        self.single_view_btn.setObjectName("viewModeButton")
+        self.single_view_btn.setProperty("position", "left")
         self.single_view_btn.clicked.connect(lambda: self._set_view_mode("single"))
         self.view_mode_group.addButton(self.single_view_btn)
-        controls_layout.addWidget(self.single_view_btn)
+        view_mode_layout.addWidget(self.single_view_btn)
 
-        self.side_by_side_btn = QPushButton("Side by Side")
+        # Side by Side Button
+        self.side_by_side_btn = QPushButton("▢▢")
+        self.side_by_side_btn.setToolTip("Side by Side")
         self.side_by_side_btn.setCheckable(True)
+        self.side_by_side_btn.setObjectName("viewModeButton")
+        self.side_by_side_btn.setProperty("position", "right")
         self.side_by_side_btn.clicked.connect(lambda: self._set_view_mode("side_by_side"))
         self.view_mode_group.addButton(self.side_by_side_btn)
-        controls_layout.addWidget(self.side_by_side_btn)
+        view_mode_layout.addWidget(self.side_by_side_btn)
         
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.VLine)
-        separator.setFrameShadow(QFrame.Shadow.Sunken)
-        controls_layout.addWidget(separator)
+        controls_layout.addWidget(view_mode_container)
+        
+        # Vertical separator
+        separator1 = QFrame()
+        separator1.setObjectName("toolbarSeparator")
+        separator1.setFrameShape(QFrame.Shape.VLine)
+        controls_layout.addWidget(separator1)
 
-        # -- Zoom Controls --
-        self.zoom_out_btn = QPushButton(); self.zoom_out_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowLeft)); self.zoom_out_btn.setToolTip("Zoom Out (-)"); self.zoom_out_btn.clicked.connect(self._zoom_out_all); controls_layout.addWidget(self.zoom_out_btn)
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal); self.zoom_slider.setRange(10, 2000); self.zoom_slider.setValue(100); self.zoom_slider.setToolTip("Zoom"); self.zoom_slider.valueChanged.connect(self._zoom_slider_changed); controls_layout.addWidget(self.zoom_slider)
-        self.zoom_in_btn = QPushButton(); self.zoom_in_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight)); self.zoom_in_btn.setToolTip("Zoom In (+)"); self.zoom_in_btn.clicked.connect(self._zoom_in_all); controls_layout.addWidget(self.zoom_in_btn)
-        self.zoom_label = QLabel("100%"); self.zoom_label.setMinimumWidth(45); controls_layout.addWidget(self.zoom_label)
+        # -- Zoom Controls Section --
+        zoom_container = QFrame()
+        zoom_container.setObjectName("zoomContainer")
+        zoom_layout = QHBoxLayout(zoom_container)
+        zoom_layout.setContentsMargins(8, 2, 8, 2)
+        zoom_layout.setSpacing(10)
+        
+        # Zoom Out Button
+        self.zoom_out_btn = QPushButton("−")
+        self.zoom_out_btn.setToolTip("Zoom Out (-)")
+        self.zoom_out_btn.setObjectName("zoomButton")
+        self.zoom_out_btn.clicked.connect(self._zoom_out_all)
+        zoom_layout.addWidget(self.zoom_out_btn)
+        
+        # Zoom Slider
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setObjectName("zoomSlider")
+        self.zoom_slider.setRange(10, 2000)
+        self.zoom_slider.setValue(100)
+        self.zoom_slider.setToolTip("Zoom Level")
+        self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
+        self.zoom_slider.setFixedWidth(140)
+        zoom_layout.addWidget(self.zoom_slider)
+        
+        # Zoom In Button
+        self.zoom_in_btn = QPushButton("+")
+        self.zoom_in_btn.setToolTip("Zoom In (+)")
+        self.zoom_in_btn.setObjectName("zoomButton")
+        self.zoom_in_btn.clicked.connect(self._zoom_in_all)
+        zoom_layout.addWidget(self.zoom_in_btn)
+        
+        # Zoom percentage label
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setObjectName("zoomLabel")
+        self.zoom_label.setMinimumWidth(55)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_layout.addWidget(self.zoom_label)
+        
+        controls_layout.addWidget(zoom_container)
 
-        # -- Fit Buttons --
-        self.fit_btn = QPushButton(); self.fit_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogToParent)); self.fit_btn.setToolTip("Fit to View (0)"); self.fit_btn.clicked.connect(self._fit_all); controls_layout.addWidget(self.fit_btn)
-        self.actual_size_btn = QPushButton("1:1"); self.actual_size_btn.setToolTip("Actual Size (100%) (1)"); self.actual_size_btn.clicked.connect(self._actual_size_all); controls_layout.addWidget(self.actual_size_btn)
+        # -- Fit Controls Section --
+        fit_container = QFrame()
+        fit_container.setObjectName("fitContainer")
+        fit_layout = QHBoxLayout(fit_container)
+        fit_layout.setContentsMargins(8, 2, 8, 2)
+        fit_layout.setSpacing(8)
+        
+        # Fit to View Button
+        self.fit_btn = QPushButton("⊡")
+        self.fit_btn.setToolTip("Fit to View (0)")
+        self.fit_btn.setObjectName("fitButton")
+        self.fit_btn.clicked.connect(self._fit_all)
+        fit_layout.addWidget(self.fit_btn)
+        
+        # 1:1 View Button
+        self.actual_size_btn = QPushButton("1:1")
+        self.actual_size_btn.setToolTip("Actual Size (100%)")
+        self.actual_size_btn.setObjectName("actualSizeButton")
+        self.actual_size_btn.clicked.connect(self._actual_size_all)
+        fit_layout.addWidget(self.actual_size_btn)
+        
+        controls_layout.addWidget(fit_container)
+        
+        # Spacer
         controls_layout.addStretch()
 
-        # -- Sync Button --
-        self.sync_button = QPushButton("Sync"); self.sync_button.setCheckable(True); self.sync_button.setChecked(True); self.sync_button.setToolTip("Synchronize Pan & Zoom"); self.sync_button.toggled.connect(self._toggle_sync); controls_layout.addWidget(self.sync_button)
+        # -- Sync Toggle --
+        self.sync_button = QPushButton("⟲ Sync")
+        self.sync_button.setCheckable(True)
+        self.sync_button.setChecked(True)
+        self.sync_button.setToolTip("Synchronize Pan & Zoom")
+        self.sync_button.setObjectName("syncButton")
+        self.sync_button.toggled.connect(self._toggle_sync)
+        controls_layout.addWidget(self.sync_button)
+        
         layout.addWidget(self.controls_frame)
 
         # --- Image Viewer Container ---
-        self.viewer_splitter = QSplitter(Qt.Orientation.Horizontal); self.viewer_splitter.setObjectName("advancedViewerSplitter"); self.viewer_splitter.setHandleWidth(2); self.viewer_splitter.splitterMoved.connect(self._on_splitter_moved); layout.addWidget(self.viewer_splitter, 1)
+        self.viewer_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.viewer_splitter.setObjectName("advancedViewerSplitter")
+        self.viewer_splitter.setHandleWidth(2)
+        self.viewer_splitter.splitterMoved.connect(self._on_splitter_moved)
+        layout.addWidget(self.viewer_splitter, 1)
 
         self._create_viewer()
         self._update_controls_visibility()
-        
+                
     def _on_splitter_moved(self, pos, index):
         QTimer.singleShot(50, self._fit_visible_images_after_layout_change)
 
