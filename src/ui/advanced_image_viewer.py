@@ -383,8 +383,9 @@ class IndividualViewer(QWidget):
         
     def _connect_signals(self):
         """Connect button signals to handlers."""
-        for btn in self.star_buttons:
-            btn.clicked.connect(self._on_rating_button_clicked)
+        for i, btn in enumerate(self.star_buttons):
+            # Use lambda with default parameter to capture the rating value correctly
+            btn.clicked.connect(lambda checked, rating=i+1: self._on_rating_button_clicked(rating))
         self.clear_rating_button.clicked.connect(lambda: self._on_rating_button_clicked(0))
         
         for btn in self.color_buttons.values():
