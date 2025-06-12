@@ -12,7 +12,6 @@ class AppState:
     def __init__(self):
         self.image_files_data: List[Dict[str, Any]] = [] # {'path': str, 'is_blurred': Optional[bool]}
         self.rating_cache: Dict[str, int] = {} # This is an in-memory dictionary for quick UI access
-        self.label_cache: Dict[str, Optional[str]] = {}
         self.date_cache: Dict[str, Optional[date_obj]] = {}
         self.cluster_results: Dict[str, int] = {} # {image_path: cluster_id}
         self.embeddings_cache: Dict[str, List[float]] = {} # {image_path: embedding_vector}
@@ -26,7 +25,6 @@ class AppState:
         """Clears all data that is specific to a loaded set of files/folder."""
         self.image_files_data.clear()
         self.rating_cache.clear() # Clears in-memory dict
-        self.label_cache.clear()
         self.date_cache.clear()
         self.cluster_results.clear()
         self.embeddings_cache.clear()
@@ -44,7 +42,6 @@ class AppState:
             self.rating_disk_cache.delete(file_path) # Disk cache
         if self.exif_disk_cache:
             self.exif_disk_cache.delete(file_path) # Exif Disk cache
-        self.label_cache.pop(file_path, None)
         self.date_cache.pop(file_path, None)
         self.cluster_results.pop(file_path, None)
         self.embeddings_cache.pop(file_path, None)
@@ -71,8 +68,6 @@ class AppState:
                 self.exif_disk_cache.delete(old_path)
                 self.exif_disk_cache.set(new_path, exif_data)
 
-        if old_path in self.label_cache:
-            self.label_cache[new_path] = self.label_cache.pop(old_path)
         if old_path in self.date_cache:
             self.date_cache[new_path] = self.date_cache.pop(old_path)
         if old_path in self.cluster_results:

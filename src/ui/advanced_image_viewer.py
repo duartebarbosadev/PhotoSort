@@ -297,8 +297,7 @@ class IndividualViewer(QWidget):
     """
     # Signals to bubble up to the main window/controller
     ratingChanged = pyqtSignal(str, int)  # file_path, rating
-    labelChanged = pyqtSignal(str, str)   # file_path, label
-
+ 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._file_path = None
@@ -330,10 +329,6 @@ class IndividualViewer(QWidget):
         self.rating_widget = self._create_rating_controls()
         control_layout.addWidget(self.rating_widget)
         
-        # Color label controls
-        self.color_widget = self._create_color_controls()
-        control_layout.addWidget(self.color_widget)
-        
         control_layout.addStretch()
         
         layout.addWidget(self.control_bar)
@@ -358,39 +353,12 @@ class IndividualViewer(QWidget):
         
         return widget
 
-    def _create_color_controls(self) -> QWidget:
-        """Creates the color label buttons widget."""
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(3)
-        
-        self.color_buttons = {}
-        colors = ["Red", "Yellow", "Green", "Blue", "Purple"]
-        
-        for color_name in colors:
-            btn = QPushButton("")
-            btn.setToolTip(f"Set label to {color_name}")
-            btn.setProperty("labelValue", color_name)
-            layout.addWidget(btn)
-            self.color_buttons[color_name] = btn
-            
-        self.clear_color_label_button = QPushButton("X")
-        self.clear_color_label_button.setToolTip("Clear color label")
-        layout.addWidget(self.clear_color_label_button)
-        
-        return widget
-        
     def _connect_signals(self):
         """Connect button signals to handlers."""
         for i, btn in enumerate(self.star_buttons):
             # Use lambda with default parameter to capture the rating value correctly
             btn.clicked.connect(lambda checked, rating=i+1: self._on_rating_button_clicked(rating))
         self.clear_rating_button.clicked.connect(lambda: self._on_rating_button_clicked(0))
-        
-        for btn in self.color_buttons.values():
-            btn.clicked.connect(self._on_color_button_clicked)
-        self.clear_color_label_button.clicked.connect(lambda: self._on_color_button_clicked(None))
         
     def _on_rating_button_clicked(self, rating_override=None):
         """Handle rating button clicks and emit signal."""
@@ -405,49 +373,22 @@ class IndividualViewer(QWidget):
             self.ratingChanged.emit(self._file_path, rating)
             self.update_rating_display(rating) # Update own display immediately
 
-    def _on_color_button_clicked(self, label_override=None):
-        """Handle color button clicks and emit signal."""
-        if self._file_path is None: return
-        
-        label = label_override
-        if label is None and label_override is not False: # Distinguish None from clear button
-            sender = self.sender()
-            label = sender.property("labelValue")
-
-        self.labelChanged.emit(self._file_path, label)
-        self.update_label_display(label) # Update own display immediately
-
     def set_data(self, pixmap: QPixmap, file_path: str, rating: int, label: Optional[str]):
         """Set all data for the viewer at once."""
         self._file_path = file_path
         self.image_view.set_image(pixmap)
         self.update_rating_display(rating)
-        self.update_label_display(label)
 
     def update_rating_display(self, rating: int):
         """Update the star buttons to reflect the current rating."""
         for i, btn in enumerate(self.star_buttons):
             btn.setText("★" if i < rating else "☆")
 
-    def update_label_display(self, label: Optional[str]):
-        """Update the color buttons to reflect the current label."""
-        for color_name, btn in self.color_buttons.items():
-            is_selected = (color_name == label)
-            btn.setProperty("selected", is_selected)
-            # Re-polish to apply stylesheet changes
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-            
-        self.clear_color_label_button.setProperty("selected", label is None)
-        self.clear_color_label_button.style().unpolish(self.clear_color_label_button)
-        self.clear_color_label_button.style().polish(self.clear_color_label_button)
-
     def clear(self):
         """Clear the viewer and its associated data."""
         self._file_path = None
         self.image_view.clear()
         self.update_rating_display(0)
-        self.update_label_display(None)
 
     def has_image(self) -> bool:
         """Check if the internal image view has an image."""
@@ -459,7 +400,6 @@ class SynchronizedImageViewer(QWidget):
     """
     # Forward signals from IndividualViewer instances
     ratingChanged = pyqtSignal(str, int)
-    labelChanged = pyqtSignal(str, str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -619,8 +559,6 @@ class SynchronizedImageViewer(QWidget):
         viewer.image_view.zoom_changed.connect(self._on_zoom_changed)
         viewer.image_view.pan_changed.connect(self._on_pan_changed)
         viewer.ratingChanged.connect(self.ratingChanged)
-        viewer.labelChanged.connect(self.labelChanged)
-        
         self.image_viewers.append(viewer)
         self.viewer_splitter.addWidget(viewer)
         return viewer

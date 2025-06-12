@@ -194,8 +194,8 @@ class MetadataProcessor:
            result_key_for_this_file = unicodedata.normalize('NFC', os.path.normpath(image_path_input))
 
            if not resolved:
-               results[result_key_for_this_file] = {'rating': 0, 'label': None, 'date': None, 'raw_metadata': None}
-               minimal_data = {"file_path": result_key_for_this_file, 
+               results[result_key_for_this_file] = {'rating': 0, 'date': None, 'raw_metadata': None}
+               minimal_data = {"file_path": result_key_for_this_file,
                                "file_size": "Unknown", 
                                "error": "File not found or inaccessible during path resolution"}
                if exif_disk_cache:
@@ -205,7 +205,7 @@ class MetadataProcessor:
                continue
 
            operational_path, cache_key_path = resolved
-           results[cache_key_path] = {'rating': 0, 'label': None, 'date': None, 'raw_metadata': None} # Use canonical key
+           results[cache_key_path] = {'rating': 0, 'date': None, 'raw_metadata': None} # Use canonical key
 
            cached_metadata: Optional[Dict[str, Any]] = None
            if exif_disk_cache:
@@ -286,14 +286,13 @@ class MetadataProcessor:
        final_results_for_caller: Dict[str, Dict[str, Any]] = {}
        for cache_key, data_dict in results.items(): # cache_key is NFC normalized
            filename_only = os.path.basename(cache_key) # Basename of the cache key for logging
-           parsed_rating, parsed_label, parsed_date = 0, None, None
+           parsed_rating, parsed_date = 0, None
            raw_metadata = data_dict['raw_metadata']
 
            if raw_metadata and "error" not in raw_metadata : # Check if metadata is valid
-               # ... (parsing logic for rating, label, date from raw_metadata as before) ...
+               # ... (parsing logic for rating, date from raw_metadata as before) ...
                rating_raw_val = raw_metadata.get("Xmp.xmp.Rating") # etc.
                parsed_rating = _parse_rating(rating_raw_val)
-               parsed_label = str(raw_metadata.get("Xmp.xmp.Label")) if raw_metadata.get("Xmp.xmp.Label") is not None else None
                for date_tag in DATE_TAGS_PREFERENCE:
                    date_string = raw_metadata.get(date_tag)
                    if date_string:
@@ -326,8 +325,8 @@ class MetadataProcessor:
                except Exception as e_fs:
                    logging.warning(f"[MetadataProcessor] Filesystem date error for {filename_only} (op_path: {op_path_for_stat}): {e_fs}")
 
-           final_results_for_caller[cache_key] = {'rating': parsed_rating, 'label': parsed_label, 'date': parsed_date}
-           logging.debug(f"[MetadataProcessor] Processed {filename_only}: R={parsed_rating}, L='{parsed_label}', D={parsed_date}")
+           final_results_for_caller[cache_key] = {'rating': parsed_rating, 'date': parsed_date}
+           logging.debug(f"[MetadataProcessor] Processed {filename_only}: R={parsed_rating}, D={parsed_date}")
 
        duration = time.perf_counter() - start_time
        logging.info(f"[MetadataProcessor] Finished batch metadata for {len(image_paths)} files in {duration:.4f}s.")
@@ -367,32 +366,6 @@ class MetadataProcessor:
        if success:
            if rating_disk_cache: rating_disk_cache.set(cache_key_path, rating_int)
            if exif_disk_cache: exif_disk_cache.delete(cache_key_path)
-       return success
-
-   @staticmethod
-   def set_label(image_path: str, label: Optional[str], exif_disk_cache: Optional[ExifCache] = None) -> bool:
-       """
-       Sets the XMP:Label using pyexiv2.
-       An empty string or None removes the label.
-       Invalidates exif_disk_cache if provided.
-       Returns True on apparent success, False on failure.
-       """
-       resolved = MetadataProcessor._resolve_path_forms(image_path)
-       if not resolved: return False
-       operational_path, cache_key_path = resolved
-
-       success = False
-       label_to_write = label if label else ""
-       try:
-           with pyexiv2.Image(operational_path, encoding='utf-8') as img:
-               img.modify_xmp({"Xmp.xmp.Label": label_to_write})
-               success = True
-               logging.info(f"[MetadataProcessor] Set Xmp.xmp.Label to '{label_to_write}' for {os.path.basename(operational_path)}")
-       except Exception as e:
-           logging.error(f"Error setting label for {os.path.basename(operational_path)}: {e}", exc_info=True)
-       
-       if success and exif_disk_cache:
-           exif_disk_cache.delete(cache_key_path)
        return success
 
    @staticmethod

@@ -849,7 +849,6 @@ class MainWindow(QMainWindow):
         
         # Connect to the new signals from the advanced viewer
         self.advanced_image_viewer.ratingChanged.connect(self._apply_rating)
-        self.advanced_image_viewer.labelChanged.connect(self._apply_label)
         
         self.prev_button.clicked.connect(self._navigate_up_sequential) # Renamed
         self.next_button.clicked.connect(self._navigate_down_sequential) # Renamed
@@ -2170,10 +2169,9 @@ class MainWindow(QMainWindow):
         normalized_path = os.path.normpath(file_path)
 
         current_rating = self.app_state.rating_cache.get(normalized_path, 0)
-        current_label = self.app_state.label_cache.get(normalized_path)
         current_date = self.app_state.date_cache.get(normalized_path)
 
-        return {'rating': current_rating, 'label': current_label, 'date': current_date}
+        return {'rating': current_rating, 'date': current_date}
 
     def _display_single_image_preview(self, file_path: str, file_data_from_model: Optional[Dict[str, Any]]):
         """Handles displaying preview and info for a single selected image."""
@@ -2202,7 +2200,6 @@ class MainWindow(QMainWindow):
                 'pixmap': pixmap,
                 'path': file_path,
                 'rating': metadata.get('rating', 0),
-                'label': metadata.get('label')
             }
             self.advanced_image_viewer.set_image_data(image_data)
             self._update_status_bar_for_image(file_path, metadata, pixmap, file_data_from_model)
@@ -2217,7 +2214,6 @@ class MainWindow(QMainWindow):
         """Helper to compose and set the status bar message for an image."""
         filename = os.path.basename(file_path)
         rating_text = f"R: {metadata.get('rating', 0)}"
-        label_text = f"L: {metadata.get('label', 'None')}"
         date_obj = metadata.get('date')
         date_text = f"D: {date_obj.strftime('%Y-%m-%d')}" if date_obj else "D: Unknown"
         cluster = self.app_state.cluster_results.get(file_path)
@@ -2230,7 +2226,7 @@ class MainWindow(QMainWindow):
         is_blurred = file_data_from_model.get('is_blurred') if file_data_from_model else None
         blur_status_text = " | Blurred: Yes" if is_blurred is True else (" | Blurred: No" if is_blurred is False else "")
         
-        status_message = f"{filename} | {rating_text} | {label_text} | {date_text}{cluster_text}{size_text}{dimensions_text}{blur_status_text}"
+        status_message = f"{filename} | {rating_text} | {date_text}{cluster_text}{size_text}{dimensions_text}{blur_status_text}"
         self.statusBar().showMessage(status_message)
 
     def _display_multi_selection_info(self, selected_paths: List[str]):
@@ -2416,7 +2412,6 @@ class MainWindow(QMainWindow):
                 if viewer.isVisible() and viewer._file_path == image_path:
                     logging.debug(f"Updating viewer for {os.path.basename(image_path)}.")
                     viewer.update_rating_display(metadata.get('rating', 0))
-                    viewer.update_label_display(metadata.get('label'))
 
             # Check if the processed image is part of the current selection
             if image_path in currently_selected_paths:
@@ -2501,18 +2496,6 @@ class MainWindow(QMainWindow):
         # WorkerManager handles thread cleanup
         logging.info(f"<<< EXIT >>> _handle_preview_error.")
  
-    def _apply_label(self, file_path: str, label: Optional[str]):
-        """Apply label to a specific file path, called by signal."""
-        if not os.path.exists(file_path): return
-
-        success = MetadataProcessor.set_label(file_path, label, self.app_state.exif_disk_cache)
-        
-        if success:
-            self.app_state.label_cache[file_path] = label
-        else:
-            self.statusBar().showMessage(f"Failed to set label for {os.path.basename(file_path)}", 5000)
-
-
     def _set_view_mode_list(self):
         self.current_view_mode = "list"
         self.tree_display_view.setVisible(True)

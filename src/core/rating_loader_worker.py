@@ -88,7 +88,6 @@ class RatingLoaderWorker(QObject):
                 if metadata:
                     # Update AppState's in-memory caches directly here
                     self._app_state.rating_cache[image_path_norm] = metadata.get('rating', 0)
-                    self._app_state.label_cache[image_path_norm] = metadata.get('label')
                     if metadata.get('date'):
                         self._app_state.date_cache[image_path_norm] = metadata['date']
                     else:
@@ -97,7 +96,7 @@ class RatingLoaderWorker(QObject):
                 else:
                     logging.warning(f"[RatingLoaderWorker] No metadata returned for {image_path_norm} from batch call.")
                     # Still add to batch for UI to know it was processed, with default values
-                    current_metadata_tuple = (image_path_norm, {'rating': 0, 'label': None, 'date': None})
+                    current_metadata_tuple = (image_path_norm, {'rating': 0, 'date': None})
                 
                 if current_metadata_tuple:
                     metadata_batch_to_emit.append(current_metadata_tuple)
