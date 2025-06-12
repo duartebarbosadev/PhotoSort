@@ -306,7 +306,7 @@ class MetadataSidebar(QWidget):
     
     def _delayed_update(self):
         """Perform the actual metadata update"""
-        if not self.current_image_path:
+        if not self.current_image_path and not self.comparison_mode:
             self.show_placeholder()
             return
         
