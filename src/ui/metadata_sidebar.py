@@ -41,17 +41,17 @@ class MetadataCard(QFrame):
         # Header with title and expand/collapse functionality
         self.header = QFrame()
         self.header.setObjectName("cardHeader")
-        self.header.setFixedHeight(40)
+        self.header.setFixedHeight(32)
         self.header.setCursor(Qt.CursorShape.PointingHandCursor)
         
         header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(12, 8, 12, 8)
+        header_layout.setContentsMargins(10, 6, 10, 6)
         
         # Icon and title
         self.icon_label = QLabel(self.icon)
         self.icon_label.setFont(QFont("Segoe UI Emoji", 14))
         self.title_label = QLabel(self.title)
-        self.title_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.title_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         
         # Expand/collapse indicator
         self.expand_indicator = QLabel("▼")
@@ -67,8 +67,8 @@ class MetadataCard(QFrame):
         self.content_widget.setObjectName("cardContent")
         self.content_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(12, 8, 12, 12)
-        self.content_layout.setSpacing(6)
+        self.content_layout.setContentsMargins(10, 6, 10, 8)
+        self.content_layout.setSpacing(4)
         
         main_layout.addWidget(self.header)
         main_layout.addWidget(self.content_widget)
@@ -100,11 +100,11 @@ class MetadataCard(QFrame):
     def add_info_row(self, label: str, value: str, value_color: str = None):
         """Add an information row to the card"""
         row = QHBoxLayout()
-        row.setContentsMargins(0, 2, 0, 2)
+        row.setContentsMargins(0, 1, 0, 1)
         
         label_widget = QLabel(label + ":")
         label_widget.setObjectName("metadataLabel")
-        label_widget.setFixedWidth(80)
+        label_widget.setFixedWidth(65)
         
         value_widget = QLabel(str(value) if value is not None else "N/A")
         value_widget.setObjectName("metadataValue")
@@ -122,7 +122,7 @@ class MetadataCard(QFrame):
                         color: str = "#0078D4"):
         """Add a progress bar visualization"""
         row = QVBoxLayout()
-        row.setContentsMargins(0, 4, 0, 4)
+        row.setContentsMargins(0, 2, 0, 2)
         
         label_widget = QLabel(label)
         label_widget.setObjectName("metadataLabel")
@@ -151,19 +151,19 @@ class MetadataCard(QFrame):
         """Add a row for comparing two values."""
         row_widget = QWidget()
         row = QHBoxLayout(row_widget)
-        row.setContentsMargins(0, 2, 0, 2)
+        row.setContentsMargins(0, 1, 0, 1)
 
         label_widget = QLabel(label + ":")
         label_widget.setObjectName("metadataLabel")
-        label_widget.setFixedWidth(80)
+        label_widget.setFixedWidth(65)
 
         value1_widget = QLabel(str(value1) if value1 is not None else "N/A")
         value1_widget.setObjectName("metadataValue")
-        value1_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        value1_widget.setWordWrap(True)
 
         value2_widget = QLabel(str(value2) if value2 is not None else "N/A")
         value2_widget.setObjectName("metadataValue")
-        value2_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        value2_widget.setWordWrap(True)
 
         # Highlight differences
         if highlight_diff and value1 != value2:
@@ -224,8 +224,8 @@ class MetadataSidebar(QWidget):
         # Content widget
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(8, 8, 8, 8)
-        self.content_layout.setSpacing(8)
+        self.content_layout.setContentsMargins(6, 6, 6, 6)
+        self.content_layout.setSpacing(6)
         # Don't add stretch here - we'll add it after all cards
         
         scroll_area.setWidget(self.content_widget)
@@ -454,11 +454,21 @@ class MetadataSidebar(QWidget):
             if card_def["title"] == "File Information":
                 header = QWidget()
                 layout = QHBoxLayout(header)
-                layout.setContentsMargins(0, 2, 0, 2); layout.addWidget(QLabel(""), 1)
+                layout.setContentsMargins(0, 0, 0, 2)
+                # Add an empty label for the first column (the metadata field names)
+                layout.addWidget(QLabel(""), 0) # 0 stretch factor
+                
                 for i in range(2):
-                    label = QLabel(f"<b>{os.path.basename(self.current_image_paths_for_comparison[i])}</b>")
+                    original_filename = os.path.basename(self.current_image_paths_for_comparison[i])
+                    # Smart truncate: show beginning and end of filename
+                    filename = original_filename
+                    if len(filename) > 20: # A bit shorter to be safe
+                        filename = f"{filename[:10]}...{filename[-7:]}"
+                    
+                    label = QLabel(f"<b>{filename}</b>")
                     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    layout.addWidget(label, 1)
+                    label.setToolTip(original_filename) # Tooltip shows the full name
+                    layout.addWidget(label, 1) # 1 stretch factor to use available space
                 card.content_layout.addWidget(header)
                 
                 try:

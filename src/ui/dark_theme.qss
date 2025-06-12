@@ -546,15 +546,15 @@ QScrollArea#metadataScrollArea QScrollBar::handle:vertical:hover {
 QFrame#metadataCard {
     background-color: #252525;
     border: 1px solid #333333;
-    border-radius: 8px;
-    margin: 2px 0;
+    border-radius: 6px;
+    margin: 1px 0;
 }
 
 QFrame#cardHeader {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
                                 stop: 0 #2A2A2A, stop: 1 #252525);
-    border-top-left-radius: 7px;
-    border-top-right-radius: 7px;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
     border-bottom: 1px solid #333333;
 }
 
@@ -570,13 +570,13 @@ QWidget#cardContent {
 
 QLabel#metadataLabel {
     color: #888888;
-    font-size: 8.5pt;
+    font-size: 8pt;
     font-weight: bold;
 }
 
 QLabel#metadataValue {
     color: #D1D1D1;
-    font-size: 8.5pt;
+    font-size: 8pt;
 }
 QLabel#metadataValueDiff {
     color: #FFB366; /* A warm orange/yellow to indicate a difference */
