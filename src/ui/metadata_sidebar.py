@@ -348,6 +348,85 @@ class MetadataSidebar(QWidget):
         except Exception as e:
             logging.error(f"Error updating metadata sidebar: {e}", exc_info=True)
             self.show_error_message(str(e))
+    def _format_display_value(self, value: Any, fmt: Optional[str], path: str = "") -> str:
+        """Centralized helper to format metadata values for display."""
+        # Handle size as a special case first for clarity and robustness
+        if fmt == "size_fallback":
+            size_in_bytes = None
+            if value is not None:
+                try: size_in_bytes = int(value)
+                except (ValueError, TypeError): pass
+            if size_in_bytes is None and path and os.path.exists(path):
+                try: size_in_bytes = os.stat(path).st_size
+                except FileNotFoundError: return "N/A"
+            if size_in_bytes is not None:
+                return f"{size_in_bytes / (1024*1024):.2f} MB" if size_in_bytes >= 1024*1024 else f"{size_in_bytes / 1024:.1f} KB"
+            return "N/A"
+
+        if value is None: return "N/A"
+        
+        try:
+            if fmt == "aperture":
+                logging.debug(f"Formatting aperture. Value: '{value}', Type: {type(value)}")
+                try:
+                    # Handle objects with numerator/denominator (like pyexiv2.Rational)
+                    if hasattr(value, 'numerator') and hasattr(value, 'denominator'):
+                        logging.debug("Is Rational-like object.")
+                        if value.denominator == 0:
+                            return str(value) # Avoid division by zero
+                        val = float(value.numerator) / float(value.denominator)
+                    # Handle string fractions that are not Rational objects
+                    elif isinstance(value, str) and "/" in value:
+                        logging.debug("Is string fraction.")
+                        num, den = value.split('/')
+                        if float(den) == 0:
+                            return value # Avoid division by zero
+                        val = float(num) / float(den)
+                    # Handle other numeric types (including numeric strings)
+                    else:
+                        logging.debug("Is other numeric type.")
+                        val = float(value)
+                    
+                    formatted_val = f"f/{val:.1f}".replace(".0", "")
+                    logging.debug(f"Formatted aperture to: {formatted_val}")
+                    return formatted_val
+                except (ValueError, TypeError, ZeroDivisionError) as e:
+                    logging.warning(f"Could not format aperture value '{value}'. Error: {e}")
+                    return str(value) # Fallback for any other case
+            if fmt == "megapixels": return f"{float(value):.1f} MP"
+            if fmt == "focal": return f"{value}mm" if not str(value).endswith('mm') else str(value)
+            if fmt == "shutter":
+                s_str = str(value)
+                return f"{s_str}s" if not s_str.endswith('s') and '/' in s_str else s_str
+            if fmt == "iso": return f"ISO {value}"
+            if fmt == "ev":
+                return f"+{float(value):.1f} EV" if float(value) > 0 else f"{float(value):.1f} EV"
+            if fmt == "orientation_map": return {"1": "Normal", "3": "Rotated 180°", "6": "Rotated 90° CW", "8": "Rotated 90° CCW"}.get(str(value), str(value))
+            if fmt == "wb_map": return {"0": "Auto", "1": "Manual"}.get(str(value), str(value))
+            if fmt == "metering_map": return {"0": "Unknown", "1": "Average", "2": "Center-weighted", "3": "Spot", "5": "Multi-segment"}.get(str(value), str(value))
+            if fmt == "exp_map": return {"0": "Auto", "1": "Manual", "2": "Auto bracket"}.get(str(value), str(value))
+            if fmt == "scene_map": return {"0": "Standard", "1": "Landscape", "2": "Portrait", "3": "Night"}.get(str(value), str(value))
+            if fmt == "flash_map":
+                try:
+                    val_int = int(value)
+                    flash_map = {
+                        0: "Off", 1: "Fired", 5: "Fired", 7: "Fired",
+                        9: "Fired (Forced)", 13: "Fired (Forced)", 15: "Fired (Forced)",
+                        16: "Off", 24: "Off (Auto)", 25: "Fired (Auto)",
+                        29: "Fired (Auto)", 31: "Fired (Auto)", 32: "No flash function",
+                        65: "Fired, Red-eye", 69: "Fired, Red-eye", 71: "Fired, Red-eye",
+                        73: "Fired (Forced), Red-eye", 77: "Fired (Forced), Red-eye",
+                        79: "Fired (Forced), Red-eye", 89: "Fired (Auto), Red-eye",
+                        93: "Fired (Auto), Red-eye", 95: "Fired (Auto), Red-eye",
+                    }
+                    return flash_map.get(val_int, str(value))
+                except (ValueError, TypeError):
+                    return str(value)
+            if isinstance(fmt, str) and "{}" in fmt: return fmt.format(value)
+            return str(value)
+        except (ValueError, TypeError):
+             return str(value)
+
     def add_comparison_cards(self):
         """
         Add cards for comparing two images, dynamically showing all available data
@@ -422,61 +501,6 @@ class MetadataSidebar(QWidget):
             }
         ]
 
-        def format_display_value(value: Any, fmt: Optional[str], path: str = "") -> str:
-            # Handle size as a special case first for clarity and robustness
-            if fmt == "size_fallback":
-                size_in_bytes = None
-                if value is not None:
-                    try: size_in_bytes = int(value)
-                    except (ValueError, TypeError): pass
-                if size_in_bytes is None and path and os.path.exists(path):
-                    try: size_in_bytes = os.stat(path).st_size
-                    except FileNotFoundError: return "N/A"
-                if size_in_bytes is not None:
-                    return f"{size_in_bytes / (1024*1024):.2f} MB" if size_in_bytes >= 1024*1024 else f"{size_in_bytes / 1024:.1f} KB"
-                return "N/A"
-
-            if value is None: return "N/A"
-            
-            try:
-                if fmt == "aperture":
-                    # Handles pyexiv2.Rational by converting to float for display
-                    val = float(value)
-                    return f"f/{val:.1f}".replace(".0", "")
-                if fmt == "megapixels": return f"{float(value):.1f} MP"
-                if fmt == "focal": return f"{value}mm" if not str(value).endswith('mm') else str(value)
-                if fmt == "shutter":
-                    s_str = str(value)
-                    return f"{s_str}s" if not s_str.endswith('s') and '/' in s_str else s_str
-                if fmt == "iso": return f"ISO {value}"
-                if fmt == "ev":
-                    return f"+{float(value):.1f} EV" if float(value) > 0 else f"{float(value):.1f} EV"
-                if fmt == "orientation_map": return {"1": "Normal", "3": "Rotated 180°", "6": "Rotated 90° CW", "8": "Rotated 90° CCW"}.get(str(value), str(value))
-                if fmt == "wb_map": return {"0": "Auto", "1": "Manual"}.get(str(value), str(value))
-                if fmt == "metering_map": return {"0": "Unknown", "1": "Average", "2": "Center-weighted", "3": "Spot", "5": "Multi-segment"}.get(str(value), str(value))
-                if fmt == "exp_map": return {"0": "Auto", "1": "Manual", "2": "Auto bracket"}.get(str(value), str(value))
-                if fmt == "scene_map": return {"0": "Standard", "1": "Landscape", "2": "Portrait", "3": "Night"}.get(str(value), str(value))
-                if fmt == "flash_map":
-                    try:
-                        val_int = int(value)
-                        flash_map = {
-                            0: "Off", 1: "Fired", 5: "Fired", 7: "Fired",
-                            9: "Fired (Forced)", 13: "Fired (Forced)", 15: "Fired (Forced)",
-                            16: "Off", 24: "Off (Auto)", 25: "Fired (Auto)",
-                            29: "Fired (Auto)", 31: "Fired (Auto)", 32: "No flash function",
-                            65: "Fired, Red-eye", 69: "Fired, Red-eye", 71: "Fired, Red-eye",
-                            73: "Fired (Forced), Red-eye", 77: "Fired (Forced), Red-eye",
-                            79: "Fired (Forced), Red-eye", 89: "Fired (Auto), Red-eye",
-                            93: "Fired (Auto), Red-eye", 95: "Fired (Auto), Red-eye",
-                        }
-                        return flash_map.get(val_int, str(value))
-                    except (ValueError, TypeError):
-                        return str(value)
-                if isinstance(fmt, str) and "{}" in fmt: return fmt.format(value)
-                return str(value)
-            except (ValueError, TypeError):
-                 return str(value)
-
         for card_def in card_definitions:
             card = MetadataCard(card_def["title"], card_def["icon"])
             rows_added = 0
@@ -550,8 +574,8 @@ class MetadataSidebar(QWidget):
                         disp1 = val1 if val1 is not None else "N/A"
                         disp2 = val2 if val2 is not None else "N/A"
                     else:
-                        disp1 = format_display_value(val1, fmt, path1)
-                        disp2 = format_display_value(val2, fmt, path2)
+                        disp1 = self._format_display_value(val1, fmt, path1)
+                        disp2 = self._format_display_value(val2, fmt, path2)
                     
                     if field["label"] == "Lens" and (disp1 == get_val(["source"], 0) or disp2 == get_val(["source"], 1)): continue
                     
@@ -653,64 +677,38 @@ class MetadataSidebar(QWidget):
             focal_length = (self.raw_metadata.get("Exif.Photo.FocalLength") or
                           self.raw_metadata.get("FocalLength") or
                           self.raw_metadata.get("EXIF:FocalLength"))
-            if focal_length:
-                # Clean up focal length display (remove 'mm' if already present)
-                fl_str = str(focal_length)
-                if not fl_str.endswith('mm'):
-                    fl_str += "mm"
-                card.add_info_row("Focal Length", fl_str)
+            if focal_length is not None:
+                card.add_info_row("Focal Length", self._format_display_value(focal_length, "focal"))
             
             aperture = (self.raw_metadata.get("Exif.Photo.FNumber") or
                        self.raw_metadata.get("Exif.Photo.ApertureValue") or
                        self.raw_metadata.get("FNumber") or
                        self.raw_metadata.get("EXIF:FNumber") or
                        self.raw_metadata.get("EXIF:ApertureValue"))
-            if aperture:
-                if isinstance(aperture, str) and aperture.startswith('f/'):
-                    card.add_info_row("Aperture", aperture)
-                else:
-                    card.add_info_row("Aperture", f"f/{aperture}")
+            if aperture is not None:
+                card.add_info_row("Aperture", self._format_display_value(aperture, "aperture"))
             
             shutter_speed = (self.raw_metadata.get("ExposureTime") or
                            self.raw_metadata.get("Exif.Photo.ExposureTime") or
                            self.raw_metadata.get("Exif.Photo.ShutterSpeedValue") or
                            self.raw_metadata.get("EXIF:ExposureTime") or
                            self.raw_metadata.get("EXIF:ShutterSpeedValue"))
-            if shutter_speed:
-                # Format shutter speed nicely
-                ss_str = str(shutter_speed)
-                if not ss_str.endswith('s') and '/' in ss_str:
-                    ss_str += "s"
-                card.add_info_row("Shutter Speed", ss_str)
+            if shutter_speed is not None:
+                card.add_info_row("Shutter Speed", self._format_display_value(shutter_speed, "shutter"))
             
             iso = (self.raw_metadata.get("Exif.Photo.ISOSpeedRatings") or
                    self.raw_metadata.get("ISO") or
                    self.raw_metadata.get("EXIF:ISO") or
                    self.raw_metadata.get("EXIF:ISOSpeedRatings"))
-            if iso:
-                card.add_info_row("ISO", f"ISO {iso}")
+            if iso is not None:
+                card.add_info_row("ISO", self._format_display_value(iso, "iso"))
             
             # Flash
             flash = (self.raw_metadata.get("Exif.Photo.Flash") or
                     self.raw_metadata.get("Flash") or
                     self.raw_metadata.get("EXIF:Flash"))
             if flash is not None:
-                try:
-                    flash_val = int(flash)
-                    flash_map = {
-                        0: "Off", 1: "Fired", 5: "Fired", 7: "Fired",
-                        9: "Fired (Forced)", 13: "Fired (Forced)", 15: "Fired (Forced)",
-                        16: "Off", 24: "Off (Auto)", 25: "Fired (Auto)",
-                        29: "Fired (Auto)", 31: "Fired (Auto)", 32: "No flash function",
-                        65: "Fired, Red-eye", 69: "Fired, Red-eye", 71: "Fired, Red-eye",
-                        73: "Fired (Forced), Red-eye", 77: "Fired (Forced), Red-eye",
-                        79: "Fired (Forced), Red-eye", 89: "Fired (Auto), Red-eye",
-                        93: "Fired (Auto), Red-eye", 95: "Fired (Auto), Red-eye",
-                    }
-                    flash_display = flash_map.get(flash_val, str(flash))
-                    card.add_info_row("Flash", flash_display)
-                except (ValueError, TypeError):
-                    card.add_info_row("Flash", str(flash))
+                card.add_info_row("Flash", self._format_display_value(flash, "flash_map"))
         
         self.content_layout.insertWidget(-1, card)
     
