@@ -392,11 +392,11 @@ class MetadataSidebar(QWidget):
                 "fields": [
                     {"label": "Source", "key": ["source"], "format": "composite"},
                     {"label": "Lens", "key": ["Exif.Photo.LensModel", "Exif.Photo.LensSpecification", "LensModel", "LensInfo", "Xmp.aux.Lens"], "format": None},
-                    {"label": "Focal Length", "key": ["Exif.Photo.FocalLength", "FocalLength"], "format": "focal"},
-                    {"label": "Aperture", "key": ["Exif.Photo.FNumber", "Exif.Photo.ApertureValue", "FNumber"], "format": "aperture"},
-                    {"label": "Shutter Speed", "key": ["ExposureTime", "Exif.Photo.ExposureTime", "Exif.Photo.ShutterSpeedValue"], "format": "shutter"},
-                    {"label": "ISO", "key": ["Exif.Photo.ISOSpeedRatings", "ISO"], "format": "iso"},
-                    {"label": "Flash", "key": ["Exif.Photo.Flash", "Flash"], "format": None},
+                    {"label": "Focal Length", "key": ["Exif.Photo.FocalLength", "FocalLength", "EXIF:FocalLength"], "format": "focal"},
+                    {"label": "Aperture", "key": ["Exif.Photo.FNumber", "Exif.Photo.ApertureValue", "FNumber", "EXIF:FNumber", "EXIF:ApertureValue"], "format": "aperture"},
+                    {"label": "Shutter Speed", "key": ["ExposureTime", "Exif.Photo.ExposureTime", "Exif.Photo.ShutterSpeedValue", "EXIF:ExposureTime", "EXIF:ShutterSpeedValue"], "format": "shutter"},
+                    {"label": "ISO", "key": ["Exif.Photo.ISOSpeedRatings", "ISO", "EXIF:ISO", "EXIF:ISOSpeedRatings"], "format": "iso"},
+                    {"label": "Flash", "key": ["Exif.Photo.Flash", "Flash", "EXIF:Flash"], "format": "flash_map"},
                 ]
             },
             {
@@ -456,6 +456,22 @@ class MetadataSidebar(QWidget):
                 if fmt == "metering_map": return {"0": "Unknown", "1": "Average", "2": "Center-weighted", "3": "Spot", "5": "Multi-segment"}.get(str(value), str(value))
                 if fmt == "exp_map": return {"0": "Auto", "1": "Manual", "2": "Auto bracket"}.get(str(value), str(value))
                 if fmt == "scene_map": return {"0": "Standard", "1": "Landscape", "2": "Portrait", "3": "Night"}.get(str(value), str(value))
+                if fmt == "flash_map":
+                    try:
+                        val_int = int(value)
+                        flash_map = {
+                            0: "Off", 1: "Fired", 5: "Fired", 7: "Fired",
+                            9: "Fired (Forced)", 13: "Fired (Forced)", 15: "Fired (Forced)",
+                            16: "Off", 24: "Off (Auto)", 25: "Fired (Auto)",
+                            29: "Fired (Auto)", 31: "Fired (Auto)", 32: "No flash function",
+                            65: "Fired, Red-eye", 69: "Fired, Red-eye", 71: "Fired, Red-eye",
+                            73: "Fired (Forced), Red-eye", 77: "Fired (Forced), Red-eye",
+                            79: "Fired (Forced), Red-eye", 89: "Fired (Auto), Red-eye",
+                            93: "Fired (Auto), Red-eye", 95: "Fired (Auto), Red-eye",
+                        }
+                        return flash_map.get(val_int, str(value))
+                    except (ValueError, TypeError):
+                        return str(value)
                 if isinstance(fmt, str) and "{}" in fmt: return fmt.format(value)
                 return str(value)
             except (ValueError, TypeError):
@@ -656,6 +672,8 @@ class MetadataSidebar(QWidget):
                     card.add_info_row("Aperture", f"f/{aperture}")
             
             shutter_speed = (self.raw_metadata.get("ExposureTime") or
+                           self.raw_metadata.get("Exif.Photo.ExposureTime") or
+                           self.raw_metadata.get("Exif.Photo.ShutterSpeedValue") or
                            self.raw_metadata.get("EXIF:ExposureTime") or
                            self.raw_metadata.get("EXIF:ShutterSpeedValue"))
             if shutter_speed:
@@ -676,8 +694,23 @@ class MetadataSidebar(QWidget):
             flash = (self.raw_metadata.get("Exif.Photo.Flash") or
                     self.raw_metadata.get("Flash") or
                     self.raw_metadata.get("EXIF:Flash"))
-            if flash:
-                card.add_info_row("Flash", str(flash))
+            if flash is not None:
+                try:
+                    flash_val = int(flash)
+                    flash_map = {
+                        0: "Off", 1: "Fired", 5: "Fired", 7: "Fired",
+                        9: "Fired (Forced)", 13: "Fired (Forced)", 15: "Fired (Forced)",
+                        16: "Off", 24: "Off (Auto)", 25: "Fired (Auto)",
+                        29: "Fired (Auto)", 31: "Fired (Auto)", 32: "No flash function",
+                        65: "Fired, Red-eye", 69: "Fired, Red-eye", 71: "Fired, Red-eye",
+                        73: "Fired (Forced), Red-eye", 77: "Fired (Forced), Red-eye",
+                        79: "Fired (Forced), Red-eye", 89: "Fired (Auto), Red-eye",
+                        93: "Fired (Auto), Red-eye", 95: "Fired (Auto), Red-eye",
+                    }
+                    flash_display = flash_map.get(flash_val, str(flash))
+                    card.add_info_row("Flash", flash_display)
+                except (ValueError, TypeError):
+                    card.add_info_row("Flash", str(flash))
         
         self.content_layout.insertWidget(-1, card)
     
