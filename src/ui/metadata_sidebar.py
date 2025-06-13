@@ -306,6 +306,20 @@ class MetadataSidebar(QWidget):
     
     def _delayed_update(self):
         """Perform the actual metadata update"""
+        if self.comparison_mode:
+            logging.debug(f"[MetadataSidebar] Updating in comparison mode for: {self.current_image_paths_for_comparison}")
+            if self.raw_metadata_for_comparison:
+                if len(self.raw_metadata_for_comparison) > 0 and self.raw_metadata_for_comparison[0]:
+                    logging.debug(f"  Image 1 metadata keys ({len(self.raw_metadata_for_comparison[0])}): {list(self.raw_metadata_for_comparison[0].keys())}")
+                if len(self.raw_metadata_for_comparison) > 1 and self.raw_metadata_for_comparison[1]:
+                    logging.debug(f"  Image 2 metadata keys ({len(self.raw_metadata_for_comparison[1])}): {list(self.raw_metadata_for_comparison[1].keys())}")
+        elif self.current_image_path:
+            logging.debug(f"[MetadataSidebar] Updating for single image: {self.current_image_path}")
+            if self.raw_metadata:
+                logging.debug(f"  Metadata keys ({len(self.raw_metadata)}): {list(self.raw_metadata.keys())}")
+        else:
+            logging.debug("[MetadataSidebar] Clearing sidebar (no image selected).")
+        
         if not self.current_image_path and not self.comparison_mode:
             self.show_placeholder()
             return
@@ -377,7 +391,7 @@ class MetadataSidebar(QWidget):
                 "title": "Camera & Settings", "icon": "📷",
                 "fields": [
                     {"label": "Source", "key": ["source"], "format": "composite"},
-                    {"label": "Lens", "key": ["Exif.Photo.LensModel", "Exif.Photo.LensSpecification", "LensModel", "LensInfo"], "format": None},
+                    {"label": "Lens", "key": ["Exif.Photo.LensModel", "Exif.Photo.LensSpecification", "LensModel", "LensInfo", "Xmp.aux.Lens"], "format": None},
                     {"label": "Focal Length", "key": ["Exif.Photo.FocalLength", "FocalLength"], "format": "focal"},
                     {"label": "Aperture", "key": ["Exif.Photo.FNumber", "Exif.Photo.ApertureValue", "FNumber"], "format": "aperture"},
                     {"label": "Shutter Speed", "key": ["ExposureTime", "Exif.Photo.ExposureTime", "Exif.Photo.ShutterSpeedValue"], "format": "shutter"},
@@ -489,10 +503,10 @@ class MetadataSidebar(QWidget):
                         w2, h2 = get_val(['pixel_width', 'Exif.Image.ImageWidth', 'ImageWidth'], 1), get_val(['pixel_height', 'Exif.Image.ImageLength', 'ImageLength'], 1)
                         val2 = f"{w2} × {h2}" if w2 and h2 else None
                     elif field["key"][0] == "source":
-                        make1, model1 = get_val(["Exif.Image.Make"], 0), get_val(["Exif.Image.Model"], 0)
+                        make1, model1 = get_val(["Exif.Image.Make", "Xmp.tiff.Make"], 0), get_val(["Exif.Image.Model", "Xmp.tiff.Model"], 0)
                         if make1 or model1: val1 = f"{make1 or ''} {model1 or ''}".strip()
                         elif any(s in os.path.basename(self.current_image_paths_for_comparison[0]).lower() for s in ["screenshot", "captura"]): val1 = "Screen Capture"
-                        make2, model2 = get_val(["Exif.Image.Make"], 1), get_val(["Exif.Image.Model"], 1)
+                        make2, model2 = get_val(["Exif.Image.Make", "Xmp.tiff.Make"], 1), get_val(["Exif.Image.Model", "Xmp.tiff.Model"], 1)
                         if make2 or model2: val2 = f"{make2 or ''} {model2 or ''}".strip()
                         elif any(s in os.path.basename(self.current_image_paths_for_comparison[1]).lower() for s in ["screenshot", "captura"]): val2 = "Screen Capture"
                 elif fmt == "megapixels":
@@ -577,9 +591,11 @@ class MetadataSidebar(QWidget):
         
         # Check if we have any camera-related metadata using pyexiv2 format
         make = (self.raw_metadata.get("Exif.Image.Make") or
+                self.raw_metadata.get("Xmp.tiff.Make") or
                 self.raw_metadata.get("EXIF:Make") or
                 self.raw_metadata.get("Make"))
         model = (self.raw_metadata.get("Exif.Image.Model") or
+                 self.raw_metadata.get("Xmp.tiff.Model") or
                  self.raw_metadata.get("EXIF:Model") or
                  self.raw_metadata.get("Model"))
         
@@ -609,6 +625,7 @@ class MetadataSidebar(QWidget):
             # Lens information - check pyexiv2 format first
             lens = (self.raw_metadata.get("Exif.Photo.LensModel") or
                     self.raw_metadata.get("Exif.Photo.LensSpecification") or
+                    self.raw_metadata.get("Xmp.aux.Lens") or
                     self.raw_metadata.get("LensModel") or
                     self.raw_metadata.get("EXIF:LensModel") or
                     self.raw_metadata.get("LensInfo") or
