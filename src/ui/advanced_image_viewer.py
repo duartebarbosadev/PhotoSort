@@ -600,7 +600,7 @@ class SynchronizedImageViewer(QWidget):
             if viewer.isVisible() and viewer.has_image():
                 viewer.image_view.fit_in_view()
             
-    def set_image_data(self, image_data: Dict[str, Any], viewer_index: int = 0):
+    def set_image_data(self, image_data: Dict[str, Any], viewer_index: int = 0, preserve_view_mode: bool = False):
         if viewer_index < len(self.image_viewers):
             pixmap = image_data.get('pixmap')
             if pixmap:
@@ -610,12 +610,16 @@ class SynchronizedImageViewer(QWidget):
                     image_data.get('rating', 0),
                     image_data.get('label')
                 )
-        self._set_view_mode("single")
+        
+        # Only change to single view if not preserving current mode
+        if not preserve_view_mode:
+            self._set_view_mode("single")
         self._update_controls_visibility()
 
-    def set_images_data(self, images_data: List[Dict[str, Any]]):
+    def set_images_data(self, images_data: List[Dict[str, Any]], preserve_view_mode: bool = False):
         if len(images_data) >= 2:
-            self._set_view_mode("side_by_side")
+            if not preserve_view_mode:
+                self._set_view_mode("side_by_side")
             for i, data in enumerate(images_data[:2]):
                 if i < len(self.image_viewers) and data.get('pixmap'):
                     self.image_viewers[i].set_data(
@@ -623,7 +627,7 @@ class SynchronizedImageViewer(QWidget):
                     )
             for i in range(2, len(self.image_viewers)): self.image_viewers[i].clear()
         elif images_data:
-            self.set_image_data(images_data[0], 0)
+            self.set_image_data(images_data[0], 0, preserve_view_mode)
         self._update_controls_visibility()
 
     def clear(self):

@@ -123,7 +123,7 @@ The sidebar provides quick access to image metadata and organizational tools:
 7. **Rotate Images**:
 
    * **Via Context Menu**: Right-click any image → choose rotation direction (90° clockwise, counterclockwise, or 180°).
-   * **Via Keyboard**: Use `Ctrl+R` (clockwise), `Ctrl+Shift+R` (counterclockwise), or `Ctrl+Alt+R` (180°).
+   * **Via Keyboard**: Use `R` (clockwise), `Shift+R` (counterclockwise), or `Alt+R` (180°).
    * **Via Image Menu**: Access rotation commands through the "Image" menu.
    * **Intelligent Rotation Process**:
      1. **Metadata-First**: Always attempts lossless XMP orientation metadata update first
