@@ -285,7 +285,7 @@ class MetadataSidebar(QWidget):
         self.raw_metadata_for_comparison = metadatas
         self.title_label.setText("Compare Details")
 
-        self._delayed_update()
+        self.update_timer.start()
     
     def clear_content(self):
         """Clear all content from the sidebar"""
@@ -302,7 +302,7 @@ class MetadataSidebar(QWidget):
         self.raw_metadata = raw_exif or {}
         self.title_label.setText("Image Details")
 
-        self._delayed_update()
+        self.update_timer.start()
     
     def _delayed_update(self):
         """Perform the actual metadata update"""
