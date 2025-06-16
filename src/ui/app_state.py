@@ -20,6 +20,7 @@ class AppState:
         
         # Could also hold current folder path, filter states, etc. if desired.
         self.current_folder_path: Optional[str] = None
+        self.focused_image_path: Optional[str] = None # Path of the image in the single/focused viewer
 
     def clear_all_file_specific_data(self):
         """Clears all data that is specific to a loaded set of files/folder."""
@@ -32,6 +33,7 @@ class AppState:
             self.rating_disk_cache.clear() # Decide if folder clear should wipe the whole disk cache
         if self.exif_disk_cache:
             self.exif_disk_cache.clear() # Decide if folder clear should wipe the whole disk cache
+        self.focused_image_path = None
         # self.current_folder_path = None # Optionally reset current folder path
 
     def remove_data_for_path(self, file_path: str):

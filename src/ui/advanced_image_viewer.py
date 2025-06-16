@@ -223,16 +223,26 @@ class ZoomableImageView(QGraphicsView):
         super().mouseReleaseEvent(event)
         
     def keyPressEvent(self, event: QKeyEvent):
-        """Handle keyboard shortcuts"""
-        if event.key() == Qt.Key.Key_Plus or event.key() == Qt.Key.Key_Equal:
+        """Handle keyboard shortcuts, allowing number keys to propagate up."""
+        key = event.key()
+        logging.debug(f"ZoomableImageView received key: {event.text()}")
+
+        # Let number keys 1-9 pass up to the parent for focus switching
+        if Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
+            logging.debug(f"ZoomableImageView propagating key {event.text()} to parent.")
+            super().keyPressEvent(event) # Propagate event to parent
+            return
+
+        if key == Qt.Key.Key_Plus or key == Qt.Key.Key_Equal:
             self.zoom_in()
-        elif event.key() == Qt.Key.Key_Minus:
+        elif key == Qt.Key.Key_Minus:
             self.zoom_out()
-        elif event.key() == Qt.Key.Key_0:
+        elif key == Qt.Key.Key_0:
             self.fit_in_view()
-        elif event.key() == Qt.Key.Key_1:
-            self.zoom_to_actual_size()
+        elif key == Qt.Key.Key_Backspace: # Another common key, ensure it propagates
+             super().keyPressEvent(event)
         else:
+            # Propagate unhandled keys to the parent
             super().keyPressEvent(event)
     
     def clear(self):
@@ -311,6 +321,7 @@ class IndividualViewer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._file_path = None
+        self._is_selected = False
         
         self._setup_ui()
         self._connect_signals()
@@ -404,21 +415,40 @@ class IndividualViewer(QWidget):
         """Check if the internal image view has an image."""
         return self.image_view.has_image()
 
+    def set_selected(self, is_selected: bool):
+        """Set the visual selection state of the viewer."""
+        if self._is_selected != is_selected:
+            self._is_selected = is_selected
+            if is_selected:
+                self.setProperty("selected", True)
+                self.setStyleSheet("IndividualViewer[selected='true'] { border: 2px solid #0078d7; }")
+            else:
+                self.setProperty("selected", False)
+                self.setStyleSheet("IndividualViewer { border: none; }")
+            
+            # Refresh style
+            self.style().unpolish(self)
+            self.style().polish(self)
+
 class SynchronizedImageViewer(QWidget):
     """
     Container for synchronized IndividualViewers with a central toolbar.
     """
     # Forward signals from IndividualViewer instances
     ratingChanged = pyqtSignal(str, int)
-    
+    focused_image_changed = pyqtSignal(int, str) # index, file_path
+
     def __init__(self, parent=None):
         super().__init__(parent)
         
         self.image_viewers: List[IndividualViewer] = []
         self.sync_enabled = True
         self._updating_sync = False
+        self._focused_index = 0
+        self._view_mode = "single"
         
         self._setup_ui()
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus) # Allow widget to receive key events
         
     def _setup_ui(self):
         """Setup the user interface with a modern, sleek toolbar."""
@@ -586,26 +616,53 @@ class SynchronizedImageViewer(QWidget):
         num_images_loaded = sum(1 for v in self.image_viewers if v.has_image())
         self.side_by_side_btn.setEnabled(num_images_loaded >= 2)
 
-    def _set_view_mode(self, mode: str):
-        """Set the display mode to single or side-by-side."""
-        if mode == "single":
+    def _set_view_mode(self, mode: str, focused_index: int = -1):
+        """Set the display mode to single, focused, or side-by-side."""
+        logging.debug(f"Setting view mode to '{mode}' with focused_index: {focused_index}")
+        num_images = sum(1 for v in self.image_viewers if v.has_image())
+
+        if focused_index != -1:
+            self._focused_index = focused_index
+        
+        # If going to single mode with multiple images, switch to focused mode instead
+        if mode == "single" and num_images > 1:
+            mode = "focused"
+            logging.debug(f"Switching mode to 'focused' because num_images > 1")
+            
+        self._view_mode = mode
+
+        if mode == "focused":
             for i, viewer in enumerate(self.image_viewers):
-                viewer.setVisible(i == 0)
-            
-            if hasattr(self, 'viewer_splitter') and self.viewer_splitter.count() > 0:
-                sizes = [1] + [0] * (self.viewer_splitter.count() - 1)
-                self.viewer_splitter.setSizes(sizes)
-            
+                is_focused = (i == self._focused_index)
+                viewer.setVisible(is_focused)
+                viewer.set_selected(is_focused)
+            if self._focused_index < len(self.image_viewers) and self.image_viewers[self._focused_index].has_image():
+                path = self.image_viewers[self._focused_index]._file_path
+                self.focused_image_changed.emit(self._focused_index, path if path else "")
+            self.single_view_btn.setChecked(True)
+
+        elif mode == "single":
+            for i, viewer in enumerate(self.image_viewers):
+                is_first = (i == 0)
+                viewer.setVisible(is_first)
+                viewer.set_selected(is_first and num_images > 0)
+            if len(self.image_viewers) > 0 and self.image_viewers[0].has_image():
+                path = self.image_viewers[0]._file_path
+                self.focused_image_changed.emit(0, path if path else "")
             self.single_view_btn.setChecked(True)
 
         elif mode == "side_by_side":
+            # When returning to side-by-side, clear any focused image state
+            self.focused_image_changed.emit(-1, "") # index=-1, empty path
+            
             num_active_viewers = sum(1 for v in self.image_viewers if v.has_image())
             if num_active_viewers == 0:
                 num_active_viewers = 1 # Show at least one empty viewer
             
             for i, viewer in enumerate(self.image_viewers):
                 viewer.setVisible(i < num_active_viewers)
-            
+                viewer.set_selected(False) # No selection in side-by-side
+
             if hasattr(self, 'viewer_splitter') and self.viewer_splitter.count() > 0 and num_active_viewers > 0:
                 total_width = self.viewer_splitter.width()
                 if total_width > 0:
@@ -618,30 +675,70 @@ class SynchronizedImageViewer(QWidget):
             self.side_by_side_btn.setChecked(True)
         
         self._update_controls_visibility()
-        QTimer.singleShot(0, self._fit_visible_images_after_layout_change)
-        
+        QTimer.singleShot(50, self._fit_visible_images_after_layout_change)
+
+    def set_focused_viewer(self, index: int):
+        """Public method to set the focused viewer by index."""
+        num_images = sum(1 for v in self.image_viewers if v.has_image())
+        if 0 <= index < num_images:
+            self._set_view_mode("focused", focused_index=index)
+
     def _fit_visible_images_after_layout_change(self):
         for viewer in self.image_viewers:
             if viewer.isVisible() and viewer.has_image():
                 viewer.image_view.fit_in_view()
+
+    def get_focused_image_path_if_any(self) -> Optional[str]:
+        """
+        If the view is in 'focused' mode (one image shown out of many),
+        returns the file path of the focused image. Otherwise, returns None.
+        """
+        # Rely on the internal view mode state
+        if hasattr(self, '_view_mode') and self._view_mode == 'focused':
+            # In focused mode, there should be more than one image loaded total
+            num_with_image = sum(1 for v in self.image_viewers if v.has_image())
+            if num_with_image > 1:
+                if 0 <= self._focused_index < len(self.image_viewers):
+                    viewer = self.image_viewers[self._focused_index]
+                    # Check if this viewer is actually visible and has our file
+                    if viewer.isVisible() and viewer.has_image() and viewer._file_path:
+                        return viewer._file_path
+        return None
             
     def set_image_data(self, image_data: Dict[str, Any], viewer_index: int = 0, preserve_view_mode: bool = False):
-        if viewer_index < len(self.image_viewers):
-            pixmap = image_data.get('pixmap')
-            if pixmap:
-                self.image_viewers[viewer_index].set_data(
-                    pixmap,
-                    image_data.get('path'),
-                    image_data.get('rating', 0),
-                    image_data.get('label')
-                )
+        """Sets the data for a single viewer and clears others."""
         
-        # Only change to single view if not preserving current mode
+        # Ensure we have at least one viewer
+        if not self.image_viewers:
+            self._create_viewer()
+
+        # Update all viewers: set data for the target, clear others
+        for i, viewer in enumerate(self.image_viewers):
+            if i == viewer_index:
+                pixmap = image_data.get('pixmap')
+                if pixmap:
+                    viewer.set_data(
+                        pixmap,
+                        image_data.get('path'),
+                        image_data.get('rating', 0),
+                        image_data.get('label')
+                    )
+                else:
+                    viewer.clear() # Clear if pixmap is invalid
+            else:
+                viewer.clear()
+        
+        # If not preserving view mode, set to single/focused view
         if not preserve_view_mode:
+            # When a new single image is set, it becomes the new focus.
+            # We must reset the focused index to 0 (where the new image is displayed)
+            # to prevent the viewer from reverting to a stale focused index.
+            self._focused_index = viewer_index
             self._set_view_mode("single")
+            
         self._update_controls_visibility()
 
-    def set_images_data(self, images_data: List[Dict[str, Any]], preserve_view_mode: bool = False):
+    def set_images_data(self, images_data: List[Dict[str, Any]]):
         """Populate viewers with a list of image data."""
         num_images = len(images_data)
 
@@ -650,7 +747,7 @@ class SynchronizedImageViewer(QWidget):
             return
             
         if num_images == 1:
-            self.set_image_data(images_data[0], 0, preserve_view_mode)
+            self.set_image_data(images_data[0], 0)
             return
 
         # Ensure we have enough viewer widgets for all images
@@ -668,11 +765,7 @@ class SynchronizedImageViewer(QWidget):
             else:
                 viewer.clear()
 
-        if not preserve_view_mode:
-            self._set_view_mode("side_by_side")
-        else:
-            # If preserving mode, just ensure visibility is correct based on current mode
-            self._set_view_mode(self._get_current_view_mode())
+        self._set_view_mode("side_by_side")
 
     def clear(self):
         for viewer in self.image_viewers: viewer.clear()
@@ -747,3 +840,7 @@ class SynchronizedImageViewer(QWidget):
 
     def setText(self, text: str):
         if self.image_viewers: self.image_viewers[0].image_view.setText(text)
+
+    # keyPressEvent is now handled by the MainWindow to make it global.
+    # The event filter on the view and the keyPressEvent on the MainWindow
+    # cover all necessary navigation and shortcuts.

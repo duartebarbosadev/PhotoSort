@@ -135,7 +135,7 @@ def main():
     # Create a new stream handler (outputs to console)
     console_handler = logging.StreamHandler(sys.stderr) # or sys.stdout
     console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.INFO) # Set level for console
+    console_handler.setLevel(logging.DEBUG) # Set level for console
     root_logger.addHandler(console_handler)
 
     # Conditionally create and add a file handler
@@ -154,7 +154,7 @@ def main():
             logging.error(f"Failed to initialize file logging: {e_file_log}")
             root_logger.setLevel(logging.INFO) # Fallback to INFO if file logging fails
     else:
-        root_logger.setLevel(logging.INFO) # Default to INFO if file logging is not enabled
+        root_logger.setLevel(logging.DEBUG) # Default to DEBUG if file logging is not enabled
         logging.info("File logging is DISABLED (set PHOTORANKER_ENABLE_FILE_LOGGING=true to enable).")
     # --- End Aggressive Logging Setup ---
 

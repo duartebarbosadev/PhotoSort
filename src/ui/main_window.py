@@ -20,7 +20,7 @@ from datetime import date as date_obj, datetime # For date type hinting and obje
 from typing import List, Dict, Optional, Any, Tuple # Import List and Dict for type hinting, Optional, Any, Tuple
 from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent, QPoint, QRect, QPropertyAnimation, QEasingCurve # Import QEvent for eventFilter and QPoint, QRect
 from PyQt6.QtGui import QColor # Import QColor for highlighting
-from PyQt6.QtGui import QAction, QKeySequence, QPixmap, QKeyEvent, QIcon, QStandardItemModel, QStandardItem, QResizeEvent, QDragEnterEvent, QDropEvent, QDragMoveEvent # Import model classes and event types
+from PyQt6.QtGui import QAction, QKeySequence, QPixmap, QKeyEvent, QIcon, QStandardItemModel, QStandardItem, QResizeEvent, QDragEnterEvent, QDropEvent, QDragMoveEvent, QPalette # Import model classes and event types
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_similarity # Add cosine_similarity import
@@ -80,6 +80,49 @@ class DroppableTreeView(QTreeView):
     def dropEvent(self, event: QDropEvent):
         event.ignore() # Disable drag and drop
 
+# --- Custom Delegate for Highlighting Focused Image ---
+class FocusHighlightDelegate(QStyledItemDelegate):
+    def __init__(self, app_state, main_window, parent=None):
+        super().__init__(parent)
+        self.app_state = app_state
+        self.main_window = main_window
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
+        # Let the base class handle the default painting (selection, text, icon)
+        super().paint(painter, option, index)
+
+        if not self.app_state.focused_image_path:
+            return
+
+        active_view = self.main_window._get_active_file_view()
+        if not active_view:
+            return
+
+        # Only draw the underline if more than one item is selected (i.e., we are in a "split" context)
+        num_selected = len(active_view.selectionModel().selectedIndexes())
+        if num_selected <= 1:
+            return
+
+        # Check if the current item is the one that is focused in the viewer
+        item_data = index.data(Qt.ItemDataRole.UserRole)
+        if isinstance(item_data, dict) and item_data.get('path') == self.app_state.focused_image_path:
+            painter.save()
+            
+            # Use the theme's highlight color for a more integrated look.
+            pen_color = option.palette.color(QPalette.ColorRole.Highlight)
+            pen = painter.pen()
+            pen.setColor(pen_color)
+            pen.setWidth(3)  # A bit thicker for better visibility
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap) # Softer edges
+            painter.setPen(pen)
+
+            # Position the underline at the bottom of the item's rectangle
+            rect = option.rect
+            # Position 2px from the bottom, and inset the line horizontally
+            y = rect.bottom() - 2
+            painter.drawLine(rect.left() + 5, y, rect.right() - 5, y)
+
+            painter.restore()
 # --- Custom Proxy Model for Filtering ---
 class CustomFilterProxyModel(QSortFilterProxyModel):
     def __init__(self, parent=None):
@@ -158,6 +201,7 @@ class MainWindow(QMainWindow):
         init_start_time = time.perf_counter()
         logging.info("MainWindow.__init__ - Start")
         self.initial_folder = initial_folder
+        self._is_syncing_selection = False # Flag to prevent selection signal loops
 
         self.image_pipeline = ImagePipeline()
         logging.info(f"MainWindow.__init__ - ImagePipeline instantiated: {time.perf_counter() - init_start_time:.4f}s")
@@ -793,6 +837,11 @@ class MainWindow(QMainWindow):
         self.image_info_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         bottom_layout.addWidget(self.image_info_label, 0, Qt.AlignmentFlag.AlignRight)
 
+        # --- Item Delegate for Custom Highlighting ---
+        self.focus_delegate = FocusHighlightDelegate(self.app_state, self, self)
+        self.tree_display_view.setItemDelegate(self.focus_delegate)
+        self.grid_display_view.setItemDelegate(self.focus_delegate)
+
         self.statusBar().showMessage("Ready")
         logging.debug(f"MainWindow._create_widgets - End: {time.perf_counter() - start_time:.4f}s")
 
@@ -856,7 +905,8 @@ class MainWindow(QMainWindow):
         
         # Connect to the new signals from the advanced viewer
         self.advanced_image_viewer.ratingChanged.connect(self._apply_rating)
-        
+        self.advanced_image_viewer.focused_image_changed.connect(self._handle_focused_image_changed)
+
         self.prev_button.clicked.connect(self._navigate_up_sequential) # Renamed
         self.next_button.clicked.connect(self._navigate_down_sequential) # Renamed
         self.filter_combo.currentIndexChanged.connect(self._apply_filter)
@@ -943,6 +993,17 @@ class MainWindow(QMainWindow):
         self.rotate_180_action.triggered.connect(self._rotate_current_image_180)
         self.addAction(self.rotate_180_action)
         
+        # Actions for switching focused image in side-by-side or focused view
+        self.image_focus_actions = {}
+        for i in range(1, 10): # For keys 1-9
+            action = QAction(self)
+            action.setShortcut(QKeySequence(str(i)))
+            action.setData(i - 1) # 0-indexed
+            action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+            action.triggered.connect(self._handle_image_focus_shortcut)
+            self.addAction(action)
+            self.image_focus_actions[i] = action
+
         logging.debug(f"MainWindow._create_actions - End: {time.perf_counter() - start_time:.4f}s")
         
         # Create Image menu now that actions are available
@@ -1381,6 +1442,34 @@ class MainWindow(QMainWindow):
 
         super().keyPressEvent(event) # Pass to super for any other default handling
 
+    def _handle_image_focus_shortcut(self):
+        """Handles the triggered signal from the 1-9 QAction shortcuts."""
+        sender = self.sender()
+        if not isinstance(sender, QAction):
+            return
+
+        index = sender.data()
+        if index is None:
+            return
+            
+        # This logic is now independent of focus.
+        # It will trigger regardless of which widget is active.
+        if self.group_by_similarity_mode:
+            # In group mode, numbers select within a cluster.
+            # We use the key directly (1-9) for this logic.
+            key = index + Qt.Key.Key_1
+            active_view = self._get_active_file_view()
+            if active_view and self._perform_group_selection_from_key(key, active_view):
+                return # Handled
+        else:
+            # In other modes, numbers switch focus in multi-select/side-by-side.
+            num_images = sum(1 for v in self.advanced_image_viewer.image_viewers if v.has_image())
+            # It is considered multi-image if more than one image is loaded into the viewer,
+            # even if only one is currently visible (focused mode).
+            if num_images > 1 and index < num_images:
+                self.advanced_image_viewer.set_focused_viewer(index)
+                return # Handled
+
     def _focus_search_input(self):
         self.search_input.setFocus()
         self.search_input.selectAll()
@@ -1398,8 +1487,17 @@ class MainWindow(QMainWindow):
         
         # This uses selectionModel, which is fine before deletions alter the model structure too much.
         # It's important this is called BEFORE items are removed from the model.
-        deleted_file_paths = self._get_selected_file_paths_from_view()
         
+        # ---- START: MODIFICATION FOR FOCUSED IMAGE DELETION ----
+        focused_path_to_delete = self.advanced_image_viewer.get_focused_image_path_if_any()
+        
+        if focused_path_to_delete:
+            deleted_file_paths = [focused_path_to_delete]
+            logging.info(f"Deletion action focused on single image: {os.path.basename(focused_path_to_delete)}")
+        else:
+            deleted_file_paths = self._get_selected_file_paths_from_view()
+        # ---- END: MODIFICATION FOR FOCUSED IMAGE DELETION ----
+
         if not deleted_file_paths: # Renamed from selected_file_paths for clarity post-selection
             self.statusBar().showMessage("No image(s) selected to delete.", 3000)
             return
@@ -2360,31 +2458,47 @@ class MainWindow(QMainWindow):
     def _handle_no_selection_or_non_image(self):
         """Handles UI updates when no valid image is selected."""
         if not self.app_state.image_files_data: return
+        
+        # Clear focused image path and repaint view to remove underline
+        if self.app_state.focused_image_path:
+            self.app_state.focused_image_path = None
+            self._get_active_file_view().viewport().update()
+            
         self.advanced_image_viewer.clear()
         self.advanced_image_viewer.setText("Select an image to view details.")
         self.statusBar().showMessage("Ready")
 
     def _handle_file_selection_changed(self, selected=None, deselected=None):
+        # If the selection is changing because we are syncing it from the viewer,
+        # do nothing, to prevent a feedback loop. The flag will be reset by a timer.
+        if self._is_syncing_selection:
+            return
+
         selected_file_paths = self._get_selected_file_paths_from_view()
         
         if not self.app_state.image_files_data: return
+
+        # When selection changes, clear the focused image path unless it's a single selection
+        if len(selected_file_paths) != 1:
+            if self.app_state.focused_image_path:
+                self.app_state.focused_image_path = None
+                self._get_active_file_view().viewport().update() # Trigger repaint to remove underline
         
         if len(selected_file_paths) == 1:
-            file_data_from_model = None
-            active_view = self._get_active_file_view()
-            if active_view and active_view.currentIndex().isValid():
-                source_idx = self.proxy_model.mapToSource(active_view.currentIndex())
-                item = self.file_system_model.itemFromIndex(source_idx)
-                if item: file_data_from_model = item.data(Qt.ItemDataRole.UserRole)
+            file_path = selected_file_paths[0]
+            # This is a single selection, so it's also the "focused" image.
+            self.app_state.focused_image_path = file_path
+            self._get_active_file_view().viewport().update()
 
-            QTimer.singleShot(0, lambda: self._display_single_image_preview(selected_file_paths[0], file_data_from_model))
-            if self.sidebar_visible: self._update_sidebar_with_current_selection()
+            file_data_from_model = self._get_cached_metadata_for_selection(file_path)
+            # This will force the viewer into single-view mode.
+            self._display_single_image_preview(file_path, file_data_from_model)
 
         elif len(selected_file_paths) >= 2:
+            # This will force the viewer into side-by-side mode.
             self._display_multi_selection_info(selected_file_paths)
-            if self.sidebar_visible and self.metadata_sidebar and len(selected_file_paths) > 2:
-                self.metadata_sidebar.show_placeholder()
-        else:
+            
+        else: # No selection
             self._handle_no_selection_or_non_image()
             if self.sidebar_visible and self.metadata_sidebar:
                 self.metadata_sidebar.show_placeholder()
@@ -3188,17 +3302,7 @@ class MainWindow(QMainWindow):
                         self._move_current_image_to_trash()
                         return True
 
-                # Handle 1-9 for group selection (existing logic, also conditional on search_input focus)
-                if not search_has_focus and \
-                   key_event.modifiers() == Qt.KeyboardModifier.NoModifier and \
-                   self.group_by_similarity_mode and \
-                   key >= Qt.Key.Key_1 and key <= Qt.Key.Key_9:
-                    
-                    current_active_view_for_logic = self._get_active_file_view()
-                    # Ensure the event source is the logically active view for this specific shortcut
-                    if obj is current_active_view_for_logic:
-                        if self._perform_group_selection_from_key(key, obj):
-                            return True # Event consumed
+                # Numeric key (1-9) handling was moved to MainWindow.keyPressEvent to make it global.
         
         # Pass unhandled events to the base class
         return super().eventFilter(obj, event)
@@ -3751,20 +3855,22 @@ class MainWindow(QMainWindow):
         current_view_mode = self.advanced_image_viewer._get_current_view_mode()
         is_side_by_side = current_view_mode == "side_by_side"
         
+        # Find the model item corresponding to the rotated file path to get its data
+        item_data = None
+        proxy_idx = self._find_proxy_index_for_path(file_path)
+        if proxy_idx.isValid():
+            source_idx = self.proxy_model.mapToSource(proxy_idx)
+            item = self.file_system_model.itemFromIndex(source_idx)
+            if item:
+                item_data = item.data(Qt.ItemDataRole.UserRole)
+
         # Refresh the current preview if this is the selected image
         active_view = self._get_active_file_view()
         if active_view:
-            current_proxy_idx = active_view.currentIndex()
-            if current_proxy_idx.isValid() and self._is_valid_image_item(current_proxy_idx):
-                source_idx = self.proxy_model.mapToSource(current_proxy_idx)
-                item = self.file_system_model.itemFromIndex(source_idx)
-                if item:
-                    item_data = item.data(Qt.ItemDataRole.UserRole)
-                    if isinstance(item_data, dict) and item_data.get('path') == file_path:
-                        # This is the currently selected image, refresh while preserving view mode
-                        self._refresh_current_selection_preview()
-                        # Also trigger a fresh load with view mode preservation
-                        QTimer.singleShot(100, lambda: self._display_rotated_image_preview(file_path, item_data, is_side_by_side))
+            selected_paths = self._get_selected_file_paths_from_view()
+            if file_path in selected_paths:
+                # This is one of the currently selected images, refresh while preserving view mode
+                self._display_rotated_image_preview(file_path, item_data, is_side_by_side)
         
         # Update sidebar if visible and showing this image
         if self.sidebar_visible and hasattr(self, 'metadata_sidebar'):
@@ -3983,3 +4089,47 @@ class MainWindow(QMainWindow):
                 action = QAction(folder, self)
                 action.triggered.connect(lambda checked=False, f=folder: self._load_folder(f))
                 self.open_recent_menu.addAction(action)
+
+    def _handle_focused_image_changed(self, index: int, file_path: str):
+        """Slot to handle when the focused image changes in the viewer."""
+        if not file_path:
+            # If the focused image is cleared, remove the underline
+            if self.app_state.focused_image_path:
+                self.app_state.focused_image_path = None
+                view = self._get_active_file_view()
+                if view:
+                    view.viewport().update()
+                    # Process events to ensure the repaint happens immediately
+                    QApplication.processEvents()
+            return
+
+        active_view = self._get_active_file_view()
+        if not active_view:
+            return
+            
+        # Update the app state with the new focused path
+        self.app_state.focused_image_path = file_path
+        # Trigger a repaint of the view to draw the underline
+        active_view.viewport().update()
+
+        proxy_index = self._find_proxy_index_for_path(file_path)
+
+        if proxy_index.isValid():
+            self._is_syncing_selection = True
+
+            selection_model = active_view.selectionModel()
+            original_selection = selection_model.selection()
+
+            # Set the current item indicator, which the delegate uses for underlining.
+            # This might temporarily clear the visual selection.
+            active_view.setCurrentIndex(proxy_index)
+
+            # Re-apply the original selection to ensure the multi-selection highlight is preserved.
+            if not original_selection.isEmpty():
+                selection_model.select(original_selection, QItemSelectionModel.SelectionFlag.Select)
+
+            active_view.scrollTo(proxy_index, QAbstractItemView.ScrollHint.PositionAtCenter)
+            active_view.setFocus()
+            
+            # Reset the flag after the event queue is cleared to prevent loops
+            QTimer.singleShot(0, lambda: setattr(self, '_is_syncing_selection', False))
