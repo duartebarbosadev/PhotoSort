@@ -18,12 +18,14 @@ PREVIEW_CACHE_SIZE_GB_KEY = "Cache/PreviewCacheSizeGB"
 EXIF_CACHE_SIZE_MB_KEY = "Cache/ExifCacheSizeMB" # For EXIF metadata cache
 ROTATION_CONFIRM_LOSSY_KEY = "UI/RotationConfirmLossy" # Ask before lossy rotation
 AUTO_EDIT_PHOTOS_KEY = "UI/AutoEditPhotos"  # Key for auto edit photos setting
+RECENT_FOLDERS_KEY = "UI/RecentFolders" # Key for recent folders list
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0 # Default to 2 GB for preview cache
 DEFAULT_EXIF_CACHE_SIZE_MB = 256 # Default to 256 MB for EXIF cache
 DEFAULT_ROTATION_CONFIRM_LOSSY = True # Default to asking before lossy rotation
 DEFAULT_AUTO_EDIT_PHOTOS = False      # Default auto edit photos setting
+MAX_RECENT_FOLDERS = 10                 # Max number of recent folders to store
 
 # --- Model Settings ---
 DEFAULT_CLIP_MODEL = "sentence-transformers/clip-ViT-B-32" # Common default, adjust if different
@@ -84,6 +86,43 @@ def set_auto_edit_photos(enabled: bool):
     """Set whether auto edit photos is enabled."""
     settings = _get_settings()
     settings.setValue(AUTO_EDIT_PHOTOS_KEY, enabled)
+
+# --- Recent Folders ---
+def get_recent_folders() -> list[str]:
+    """Gets the list of recent folders from settings."""
+    settings = _get_settings()
+    recent_folders = settings.value(RECENT_FOLDERS_KEY, [], type=list)
+    # Filter out folders that no longer exist
+    return [folder for folder in recent_folders if os.path.isdir(folder)]
+
+def add_recent_folder(path: str):
+    """Adds a folder to the top of the recent folders list."""
+    if not path or not os.path.isdir(path):
+        return
+    
+    settings = _get_settings()
+    # Get the list of current, valid recent folders
+    recent_folders = get_recent_folders()
+    
+    # Use os.path.normpath to handle platform-specific path separators (e.g., / vs \)
+    normalized_path = os.path.normpath(path)
+
+    # Remove if already exists (case-insensitive on Windows)
+    # and normalize existing paths for comparison
+    recent_folders = [
+        p for p in recent_folders
+        if os.path.normpath(p).lower() != normalized_path.lower()
+    ]
+
+    # Add the new path to the beginning of the list
+    recent_folders.insert(0, normalized_path)
+    
+    # Trim the list to the maximum size
+    if len(recent_folders) > MAX_RECENT_FOLDERS:
+        recent_folders = recent_folders[:MAX_RECENT_FOLDERS]
+        
+    settings.setValue(RECENT_FOLDERS_KEY, recent_folders)
+
 
 def is_pytorch_cuda_available() -> bool:
     """Check if PyTorch with CUDA support is available."""

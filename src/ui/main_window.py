@@ -34,7 +34,8 @@ from src.core.metadata_processor import MetadataProcessor # New metadata process
 from src.core.app_settings import (
     get_preview_cache_size_gb, set_preview_cache_size_gb, get_preview_cache_size_bytes,
     get_exif_cache_size_mb, set_exif_cache_size_mb,
-    get_auto_edit_photos, set_auto_edit_photos
+    get_auto_edit_photos, set_auto_edit_photos,
+    get_recent_folders, add_recent_folder
 ) # Import settings
 from PyQt6.QtWidgets import QFormLayout, QComboBox, QSizePolicy # For cache dialog
 from src.ui.app_state import AppState # Import AppState
@@ -309,6 +310,12 @@ class MainWindow(QMainWindow):
         self.open_folder_action = QAction("&Open Folder...", self)
         self.open_folder_action.setShortcut(QKeySequence.StandardKey.Open)
         file_menu.addAction(self.open_folder_action)
+
+        self.open_recent_menu = QMenu("Open &Recent", self)
+        file_menu.addMenu(self.open_recent_menu)
+        self._update_recent_folders_menu() # Initial population
+
+        file_menu.addSeparator()
         exit_action = QAction("&Exit", self)
         exit_action.setShortcut(QKeySequence.StandardKey.Quit)
         exit_action.triggered.connect(self.close)
@@ -985,6 +992,10 @@ class MainWindow(QMainWindow):
         load_folder_start_time = time.perf_counter()
         logging.info(f"MainWindow._load_folder - Start for: {folder_path}")
         self.show_loading_overlay(f"Preparing to scan folder...")
+
+        # Add to recent folders before doing anything else
+        add_recent_folder(folder_path)
+        self._update_recent_folders_menu()
 
         # Check cache size vs folder size
         estimated_folder_image_size_bytes = self._calculate_folder_image_size(folder_path)
@@ -3952,3 +3963,19 @@ class MainWindow(QMainWindow):
             return None
 
         return file_path
+
+    def _update_recent_folders_menu(self):
+        """Update the 'Open Recent' menu with the latest list of folders."""
+        self.open_recent_menu.clear()
+        recent_folders = get_recent_folders()
+
+        if not recent_folders:
+            action = QAction("No Recent Folders", self)
+            action.setEnabled(False)
+            self.open_recent_menu.addAction(action)
+        else:
+            for folder in recent_folders:
+                # Use a lambda to capture the folder path for the slot
+                action = QAction(folder, self)
+                action.triggered.connect(lambda checked=False, f=folder: self._load_folder(f))
+                self.open_recent_menu.addAction(action)
