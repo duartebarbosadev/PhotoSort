@@ -2291,16 +2291,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(status_message)
 
     def _display_multi_selection_info(self, selected_paths: List[str]):
-        """Handles UI updates when multiple (2 or more) images are selected."""
-        if len(selected_paths) < 2:
-            self.statusBar().showMessage(f"{len(selected_paths)} items selected. Select 1 for preview or 2 for side-by-side comparison.")
+        """Handles UI updates when multiple images are selected."""
+        if not selected_paths:
             self.advanced_image_viewer.clear()
+            self.statusBar().showMessage("No items selected.")
             return
 
         images_data_for_viewer = []
         metadata_for_sidebar = []
 
-        for path in selected_paths[:2]:  # Max 2 images
+        for path in selected_paths:
             pixmap = self.image_pipeline.get_preview_qpixmap(
                 path,
                 display_max_size=(8000, 8000),
@@ -2313,7 +2313,6 @@ class MainWindow(QMainWindow):
                 basic_metadata = self._get_cached_metadata_for_selection(path)
                 raw_exif = MetadataProcessor.get_detailed_metadata(path, self.app_state.exif_disk_cache)
                 
-                # Data for the viewer
                 images_data_for_viewer.append({
                     'pixmap': pixmap,
                     'path': path,
@@ -2321,33 +2320,39 @@ class MainWindow(QMainWindow):
                     'label': basic_metadata.get('label') if basic_metadata else None
                 })
                 
-                # Combine all metadata for the sidebar
                 combined_meta = (basic_metadata or {}).copy()
                 combined_meta['raw_exif'] = (raw_exif or {}).copy()
                 metadata_for_sidebar.append(combined_meta)
 
-        if len(images_data_for_viewer) == 2:
+        if images_data_for_viewer:
             self.advanced_image_viewer.set_images_data(images_data_for_viewer)
             
-            # Update sidebar for comparison
             if self.sidebar_visible:
-                self.metadata_sidebar.update_comparison(
-                    [d['path'] for d in images_data_for_viewer],
-                    metadata_for_sidebar
-                )
+                if len(images_data_for_viewer) == 2:
+                    self.metadata_sidebar.update_comparison(
+                        [d['path'] for d in images_data_for_viewer],
+                        metadata_for_sidebar
+                    )
+                else:
+                    # Sidebar shows first selected image if more or less than 2 are selected
+                    self._update_sidebar_with_current_selection()
 
-            path1, path2 = images_data_for_viewer[0]['path'], images_data_for_viewer[1]['path']
-            emb1, emb2 = self.app_state.embeddings_cache.get(path1), self.app_state.embeddings_cache.get(path2)
-            if emb1 is not None and emb2 is not None:
-                try:
-                    similarity = cosine_similarity([emb1], [emb2])[0][0]
-                    self.statusBar().showMessage(f"Similarity between selected: {similarity:.4f}")
-                except Exception as e:
-                    logging.error(f"Error calculating similarity: {e}")
+            if len(images_data_for_viewer) >= 2:
+                # Show similarity for the first two images in a multi-selection
+                path1, path2 = images_data_for_viewer[0]['path'], images_data_for_viewer[1]['path']
+                emb1, emb2 = self.app_state.embeddings_cache.get(path1), self.app_state.embeddings_cache.get(path2)
+                if emb1 is not None and emb2 is not None:
+                    try:
+                        similarity = cosine_similarity([emb1], [emb2])[0][0]
+                        self.statusBar().showMessage(f"Comparing {len(images_data_for_viewer)} images. Similarity (first 2): {similarity:.4f}")
+                    except Exception as e:
+                        logging.error(f"Error calculating similarity: {e}")
+                else:
+                    self.statusBar().showMessage(f"Comparing {len(images_data_for_viewer)} images.")
             else:
-                self.statusBar().showMessage(f"Comparing {os.path.basename(path1)} and {os.path.basename(path2)}")
+                 self.statusBar().showMessage(f"Displaying {len(images_data_for_viewer)} image(s).")
         else:
-            self.statusBar().showMessage("Could not load one or more images for comparison.", 3000)
+            self.statusBar().showMessage("Could not load any selected images for display.", 3000)
             self.advanced_image_viewer.clear()
             if self.sidebar_visible:
                 self.metadata_sidebar.show_placeholder()

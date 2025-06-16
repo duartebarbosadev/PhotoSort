@@ -587,21 +587,36 @@ class SynchronizedImageViewer(QWidget):
         self.side_by_side_btn.setEnabled(num_images_loaded >= 2)
 
     def _set_view_mode(self, mode: str):
+        """Set the display mode to single or side-by-side."""
         if mode == "single":
             for i, viewer in enumerate(self.image_viewers):
                 viewer.setVisible(i == 0)
+            
+            if hasattr(self, 'viewer_splitter') and self.viewer_splitter.count() > 0:
+                sizes = [1] + [0] * (self.viewer_splitter.count() - 1)
+                self.viewer_splitter.setSizes(sizes)
+            
             self.single_view_btn.setChecked(True)
+
         elif mode == "side_by_side":
-            while len(self.image_viewers) < 2: self._create_viewer()
-            for i, viewer in enumerate(self.image_viewers): viewer.setVisible(i < 2)
+            num_active_viewers = sum(1 for v in self.image_viewers if v.has_image())
+            if num_active_viewers == 0:
+                num_active_viewers = 1 # Show at least one empty viewer
+            
+            for i, viewer in enumerate(self.image_viewers):
+                viewer.setVisible(i < num_active_viewers)
+            
+            if hasattr(self, 'viewer_splitter') and self.viewer_splitter.count() > 0 and num_active_viewers > 0:
+                total_width = self.viewer_splitter.width()
+                if total_width > 0:
+                    base_size = total_width // num_active_viewers
+                    remainder = total_width % num_active_viewers
+                    sizes = [base_size + 1 if i < remainder else base_size for i in range(num_active_viewers)]
+                    sizes.extend([0] * (self.viewer_splitter.count() - num_active_viewers))
+                    self.viewer_splitter.setSizes(sizes)
+            
             self.side_by_side_btn.setChecked(True)
         
-        if hasattr(self, 'viewer_splitter'):
-            if mode == "side_by_side" and len(self.image_viewers) >= 2:
-                total_width = self.viewer_splitter.width()
-                self.viewer_splitter.setSizes([total_width // 2, total_width // 2] if total_width > 0 else [1, 1])
-            else: self.viewer_splitter.setSizes([1] + [0] * (len(self.image_viewers) - 1))
-
         self._update_controls_visibility()
         QTimer.singleShot(0, self._fit_visible_images_after_layout_change)
         
@@ -627,18 +642,37 @@ class SynchronizedImageViewer(QWidget):
         self._update_controls_visibility()
 
     def set_images_data(self, images_data: List[Dict[str, Any]], preserve_view_mode: bool = False):
-        if len(images_data) >= 2:
-            if not preserve_view_mode:
-                self._set_view_mode("side_by_side")
-            for i, data in enumerate(images_data[:2]):
-                if i < len(self.image_viewers) and data.get('pixmap'):
-                    self.image_viewers[i].set_data(
-                        data['pixmap'], data['path'], data.get('rating', 0), data.get('label')
-                    )
-            for i in range(2, len(self.image_viewers)): self.image_viewers[i].clear()
-        elif images_data:
+        """Populate viewers with a list of image data."""
+        num_images = len(images_data)
+
+        if num_images == 0:
+            self.clear()
+            return
+            
+        if num_images == 1:
             self.set_image_data(images_data[0], 0, preserve_view_mode)
-        self._update_controls_visibility()
+            return
+
+        # Ensure we have enough viewer widgets for all images
+        while len(self.image_viewers) < num_images:
+            self._create_viewer()
+
+        # Update all viewers, then hide unused ones
+        for i, viewer in enumerate(self.image_viewers):
+            if i < num_images:
+                data = images_data[i]
+                if data and data.get('pixmap'):
+                    viewer.set_data(data['pixmap'], data['path'], data.get('rating', 0), data.get('label'))
+                else:
+                    viewer.clear()
+            else:
+                viewer.clear()
+
+        if not preserve_view_mode:
+            self._set_view_mode("side_by_side")
+        else:
+            # If preserving mode, just ensure visibility is correct based on current mode
+            self._set_view_mode(self._get_current_view_mode())
 
     def clear(self):
         for viewer in self.image_viewers: viewer.clear()

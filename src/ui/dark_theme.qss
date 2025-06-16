@@ -957,8 +957,6 @@ QFrame#imageActionControls QWidget > QPushButton { /* Target star buttons */
 QFrame#imageActionControls QWidget > QPushButton[labelValue] {
     min-width: 18px;
     min-height: 18px;
-    max-width: 18px;
-    max-height: 18px;
     border: 1px solid #33353a;
 }
 QFrame#imageActionControls QWidget > QPushButton[labelValue]:hover {
