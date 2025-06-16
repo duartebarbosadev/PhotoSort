@@ -81,6 +81,11 @@ class ZoomableImageView(QGraphicsView):
     def set_image(self, pixmap: QPixmap):
         """Set the image to display with smooth transition"""
         if pixmap and not pixmap.isNull():
+            # Remove any lingering text items before showing the new image
+            for item in self._scene.items():
+                if hasattr(item, '_is_text_item'):
+                    self._scene.removeItem(item)
+
             # CRITICAL: Set new image directly without clearing - prevents black flash
             self._photo_item.setPixmap(pixmap)
             self._empty = False
@@ -232,6 +237,11 @@ class ZoomableImageView(QGraphicsView):
     
     def clear(self):
         """Clear the image display with smooth transition"""
+        # Remove any lingering text items
+        for item in self._scene.items():
+            if hasattr(item, '_is_text_item'):
+                self._scene.removeItem(item)
+        
         # Use transparent pixmap instead of completely empty to reduce flash
         self._empty = True
         transparent_pixmap = QPixmap(1, 1)

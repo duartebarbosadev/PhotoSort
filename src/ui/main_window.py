@@ -3147,7 +3147,6 @@ class MainWindow(QMainWindow):
                         break
             
             if target_proxy_idx_to_select.isValid():
-                active_view.selectionModel().clearSelection()
                 active_view.setCurrentIndex(target_proxy_idx_to_select)
                 active_view.selectionModel().select(target_proxy_idx_to_select, QItemSelectionModel.SelectionFlag.ClearAndSelect)
                 active_view.scrollTo(target_proxy_idx_to_select, QAbstractItemView.ScrollHint.EnsureVisible)
