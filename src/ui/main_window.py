@@ -18,7 +18,7 @@ import subprocess # For opening file explorer
 import traceback # For detailed error logging
 from datetime import date as date_obj, datetime # For date type hinting and objects
 from typing import List, Dict, Optional, Any, Tuple # Import List and Dict for type hinting, Optional, Any, Tuple
-from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent, QPoint, QRect, QPropertyAnimation, QEasingCurve # Import QEvent for eventFilter and QPoint, QRect
+from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent, QPoint, QRect, QPropertyAnimation, QEasingCurve, QItemSelection # Import QEvent for eventFilter and QPoint, QRect
 from PyQt6.QtGui import QColor # Import QColor for highlighting
 from PyQt6.QtGui import QAction, QKeySequence, QPixmap, QKeyEvent, QIcon, QStandardItemModel, QStandardItem, QResizeEvent, QDragEnterEvent, QDropEvent, QDragMoveEvent, QPalette # Import model classes and event types
 import numpy as np
@@ -1484,25 +1484,26 @@ class MainWindow(QMainWindow):
 
         visible_paths_before_delete = self._get_all_visible_image_paths()
         logging.debug(f"MDIT: Visible paths before delete ({len(visible_paths_before_delete)}): {visible_paths_before_delete[:5]}...")
+
+        # Get the full selection from the view first, as this is our context for post-deletion navigation.
+        self.original_selection_paths = self._get_selected_file_paths_from_view()
         
-        # This uses selectionModel, which is fine before deletions alter the model structure too much.
-        # It's important this is called BEFORE items are removed from the model.
-        
-        # ---- START: MODIFICATION FOR FOCUSED IMAGE DELETION ----
+        # Check if we are in a focused view. If so, we only target that one image for deletion.
         focused_path_to_delete = self.advanced_image_viewer.get_focused_image_path_if_any()
-        
-        if focused_path_to_delete:
+        self.was_focused_delete = (focused_path_to_delete is not None) # Store state for post-deletion logic
+
+        if self.was_focused_delete:
             deleted_file_paths = [focused_path_to_delete]
             logging.info(f"Deletion action focused on single image: {os.path.basename(focused_path_to_delete)}")
         else:
-            deleted_file_paths = self._get_selected_file_paths_from_view()
-        # ---- END: MODIFICATION FOR FOCUSED IMAGE DELETION ----
-
-        if not deleted_file_paths: # Renamed from selected_file_paths for clarity post-selection
+            # Not a focused view, delete all selected items from original selection
+            deleted_file_paths = self.original_selection_paths
+        
+        if not deleted_file_paths:
             self.statusBar().showMessage("No image(s) selected to delete.", 3000)
             return
 
-        num_selected = len(deleted_file_paths) # Corrected variable name here
+        num_selected = len(deleted_file_paths)
         
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Confirm Delete")
@@ -1613,13 +1614,14 @@ class MainWindow(QMainWindow):
         if active_selection:
             first_selected_proxy_idx = active_selection[0] # Assuming column 0 if multiple columns selected
 
-        # We need to map proxy indices to source indices *before* deleting,
-        # as proxy indices will become invalid once source items are removed.
+        # This part now finds the source indices for the file paths we've decided to delete.
+        # This correctly handles deleting a single focused file or a whole selection.
         source_indices_to_delete = []
-        for proxy_idx_to_delete in active_view.selectionModel().selectedIndexes():
-            if proxy_idx_to_delete.column() == 0: # Process only one index per row
+        for path_to_delete in deleted_file_paths:
+             proxy_idx_to_delete = self._find_proxy_index_for_path(path_to_delete)
+             if proxy_idx_to_delete.isValid():
                 source_idx = self.proxy_model.mapToSource(proxy_idx_to_delete)
-                if source_idx.isValid():
+                if source_idx.isValid() and source_idx not in source_indices_to_delete:
                     source_indices_to_delete.append(source_idx)
         
         # Sort source indices in reverse order by row, then by parent.
@@ -1712,62 +1714,73 @@ class MainWindow(QMainWindow):
             active_view.selectionModel().clearSelection() # Clear old selection to avoid issues
 
             logging.debug(f"MDIT: --- New Post Deletion Selection Logic ---")
+            
+            # Get the state of the view AFTER deletions have occurred.
             visible_paths_after_delete = self._get_all_visible_image_paths()
             logging.debug(f"MDIT: Visible paths after delete ({len(visible_paths_after_delete)}): {visible_paths_after_delete[:5]}...")
 
-            next_item_to_select_proxy_idx = QModelIndex()
+            # This flag will be used to determine if our special focused-delete logic handled the selection.
+            selection_handled_by_focus_logic = False
 
-            if not visible_paths_after_delete:
-                logging.debug("MDIT: No visible image items left after deletion.")
-                self.advanced_image_viewer.clear()
-                self.advanced_image_viewer.setText("No images left to display.")
-                self.statusBar().showMessage("No images left or visible.")
-            else:
-                # Determine the index in the *original* visible list of the first deleted item
-                first_deleted_path_idx_in_visible_list = -1
-                if visible_paths_before_delete and deleted_file_paths: # deleted_file_paths from earlier
-                    try:
-                        first_deleted_path_idx_in_visible_list = visible_paths_before_delete.index(deleted_file_paths[0])
-                    except ValueError:
-                        logging.warning(f"MDIT: First deleted path {deleted_file_paths[0]} not found in pre-delete visible list. Defaulting to 0.")
-                        first_deleted_path_idx_in_visible_list = 0 # Fallback
-                elif visible_paths_before_delete: # If deleted_file_paths was empty for some reason, but we had original paths
-                    first_deleted_path_idx_in_visible_list = 0
-                else: # No visible items before, or no deleted items tracked (should not happen if deleted_count > 0)
-                    first_deleted_path_idx_in_visible_list = 0
+            if self.was_focused_delete:
+                remaining_selection_paths = [p for p in self.original_selection_paths if p in visible_paths_after_delete]
+                logging.debug(f"Post-focused-delete: {len(remaining_selection_paths)} items remain from original selection.")
                 
-                logging.debug(f"MDIT: Index of first deleted item in original visible list: {first_deleted_path_idx_in_visible_list}")
+                if remaining_selection_paths:
+                    self._handle_file_selection_changed(override_selected_paths=remaining_selection_paths)
+                    
+                    selection = QItemSelection()
+                    first_proxy_idx_to_select = QModelIndex()
 
-                # Target index in the new list: try to select item at same original visual position, or new last if original was last
-                target_idx_in_new_list = min(first_deleted_path_idx_in_visible_list, len(visible_paths_after_delete) - 1)
-                # Ensure target_idx is non-negative
-                target_idx_in_new_list = max(0, target_idx_in_new_list)
+                    for path in remaining_selection_paths:
+                        proxy_idx = self._find_proxy_index_for_path(path)
+                        if proxy_idx.isValid():
+                            selection.select(proxy_idx, proxy_idx)
+                            if not first_proxy_idx_to_select.isValid():
+                                first_proxy_idx_to_select = proxy_idx
 
+                    if not selection.isEmpty():
+                        selection_model = active_view.selectionModel()
+                        selection_model.blockSignals(True)
+                        selection_model.select(selection, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                        selection_model.blockSignals(False)
+                        
+                        if first_proxy_idx_to_select.isValid():
+                            active_view.scrollTo(first_proxy_idx_to_select, QAbstractItemView.ScrollHint.EnsureVisible)
 
-                logging.debug(f"MDIT: Target index in new visible list: {target_idx_in_new_list}")
+                    selection_handled_by_focus_logic = True
 
-                if 0 <= target_idx_in_new_list < len(visible_paths_after_delete):
-                    path_to_select = visible_paths_after_delete[target_idx_in_new_list]
-                    logging.debug(f"MDIT: Path to select: {os.path.basename(path_to_select)}")
-                    next_item_to_select_proxy_idx = self._find_proxy_index_for_path(path_to_select)
-                    logging.debug(f"MDIT: Proxy index for path: {self._log_qmodelindex(next_item_to_select_proxy_idx)}")
+            # Fallback logic for standard deletion or if focused-delete logic fails to find items
+            if not selection_handled_by_focus_logic:
+                if not visible_paths_after_delete:
+                    logging.debug("MDIT: No visible image items left after deletion.")
+                    self.advanced_image_viewer.clear()
+                    self.advanced_image_viewer.setText("No images left to display.")
+                    self.statusBar().showMessage("No images left or visible.")
                 else:
-                    logging.warning(f"MDIT: target_idx_in_new_list ({target_idx_in_new_list}) is out of bounds for visible_paths_after_delete (len {len(visible_paths_after_delete)}).")
+                    first_deleted_path_idx_in_visible_list = -1
+                    if visible_paths_before_delete and deleted_file_paths:
+                        try:
+                            first_deleted_path_idx_in_visible_list = visible_paths_before_delete.index(deleted_file_paths[0])
+                        except ValueError:
+                            first_deleted_path_idx_in_visible_list = 0
+                    elif visible_paths_before_delete:
+                        first_deleted_path_idx_in_visible_list = 0
+                    
+                    target_idx_in_new_list = min(first_deleted_path_idx_in_visible_list, len(visible_paths_after_delete) - 1)
+                    target_idx_in_new_list = max(0, target_idx_in_new_list)
 
+                    next_item_to_select_proxy_idx = self._find_proxy_index_for_path(visible_paths_after_delete[target_idx_in_new_list])
 
-            if next_item_to_select_proxy_idx.isValid() and self._is_valid_image_item(next_item_to_select_proxy_idx):
-                logging.debug(f"MDIT: Selecting item: {self._log_qmodelindex(next_item_to_select_proxy_idx)}")
-                active_view.setCurrentIndex(next_item_to_select_proxy_idx)
-                active_view.selectionModel().select(next_item_to_select_proxy_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect)
-                active_view.scrollTo(next_item_to_select_proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible)
-                self._handle_file_selection_changed()
-            else:
-                # This case handles if visible_paths_after_delete was empty OR find_proxy_index_for_path failed
-                logging.debug("MDIT: No valid image item to select after deletion based on new logic. Clearing UI.")
-                self.advanced_image_viewer.clear()
-                self.advanced_image_viewer.setText("No valid image to select.")
-                if not visible_paths_after_delete : self.statusBar().showMessage("No images left or visible.")
-                else: self.statusBar().showMessage("Could not determine next item to select.")
+                    if next_item_to_select_proxy_idx.isValid():
+                        active_view.setCurrentIndex(next_item_to_select_proxy_idx)
+                        active_view.selectionModel().select(next_item_to_select_proxy_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                        active_view.scrollTo(next_item_to_select_proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible)
+                        # The selection change will trigger _handle_file_selection_changed automatically.
+                    else:
+                        logging.debug("MDIT: Fallback failed. No valid item to select. Clearing UI.")
+                        self.advanced_image_viewer.clear()
+                        self.advanced_image_viewer.setText("No valid image to select.")
             
             self._update_image_info_label()
         elif num_selected > 0 : # No items were actually deleted, but some were selected
@@ -2468,13 +2481,15 @@ class MainWindow(QMainWindow):
         self.advanced_image_viewer.setText("Select an image to view details.")
         self.statusBar().showMessage("Ready")
 
-    def _handle_file_selection_changed(self, selected=None, deselected=None):
-        # If the selection is changing because we are syncing it from the viewer,
-        # do nothing, to prevent a feedback loop. The flag will be reset by a timer.
-        if self._is_syncing_selection:
+    def _handle_file_selection_changed(self, selected=None, deselected=None, override_selected_paths: Optional[List[str]] = None):
+        if self._is_syncing_selection and override_selected_paths is None:
             return
 
-        selected_file_paths = self._get_selected_file_paths_from_view()
+        if override_selected_paths is not None:
+            selected_file_paths = override_selected_paths
+            logging.debug(f"_handle_file_selection_changed: Using overridden selection of {len(selected_file_paths)} paths.")
+        else:
+            selected_file_paths = self._get_selected_file_paths_from_view()
         
         if not self.app_state.image_files_data: return
 
@@ -2482,13 +2497,15 @@ class MainWindow(QMainWindow):
         if len(selected_file_paths) != 1:
             if self.app_state.focused_image_path:
                 self.app_state.focused_image_path = None
-                self._get_active_file_view().viewport().update() # Trigger repaint to remove underline
+                active_view = self._get_active_file_view()
+                if active_view: active_view.viewport().update() # Trigger repaint to remove underline
         
         if len(selected_file_paths) == 1:
             file_path = selected_file_paths[0]
             # This is a single selection, so it's also the "focused" image.
             self.app_state.focused_image_path = file_path
-            self._get_active_file_view().viewport().update()
+            active_view = self._get_active_file_view()
+            if active_view: active_view.viewport().update()
 
             file_data_from_model = self._get_cached_metadata_for_selection(file_path)
             # This will force the viewer into single-view mode.
