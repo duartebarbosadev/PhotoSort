@@ -49,6 +49,38 @@ QMenu::separator {
     margin: 4px 0px;
 }
 
+/* Filter menu widget actions */
+QMenu QWidget {
+    background-color: #2D2D2D;
+    color: #D1D1D1;
+    padding: 2px;
+}
+
+QMenu QWidget QLabel {
+    color: #909090;
+    font-size: 8.5pt;
+    background-color: transparent;
+    padding: 0px 4px;
+}
+
+QMenu QWidget QComboBox {
+    background-color: #2D2D2D;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    padding: 4px 6px;
+    min-width: 5em;
+    min-height: 22px;
+    color: #C0C0C0;
+    margin: 2px;
+}
+QMenu QWidget QComboBox:hover {
+    background-color: #353535;
+    border-color: #505050;
+}
+QMenu QWidget QComboBox:focus {
+    border: 1px solid #0078D4;
+}
+
 /* Status Bar */
 QStatusBar {
     background-color: #202020;
@@ -168,116 +200,99 @@ QWidget#color_widget QPushButton:hover {
 }
 
 
-/* --- Bottom Bar (Navigation, Filters, etc.) --- */
-QWidget#bottom_bar {
+/* --- View Toolbar --- */
+QToolBar#view_toolbar {
     background-color: #202020; /* Matches menubar */
-    border-top: 1px solid #383838;
-    min-height: 38px; /* Compact bar */
-    max-height: 38px;
-    padding: 0 5px; /* Padding for the bar itself */
+    border-bottom: 1px solid #383838;
+    spacing: 8px;
+    padding: 4px 8px;
+    min-height: 40px;
+    max-height: 40px;
 }
 
-/* General Buttons in bottom_bar (Text buttons like View modes) */
-QWidget#bottom_bar QPushButton {
-    background-color: #333333; /* Darker base for text buttons */
+QToolBar#view_toolbar QLabel {
+    color: #909090; /* Dimmer text for labels */
+    padding: 0px 4px;
+    font-size: 8.5pt;
+    background-color: transparent;
+}
+
+QToolBar#view_toolbar QPushButton {
+    background-color: #333333;
     color: #C0C0C0;
     border: 1px solid #404040;
     padding: 4px 8px;
     border-radius: 4px;
     min-height: 24px;
+    margin: 2px;
 }
-QWidget#bottom_bar QPushButton:hover {
+QToolBar#view_toolbar QPushButton:hover {
     background-color: #3D3D3D;
     border-color: #505050;
     color: #FFFFFF;
 }
-QWidget#bottom_bar QPushButton:pressed {
+QToolBar#view_toolbar QPushButton:checked {
+    background-color: #0078D4;
+    border-color: #005A9E;
+    color: #FFFFFF;
+}
+QToolBar#view_toolbar QPushButton:pressed {
     background-color: #2A2A2A;
 }
-QWidget#bottom_bar QPushButton:disabled {
-    background-color: #2C2C2C;
-    color: #666666;
-    border-color: #353535;
-}
 
-/* Navigation Buttons (Icon-only) in bottom_bar */
-QWidget#nav_widget QPushButton {
-    background-color: transparent; /* Ghost buttons for icons */
-    color: #A0A0A0;
-    border: none;
+/* --- Search Container in Left Panel --- */
+QWidget#search_container {
+    background-color: #2A2A2A;
+    border: 1px solid #383838;
     border-radius: 4px;
     padding: 4px;
-    min-width: 26px;
-    min-height: 26px;
-}
-QWidget#nav_widget QPushButton:hover {
-    background-color: #3D3D3D;
-    color: #FFFFFF;
+    margin-bottom: 5px;
 }
 
-/* Labels in bottom_bar (e.g., "Filter:", "View:") */
-QWidget#bottom_bar QLabel {
-    color: #909090; /* Dimmer text for labels */
-    padding: 0px 2px 0px 5px; /* Left padding for spacing from previous element */
+QWidget#search_container QLabel {
+    color: #909090;
     font-size: 8.5pt;
-    background-color: transparent; /* Ensure no inherited background */
+    background-color: transparent;
+    padding: 0px 4px;
 }
 
-/* Combo Box (Filter) in bottom_bar */
-QWidget#bottom_bar QComboBox {
-    background-color: #2D2D2D;
-    border: 1px solid #404040;
-    border-radius: 4px;
-    padding: 4px 6px;
-    min-width: 5em;
-    min-height: 22px; /* Match other controls */
-    color: #C0C0C0;
-}
-QWidget#bottom_bar QComboBox:hover {
-    background-color: #353535;
-    border-color: #505050;
-}
-QWidget#bottom_bar QComboBox:focus {
-    border: 1px solid #0078D4; /* Accent border on focus */
-}
-QWidget#bottom_bar QComboBox::drop-down {
-    subcontrol-origin: padding;
-    subcontrol-position: top right;
-    width: 16px;
-    border-left: 1px solid #404040; /* Separator for arrow */
-}
-QWidget#bottom_bar QComboBox::down-arrow {
-    image: url(:/qt-project.org/styles/commonstyle/images/downarraow-16.png); /* Keep default for now */
-    width: 9px;
-    height: 9px;
-}
-/* QComboBox QAbstractItemView (dropdown list) - uses global QMenu styling mostly */
-QComboBox QAbstractItemView {
-    background-color: #2D2D2D;
-    border: 1px solid #484848;
-    border-radius: 4px; /* Matches QMenu */
-    selection-background-color: #0078D4;
-    color: #D1D1D1;
-    padding: 2px; /* Minimal padding for dropdown items */
-    outline: 0;
-}
-
-/* Line Edit (Search) in bottom_bar */
-QWidget#bottom_bar QLineEdit {
+QWidget#search_container QLineEdit {
     background-color: #2D2D2D;
     border: 1px solid #404040;
     border-radius: 4px;
     padding: 4px 6px;
     color: #D1D1D1;
-    min-height: 22px; /* Match other controls */
+    min-height: 22px;
 }
-QWidget#bottom_bar QLineEdit:focus {
+QWidget#search_container QLineEdit:focus {
     border: 1px solid #0078D4;
     background-color: #353535;
 }
-QWidget#bottom_bar QLineEdit::placeholder-text {
+QWidget#search_container QLineEdit::placeholder-text {
     color: #777777;
 }
+
+/* View type icon buttons in search container */
+QWidget#search_container QPushButton {
+    background-color: transparent;
+    color: #A0A0A0;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 2px;
+    margin: 1px;
+}
+QWidget#search_container QPushButton:hover {
+    background-color: #3D3D3D;
+    color: #FFFFFF;
+    border-color: #505050;
+}
+QWidget#search_container QPushButton:checked {
+    background-color: #0078D4;
+    color: #FFFFFF;
+    border-color: #005A9E;
+}
+
+/* Bottom bar removed - using status bar only */
 
 
 /* Splitter Handle */

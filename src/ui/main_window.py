@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QListView, QComboBox,
     QLineEdit, # For search input
     QStyle, # For standard icons
-    QAbstractItemView, QMessageBox, QApplication, QMenu # For selection and edit triggersor dialogs
+    QAbstractItemView, QMessageBox, QApplication, QMenu, QWidgetAction # For selection and edit triggersor dialogs
 )
 import re # For regular expressions in filtering
 import os # <-- Add import os at the top level
@@ -228,6 +228,23 @@ class MainWindow(QMainWindow):
         self.mark_for_deletion_mode_enabled = get_mark_for_deletion_mode()
         self.blur_detection_threshold = 100.0
  
+        # Create filter controls first (needed by menu creation)
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItems([
+            "Show All", "Unrated (0)", "1 Star +", "2 Stars +",
+            "3 Stars +", "4 Stars +", "5 Stars"
+        ])
+        
+        self.cluster_filter_combo = QComboBox()
+        self.cluster_filter_combo.addItems(["All Clusters"])
+        self.cluster_filter_combo.setEnabled(False)
+        self.cluster_filter_combo.setToolTip("Filter images by similarity cluster")
+        
+        self.cluster_sort_combo = QComboBox()
+        self.cluster_sort_combo.addItems(["Time", "Similarity then Time"])
+        self.cluster_sort_combo.setEnabled(False)
+        self.cluster_sort_combo.setToolTip("Order of clusters when 'Group by Similarity' is active")
+
         section_start_time = time.perf_counter()
         self._create_menu()
         logging.info(f"MainWindow.__init__ - _create_menu done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
@@ -254,6 +271,7 @@ class MainWindow(QMainWindow):
         
         section_start_time = time.perf_counter()
         self._set_view_mode_list()
+        self._update_view_button_states()  # Ensure buttons are in correct state
         logging.info(f"MainWindow.__init__ - _set_view_mode_list done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
         
         self._update_image_info_label() # Set initial info label text
@@ -265,13 +283,10 @@ class MainWindow(QMainWindow):
         if self.initial_folder and os.path.isdir(self.initial_folder):
             QTimer.singleShot(0, lambda: self._load_folder(self.initial_folder))
 
-    # Helper method to update the image information status label
+    # Helper method to update the image information in status bar
     def _update_image_info_label(self, status_message_override: Optional[str] = None):
-        if not hasattr(self, 'image_info_label'): # Widget might not be created yet
-            return
-
         if status_message_override:
-            self.image_info_label.setText(status_message_override)
+            self.statusBar().showMessage(status_message_override)
             return
 
         num_images = 0
@@ -318,7 +333,7 @@ class MainWindow(QMainWindow):
             else: # Folder path set, scan finished (or not started if folder just selected), no image data
                 status_text = f"Folder: {folder_name_display}  |  Images: 0 (0.00 MB)"
         
-        self.image_info_label.setText(status_text)
+        self.statusBar().showMessage(status_text)
 
     def _create_loading_overlay(self):
         start_time = time.perf_counter()
@@ -406,12 +421,56 @@ class MainWindow(QMainWindow):
         self.toggle_metadata_sidebar_action.setShortcut("I")
         view_menu.addAction(self.toggle_metadata_sidebar_action)
         
+        self._create_filter_menu()
         self._create_settings_menu()
 
         # Add to view menu after other view options
         view_menu.addSeparator()
         # Side-by-side toggle is now handled within the viewer's own controls
         logging.debug(f"MainWindow._create_menu - End: {time.perf_counter() - start_time:.4f}s")
+
+    def _create_filter_menu(self):
+        """Create the Filter menu with rating and cluster filter controls."""
+        start_time = time.perf_counter()
+        logging.debug("MainWindow._create_filter_menu - Start")
+        
+        filter_menu = self.menuBar().addMenu("&Filter")
+        
+        # Create a widget action for the rating filter
+        rating_filter_widget = QWidget()
+        rating_filter_layout = QHBoxLayout(rating_filter_widget)
+        rating_filter_layout.setContentsMargins(10, 5, 10, 5)
+        rating_filter_layout.addWidget(QLabel("Rating:"))
+        rating_filter_layout.addWidget(self.filter_combo)
+        
+        rating_filter_action = QWidgetAction(self)
+        rating_filter_action.setDefaultWidget(rating_filter_widget)
+        filter_menu.addAction(rating_filter_action)
+        
+        # Create a widget action for the cluster filter
+        cluster_filter_widget = QWidget()
+        cluster_filter_layout = QHBoxLayout(cluster_filter_widget)
+        cluster_filter_layout.setContentsMargins(10, 5, 10, 5)
+        cluster_filter_layout.addWidget(QLabel("Cluster:"))
+        cluster_filter_layout.addWidget(self.cluster_filter_combo)
+        
+        cluster_filter_action = QWidgetAction(self)
+        cluster_filter_action.setDefaultWidget(cluster_filter_widget)
+        filter_menu.addAction(cluster_filter_action)
+        
+        # Create a widget action for the cluster sort
+        cluster_sort_widget = QWidget()
+        cluster_sort_layout = QHBoxLayout(cluster_sort_widget)
+        cluster_sort_layout.setContentsMargins(10, 5, 10, 5)
+        cluster_sort_layout.addWidget(QLabel("Sort Clusters By:"))
+        cluster_sort_layout.addWidget(self.cluster_sort_combo)
+        
+        self.cluster_sort_action = QWidgetAction(self)
+        self.cluster_sort_action.setDefaultWidget(cluster_sort_widget)
+        filter_menu.addAction(self.cluster_sort_action)
+        self.cluster_sort_action.setVisible(False)  # Initially hidden
+        
+        logging.debug(f"MainWindow._create_filter_menu - End: {time.perf_counter() - start_time:.4f}s")
 
     def _create_settings_menu(self):
         start_time = time.perf_counter()
@@ -754,100 +813,21 @@ class MainWindow(QMainWindow):
         # The rating and color controls are now part of the IndividualViewer
         # widgets inside SynchronizedImageViewer, so they are no longer created here.
 
-        self.bottom_bar = QWidget()
-        self.bottom_bar.setObjectName("bottom_bar")
-        bottom_layout = QHBoxLayout(self.bottom_bar)
-        bottom_layout.setContentsMargins(8, 5, 8, 5) 
-        bottom_layout.setSpacing(10) 
-
-        self.nav_widget = QWidget() 
-        self.nav_widget.setObjectName("nav_widget")
-        nav_layout = QHBoxLayout(self.nav_widget)
-        nav_layout.setContentsMargins(0,0,0,0)
-        nav_layout.setSpacing(5)
-
-        self.prev_button = QPushButton()
-        prev_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack)
-        self.prev_button.setIcon(prev_icon)
-        self.prev_button.setToolTip("Previous Image (Left Arrow)")
-        nav_layout.addWidget(self.prev_button)
-
-        self.next_button = QPushButton()
-        next_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward)
-        self.next_button.setIcon(next_icon)
-        self.next_button.setToolTip("Next Image (Right Arrow)")
-        nav_layout.addWidget(self.next_button)
-        bottom_layout.addWidget(self.nav_widget) 
-
-        bottom_layout.addStretch(1) 
-
-        self.filter_widget = QWidget() 
-        self.filter_widget.setObjectName("filter_widget")
-        filter_layout = QHBoxLayout(self.filter_widget)
-        filter_layout.setContentsMargins(0,0,0,0)
-        filter_layout.setSpacing(5) 
-        filter_layout.addWidget(QLabel("Filter:"))
-        self.filter_combo = QComboBox()
-        self.filter_combo.addItems([
-            "Show All", "Unrated (0)", "1 Star +", "2 Stars +",
-            "3 Stars +", "4 Stars +", "5 Stars"
-        ])
-        filter_layout.addWidget(self.filter_combo)
-        
-        self.cluster_filter_combo = QComboBox()
-        self.cluster_filter_combo.addItems(["All Clusters"])
-        self.cluster_filter_combo.setEnabled(False)
-        self.cluster_filter_combo.setToolTip("Filter images by similarity cluster")
-        filter_layout.addWidget(QLabel(" Cluster:"))
-        filter_layout.addWidget(self.cluster_filter_combo)
-        bottom_layout.addWidget(self.filter_widget) 
-
-        self.cluster_sort_label = QLabel("Sort Clusters By:")
-        self.cluster_sort_combo = QComboBox()
-        self.cluster_sort_combo.addItems(["Time", "Similarity then Time"]) # "Default" removed, "Time" is now default
-        self.cluster_sort_combo.setEnabled(False)
-        self.cluster_sort_combo.setToolTip("Order of clusters when 'Group by Similarity' is active")
-        bottom_layout.addWidget(self.cluster_sort_label)
-        bottom_layout.addWidget(self.cluster_sort_combo)
-        self.cluster_sort_label.setVisible(False)
-        self.cluster_sort_combo.setVisible(False)
-        
-        bottom_layout.addStretch(1) 
-
-        self.view_mode_widget = QWidget() 
-        self.view_mode_widget.setObjectName("view_mode_widget")
-        view_mode_layout = QHBoxLayout(self.view_mode_widget)
-        view_mode_layout.setContentsMargins(0,0,0,0)
-        view_mode_layout.setSpacing(5)
-        view_mode_layout.addWidget(QLabel("View:"))
+        # Create dummy view mode buttons for compatibility (not displayed)
         self.view_list_button = QPushButton("List")
+        self.view_list_button.setCheckable(True)
+        self.view_list_button.setVisible(False)
         self.view_icons_button = QPushButton("Icons")
+        self.view_icons_button.setCheckable(True)
+        self.view_icons_button.setVisible(False)
         self.view_grid_button = QPushButton("Grid")
+        self.view_grid_button.setCheckable(True)
+        self.view_grid_button.setVisible(False)
         self.view_date_button = QPushButton("Date")
-        view_mode_layout.addWidget(self.view_list_button)
-        view_mode_layout.addWidget(self.view_icons_button)
-        view_mode_layout.addWidget(self.view_grid_button)
-        view_mode_layout.addWidget(self.view_date_button)
-        bottom_layout.addWidget(self.view_mode_widget) 
+        self.view_date_button.setCheckable(True)
+        self.view_date_button.setVisible(False)
 
-        bottom_layout.addStretch(2) 
-
-        self.search_widget = QWidget() 
-        self.search_widget.setObjectName("search_widget")
-        search_layout = QHBoxLayout(self.search_widget)
-        search_layout.setContentsMargins(0,0,0,0)
-        search_layout.setSpacing(5)
-        search_layout.addWidget(QLabel("Search:"))
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Filename...")
-        self.search_input.setFixedWidth(180) 
-        search_layout.addWidget(self.search_input)
-        bottom_layout.addWidget(self.search_widget)
-
-        self.image_info_label = QLabel() # Initial text set by _update_image_info_label in __init__
-        self.image_info_label.setObjectName("imageInfoLabel")
-        self.image_info_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        bottom_layout.addWidget(self.image_info_label, 0, Qt.AlignmentFlag.AlignRight)
+        # No bottom bar - image info will be shown in status bar only
 
         # --- Item Delegate for Custom Highlighting ---
         self.focus_delegate = FocusHighlightDelegate(self.app_state, self, self)
@@ -872,8 +852,61 @@ class MainWindow(QMainWindow):
         self.left_pane_widget = QWidget()
         self.left_pane_widget.setObjectName("left_pane_widget")
         left_pane_layout = QVBoxLayout(self.left_pane_widget)
-        left_pane_layout.setContentsMargins(0,0,0,0)
-        left_pane_layout.setSpacing(0)
+        left_pane_layout.setContentsMargins(5,5,5,5)
+        left_pane_layout.setSpacing(5)
+        
+        # Add search to left panel
+        search_container = QWidget()
+        search_container.setObjectName("search_container")
+        search_layout = QHBoxLayout(search_container)
+        search_layout.setContentsMargins(0,0,0,0)
+        search_layout.setSpacing(5)
+        
+        search_layout.addWidget(QLabel("Search:"))
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Filename...")
+        search_layout.addWidget(self.search_input)
+        
+        # Add view type icons to search container
+        view_icons_container = QWidget()
+        view_icons_layout = QHBoxLayout(view_icons_container)
+        view_icons_layout.setContentsMargins(0,0,0,0)
+        view_icons_layout.setSpacing(2)
+        
+        # Create icon buttons for view types
+        self.view_list_icon = QPushButton()
+        self.view_list_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.view_list_icon.setToolTip("List View")
+        self.view_list_icon.setCheckable(True)
+        self.view_list_icon.setMaximumSize(24, 24)
+        
+        self.view_icons_icon = QPushButton()
+        self.view_icons_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
+        self.view_icons_icon.setToolTip("Icons View")
+        self.view_icons_icon.setCheckable(True)
+        self.view_icons_icon.setMaximumSize(24, 24)
+        
+        self.view_grid_icon = QPushButton()
+        self.view_grid_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
+        self.view_grid_icon.setToolTip("Grid View")
+        self.view_grid_icon.setCheckable(True)
+        self.view_grid_icon.setMaximumSize(24, 24)
+        
+        self.view_date_icon = QPushButton()
+        self.view_date_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.view_date_icon.setToolTip("Date View")
+        self.view_date_icon.setCheckable(True)
+        self.view_date_icon.setMaximumSize(24, 24)
+        
+        view_icons_layout.addWidget(self.view_list_icon)
+        view_icons_layout.addWidget(self.view_icons_icon)
+        view_icons_layout.addWidget(self.view_grid_icon)
+        view_icons_layout.addWidget(self.view_date_icon)
+        view_icons_layout.addStretch()
+        
+        search_layout.addWidget(view_icons_container)
+        
+        left_pane_layout.addWidget(search_container)
         left_pane_layout.addWidget(self.tree_display_view)
         left_pane_layout.addWidget(self.grid_display_view)
         main_splitter.addWidget(self.left_pane_widget)
@@ -895,7 +928,6 @@ class MainWindow(QMainWindow):
         self.main_splitter = main_splitter  # Store reference for sidebar toggling
 
         main_layout.addWidget(main_splitter)
-        main_layout.addWidget(self.bottom_bar)
 
         self.setCentralWidget(central_widget)
         logging.debug(f"MainWindow._create_layout - End: {time.perf_counter() - start_time:.4f}s")
@@ -919,18 +951,17 @@ class MainWindow(QMainWindow):
         self.advanced_image_viewer.ratingChanged.connect(self._apply_rating)
         self.advanced_image_viewer.focused_image_changed.connect(self._handle_focused_image_changed)
 
-        self.prev_button.clicked.connect(self._navigate_up_sequential) # Renamed
-        self.next_button.clicked.connect(self._navigate_down_sequential) # Renamed
         self.filter_combo.currentIndexChanged.connect(self._apply_filter)
         self.cluster_filter_combo.currentIndexChanged.connect(self._apply_filter)
         self.cluster_sort_combo.currentIndexChanged.connect(self._cluster_sort_changed)
         self.search_input.textChanged.connect(self._apply_filter)
         # self._connect_rating_actions() # Obsolete, handled by advanced viewer
         self.tree_display_view.collapsed.connect(self._handle_item_collapsed)
-        self.view_list_button.clicked.connect(self._set_view_mode_list)
-        self.view_icons_button.clicked.connect(self._set_view_mode_icons)
-        self.view_grid_button.clicked.connect(self._set_view_mode_grid)
-        self.view_date_button.clicked.connect(self._set_view_mode_date)
+        # Connect only the icon view buttons (toolbar buttons are hidden)
+        self.view_list_icon.clicked.connect(self._set_view_mode_list)
+        self.view_icons_icon.clicked.connect(self._set_view_mode_icons)
+        self.view_grid_icon.clicked.connect(self._set_view_mode_grid)
+        self.view_date_icon.clicked.connect(self._set_view_mode_date)
         self.toggle_folder_view_action.toggled.connect(self._toggle_folder_visibility)
         self.group_by_similarity_action.toggled.connect(self._toggle_group_by_similarity)
         self.find_action.triggered.connect(self._focus_search_input)
@@ -1128,9 +1159,8 @@ class MainWindow(QMainWindow):
         self.cluster_filter_combo.clear()
         self.cluster_filter_combo.addItems(["All Clusters"])
         self.cluster_filter_combo.setEnabled(False)
-        self.cluster_sort_label.setVisible(False)
+        self.cluster_sort_action.setVisible(False)
         self.cluster_sort_combo.setEnabled(False)
-        self.cluster_sort_combo.setVisible(False)
         self.cluster_sort_combo.setCurrentIndex(0)
         self.group_by_similarity_action.setEnabled(False)
         self.group_by_similarity_action.setChecked(False)
@@ -2735,8 +2765,9 @@ class MainWindow(QMainWindow):
         self.tree_display_view.setIndentation(10)
         self.tree_display_view.setRootIsDecorated(self.show_folders_mode or self.group_by_similarity_mode)
         self.tree_display_view.setItemsExpandable(self.show_folders_mode or self.group_by_similarity_mode)
-        if self.tree_display_view.itemDelegate() is self.thumbnail_delegate: 
+        if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
             self.tree_display_view.setItemDelegate(None)
+        self._update_view_button_states()
         self._rebuild_model_view()
         self.tree_display_view.setFocus()
 
@@ -2748,8 +2779,9 @@ class MainWindow(QMainWindow):
         self.tree_display_view.setIndentation(20)
         self.tree_display_view.setRootIsDecorated(self.show_folders_mode or self.group_by_similarity_mode)
         self.tree_display_view.setItemsExpandable(self.show_folders_mode or self.group_by_similarity_mode)
-        if self.tree_display_view.itemDelegate() is self.thumbnail_delegate: 
+        if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
              self.tree_display_view.setItemDelegate(None)
+        self._update_view_button_states()
         self._rebuild_model_view()
         self.tree_display_view.setFocus()
 
@@ -2782,13 +2814,11 @@ class MainWindow(QMainWindow):
             return
         self.group_by_similarity_mode = checked
         if checked and self.app_state.cluster_results:
-            self.cluster_sort_label.setVisible(True)
+            self.cluster_sort_action.setVisible(True)
             self.cluster_sort_combo.setEnabled(True)
-            self.cluster_sort_combo.setVisible(True)
         else:
-            self.cluster_sort_label.setVisible(False)
+            self.cluster_sort_action.setVisible(False)
             self.cluster_sort_combo.setEnabled(False)
-            self.cluster_sort_combo.setVisible(False)
             if checked and not self.app_state.cluster_results: # Should not happen if initial check passed
                 self.group_by_similarity_action.setChecked(False)
                 self.group_by_similarity_mode = False
@@ -2804,12 +2834,13 @@ class MainWindow(QMainWindow):
             self.tree_display_view.setVisible(True)
             self.grid_display_view.setVisible(False)
             # Use a suitable icon size for tree when grid would have been active
-            self.tree_display_view.setIconSize(QSize(96, 96)) 
+            self.tree_display_view.setIconSize(QSize(96, 96))
             self.tree_display_view.setIndentation(20)
             self.tree_display_view.setRootIsDecorated(True)
             self.tree_display_view.setItemsExpandable(True)
-            if self.tree_display_view.itemDelegate() is self.thumbnail_delegate: 
+            if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
                  self.tree_display_view.setItemDelegate(None)
+            self._update_view_button_states()
             self._rebuild_model_view()
             self.tree_display_view.setFocus()
         else:
@@ -2819,6 +2850,7 @@ class MainWindow(QMainWindow):
             self.grid_display_view.setFlow(QListView.Flow.LeftToRight)
             self.grid_display_view.setWrapping(True)
             self.grid_display_view.setResizeMode(QListView.ResizeMode.Adjust)
+            self._update_view_button_states()
             self._rebuild_model_view() # Populate model first
             self._update_grid_view_layout() # Then adjust layout
             self.grid_display_view.setFocus()
@@ -2831,10 +2863,29 @@ class MainWindow(QMainWindow):
         self.tree_display_view.setIndentation(20)
         self.tree_display_view.setRootIsDecorated(True)
         self.tree_display_view.setItemsExpandable(True)
-        if self.tree_display_view.itemDelegate() is self.thumbnail_delegate: 
+        if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
             self.tree_display_view.setItemDelegate(None)
+        self._update_view_button_states()
         self._rebuild_model_view()
         self.tree_display_view.setFocus()
+
+    def _update_view_button_states(self):
+        """Update the visual state of view mode icon buttons"""
+        # Reset all icon buttons
+        self.view_list_icon.setChecked(False)
+        self.view_icons_icon.setChecked(False)
+        self.view_grid_icon.setChecked(False)
+        self.view_date_icon.setChecked(False)
+        
+        # Set the active icon button
+        if self.current_view_mode == "list":
+            self.view_list_icon.setChecked(True)
+        elif self.current_view_mode == "icons":
+            self.view_icons_icon.setChecked(True)
+        elif self.current_view_mode == "grid":
+            self.view_grid_icon.setChecked(True)
+        elif self.current_view_mode == "date":
+            self.view_date_icon.setChecked(True)
 
     def _populate_model_by_date(self, parent_item: QStandardItem, image_data_list: List[Dict[str, any]]):
         if not image_data_list: return
@@ -2952,9 +3003,8 @@ class MainWindow(QMainWindow):
         self.group_by_similarity_action.setEnabled(True)
         self.group_by_similarity_action.setChecked(True) # Automatically switch to group by similarity view
         if self.group_by_similarity_action.isChecked() and self.app_state.cluster_results:
-            self.cluster_sort_label.setVisible(True)
+            self.cluster_sort_action.setVisible(True)
             self.cluster_sort_combo.setEnabled(True)
-            self.cluster_sort_combo.setVisible(True)
         if self.group_by_similarity_mode: self._rebuild_model_view()
         self.hide_loading_overlay()
 
