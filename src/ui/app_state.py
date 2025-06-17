@@ -48,34 +48,38 @@ class AppState:
         self.cluster_results.pop(file_path, None)
         self.embeddings_cache.pop(file_path, None)
 
-    def update_data_for_path_move(self, old_path: str, new_path: str):
-        """Updates cache keys when a file is moved."""
-        for i, file_data in enumerate(self.image_files_data):
-            if file_data.get('path') == old_path:
-                self.image_files_data[i]['path'] = new_path
-                # is_blurred status is preserved
-                break
-        
-        if old_path in self.rating_cache: # In-memory dict
-            self.rating_cache[new_path] = self.rating_cache.pop(old_path)
-        if self.rating_disk_cache: # Disk cache for ratings
-            rating_val = self.rating_disk_cache.get(old_path)
-            if rating_val is not None:
-                self.rating_disk_cache.delete(old_path)
-                self.rating_disk_cache.set(new_path, rating_val)
-        
-        if self.exif_disk_cache: # Disk cache for EXIF
-            exif_data = self.exif_disk_cache.get(old_path)
-            if exif_data is not None:
-                self.exif_disk_cache.delete(old_path)
-                self.exif_disk_cache.set(new_path, exif_data)
+    def update_path(self, old_path: str, new_path: str):
+        """Updates all cache entries and data references from an old path to a new path."""
+        # Update image_files_data
+        file_data = self.get_file_data_by_path(old_path)
+        if file_data:
+            file_data['path'] = new_path
 
+        # Update in-memory caches
+        if old_path in self.rating_cache:
+            self.rating_cache[new_path] = self.rating_cache.pop(old_path)
         if old_path in self.date_cache:
             self.date_cache[new_path] = self.date_cache.pop(old_path)
         if old_path in self.cluster_results:
             self.cluster_results[new_path] = self.cluster_results.pop(old_path)
         if old_path in self.embeddings_cache:
             self.embeddings_cache[new_path] = self.embeddings_cache.pop(old_path)
+            
+        # Update disk caches
+        if self.rating_disk_cache:
+            rating_val = self.rating_disk_cache.get(old_path)
+            if rating_val is not None:
+                self.rating_disk_cache.set(new_path, rating_val)
+                self.rating_disk_cache.delete(old_path)
+        
+        if self.exif_disk_cache:
+            exif_data = self.exif_disk_cache.get(old_path)
+            if exif_data is not None:
+                self.exif_disk_cache.set(new_path, exif_data)
+                self.exif_disk_cache.delete(old_path)
+                
+        if self.focused_image_path == old_path:
+            self.focused_image_path = new_path
 
     # Add more methods as needed, e.g., to get specific data,
     # update blur status, etc.
