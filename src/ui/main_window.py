@@ -786,13 +786,17 @@ class MainWindow(QMainWindow):
         self.grid_display_view.setViewMode(QListView.ViewMode.IconMode)
         self.grid_display_view.setFlow(QListView.Flow.LeftToRight)
         self.grid_display_view.setWrapping(True)
-        self.grid_display_view.setResizeMode(QListView.ResizeMode.Adjust)
+        self.grid_display_view.setResizeMode(QListView.ResizeMode.Fixed)  # Fixed resize mode
         self.grid_display_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.grid_display_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.grid_display_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.grid_display_view.setMinimumWidth(300)
         self.grid_display_view.setVisible(False)
         self.grid_display_view.setDragEnabled(True)
+        # Set fixed grid properties for consistent layout
+        self.grid_display_view.setGridSize(QSize(128, 148))
+        self.grid_display_view.setUniformItemSizes(True)
+        self.grid_display_view.setWordWrap(True)
 
         self.center_pane_container = QWidget()
         self.center_pane_container.setObjectName("center_pane_container")
@@ -2786,17 +2790,23 @@ class MainWindow(QMainWindow):
         self.tree_display_view.setFocus()
 
     def _update_grid_view_layout(self):
-        if not self.grid_display_view.isVisible(): return
-        TARGET_GRID_COLUMNS = 4; GRID_ITEM_HORIZONTAL_SPACING = 10
-        MIN_ICON_SIZE = 64; MAX_ICON_SIZE = 192
-        viewport_width = self.grid_display_view.viewport().width()
-        if viewport_width > 0 and TARGET_GRID_COLUMNS > 0:
-            available_width_for_icons = viewport_width - ((TARGET_GRID_COLUMNS -1) * GRID_ITEM_HORIZONTAL_SPACING)
-            calculated_icon_width = available_width_for_icons / TARGET_GRID_COLUMNS
-            icon_size = int(max(MIN_ICON_SIZE, min(calculated_icon_width, MAX_ICON_SIZE)))
-        else: icon_size = MIN_ICON_SIZE
-        self.grid_display_view.setIconSize(QSize(icon_size, icon_size))
-        self.grid_display_view.setSpacing(GRID_ITEM_HORIZONTAL_SPACING // 2)
+        if not self.grid_display_view.isVisible():
+            return
+        
+        # Fixed grid layout to prevent filename length from affecting layout
+        FIXED_ICON_SIZE = 96  # Fixed icon size
+        FIXED_GRID_SIZE = QSize(128, 148)  # Fixed grid cell size (width, height)
+        GRID_SPACING = 4
+        
+        # Set fixed icon size and grid properties
+        self.grid_display_view.setIconSize(QSize(FIXED_ICON_SIZE, FIXED_ICON_SIZE))
+        self.grid_display_view.setGridSize(FIXED_GRID_SIZE)
+        self.grid_display_view.setSpacing(GRID_SPACING)
+        
+        # Ensure uniform grid layout
+        self.grid_display_view.setUniformItemSizes(True)
+        self.grid_display_view.setWordWrap(True)
+        
         self.grid_display_view.updateGeometries()
         self.grid_display_view.viewport().update()
 

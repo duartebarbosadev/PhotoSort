@@ -131,6 +131,24 @@ QTreeView::item:hover:!selected, QListView::item:hover:!selected {
     background-color: #3A3A3A; /* Hover color */
     color: #FFFFFF;
 }
+/* Grid view specific styling for consistent layout */
+QListView[viewMode="IconMode"] {
+    /* Fixed grid size to maintain consistent layout */
+    gridSize: 128px 148px;
+    spacing: 4px;
+}
+
+QListView[viewMode="IconMode"]::item {
+    width: 120px;
+    height: 140px;
+    margin: 4px;
+    text-align: center;
+    /* Force text wrapping for long filenames */
+    word-wrap: break-word;
+    /* Ensure text doesn't overflow */
+    text-overflow: ellipsis;
+}
+
 QTreeView::branch {
     background: transparent;
     /* Consider using SVGs for arrows if default ones look bad */
