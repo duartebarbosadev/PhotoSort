@@ -1,11 +1,89 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
-from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QTreeView, QStyledItemDelegate, QStyleOptionViewItem
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex
+from PyQt6.QtGui import QPainter, QPalette, QDragEnterEvent, QDragMoveEvent, QDropEvent, QStandardItem
 from typing import List, Dict, Any
 
 from src.core.image_pipeline import ImagePipeline # For PreviewPreloaderWorker
 from src.core.image_features.blur_detector import BlurDetector # For BlurDetectionWorker
 import logging
 import os # For BlurDetectionWorker path.basename
+
+# --- Custom Tree View for Drag and Drop ---
+class DroppableTreeView(QTreeView):
+    def __init__(self, model, main_window, parent=None):
+        super().__init__(parent)
+        self.setModel(model)
+        self.main_window = main_window # To access AppState
+        self.viewport().setAcceptDrops(False) # Disable drag and drop
+        # self.setDefaultDropAction(Qt.DropAction.MoveAction) # Disable drag and drop
+        self.highlighted_drop_target_index = None
+        self.original_item_brush = None
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        event.ignore() # Disable drag and drop
+
+    def _clear_drop_highlight(self):
+        if self.highlighted_drop_target_index and self.highlighted_drop_target_index.isValid():
+            item = self.model().itemFromIndex(self.highlighted_drop_target_index)
+            if item:
+                item.setBackground(self.original_item_brush if self.original_item_brush else QStandardItem().background())
+        self.highlighted_drop_target_index = None
+        self.original_item_brush = None
+
+    def dragMoveEvent(self, event: QDragMoveEvent):
+        event.ignore() # Disable drag and drop
+
+    def dragLeaveEvent(self, event):
+        self._clear_drop_highlight()
+        super().dragLeaveEvent(event)
+
+
+    def dropEvent(self, event: QDropEvent):
+        event.ignore() # Disable drag and drop
+
+# --- Custom Delegate for Highlighting Focused Image ---
+class FocusHighlightDelegate(QStyledItemDelegate):
+    def __init__(self, app_state, main_window, parent=None):
+        super().__init__(parent)
+        self.app_state = app_state
+        self.main_window = main_window
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
+        # Let the base class handle the default painting (selection, text, icon)
+        super().paint(painter, option, index)
+
+        if not self.app_state.focused_image_path:
+            return
+
+        active_view = self.main_window._get_active_file_view()
+        if not active_view:
+            return
+
+        # Only draw the underline if more than one item is selected (i.e., we are in a "split" context)
+        num_selected = len(active_view.selectionModel().selectedIndexes())
+        if num_selected <= 1:
+            return
+
+        # Check if the current item is the one that is focused in the viewer
+        item_data = index.data(Qt.ItemDataRole.UserRole)
+        if isinstance(item_data, dict) and item_data.get('path') == self.app_state.focused_image_path:
+            painter.save()
+            
+            # Use the theme's highlight color for a more integrated look.
+            pen_color = option.palette.color(QPalette.ColorRole.Highlight)
+            pen = painter.pen()
+            pen.setColor(pen_color)
+            pen.setWidth(3)  # A bit thicker for better visibility
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap) # Softer edges
+            painter.setPen(pen)
+
+            # Position the underline at the bottom of the item's rectangle
+            rect = option.rect
+            # Position 2px from the bottom, and inset the line horizontally
+            y = rect.bottom() - 2
+            painter.drawLine(rect.left() + 5, y, rect.right() - 5, y)
+
+            painter.restore()
 
 # --- Loading Overlay ---
 class LoadingOverlay(QWidget):

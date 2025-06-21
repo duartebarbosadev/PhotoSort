@@ -46,84 +46,9 @@ from src.ui.ui_components import LoadingOverlay # PreviewPreloaderWorker, BlurDe
 from src.ui.worker_manager import WorkerManager # Import WorkerManager
 from src.ui.metadata_sidebar import MetadataSidebar # Import MetadataSidebar
 from src.core.file_scanner import SUPPORTED_EXTENSIONS # Import from file_scanner
+from src.ui.left_panel import LeftPanel
 
 
-# --- Custom Tree View for Drag and Drop ---
-class DroppableTreeView(QTreeView):
-    def __init__(self, model, main_window, parent=None):
-        super().__init__(parent)
-        self.setModel(model)
-        self.main_window = main_window # To access AppState
-        self.viewport().setAcceptDrops(False) # Disable drag and drop
-        # self.setDefaultDropAction(Qt.DropAction.MoveAction) # Disable drag and drop
-        self.highlighted_drop_target_index = None
-        self.original_item_brush = None
-
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        event.ignore() # Disable drag and drop
-
-    def _clear_drop_highlight(self):
-        if self.highlighted_drop_target_index and self.highlighted_drop_target_index.isValid():
-            item = self.model().itemFromIndex(self.highlighted_drop_target_index)
-            if item:
-                item.setBackground(self.original_item_brush if self.original_item_brush else QStandardItem().background())
-        self.highlighted_drop_target_index = None
-        self.original_item_brush = None
-
-    def dragMoveEvent(self, event: QDragMoveEvent):
-        event.ignore() # Disable drag and drop
-
-    def dragLeaveEvent(self, event):
-        self._clear_drop_highlight()
-        super().dragLeaveEvent(event)
-
-
-    def dropEvent(self, event: QDropEvent):
-        event.ignore() # Disable drag and drop
-
-# --- Custom Delegate for Highlighting Focused Image ---
-class FocusHighlightDelegate(QStyledItemDelegate):
-    def __init__(self, app_state, main_window, parent=None):
-        super().__init__(parent)
-        self.app_state = app_state
-        self.main_window = main_window
-
-    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
-        # Let the base class handle the default painting (selection, text, icon)
-        super().paint(painter, option, index)
-
-        if not self.app_state.focused_image_path:
-            return
-
-        active_view = self.main_window._get_active_file_view()
-        if not active_view:
-            return
-
-        # Only draw the underline if more than one item is selected (i.e., we are in a "split" context)
-        num_selected = len(active_view.selectionModel().selectedIndexes())
-        if num_selected <= 1:
-            return
-
-        # Check if the current item is the one that is focused in the viewer
-        item_data = index.data(Qt.ItemDataRole.UserRole)
-        if isinstance(item_data, dict) and item_data.get('path') == self.app_state.focused_image_path:
-            painter.save()
-            
-            # Use the theme's highlight color for a more integrated look.
-            pen_color = option.palette.color(QPalette.ColorRole.Highlight)
-            pen = painter.pen()
-            pen.setColor(pen_color)
-            pen.setWidth(3)  # A bit thicker for better visibility
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap) # Softer edges
-            painter.setPen(pen)
-
-            # Position the underline at the bottom of the item's rectangle
-            rect = option.rect
-            # Position 2px from the bottom, and inset the line horizontally
-            y = rect.bottom() - 2
-            painter.drawLine(rect.left() + 5, y, rect.right() - 5, y)
-
-            painter.restore()
 # --- Custom Proxy Model for Filtering ---
 class CustomFilterProxyModel(QSortFilterProxyModel):
     def __init__(self, parent=None):
@@ -770,33 +695,7 @@ class MainWindow(QMainWindow):
         self.proxy_model.setSourceModel(self.file_system_model)
         self.proxy_model.app_state_ref = self.app_state # Link AppState to proxy model
 
-        self.tree_display_view = DroppableTreeView(self.proxy_model, self)
-        self.tree_display_view.setHeaderHidden(True)
-        self.tree_display_view.setIndentation(15)
-        self.tree_display_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.tree_display_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.tree_display_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.tree_display_view.setMinimumWidth(300)
-        self.tree_display_view.setDragEnabled(False) # Disable drag and drop
-        self.tree_display_view.setAcceptDrops(False) # Disable drag and drop
-        self.tree_display_view.setDropIndicatorShown(False) # Disable drag and drop
-
-        self.grid_display_view = QListView()
-        self.grid_display_view.setModel(self.proxy_model)
-        self.grid_display_view.setViewMode(QListView.ViewMode.IconMode)
-        self.grid_display_view.setFlow(QListView.Flow.LeftToRight)
-        self.grid_display_view.setWrapping(True)
-        self.grid_display_view.setResizeMode(QListView.ResizeMode.Fixed)  # Fixed resize mode
-        self.grid_display_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.grid_display_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.grid_display_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.grid_display_view.setMinimumWidth(300)
-        self.grid_display_view.setVisible(False)
-        self.grid_display_view.setDragEnabled(True)
-        # Set fixed grid properties for consistent layout
-        self.grid_display_view.setGridSize(QSize(128, 148))
-        self.grid_display_view.setUniformItemSizes(True)
-        self.grid_display_view.setWordWrap(True)
+        self.left_panel = LeftPanel(self.proxy_model, self.app_state, self)
 
         self.center_pane_container = QWidget()
         self.center_pane_container.setObjectName("center_pane_container")
@@ -833,11 +732,6 @@ class MainWindow(QMainWindow):
 
         # No bottom bar - image info will be shown in status bar only
 
-        # --- Item Delegate for Custom Highlighting ---
-        self.focus_delegate = FocusHighlightDelegate(self.app_state, self, self)
-        self.tree_display_view.setItemDelegate(self.focus_delegate)
-        self.grid_display_view.setItemDelegate(self.focus_delegate)
-
         self.statusBar().showMessage("Ready")
         logging.debug(f"MainWindow._create_widgets - End: {time.perf_counter() - start_time:.4f}s")
 
@@ -853,68 +747,7 @@ class MainWindow(QMainWindow):
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_splitter.setObjectName("main_splitter")
 
-        self.left_pane_widget = QWidget()
-        self.left_pane_widget.setObjectName("left_pane_widget")
-        left_pane_layout = QVBoxLayout(self.left_pane_widget)
-        left_pane_layout.setContentsMargins(5,5,5,5)
-        left_pane_layout.setSpacing(5)
-        
-        # Add search to left panel
-        search_container = QWidget()
-        search_container.setObjectName("search_container")
-        search_layout = QHBoxLayout(search_container)
-        search_layout.setContentsMargins(0,0,0,0)
-        search_layout.setSpacing(5)
-        
-        search_layout.addWidget(QLabel("Search:"))
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Filename...")
-        search_layout.addWidget(self.search_input)
-        
-        # Add view type icons to search container
-        view_icons_container = QWidget()
-        view_icons_layout = QHBoxLayout(view_icons_container)
-        view_icons_layout.setContentsMargins(0,0,0,0)
-        view_icons_layout.setSpacing(2)
-        
-        # Create icon buttons for view types
-        self.view_list_icon = QPushButton()
-        self.view_list_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
-        self.view_list_icon.setToolTip("List View")
-        self.view_list_icon.setCheckable(True)
-        self.view_list_icon.setMaximumSize(24, 24)
-        
-        self.view_icons_icon = QPushButton()
-        self.view_icons_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
-        self.view_icons_icon.setToolTip("Icons View")
-        self.view_icons_icon.setCheckable(True)
-        self.view_icons_icon.setMaximumSize(24, 24)
-        
-        self.view_grid_icon = QPushButton()
-        self.view_grid_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
-        self.view_grid_icon.setToolTip("Grid View")
-        self.view_grid_icon.setCheckable(True)
-        self.view_grid_icon.setMaximumSize(24, 24)
-        
-        self.view_date_icon = QPushButton()
-        self.view_date_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
-        self.view_date_icon.setToolTip("Date View")
-        self.view_date_icon.setCheckable(True)
-        self.view_date_icon.setMaximumSize(24, 24)
-        
-        view_icons_layout.addWidget(self.view_list_icon)
-        view_icons_layout.addWidget(self.view_icons_icon)
-        view_icons_layout.addWidget(self.view_grid_icon)
-        view_icons_layout.addWidget(self.view_date_icon)
-        view_icons_layout.addStretch()
-        
-        search_layout.addWidget(view_icons_container)
-        
-        left_pane_layout.addWidget(search_container)
-        left_pane_layout.addWidget(self.tree_display_view)
-        left_pane_layout.addWidget(self.grid_display_view)
-        main_splitter.addWidget(self.left_pane_widget)
-
+        main_splitter.addWidget(self.left_panel)
         main_splitter.addWidget(self.center_pane_container)
 
         # Create metadata sidebar and add to splitter
@@ -942,14 +775,14 @@ class MainWindow(QMainWindow):
         self.open_folder_action.triggered.connect(self._open_folder_dialog)
         
         # Install event filters on views
-        self.tree_display_view.installEventFilter(self)
-        self.grid_display_view.installEventFilter(self)
+        self.left_panel.tree_display_view.installEventFilter(self)
+        self.left_panel.grid_display_view.installEventFilter(self)
 
-        self.tree_display_view.customContextMenuRequested.connect(self._show_image_context_menu)
-        self.grid_display_view.customContextMenuRequested.connect(self._show_image_context_menu)
+        self.left_panel.tree_display_view.customContextMenuRequested.connect(self._show_image_context_menu)
+        self.left_panel.grid_display_view.customContextMenuRequested.connect(self._show_image_context_menu)
 
-        self.tree_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
-        self.grid_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
+        self.left_panel.tree_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
+        self.left_panel.grid_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
         
         # Connect to the new signals from the advanced viewer
         self.advanced_image_viewer.ratingChanged.connect(self._apply_rating)
@@ -958,14 +791,14 @@ class MainWindow(QMainWindow):
         self.filter_combo.currentIndexChanged.connect(self._apply_filter)
         self.cluster_filter_combo.currentIndexChanged.connect(self._apply_filter)
         self.cluster_sort_combo.currentIndexChanged.connect(self._cluster_sort_changed)
-        self.search_input.textChanged.connect(self._apply_filter)
+        self.left_panel.search_input.textChanged.connect(self._apply_filter)
         # self._connect_rating_actions() # Obsolete, handled by advanced viewer
-        self.tree_display_view.collapsed.connect(self._handle_item_collapsed)
+        self.left_panel.tree_display_view.collapsed.connect(self._handle_item_collapsed)
         # Connect only the icon view buttons (toolbar buttons are hidden)
-        self.view_list_icon.clicked.connect(self._set_view_mode_list)
-        self.view_icons_icon.clicked.connect(self._set_view_mode_icons)
-        self.view_grid_icon.clicked.connect(self._set_view_mode_grid)
-        self.view_date_icon.clicked.connect(self._set_view_mode_date)
+        self.left_panel.view_list_icon.clicked.connect(self._set_view_mode_list)
+        self.left_panel.view_icons_icon.clicked.connect(self._set_view_mode_icons)
+        self.left_panel.view_grid_icon.clicked.connect(self._set_view_mode_grid)
+        self.left_panel.view_date_icon.clicked.connect(self._set_view_mode_date)
         self.toggle_folder_view_action.toggled.connect(self._toggle_folder_visibility)
         self.group_by_similarity_action.toggled.connect(self._toggle_group_by_similarity)
         self.find_action.triggered.connect(self._focus_search_input)
@@ -1465,11 +1298,7 @@ class MainWindow(QMainWindow):
         return is_image
 
     def _get_active_file_view(self):
-        # Simplified: Grid view is only active if NOT grouping by similarity
-        if hasattr(self, 'current_view_mode') and self.current_view_mode == "grid" and not self.group_by_similarity_mode:
-            return self.grid_display_view
-        else: # list, icons, date views, or grid view when grouped by similarity, use tree_display_view
-            return self.tree_display_view
+        return self.left_panel.get_active_view() if self.left_panel else None
 
     # resizeEvent needs to be defined before it's called by super() or other events
     def resizeEvent(self, event: QResizeEvent):
@@ -1493,8 +1322,8 @@ class MainWindow(QMainWindow):
         
         # Escape key to clear focus from search input (if it has focus)
         if key == Qt.Key.Key_Escape:
-            if self.search_input.hasFocus():
-                self.search_input.clearFocus()
+            if self.left_panel.search_input.hasFocus():
+                self.left_panel.search_input.clearFocus()
                 active_view = self._get_active_file_view()
                 if (active_view): active_view.setFocus() # Return focus to the view
                 event.accept(); return
@@ -1533,8 +1362,8 @@ class MainWindow(QMainWindow):
                 return # Handled
 
     def _focus_search_input(self):
-        self.search_input.setFocus()
-        self.search_input.selectAll()
+        self.left_panel.search_input.setFocus()
+        self.left_panel.search_input.selectAll()
 
     def _handle_delete_action(self):
         if self.mark_for_deletion_mode_enabled:
@@ -2594,7 +2423,7 @@ class MainWindow(QMainWindow):
             logging.debug("_apply_filter called but no images loaded, skipping")
             return
             
-        search_text = self.search_input.text().lower()
+        search_text = self.left_panel.search_input.text().lower()
         selected_filter_text = self.filter_combo.currentText()
         selected_cluster_text = self.cluster_filter_combo.currentText()
         target_cluster_id = -1
@@ -2763,34 +2592,34 @@ class MainWindow(QMainWindow):
  
     def _set_view_mode_list(self):
         self.current_view_mode = "list"
-        self.tree_display_view.setVisible(True)
-        self.grid_display_view.setVisible(False)
-        self.tree_display_view.setIconSize(QSize(16, 16))
-        self.tree_display_view.setIndentation(10)
-        self.tree_display_view.setRootIsDecorated(self.show_folders_mode or self.group_by_similarity_mode)
-        self.tree_display_view.setItemsExpandable(self.show_folders_mode or self.group_by_similarity_mode)
-        if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
-            self.tree_display_view.setItemDelegate(None)
+        self.left_panel.tree_display_view.setVisible(True)
+        self.left_panel.grid_display_view.setVisible(False)
+        self.left_panel.tree_display_view.setIconSize(QSize(16, 16))
+        self.left_panel.tree_display_view.setIndentation(10)
+        self.left_panel.tree_display_view.setRootIsDecorated(self.show_folders_mode or self.group_by_similarity_mode)
+        self.left_panel.tree_display_view.setItemsExpandable(self.show_folders_mode or self.group_by_similarity_mode)
+        if self.left_panel.tree_display_view.itemDelegate() is self.thumbnail_delegate:
+            self.left_panel.tree_display_view.setItemDelegate(None)
         self._update_view_button_states()
         self._rebuild_model_view()
-        self.tree_display_view.setFocus()
+        self.left_panel.tree_display_view.setFocus()
 
     def _set_view_mode_icons(self):
         self.current_view_mode = "icons"
-        self.tree_display_view.setVisible(True)
-        self.grid_display_view.setVisible(False)
-        self.tree_display_view.setIconSize(QSize(64, 64))
-        self.tree_display_view.setIndentation(20)
-        self.tree_display_view.setRootIsDecorated(self.show_folders_mode or self.group_by_similarity_mode)
-        self.tree_display_view.setItemsExpandable(self.show_folders_mode or self.group_by_similarity_mode)
-        if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
-             self.tree_display_view.setItemDelegate(None)
+        self.left_panel.tree_display_view.setVisible(True)
+        self.left_panel.grid_display_view.setVisible(False)
+        self.left_panel.tree_display_view.setIconSize(QSize(64, 64))
+        self.left_panel.tree_display_view.setIndentation(20)
+        self.left_panel.tree_display_view.setRootIsDecorated(self.show_folders_mode or self.group_by_similarity_mode)
+        self.left_panel.tree_display_view.setItemsExpandable(self.show_folders_mode or self.group_by_similarity_mode)
+        if self.left_panel.tree_display_view.itemDelegate() is self.thumbnail_delegate:
+             self.left_panel.tree_display_view.setItemDelegate(None)
         self._update_view_button_states()
         self._rebuild_model_view()
-        self.tree_display_view.setFocus()
+        self.left_panel.tree_display_view.setFocus()
 
     def _update_grid_view_layout(self):
-        if not self.grid_display_view.isVisible():
+        if not self.left_panel.grid_display_view.isVisible():
             return
         
         # Fixed grid layout to prevent filename length from affecting layout
@@ -2799,16 +2628,16 @@ class MainWindow(QMainWindow):
         GRID_SPACING = 4
         
         # Set fixed icon size and grid properties
-        self.grid_display_view.setIconSize(QSize(FIXED_ICON_SIZE, FIXED_ICON_SIZE))
-        self.grid_display_view.setGridSize(FIXED_GRID_SIZE)
-        self.grid_display_view.setSpacing(GRID_SPACING)
+        self.left_panel.grid_display_view.setIconSize(QSize(FIXED_ICON_SIZE, FIXED_ICON_SIZE))
+        self.left_panel.grid_display_view.setGridSize(FIXED_GRID_SIZE)
+        self.left_panel.grid_display_view.setSpacing(GRID_SPACING)
         
         # Ensure uniform grid layout
-        self.grid_display_view.setUniformItemSizes(True)
-        self.grid_display_view.setWordWrap(True)
+        self.left_panel.grid_display_view.setUniformItemSizes(True)
+        self.left_panel.grid_display_view.setWordWrap(True)
         
-        self.grid_display_view.updateGeometries()
-        self.grid_display_view.viewport().update()
+        self.left_panel.grid_display_view.updateGeometries()
+        self.left_panel.grid_display_view.viewport().update()
 
     def _toggle_folder_visibility(self, checked):
         self.show_folders_mode = checked
@@ -2841,61 +2670,61 @@ class MainWindow(QMainWindow):
     def _set_view_mode_grid(self):
         self.current_view_mode = "grid"
         if self.group_by_similarity_mode: # Grid view not supported when grouping by similarity
-            self.tree_display_view.setVisible(True)
-            self.grid_display_view.setVisible(False)
+            self.left_panel.tree_display_view.setVisible(True)
+            self.left_panel.grid_display_view.setVisible(False)
             # Use a suitable icon size for tree when grid would have been active
-            self.tree_display_view.setIconSize(QSize(96, 96))
-            self.tree_display_view.setIndentation(20)
-            self.tree_display_view.setRootIsDecorated(True)
-            self.tree_display_view.setItemsExpandable(True)
-            if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
-                 self.tree_display_view.setItemDelegate(None)
+            self.left_panel.tree_display_view.setIconSize(QSize(96, 96))
+            self.left_panel.tree_display_view.setIndentation(20)
+            self.left_panel.tree_display_view.setRootIsDecorated(True)
+            self.left_panel.tree_display_view.setItemsExpandable(True)
+            if self.left_panel.tree_display_view.itemDelegate() is self.thumbnail_delegate:
+                 self.left_panel.tree_display_view.setItemDelegate(None)
             self._update_view_button_states()
             self._rebuild_model_view()
-            self.tree_display_view.setFocus()
+            self.left_panel.tree_display_view.setFocus()
         else:
-            self.tree_display_view.setVisible(False)
-            self.grid_display_view.setVisible(True)
-            self.grid_display_view.setViewMode(QListView.ViewMode.IconMode)
-            self.grid_display_view.setFlow(QListView.Flow.LeftToRight)
-            self.grid_display_view.setWrapping(True)
-            self.grid_display_view.setResizeMode(QListView.ResizeMode.Adjust)
+            self.left_panel.tree_display_view.setVisible(False)
+            self.left_panel.grid_display_view.setVisible(True)
+            self.left_panel.grid_display_view.setViewMode(QListView.ViewMode.IconMode)
+            self.left_panel.grid_display_view.setFlow(QListView.Flow.LeftToRight)
+            self.left_panel.grid_display_view.setWrapping(True)
+            self.left_panel.grid_display_view.setResizeMode(QListView.ResizeMode.Adjust)
             self._update_view_button_states()
             self._rebuild_model_view() # Populate model first
             self._update_grid_view_layout() # Then adjust layout
-            self.grid_display_view.setFocus()
+            self.left_panel.grid_display_view.setFocus()
 
     def _set_view_mode_date(self):
         self.current_view_mode = "date"
-        self.tree_display_view.setVisible(True)
-        self.grid_display_view.setVisible(False)
-        self.tree_display_view.setIconSize(QSize(16, 16))
-        self.tree_display_view.setIndentation(20)
-        self.tree_display_view.setRootIsDecorated(True)
-        self.tree_display_view.setItemsExpandable(True)
-        if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
-            self.tree_display_view.setItemDelegate(None)
+        self.left_panel.tree_display_view.setVisible(True)
+        self.left_panel.grid_display_view.setVisible(False)
+        self.left_panel.tree_display_view.setIconSize(QSize(16, 16))
+        self.left_panel.tree_display_view.setIndentation(20)
+        self.left_panel.tree_display_view.setRootIsDecorated(True)
+        self.left_panel.tree_display_view.setItemsExpandable(True)
+        if self.left_panel.tree_display_view.itemDelegate() is self.thumbnail_delegate:
+            self.left_panel.tree_display_view.setItemDelegate(None)
         self._update_view_button_states()
         self._rebuild_model_view()
-        self.tree_display_view.setFocus()
+        self.left_panel.tree_display_view.setFocus()
 
     def _update_view_button_states(self):
         """Update the visual state of view mode icon buttons"""
         # Reset all icon buttons
-        self.view_list_icon.setChecked(False)
-        self.view_icons_icon.setChecked(False)
-        self.view_grid_icon.setChecked(False)
-        self.view_date_icon.setChecked(False)
+        self.left_panel.view_list_icon.setChecked(False)
+        self.left_panel.view_icons_icon.setChecked(False)
+        self.left_panel.view_grid_icon.setChecked(False)
+        self.left_panel.view_date_icon.setChecked(False)
         
         # Set the active icon button
         if self.current_view_mode == "list":
-            self.view_list_icon.setChecked(True)
+            self.left_panel.view_list_icon.setChecked(True)
         elif self.current_view_mode == "icons":
-            self.view_icons_icon.setChecked(True)
+            self.left_panel.view_icons_icon.setChecked(True)
         elif self.current_view_mode == "grid":
-            self.view_grid_icon.setChecked(True)
+            self.left_panel.view_grid_icon.setChecked(True)
         elif self.current_view_mode == "date":
-            self.view_date_icon.setChecked(True)
+            self.left_panel.view_date_icon.setChecked(True)
 
     def _populate_model_by_date(self, parent_item: QStandardItem, image_data_list: List[Dict[str, any]]):
         if not image_data_list: return
@@ -3036,7 +2865,7 @@ class MainWindow(QMainWindow):
 
     def _handle_item_collapsed(self, proxy_index: QModelIndex):
         if self.group_by_similarity_mode and proxy_index.isValid():
-            active_view = self.tree_display_view
+            active_view = self.left_panel.tree_display_view
             source_index = self.proxy_model.mapToSource(proxy_index)
             item = self.file_system_model.itemFromIndex(source_index)
             if item:
@@ -3393,12 +3222,12 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             # Ensure the event is for one of our views
-            if (obj is self.tree_display_view or obj is self.grid_display_view):
+            if (obj is self.left_panel.tree_display_view or obj is self.left_panel.grid_display_view):
                 
                 key_event: QKeyEvent = event # Cast event to QKeyEvent
                 key = key_event.key()
                 
-                search_has_focus = self.search_input.hasFocus()
+                search_has_focus = self.left_panel.search_input.hasFocus()
 
                 # Handle Arrow Keys & Delete for navigation (if search input doesn't have focus on the view itself)
                 if not search_has_focus: # Only act if search input doesn't have focus
