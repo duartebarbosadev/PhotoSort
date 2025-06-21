@@ -1212,104 +1212,86 @@ QPushButton#aboutCloseButton:pressed {
 
 /* --- Lossy Rotation Dialog --- */
 QDialog#lossyRotationDialog {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #2D2D2D, stop: 1 #272727);
-    color: #E0E0E0;
-    border: 2px solid #FF8C42;
-    border-radius: 12px;
+    background-color: #2B2B2B;
+    color: #D1D1D1;
+    border: 2px solid #0078D4;
+    border-radius: 8px;
 }
 
 QLabel#lossyRotationMessageLabel {
-    color: #F0F0F0;
+    color: #E5E5E5;
     font-size: 11pt;
     font-weight: bold;
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #1E1E1E, stop: 1 #191919);
-    padding: 12px 16px;
+    background-color: transparent;
+    padding: 10px;
     border: 1px solid #404040;
-    border-radius: 8px;
+    border-radius: 6px;
+    background-color: #1E1E1E;
 }
 
 QLabel#lossyRotationWarningLabel {
     color: #FFB366;
     font-size: 10pt;
-    padding: 12px 8px;
-    font-weight: 500;
+    background-color: transparent;
+    padding: 8px;
 }
 
 QCheckBox#neverAskAgainCheckbox {
-    color: #C8C8C8;
+    color: #C0C0C0;
     font-size: 9pt;
-    spacing: 10px;
+    background-color: transparent;
+    spacing: 8px;
 }
-
 QCheckBox#neverAskAgainCheckbox::indicator {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border: 2px solid #404040;
-    border-radius: 4px;
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #2D2D2D, stop: 1 #232323);
+    border-radius: 3px;
+    background-color: #2D2D2D;
 }
-
 QCheckBox#neverAskAgainCheckbox::indicator:checked {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #0084FF, stop: 1 #0066CC);
-    border-color: #0084FF;
+    background-color: #0078D4;
+    border-color: #005A9E;
     image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTkuNSAzLjVMNC43NSA4LjI1TDIuNSA2IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
 }
-
 QCheckBox#neverAskAgainCheckbox::indicator:hover {
     border-color: #505050;
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #323232, stop: 1 #282828);
 }
 
 QPushButton#lossyRotationCancelButton {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #383838, stop: 1 #303030);
-    color: #E0E0E0;
+    background-color: #383838;
+    color: #D1D1D1;
     border: 1px solid #484848;
-    min-width: 90px;
-    padding: 10px 18px;
-    border-radius: 6px;
+    padding: 8px 16px;
+    border-radius: 4px;
+    min-width: 80px;
     font-size: 9pt;
-    font-weight: 500;
 }
-
 QPushButton#lossyRotationCancelButton:hover {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #454545, stop: 1 #3C3C3C);
+    background-color: #454545;
     border-color: #555555;
     color: #FFFFFF;
 }
-
 QPushButton#lossyRotationCancelButton:pressed {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #282828, stop: 1 #202020);
+    background-color: #303030;
 }
 
 QPushButton#lossyRotationProceedButton {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #FF8C42, stop: 1 #E67A35);
+    background-color: #FF8C42;
     color: #FFFFFF;
     border: 1px solid #E67A35;
-    min-width: 160px;
+    padding: 8px 16px;
+    border-radius: 4px;
+    min-width: 140px;
     font-weight: bold;
-    padding: 10px 20px;
-    border-radius: 6px;
     font-size: 9pt;
 }
-
 QPushButton#lossyRotationProceedButton:hover {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #FF9D5C, stop: 1 #F08A45);
+    background-color: #FF9D5C;
     border-color: #FF8C42;
 }
-
 QPushButton#lossyRotationProceedButton:pressed {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #E67A35, stop: 1 #D66B28);
+    background-color: #E67A35;
 }
 
 /* --- Confirm Delete Dialog (QMessageBox) --- */

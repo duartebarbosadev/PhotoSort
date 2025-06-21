@@ -2925,7 +2925,7 @@ class MainWindow(QMainWindow):
                         '180': '180°'
                     }.get(direction, direction)
                     
-                    proceed, never_ask_again = self._show_lossy_rotation_confirmation_dialog(
+                    proceed, never_ask_again = self.dialog_manager.show_lossy_rotation_confirmation_dialog(
                         f"{len(rotation_supported_paths)} images", rotation_desc
                     )
                     
@@ -2948,7 +2948,7 @@ class MainWindow(QMainWindow):
                         '180': '180°'
                     }.get(direction, direction)
                     
-                    proceed, never_ask_again = self._show_lossy_rotation_confirmation_dialog(
+                    proceed, never_ask_again = self.dialog_manager.show_lossy_rotation_confirmation_dialog(
                         os.path.basename(file_path), rotation_desc
                     )
                     
@@ -3325,7 +3325,7 @@ class MainWindow(QMainWindow):
         proxy_model = self.proxy_model
         
         # Get the active view from the LeftPanel, not from the MainWindow itself.
-        active_view = self.left_panel.get_active_view() 
+        active_view = self.left_panel.get_active_view()
         if not active_view:
             logging.warning(f"Could not get active view to update blur status for {image_path}")
             return
@@ -3352,7 +3352,7 @@ class MainWindow(QMainWindow):
                         item_to_update = child_item
                         break
                     
-                    if child_item.hasChildren(): 
+                    if child_item.hasChildren():
                         for r_grandchild in range(child_item.rowCount()):
                             grandchild_item = child_item.child(r_grandchild)
                             if not grandchild_item: continue
