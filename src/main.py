@@ -34,6 +34,13 @@ def load_stylesheet(filename="src/ui/dark_theme.qss"):
 # --- Global Exception Handler ---
 def global_exception_handler(exc_type, exc_value, exc_traceback):
     """Handles any unhandled exception, logs it, and shows an error dialog."""
+    # Don't show a dialog for KeyboardInterrupt (Ctrl+C)
+    if issubclass(exc_type, KeyboardInterrupt):
+        logging.warning("Application terminated by user (KeyboardInterrupt).")
+        # Let the default handler take over to exit
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+        
     # Format the traceback
     error_message_details = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
     
