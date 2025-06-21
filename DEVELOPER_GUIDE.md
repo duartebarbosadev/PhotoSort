@@ -10,7 +10,7 @@ The application is structured into two main packages: `core` and `ui`.
   - **`main.py`**: The application entry point. Handles application setup, command-line argument parsing, and instantiates the `MainWindow`.
   - **`core/`**: Contains the application's business logic, independent of the UI.
     - **`app_settings.py`**: Manages persistent application settings using `QSettings`. All settings-related logic (getting, setting, defaults) should be here.
-    - **`caching/`**: Caching mechanisms for thumbnails, previews, ratings, and EXIF data. To add a new cache, create a new class in this directory following the existing examples.
+    - **`caching/`**: Caching mechanisms for thumbnails, previews, ratings, and EXIF data. To add a new cache, create a new class in this directory following the existing examples. The rating cache is cleared alongside the EXIF cache.
     - **`image_features/`**: Image analysis features like blur detection. New features that analyze image properties should be added here.
     - **`image_processing/`**: Low-level image manipulation, such as RAW processing and rotation.
     - **`file_scanner.py`**: Scans directories for image files.

@@ -8,6 +8,7 @@ from PyQt6.QtCore import QObject
 from src.core.app_settings import add_recent_folder, get_preview_cache_size_bytes
 from src.core.file_scanner import SUPPORTED_EXTENSIONS
 from src.core.image_file_ops import ImageFileOperations
+from src.core.image_pipeline import ImagePipeline
 
 # Forward declarations for type hinting to avoid circular imports.
 class MainWindow:
@@ -20,6 +21,43 @@ class WorkerManager:
     pass
 
 class AppController(QObject):
+    @staticmethod
+    def clear_application_caches():
+        """Clears all application caches."""
+        start_time = time.perf_counter()
+        logging.info("clear_application_caches - Start")
+        
+        try:
+            pipeline = ImagePipeline()
+            pipeline.clear_all_image_caches()
+            logging.info("Image pipeline caches cleared.")
+        except Exception as e:
+            logging.error(f"Error clearing image pipeline caches: {e}")
+
+        try:
+            from src.core.similarity_engine import SimilarityEngine
+            SimilarityEngine.clear_embedding_cache()
+        except Exception as e:
+            logging.error(f"Error clearing similarity cache: {e}")
+        
+        try:
+            from src.core.caching.exif_cache import ExifCache
+            exif_cache = ExifCache()
+            exif_cache.clear()
+            logging.info("EXIF metadata cache cleared.")
+        except Exception as e:
+            logging.error(f"Error clearing EXIF metadata cache: {e}")
+        
+        try:
+            from src.core.caching.rating_cache import RatingCache
+            rating_cache = RatingCache()
+            rating_cache.clear()
+            logging.info("Rating cache cleared.")
+        except Exception as e:
+            logging.error(f"Error clearing rating cache: {e}")
+
+        logging.info(f"clear_application_caches - End: {time.perf_counter() - start_time:.4f}s")
+        
     """
     Manages interactions between the WorkerManager, AppState, and the UI (MainWindow).
     This class handles the logic for loading data, running analyses,

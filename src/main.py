@@ -6,8 +6,8 @@ import time # Added for startup timing
 import traceback # For global exception handler
 from PyQt6.QtWidgets import QApplication, QMessageBox # QMessageBox for global exception handler
 from src.ui.main_window import MainWindow
-from src.core.image_pipeline import ImagePipeline # For clearing image caches
 from src.core.metadata_processor import MetadataProcessor # For metadata processing
+from src.ui.app_controller import AppController
 
 def load_stylesheet(filename="src/ui/dark_theme.qss"):
     """Loads an external QSS stylesheet."""
@@ -30,37 +30,6 @@ def load_stylesheet(filename="src/ui/dark_theme.qss"):
     except Exception as e:
         logging.error(f"Error loading stylesheet '{filename}': {e}")
         return "" # Return empty on error
-
-def clear_application_caches():
-    """Clears all application caches."""
-    start_time = time.perf_counter()
-    logging.info("clear_application_caches - Start")
-    # print("Clearing application caches...") # Replaced by logging
-    try:
-        pipeline = ImagePipeline()
-        pipeline.clear_all_image_caches()
-        logging.info("Image pipeline caches cleared.")
-    except Exception as e:
-        logging.error(f"Error clearing image pipeline caches: {e}")
-
-    try:
-        from src.core.similarity_engine import SimilarityEngine # <-- Local import
-        # Call the static method directly
-        SimilarityEngine.clear_embedding_cache()
-    except Exception as e:
-        logging.error(f"Error clearing similarity cache: {e}")
-    
-    # Clear EXIF metadata cache using the existing ExifCache class
-    try:
-        from src.core.caching.exif_cache import ExifCache
-        exif_cache = ExifCache()
-        exif_cache.clear()
-        logging.info("EXIF metadata cache cleared.")
-    except Exception as e:
-        logging.error(f"Error clearing EXIF metadata cache: {e}")
-    
-    logging.info(f"clear_application_caches - End: {time.perf_counter() - start_time:.4f}s")
-    # print("Application caches cleared.") # Replaced by logging
 
 # --- Global Exception Handler ---
 def global_exception_handler(exc_type, exc_value, exc_traceback):
@@ -177,7 +146,7 @@ def main():
     # Handle clear-cache argument
     if args.clear_cache:
         clear_application_caches_start_time = time.perf_counter()
-        clear_application_caches()
+        AppController.clear_application_caches()
         logging.info(f"Application main - clear_application_caches (via --clear-cache): {time.perf_counter() - clear_application_caches_start_time:.4f}s")
 
 

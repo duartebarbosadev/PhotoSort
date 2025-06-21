@@ -258,7 +258,7 @@ class DialogManager:
         apply_exif_limit_button.clicked.connect(self.parent._apply_exif_cache_limit_action)
         exif_layout.addWidget(apply_exif_limit_button, 3, 0, 1, 2)
 
-        delete_exif_cache_button = QPushButton("Clear EXIF Cache")
+        delete_exif_cache_button = QPushButton("Clear EXIF && Rating Caches")
         delete_exif_cache_button.setObjectName("deleteExifCacheButton")
         delete_exif_cache_button.clicked.connect(self.parent._clear_exif_cache_action)
         exif_layout.addWidget(delete_exif_cache_button, 4, 0, 1, 2)

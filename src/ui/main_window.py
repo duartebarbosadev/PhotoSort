@@ -346,7 +346,8 @@ class MainWindow(QMainWindow):
     def _clear_exif_cache_action(self):
         if self.app_state.exif_disk_cache:
             self.app_state.exif_disk_cache.clear()
-            self.statusBar().showMessage("EXIF cache cleared.", 5000)
+            self.app_state.rating_disk_cache.clear()
+            self.statusBar().showMessage("EXIF and rating caches cleared.", 5000)
             self._update_cache_dialog_labels()
             # No direct visual refresh needed for EXIF data itself in list/grid,
             # but metadata display for current image might need update
