@@ -21,7 +21,7 @@ class ZoomableImageView(QGraphicsView):
         
         # Zoom settings
         self._zoom_factor = 1.0
-        self._min_zoom = 0.1
+        self._min_zoom = 0.01  # Fixed minimum zoom at 1% instead of dynamic
         self._max_zoom = 20.0
         self._zoom_step = 1.15
         
@@ -108,6 +108,29 @@ class ZoomableImageView(QGraphicsView):
         """Get current zoom factor"""
         return self._zoom_factor
         
+    def get_display_zoom_percentage(self) -> int:
+        """Get zoom percentage for display, where minimum zoom shows as 0%"""
+        if self._zoom_factor <= self._min_zoom:
+            return 0
+        else:
+            # Calculate percentage above minimum zoom
+            # When at 1.0x (100% actual size), show 100%
+            # Scale the display so min_zoom = 0% and 1.0 = 100%
+            if self._min_zoom >= 1.0:
+                # If minimum zoom is already >= 100%, use actual percentage
+                return int(self._zoom_factor * 100)
+            else:
+                # Scale from min_zoom=0% to 1.0=100%, and beyond for higher zoom levels
+                if self._zoom_factor <= 1.0:
+                    # Scale from min_zoom=0% to 1.0=100%
+                    normalized = (self._zoom_factor - self._min_zoom) / (1.0 - self._min_zoom)
+                    return max(0, int(normalized * 100))
+                else:
+                    # Above 1.0, show actual percentage (100%+ for zoom levels above 1.0)
+                    base_percentage = 100  # 100% at 1.0x zoom
+                    additional_percentage = (self._zoom_factor - 1.0) * 100
+                    return int(base_percentage + additional_percentage)
+        
     def set_zoom_factor(self, factor: float, center_point: Optional[QPointF] = None):
         """Set zoom factor with optional center point"""
         factor = max(self._min_zoom, min(self._max_zoom, factor))
@@ -161,6 +184,7 @@ class ZoomableImageView(QGraphicsView):
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
             # Update internal zoom factor to match the new transform
             self._zoom_factor = self.transform().m11()
+            # Set minimum zoom to current fit level (functional behavior stays the same)
             self._min_zoom = self._zoom_factor
             center_point = self.mapToScene(self.viewport().rect().center())
             self.zoom_changed.emit(self._zoom_factor, center_point)
@@ -521,8 +545,8 @@ class SynchronizedImageViewer(QWidget):
         # Zoom Slider
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setObjectName("zoomSlider")
-        self.zoom_slider.setRange(10, 2000)
-        self.zoom_slider.setValue(100)
+        self.zoom_slider.setRange(0, 500)  # 0% to 500% display range
+        self.zoom_slider.setValue(0)  # Start at minimum zoom (0% display)
         self.zoom_slider.setToolTip("Zoom Level")
         self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
         self.zoom_slider.setFixedWidth(140)
@@ -536,7 +560,7 @@ class SynchronizedImageViewer(QWidget):
         zoom_layout.addWidget(self.zoom_in_btn)
         
         # Zoom percentage label
-        self.zoom_label = QLabel("100%")
+        self.zoom_label = QLabel("0%")
         self.zoom_label.setObjectName("zoomLabel")
         self.zoom_label.setMinimumWidth(55)
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -792,18 +816,39 @@ class SynchronizedImageViewer(QWidget):
                 
     def _zoom_slider_changed(self, value: int):
         if self._updating_sync: return
-        zoom_factor = value / 100.0
+        
+        # Convert display percentage back to actual zoom factor
         for viewer in self.image_viewers:
-            if viewer.isVisible(): viewer.image_view.set_zoom_factor(zoom_factor)
+            if viewer.isVisible():
+                view = viewer.image_view
+                if value == 0:
+                    # 0% display = minimum zoom level
+                    zoom_factor = view._min_zoom
+                elif value <= 100:
+                    # Scale from 0-100% display to min_zoom-1.0 actual zoom
+                    if view._min_zoom >= 1.0:
+                        # If minimum zoom is already >= 100%, use actual percentage
+                        zoom_factor = value / 100.0
+                    else:
+                        # Scale from 0%=min_zoom to 100%=1.0
+                        normalized = value / 100.0
+                        zoom_factor = view._min_zoom + normalized * (1.0 - view._min_zoom)
+                else:
+                    # Above 100% display = above 1.0x actual zoom
+                    zoom_factor = value / 100.0
+                
+                view.set_zoom_factor(zoom_factor)
                 
     def _on_zoom_changed(self, zoom_factor: float, center_point: QPointF):
         if self._updating_sync: return
         sender_view = self.sender()
         if not isinstance(sender_view, ZoomableImageView): return
 
-        self.zoom_label.setText(f"{int(zoom_factor * 100)}%")
+        # Use display percentage instead of actual zoom percentage
+        display_percentage = sender_view.get_display_zoom_percentage()
+        self.zoom_label.setText(f"{display_percentage}%")
         self._updating_sync = True
-        self.zoom_slider.setValue(int(zoom_factor * 100))
+        self.zoom_slider.setValue(display_percentage)
         self._updating_sync = False
         
         if self.sync_enabled:
