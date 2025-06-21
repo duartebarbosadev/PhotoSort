@@ -2808,14 +2808,7 @@ class MainWindow(QMainWindow):
         self.image_pipeline.preview_cache.delete_all_for_path(file_path)
         self.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
         
-        # Force refresh of thumbnails in the view
-        self._refresh_visible_items_icons()
-        
-        # Check if we're in side-by-side mode to preserve it
-        current_view_mode = self.advanced_image_viewer._get_current_view_mode()
-        is_side_by_side = current_view_mode == "side_by_side"
-        
-        # Find the model item corresponding to the rotated file path to get its data
+        # Find the model item, update its icon, and get its data
         item_data = None
         proxy_idx = self._find_proxy_index_for_path(file_path)
         if proxy_idx.isValid():
@@ -2823,6 +2816,14 @@ class MainWindow(QMainWindow):
             item = self.file_system_model.itemFromIndex(source_idx)
             if item:
                 item_data = item.data(Qt.ItemDataRole.UserRole)
+                # Regenerate and set the new icon for the item
+                new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(file_path, apply_auto_edits=self.apply_auto_edits_enabled)
+                if new_thumbnail:
+                    item.setIcon(QIcon(new_thumbnail))
+
+        # Check if we're in side-by-side mode to preserve it
+        current_view_mode = self.advanced_image_viewer._get_current_view_mode()
+        is_side_by_side = current_view_mode == "side_by_side"
 
         # Refresh the current preview if this is the selected image
         active_view = self._get_active_file_view()

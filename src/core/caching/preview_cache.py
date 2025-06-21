@@ -61,7 +61,7 @@ class PreviewCache:
 
     def set(self, key: Tuple[str, Tuple[int, int], bool], value: Image.Image) -> None:
         """
-        Adds or updates an item in the cache.
+        Adds or updates an item in the cache and updates the path index.
         Key is typically (normalized_path, resolution_tuple, apply_auto_edits_bool).
 
         Args:
@@ -72,26 +72,52 @@ class PreviewCache:
             logging.error(f"Attempted to cache non-Image object for key {key}. Type: {type(value)}")
             return
         try:
-            self._cache.set(key, value)
+            file_path = key[0]
+            index_key = f"index_{file_path}"
+
+            with self._cache.transact():
+                # Get current index list or create new one
+                key_list = self._cache.get(index_key, default=[])
+                if key not in key_list:
+                    key_list.append(key)
+                    self._cache.set(index_key, key_list)
+                # Set the actual data
+                self._cache.set(key, value)
         except Exception as e:
             logging.error(f"Error setting item in preview_cache for key {key}: {e}")
             
     def delete(self, key: Tuple[str, Tuple[int, int], bool]) -> None:
         """
-        Deletes an item from the cache.
+        Deletes an item from the cache and updates the path index.
 
         Args:
             key: The cache key to delete.
         """
         try:
-            if key in self._cache:
-                del self._cache[key]
+            file_path = key[0]
+            index_key = f"index_{file_path}"
+            
+            with self._cache.transact():
+                # Update the index first
+                key_list = self._cache.get(index_key)
+                if key_list and key in key_list:
+                    key_list.remove(key)
+                    if key_list:
+                        self._cache.set(index_key, key_list)
+                    else:
+                        # If list is empty, remove the index key
+                        self._cache.delete(index_key)
+                
+                # Now delete the actual data. Use pop for safety.
+                self._cache.pop(key, default=None)
+
         except Exception as e:
-            logging.error(f"极Error deleting item from preview_cache for key {key}: {e}")
+            logging.error(f"Error deleting item from preview_cache for key {key}: {e}")
 
     def delete_all_for_path(self, file_path: str) -> None:
         """
-        Deletes all cache entries for a specific file path.
+        Deletes all cache entries for a specific file path using an index.
+        Falls back to iterating the cache if the index is not found.
         
         Args:
             file_path: The file path to clear from cache.
@@ -100,33 +126,40 @@ class PreviewCache:
             import unicodedata
             import os
             normalized_path = unicodedata.normalize('NFC', os.path.normpath(file_path))
-            
-            # Debug: show what we're looking for and what's in cache
-            logging.debug(f"Looking to delete entries for: '{normalized_path}'")
-            logging.debug(f"Current cache has {len(self._cache)} entries")
-            
-            # Find all keys that match this file path
+            index_key = f"index_{normalized_path}"
+
+            # Try the fast, indexed deletion first
+            key_list = self._cache.get(index_key)
+
+            if key_list is not None:
+                with self._cache.transact():
+                    # The index exists, use it to delete entries
+                    for key in key_list:
+                        self._cache.pop(key, default=None)
+                    self._cache.pop(index_key, default=None)
+                
+                if key_list:
+                    logging.info(f"Deleted {len(key_list)} preview cache entries for {os.path.basename(file_path)} using index.")
+                return
+
+            # --- Fallback for caches created before indexing was implemented ---
+            logging.warning(f"No cache index for '{normalized_path}'. Falling back to slow iteration.")
             keys_to_delete = []
             for key in self._cache:
-                if isinstance(key, tuple) and len(key) >= 1:
-                    # Normalize both paths for comparison to handle Unicode differences
+                # Skip index keys
+                if isinstance(key, str) and key.startswith('index_'):
+                    continue
+
+                if isinstance(key, tuple) and len(key) > 0 and isinstance(key[0], str):
                     key_path = unicodedata.normalize('NFC', os.path.normpath(key[0]))
-                    logging.debug(f"Checking key: '{key_path}' == '{normalized_path}' ? {key_path == normalized_path}")
-                    logging.debug(f"Key bytes: {key_path.encode('utf-8')}")
-                    logging.debug(f"Target bytes: {normalized_path.encode('utf-8')}")
                     if key_path == normalized_path:
                         keys_to_delete.append(key)
             
-            # Delete the matching keys
-            for key in keys_to_delete:
-                del self._cache[key]
-                logging.debug(f"Deleted cache entry: {key}")
-                
             if keys_to_delete:
-                logging.info(f"Deleted {len(keys_to_delete)} preview cache entries for {os.path.basename(file_path)}")
-            else:
-                logging.info(f"No cache entries found to delete for {os.path.basename(file_path)}")
-                
+                for key in keys_to_delete:
+                    self._cache.pop(key, default=None)
+                logging.info(f"Deleted {len(keys_to_delete)} preview cache entries for {os.path.basename(file_path)} using fallback.")
+
         except Exception as e:
             logging.error(f"Error deleting preview cache entries for path {file_path}: {e}")
 
