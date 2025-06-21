@@ -29,7 +29,7 @@ class DialogManager:
     def show_about_dialog(self):
         """Show the 'About' dialog with application and technology information."""
         dialog = QDialog(self.parent)
-        dialog.setWindowTitle("About PhotoRanker")
+        dialog.setWindowTitle("About PhotoSort")
         dialog.setObjectName("aboutDialog")
         dialog.setModal(True)
         dialog.setFixedSize(480, 420)
@@ -51,7 +51,7 @@ class DialogManager:
         app_info_layout = QVBoxLayout()
         app_info_layout.setSpacing(3)
         
-        title_label = QLabel("PhotoRanker")
+        title_label = QLabel("PhotoSort")
         title_label.setObjectName("aboutTitle")
         app_info_layout.addWidget(title_label)
 

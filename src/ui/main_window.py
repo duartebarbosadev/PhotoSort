@@ -141,7 +141,7 @@ class MainWindow(QMainWindow):
         self.app_controller = AppController(main_window=self, app_state=self.app_state, worker_manager=self.worker_manager, parent=self)
         logging.info(f"MainWindow.__init__ - AppController instantiated: {time.perf_counter() - init_start_time:.4f}s")
 
-        self.setWindowTitle("PhotoRanker")
+        self.setWindowTitle("PhotoSort")
         self.setGeometry(100, 100, 1200, 800)
   
         self.loading_overlay = None
@@ -2605,7 +2605,7 @@ class MainWindow(QMainWindow):
         
         # Create advanced viewer window
         self.advanced_viewer_window = QWidget()
-        self.advanced_viewer_window.setWindowTitle("PhotoRanker - Advanced Viewer")
+        self.advanced_viewer_window.setWindowTitle("PhotoSort - Advanced Viewer")
         self.advanced_viewer_window.setGeometry(200, 200, 1200, 800)
         
         layout = QVBoxLayout(self.advanced_viewer_window)

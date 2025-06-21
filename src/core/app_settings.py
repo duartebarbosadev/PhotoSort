@@ -10,8 +10,8 @@ from typing import Optional
 # --- Settings Constants ---
 
 # Settings organization and application name
-SETTINGS_ORGANIZATION = "PhotoRanker"
-SETTINGS_APPLICATION = "PhotoRanker"
+SETTINGS_ORGANIZATION = "PhotoSort"
+SETTINGS_APPLICATION = "PhotoSort"
 
 # Settings keys
 PREVIEW_CACHE_SIZE_GB_KEY = "Cache/PreviewCacheSizeGB"

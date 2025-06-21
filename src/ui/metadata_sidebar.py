@@ -1,5 +1,5 @@
 """
-Metadata Sidebar Widget for PhotoRanker
+Metadata Sidebar Widget for PhotoSort
 Displays comprehensive image metadata in a modern, elegant sidebar
 """
 

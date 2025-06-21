@@ -81,7 +81,7 @@ def main():
     faulthandler.enable()
 
     # Parse command-line arguments
-    parser = argparse.ArgumentParser(description='PhotoRanker')
+    parser = argparse.ArgumentParser(description='PhotoSort')
     parser.add_argument('--folder', type=str, help='Open specified folder at startup')
     parser.add_argument('--clear-cache', action='store_true', help='Clear all caches before starting')
     args = parser.parse_args()
@@ -108,10 +108,10 @@ def main():
     root_logger.addHandler(console_handler)
 
     # Conditionally create and add a file handler
-    enable_file_logging_env = os.environ.get("PHOTORANKER_ENABLE_FILE_LOGGING", "false")
+    enable_file_logging_env = os.environ.get("PHOTOSORT_ENABLE_FILE_LOGGING", "false")
     if enable_file_logging_env.lower() == "true":
         try:
-            log_file_path = os.path.join(os.path.expanduser('~'), '.photoranker_logs', 'photoranker_app.log')
+            log_file_path = os.path.join(os.path.expanduser('~'), '.photosort_logs', 'photosort_app.log')
             os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
             file_handler = logging.FileHandler(log_file_path, mode='a') # Append mode
             file_handler.setFormatter(formatter)
@@ -124,7 +124,7 @@ def main():
             root_logger.setLevel(logging.INFO) # Fallback to INFO if file logging fails
     else:
         root_logger.setLevel(logging.DEBUG) # Default to DEBUG if file logging is not enabled
-        logging.info("File logging is DISABLED (set PHOTORANKER_ENABLE_FILE_LOGGING=true to enable).")
+        logging.info("File logging is DISABLED (set PHOTOSORT_ENABLE_FILE_LOGGING=true to enable).")
     
         # --- Suppress verbose third-party loggers ---
     logging.getLogger('PIL').setLevel(logging.INFO)
