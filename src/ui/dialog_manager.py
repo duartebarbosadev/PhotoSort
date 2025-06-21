@@ -1,9 +1,12 @@
 from typing import List, Tuple
+import webbrowser
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QMessageBox, QFrame, QGridLayout, QSpacerItem,
     QComboBox, QSizePolicy
 )
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont, QPixmap, QPainter, QLinearGradient, QColor
 
 from src.core.app_settings import (
     get_rotation_confirm_lossy, is_pytorch_cuda_available, get_preview_cache_size_gb,
@@ -25,18 +28,217 @@ class DialogManager:
 
     def show_about_dialog(self):
         """Show the 'About' dialog with application and technology information."""
-        clustering_info = "Clustering Algorithm: DBSCAN (scikit-learn)"
+        dialog = QDialog(self.parent)
+        dialog.setWindowTitle("About PhotoRanker")
+        dialog.setObjectName("aboutDialog")
+        dialog.setModal(True)
+        dialog.setFixedSize(480, 420)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
-        about_text = (
-            "PhotoRanker\n"
-            "Version: 1.0b\n"
-            "Author: Duarte Barbosa\n\n"
-            "Technology Used:\n"
-            f"  - Embeddings: SentenceTransformer (CLIP) on {'GPU (CUDA)' if is_pytorch_cuda_available() else 'CPU'}\n"
-            f"  - {clustering_info}\n"
-            f"  - Metadata: pyexiv2"
-        )
-        QMessageBox.information(self.parent, "About PhotoRanker", about_text)
+        # Main layout
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(25, 25, 25, 25)
+
+        # Compact header section
+        header_frame = QFrame()
+        header_frame.setObjectName("aboutHeader")
+        header_layout = QHBoxLayout(header_frame)
+        header_layout.setSpacing(15)
+        header_layout.setContentsMargins(20, 15, 20, 15)
+
+        # App info (left side)
+        app_info_layout = QVBoxLayout()
+        app_info_layout.setSpacing(3)
+        
+        title_label = QLabel("PhotoRanker")
+        title_label.setObjectName("aboutTitle")
+        app_info_layout.addWidget(title_label)
+
+        version_label = QLabel("Version 1.0b")
+        version_label.setObjectName("aboutVersion")
+        app_info_layout.addWidget(version_label)
+
+
+        header_layout.addLayout(app_info_layout)
+        header_layout.addStretch()
+
+        main_layout.addWidget(header_frame)
+
+        # Content section
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(15)
+
+        # Technology section
+        tech_title = QLabel("Technology Stack")
+        tech_title.setObjectName("aboutSectionTitle")
+        content_layout.addWidget(tech_title)
+
+        # Tech details in a more compact grid
+        tech_frame = QFrame()
+        tech_frame.setObjectName("aboutTechFrame")
+        tech_layout = QVBoxLayout(tech_frame)
+        tech_layout.setSpacing(6)
+        tech_layout.setContentsMargins(15, 10, 15, 10)
+
+        clustering_info = "Clustering Algorithm: DBSCAN (scikit-learn)"
+        tech_items = [
+            f"🧠 Embeddings: SentenceTransformer (CLIP) on {'GPU (CUDA)' if is_pytorch_cuda_available() else 'CPU'}",
+            f"🔍 {clustering_info}",
+            "📋 Metadata: pyexiv2 • 🎨 Interface: PyQt6 • 🐍 Runtime: Python"
+        ]
+
+        for item in tech_items:
+            item_label = QLabel(item)
+            item_label.setObjectName("aboutTechItem")
+            item_label.setWordWrap(True)
+            tech_layout.addWidget(item_label)
+
+        content_layout.addWidget(tech_frame)
+
+        # GitHub section - just the button
+        github_layout = QHBoxLayout()
+        github_layout.addStretch()
+
+        # GitHub button
+        github_button = QPushButton("🔗 View on GitHub")
+        github_button.setObjectName("aboutGithubButton")
+        github_button.clicked.connect(lambda: webbrowser.open("https://github.com/duartebarbosadev/PhotoSort"))
+        github_layout.addWidget(github_button)
+
+        content_layout.addLayout(github_layout)
+
+        # Add content to main layout
+        main_layout.addLayout(content_layout)
+
+        # Spacer
+        main_layout.addSpacerItem(QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
+
+        # Footer with close button
+        footer_layout = QHBoxLayout()
+        footer_layout.addStretch()
+
+        close_button = QPushButton("Close")
+        close_button.setObjectName("aboutCloseButton")
+        close_button.clicked.connect(dialog.accept)
+        close_button.setDefault(True)
+        footer_layout.addWidget(close_button)
+
+        main_layout.addLayout(footer_layout)
+
+        # Apply modern styling
+        dialog.setStyleSheet("""
+            QDialog#aboutDialog {
+                background-color: #2B2B2B;
+                border: 2px solid #0078D4;
+                border-radius: 8px;
+            }
+            
+            QFrame#aboutHeader {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #353535, stop: 1 #2A2A2A);
+                border: 1px solid #404040;
+                border-radius: 6px;
+            }
+            
+            QLabel#aboutTitle {
+                color: #0078D4;
+                font-size: 18pt;
+                font-weight: bold;
+                font-family: "Segoe UI", system-ui, sans-serif;
+                background-color: transparent;
+            }
+            
+            QLabel#aboutVersion {
+                color: #E5E5E5;
+                font-size: 11pt;
+                font-weight: 500;
+                background-color: transparent;
+            }
+            
+            QLabel#aboutAuthor {
+                color: #C0C0C0;
+                font-size: 10pt;
+                font-style: italic;
+                background-color: transparent;
+            }
+            
+            QLabel#aboutSectionTitle {
+                color: #0078D4;
+                font-size: 12pt;
+                font-weight: bold;
+                padding: 5px 0 3px 0;
+                background-color: transparent;
+            }
+            
+            QFrame#aboutTechFrame, QFrame#aboutGithubFrame {
+                background-color: #252525;
+                border: 1px solid #404040;
+                border-radius: 6px;
+            }
+            
+            QLabel#aboutTechItem {
+                color: #E5E5E5;
+                font-size: 9pt;
+                padding: 2px 0;
+                background-color: transparent;
+            }
+            
+            QLabel#aboutGithubDesc {
+                color: #D1D1D1;
+                font-size: 10pt;
+                background-color: transparent;
+            }
+            
+            QPushButton#aboutGithubButton {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #404040, stop: 1 #333333);
+                color: #E5E5E5;
+                border: 1px solid #505050;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-size: 9pt;
+                font-weight: 500;
+                min-height: 26px;
+            }
+            
+            QPushButton#aboutGithubButton:hover {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #505050, stop: 1 #404040);
+                border-color: #606060;
+                color: #FFFFFF;
+            }
+            
+            QPushButton#aboutGithubButton:pressed {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #353535, stop: 1 #2A2A2A);
+            }
+            
+            QPushButton#aboutCloseButton {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0078D4, stop: 1 #005A9E);
+                color: #FFFFFF;
+                border: 1px solid #004A80;
+                border-radius: 4px;
+                padding: 6px 20px;
+                font-size: 10pt;
+                font-weight: 500;
+                min-width: 70px;
+                min-height: 28px;
+            }
+            
+            QPushButton#aboutCloseButton:hover {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0088F0, stop: 1 #006AB0);
+            }
+            
+            QPushButton#aboutCloseButton:pressed {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #005A9E, stop: 1 #004A80);
+            }
+        """)
+
+        dialog.exec()
 
     def show_lossy_rotation_confirmation_dialog(self, filename: str, rotation_type: str) -> Tuple[bool, bool]:
         """
