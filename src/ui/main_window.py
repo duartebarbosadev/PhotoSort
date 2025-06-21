@@ -3307,3 +3307,85 @@ class MainWindow(QMainWindow):
             
             # Reset the flag after the event queue is cleared to prevent loops
             QTimer.singleShot(0, lambda: setattr(self, '_is_syncing_selection', False))
+
+
+    def _update_item_blur_status(self, image_path: str, is_blurred: bool):
+        """
+        Finds the QStandardItem for a given path and updates its visual state
+        to reflect its blurriness. This is the UI-specific part of the update process.
+        """
+        source_model = self.file_system_model
+        proxy_model = self.proxy_model
+        
+        # Get the active view from the LeftPanel, not from the MainWindow itself.
+        active_view = self.left_panel.get_active_view() 
+        if not active_view:
+            logging.warning(f"Could not get active view to update blur status for {image_path}")
+            return
+
+        item_to_update = None
+        # The search logic remains the same, as it operates on the source_model which MainWindow owns.
+        for r_top in range(source_model.rowCount()):
+            top_item = source_model.item(r_top)
+            if not top_item: continue
+            
+            # Check top-level item
+            top_item_data = top_item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(top_item_data, dict) and top_item_data.get('path') == image_path:
+                item_to_update = top_item
+                break
+
+            if top_item.hasChildren():
+                for r_child in range(top_item.rowCount()):
+                    child_item = top_item.child(r_child)
+                    if not child_item: continue
+
+                    child_item_data = child_item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(child_item_data, dict) and child_item_data.get('path') == image_path:
+                        item_to_update = child_item
+                        break
+                    
+                    if child_item.hasChildren(): 
+                        for r_grandchild in range(child_item.rowCount()):
+                            grandchild_item = child_item.child(r_grandchild)
+                            if not grandchild_item: continue
+                            grandchild_item_data = grandchild_item.data(Qt.ItemDataRole.UserRole)
+                            if isinstance(grandchild_item_data, dict) and grandchild_item_data.get('path') == image_path:
+                                item_to_update = grandchild_item
+                                break
+                        if item_to_update: break
+                if item_to_update: break
+        
+        if item_to_update:
+            original_text = os.path.basename(image_path)
+            item_user_data = item_to_update.data(Qt.ItemDataRole.UserRole)
+
+            # Update the UserRole data on the item for consistency.
+            if isinstance(item_user_data, dict):
+                item_user_data['is_blurred'] = is_blurred
+                item_to_update.setData(item_user_data, Qt.ItemDataRole.UserRole)
+
+            # Update display text and color, respecting the deletion mark status.
+            is_marked_deleted = self._is_marked_for_deletion(image_path)
+            blur_suffix = " (Blurred)" if is_blurred else ""
+            
+            if is_marked_deleted:
+                item_to_update.setForeground(QColor("#FFB366"))
+                # The name already contains "(DELETED)", so no need to add suffix
+                item_to_update.setText(original_text)
+            elif is_blurred:
+                item_to_update.setForeground(QColor(Qt.GlobalColor.red))
+                item_to_update.setText(original_text + blur_suffix)
+            else:
+                item_to_update.setForeground(QApplication.palette().text().color())
+                item_to_update.setText(original_text)
+
+            # If the updated item is currently selected, refresh the main image viewer and status bar.
+            if active_view.currentIndex().isValid():
+                current_proxy_idx = active_view.currentIndex()
+                current_source_idx = proxy_model.mapToSource(current_proxy_idx)
+                selected_item = source_model.itemFromIndex(current_source_idx)
+                if selected_item == item_to_update:
+                    self._handle_file_selection_changed()
+        else:
+            logging.warning(f"Could not find QStandardItem for {image_path} to update blur status in UI.")
