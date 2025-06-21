@@ -18,9 +18,8 @@ import subprocess # For opening file explorer
 import traceback # For detailed error logging
 from datetime import date as date_obj, datetime # For date type hinting and objects
 from typing import List, Dict, Optional, Any, Tuple # Import List and Dict for type hinting, Optional, Any, Tuple
-from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent, QPoint, QRect, QPropertyAnimation, QEasingCurve, QItemSelection # Import QEvent for eventFilter and QPoint, QRect
-from PyQt6.QtGui import QColor # Import QColor for highlighting
-from PyQt6.QtGui import QAction, QKeySequence, QPixmap, QKeyEvent, QIcon, QStandardItemModel, QStandardItem, QResizeEvent, QDragEnterEvent, QDropEvent, QDragMoveEvent, QPalette # Import model classes and event types
+from PyQt6.QtCore import Qt, QThread, QSize, QModelIndex, QMimeData, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer, QPersistentModelIndex, QItemSelectionModel, QEvent, QPoint, QRect, QPropertyAnimation, QEasingCurve, QItemSelection
+from PyQt6.QtGui import QColor, QAction, QKeySequence, QPixmap, QKeyEvent, QIcon, QStandardItemModel, QStandardItem, QResizeEvent, QDragEnterEvent, QDropEvent, QDragMoveEvent, QPalette
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_similarity # Add cosine_similarity import
@@ -32,22 +31,23 @@ from src.core.image_file_ops import ImageFileOperations
 # from src.core.image_features.blur_detector import BlurDetector # Now managed by WorkerManager
 from src.core.metadata_processor import MetadataProcessor # New metadata processor
 from src.core.app_settings import (
-    get_preview_cache_size_gb, set_preview_cache_size_gb, get_preview_cache_size_bytes,
+    get_preview_cache_size_gb, set_preview_cache_size_gb,
     get_exif_cache_size_mb, set_exif_cache_size_mb,
     get_auto_edit_photos, set_auto_edit_photos,
     get_mark_for_deletion_mode, set_mark_for_deletion_mode,
-    get_recent_folders, add_recent_folder
-) # Import settings
-from PyQt6.QtWidgets import QFormLayout, QComboBox, QSizePolicy # For cache dialog
-from src.ui.app_state import AppState # Import AppState
-from src.core.caching.rating_cache import RatingCache # Import RatingCache for type hinting
-from src.core.caching.exif_cache import ExifCache # Import ExifCache for type hinting and methods
-from src.ui.ui_components import LoadingOverlay # PreviewPreloaderWorker, BlurDetectionWorker are used by WorkerManager
-from src.ui.worker_manager import WorkerManager # Import WorkerManager
-from src.ui.metadata_sidebar import MetadataSidebar # Import MetadataSidebar
-from src.core.file_scanner import SUPPORTED_EXTENSIONS # Import from file_scanner
+    get_recent_folders
+)
+from src.ui.app_state import AppState
+from src.core.caching.rating_cache import RatingCache
+from src.core.caching.exif_cache import ExifCache
+from src.ui.ui_components import LoadingOverlay
+from src.ui.worker_manager import WorkerManager
+from src.ui.metadata_sidebar import MetadataSidebar
+from src.core.file_scanner import SUPPORTED_EXTENSIONS
 from src.ui.dialog_manager import DialogManager
 from src.ui.left_panel import LeftPanel
+from src.ui.app_controller import AppController
+from src.ui.menu_manager import MenuManager
 
 
 # --- Custom Proxy Model for Filtering ---
@@ -141,10 +141,12 @@ class MainWindow(QMainWindow):
         self.dialog_manager = DialogManager(self)
         logging.info(
             f"MainWindow.__init__ - DialogManager instantiated: {time.perf_counter() - init_start_time:.4f}s")
+        self.app_controller = AppController(main_window=self, app_state=self.app_state, worker_manager=self.worker_manager, parent=self)
+        logging.info(f"MainWindow.__init__ - AppController instantiated: {time.perf_counter() - init_start_time:.4f}s")
 
         self.setWindowTitle("PhotoRanker")
         self.setGeometry(100, 100, 1200, 800)
- 
+  
         self.loading_overlay = None
         self.metadata_sidebar = None
         self.sidebar_visible = False
@@ -175,8 +177,9 @@ class MainWindow(QMainWindow):
         self.cluster_sort_combo.setToolTip("Order of clusters when 'Group by Similarity' is active")
 
         section_start_time = time.perf_counter()
-        self._create_menu()
-        logging.info(f"MainWindow.__init__ - _create_menu done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
+        self.menu_manager = MenuManager(self)
+        self.menu_manager.create_menus(self.menuBar())
+        logging.info(f"MainWindow.__init__ - MenuManager created: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
         
         section_start_time = time.perf_counter()
         self._create_widgets()
@@ -189,10 +192,6 @@ class MainWindow(QMainWindow):
         section_start_time = time.perf_counter()
         self._create_loading_overlay()
         logging.info(f"MainWindow.__init__ - _create_loading_overlay done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
-        
-        section_start_time = time.perf_counter()
-        self._create_actions()
-        logging.info(f"MainWindow.__init__ - _create_actions done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
         
         section_start_time = time.perf_counter()
         self._connect_signals()
@@ -210,7 +209,7 @@ class MainWindow(QMainWindow):
         
         # Load initial folder if provided
         if self.initial_folder and os.path.isdir(self.initial_folder):
-            QTimer.singleShot(0, lambda: self._load_folder(self.initial_folder))
+            QTimer.singleShot(0, lambda: self.app_controller.load_folder(self.initial_folder))
 
     # Helper method to update the image information in status bar
     def _update_image_info_label(self, status_message_override: Optional[str] = None):
@@ -232,7 +231,7 @@ class MainWindow(QMainWindow):
 
             # Determine if scan is considered "active" based on UI elements
             # open_folder_action is disabled during the scan process.
-            scan_logically_active = not self.open_folder_action.isEnabled()
+            scan_logically_active = not self.menu_manager.open_folder_action.isEnabled()
 
             if scan_logically_active:
                 # Scan is in progress
@@ -292,168 +291,6 @@ class MainWindow(QMainWindow):
             self.loading_overlay.hide()
             QApplication.processEvents()
 
-    def _create_menu(self):
-        start_time = time.perf_counter()
-        logging.debug("MainWindow._create_menu - Start")
-        menu_bar = self.menuBar()
-        file_menu = menu_bar.addMenu("&File")
-        self.open_folder_action = QAction("&Open Folder...", self)
-        self.open_folder_action.setShortcut(QKeySequence.StandardKey.Open)
-        file_menu.addAction(self.open_folder_action)
-
-        self.open_recent_menu = QMenu("Open &Recent", self)
-        file_menu.addMenu(self.open_recent_menu)
-        self._update_recent_folders_menu() # Initial population
-
-        file_menu.addSeparator()
-        exit_action = QAction("&Exit", self)
-        exit_action.setShortcut(QKeySequence.StandardKey.Quit)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        view_menu = menu_bar.addMenu("&View")
-        self.toggle_folder_view_action = QAction("Show Images in Folders", self)
-        self.toggle_folder_view_action.setCheckable(True)
-        self.toggle_folder_view_action.setChecked(self.show_folders_mode)
-        view_menu.addAction(self.toggle_folder_view_action)
-        self.group_by_similarity_action = QAction("Group by Similarity", self)
-        self.group_by_similarity_action.setCheckable(True)
-        self.group_by_similarity_action.setChecked(False)
-        self.group_by_similarity_action.setEnabled(False)
-        view_menu.addAction(self.group_by_similarity_action)
-        view_menu.addSeparator()
-        self.toggle_thumbnails_action = QAction("Show Thumbnails", self)
-        self.toggle_thumbnails_action.setCheckable(True)
-        self.toggle_thumbnails_action.setChecked(True)
-        view_menu.addAction(self.toggle_thumbnails_action)
-        view_menu.addSeparator()
-        self.analyze_similarity_action = QAction("Analyze Similarity", self)
-        self.analyze_similarity_action.setToolTip("Generate image embeddings and find similar groups (can be slow)")
-        self.analyze_similarity_action.setEnabled(False)
-        view_menu.addAction(self.analyze_similarity_action)
-
-        self.detect_blur_action = QAction("Detect Blurriness", self)
-        self.detect_blur_action.setToolTip("Analyze images for blurriness (can be slow for many images)")
-        self.detect_blur_action.setEnabled(False) 
-        view_menu.addAction(self.detect_blur_action)
-
-        help_menu = menu_bar.addMenu("&Help")
-        about_action = QAction("&About", self)
-        about_action.triggered.connect(self.dialog_manager.show_about_dialog)
-        help_menu.addAction(about_action)
-
-        # Add metadata sidebar toggle to View menu
-        view_menu.addSeparator()
-        self.toggle_metadata_sidebar_action = QAction("Show Image Details Sidebar", self)
-        self.toggle_metadata_sidebar_action.setCheckable(True)
-        self.toggle_metadata_sidebar_action.setChecked(False)
-        self.toggle_metadata_sidebar_action.setShortcut("I")
-        view_menu.addAction(self.toggle_metadata_sidebar_action)
-        
-        self._create_filter_menu()
-        self._create_settings_menu()
-
-        # Add to view menu after other view options
-        view_menu.addSeparator()
-        # Side-by-side toggle is now handled within the viewer's own controls
-        logging.debug(f"MainWindow._create_menu - End: {time.perf_counter() - start_time:.4f}s")
-
-    def _create_filter_menu(self):
-        """Create the Filter menu with rating and cluster filter controls."""
-        start_time = time.perf_counter()
-        logging.debug("MainWindow._create_filter_menu - Start")
-        
-        filter_menu = self.menuBar().addMenu("&Filter")
-        
-        # Create a widget action for the rating filter
-        rating_filter_widget = QWidget()
-        rating_filter_layout = QHBoxLayout(rating_filter_widget)
-        rating_filter_layout.setContentsMargins(10, 5, 10, 5)
-        rating_filter_layout.addWidget(QLabel("Rating:"))
-        rating_filter_layout.addWidget(self.filter_combo)
-        
-        rating_filter_action = QWidgetAction(self)
-        rating_filter_action.setDefaultWidget(rating_filter_widget)
-        filter_menu.addAction(rating_filter_action)
-        
-        # Create a widget action for the cluster filter
-        cluster_filter_widget = QWidget()
-        cluster_filter_layout = QHBoxLayout(cluster_filter_widget)
-        cluster_filter_layout.setContentsMargins(10, 5, 10, 5)
-        cluster_filter_layout.addWidget(QLabel("Cluster:"))
-        cluster_filter_layout.addWidget(self.cluster_filter_combo)
-        
-        cluster_filter_action = QWidgetAction(self)
-        cluster_filter_action.setDefaultWidget(cluster_filter_widget)
-        filter_menu.addAction(cluster_filter_action)
-        
-        # Create a widget action for the cluster sort
-        cluster_sort_widget = QWidget()
-        cluster_sort_layout = QHBoxLayout(cluster_sort_widget)
-        cluster_sort_layout.setContentsMargins(10, 5, 10, 5)
-        cluster_sort_layout.addWidget(QLabel("Sort Clusters By:"))
-        cluster_sort_layout.addWidget(self.cluster_sort_combo)
-        
-        self.cluster_sort_action = QWidgetAction(self)
-        self.cluster_sort_action.setDefaultWidget(cluster_sort_widget)
-        filter_menu.addAction(self.cluster_sort_action)
-        self.cluster_sort_action.setVisible(False)  # Initially hidden
-        
-        logging.debug(f"MainWindow._create_filter_menu - End: {time.perf_counter() - start_time:.4f}s")
-
-    def _create_settings_menu(self):
-        start_time = time.perf_counter()
-        logging.debug("MainWindow._create_settings_menu - Start")
-        settings_menu = self.menuBar().addMenu("&Settings")
-        manage_cache_action = QAction("Manage Cache", self)
-        manage_cache_action.triggered.connect(self.dialog_manager.show_cache_management_dialog)
-        settings_menu.addAction(manage_cache_action)
-        settings_menu.addSeparator()
-        self.toggle_auto_edits_action = QAction("Enable Auto RAW Edits", self)
-        self.toggle_auto_edits_action.setCheckable(True)
-        self.toggle_auto_edits_action.setChecked(self.apply_auto_edits_enabled)
-        self.toggle_auto_edits_action.setToolTip("Apply automatic brightness, contrast, and color adjustments to RAW previews and thumbnails.")
-        settings_menu.addAction(self.toggle_auto_edits_action)
-
-        self.toggle_mark_for_deletion_action = QAction("Mark for Deletion (vs. Direct Delete)", self)
-        self.toggle_mark_for_deletion_action.setCheckable(True)
-        self.toggle_mark_for_deletion_action.setChecked(self.mark_for_deletion_mode_enabled)
-        self.toggle_mark_for_deletion_action.setToolTip("If checked, the Delete key will mark files for later deletion. If unchecked, it will move them to trash immediately.")
-        settings_menu.addAction(self.toggle_mark_for_deletion_action)
-        logging.debug(f"MainWindow._create_settings_menu - End: {time.perf_counter() - start_time:.4f}s")
-
-    def _create_image_menu(self):
-        """Create the Image menu with rotation actions (called after actions are created)."""
-        start_time = time.perf_counter()
-        logging.debug("MainWindow._create_image_menu - Start")
-        
-        # Insert Image menu before Help menu
-        menu_bar = self.menuBar()
-        help_menu = None
-        
-        # Find the Help menu to insert before it
-        for action in menu_bar.actions():
-            if action.text() == "&Help":
-                help_menu = action
-                break
-        
-        if help_menu:
-            image_menu = QMenu("&Image", self)
-            menu_bar.insertMenu(help_menu, image_menu)
-        else:
-            # Fallback: add at the end
-            image_menu = menu_bar.addMenu("&Image")
-        
-        # Add rotation actions to menu
-        image_menu.addAction(self.rotate_clockwise_action)
-        image_menu.addAction(self.rotate_counterclockwise_action)
-        image_menu.addAction(self.rotate_180_action)
-        
-        image_menu.addSeparator()
-        image_menu.addAction(self.mark_for_delete_action)
-        image_menu.addAction(self.commit_deletions_action)
-        image_menu.addAction(self.clear_marked_deletions_action)
-        logging.debug(f"MainWindow._create_image_menu - End: {time.perf_counter() - start_time:.4f}s")
 
 
 
@@ -636,141 +473,36 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         start_time = time.perf_counter()
         logging.debug("MainWindow._connect_signals - Start")
-        self.open_folder_action.triggered.connect(self._open_folder_dialog)
-        
-        # Install event filters on views
-        self.left_panel.tree_display_view.installEventFilter(self)
-        self.left_panel.grid_display_view.installEventFilter(self)
-
-        self.left_panel.tree_display_view.customContextMenuRequested.connect(self._show_image_context_menu)
-        self.left_panel.grid_display_view.customContextMenuRequested.connect(self._show_image_context_menu)
-
-        self.left_panel.tree_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
-        self.left_panel.grid_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
-        
         # Connect to the new signals from the advanced viewer
         self.advanced_image_viewer.ratingChanged.connect(self._apply_rating)
         self.advanced_image_viewer.focused_image_changed.connect(self._handle_focused_image_changed)
 
+        # Connect UI component signals
+        self.left_panel.tree_display_view.installEventFilter(self)
+        self.left_panel.grid_display_view.installEventFilter(self)
+        self.left_panel.tree_display_view.customContextMenuRequested.connect(self.menu_manager.show_image_context_menu)
+        self.left_panel.grid_display_view.customContextMenuRequested.connect(self.menu_manager.show_image_context_menu)
+        self.left_panel.tree_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
+        self.left_panel.grid_display_view.selectionModel().selectionChanged.connect(self._handle_file_selection_changed)
         self.filter_combo.currentIndexChanged.connect(self._apply_filter)
         self.cluster_filter_combo.currentIndexChanged.connect(self._apply_filter)
         self.cluster_sort_combo.currentIndexChanged.connect(self._cluster_sort_changed)
         self.left_panel.search_input.textChanged.connect(self._apply_filter)
-        # self._connect_rating_actions() # Obsolete, handled by advanced viewer
         self.left_panel.tree_display_view.collapsed.connect(self._handle_item_collapsed)
-        # Connect only the icon view buttons (toolbar buttons are hidden)
         self.left_panel.view_list_icon.clicked.connect(self._set_view_mode_list)
         self.left_panel.view_icons_icon.clicked.connect(self._set_view_mode_icons)
         self.left_panel.view_grid_icon.clicked.connect(self._set_view_mode_grid)
         self.left_panel.view_date_icon.clicked.connect(self._set_view_mode_date)
-        self.toggle_folder_view_action.toggled.connect(self._toggle_folder_visibility)
-        self.group_by_similarity_action.toggled.connect(self._toggle_group_by_similarity)
-        self.find_action.triggered.connect(self._focus_search_input)
-        self.analyze_similarity_action.triggered.connect(self._start_similarity_analysis)
-        self.detect_blur_action.triggered.connect(self._start_blur_detection_analysis)
-        self.toggle_auto_edits_action.toggled.connect(self._handle_toggle_auto_edits)
-        self.toggle_mark_for_deletion_action.toggled.connect(self._handle_toggle_mark_for_deletion_mode)
-        self.toggle_metadata_sidebar_action.toggled.connect(self._toggle_metadata_sidebar)
-        self.clear_marked_deletions_action.triggered.connect(self._clear_all_deletion_marks)
-         # Connect signals from WorkerManager
-        self.worker_manager.file_scan_found_files.connect(self._handle_files_found)
-        self.worker_manager.file_scan_thumbnail_preload_finished.connect(self._handle_thumbnail_preload_finished)
-        self.worker_manager.file_scan_finished.connect(self._handle_scan_finished)
-        self.worker_manager.file_scan_error.connect(self._handle_scan_error)
 
-        self.worker_manager.similarity_progress.connect(self._handle_similarity_progress)
-        self.worker_manager.similarity_embeddings_generated.connect(self._handle_embeddings_generated)
-        self.worker_manager.similarity_clustering_complete.connect(self._handle_clustering_complete)
-        self.worker_manager.similarity_error.connect(self._handle_similarity_error)
-
-        self.worker_manager.preview_preload_progress.connect(self._handle_preview_progress)
-        self.worker_manager.preview_preload_finished.connect(self._handle_preview_finished)
-        self.worker_manager.preview_preload_error.connect(self._handle_preview_error)
-
-        self.worker_manager.blur_detection_progress.connect(self._handle_blur_detection_progress)
-        self.worker_manager.blur_detection_status_updated.connect(self._handle_blur_status_updated)
-        self.worker_manager.blur_detection_finished.connect(self._handle_blur_detection_finished)
-        self.worker_manager.blur_detection_error.connect(self._handle_blur_detection_error)
-
-        # Connect signals from WorkerManager for RatingLoader
-        self.worker_manager.rating_load_progress.connect(self._handle_rating_load_progress)
-        self.worker_manager.rating_load_metadata_batch_loaded.connect(self._handle_metadata_batch_loaded) # New batched signal
-        self.worker_manager.rating_load_finished.connect(self._handle_rating_load_finished)
-        self.worker_manager.rating_load_error.connect(self._handle_rating_load_error)
+        # Connect MenuManager signals
+        self.menu_manager.connect_signals()
+        
+        # Delegate signal connections to the AppController
+        self.app_controller.connect_signals()
         logging.debug(f"MainWindow._connect_signals - End: {time.perf_counter() - start_time:.4f}s")
-    def _create_actions(self):
-        start_time = time.perf_counter()
-        logging.debug("MainWindow._create_actions - Start")
-        self.rating_actions = {}
-        key_map = {
-            0: Qt.Key.Key_0, 1: Qt.Key.Key_1, 2: Qt.Key.Key_2,
-            3: Qt.Key.Key_3, 4: Qt.Key.Key_4, 5: Qt.Key.Key_5
-        }
-        for rating_value in range(6):
-            action = QAction(self)
-            # Add ControlModifier for rating shortcuts
-            action.setShortcut(QKeySequence(Qt.KeyboardModifier.ControlModifier | key_map[rating_value]))
-            action.setData(rating_value)
-            action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-            self.addAction(action)
-            self.rating_actions[rating_value] = action
-        self.find_action = QAction("Find", self)
-        self.find_action.setShortcut(QKeySequence.StandardKey.Find)
-        self.find_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-        self.addAction(self.find_action)
-        
-        # Rotation shortcuts
-        self.rotate_clockwise_action = QAction("Rotate Clockwise", self)
-        self.rotate_clockwise_action.setShortcut(QKeySequence("R"))
-        self.rotate_clockwise_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-        self.rotate_clockwise_action.triggered.connect(self._rotate_current_image_clockwise)
-        self.addAction(self.rotate_clockwise_action)
-        
-        self.rotate_counterclockwise_action = QAction("Rotate Counterclockwise", self)
-        self.rotate_counterclockwise_action.setShortcut(QKeySequence("Shift+R"))
-        self.rotate_counterclockwise_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-        self.rotate_counterclockwise_action.triggered.connect(self._rotate_current_image_counterclockwise)
-        self.addAction(self.rotate_counterclockwise_action)
-        
-        self.rotate_180_action = QAction("Rotate 180°", self)
-        self.rotate_180_action.setShortcut(QKeySequence("Alt+R"))
-        self.rotate_180_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-        self.rotate_180_action.triggered.connect(self._rotate_current_image_180)
-        self.addAction(self.rotate_180_action)
-        
-        # Actions for switching focused image in side-by-side or focused view
-        self.image_focus_actions = {}
-        for i in range(1, 10): # For keys 1-9
-            action = QAction(self)
-            action.setShortcut(QKeySequence(str(i)))
-            action.setData(i - 1) # 0-indexed
-            action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-            action.triggered.connect(self._handle_image_focus_shortcut)
-            self.addAction(action)
-            self.image_focus_actions[i] = action
-
-        # --- Deletion Marking Actions ---
-        self.mark_for_delete_action = QAction("Mark for Deletion", self)
-        self.mark_for_delete_action.triggered.connect(self._mark_selection_for_deletion)
-        self.addAction(self.mark_for_delete_action)
-
-
-        self.commit_deletions_action = QAction("Commit All Marked Deletions", self)
-        self.commit_deletions_action.triggered.connect(self._commit_marked_deletions)
-        self.addAction(self.commit_deletions_action)
-
-        self.clear_marked_deletions_action = QAction("Clear All Deletion Marks", self)
-        self.clear_marked_deletions_action.triggered.connect(self._clear_all_deletion_marks)
-        self.addAction(self.clear_marked_deletions_action)
-
-
-        logging.debug(f"MainWindow._create_actions - End: {time.perf_counter() - start_time:.4f}s")
-        
-        # Create Image menu now that actions are available
-        self._create_image_menu()
 
     # def _connect_rating_actions(self):
-    #     for rating_value, action in self.rating_actions.items():
+    #     for rating_value, action in self.menu_manager.rating_actions.items():
     #         action.triggered.connect(self._apply_rating_from_action)
 
     def _apply_rating_from_action(self):
@@ -788,145 +520,9 @@ class MainWindow(QMainWindow):
             QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
         )
         if folder_path:
-            self._load_folder(folder_path)
+            self.app_controller.load_folder(folder_path)
         else:
             self.statusBar().showMessage("Folder selection cancelled.")
-
-    def _calculate_folder_image_size(self, folder_path: str) -> int:
-        """Calculates the total size of supported image files in a folder (recursive)."""
-        total_size_bytes = 0
-        try:
-            for root, _, files in os.walk(folder_path):
-                for filename in files:
-                    ext = os.path.splitext(filename)[1].lower()
-                    if ext in SUPPORTED_EXTENSIONS:
-                        try:
-                            full_path = os.path.join(root, filename)
-                            total_size_bytes += os.path.getsize(full_path)
-                        except OSError:
-                            pass # Ignore files that can't be accessed or no longer exist
-        except Exception as e:
-            logging.error(f"Error calculating folder image size for {folder_path}: {e}")
-        return total_size_bytes
-
-    def _load_folder(self, folder_path):
-        load_folder_start_time = time.perf_counter()
-        logging.info(f"MainWindow._load_folder - Start for: {folder_path}")
-        self.show_loading_overlay(f"Preparing to scan folder...")
-
-        # Add to recent folders before doing anything else
-        add_recent_folder(folder_path)
-        self._update_recent_folders_menu()
-
-        # Check cache size vs folder size
-        estimated_folder_image_size_bytes = self._calculate_folder_image_size(folder_path)
-        preview_cache_limit_bytes = get_preview_cache_size_bytes()
-
-        # Log the sizes for diagnostics
-        logging.info(f"Folder Size (Images): {estimated_folder_image_size_bytes / (1024*1024):.2f} MB")
-        logging.info(f"Preview Cache Limit: {preview_cache_limit_bytes / (1024*1024*1024):.2f} GB")
-        logging.info(f"Current Preview Cache Usage: {self.image_pipeline.preview_cache.volume() / (1024*1024):.2f} MB")
-
-        # Use a more conservative estimate for the preview size factor
-        PREVIEW_ESTIMATED_SIZE_FACTOR = 1.35
-        estimated_preview_data_needed_for_folder_bytes = int(estimated_folder_image_size_bytes * PREVIEW_ESTIMATED_SIZE_FACTOR)
-
-        if preview_cache_limit_bytes > 0 and \
-           estimated_preview_data_needed_for_folder_bytes > preview_cache_limit_bytes:
-            self.dialog_manager.show_potential_cache_overflow_warning(
-                estimated_preview_data_needed_for_folder_bytes,
-                preview_cache_limit_bytes
-            )
-        
-        section_start_time = time.perf_counter()
-        self.worker_manager.stop_all_workers() # Use WorkerManager to stop all
-        logging.info(f"MainWindow._load_folder - stop_all_workers done: {time.perf_counter() - section_start_time:.4f}s")
- 
-        section_start_time = time.perf_counter()
-        self.app_state.clear_all_file_specific_data()
-        self.app_state.current_folder_path = folder_path
-        folder_display_name = os.path.basename(folder_path) if folder_path else "Selected Folder"
-        self._update_image_info_label(status_message_override=f"Folder: {folder_display_name} | Preparing scan...")
-        logging.info(f"MainWindow._load_folder - clear_all_file_specific_data & set path done: {time.perf_counter() - section_start_time:.4f}s")
-        
-        section_start_time = time.perf_counter()
-        self.cluster_filter_combo.clear()
-        self.cluster_filter_combo.addItems(["All Clusters"])
-        self.cluster_filter_combo.setEnabled(False)
-        self.cluster_sort_action.setVisible(False)
-        self.cluster_sort_combo.setEnabled(False)
-        self.cluster_sort_combo.setCurrentIndex(0)
-        self.group_by_similarity_action.setEnabled(False)
-        self.group_by_similarity_action.setChecked(False)
-        logging.info(f"MainWindow._load_folder - UI reset (cluster, group by) done: {time.perf_counter() - section_start_time:.4f}s")
-
-        section_start_time = time.perf_counter()
-        self.file_system_model.clear()
-        self.file_system_model.setColumnCount(1)
-        logging.info(f"MainWindow._load_folder - file_system_model cleared: {time.perf_counter() - section_start_time:.4f}s")
-        
-        self.update_loading_text(f"Scanning folder: {os.path.basename(folder_path)}...")
-        self.open_folder_action.setEnabled(False)
-        self.analyze_similarity_action.setEnabled(False)
-        self.detect_blur_action.setEnabled(False)
-        
-        # Delegate to WorkerManager
-        logging.info(f"MainWindow._load_folder - Preparing to call start_file_scan. Total time before call: {time.perf_counter() - load_folder_start_time:.4f}s")
-        self.worker_manager.start_file_scan(
-            folder_path,
-            apply_auto_edits=self.apply_auto_edits_enabled,
-            perform_blur_detection=False, # Initial scan doesn't do blur
-            blur_threshold=self.blur_detection_threshold
-        )
-        logging.info(f"MainWindow._load_folder - start_file_scan called. Total time for _load_folder (sync part): {time.perf_counter() - load_folder_start_time:.4f}s")
-    # _stop_scanner, _reset_scanner_state are now implicitly handled by WorkerManager
-    # and MainWindow's reaction to WorkerManager's signals (e.g., file_scan_finished)
-
-    # Slot for WorkerManager's file_scan_found_files signal
-    def _handle_files_found(self, batch_of_file_data: List[Dict[str, any]]):
-        self.app_state.image_files_data.extend(batch_of_file_data)
-        self.update_loading_text(f"Scanning... {len(self.app_state.image_files_data)} images found")
-        self._update_image_info_label() # Update bottom bar info
-
-
-    # Slot for WorkerManager's file_scan_finished signal
-    def _handle_scan_finished(self):
-        self.update_loading_text("Scan finished. Populating view and starting background loads...")
-        # Enable actions now that scan is complete
-        self.open_folder_action.setEnabled(True)
-        self.analyze_similarity_action.setEnabled(bool(self.app_state.image_files_data))
-        self.detect_blur_action.setEnabled(bool(self.app_state.image_files_data))
-        
-        self._rebuild_model_view() # Populate view with basic file info first
-        
-        # Start background loading of ratings and then previews
-        if self.app_state.image_files_data:
-            self.update_loading_text("Loading Exiftool data...")
-            self.worker_manager.start_rating_load(
-                self.app_state.image_files_data.copy(), # Pass a copy of the list
-                self.app_state.rating_disk_cache,
-                self.app_state
-            )
-            # Preview preloading will be chained after rating loading finishes
-        else:
-            self.hide_loading_overlay() # No data to load further
-        
-        self._update_image_info_label() # Update with final counts
-        # WorkerManager handles file_scanner thread cleanup
- 
-    # Slot for WorkerManager's file_scan_error signal
-    def _handle_scan_error(self, message):
-        self.statusBar().showMessage(f"Scan Error: {message}")
-        self.open_folder_action.setEnabled(True) # Re-enable in case of error
-        
-        error_folder_display = "N/A"
-        if self.app_state.current_folder_path:
-            error_folder_display = os.path.basename(self.app_state.current_folder_path)
-            if not error_folder_display: error_folder_display = self.app_state.current_folder_path
-        self._update_image_info_label(status_message_override=f"Folder: {error_folder_display} | Scan error.")
-        
-        self.hide_loading_overlay()
-        # WorkerManager handles thread cleanup
  
     def _rebuild_model_view(self):
         self.update_loading_text("Rebuilding view...")
@@ -953,14 +549,14 @@ class MainWindow(QMainWindow):
             sorted_cluster_ids = list(images_by_cluster.keys())
             current_sort_method = self.cluster_sort_combo.currentText()
             if current_sort_method == "Time":
-                cluster_timestamps = self._get_cluster_timestamps(images_by_cluster, self.app_state.date_cache) 
+                cluster_timestamps = self._get_cluster_timestamps(images_by_cluster, self.app_state.date_cache)
                 sorted_cluster_ids.sort(key=lambda cid: cluster_timestamps.get(cid, date_obj.max))
             elif current_sort_method == "Similarity then Time":
-                if not self.app_state.embeddings_cache: 
-                    cluster_timestamps = self._get_cluster_timestamps(images_by_cluster, self.app_state.date_cache) 
+                if not self.app_state.embeddings_cache:
+                    cluster_timestamps = self._get_cluster_timestamps(images_by_cluster, self.app_state.date_cache)
                     sorted_cluster_ids.sort(key=lambda cid: cluster_timestamps.get(cid, date_obj.max))
                 else:
-                    sorted_cluster_ids = self._sort_clusters_by_similarity_time( 
+                    sorted_cluster_ids = self._sort_clusters_by_similarity_time(
                         images_by_cluster, self.app_state.embeddings_cache, self.app_state.date_cache
                     )
             else: # Default sort
@@ -972,12 +568,12 @@ class MainWindow(QMainWindow):
                 cluster_item.setEditable(False); cluster_item.setData(f"cluster_header_{cluster_id}", Qt.ItemDataRole.UserRole)
                 cluster_item.setForeground(QColor(Qt.GlobalColor.gray))
                 root_item.appendRow(cluster_item)
-                files_in_cluster = images_by_cluster[cluster_id] 
+                files_in_cluster = images_by_cluster[cluster_id]
                 total_clustered_images += len(files_in_cluster)
                 if self.current_view_mode == "date":
-                    self._populate_model_by_date(cluster_item, files_in_cluster) 
+                    self._populate_model_by_date(cluster_item, files_in_cluster)
                 else:
-                    self._populate_model_standard(cluster_item, files_in_cluster) 
+                    self._populate_model_standard(cluster_item, files_in_cluster)
             self.statusBar().showMessage(f"Grouped {total_clustered_images} images into {len(sorted_cluster_ids)} clusters.", 3000)
         else: # Not grouping by similarity
             if self.current_view_mode == "date":
@@ -986,14 +582,14 @@ class MainWindow(QMainWindow):
                 self._populate_model_standard(root_item, self.app_state.image_files_data)
             self.statusBar().showMessage(f"View populated with {len(self.app_state.image_files_data)} images.", 3000)
 
-        self._apply_filter() 
+        self._apply_filter()
         if self.group_by_similarity_mode and isinstance(active_view, QTreeView):
             proxy_root = QModelIndex()
             for i in range(self.proxy_model.rowCount(proxy_root)):
                 proxy_cluster_index = self.proxy_model.index(i, 0, proxy_root)
                 if proxy_cluster_index.isValid():
                     source_cluster_index = self.proxy_model.mapToSource(proxy_cluster_index)
-                    item = self.file_system_model.itemFromIndex(source_cluster_index) 
+                    item = self.file_system_model.itemFromIndex(source_cluster_index)
                     if item:
                         item_user_data = item.data(Qt.ItemDataRole.UserRole)
                         if isinstance(item_user_data, str) and item_user_data.startswith("cluster_header_"):
@@ -1020,6 +616,9 @@ class MainWindow(QMainWindow):
                  # self._update_rating_display(0); self._update_label_display(None)
                  self.advanced_image_viewer.clear()
                  self.statusBar().showMessage("No items match current filter.")
+
+    def _reload_current_folder(self):
+        self.app_controller.reload_current_folder()
 
     def _group_images_by_cluster(self) -> Dict[int, List[Dict[str, any]]]:
         images_by_cluster: Dict[int, List[Dict[str, any]]] = {}
@@ -2400,25 +1999,25 @@ class MainWindow(QMainWindow):
 
     def _toggle_folder_visibility(self, checked):
         self.show_folders_mode = checked
-        self._rebuild_model_view() 
+        self._rebuild_model_view()
         if self.current_view_mode == "list": self._set_view_mode_list()
         elif self.current_view_mode == "icons": self._set_view_mode_icons()
         elif self.current_view_mode == "date": self._set_view_mode_date()
 
     def _toggle_group_by_similarity(self, checked):
         if not self.app_state.cluster_results and checked:
-            self.group_by_similarity_action.setChecked(False)
+            self.menu_manager.group_by_similarity_action.setChecked(False)
             self.statusBar().showMessage("Cannot group: Run 'Analyze Similarity' first.", 3000)
             return
         self.group_by_similarity_mode = checked
         if checked and self.app_state.cluster_results:
-            self.cluster_sort_action.setVisible(True)
+            self.menu_manager.cluster_sort_action.setVisible(True)
             self.cluster_sort_combo.setEnabled(True)
         else:
-            self.cluster_sort_action.setVisible(False)
+            self.menu_manager.cluster_sort_action.setVisible(False)
             self.cluster_sort_combo.setEnabled(False)
             if checked and not self.app_state.cluster_results: # Should not happen if initial check passed
-                self.group_by_similarity_action.setChecked(False)
+                self.menu_manager.group_by_similarity_action.setChecked(False)
                 self.group_by_similarity_mode = False
         if self.current_view_mode == "list": self._set_view_mode_list()
         elif self.current_view_mode == "icons": self._set_view_mode_icons()
@@ -2536,7 +2135,7 @@ class MainWindow(QMainWindow):
         item.setEditable(False)
 
         # Icon logic depends on toggle_thumbnails_action and view mode
-        if self.toggle_thumbnails_action.isChecked():
+        if self.menu_manager.toggle_thumbnails_action.isChecked():
             thumbnail_pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path, apply_auto_edits=self.apply_auto_edits_enabled)
             if thumbnail_pixmap:
                 item.setIcon(QIcon(thumbnail_pixmap))
@@ -2571,7 +2170,7 @@ class MainWindow(QMainWindow):
             return
  
         self.show_loading_overlay("Starting similarity analysis...")
-        self.analyze_similarity_action.setEnabled(False) 
+        self.menu_manager.analyze_similarity_action.setEnabled(False)
         self.worker_manager.start_similarity_analysis(paths_for_similarity, self.apply_auto_edits_enabled)
   
     # Slot for WorkerManager's similarity_progress signal
@@ -2586,7 +2185,7 @@ class MainWindow(QMainWindow):
     # Slot for WorkerManager's similarity_clustering_complete signal
     def _handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
         self.app_state.cluster_results = cluster_results_dict
-        self.analyze_similarity_action.setEnabled(bool(self.app_state.image_files_data)) 
+        self.menu_manager.analyze_similarity_action.setEnabled(bool(self.app_state.image_files_data))
 
         if not self.app_state.cluster_results:
             self.hide_loading_overlay()
@@ -2598,10 +2197,10 @@ class MainWindow(QMainWindow):
         self.cluster_filter_combo.clear()
         self.cluster_filter_combo.addItems(["All Clusters"] + [f"Cluster {cid}" for cid in cluster_ids])
         self.cluster_filter_combo.setEnabled(True)
-        self.group_by_similarity_action.setEnabled(True)
-        self.group_by_similarity_action.setChecked(True) # Automatically switch to group by similarity view
-        if self.group_by_similarity_action.isChecked() and self.app_state.cluster_results:
-            self.cluster_sort_action.setVisible(True)
+        self.menu_manager.group_by_similarity_action.setEnabled(True)
+        self.menu_manager.group_by_similarity_action.setChecked(True) # Automatically switch to group by similarity view
+        if self.menu_manager.group_by_similarity_action.isChecked() and self.app_state.cluster_results:
+            self.menu_manager.cluster_sort_action.setVisible(True)
             self.cluster_sort_combo.setEnabled(True)
         if self.group_by_similarity_mode: self._rebuild_model_view()
         self.hide_loading_overlay()
@@ -2609,7 +2208,7 @@ class MainWindow(QMainWindow):
     # Slot for WorkerManager's similarity_error signal
     def _handle_similarity_error(self, message):
         self.statusBar().showMessage(f"Similarity Error: {message}", 8000)
-        self.analyze_similarity_action.setEnabled(bool(self.app_state.image_files_data)) 
+        self.menu_manager.analyze_similarity_action.setEnabled(bool(self.app_state.image_files_data))
         self.hide_loading_overlay()
  
     def _reload_current_folder(self):
@@ -2773,7 +2372,7 @@ class MainWindow(QMainWindow):
             return
  
         self.show_loading_overlay("Starting blur detection...")
-        self.detect_blur_action.setEnabled(False)
+        self.menu_manager.detect_blur_action.setEnabled(False)
  
         self.worker_manager.start_blur_detection(
             self.app_state.image_files_data.copy(),
@@ -2865,12 +2464,6 @@ class MainWindow(QMainWindow):
 
 
     # Slot for WorkerManager's blur_detection_finished signal
-    def _handle_blur_detection_finished(self):
-        self.hide_loading_overlay()
-        self.statusBar().showMessage("Blur detection complete.", 5000)
-        self.detect_blur_action.setEnabled(bool(self.app_state.image_files_data)) # Re-enable
-        # WorkerManager handles thread cleanup
-
     def _perform_group_selection_from_key(self, key: int, active_view_from_event: QWidget) -> bool:
         """
         Handles selection of an image within the current cluster based on a numeric key (1-9).
@@ -3011,110 +2604,6 @@ class MainWindow(QMainWindow):
         # Pass unhandled events to the base class
         return super().eventFilter(obj, event)
 
-    # Slot for WorkerManager's blur_detection_error signal
-    def _handle_blur_detection_error(self, message: str):
-        self.hide_loading_overlay()
-        self.statusBar().showMessage(f"Blur Detection Error: {message}", 8000)
-        self.detect_blur_action.setEnabled(bool(self.app_state.image_files_data)) # Re-enable
-        # WorkerManager handles thread cleanup
-
-    def _show_image_context_menu(self, position: QPoint):
-        active_view = self.sender() # Get the view that emitted the signal
-        if not isinstance(active_view, (QTreeView, QListView)):
-            return
-
-        proxy_index = active_view.indexAt(position)
-        if not proxy_index.isValid():
-            return
-
-        if self._is_valid_image_item(proxy_index):
-            source_index = self.proxy_model.mapToSource(proxy_index)
-            item = self.file_system_model.itemFromIndex(source_index)
-            if not item: return
-
-            item_data = item.data(Qt.ItemDataRole.UserRole)
-            if not isinstance(item_data, dict) or 'path' not in item_data: return
-            file_path = item_data['path']
-            
-            if not os.path.exists(file_path): return
-
-            menu = QMenu(self)
-            
-            # Check if rotation is supported for this image
-            rotation_supported = MetadataProcessor.is_rotation_supported(file_path)
-            
-            if rotation_supported:
-                # Check if multiple images are selected
-                selected_paths = self._get_selected_file_paths_from_view()
-                
-                if len(selected_paths) > 1:
-                    # Multiple images selected - use batch rotation
-                    rotate_cw_action = QAction(f"Rotate {len(selected_paths)} Images 90° Clockwise", self)
-                    rotate_cw_action.setShortcut("R")
-                    rotate_cw_action.triggered.connect(lambda checked=False: self._rotate_selected_images('clockwise'))
-                    menu.addAction(rotate_cw_action)
-                    
-                    rotate_ccw_action = QAction(f"Rotate {len(selected_paths)} Images 90° Counterclockwise", self)
-                    rotate_ccw_action.setShortcut("Shift+R")
-                    rotate_ccw_action.triggered.connect(lambda checked=False: self._rotate_selected_images('counterclockwise'))
-                    menu.addAction(rotate_ccw_action)
-                    
-                    rotate_180_action = QAction(f"Rotate {len(selected_paths)} Images 180°", self)
-
-                    menu.addAction(self.mark_for_delete_action)
-                    menu.addAction(self.unmark_for_delete_action)
-                    menu.addSeparator()
-                    rotate_180_action.setShortcut("Alt+R")
-                    rotate_180_action.triggered.connect(lambda checked=False: self._rotate_selected_images('180'))
-                    menu.addAction(rotate_180_action)
-                else:
-                    # Single image - keep original behavior but use new method
-                    rotate_cw_action = QAction("Rotate 90° Clockwise", self)
-                    rotate_cw_action.setShortcut("R")
-                    rotate_cw_action.triggered.connect(lambda checked=False: self._rotate_selected_images('clockwise'))
-                    menu.addAction(rotate_cw_action)
-                    
-                    rotate_ccw_action = QAction("Rotate 90° Counterclockwise", self)
-                    rotate_ccw_action.setShortcut("Shift+R")
-                    rotate_ccw_action.triggered.connect(lambda checked=False: self._rotate_selected_images('counterclockwise'))
-                    menu.addAction(rotate_ccw_action)
-                    
-                    rotate_180_action = QAction("Rotate 180°", self)
-                    rotate_180_action.setShortcut("Alt+R")
-                    rotate_180_action.triggered.connect(lambda checked=False: self._rotate_selected_images('180'))
-                    menu.addAction(rotate_180_action)
-                
-                menu.addSeparator()
-            
-            show_in_explorer_action = QAction(QIcon.fromTheme("folder-open", self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)), "Show in Explorer", self)
-            
-            # Use a lambda to pass the file_path to the slot
-            show_in_explorer_action.triggered.connect(lambda checked=False, path=file_path: self._open_image_in_explorer(path))
-            menu.addAction(show_in_explorer_action)
-            
-            menu.exec(active_view.viewport().mapToGlobal(position))
-
-    def _open_image_in_explorer(self, file_path: str):
-        try:
-            # Ensure the path is normalized for the explorer command
-            normalized_path = os.path.normpath(file_path)
-            if os.name == 'nt': # Windows
-                subprocess.run(['explorer', '/select,', normalized_path], check=False)
-            elif os.name == 'posix': # macOS or Linux
-                # For macOS, 'open -R' reveals in Finder
-                # For Linux, 'xdg-open' on the directory might work, or specific file manager commands.
-                # This is a simplification; more robust cross-platform handling might be needed.
-                folder = os.path.dirname(normalized_path)
-                if os.uname().sysname == "Darwin": # macOS
-                     subprocess.run(['open', '-R', normalized_path], check=False)
-                else: # Linux (generic)
-                     subprocess.run(['xdg-open', folder], check=False)
-            else:
-                logging.warning(f"Unsupported OS for 'Show in Explorer': {os.name}")
-                self.statusBar().showMessage(f"Show in Explorer not supported on this OS: {os.name}", 3000)
-        except Exception as e:
-            logging.error(f"Error opening image in explorer '{file_path}': {e}", exc_info=True)
-            self.statusBar().showMessage(f"Error showing file in explorer: {e}", 5000)
 
     def _toggle_metadata_sidebar(self, checked: bool):
         """Toggle the metadata sidebar visibility"""
@@ -3129,9 +2618,9 @@ class MainWindow(QMainWindow):
             return
 
         self.sidebar_visible = True
-        self.toggle_metadata_sidebar_action.blockSignals(True)
-        self.toggle_metadata_sidebar_action.setChecked(True)
-        self.toggle_metadata_sidebar_action.blockSignals(False)
+        self.menu_manager.toggle_metadata_sidebar_action.blockSignals(True)
+        self.menu_manager.toggle_metadata_sidebar_action.setChecked(True)
+        self.menu_manager.toggle_metadata_sidebar_action.blockSignals(False)
 
         # Explicitly check selection state before showing
         selected_paths = self._get_selected_file_paths_from_view()
@@ -3152,9 +2641,9 @@ class MainWindow(QMainWindow):
         
         self.sidebar_visible = False
         # Block signals to avoid signal loop
-        self.toggle_metadata_sidebar_action.blockSignals(True)
-        self.toggle_metadata_sidebar_action.setChecked(False)
-        self.toggle_metadata_sidebar_action.blockSignals(False)
+        self.menu_manager.toggle_metadata_sidebar_action.blockSignals(True)
+        self.menu_manager.toggle_metadata_sidebar_action.setChecked(False)
+        self.menu_manager.toggle_metadata_sidebar_action.blockSignals(False)
         
         # Hide sidebar instantly
         self._set_sidebar_visibility(False)
@@ -3855,22 +3344,6 @@ class MainWindow(QMainWindow):
             return None
 
         return file_path
-
-    def _update_recent_folders_menu(self):
-        """Update the 'Open Recent' menu with the latest list of folders."""
-        self.open_recent_menu.clear()
-        recent_folders = get_recent_folders()
-
-        if not recent_folders:
-            action = QAction("No Recent Folders", self)
-            action.setEnabled(False)
-            self.open_recent_menu.addAction(action)
-        else:
-            for folder in recent_folders:
-                # Use a lambda to capture the folder path for the slot
-                action = QAction(folder, self)
-                action.triggered.connect(lambda checked=False, f=folder: self._load_folder(f))
-                self.open_recent_menu.addAction(action)
 
     def _handle_focused_image_changed(self, index: int, file_path: str):
         """Slot to handle when the focused image changes in the viewer."""
