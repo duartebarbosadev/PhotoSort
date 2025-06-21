@@ -156,7 +156,14 @@ def main():
     else:
         root_logger.setLevel(logging.DEBUG) # Default to DEBUG if file logging is not enabled
         logging.info("File logging is DISABLED (set PHOTORANKER_ENABLE_FILE_LOGGING=true to enable).")
-    # --- End Aggressive Logging Setup ---
+    
+        # --- Suppress verbose third-party loggers ---
+    logging.getLogger('PIL').setLevel(logging.INFO)
+    logging.getLogger('PIL.PngImagePlugin').setLevel(logging.INFO)
+    logging.getLogger('PIL.TiffImagePlugin').setLevel(logging.INFO)
+    # You might also want to set it for the more general Image module if logs still appear
+    logging.getLogger('PIL.Image').setLevel(logging.INFO)
+    # --- End Suppress verbose third-party loggers ---
 
     # --- Setup Global Exception Hook ---
     sys.excepthook = global_exception_handler # Assign the function
