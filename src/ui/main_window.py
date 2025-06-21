@@ -149,7 +149,6 @@ class MainWindow(QMainWindow):
         self.sidebar_visible = False
         
         self.thumbnail_delegate = None
-        self.current_view_mode = None
         self.show_folders_mode = False
         self.group_by_similarity_mode = False
         self.apply_auto_edits_enabled = get_auto_edit_photos()
@@ -191,12 +190,12 @@ class MainWindow(QMainWindow):
         logging.info(f"MainWindow.__init__ - _create_loading_overlay done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
         
         section_start_time = time.perf_counter()
+        self.left_panel.thumbnail_delegate = self.thumbnail_delegate
         self._connect_signals()
         logging.info(f"MainWindow.__init__ - _connect_signals done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
         
         section_start_time = time.perf_counter()
-        self._set_view_mode_list()
-        self._update_view_button_states()  # Ensure buttons are in correct state
+        self.left_panel.set_view_mode_list()
         logging.info(f"MainWindow.__init__ - _set_view_mode_list done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
         
         self._update_image_info_label() # Set initial info label text
@@ -487,10 +486,7 @@ class MainWindow(QMainWindow):
         self.cluster_sort_combo.currentIndexChanged.connect(self._cluster_sort_changed)
         self.left_panel.search_input.textChanged.connect(self._apply_filter)
         self.left_panel.tree_display_view.collapsed.connect(self._handle_item_collapsed)
-        self.left_panel.view_list_icon.clicked.connect(self._set_view_mode_list)
-        self.left_panel.view_icons_icon.clicked.connect(self._set_view_mode_icons)
-        self.left_panel.view_grid_icon.clicked.connect(self._set_view_mode_grid)
-        self.left_panel.view_date_icon.clicked.connect(self._set_view_mode_date)
+        self.left_panel.connect_signals()
 
         # Connect MenuManager signals
         self.menu_manager.connect_signals()
@@ -568,13 +564,13 @@ class MainWindow(QMainWindow):
                 root_item.appendRow(cluster_item)
                 files_in_cluster = images_by_cluster[cluster_id]
                 total_clustered_images += len(files_in_cluster)
-                if self.current_view_mode == "date":
+                if self.left_panel.current_view_mode == "date":
                     self._populate_model_by_date(cluster_item, files_in_cluster)
                 else:
                     self._populate_model_standard(cluster_item, files_in_cluster)
             self.statusBar().showMessage(f"Grouped {total_clustered_images} images into {len(sorted_cluster_ids)} clusters.", 3000)
         else: # Not grouping by similarity
-            if self.current_view_mode == "date":
+            if self.left_panel.current_view_mode == "date":
                 self._populate_model_by_date(root_item, self.app_state.image_files_data)
             else:
                 self._populate_model_standard(root_item, self.app_state.image_files_data)
@@ -757,9 +753,9 @@ class MainWindow(QMainWindow):
     # resizeEvent needs to be defined before it's called by super() or other events
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
-        if hasattr(self, 'current_view_mode') and self.current_view_mode == "grid" and not self.group_by_similarity_mode:
-            if hasattr(self, '_update_grid_view_layout'):
-                self._update_grid_view_layout()
+        if hasattr(self, 'left_panel') and self.left_panel.current_view_mode == "grid" and not self.group_by_similarity_mode:
+            if hasattr(self, 'left_panel'):
+                self.left_panel.update_grid_view_layout()
         
         if self.loading_overlay:
             self.loading_overlay.update_position()
@@ -1791,7 +1787,7 @@ class MainWindow(QMainWindow):
         self.proxy_model.current_rating_filter = selected_filter_text
         self.proxy_model.current_cluster_filter_id = target_cluster_id
         self.proxy_model.show_folders_mode_ref = self.show_folders_mode
-        self.proxy_model.current_view_mode_ref = self.current_view_mode
+        self.proxy_model.current_view_mode_ref = self.left_panel.current_view_mode
         
         # Set the search text filter
         self.proxy_model.setFilterRegularExpression(search_text)
@@ -1946,63 +1942,17 @@ class MainWindow(QMainWindow):
         # WorkerManager handles thread cleanup
         logging.info(f"<<< EXIT >>> _handle_preview_error.")
  
-    def _set_view_mode_list(self):
-        self.current_view_mode = "list"
-        self.left_panel.tree_display_view.setVisible(True)
-        self.left_panel.grid_display_view.setVisible(False)
-        self.left_panel.tree_display_view.setIconSize(QSize(16, 16))
-        self.left_panel.tree_display_view.setIndentation(10)
-        self.left_panel.tree_display_view.setRootIsDecorated(self.show_folders_mode or self.group_by_similarity_mode)
-        self.left_panel.tree_display_view.setItemsExpandable(self.show_folders_mode or self.group_by_similarity_mode)
-        if self.left_panel.tree_display_view.itemDelegate() is self.thumbnail_delegate:
-            self.left_panel.tree_display_view.setItemDelegate(None)
-        self._update_view_button_states()
-        self._rebuild_model_view()
-        self.left_panel.tree_display_view.setFocus()
-
-    def _set_view_mode_icons(self):
-        self.current_view_mode = "icons"
-        self.left_panel.tree_display_view.setVisible(True)
-        self.left_panel.grid_display_view.setVisible(False)
-        self.left_panel.tree_display_view.setIconSize(QSize(64, 64))
-        self.left_panel.tree_display_view.setIndentation(20)
-        self.left_panel.tree_display_view.setRootIsDecorated(self.show_folders_mode or self.group_by_similarity_mode)
-        self.left_panel.tree_display_view.setItemsExpandable(self.show_folders_mode or self.group_by_similarity_mode)
-        if self.left_panel.tree_display_view.itemDelegate() is self.thumbnail_delegate:
-             self.left_panel.tree_display_view.setItemDelegate(None)
-        self._update_view_button_states()
-        self._rebuild_model_view()
-        self.left_panel.tree_display_view.setFocus()
-
-    def _update_grid_view_layout(self):
-        if not self.left_panel.grid_display_view.isVisible():
-            return
-        
-        # Fixed grid layout to prevent filename length from affecting layout
-        FIXED_ICON_SIZE = 96  # Fixed icon size
-        FIXED_GRID_SIZE = QSize(128, 148)  # Fixed grid cell size (width, height)
-        GRID_SPACING = 4
-        
-        # Set fixed icon size and grid properties
-        self.left_panel.grid_display_view.setIconSize(QSize(FIXED_ICON_SIZE, FIXED_ICON_SIZE))
-        self.left_panel.grid_display_view.setGridSize(FIXED_GRID_SIZE)
-        self.left_panel.grid_display_view.setSpacing(GRID_SPACING)
-        
-        # Ensure uniform grid layout
-        self.left_panel.grid_display_view.setUniformItemSizes(True)
-        self.left_panel.grid_display_view.setWordWrap(True)
-        
-        self.left_panel.grid_display_view.updateGeometries()
-        self.left_panel.grid_display_view.viewport().update()
-
-    def _toggle_folder_visibility(self, checked):
+    def _toggle_folder_visibility(self, checked: bool):
         self.show_folders_mode = checked
         self._rebuild_model_view()
-        if self.current_view_mode == "list": self._set_view_mode_list()
-        elif self.current_view_mode == "icons": self._set_view_mode_icons()
-        elif self.current_view_mode == "date": self._set_view_mode_date()
+        if self.left_panel.current_view_mode == "list":
+            self.left_panel.set_view_mode_list()
+        elif self.left_panel.current_view_mode == "icons":
+            self.left_panel.set_view_mode_icons()
+        elif self.left_panel.current_view_mode == "date":
+            self.left_panel.set_view_mode_date()
 
-    def _toggle_group_by_similarity(self, checked):
+    def _toggle_group_by_similarity(self, checked: bool):
         if not self.app_state.cluster_results and checked:
             self.menu_manager.group_by_similarity_action.setChecked(False)
             self.statusBar().showMessage("Cannot group: Run 'Analyze Similarity' first.", 3000)
@@ -2017,70 +1967,11 @@ class MainWindow(QMainWindow):
             if checked and not self.app_state.cluster_results: # Should not happen if initial check passed
                 self.menu_manager.group_by_similarity_action.setChecked(False)
                 self.group_by_similarity_mode = False
-        if self.current_view_mode == "list": self._set_view_mode_list()
-        elif self.current_view_mode == "icons": self._set_view_mode_icons()
-        elif self.current_view_mode == "grid": self._set_view_mode_grid()
-        elif self.current_view_mode == "date": self._set_view_mode_date()
+        if self.left_panel.current_view_mode == "list": self.left_panel.set_view_mode_list()
+        elif self.left_panel.current_view_mode == "icons": self.left_panel.set_view_mode_icons()
+        elif self.left_panel.current_view_mode == "grid": self.left_panel.set_view_mode_grid()
+        elif self.left_panel.current_view_mode == "date": self.left_panel.set_view_mode_date()
         else: self._rebuild_model_view()
-
-    def _set_view_mode_grid(self):
-        self.current_view_mode = "grid"
-        if self.group_by_similarity_mode: # Grid view not supported when grouping by similarity
-            self.left_panel.tree_display_view.setVisible(True)
-            self.left_panel.grid_display_view.setVisible(False)
-            # Use a suitable icon size for tree when grid would have been active
-            self.left_panel.tree_display_view.setIconSize(QSize(96, 96))
-            self.left_panel.tree_display_view.setIndentation(20)
-            self.left_panel.tree_display_view.setRootIsDecorated(True)
-            self.left_panel.tree_display_view.setItemsExpandable(True)
-            if self.left_panel.tree_display_view.itemDelegate() is self.thumbnail_delegate:
-                 self.left_panel.tree_display_view.setItemDelegate(None)
-            self._update_view_button_states()
-            self._rebuild_model_view()
-            self.left_panel.tree_display_view.setFocus()
-        else:
-            self.left_panel.tree_display_view.setVisible(False)
-            self.left_panel.grid_display_view.setVisible(True)
-            self.left_panel.grid_display_view.setViewMode(QListView.ViewMode.IconMode)
-            self.left_panel.grid_display_view.setFlow(QListView.Flow.LeftToRight)
-            self.left_panel.grid_display_view.setWrapping(True)
-            self.left_panel.grid_display_view.setResizeMode(QListView.ResizeMode.Adjust)
-            self._update_view_button_states()
-            self._rebuild_model_view() # Populate model first
-            self._update_grid_view_layout() # Then adjust layout
-            self.left_panel.grid_display_view.setFocus()
-
-    def _set_view_mode_date(self):
-        self.current_view_mode = "date"
-        self.left_panel.tree_display_view.setVisible(True)
-        self.left_panel.grid_display_view.setVisible(False)
-        self.left_panel.tree_display_view.setIconSize(QSize(16, 16))
-        self.left_panel.tree_display_view.setIndentation(20)
-        self.left_panel.tree_display_view.setRootIsDecorated(True)
-        self.left_panel.tree_display_view.setItemsExpandable(True)
-        if self.left_panel.tree_display_view.itemDelegate() is self.thumbnail_delegate:
-            self.left_panel.tree_display_view.setItemDelegate(None)
-        self._update_view_button_states()
-        self._rebuild_model_view()
-        self.left_panel.tree_display_view.setFocus()
-
-    def _update_view_button_states(self):
-        """Update the visual state of view mode icon buttons"""
-        # Reset all icon buttons
-        self.left_panel.view_list_icon.setChecked(False)
-        self.left_panel.view_icons_icon.setChecked(False)
-        self.left_panel.view_grid_icon.setChecked(False)
-        self.left_panel.view_date_icon.setChecked(False)
-        
-        # Set the active icon button
-        if self.current_view_mode == "list":
-            self.left_panel.view_list_icon.setChecked(True)
-        elif self.current_view_mode == "icons":
-            self.left_panel.view_icons_icon.setChecked(True)
-        elif self.current_view_mode == "grid":
-            self.left_panel.view_grid_icon.setChecked(True)
-        elif self.current_view_mode == "date":
-            self.left_panel.view_date_icon.setChecked(True)
 
     def _populate_model_by_date(self, parent_item: QStandardItem, image_data_list: List[Dict[str, any]]):
         if not image_data_list: return
