@@ -70,7 +70,7 @@ class RatingCache:
         try:
             self._cache.set(key, value)
         except Exception as e:
-            print(f"Error setting item in rating_cache for key {key}: {e}")
+            logging.error(f"Error setting item in rating_cache for key {key}: {e}")
 
     def delete(self, key: str) -> None:
         """

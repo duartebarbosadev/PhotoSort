@@ -56,7 +56,7 @@ class PreviewCache:
                 # self.delete(key)
             return None
         except Exception as e:
-            print(f"Error accessing preview_cache for key {key}: {e}.")
+            logging.error(f"Error accessing preview_cache for key {key}: {e}.")
             return None
 
     def set(self, key: Tuple[str, Tuple[int, int], bool], value: Image.Image) -> None:

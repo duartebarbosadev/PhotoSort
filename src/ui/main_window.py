@@ -1318,7 +1318,7 @@ class MainWindow(QMainWindow):
         
         root_proxy_index = QModelIndex()
         proxy_row_count = proxy_model.rowCount(root_proxy_index)
-        print(f"[DEBUG] _find_first_visible_item: {proxy_row_count} top-level rows in proxy model")
+        logging.debug(f"[DEBUG] _find_first_visible_item: {proxy_row_count} top-level rows in proxy model")
 
         if isinstance(active_view, QTreeView):
             logging.debug("_find_first_visible_item: Using TreeView logic")
@@ -1336,7 +1336,7 @@ class MainWindow(QMainWindow):
                 
                 if not active_view.isRowHidden(current_proxy_idx.row(), current_proxy_idx.parent()):
                     if self._is_valid_image_item(current_proxy_idx):
-                        print(f"[DEBUG] _find_first_visible_item: Found first valid image at row {current_proxy_idx.row()}")
+                        logging.debug(f"[DEBUG] _find_first_visible_item: Found first valid image at row {current_proxy_idx.row()}")
                         return current_proxy_idx
                     
                     # Check if it's an expanded group with children
@@ -1346,28 +1346,28 @@ class MainWindow(QMainWindow):
                         item_for_children_check = proxy_model.sourceModel().itemFromIndex(source_idx_for_children_check)
 
                     if item_for_children_check and proxy_model.hasChildren(current_proxy_idx) and active_view.isExpanded(current_proxy_idx):
-                        print(f"[DEBUG] _find_first_visible_item: Row {current_proxy_idx.row()} is expanded, adding children")
+                        logging.debug(f"[DEBUG] _find_first_visible_item: Row {current_proxy_idx.row()} is expanded, adding children")
                         for child_row in range(proxy_model.rowCount(current_proxy_idx)):
                             q.append(proxy_model.index(child_row, 0, current_proxy_idx))
                 else:
-                    print(f"[DEBUG] _find_first_visible_item: Row {current_proxy_idx.row()} is hidden")
+                    logging.debug(f"[DEBUG] _find_first_visible_item: Row {current_proxy_idx.row()} is hidden")
             
-            print("[DEBUG] _find_first_visible_item: No visible image item found in TreeView")
+            logging.debug("[DEBUG] _find_first_visible_item: No visible image item found in TreeView")
             return QModelIndex()
             
         elif isinstance(active_view, QListView):
-            print("[DEBUG] _find_first_visible_item: Using ListView logic")
+            logging.debug("[DEBUG] _find_first_visible_item: Using ListView logic")
             for r in range(proxy_row_count):
                 proxy_idx = proxy_model.index(r, 0, root_proxy_index)
-                print(f"[DEBUG] _find_first_visible_item: Checking ListView row {r}")
+                logging.debug(f"[DEBUG] _find_first_visible_item: Checking ListView row {r}")
                 if self._is_valid_image_item(proxy_idx):
-                    print(f"[DEBUG] _find_first_visible_item: Found first valid image at ListView row {r}")
+                    logging.debug(f"[DEBUG] _find_first_visible_item: Found first valid image at ListView row {r}")
                     return proxy_idx
             
-            print("[DEBUG] _find_first_visible_item: No visible image item found in ListView")
+            logging.debug("[DEBUG] _find_first_visible_item: No visible image item found in ListView")
             return QModelIndex()
         
-        print("[DEBUG] _find_first_visible_item: Unknown view type")
+        logging.debug("[DEBUG] _find_first_visible_item: Unknown view type")
         return QModelIndex()
         
     def _find_last_visible_item(self) -> QModelIndex:
@@ -2264,8 +2264,8 @@ class MainWindow(QMainWindow):
                              # Explicitly cast to float32 if not already, for consistency
                             centroids[cluster_id] = np.mean(np.array(cluster_embeddings, dtype=np.float32), axis=0)
                 except Exception as e: # Catch potential errors in np.mean, like empty list or dtype issues
-                    print(f"Error calculating centroid for cluster {cluster_id}: {e}")
-                    pass 
+                    logging.error(f"Error calculating centroid for cluster {cluster_id}: {e}")
+                    pass
         return centroids
 
     def _sort_clusters_by_similarity_time(self,
@@ -2300,8 +2300,8 @@ class MainWindow(QMainWindow):
                     transformed_centroids = pca.fit_transform(centroid_matrix)
                     for i, cid in enumerate(valid_cluster_ids_for_pca): 
                         pca_scores[cid] = transformed_centroids[i, 0] if transformed_centroids.ndim > 1 else transformed_centroids[i]
-            except Exception as e: 
-                print(f"Error during PCA for cluster sorting: {e}")
+            except Exception as e:
+                logging.error(f"Error during PCA for cluster sorting: {e}")
         
         cluster_timestamps = self._get_cluster_timestamps(images_by_cluster, date_cache)
         sortable_clusters = []

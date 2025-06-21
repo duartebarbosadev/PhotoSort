@@ -1,6 +1,6 @@
 from typing import Dict, Any, List, Optional
 from datetime import date as date_obj
-
+import logging
 from src.core.caching.rating_cache import RatingCache
 from src.core.caching.exif_cache import ExifCache # Import ExifCache
 
@@ -90,7 +90,7 @@ class AppState:
                 return
         # If path not in image_files_data, it might be an error or a new file
         # For now, we assume it should exist if blur status is being updated post-scan.
-        print(f"[AppState] Warning: Path {file_path} not found in image_files_data to update blur status.")
+        logging.warning(f"[AppState] Warning: Path {file_path} not found in image_files_data to update blur status.")
 
     def get_file_data_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
         for file_data in self.image_files_data:
