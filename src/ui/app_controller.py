@@ -1,11 +1,9 @@
 import os
 import time
 import logging
-from typing import List, Dict, Optional, Any, Tuple
-from datetime import date as date_obj
+from typing import List, Dict, Any, Tuple
 
 from PyQt6.QtCore import QObject
-from PyQt6.QtWidgets import QApplication
 
 from src.core.app_settings import add_recent_folder, get_preview_cache_size_bytes
 from src.core.file_scanner import SUPPORTED_EXTENSIONS
@@ -238,7 +236,7 @@ class AppController(QObject):
 
     def handle_scan_error(self, message: str):
         self.main_window.statusBar().showMessage(f"Scan Error: {message}")
-        self.main_window.open_folder_action.setEnabled(True)
+        self.main_window.menu_manager.open_folder_action.setEnabled(True)
         
         error_folder_display = "N/A"
         if self.app_state.current_folder_path:
