@@ -80,18 +80,6 @@ class MenuManager:
         
         # Rating actions
         self.rating_actions = {}
-        key_map = {
-            0: Qt.Key.Key_0, 1: Qt.Key.Key_1, 2: Qt.Key.Key_2,
-            3: Qt.Key.Key_3, 4: Qt.Key.Key_4, 5: Qt.Key.Key_5
-        }
-        for rating_value in range(6):
-            action = QAction(main_win)
-            # Add ControlModifier for rating shortcuts
-            action.setShortcut(QKeySequence(Qt.KeyboardModifier.ControlModifier | key_map[rating_value]))
-            action.setData(rating_value)
-            action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-            main_win.addAction(action)
-            self.rating_actions[rating_value] = action
             
         self.find_action = QAction("Find", main_win)
         self.find_action.setShortcut(QKeySequence.StandardKey.Find)
@@ -306,8 +294,6 @@ class MenuManager:
 
         # Other Actions
         self.find_action.triggered.connect(main_win._focus_search_input)
-        for action in self.rating_actions.values():
-            action.triggered.connect(main_win._apply_rating_from_action)
         for action in self.image_focus_actions.values():
             action.triggered.connect(main_win._handle_image_focus_shortcut)
             

@@ -2502,6 +2502,12 @@ class MainWindow(QMainWindow):
 
                 # Handle Arrow Keys & Delete for navigation (if search input doesn't have focus on the view itself)
                 if not search_has_focus: # Only act if search input doesn't have focus
+                    # Rating shortcuts (Ctrl+0 to Ctrl+5)
+                    if key_event.modifiers() == Qt.KeyboardModifier.ControlModifier and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
+                        rating = key - Qt.Key.Key_0
+                        self._apply_rating_to_selection(rating)
+                        return True
+
                     if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
                         self._navigate_left_in_group()
                         return True
