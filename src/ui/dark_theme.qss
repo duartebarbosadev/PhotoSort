@@ -418,204 +418,193 @@ LoadingOverlay QLabel#loading_animation_label {
 
 /* --- Cache Management Dialog --- */
 QDialog#cacheManagementDialog {
-    background-color: #2B2B2B;
-    border: 1px solid #3A3A3A; /* Subtle border for the dialog itself */
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #272727);
+    border: 2px solid #0084FF;
+    border-radius: 12px;
 }
 
 QDialog#cacheManagementDialog QLabel {
-    color: #C0C0C0; /* Standard text color for labels within this dialog */
-    background-color: transparent; /* Ensure labels don't pick up strange backgrounds */
-    padding: 2px 0; /* Add some vertical padding */
+    color: #C8C8C8;
+    background-color: transparent;
+    padding: 3px 0;
 }
 
 QLabel#cacheSectionTitle {
-    font-size: 11pt;
+    font-size: 12pt;
     font-weight: bold;
-    color: #0090D0; /* Accent color for titles */
-    padding-top: 5px;
-    padding-bottom: 3px;
-    border-bottom: 1px solid #383838;
-    margin-bottom: 5px;
+    color: #0084FF;
+    padding: 8px 0 6px 0;
+    border-bottom: 1px solid #0084FF;
+    margin-bottom: 8px;
 }
 
 QFrame#cacheSectionFrame {
-    background-color: #252525; /* Slightly darker than dialog bg for grouping */
-    border: 1px solid #333333;
-    border-radius: 5px;
-    padding: 10px; /* Padding inside the frame */
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #252525, stop: 1 #202020);
+    border: 1px solid #404040;
+    border-radius: 8px;
+    padding: 12px;
 }
 
 /* Buttons within the Cache Dialog */
 QDialog#cacheManagementDialog QPushButton {
-    background-color: #383838;
-    color: #D1D1D1;
-    border: 1px solid #454545;
-    padding: 6px 12px;
-    border-radius: 4px;
-    min-height: 26px;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #383838, stop: 1 #303030);
+    color: #E0E0E0;
+    border: 1px solid #484848;
+    padding: 8px 16px;
+    border-radius: 6px;
+    min-height: 28px;
+    font-weight: 500;
+    font-size: 9pt;
 }
+
 QDialog#cacheManagementDialog QPushButton:hover {
-    background-color: #4A4A4A;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #4A4A4A, stop: 1 #404040);
     border-color: #555555;
     color: #FFFFFF;
 }
+
 QDialog#cacheManagementDialog QPushButton:pressed {
-    background-color: #303030;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #282828, stop: 1 #202020);
 }
 
-/* Specific Buttons */
+/* Specific Cache Dialog Buttons */
 QPushButton#deleteThumbnailCacheButton,
-QPushButton#deletePreviewCacheButton {
-    background-color: #C92C2C; /* Destructive action red */
-    color: #FFFFFF;
-    font-weight: bold;
-    border-color: #A02020;
-}
-QPushButton#deleteThumbnailCacheButton:hover,
-QPushButton#deletePreviewCacheButton:hover {
-    background-color: #E04040;
-    border-color: #B03030;
-}
-QPushButton#deleteThumbnailCacheButton:pressed,
-QPushButton#deletePreviewCacheButton:pressed {
-    background-color: #B02020;
-}
-
-QPushButton#applyPreviewLimitButton {
-    background-color: #0078D4; /* Accent blue for apply */
-    color: #FFFFFF;
-    font-weight: bold;
-    border-color: #005A9E;
-}
-QPushButton#applyPreviewLimitButton:hover {
-    background-color: #0088F0;
-    border-color: #006AB0;
-}
-QPushButton#applyPreviewLimitButton:pressed {
-    background-color: #005A9E;
-}
-
-QPushButton#applyExifLimitButton {
-    background-color: #0078D4; /* Accent blue for apply */
-    color: #FFFFFF;
-    font-weight: bold;
-    border-color: #005A9E;
-}
-
-QPushButton#applyExifLimitButton:hover {
-    background-color: #0088F0;
-    border-color: #006AB0;
-}
-
-QPushButton#applyExifLimitButton:pressed {
-    background-color: #005A9E;
-}
-
+QPushButton#deletePreviewCacheButton,
 QPushButton#deleteExifCacheButton {
-    background-color: #C92C2C; /* Destructive action red */
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #DC3545, stop: 1 #B02A37);
     color: #FFFFFF;
     font-weight: bold;
-    border-color: #A02020;
+    border: 1px solid #B02A37;
 }
 
+QPushButton#deleteThumbnailCacheButton:hover,
+QPushButton#deletePreviewCacheButton:hover,
 QPushButton#deleteExifCacheButton:hover {
-    background-color: #E04040;
-    border-color: #B03030;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #E85362, stop: 1 #C73E4A);
+    border-color: #DC3545;
 }
 
+QPushButton#deleteThumbnailCacheButton:pressed,
+QPushButton#deletePreviewCacheButton:pressed,
 QPushButton#deleteExifCacheButton:pressed {
-    background-color: #B02020;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #B02A37, stop: 1 #9A2530);
+}
+
+QPushButton#applyPreviewLimitButton,
+QPushButton#applyExifLimitButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0084FF, stop: 1 #0066CC);
+    color: #FFFFFF;
+    font-weight: bold;
+    border: 1px solid #005A9E;
+}
+
+QPushButton#applyPreviewLimitButton:hover,
+QPushButton#applyExifLimitButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0094FF, stop: 1 #0074DD);
+    border-color: #0084FF;
+}
+
+QPushButton#applyPreviewLimitButton:pressed,
+QPushButton#applyExifLimitButton:pressed {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0066CC, stop: 1 #0052AA);
 }
 
 QPushButton#cacheDialogCloseButton {
-    /* Uses default QDialog#cacheManagementDialog QPushButton style or can be more specific */
-    min-width: 80px; /* Give close button a decent width */
+    min-width: 90px;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0084FF, stop: 1 #0066CC);
+    color: #FFFFFF;
+    font-weight: bold;
+    border: 1px solid #005A9E;
 }
 
-/* ComboBox for Cache Size Limit */
-QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo {
-    background-color: #2D2D2D;
-    border: 1px solid #404040;
-    border-radius: 4px;
-    padding: 5px 8px; /* Slightly more padding */
-    min-height: 24px;
-    color: #D1D1D1;
+QPushButton#cacheDialogCloseButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0094FF, stop: 1 #0074DD);
 }
-QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo:hover {
-    background-color: #353535;
-    border-color: #505050;
+
+QPushButton#cacheDialogCloseButton:pressed {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0066CC, stop: 1 #0052AA);
 }
-QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo:focus {
-    border: 1px solid #0078D4;
-}
-QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo::drop-down {
-    subcontrol-origin: padding;
-    subcontrol-position: top right;
-    width: 18px; /* Slightly wider dropdown arrow area */
-    border-left: 1px solid #404040;
-}
-QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo::down-arrow {
-    image: url(:/qt-project.org/styles/commonstyle/images/downarraow-16.png); /* Standard arrow */
-    width: 10px; /* Adjust size as needed */
-    height: 10px;
-}
-/* ComboBox for EXIF Cache Size Limit */
+
+/* ComboBox for Cache Size Limits */
+QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo,
 QDialog#cacheManagementDialog QComboBox#exifCacheSizeCombo {
-    background-color: #2D2D2D;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #262626);
     border: 1px solid #404040;
-    border-radius: 4px;
-    padding: 5px 8px; /* Slightly more padding */
-    min-height: 24px;
-    color: #D1D1D1;
+    border-radius: 6px;
+    padding: 6px 12px;
+    min-height: 28px;
+    color: #E0E0E0;
+    font-weight: 500;
 }
 
+QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo:hover,
 QDialog#cacheManagementDialog QComboBox#exifCacheSizeCombo:hover {
-    background-color: #353535;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #353535, stop: 1 #2D2D2D);
     border-color: #505050;
 }
 
+QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo:focus,
 QDialog#cacheManagementDialog QComboBox#exifCacheSizeCombo:focus {
-    border: 1px solid #0078D4;
+    border: 1px solid #0084FF;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #353535, stop: 1 #2D2D2D);
 }
 
+QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo::drop-down,
 QDialog#cacheManagementDialog QComboBox#exifCacheSizeCombo::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width: 18px; /* Slightly wider dropdown arrow area */
+    width: 20px;
     border-left: 1px solid #404040;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #373737, stop: 1 #2D2D2D);
 }
 
+QDialog#cacheManagementDialog QComboBox#previewCacheSizeCombo::down-arrow,
 QDialog#cacheManagementDialog QComboBox#exifCacheSizeCombo::down-arrow {
-    image: url(:/qt-project.org/styles/commonstyle/images/downarraow-16.png); /* Standard arrow */
-    width: 10px; /* Adjust size as needed */
-    height: 10px;
+    image: url(:/qt-project.org/styles/commonstyle/images/downarraow-16.png);
+    width: 12px;
+    height: 12px;
 }
 
-/* Dropdown list for the ComboBox uses global QMenu/QAbstractItemView styling, which should be fine */
-
-QDialog#cacheManagementDialog QComboBox#exifCacheSizeCombo:hover {
-    background-color: #353535;
-    border-color: #505050;
+/* Enhanced dropdown list styling */
+QDialog#cacheManagementDialog QComboBox QAbstractItemView {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #262626);
+    border: 1px solid #0084FF;
+    border-radius: 6px;
+    selection-background-color: #0084FF;
+    selection-color: #FFFFFF;
 }
 
-QDialog#cacheManagementDialog QComboBox#exifCacheSizeCombo:focus {
-    border: 1px solid #0078D4;
+QDialog#cacheManagementDialog QComboBox QAbstractItemView::item {
+    padding: 6px 12px;
+    border-radius: 3px;
+    margin: 1px;
 }
 
-QDialog#cacheManagementDialog QComboBox#exifCacheSizeCombo::drop-down {
-    subcontrol-origin: padding;
-    subcontrol-position: top right;
-    width: 18px; /* Slightly wider dropdown arrow area */
-    border-left: 1px solid #404040;
+QDialog#cacheManagementDialog QComboBox QAbstractItemView::item:hover {
+    background-color: #404040;
+    color: #FFFFFF;
 }
-
-QDialog#cacheManagementDialog QComboBox#exifCacheSizeCombo::down-arrow {
-    image: url(:/qt-project.org/styles/commonstyle/images/downarraow-16.png); /* Standard arrow */
-    width: 10px; /* Adjust size as needed */
-    height: 10px;
-}
-
-/* Dropdown list for the ComboBox uses global QMenu/QAbstractItemView styling, which should be fine */
 
 /* --- Metadata Sidebar --- */
 QWidget#metadataSidebar {
@@ -1109,63 +1098,67 @@ QSplitter#advancedViewerSplitter::handle:hover {
 
 /* --- About Dialog --- */
 QDialog#aboutDialog {
-    background-color: #2B2B2B;
-    border: 2px solid #0078D4;
-    border-radius: 8px;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #272727);
+    border: 2px solid #0084FF;
+    border-radius: 12px;
 }
 
 QFrame#aboutHeader {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
         stop: 0 #353535, stop: 1 #2A2A2A);
     border: 1px solid #404040;
-    border-radius: 6px;
+    border-radius: 8px;
 }
 
 QLabel#aboutTitle {
-    color: #0078D4;
-    font-size: 18pt;
+    color: #0084FF;
+    font-size: 20pt;
     font-weight: bold;
     font-family: "Segoe UI", system-ui, sans-serif;
     background-color: transparent;
 }
 
 QLabel#aboutVersion {
-    color: #E5E5E5;
+    color: #F0F0F0;
     font-size: 11pt;
-    font-weight: 500;
+    font-weight: normal;
     background-color: transparent;
 }
 
 QLabel#aboutAuthor {
-    color: #C0C0C0;
+    color: #C8C8C8;
     font-size: 10pt;
     font-style: italic;
     background-color: transparent;
 }
 
 QLabel#aboutSectionTitle {
-    color: #0078D4;
-    font-size: 12pt;
+    color: #0084FF;
+    font-size: 13pt;
     font-weight: bold;
-    padding: 5px 0 3px 0;
+    padding: 8px 0 5px 0;
     background-color: transparent;
+    border-bottom: 1px solid #0084FF;
+    margin-bottom: 8px;
 }
 
 QFrame#aboutTechFrame, QFrame#aboutGithubFrame {
-    background-color: #252525;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #252525, stop: 1 #202020);
     border: 1px solid #404040;
-    border-radius: 6px;
+    border-radius: 8px;
 }
 
 QLabel#aboutTechItem {
-    color: #E5E5E5;
+    color: #E8E8E8;
     font-size: 9pt;
-    padding: 2px 0;
+    padding: 3px 0;
     background-color: transparent;
 }
 
 QLabel#aboutGithubDesc {
-    color: #D1D1D1;
+    color: #D8D8D8;
     font-size: 10pt;
     background-color: transparent;
 }
@@ -1173,13 +1166,13 @@ QLabel#aboutGithubDesc {
 QPushButton#aboutGithubButton {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
         stop: 0 #404040, stop: 1 #333333);
-    color: #E5E5E5;
+    color: #E8E8E8;
     border: 1px solid #505050;
-    border-radius: 4px;
-    padding: 6px 12px;
+    border-radius: 6px;
+    padding: 8px 16px;
     font-size: 9pt;
     font-weight: 500;
-    min-height: 26px;
+    min-height: 28px;
 }
 
 QPushButton#aboutGithubButton:hover {
@@ -1196,177 +1189,207 @@ QPushButton#aboutGithubButton:pressed {
 
 QPushButton#aboutCloseButton {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #0078D4, stop: 1 #005A9E);
+        stop: 0 #0084FF, stop: 1 #0066CC);
     color: #FFFFFF;
-    border: 1px solid #004A80;
-    border-radius: 4px;
-    padding: 6px 20px;
+    border: 1px solid #005A9E;
+    border-radius: 6px;
+    padding: 8px 24px;
     font-size: 10pt;
-    font-weight: 500;
-    min-width: 70px;
-    min-height: 28px;
+    font-weight: bold;
+    min-width: 80px;
+    min-height: 32px;
 }
 
 QPushButton#aboutCloseButton:hover {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #0088F0, stop: 1 #006AB0);
+        stop: 0 #0094FF, stop: 1 #0074DD);
 }
 
 QPushButton#aboutCloseButton:pressed {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #005A9E, stop: 1 #004A80);
+        stop: 0 #0066CC, stop: 1 #0052AA);
 }
 
 /* --- Lossy Rotation Dialog --- */
 QDialog#lossyRotationDialog {
-    background-color: #2B2B2B;
-    color: #D1D1D1;
-    border: 2px solid #0078D4;
-    border-radius: 8px;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #272727);
+    color: #E0E0E0;
+    border: 2px solid #FF8C42;
+    border-radius: 12px;
 }
 
 QLabel#lossyRotationMessageLabel {
-    color: #E5E5E5;
+    color: #F0F0F0;
     font-size: 11pt;
     font-weight: bold;
-    background-color: #1E1E1E;
-    padding: 10px;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #1E1E1E, stop: 1 #191919);
+    padding: 12px 16px;
     border: 1px solid #404040;
-    border-radius: 6px;
+    border-radius: 8px;
 }
 
 QLabel#lossyRotationWarningLabel {
     color: #FFB366;
     font-size: 10pt;
-    padding: 8px;
+    padding: 12px 8px;
+    font-weight: 500;
 }
 
 QCheckBox#neverAskAgainCheckbox {
-    color: #C0C0C0;
+    color: #C8C8C8;
     font-size: 9pt;
-    spacing: 8px;
+    spacing: 10px;
 }
 
 QCheckBox#neverAskAgainCheckbox::indicator {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border: 2px solid #404040;
-    border-radius: 3px;
-    background-color: #2D2D2D;
+    border-radius: 4px;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #232323);
 }
 
 QCheckBox#neverAskAgainCheckbox::indicator:checked {
-    background-color: #0078D4;
-    border-color: #005A9E;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0084FF, stop: 1 #0066CC);
+    border-color: #0084FF;
     image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTkuNSAzLjVMNC43NSA4LjI1TDIuNSA2IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
 }
 
 QCheckBox#neverAskAgainCheckbox::indicator:hover {
     border-color: #505050;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #323232, stop: 1 #282828);
 }
 
 QPushButton#lossyRotationCancelButton {
-    background-color: #383838;
-    color: #D1D1D1;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #383838, stop: 1 #303030);
+    color: #E0E0E0;
     border: 1px solid #484848;
-    min-width: 80px;
-    padding: 8px 16px;
-    border-radius: 4px;
+    min-width: 90px;
+    padding: 10px 18px;
+    border-radius: 6px;
     font-size: 9pt;
+    font-weight: 500;
 }
 
 QPushButton#lossyRotationCancelButton:hover {
-    background-color: #454545;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #454545, stop: 1 #3C3C3C);
     border-color: #555555;
     color: #FFFFFF;
 }
 
 QPushButton#lossyRotationCancelButton:pressed {
-    background-color: #303030;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #282828, stop: 1 #202020);
 }
 
 QPushButton#lossyRotationProceedButton {
-    background-color: #FF8C42;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #FF8C42, stop: 1 #E67A35);
     color: #FFFFFF;
     border: 1px solid #E67A35;
-    min-width: 140px;
+    min-width: 160px;
     font-weight: bold;
-    padding: 8px 16px;
-    border-radius: 4px;
+    padding: 10px 20px;
+    border-radius: 6px;
     font-size: 9pt;
 }
 
 QPushButton#lossyRotationProceedButton:hover {
-    background-color: #FF9D5C;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #FF9D5C, stop: 1 #F08A45);
     border-color: #FF8C42;
 }
 
 QPushButton#lossyRotationProceedButton:pressed {
-    background-color: #E67A35;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #E67A35, stop: 1 #D66B28);
 }
 
 /* --- Confirm Delete Dialog (QMessageBox) --- */
 QMessageBox {
-    background-color: #2B2B2B;
-    color: #D1D1D1;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #272727);
+    color: #E0E0E0;
     font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     font-size: 9pt;
+    border: 2px solid #DC3545;
+    border-radius: 12px;
 }
 
 QMessageBox QLabel {
-    color: #D1D1D1;
+    color: #E8E8E8;
     background-color: transparent;
-    padding-bottom: 10px;
+    padding: 16px 8px;
+    font-size: 10pt;
 }
 
 QMessageBox QPushButton {
-    background-color: #333333;
-    color: #C0C0C0;
-    border: 1px solid #404040;
-    padding: 6px 15px;
-    border-radius: 4px;
-    min-height: 28px;
-    min-width: 80px;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #333333, stop: 1 #2B2B2B);
+    color: #C8C8C8;
+    border: 1px solid #484848;
+    padding: 8px 18px;
+    border-radius: 6px;
+    min-height: 32px;
+    min-width: 90px;
+    font-size: 9pt;
+    font-weight: 500;
 }
 
 QMessageBox QPushButton:hover {
-    background-color: #3D3D3D;
-    border-color: #505050;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #3D3D3D, stop: 1 #353535);
+    border-color: #555555;
     color: #FFFFFF;
 }
 
 QMessageBox QPushButton:pressed {
-    background-color: #2A2A2A;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #232323, stop: 1 #1B1B1B);
 }
 
 QPushButton#confirmDeleteYesButton {
-    background-color: #C92C2C;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #DC3545, stop: 1 #B02A37);
     color: #FFFFFF;
-    border: 1px solid #A02020;
+    border: 1px solid #B02A37;
     font-weight: bold;
 }
 
 QPushButton#confirmDeleteYesButton:hover {
-    background-color: #E04040;
-    border-color: #B03030;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #E85362, stop: 1 #C73E4A);
+    border-color: #DC3545;
 }
 
 QPushButton#confirmDeleteYesButton:pressed {
-    background-color: #B02020;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #B02A37, stop: 1 #9A2530);
 }
 
 QPushButton#confirmDeleteNoButton {
-    background-color: #383838;
-    color: #D1D1D1;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #383838, stop: 1 #303030);
+    color: #E0E0E0;
     border: 1px solid #484848;
+    font-weight: 500;
 }
 
 QPushButton#confirmDeleteNoButton:hover {
-    background-color: #454545;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #454545, stop: 1 #3C3C3C);
     border-color: #555555;
     color: #FFFFFF;
 }
 
 QPushButton#confirmDeleteNoButton:pressed {
-    background-color: #303030;
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #282828, stop: 1 #202020);
 }
