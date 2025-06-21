@@ -67,8 +67,8 @@ class MenuManager:
         self._create_file_menu(menu_bar)
         self._create_view_menu(menu_bar)
         self._create_filter_menu(menu_bar)
+        self._create_image_menu(menu_bar) # Must be after _create_actions are created
         self._create_settings_menu(menu_bar)
-        self._create_image_menu(menu_bar) # Must be after actions are created
         self._create_help_menu(menu_bar)
         
         logging.debug("MenuManager.create_menus - End")
