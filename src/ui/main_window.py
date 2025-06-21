@@ -46,6 +46,7 @@ from src.ui.ui_components import LoadingOverlay # PreviewPreloaderWorker, BlurDe
 from src.ui.worker_manager import WorkerManager # Import WorkerManager
 from src.ui.metadata_sidebar import MetadataSidebar # Import MetadataSidebar
 from src.core.file_scanner import SUPPORTED_EXTENSIONS # Import from file_scanner
+from src.ui.dialog_manager import DialogManager
 from src.ui.left_panel import LeftPanel
 
 
@@ -137,7 +138,10 @@ class MainWindow(QMainWindow):
         logging.info(f"MainWindow.__init__ - AppState instantiated: {time.perf_counter() - init_start_time:.4f}s")
         self.worker_manager = WorkerManager(image_pipeline_instance=self.image_pipeline, parent=self)
         logging.info(f"MainWindow.__init__ - WorkerManager instantiated: {time.perf_counter() - init_start_time:.4f}s")
-        
+        self.dialog_manager = DialogManager(self)
+        logging.info(
+            f"MainWindow.__init__ - DialogManager instantiated: {time.perf_counter() - init_start_time:.4f}s")
+
         self.setWindowTitle("PhotoRanker")
         self.setGeometry(100, 100, 1200, 800)
  
@@ -335,9 +339,9 @@ class MainWindow(QMainWindow):
 
         help_menu = menu_bar.addMenu("&Help")
         about_action = QAction("&About", self)
-        about_action.triggered.connect(self._show_about_dialog)
+        about_action.triggered.connect(self.dialog_manager.show_about_dialog)
         help_menu.addAction(about_action)
-        
+
         # Add metadata sidebar toggle to View menu
         view_menu.addSeparator()
         self.toggle_metadata_sidebar_action = QAction("Show Image Details Sidebar", self)
@@ -402,7 +406,7 @@ class MainWindow(QMainWindow):
         logging.debug("MainWindow._create_settings_menu - Start")
         settings_menu = self.menuBar().addMenu("&Settings")
         manage_cache_action = QAction("Manage Cache", self)
-        manage_cache_action.triggered.connect(self._show_cache_management_dialog)
+        manage_cache_action.triggered.connect(self.dialog_manager.show_cache_management_dialog)
         settings_menu.addAction(manage_cache_action)
         settings_menu.addSeparator()
         self.toggle_auto_edits_action = QAction("Enable Auto RAW Edits", self)
@@ -452,131 +456,6 @@ class MainWindow(QMainWindow):
         logging.debug(f"MainWindow._create_image_menu - End: {time.perf_counter() - start_time:.4f}s")
 
 
-    def _show_cache_management_dialog(self):
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QFrame, QGridLayout, QSpacerItem
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Cache Management")
-        dialog.setObjectName("cacheManagementDialog")
-        main_layout = QVBoxLayout(dialog)
-        main_layout.setSpacing(15)
-
-        thumb_section_title = QLabel("Thumbnail Cache")
-        thumb_section_title.setObjectName("cacheSectionTitle")
-        main_layout.addWidget(thumb_section_title)
-
-        thumb_frame = QFrame()
-        thumb_frame.setObjectName("cacheSectionFrame")
-        thumb_layout = QGridLayout(thumb_frame) 
-
-        self.thumb_cache_usage_label = QLabel() 
-        thumb_layout.addWidget(QLabel("Current Disk Usage:"), 0, 0)
-        thumb_layout.addWidget(self.thumb_cache_usage_label, 0, 1)
-
-        delete_thumb_cache_button = QPushButton("Clear Thumbnail Cache")
-        delete_thumb_cache_button.setObjectName("deleteThumbnailCacheButton")
-        delete_thumb_cache_button.clicked.connect(self._clear_thumbnail_cache_action)
-        thumb_layout.addWidget(delete_thumb_cache_button, 1, 0, 1, 2)
-        
-        main_layout.addWidget(thumb_frame)
-
-        preview_section_title = QLabel("Preview Image Cache")
-        preview_section_title.setObjectName("cacheSectionTitle")
-        main_layout.addWidget(preview_section_title)
-
-        preview_frame = QFrame()
-        preview_frame.setObjectName("cacheSectionFrame")
-        preview_layout = QGridLayout(preview_frame)
-
-        self.preview_cache_configured_limit_label = QLabel()
-        preview_layout.addWidget(QLabel("Configured Size Limit:"), 0, 0)
-        preview_layout.addWidget(self.preview_cache_configured_limit_label, 0, 1)
-
-        self.preview_cache_usage_label = QLabel()
-        preview_layout.addWidget(QLabel("Current Disk Usage:"), 1, 0)
-        preview_layout.addWidget(self.preview_cache_usage_label, 1, 1)
-
-        preview_layout.addWidget(QLabel("Set New Limit (GB):"), 2, 0)
-        self.preview_cache_size_combo = QComboBox()
-        self.preview_cache_size_combo.setObjectName("previewCacheSizeCombo")
-        self.preview_cache_size_options_gb = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
-        self.preview_cache_size_combo.addItems([f"{size:.2f} GB" for size in self.preview_cache_size_options_gb])
-        
-        current_conf_gb = get_preview_cache_size_gb()
-        try:
-            current_index = self.preview_cache_size_options_gb.index(current_conf_gb)
-            self.preview_cache_size_combo.setCurrentIndex(current_index)
-        except ValueError:
-            self.preview_cache_size_combo.addItem(f"{current_conf_gb:.2f} GB (Custom)")
-            self.preview_cache_size_combo.setCurrentIndex(self.preview_cache_size_combo.count() - 1)
-
-        preview_layout.addWidget(self.preview_cache_size_combo, 2, 1)
-
-        apply_preview_limit_button = QPushButton("Apply New Limit")
-        apply_preview_limit_button.setObjectName("applyPreviewLimitButton")
-        apply_preview_limit_button.clicked.connect(self._apply_preview_cache_limit_action)
-        preview_layout.addWidget(apply_preview_limit_button, 3, 0, 1, 2)
-
-        delete_preview_cache_button = QPushButton("Clear Preview Cache")
-        delete_preview_cache_button.setObjectName("deletePreviewCacheButton")
-        delete_preview_cache_button.clicked.connect(self._clear_preview_cache_action)
-        preview_layout.addWidget(delete_preview_cache_button, 4, 0, 1, 2)
-
-        main_layout.addWidget(preview_frame)
-
-        # --- EXIF Cache Section ---
-        exif_section_title = QLabel("EXIF Metadata Cache")
-        exif_section_title.setObjectName("cacheSectionTitle")
-        main_layout.addWidget(exif_section_title)
-
-        exif_frame = QFrame()
-        exif_frame.setObjectName("cacheSectionFrame")
-        exif_layout = QGridLayout(exif_frame)
-
-        self.exif_cache_configured_limit_label = QLabel()
-        exif_layout.addWidget(QLabel("Configured Size Limit:"), 0, 0)
-        exif_layout.addWidget(self.exif_cache_configured_limit_label, 0, 1)
-
-        self.exif_cache_usage_label = QLabel()
-        exif_layout.addWidget(QLabel("Current Disk Usage:"), 1, 0)
-        exif_layout.addWidget(self.exif_cache_usage_label, 1, 1)
-
-        exif_layout.addWidget(QLabel("Set New Limit (MB):"), 2, 0)
-        self.exif_cache_size_combo = QComboBox()
-        self.exif_cache_size_combo.setObjectName("exifCacheSizeCombo") # Unique object name
-        self.exif_cache_size_options_mb = [64, 128, 256, 512, 1024] # MB options
-        self.exif_cache_size_combo.addItems([f"{size} MB" for size in self.exif_cache_size_options_mb])
-
-        current_exif_conf_mb = get_exif_cache_size_mb()
-        try:
-            current_exif_index = self.exif_cache_size_options_mb.index(current_exif_conf_mb)
-            self.exif_cache_size_combo.setCurrentIndex(current_exif_index)
-        except ValueError:
-            self.exif_cache_size_combo.addItem(f"{current_exif_conf_mb} MB (Custom)")
-            self.exif_cache_size_combo.setCurrentIndex(self.exif_cache_size_combo.count() - 1)
-        exif_layout.addWidget(self.exif_cache_size_combo, 2, 1)
-
-        apply_exif_limit_button = QPushButton("Apply New EXIF Limit")
-        apply_exif_limit_button.setObjectName("applyExifLimitButton")
-        apply_exif_limit_button.clicked.connect(self._apply_exif_cache_limit_action)
-        exif_layout.addWidget(apply_exif_limit_button, 3, 0, 1, 2)
-
-        delete_exif_cache_button = QPushButton("Clear EXIF Cache")
-        delete_exif_cache_button.setObjectName("deleteExifCacheButton") # Unique object name
-        delete_exif_cache_button.clicked.connect(self._clear_exif_cache_action)
-        exif_layout.addWidget(delete_exif_cache_button, 4, 0, 1, 2)
-
-        main_layout.addWidget(exif_frame)
-        
-        main_layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
-        close_button = QPushButton("Close")
-        close_button.setObjectName("cacheDialogCloseButton")
-        close_button.clicked.connect(dialog.accept)
-        main_layout.addWidget(close_button)
-
-        self._update_cache_dialog_labels() 
-        dialog.setLayout(main_layout)
-        dialog.exec()
 
     def _update_cache_dialog_labels(self):
         thumb_usage_bytes = self.image_pipeline.thumbnail_cache.volume()
@@ -670,21 +549,6 @@ class MainWindow(QMainWindow):
         active_view = self._get_active_file_view()
         if active_view and active_view.currentIndex().isValid():
             self._handle_file_selection_changed() 
-
-    def _show_about_dialog(self):
-        from src.core.app_settings import is_pytorch_cuda_available # <-- IMPORT FROM APP_SETTINGS
-        clustering_info = "Clustering Algorithm: DBSCAN (scikit-learn)"
-
-        about_text = (
-            "PhotoRanker\n"
-            "Version: 1.0b\n"
-            "Author: Duarte Barbosa\n\n"
-            "Technology Used:\n"
-            f"  - Embeddings: SentenceTransformer (CLIP) on {'GPU (CUDA)' if is_pytorch_cuda_available() else 'CPU'}\n"
-            f"  - {clustering_info}\n"
-            f"  - Metadata: pyexiv2"
-        )
-        QMessageBox.information(self, "About PhotoRanker", about_text)
 
     def _create_widgets(self):
         """Create the UI widgets."""
@@ -969,17 +833,10 @@ class MainWindow(QMainWindow):
 
         if preview_cache_limit_bytes > 0 and \
            estimated_preview_data_needed_for_folder_bytes > preview_cache_limit_bytes:
-            warning_msg = (
-                f"The images in the selected folder are estimated to require approximately "
-                f"{estimated_preview_data_needed_for_folder_bytes / (1024*1024):.2f} MB for their previews. "
-                f"Your current preview cache limit is "
-                f"{preview_cache_limit_bytes / (1024*1024*1024):.2f} GB.\n\n"
-                "This might exceed your cache capacity, potentially leading to frequent cache evictions "
-                "and slower performance as previews are regenerated.\n\n"
-                "Consider increasing the 'Preview Image Cache' size in "
-                "Settings > Manage Cache for a smoother experience, or select a smaller folder."
+            self.dialog_manager.show_potential_cache_overflow_warning(
+                estimated_preview_data_needed_for_folder_bytes,
+                preview_cache_limit_bytes
             )
-            QMessageBox.warning(self, "Potential Cache Overflow", warning_msg)
         
         section_start_time = time.perf_counter()
         self.worker_manager.stop_all_workers() # Use WorkerManager to stop all
@@ -1400,105 +1257,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No image(s) selected to delete.", 3000)
             return
 
-        num_selected = len(deleted_file_paths)
-        
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("Confirm Delete")
-        def get_truncated_path(path):
-            # Show up to 3 parent folders in the path
-            parts = path.replace('\\', '/').split('/')
-            if len(parts) <= 4:  # File + up to 3 folders
-                return path
-            return f".../{'/'.join(parts[-4:])}"  # Last 4 parts (3 folders + file)
-
-        if num_selected == 1:
-            truncated_path = get_truncated_path(deleted_file_paths[0])
-            dialog.setText(f"Are you sure you want to move this image to the trash?\n\n{truncated_path}")
-        else:
-            # Show up to 10 paths, then "and X more"
-            if num_selected <= 10:
-                file_list = "\n".join([get_truncated_path(p) for p in deleted_file_paths])
-                message = f"Are you sure you want to move {num_selected} images to the trash?\n\n{file_list}"
-            else:
-                file_list = "\n".join([get_truncated_path(p) for p in deleted_file_paths[:10]])
-                message = f"Are you sure you want to move {num_selected} images to the trash?\n\n{file_list}\n\n... and {num_selected-10} more"
-            dialog.setText(message)
-            dialog.setMinimumSize(600, 400)  # Ensure dialog can show the file list
-        dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        dialog.setDefaultButton(QMessageBox.StandardButton.Yes) 
-
-        yes_button = dialog.button(QMessageBox.StandardButton.Yes)
-        if yes_button:
-            yes_button.setObjectName("confirmDeleteYesButton")
-            
-        no_button = dialog.button(QMessageBox.StandardButton.No)
-        if no_button:
-            no_button.setObjectName("confirmDeleteNoButton")
-
-        # Apply QSS for QMessageBox and its buttons
-        dialog.setStyleSheet("""
-            QMessageBox {
-                background-color: #2B2B2B; 
-                color: #D1D1D1;          
-                font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-                font-size: 9pt;
-            }
-            QMessageBox QLabel { 
-                color: #D1D1D1;
-                background-color: transparent; 
-                padding-bottom: 10px; 
-            }
-            QMessageBox QPushButton { 
-                background-color: #333333;
-                color: #C0C0C0;
-                border: 1px solid #404040;
-                padding: 6px 15px; 
-                border-radius: 4px;
-                min-height: 28px; 
-                min-width: 80px;  
-            }
-            QMessageBox QPushButton:hover {
-                background-color: #3D3D3D;
-                border-color: #505050;
-                color: #FFFFFF;
-            }
-            QMessageBox QPushButton:pressed {
-                background-color: #2A2A2A;
-            }
-
-            QMessageBox QPushButton#confirmDeleteYesButton {
-                background-color: #C92C2C; 
-                color: #FFFFFF;
-                border: 1px solid #A02020;
-                font-weight: bold;
-            }
-            QMessageBox QPushButton#confirmDeleteYesButton:hover {
-                background-color: #E04040; 
-                border-color: #B03030;
-            }
-            QMessageBox QPushButton#confirmDeleteYesButton:pressed {
-                background-color: #B02020; 
-            }
-
-            QMessageBox QPushButton#confirmDeleteNoButton {
-                background-color: #383838; 
-                color: #D1D1D1;
-                border: 1px solid #484848;
-            }
-            QMessageBox QPushButton#confirmDeleteNoButton:hover {
-                background-color: #454545;
-                border-color: #555555;
-                color: #FFFFFF;
-            }
-            QMessageBox QPushButton#confirmDeleteNoButton:pressed {
-                background-color: #303030;
-            }
-        """)
-
-        reply = dialog.exec()
-
-        if reply == QMessageBox.StandardButton.No:
+        if not self.dialog_manager.show_confirm_delete_dialog(deleted_file_paths):
             return
 
         # Store the proxy index of the initially focused item to try and select something near it later.
@@ -3536,169 +3295,6 @@ class MainWindow(QMainWindow):
         logging.info(f"_update_sidebar_with_current_selection: Updating sidebar for {os.path.basename(file_path)}")
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
 
-    def _show_lossy_rotation_confirmation_dialog(self, filename: str, rotation_type: str) -> Tuple[bool, bool]:
-        """
-        Show a confirmation dialog for lossy rotation with 'never ask again' option.
-        
-        Args:
-            filename: Name of the file being rotated
-            rotation_type: Description of the rotation (e.g., "90° clockwise")
-            
-        Returns:
-            Tuple of (proceed_with_rotation: bool, never_ask_again: bool)
-        """
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox
-        from src.core.app_settings import get_rotation_confirm_lossy
-        
-        # Check if user has disabled this confirmation
-        if not get_rotation_confirm_lossy():
-            return True, False  # Proceed without asking
-        
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Confirm Lossy Rotation")
-        dialog.setObjectName("lossyRotationDialog")
-        dialog.setModal(True)
-        dialog.setFixedSize(480, 200)
-        
-        layout = QVBoxLayout(dialog)
-        layout.setSpacing(20)
-        layout.setContentsMargins(25, 25, 25, 25)
-        
-        # Main message
-        if "images" in filename.lower():
-            # Batch operation
-            message_label = QLabel(f"Lossless rotation failed for:\n{filename}")
-        else:
-            # Single file
-            message_label = QLabel(f"Lossless rotation failed for:\n{filename}")
-        message_label.setObjectName("lossyRotationMessageLabel")
-        message_label.setWordWrap(True)
-        layout.addWidget(message_label)
-        
-        # Warning text
-        if "images" in filename.lower():
-            warning_label = QLabel(f"Proceed with lossy rotation {rotation_type} for all selected images?\nThis will re-encode the images and may reduce quality.")
-        else:
-            warning_label = QLabel(f"Proceed with lossy rotation {rotation_type}?\nThis will re-encode the image and may reduce quality.")
-        warning_label.setObjectName("lossyRotationWarningLabel")
-        warning_label.setWordWrap(True)
-        layout.addWidget(warning_label)
-        
-        # Never ask again checkbox
-        never_ask_checkbox = QCheckBox("Don't ask again for lossy rotations")
-        never_ask_checkbox.setObjectName("neverAskAgainCheckbox")
-        layout.addWidget(never_ask_checkbox)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        
-        cancel_button = QPushButton("Cancel")
-        cancel_button.setObjectName("lossyRotationCancelButton")
-        cancel_button.clicked.connect(dialog.reject)
-        button_layout.addWidget(cancel_button)
-        
-        proceed_button = QPushButton("Proceed with Lossy Rotation")
-        proceed_button.setObjectName("lossyRotationProceedButton")
-        proceed_button.clicked.connect(dialog.accept)
-        proceed_button.setDefault(True)
-        button_layout.addWidget(proceed_button)
-        
-        layout.addLayout(button_layout)
-        
-        # Apply dark theme styling
-        dialog.setStyleSheet("""
-            QDialog#lossyRotationDialog {
-                background-color: #2B2B2B;
-                color: #D1D1D1;
-                border: 2px solid #0078D4;
-                border-radius: 8px;
-            }
-            
-            QLabel#lossyRotationMessageLabel {
-                color: #E5E5E5;
-                font-size: 11pt;
-                font-weight: bold;
-                background-color: transparent;
-                padding: 10px;
-                border: 1px solid #404040;
-                border-radius: 6px;
-                background-color: #1E1E1E;
-            }
-            
-            QLabel#lossyRotationWarningLabel {
-                color: #FFB366;
-                font-size: 10pt;
-                background-color: transparent;
-                padding: 8px;
-            }
-            
-            QCheckBox#neverAskAgainCheckbox {
-                color: #C0C0C0;
-                font-size: 9pt;
-                background-color: transparent;
-                spacing: 8px;
-            }
-            QCheckBox#neverAskAgainCheckbox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 2px solid #404040;
-                border-radius: 3px;
-                background-color: #2D2D2D;
-            }
-            QCheckBox#neverAskAgainCheckbox::indicator:checked {
-                background-color: #0078D4;
-                border-color: #005A9E;
-                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTkuNSAzLjVMNC43NSA4LjI1TDIuNSA2IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
-            }
-            QCheckBox#neverAskAgainCheckbox::indicator:hover {
-                border-color: #505050;
-            }
-            
-            QPushButton#lossyRotationCancelButton {
-                background-color: #383838;
-                color: #D1D1D1;
-                border: 1px solid #484848;
-                padding: 8px 16px;
-                border-radius: 4px;
-                min-width: 80px;
-                font-size: 9pt;
-            }
-            QPushButton#lossyRotationCancelButton:hover {
-                background-color: #454545;
-                border-color: #555555;
-                color: #FFFFFF;
-            }
-            QPushButton#lossyRotationCancelButton:pressed {
-                background-color: #303030;
-            }
-            
-            QPushButton#lossyRotationProceedButton {
-                background-color: #FF8C42;
-                color: #FFFFFF;
-                border: 1px solid #E67A35;
-                padding: 8px 16px;
-                border-radius: 4px;
-                min-width: 140px;
-                font-weight: bold;
-                font-size: 9pt;
-            }
-            QPushButton#lossyRotationProceedButton:hover {
-                background-color: #FF9D5C;
-                border-color: #FF8C42;
-            }
-            QPushButton#lossyRotationProceedButton:pressed {
-                background-color: #E67A35;
-            }
-        """)
-        
-        # Show dialog and get result
-        result = dialog.exec()
-        proceed = result == QDialog.DialogCode.Accepted
-        never_ask_again = never_ask_checkbox.isChecked()
-        
-        return proceed, never_ask_again
-
     def _rotate_image_clockwise(self, file_path: str):
         """Rotate the selected image 90° clockwise."""
         self._perform_image_rotation(file_path, 'clockwise')
@@ -3755,9 +3351,10 @@ class MainWindow(QMainWindow):
                 'counterclockwise': '90° counterclockwise',
                 '180': '180°'
             }.get(direction, direction)
-            
-            proceed, never_ask_again = self._show_lossy_rotation_confirmation_dialog(filename, rotation_desc)
-            
+
+            proceed, never_ask_again = self.dialog_manager.show_lossy_rotation_confirmation_dialog(
+                filename, rotation_desc)
+
             # Handle "never ask again" setting
             if never_ask_again:
                 from src.core.app_settings import set_rotation_confirm_lossy
@@ -4014,14 +3611,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No images are marked for deletion.", 3000)
             return
 
-        reply = QMessageBox.question(
-            self, "Confirm Deletion",
-            f"Are you sure you want to move {len(marked_files)} marked image(s) to trash?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-
-        if reply == QMessageBox.StandardButton.No:
+        if not self.dialog_manager.show_commit_deletions_dialog(len(marked_files)):
             return
 
         # --- Pre-computation for next selection ---
