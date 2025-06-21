@@ -136,6 +136,8 @@ class LeftPanel(QWidget):
         return self.tree_display_view
 
     def set_view_mode_list(self):
+        selected_paths = self.main_window._get_selected_file_paths_from_view()
+        focused_path = self.main_window.app_state.focused_image_path
         self.current_view_mode = "list"
         self.tree_display_view.setVisible(True)
         self.grid_display_view.setVisible(False)
@@ -146,10 +148,15 @@ class LeftPanel(QWidget):
         if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
             self.tree_display_view.setItemDelegate(None)
         self.update_view_button_states()
-        self.main_window._rebuild_model_view()
+        self.main_window._rebuild_model_view(
+            preserved_selection_paths=selected_paths,
+            preserved_focused_path=focused_path
+        )
         self.tree_display_view.setFocus()
 
     def set_view_mode_icons(self):
+        selected_paths = self.main_window._get_selected_file_paths_from_view()
+        focused_path = self.main_window.app_state.focused_image_path
         self.current_view_mode = "icons"
         self.tree_display_view.setVisible(True)
         self.grid_display_view.setVisible(False)
@@ -160,10 +167,15 @@ class LeftPanel(QWidget):
         if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
              self.tree_display_view.setItemDelegate(None)
         self.update_view_button_states()
-        self.main_window._rebuild_model_view()
+        self.main_window._rebuild_model_view(
+            preserved_selection_paths=selected_paths,
+            preserved_focused_path=focused_path
+        )
         self.tree_display_view.setFocus()
         
     def set_view_mode_grid(self):
+        selected_paths = self.main_window._get_selected_file_paths_from_view()
+        focused_path = self.main_window.app_state.focused_image_path
         self.current_view_mode = "grid"
         if self.main_window.group_by_similarity_mode: # Grid view not supported when grouping by similarity
             self.tree_display_view.setVisible(True)
@@ -176,7 +188,10 @@ class LeftPanel(QWidget):
             if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
                  self.tree_display_view.setItemDelegate(None)
             self.update_view_button_states()
-            self.main_window._rebuild_model_view()
+            self.main_window._rebuild_model_view(
+                preserved_selection_paths=selected_paths,
+                preserved_focused_path=focused_path
+            )
             self.tree_display_view.setFocus()
         else:
             self.tree_display_view.setVisible(False)
@@ -186,11 +201,16 @@ class LeftPanel(QWidget):
             self.grid_display_view.setWrapping(True)
             self.grid_display_view.setResizeMode(QListView.ResizeMode.Adjust)
             self.update_view_button_states()
-            self.main_window._rebuild_model_view() # Populate model first
+            self.main_window._rebuild_model_view(
+                preserved_selection_paths=selected_paths,
+                preserved_focused_path=focused_path
+            ) # Populate model first
             self.update_grid_view_layout() # Then adjust layout
             self.grid_display_view.setFocus()
 
     def set_view_mode_date(self):
+        selected_paths = self.main_window._get_selected_file_paths_from_view()
+        focused_path = self.main_window.app_state.focused_image_path
         self.current_view_mode = "date"
         self.tree_display_view.setVisible(True)
         self.grid_display_view.setVisible(False)
@@ -201,7 +221,10 @@ class LeftPanel(QWidget):
         if self.tree_display_view.itemDelegate() is self.thumbnail_delegate:
             self.tree_display_view.setItemDelegate(None)
         self.update_view_button_states()
-        self.main_window._rebuild_model_view()
+        self.main_window._rebuild_model_view(
+            preserved_selection_paths=selected_paths,
+            preserved_focused_path=focused_path
+        )
         self.tree_display_view.setFocus()
 
     def update_view_button_states(self):

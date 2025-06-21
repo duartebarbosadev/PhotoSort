@@ -518,28 +518,33 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Folder selection cancelled.")
  
-    def _rebuild_model_view(self):
+    def _rebuild_model_view(self, preserved_selection_paths: Optional[List[str]] = None, preserved_focused_path: Optional[str] = None):
+        if preserved_selection_paths is None:
+            preserved_selection_paths = self._get_selected_file_paths_from_view()
+        if preserved_focused_path is None:
+            preserved_focused_path = self.app_state.focused_image_path
+
         self.update_loading_text("Rebuilding view...")
         QApplication.processEvents()
         self.file_system_model.clear()
         root_item = self.file_system_model.invisibleRootItem()
         active_view = self._get_active_file_view()
-
+ 
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("No images loaded.", 3000)
             return
-
+ 
         if self.group_by_similarity_mode:
             if not self.app_state.cluster_results:
                 no_cluster_item = QStandardItem("Run 'Analyze Similarity' to group.")
                 no_cluster_item.setEditable(False); root_item.appendRow(no_cluster_item)
                 return
-
+ 
             images_by_cluster = self._group_images_by_cluster()
             if not images_by_cluster:
                  no_images_in_clusters = QStandardItem("No images assigned to clusters."); no_images_in_clusters.setEditable(False); root_item.appendRow(no_images_in_clusters)
                  return
-
+ 
             sorted_cluster_ids = list(images_by_cluster.keys())
             current_sort_method = self.cluster_sort_combo.currentText()
             if current_sort_method == "Time":
@@ -555,7 +560,7 @@ class MainWindow(QMainWindow):
                     )
             else: # Default sort
                 sorted_cluster_ids.sort()
-
+ 
             total_clustered_images = 0
             for cluster_id in sorted_cluster_ids:
                 cluster_item = QStandardItem(f"Group {cluster_id}")
@@ -575,7 +580,7 @@ class MainWindow(QMainWindow):
             else:
                 self._populate_model_standard(root_item, self.app_state.image_files_data)
             self.statusBar().showMessage(f"View populated with {len(self.app_state.image_files_data)} images.", 3000)
-
+ 
         self._apply_filter()
         if self.group_by_similarity_mode and isinstance(active_view, QTreeView):
             proxy_root = QModelIndex()
@@ -593,11 +598,40 @@ class MainWindow(QMainWindow):
         if active_view:
             active_view.updateGeometries()
             active_view.viewport().update()
-            first_index = self._find_first_visible_item()
-            if first_index.isValid():
-                active_view.setCurrentIndex(first_index)
-                active_view.scrollTo(first_index, QAbstractItemView.ScrollHint.EnsureVisible)
-                current_parent = first_index.parent()
+
+            focused_proxy_idx = self._find_proxy_index_for_path(preserved_focused_path) if preserved_focused_path else QModelIndex()
+            
+            selection_to_restore = QItemSelection()
+            for path in preserved_selection_paths:
+                proxy_idx = self._find_proxy_index_for_path(path)
+                if proxy_idx.isValid():
+                    selection_to_restore.select(proxy_idx, proxy_idx)
+
+            if not selection_to_restore.isEmpty():
+                active_view.selectionModel().select(selection_to_restore, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                # If a specific item was focused, make it the current index
+                if focused_proxy_idx.isValid():
+                    active_view.setCurrentIndex(focused_proxy_idx)
+                    active_view.scrollTo(focused_proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible)
+                else: # Otherwise, scroll to the first selected item
+                    first_selected_idx = selection_to_restore.indexes()[0]
+                    active_view.setCurrentIndex(first_selected_idx)
+                    active_view.scrollTo(first_selected_idx, QAbstractItemView.ScrollHint.EnsureVisible)
+            else:
+                # If no selection to restore, fall back to selecting the first visible item
+                first_index = self._find_first_visible_item()
+                if first_index.isValid():
+                    active_view.setCurrentIndex(first_index)
+                    active_view.scrollTo(first_index, QAbstractItemView.ScrollHint.EnsureVisible)
+                else: # No items visible after filter
+                    self.image_view.clear(); self.image_view.setText("No items match filter")
+                    self.advanced_image_viewer.clear()
+                    self.statusBar().showMessage("No items match current filter.")
+            
+            # Ensure any necessary parent items are expanded to show the selection
+            final_focus_index = active_view.currentIndex()
+            if final_focus_index.isValid():
+                current_parent = final_focus_index.parent()
                 expand_list = []
                 while current_parent.isValid() and current_parent != QModelIndex():
                     expand_list.append(current_parent)
@@ -605,11 +639,6 @@ class MainWindow(QMainWindow):
                 if isinstance(active_view, QTreeView):
                     for idx_to_expand in reversed(expand_list):
                         active_view.expand(idx_to_expand)
-            else: # No items visible after filter
-                 self.image_view.clear(); self.image_view.setText("No items match filter")
-                 # self._update_rating_display(0); self._update_label_display(None)
-                 self.advanced_image_viewer.clear()
-                 self.statusBar().showMessage("No items match current filter.")
 
     def _reload_current_folder(self):
         self.app_controller.reload_current_folder()
@@ -1945,6 +1974,7 @@ class MainWindow(QMainWindow):
     def _toggle_folder_visibility(self, checked: bool):
         self.show_folders_mode = checked
         self._rebuild_model_view()
+        
         if self.left_panel.current_view_mode == "list":
             self.left_panel.set_view_mode_list()
         elif self.left_panel.current_view_mode == "icons":
