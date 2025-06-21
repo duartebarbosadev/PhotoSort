@@ -67,5 +67,6 @@ The application is structured into two main packages: `core` and `ui`.
 -   **File Operations**: All file system operations (move, rename, delete) MUST be handled by the `ImageFileOperations` class in `src/core/image_file_ops.py`. This ensures that file manipulations are centralized and handled consistently.
 -   **Threading**: All long-running tasks MUST be executed in a background thread using the `WorkerManager`. This ensures the UI remains responsive. Workers should communicate with the main thread via Qt signals.
 -   **State Management**: The application's state (e.g., list of loaded images, cache data) is managed by the `AppState` class. Avoid storing state directly in the `MainWindow` or other UI components.
+-   **Styling**: All UI components should be styled using stylesheets. The application uses a dark theme defined in `src/ui/dark_theme.qss`. When creating new UI components or modifying existing ones, ensure that the styling is consistent with this theme.
 
 By following these guidelines, we can ensure that the application remains maintainable, scalable, and robust.
