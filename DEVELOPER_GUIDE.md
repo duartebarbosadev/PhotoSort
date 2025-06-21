@@ -1,4 +1,4 @@
-# Developer Guide
+# PhotoRanker Developer Guide
 
 This guide provides a high-level overview of the PhotoRanker application architecture, development workflow, and coding conventions.
 
@@ -14,7 +14,7 @@ The application is structured into two main packages: `core` and `ui`.
     - **`image_features/`**: Image analysis features like blur detection. New features that analyze image properties should be added here.
     - **`image_processing/`**: Low-level image manipulation, such as RAW processing and rotation.
     - **`file_scanner.py`**: Scans directories for image files.
-    - **`image_file_ops.py`**: Handles file system operations like moving and renaming images.
+    - **`image_file_ops.py`**: Handles all file system operations, such as moving, renaming, and deleting files. This is the single source of truth for file manipulations.
     - **`image_pipeline.py`**: Orchestrates image processing, caching, and retrieval.
     - **`metadata_processor.py`**: Handles reading and writing image metadata.
     - **`rating_loader_worker.py`**: A worker dedicated to loading image ratings and metadata.
@@ -32,39 +32,40 @@ The application is structured into two main packages: `core` and `ui`.
 
 ### Adding a New Feature
 
-1. **Identify the right place:**
+1.  **Identify the right place:**
+    -   If the feature is a core logic change (e.g., a new image analysis technique), it should be implemented in the `src/core` directory.
+    -   If it's a new UI component, it should be in `src/ui`.
+    -   If it's a new background task, a new worker should be added and managed by `src/ui/worker_manager.py`.
 
-   - If the feature is a core logic change (e.g., a new image analysis technique), it should be implemented in the `src/core` directory.
-   - If it's a new UI component, it should be in `src/ui`.
-   - If it's a new background task, a new worker should be added and managed by `src/ui/worker_manager.py`.
-2. **Create new files when necessary:**
+2.  **Create new files when necessary:**
+    -   Create a new file for a new class or a distinct set of functionalities. For example, a new image analysis feature like "sharpness detection" would warrant a new file `src/core/image_features/sharpness_detector.py`.
+    -   For smaller, related functions, you can add them to an existing relevant file.
 
-   - Create a new file for a new class or a distinct set of functionalities. For example, a new image analysis feature like "sharpness detection" would warrant a new file `src/core/image_features/sharpness_detector.py`.
-   - For smaller, related functions, you can add them to an existing relevant file.
-3. **Integrating the feature:**
+3.  **Integrating the feature:**
+    -   The `AppController` is the primary point of integration. User actions from the UI (e.g., a button click in `MainWindow`) should call a method in the `AppController`.
+    -   The `AppController` then calls the relevant service in the `core` package. For any file system operations, the `AppController` must call the appropriate method in `ImageFileOperations`.
+    -   If the feature involves a long-running task, the `AppController` should use the `WorkerManager` to run it in the background. The `WorkerManager` will then emit signals with the results, which the `AppController` will catch to update the `AppState` and the UI.
 
-   - The `AppController` is the primary point of integration. User actions from the UI (e.g., a button click in `MainWindow`) should call a method in the `AppController`.
-   - The `AppController` then calls the relevant service in the `core` package.
-   - If the feature involves a long-running task, the `AppController` should use the `WorkerManager` to run it in the background. The `WorkerManager` will then emit signals with the results, which the `AppController` will catch to update the `AppState` and the UI.
+4. At the end, update this document if necessary.
 
 ### Example: Adding a "Detect Duplicates" Feature
 
-1. **Core Logic**: Create a `src/core/image_features/duplicate_detector.py` file. This file would contain a `DuplicateDetector` class with a method like `find_duplicates(image_paths)`.
-2. **Worker**: In `src/ui/worker_manager.py`, create a new worker `DuplicateDetectionWorker` that calls `DuplicateDetector.find_duplicates()` in a separate thread.
-3. **Integration**:
-   - Add a "Detect Duplicates" `QAction` in `src/ui/menu_manager.py`.
-   - Connect this action to a new slot in `AppController`, e.g., `start_duplicate_detection`.
-   - The `start_duplicate_detection` method in `AppController` would call a new method in `WorkerManager`, e.g., `worker_manager.start_duplicate_detection(...)`.
-   - The `WorkerManager` would emit signals with the results (e.g., `duplicate_detection_finished(duplicate_sets)`).
-   - The `AppController` would have a slot `handle_duplicate_detection_finished(duplicate_sets)` to receive the results.
-   - Finally, the `AppController` would update the `AppState` and call a method in `MainWindow` to display the results to the user.
-4. Update this document if necessary
+1.  **Core Logic**: Create a `src/core/image_features/duplicate_detector.py` file. This file would contain a `DuplicateDetector` class with a method like `find_duplicates(image_paths)`. If this feature needs to move or delete files, it should call the methods in `ImageFileOperations`.
+2.  **Worker**: In `src/ui/worker_manager.py`, create a new worker `DuplicateDetectionWorker` that calls `DuplicateDetector.find_duplicates()` in a separate thread.
+3.  **Integration**:
+    -   Add a "Detect Duplicates" `QAction` in `src/ui/menu_manager.py`.
+    -   Connect this action to a new slot in `AppController`, e.g., `start_duplicate_detection`.
+    -   The `start_duplicate_detection` method in `AppController` would call a new method in `WorkerManager`, e.g., `worker_manager.start_duplicate_detection(...)`.
+    -   The `WorkerManager` would emit signals with the results (e.g., `duplicate_detection_finished(duplicate_sets)`).
+    -   The `AppController` would have a slot `handle_duplicate_detection_finished(duplicate_sets)` to receive the results.
+    -   Finally, the `AppController` would update the `AppState` and call a method in `MainWindow` to display the results to the user.
 
 ## 3. Coding Conventions
 
-- **Logging**: All logging should be done using the `logging` module. Use `logging.debug()` for detailed development information and `logging.info()` for general application flow. Errors should be logged with `logging.error()` or `logging.warning()`. **Do not use `print()` statements.**
-- **Separation of Concerns**: Keep UI logic separate from business logic. The `core` package should not depend on the `ui` package. The `ui` package, specifically `MainWindow`, should be as "dumb" as possible, delegating all logic to the `AppController`.
-- **Threading**: All long-running tasks MUST be executed in a background thread using the `WorkerManager`. This ensures the UI remains responsive. Workers should communicate with the main thread via Qt signals.
-- **State Management**: The application's state (e.g., list of loaded images, cache data) is managed by the `AppState` class. Avoid storing state directly in the `MainWindow` or other UI components.
+-   **Logging**: All logging should be done using the `logging` module. Use `logging.debug()` for detailed development information and `logging.info()` for general application flow. Errors should be logged with `logging.error()` or `logging.warning()`. **Do not use `print()` statements.**
+-   **Separation of Concerns**: Keep UI logic separate from business logic. The `core` package should not depend on the `ui` package. The `ui` package, specifically `MainWindow`, should be as "dumb" as possible, delegating all logic to the `AppController`.
+-   **File Operations**: All file system operations (move, rename, delete) MUST be handled by the `ImageFileOperations` class in `src/core/image_file_ops.py`. This ensures that file manipulations are centralized and handled consistently.
+-   **Threading**: All long-running tasks MUST be executed in a background thread using the `WorkerManager`. This ensures the UI remains responsive. Workers should communicate with the main thread via Qt signals.
+-   **State Management**: The application's state (e.g., list of loaded images, cache data) is managed by the `AppState` class. Avoid storing state directly in the `MainWindow` or other UI components.
 
 By following these guidelines, we can ensure that the application remains maintainable, scalable, and robust.
