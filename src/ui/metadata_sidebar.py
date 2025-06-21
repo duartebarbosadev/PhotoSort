@@ -146,34 +146,45 @@ class MetadataCard(QFrame):
         row.addWidget(progress)
         
         self.content_layout.addLayout(row)
-    def add_comparison_row(self, label: str, value1: str, value2: str,
+        
+    def add_comparison_row(self, label: str, values: List[str],
                              highlight_diff: bool = True):
-        """Add a row for comparing two values."""
+        """Add a row for comparing multiple values."""
         row_widget = QWidget()
-        row = QHBoxLayout(row_widget)
-        row.setContentsMargins(0, 1, 0, 1)
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 1, 0, 1)
+        row_layout.setSpacing(12)
 
         label_widget = QLabel(label + ":")
         label_widget.setObjectName("metadataLabel")
         label_widget.setFixedWidth(65)
+        row_layout.addWidget(label_widget)
 
-        value1_widget = QLabel(str(value1) if value1 is not None else "N/A")
-        value1_widget.setObjectName("metadataValue")
-        value1_widget.setWordWrap(True)
+        # This widget will contain all the value labels
+        values_container_widget = QWidget()
+        values_layout = QHBoxLayout(values_container_widget)
+        values_layout.setContentsMargins(0, 0, 0, 0)
+        values_layout.setSpacing(12)
 
-        value2_widget = QLabel(str(value2) if value2 is not None else "N/A")
-        value2_widget.setObjectName("metadataValue")
-        value2_widget.setWordWrap(True)
+        unique_values = set(str(v) for v in values if v is not None and str(v) != "N/A")
+        all_same = len(unique_values) <= 1
+        first_valid_value = next((str(v) for v in values if v is not None and str(v) != "N/A"), None)
 
-        # Highlight differences
-        if highlight_diff and value1 != value2:
-            value1_widget.setObjectName("metadataValueDiff")
-            value2_widget.setObjectName("metadataValueDiff")
+        for value in values:
+            value_str = str(value) if value is not None else "N/A"
+            value_widget = QLabel(value_str)
+            value_widget.setObjectName("metadataValue")
+            value_widget.setWordWrap(False)
+            value_widget.setMinimumWidth(120)
+            value_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        row.addWidget(label_widget)
-        row.addWidget(value1_widget, 1)
-        row.addWidget(value2_widget, 1)
+            if highlight_diff and not all_same and value_str != "N/A":
+                value_widget.setObjectName("metadataValueDiff")
 
+            values_layout.addWidget(value_widget)
+
+        values_layout.addStretch(1)
+        row_layout.addWidget(values_container_widget)
         self.content_layout.addWidget(row_widget)
 
 class MetadataSidebar(QWidget):
@@ -218,7 +229,7 @@ class MetadataSidebar(QWidget):
         scroll_area = QScrollArea()
         scroll_area.setObjectName("metadataScrollArea")
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         
         # Content widget
@@ -275,8 +286,8 @@ class MetadataSidebar(QWidget):
     def show_placeholder(self):
         """Show placeholder content when no image is selected"""
     def update_comparison(self, image_paths: List[str], metadatas: List[Dict[str, Any]]):
-        """Update the sidebar to show a comparison of two images."""
-        if len(image_paths) != 2 or len(metadatas) != 2:
+        """Update the sidebar to show a comparison of multiple images."""
+        if len(image_paths) < 2 or len(image_paths) != len(metadatas):
             self.show_placeholder()
             return
         
@@ -429,11 +440,13 @@ class MetadataSidebar(QWidget):
 
     def add_comparison_cards(self):
         """
-        Add cards for comparing two images, dynamically showing all available data
+        Add cards for comparing multiple images, dynamically showing all available data
         and mirroring the detail level of the single-image view for a production-ready result.
         """
-        if not self.current_image_paths_for_comparison or len(self.current_image_paths_for_comparison) != 2:
+        if not self.current_image_paths_for_comparison or len(self.current_image_paths_for_comparison) < 2:
             return
+
+        num_images = len(self.current_image_paths_for_comparison)
 
         def get_val(keys: List[str], image_index: int) -> Any:
             """Potent helper to get a value by trying multiple keys in both root and nested dicts."""
@@ -444,12 +457,10 @@ class MetadataSidebar(QWidget):
             if not metadata_dict:
                 return None
 
-            # Check top-level keys first (e.g., 'file_size', 'pixel_width')
             for key in keys:
                 if key in metadata_dict:
                     return metadata_dict[key]
 
-            # Then, check within the nested raw EXIF data for all other keys
             raw_exif = metadata_dict.get('raw_exif', {})
             if raw_exif:
                 for key in keys:
@@ -457,48 +468,35 @@ class MetadataSidebar(QWidget):
                         return raw_exif[key]
             return None
 
-        # --- Exhaustive Card & Field Definitions (mirrors single-image view) ---
         card_definitions = [
-            {
-                "title": "File Information", "icon": "📁",
-                "fields": [
-                    {"label": "Format", "key": ["format"], "format": "special"},
-                    {"label": "Size", "key": ["file_size"], "format": "size_fallback"},
-                ]
-            },
-            {
-                "title": "Camera & Settings", "icon": "📷",
-                "fields": [
-                    {"label": "Source", "key": ["source"], "format": "composite"},
-                    {"label": "Lens", "key": ["Exif.Photo.LensModel", "Exif.Photo.LensSpecification", "LensModel", "LensInfo", "Xmp.aux.Lens"], "format": None},
-                    {"label": "Focal Length", "key": ["Exif.Photo.FocalLength", "FocalLength", "EXIF:FocalLength"], "format": "focal"},
-                    {"label": "Aperture", "key": ["Exif.Photo.FNumber", "Exif.Photo.ApertureValue", "FNumber", "EXIF:FNumber", "EXIF:ApertureValue"], "format": "aperture"},
-                    {"label": "Shutter Speed", "key": ["ExposureTime", "Exif.Photo.ExposureTime", "Exif.Photo.ShutterSpeedValue", "EXIF:ExposureTime", "EXIF:ShutterSpeedValue"], "format": "shutter"},
-                    {"label": "ISO", "key": ["Exif.Photo.ISOSpeedRatings", "ISO", "EXIF:ISO", "EXIF:ISOSpeedRatings"], "format": "iso"},
-                    {"label": "Flash", "key": ["Exif.Photo.Flash", "Flash", "EXIF:Flash"], "format": "flash_map"},
-                ]
-            },
-            {
-                "title": "Image Properties", "icon": "🖼️",
-                "fields": [
-                    {"label": "Dimensions", "key": ["dimensions"], "format": "composite"},
-                    {"label": "Megapixels", "key": ["megapixels"], "format": "megapixels"},
-                    {"label": "Orientation", "key": ["Exif.Image.Orientation", "Orientation"], "format": "orientation_map"},
-                    {"label": "Bit Depth", "key": ["Exif.Image.BitsPerSample", "BitsPerSample"], "format": "{} bit"},
-                ]
-            },
-            {
-                "title": "Technical Details", "icon": "⚙️",
-                "fields": [
-                    {"label": "Color Space", "key": ["Exif.ColorSpace.ColorSpace", "ColorSpace"], "format": None},
-                    {"label": "White Balance", "key": ["Exif.Photo.WhiteBalance", "WhiteBalance"], "format": "wb_map"},
-                    {"label": "Metering", "key": ["Exif.Photo.MeteringMode", "MeteringMode"], "format": "metering_map"},
-                    {"label": "Exposure Mode", "key": ["Exif.Photo.ExposureMode", "ExposureMode"], "format": "exp_map"},
-                    {"label": "Exposure Comp.", "key": ["Exif.Photo.ExposureCompensation", "ExposureCompensation"], "format": "ev"},
-                    {"label": "Scene Type", "key": ["Exif.Photo.SceneCaptureType", "SceneCaptureType"], "format": "scene_map"},
-                    {"label": "Software", "key": ["Exif.Image.Software", "Software"], "format": None},
-                ]
-            }
+            {"title": "File Information", "icon": "📁", "fields": [
+                {"label": "Format", "key": ["format"], "format": "special"},
+                {"label": "Size", "key": ["file_size"], "format": "size_fallback"},
+            ]},
+            {"title": "Camera & Settings", "icon": "📷", "fields": [
+                {"label": "Source", "key": ["source"], "format": "composite"},
+                {"label": "Lens", "key": ["Exif.Photo.LensModel", "Exif.Photo.LensSpecification", "LensModel", "LensInfo", "Xmp.aux.Lens"], "format": None},
+                {"label": "Focal Length", "key": ["Exif.Photo.FocalLength", "FocalLength", "EXIF:FocalLength"], "format": "focal"},
+                {"label": "Aperture", "key": ["Exif.Photo.FNumber", "Exif.Photo.ApertureValue", "FNumber", "EXIF:FNumber", "EXIF:ApertureValue"], "format": "aperture"},
+                {"label": "Shutter", "key": ["ExposureTime", "Exif.Photo.ExposureTime", "Exif.Photo.ShutterSpeedValue", "EXIF:ExposureTime", "EXIF:ShutterSpeedValue"], "format": "shutter"},
+                {"label": "ISO", "key": ["Exif.Photo.ISOSpeedRatings", "ISO", "EXIF:ISO", "EXIF:ISOSpeedRatings"], "format": "iso"},
+                {"label": "Flash", "key": ["Exif.Photo.Flash", "Flash", "EXIF:Flash"], "format": "flash_map"},
+            ]},
+            {"title": "Image Properties", "icon": "🖼️", "fields": [
+                {"label": "Dimensions", "key": ["dimensions"], "format": "composite"},
+                {"label": "Megapixels", "key": ["megapixels"], "format": "megapixels"},
+                {"label": "Orientation", "key": ["Exif.Image.Orientation", "Orientation"], "format": "orientation_map"},
+                {"label": "Bit Depth", "key": ["Exif.Image.BitsPerSample", "BitsPerSample"], "format": "{} bit"},
+            ]},
+            {"title": "Technical Details", "icon": "⚙️", "fields": [
+                {"label": "Color Space", "key": ["Exif.ColorSpace.ColorSpace", "ColorSpace"], "format": None},
+                {"label": "White Balance", "key": ["Exif.Photo.WhiteBalance", "WhiteBalance"], "format": "wb_map"},
+                {"label": "Metering", "key": ["Exif.Photo.MeteringMode", "MeteringMode"], "format": "metering_map"},
+                {"label": "Exposure Mode", "key": ["Exif.Photo.ExposureMode", "ExposureMode"], "format": "exp_map"},
+                {"label": "Exposure", "key": ["Exif.Photo.ExposureCompensation", "ExposureCompensation"], "format": "ev"},
+                {"label": "Scene Type", "key": ["Exif.Photo.SceneCaptureType", "SceneCaptureType"], "format": "scene_map"},
+                {"label": "Software", "key": ["Exif.Image.Software", "Software"], "format": None},
+            ]}
         ]
 
         for card_def in card_definitions:
@@ -506,80 +504,73 @@ class MetadataSidebar(QWidget):
             rows_added = 0
 
             if card_def["title"] == "File Information":
-                header = QWidget()
-                layout = QHBoxLayout(header)
-                layout.setContentsMargins(0, 0, 0, 2)
-                # Add an empty label for the first column (the metadata field names)
-                layout.addWidget(QLabel(""), 0) # 0 stretch factor
+                header_row_widget = QWidget()
+                header_layout = QHBoxLayout(header_row_widget)
+                header_layout.setContentsMargins(0, 0, 0, 2)
+                header_layout.setSpacing(12)
                 
-                for i in range(2):
-                    original_filename = os.path.basename(self.current_image_paths_for_comparison[i])
-                    # Smart truncate: show beginning and end of filename
-                    filename = original_filename
-                    if len(filename) > 20: # A bit shorter to be safe
-                        filename = f"{filename[:10]}...{filename[-7:]}"
-                    
+                label_placeholder = QLabel()
+                label_placeholder.setFixedWidth(65)
+                header_layout.addWidget(label_placeholder)
+
+                values_container_widget = QWidget()
+                values_layout = QHBoxLayout(values_container_widget)
+                values_layout.setContentsMargins(0, 0, 0, 0)
+                values_layout.setSpacing(12)
+
+                for path in self.current_image_paths_for_comparison:
+                    original_filename = os.path.basename(path)
+                    filename = f"{original_filename[:12]}..." if len(original_filename) > 15 else original_filename
                     label = QLabel(f"<b>{filename}</b>")
                     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    label.setToolTip(original_filename) # Tooltip shows the full name
-                    layout.addWidget(label, 1) # 1 stretch factor to use available space
-                card.content_layout.addWidget(header)
+                    label.setToolTip(original_filename)
+                    label.setMinimumWidth(120)
+                    values_layout.addWidget(label)
+                
+                values_layout.addStretch(1)
+                header_layout.addWidget(values_container_widget)
+                card.content_layout.addWidget(header_row_widget)
                 
                 try:
-                    mod1, mod2 = (os.stat(p).st_mtime for p in self.current_image_paths_for_comparison)
-                    card.add_comparison_row("Modified", datetime.fromtimestamp(mod1).strftime("%Y-%m-%d %H:%M"), datetime.fromtimestamp(mod2).strftime("%Y-%m-%d %H:%M"))
+                    mod_times = [datetime.fromtimestamp(os.stat(p).st_mtime).strftime("%Y-%m-%d %H:%M") for p in self.current_image_paths_for_comparison]
+                    card.add_comparison_row("Modified", mod_times)
                     rows_added += 1
                 except FileNotFoundError: pass
 
             for field in card_def["fields"]:
-                val1, val2 = None, None
                 fmt = field.get("format")
+                raw_values = []
 
-                # --- Value Acquisition ---
-                if fmt == "composite":
-                    if field["key"][0] == "dimensions":
-                        w1, h1 = get_val(['pixel_width', 'Exif.Image.ImageWidth', 'ImageWidth'], 0), get_val(['pixel_height', 'Exif.Image.ImageLength', 'ImageLength'], 0)
-                        val1 = f"{w1} × {h1}" if w1 and h1 else None
-                        w2, h2 = get_val(['pixel_width', 'Exif.Image.ImageWidth', 'ImageWidth'], 1), get_val(['pixel_height', 'Exif.Image.ImageLength', 'ImageLength'], 1)
-                        val2 = f"{w2} × {h2}" if w2 and h2 else None
-                    elif field["key"][0] == "source":
-                        make1, model1 = get_val(["Exif.Image.Make", "Xmp.tiff.Make"], 0), get_val(["Exif.Image.Model", "Xmp.tiff.Model"], 0)
-                        if make1 or model1: val1 = f"{make1 or ''} {model1 or ''}".strip()
-                        elif any(s in os.path.basename(self.current_image_paths_for_comparison[0]).lower() for s in ["screenshot", "captura"]): val1 = "Screen Capture"
-                        make2, model2 = get_val(["Exif.Image.Make", "Xmp.tiff.Make"], 1), get_val(["Exif.Image.Model", "Xmp.tiff.Model"], 1)
-                        if make2 or model2: val2 = f"{make2 or ''} {model2 or ''}".strip()
-                        elif any(s in os.path.basename(self.current_image_paths_for_comparison[1]).lower() for s in ["screenshot", "captura"]): val2 = "Screen Capture"
-                elif fmt == "megapixels":
-                    w1, h1 = get_val(['pixel_width', 'Exif.Image.ImageWidth'], 0), get_val(['pixel_height', 'Exif.Image.ImageLength'], 0)
-                    try:
-                        if w1 and h1: val1 = (int(w1) * int(h1)) / 1_000_000
-                    except (ValueError, TypeError): pass
-                    w2, h2 = get_val(['pixel_width', 'Exif.Image.ImageWidth'], 1), get_val(['pixel_height', 'Exif.Image.ImageLength'], 1)
-                    try:
-                        if w2 and h2: val2 = (int(w2) * int(h2)) / 1_000_000
-                    except (ValueError, TypeError): pass
-                elif fmt == "special":
-                     if field["key"][0] == "format":
-                        val1 = os.path.splitext(self.current_image_paths_for_comparison[0])[1].upper().lstrip('.')
-                        val2 = os.path.splitext(self.current_image_paths_for_comparison[1])[1].upper().lstrip('.')
-                else:
-                    val1, val2 = get_val(field["key"], 0), get_val(field["key"], 1)
-
-                # --- Value Formatting & Display ---
-                if val1 is not None or val2 is not None:
-                    path1 = self.current_image_paths_for_comparison[0]
-                    path2 = self.current_image_paths_for_comparison[1]
-                    
+                for i in range(num_images):
+                    val = None
                     if fmt == "composite":
-                        disp1 = val1 if val1 is not None else "N/A"
-                        disp2 = val2 if val2 is not None else "N/A"
+                        if field["key"][0] == "dimensions":
+                            w, h = get_val(['pixel_width', 'Exif.Image.ImageWidth', 'ImageWidth'], i), get_val(['pixel_height', 'Exif.Image.ImageLength', 'ImageLength'], i)
+                            val = f"{w} × {h}" if w and h else None
+                        elif field["key"][0] == "source":
+                            make, model = get_val(["Exif.Image.Make", "Xmp.tiff.Make"], i), get_val(["Exif.Image.Model", "Xmp.tiff.Model"], i)
+                            if make or model: val = f"{make or ''} {model or ''}".strip()
+                            elif any(s in os.path.basename(self.current_image_paths_for_comparison[i]).lower() for s in ["screenshot", "captura"]): val = "Screen Capture"
+                    elif fmt == "megapixels":
+                        w, h = get_val(['pixel_width', 'Exif.Image.ImageWidth'], i), get_val(['pixel_height', 'Exif.Image.ImageLength'], i)
+                        try:
+                            if w and h: val = (int(w) * int(h)) / 1_000_000
+                        except (ValueError, TypeError): pass
+                    elif fmt == "special" and field["key"][0] == "format":
+                        val = os.path.splitext(self.current_image_paths_for_comparison[i])[1].upper().lstrip('.')
                     else:
-                        disp1 = self._format_display_value(val1, fmt, path1)
-                        disp2 = self._format_display_value(val2, fmt, path2)
+                        val = get_val(field["key"], i)
+                    raw_values.append(val)
+
+                if any(v is not None for v in raw_values):
+                    display_values = [self._format_display_value(raw_values[i], fmt, self.current_image_paths_for_comparison[i]) for i in range(num_images)]
                     
-                    if field["label"] == "Lens" and (disp1 == get_val(["source"], 0) or disp2 == get_val(["source"], 1)): continue
+                    if field["label"] == "Lens":
+                        source_values = [get_val(["source"], i) for i in range(num_images)]
+                        if all(dv == sv for dv, sv in zip(display_values, source_values) if dv is not None and sv is not None and dv != "N/A"):
+                            continue
                     
-                    card.add_comparison_row(field["label"], disp1, disp2)
+                    card.add_comparison_row(field["label"], display_values)
                     rows_added += 1
             
             if rows_added > 0:

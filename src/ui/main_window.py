@@ -1717,13 +1717,13 @@ class MainWindow(QMainWindow):
             self.advanced_image_viewer.set_images_data(images_data_for_viewer)
             
             if self.sidebar_visible:
-                if len(images_data_for_viewer) == 2:
+                if len(images_data_for_viewer) >= 2:
                     self.metadata_sidebar.update_comparison(
                         [d['path'] for d in images_data_for_viewer],
                         metadata_for_sidebar
                     )
                 else:
-                    # Sidebar shows first selected image if more or less than 2 are selected
+                    # Fallback to single selection view if something goes wrong
                     self._update_sidebar_with_current_selection()
 
             if len(images_data_for_viewer) >= 2:
