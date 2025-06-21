@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
 )
 import re # For regular expressions in filtering
 import os # <-- Add import os at the top level
-import send2trash # <-- Import send2trash for moving files to trash
 import subprocess # For opening file explorer
 import traceback # For detailed error logging
 from datetime import date as date_obj, datetime # For date type hinting and objects
@@ -132,8 +131,6 @@ class MainWindow(QMainWindow):
 
         self.image_pipeline = ImagePipeline()
         logging.info(f"MainWindow.__init__ - ImagePipeline instantiated: {time.perf_counter() - init_start_time:.4f}s")
-        self.image_file_ops = ImageFileOperations()
-        logging.info(f"MainWindow.__init__ - ImageFileOperations instantiated: {time.perf_counter() - init_start_time:.4f}s")
         self.app_state = AppState()
         logging.info(f"MainWindow.__init__ - AppState instantiated: {time.perf_counter() - init_start_time:.4f}s")
         self.worker_manager = WorkerManager(image_pipeline_instance=self.image_pipeline, parent=self)
@@ -899,7 +896,7 @@ class MainWindow(QMainWindow):
             
             file_name_to_delete = os.path.basename(file_path_to_delete)
             try:
-                send2trash.send2trash(file_path_to_delete)
+                self.app_controller.move_to_trash(file_path_to_delete)
                 self.app_state.remove_data_for_path(file_path_to_delete)
 
                 source_parent_idx = source_idx_to_delete.parent()
@@ -3127,7 +3124,7 @@ class MainWindow(QMainWindow):
         deleted_count = 0
         for file_path in marked_files:
             try:
-                send2trash.send2trash(file_path)
+                self.app_controller.move_to_trash(file_path)
                 self.app_state.remove_data_for_path(file_path)
                 deleted_count += 1
             except Exception as e:
@@ -3198,7 +3195,7 @@ class MainWindow(QMainWindow):
             new_path = os.path.join(directory, new_filename)
 
             try:
-                os.rename(old_path, new_path)
+                self.app_controller.rename_image(old_path, new_path)
                 self.app_state.update_path(old_path, new_path)
                 changed_new_paths.append(new_path)
                 
@@ -3274,7 +3271,7 @@ class MainWindow(QMainWindow):
             new_path = os.path.join(directory, new_filename)
 
             try:
-                os.rename(old_path, new_path)
+                self.app_controller.rename_image(old_path, new_path)
                 self.app_state.update_path(old_path, new_path)
                 unmarked_new_paths.append(new_path)
 

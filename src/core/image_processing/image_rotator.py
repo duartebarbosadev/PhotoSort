@@ -2,11 +2,11 @@ import os
 import logging
 import subprocess
 import tempfile
-import shutil
 from typing import Optional, Literal, Tuple
 from PIL import Image, ImageOps
 import pyexiv2
 from pathlib import Path
+from src.core.image_file_ops import ImageFileOperations
 
 # Rotation directions
 RotationDirection = Literal['clockwise', 'counterclockwise', '180']
@@ -92,9 +92,12 @@ class ImageRotator:
             
             if result.returncode == 0 and os.path.getsize(temp_path) > 0:
                 # Replace original with rotated version
-                shutil.move(temp_path, image_path)
-                logging.info(f"[ImageRotator] Lossless JPEG rotation successful: {os.path.basename(image_path)}")
-                return True
+                success, msg = ImageFileOperations.replace_file(temp_path, image_path)
+                if success:
+                    logging.info(f"[ImageRotator] Lossless JPEG rotation successful: {os.path.basename(image_path)}")
+                else:
+                    logging.error(f"[ImageRotator] Lossless JPEG rotation failed during file replacement: {msg}")
+                return success
             else:
                 logging.warning(f"[ImageRotator] jpegtran failed for {os.path.basename(image_path)}: {result.stderr.decode()}")
                 return False

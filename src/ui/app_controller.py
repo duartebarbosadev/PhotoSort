@@ -7,6 +7,7 @@ from PyQt6.QtCore import QObject
 
 from src.core.app_settings import add_recent_folder, get_preview_cache_size_bytes
 from src.core.file_scanner import SUPPORTED_EXTENSIONS
+from src.core.image_file_ops import ImageFileOperations
 
 # Forward declarations for type hinting to avoid circular imports.
 class MainWindow:
@@ -172,6 +173,18 @@ class AppController(QObject):
                     self.load_folder(current_dir)
                     return
         self.main_window.statusBar().showMessage("No folder context to reload.", 3000)
+
+    def move_to_trash(self, file_path: str):
+        """Moves a file to the system's trash."""
+        success, message = ImageFileOperations.move_to_trash(file_path)
+        if not success:
+            self.main_window.statusBar().showMessage(message, 5000)
+
+    def rename_image(self, old_path: str, new_path: str):
+        """Renames an image file."""
+        success, message = ImageFileOperations.rename_image(old_path, new_path)
+        if not success:
+            self.main_window.statusBar().showMessage(message, 5000)
 
 
     # --- Private Helper Methods ---
