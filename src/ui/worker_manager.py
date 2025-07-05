@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from src.core.file_scanner import FileScanner
 # from src.core.similarity_engine import SimilarityEngine # Commented out for lazy loading
 from src.ui.ui_components import PreviewPreloaderWorker, BlurDetectionWorker
-from src.ui.rotation_approval_dialog import RotationDetectionWorker
+from src.ui.rotation_approval_dialog import RotationDetectionWorker, DialogImageLoaderWorker
 from src.core.image_pipeline import ImagePipeline # Needed for PreviewPreloaderWorker
 from src.core.rating_loader_worker import RatingLoaderWorker # Import RatingLoaderWorker
 from src.core.caching.rating_cache import RatingCache # For type hinting
@@ -55,6 +55,10 @@ class WorkerManager(QObject):
     rotation_detection_error = pyqtSignal(str)
     rotation_model_not_found = pyqtSignal(str) # model_path
 
+    # Dialog Image Loader Signals
+    dialog_image_loaded = pyqtSignal(str, 'QPixmap', 'QPixmap') # path, before, after
+    dialog_image_load_finished = pyqtSignal()
+
     def __init__(self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None):
         super().__init__(parent)
         self.image_pipeline = image_pipeline_instance
@@ -76,6 +80,9 @@ class WorkerManager(QObject):
 
         self.rotation_detection_thread: Optional[QThread] = None
         self.rotation_detection_worker: Optional[RotationDetectionWorker] = None
+
+        self.dialog_image_loader_thread: Optional[QThread] = None
+        self.dialog_image_loader_worker: Optional[DialogImageLoaderWorker] = None
 
     def _terminate_thread(self, thread: Optional[QThread], worker_stop_method: Optional[callable] = None):
         if thread is not None and thread.isRunning(): # Explicitly check for None before calling isRunning
@@ -367,7 +374,46 @@ class WorkerManager(QObject):
         self.stop_blur_detection()
         self.stop_rating_load()
         self.stop_rotation_detection()
+        self.stop_dialog_image_load()
         logging.info("All workers stop requested.")
+
+    def _cleanup_dialog_image_loader_refs(self):
+        if self.dialog_image_loader_worker:
+            self.dialog_image_loader_worker.deleteLater()
+            self.dialog_image_loader_worker = None
+        if self.dialog_image_loader_thread:
+            self.dialog_image_loader_thread.deleteLater()
+            self.dialog_image_loader_thread = None
+        logging.debug("Dialog image loader thread and worker references cleaned up.")
+
+    # --- Dialog Image Loader Management ---
+    def start_dialog_image_load(self, items_to_load: Dict[str, Any], image_pipeline: ImagePipeline, apply_auto_edits: bool):
+        self.stop_dialog_image_load()
+        self.dialog_image_loader_thread = QThread()
+        self.dialog_image_loader_worker = DialogImageLoaderWorker(
+            items_to_load, image_pipeline, apply_auto_edits
+        )
+        self.dialog_image_loader_worker.moveToThread(self.dialog_image_loader_thread)
+
+        self.dialog_image_loader_worker.image_loaded.connect(self.dialog_image_loaded)
+        self.dialog_image_loader_worker.finished.connect(self.dialog_image_load_finished)
+
+        self.dialog_image_loader_thread.started.connect(self.dialog_image_loader_worker.run_load)
+        self.dialog_image_load_finished.connect(self.dialog_image_loader_thread.quit)
+        
+        self.dialog_image_loader_thread.finished.connect(self._cleanup_dialog_image_loader_refs)
+
+        self.dialog_image_loader_thread.start()
+        logging.info("Dialog image loader thread started.")
+
+    def stop_dialog_image_load(self):
+        worker_stop = self.dialog_image_loader_worker.stop if self.dialog_image_loader_worker else None
+        temp_thread, _ = self._terminate_thread(self.dialog_image_loader_thread, worker_stop)
+        if temp_thread is None:
+            self.dialog_image_loader_thread = None
+            self.dialog_image_loader_worker = None
+        else:
+            self.dialog_image_loader_thread = temp_thread
 
     def is_file_scanner_running(self) -> bool:
         return self.scanner_thread is not None and self.scanner_thread.isRunning()
@@ -387,6 +433,9 @@ class WorkerManager(QObject):
     def is_rotation_detection_running(self) -> bool:
         return self.rotation_detection_thread is not None and self.rotation_detection_thread.isRunning()
 
+    def is_dialog_image_loader_running(self) -> bool:
+        return self.dialog_image_loader_thread is not None and self.dialog_image_loader_thread.isRunning()
+
     def is_any_worker_running(self) -> bool:
         return (
             self.is_file_scanner_running() or
@@ -394,5 +443,6 @@ class WorkerManager(QObject):
             self.is_preview_preloader_running() or
             self.is_blur_detection_running() or
             self.is_rating_loader_running() or
-            self.is_rotation_detection_running()
+            self.is_rotation_detection_running() or
+            self.is_dialog_image_loader_running()
         )

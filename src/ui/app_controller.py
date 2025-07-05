@@ -542,6 +542,7 @@ class AppController(QObject):
             self.rotation_suggestions,
             self.main_window.image_pipeline,
             self.main_window.apply_auto_edits_enabled,
+            self.worker_manager,
             self.main_window
         )
         

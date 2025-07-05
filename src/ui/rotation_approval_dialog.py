@@ -3,13 +3,14 @@ import os
 from typing import Dict, List, Optional, Tuple
 from PIL import Image
 from PIL.ImageQt import ImageQt
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QPropertyAnimation, QEasingCurve, QRect, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QPropertyAnimation, QEasingCurve, QRect, QTimer, QObject
 from PyQt6.QtGui import QPixmap, QIcon, QPalette, QFont
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea,
     QWidget, QFrame, QSplitter, QCheckBox, QProgressBar, QApplication,
     QButtonGroup, QGridLayout, QSizePolicy, QSpacerItem
 )
+import concurrent.futures
 
 from src.core.image_pipeline import ImagePipeline
 
@@ -284,68 +285,95 @@ class RotationApprovalItem(QFrame):
         return self.approved and self.net_rotation != 0
 
 
-class DialogImageLoader(QThread):
-    """Worker to load images for the rotation dialog in the background."""
+class DialogImageLoaderWorker(QObject):
+    """Worker object to load images for the rotation dialog in the background using a thread pool."""
     image_loaded = pyqtSignal(str, QPixmap, QPixmap) # path, before_pixmap, after_pixmap
     finished = pyqtSignal()
 
-    def __init__(self, items_to_load: Dict[str, Dict], image_pipeline: ImagePipeline, apply_auto_edits: bool, parent=None):
-        super().__init__(parent)
+    def __init__(self, items_to_load: Dict[str, Dict], image_pipeline: ImagePipeline, apply_auto_edits: bool):
+        super().__init__()
         self.items_to_load = items_to_load
         self.image_pipeline = image_pipeline
         self.apply_auto_edits = apply_auto_edits
         self.is_stopped = False
+        self._num_workers = min(os.cpu_count() or 4, 8)
 
     def stop(self):
         self.is_stopped = True
 
-    def run(self):
-        for path, data in self.items_to_load.items():
-            if self.is_stopped:
-                break
-            
-            try:
-                # Before Image (EXIF Corrected)
-                before_pixmap = self.image_pipeline.get_preview_qpixmap(
-                    path, display_max_size=(400, 300), apply_auto_edits=self.apply_auto_edits
-                )
+    def _load_image_task(self, path: str, data: dict) -> Optional[Tuple[str, QPixmap, QPixmap]]:
+        """Loads before/after pixmaps for a single image. Runs in a worker thread."""
+        if self.is_stopped:
+            return None
+        try:
+            # Before Image (EXIF Corrected)
+            before_pixmap = self.image_pipeline.get_preview_qpixmap(
+                path, display_max_size=(400, 300), apply_auto_edits=self.apply_auto_edits
+            )
 
-                # After Image (Model Corrected)
-                raw_pil_image = self.image_pipeline.get_pil_image_for_processing(
-                    path, target_mode="RGBA", apply_auto_edits=True,
-                    use_preloaded_preview_if_available=False, apply_exif_transpose=False
-                )
-                
-                after_pixmap = None
-                if raw_pil_image:
-                    raw_pil_image.thumbnail((400, 300), Image.Resampling.LANCZOS)
-                    raw_pixmap = QPixmap.fromImage(ImageQt(raw_pil_image))
-                    from PyQt6.QtGui import QTransform
-                    transform = QTransform()
-                    transform.rotate(data['model_rotation'])
-                    after_pixmap = raw_pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
-                
-                if not self.is_stopped:
-                    self.image_loaded.emit(path, before_pixmap, after_pixmap)
+            # After Image (Model Corrected)
+            raw_pil_image = self.image_pipeline.get_pil_image_for_processing(
+                path, target_mode="RGBA", apply_auto_edits=True,
+                use_preloaded_preview_if_available=False, apply_exif_transpose=False
+            )
             
-            except Exception as e:
-                logging.error(f"Error loading image '{path}' for dialog worker: {e}")
+            after_pixmap = None
+            if raw_pil_image:
+                raw_pil_image.thumbnail((400, 300), Image.Resampling.LANCZOS)
+                raw_pixmap = QPixmap.fromImage(ImageQt(raw_pil_image))
+                from PyQt6.QtGui import QTransform
+                transform = QTransform()
+                transform.rotate(data['model_rotation'])
+                after_pixmap = raw_pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
+            
+            if self.is_stopped:
+                return None
+
+            return path, before_pixmap, after_pixmap
         
+        except Exception as e:
+            logging.error(f"Error loading image '{path}' for dialog worker task: {e}")
+            # Return path with empty pixmaps on error to signal failure for that item
+            return path, QPixmap(), QPixmap()
+
+    def run_load(self):
+        """Processes images in parallel and emits results."""
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self._num_workers) as executor:
+            
+            futures = {
+                executor.submit(self._load_image_task, path, data)
+                for path, data in self.items_to_load.items()
+            }
+
+            for future in concurrent.futures.as_completed(futures):
+                if self.is_stopped:
+                    # Cancel remaining futures that haven't started.
+                    for f in futures:
+                        if not f.done():
+                            f.cancel()
+                    break
+                
+                result = future.result()
+                if result:
+                    path, before_pixmap, after_pixmap = result
+                    if not self.is_stopped:
+                        self.image_loaded.emit(path, before_pixmap, after_pixmap)
+
         self.finished.emit()
 
 
 class RotationApprovalDialog(QDialog):
     """Dialog for reviewing and approving automatic rotation suggestions."""
     
-    def __init__(self, rotation_suggestions: Dict[str, int], image_pipeline: ImagePipeline, apply_auto_edits: bool, parent=None):
+    def __init__(self, rotation_suggestions: Dict[str, int], image_pipeline: ImagePipeline, apply_auto_edits: bool, worker_manager, parent=None):
         super().__init__(parent)
         self.rotation_suggestions = rotation_suggestions
         self.image_pipeline = image_pipeline
         self.apply_auto_edits = apply_auto_edits
+        self.worker_manager = worker_manager
         self.approved_rotations: Dict[str, int] = {}
         self.show_all_images = False  # Toggle for showing all vs only needing rotation
         self.approval_items_map: Dict[str, RotationApprovalItem] = {}
-        self.image_loader_thread: Optional[DialogImageLoader] = None
 
         # Filter to only show images that need rotation
         # rotation_suggestions now contains {'net_rotation': int, 'model_rotation': int}
@@ -661,43 +689,40 @@ class RotationApprovalDialog(QDialog):
         return self.approved_rotations.copy()
 
     def _start_image_loader(self):
-        """Starts the background thread for loading images."""
-        # Stop any existing loader thread before starting a new one
-        try:
-            if self.image_loader_thread and self.image_loader_thread.isRunning():
-                self.image_loader_thread.stop()
-                self.image_loader_thread.wait()
-        except RuntimeError:
-            logging.warning("Previous image loader thread was already deleted. Creating a new one.")
-            self.image_loader_thread = None
+        """Starts the background image loading via the WorkerManager."""
+        self.worker_manager.stop_dialog_image_load()  # Ensure any previous loader is stopped
 
         items_to_load = self.rotation_suggestions if self.show_all_images else self.items_needing_rotation
-        
-        # Create and hold a persistent reference to the thread
-        self.image_loader_thread = DialogImageLoader(items_to_load, self.image_pipeline, self.apply_auto_edits, self)
-        self.image_loader_thread.image_loaded.connect(self._on_image_loaded)
-        
-        # Clean up the thread object once it has finished executing
-        self.image_loader_thread.finished.connect(self.image_loader_thread.deleteLater)
-        
-        self.image_loader_thread.start()
+
+        # Connect signals from the central worker manager to this dialog's slots
+        self.worker_manager.dialog_image_loaded.connect(self._on_image_loaded)
+        self.worker_manager.dialog_image_load_finished.connect(self._on_load_finished)
+
+        # Start the worker via the manager
+        self.worker_manager.start_dialog_image_load(
+            items_to_load,
+            self.image_pipeline,
+            self.apply_auto_edits
+        )
 
     def _on_image_loaded(self, path: str, before_pixmap: QPixmap, after_pixmap: QPixmap):
         """Slot to update an item when its images are loaded."""
         if path in self.approval_items_map:
             self.approval_items_map[path].set_pixmaps(before_pixmap, after_pixmap)
     
-    def closeEvent(self, event):
-        """Ensure the image loader thread is stopped when the dialog closes."""
+    def _on_load_finished(self):
+        """Slot for when the background loading is complete."""
+        logging.debug("Dialog image loading finished, disconnecting signals.")
         try:
-            if self.image_loader_thread and self.image_loader_thread.isRunning():
-                logging.debug("Dialog closing, stopping image loader thread.")
-                self.image_loader_thread.stop()
-                self.image_loader_thread.wait(1000) # Wait up to 1 second
-        except RuntimeError:
-            # This can happen if the thread object is already deleted, which is fine.
-            logging.debug("Image loader thread was already deleted when closing dialog.")
-            pass
+            self.worker_manager.dialog_image_loaded.disconnect(self._on_image_loaded)
+            self.worker_manager.dialog_image_load_finished.disconnect(self._on_load_finished)
+        except TypeError:
+            logging.warning("Could not disconnect dialog loader signals, they may have already been disconnected.")
+
+    def closeEvent(self, event):
+        """Ensure the image loader worker is stopped when the dialog closes."""
+        logging.debug("Rotation dialog closing, stopping image loader worker.")
+        self.worker_manager.stop_dialog_image_load()
         super().closeEvent(event)
 
 
