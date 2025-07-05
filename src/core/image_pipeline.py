@@ -315,9 +315,10 @@ class ImagePipeline:
     def get_pil_image_for_processing(
         self, 
         image_path: str, 
-        target_mode: str = "RGB", 
+        target_mode: str = "RGB",
         apply_auto_edits: bool = False,
-        use_preloaded_preview_if_available: bool = True
+        use_preloaded_preview_if_available: bool = True,
+        apply_exif_transpose: bool = True
     ) -> Optional[Image.Image]:
         """
         Gets a PIL image for general processing (e.g., similarity engine, blur detection).
@@ -333,9 +334,11 @@ class ImagePipeline:
             if cached_preview:
                 logging.debug(f"Using preloaded preview for processing: {normalized_path}")
                 return cached_preview.convert(target_mode) if cached_preview.mode != target_mode else cached_preview
+            
+            # Log the cache miss only when we intended to use the cache
+            logging.debug(f"No suitable preloaded preview, loading directly for processing: {normalized_path}")
 
         # Fallback to loading directly
-        logging.debug(f"No suitable preloaded preview, loading directly for processing: {normalized_path}")
         pil_img: Optional[Image.Image] = None
         ext = os.path.splitext(normalized_path)[1].lower()
 
@@ -348,11 +351,16 @@ class ImagePipeline:
                 half_size=False # Or make this a parameter if varying quality is needed
             )
         elif ext in SUPPORTED_STANDARD_EXTENSIONS:
-            pil_img = StandardImageProcessor.load_as_pil(normalized_path, target_mode=target_mode)
+            pil_img = StandardImageProcessor.load_as_pil(
+                normalized_path,
+                target_mode=target_mode,
+                apply_exif_transpose=apply_exif_transpose
+            )
         else:
             try: # Last resort for unknown types
                 img = Image.open(normalized_path)
-                img = self.image_orientation_handler.exif_transpose(img)
+                if apply_exif_transpose:
+                    img = self.image_orientation_handler.exif_transpose(img)
                 pil_img = img.convert(target_mode)
             except Exception:
                 logging.warning(f"Unsupported extension for get_pil_image_for_processing: {ext} for {normalized_path}")

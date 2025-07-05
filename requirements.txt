@@ -9,3 +9,5 @@ diskcache
 send2trash
 opencv-python
 pyexiv2
+onnxruntime
+onnxruntime-gpu

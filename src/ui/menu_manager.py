@@ -33,6 +33,7 @@ class MenuManager:
         self.toggle_thumbnails_action: QAction
         self.analyze_similarity_action: QAction
         self.detect_blur_action: QAction
+        self.auto_rotate_action: QAction
         self.toggle_metadata_sidebar_action: QAction
 
         # Filter Menu
@@ -178,6 +179,11 @@ class MenuManager:
         self.detect_blur_action.setEnabled(False)
         view_menu.addAction(self.detect_blur_action)
 
+        self.auto_rotate_action = QAction("Auto Rotate Images", main_win)
+        self.auto_rotate_action.setToolTip("Automatically detect and suggest rotations for poorly oriented images")
+        self.auto_rotate_action.setEnabled(False)
+        view_menu.addAction(self.auto_rotate_action)
+
         view_menu.addSeparator()
 
         self.toggle_metadata_sidebar_action = QAction("Show Image Details Sidebar", main_win)
@@ -276,6 +282,7 @@ class MenuManager:
         self.toggle_thumbnails_action.toggled.connect(main_win._rebuild_model_view) # Just rebuild view on toggle
         self.analyze_similarity_action.triggered.connect(main_win.app_controller.start_similarity_analysis)
         self.detect_blur_action.triggered.connect(main_win.app_controller.start_blur_detection_analysis)
+        self.auto_rotate_action.triggered.connect(main_win.app_controller.start_auto_rotation_analysis)
         self.toggle_metadata_sidebar_action.toggled.connect(main_win._toggle_metadata_sidebar)
         
         # Settings Menu

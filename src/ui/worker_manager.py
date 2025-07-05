@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from src.core.file_scanner import FileScanner
 # from src.core.similarity_engine import SimilarityEngine # Commented out for lazy loading
 from src.ui.ui_components import PreviewPreloaderWorker, BlurDetectionWorker
+from src.ui.rotation_approval_dialog import RotationDetectionWorker
 from src.core.image_pipeline import ImagePipeline # Needed for PreviewPreloaderWorker
 from src.core.rating_loader_worker import RatingLoaderWorker # Import RatingLoaderWorker
 from src.core.caching.rating_cache import RatingCache # For type hinting
@@ -47,6 +48,13 @@ class WorkerManager(QObject):
     rating_load_finished = pyqtSignal()
     rating_load_error = pyqtSignal(str)
 
+    # Rotation Detection Signals
+    rotation_detection_progress = pyqtSignal(int, int, str)  # current, total, basename
+    rotation_detected = pyqtSignal(str, int)  # image_path, suggested_rotation
+    rotation_detection_finished = pyqtSignal()
+    rotation_detection_error = pyqtSignal(str)
+    rotation_model_not_found = pyqtSignal(str) # model_path
+
     def __init__(self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None):
         super().__init__(parent)
         self.image_pipeline = image_pipeline_instance
@@ -65,6 +73,9 @@ class WorkerManager(QObject):
 
         self.rating_loader_thread: Optional[QThread] = None
         self.rating_loader_worker: Optional[RatingLoaderWorker] = None
+
+        self.rotation_detection_thread: Optional[QThread] = None
+        self.rotation_detection_worker: Optional[RotationDetectionWorker] = None
 
     def _terminate_thread(self, thread: Optional[QThread], worker_stop_method: Optional[callable] = None):
         if thread is not None and thread.isRunning(): # Explicitly check for None before calling isRunning
@@ -303,13 +314,59 @@ class WorkerManager(QObject):
         else:
             self.rating_loader_thread = temp_thread
 
+    def _cleanup_rotation_detection_refs(self):
+        if self.rotation_detection_worker:
+            self.rotation_detection_worker.deleteLater()
+            self.rotation_detection_worker = None
+        if self.rotation_detection_thread:
+            self.rotation_detection_thread.deleteLater()
+            self.rotation_detection_thread = None
+        logging.debug("Rotation detection thread and worker references cleaned up.")
+
+    # --- Rotation Detection Management ---
+    def start_rotation_detection(self, image_paths: List[str], apply_auto_edits: bool):
+        self.stop_rotation_detection()
+        self.rotation_detection_thread = QThread()
+        self.rotation_detection_worker = RotationDetectionWorker(
+            image_paths=image_paths,
+            image_pipeline=self.image_pipeline,
+            apply_auto_edits=apply_auto_edits
+        )
+        self.rotation_detection_worker.moveToThread(self.rotation_detection_thread)
+
+        self.rotation_detection_worker.progress_update.connect(self.rotation_detection_progress)
+        self.rotation_detection_worker.rotation_detected.connect(self.rotation_detected)
+        self.rotation_detection_worker.model_not_found.connect(self.rotation_model_not_found)
+        self.rotation_detection_worker.finished.connect(self.rotation_detection_finished)
+        self.rotation_detection_worker.error.connect(self.rotation_detection_error)
+
+        self.rotation_detection_thread.started.connect(self.rotation_detection_worker.run)
+        self.rotation_detection_finished.connect(self.rotation_detection_thread.quit)
+        self.rotation_detection_error.connect(self.rotation_detection_thread.quit)
+        self.rotation_model_not_found.connect(self.rotation_detection_thread.quit)
+        
+        self.rotation_detection_thread.finished.connect(self._cleanup_rotation_detection_refs)
+
+        self.rotation_detection_thread.start()
+        logging.info("Rotation detection thread started.")
+
+    def stop_rotation_detection(self):
+        worker_stop = self.rotation_detection_worker.stop if self.rotation_detection_worker else None
+        temp_thread, _ = self._terminate_thread(self.rotation_detection_thread, worker_stop)
+        if temp_thread is None:
+            self.rotation_detection_thread = None
+            self.rotation_detection_worker = None
+        else:
+            self.rotation_detection_thread = temp_thread
+
     def stop_all_workers(self):
         logging.info("Stopping all workers...")
         self.stop_file_scan()
         self.stop_similarity_analysis()
         self.stop_preview_preload()
         self.stop_blur_detection()
-        self.stop_rating_load() # Add rating loader stop
+        self.stop_rating_load()
+        self.stop_rotation_detection()
         logging.info("All workers stop requested.")
 
     def is_file_scanner_running(self) -> bool:
@@ -327,11 +384,15 @@ class WorkerManager(QObject):
     def is_rating_loader_running(self) -> bool:
         return self.rating_loader_thread is not None and self.rating_loader_thread.isRunning()
 
+    def is_rotation_detection_running(self) -> bool:
+        return self.rotation_detection_thread is not None and self.rotation_detection_thread.isRunning()
+
     def is_any_worker_running(self) -> bool:
         return (
             self.is_file_scanner_running() or
             self.is_similarity_worker_running() or
             self.is_preview_preloader_running() or
             self.is_blur_detection_running() or
-            self.is_rating_loader_running() # Add rating loader status
+            self.is_rating_loader_running() or
+            self.is_rotation_detection_running()
         )

@@ -182,7 +182,7 @@ def main():
 
     # Clear caches on exit
     # app.aboutToQuit.connect(clear_application_caches) # Prevent clearing caches on exit for persistence
-    logging.info("Application main - aboutToQuit connection to clear_application_caches SKIPPED for persistence")
+    #logging.info("Application main - aboutToQuit connection to clear_application_caches SKIPPED for persistence")
 
     # --- Stop ExifTool Process on Exit ---
     # Ensure clean shutdown (if using persistent handler)

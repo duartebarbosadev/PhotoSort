@@ -409,3 +409,33 @@ class DialogManager:
             QMessageBox.StandardButton.No
         )
         return reply == QMessageBox.StandardButton.Yes
+    def show_model_not_found_dialog(self, model_path: str):
+        """Show a dialog informing the user that the rotation model is missing."""
+        dialog = QMessageBox(self.parent)
+        dialog.setWindowTitle("Rotation Model Not Found")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+
+        text = (
+            f"The automatic rotation feature requires a model file that was not found at:\n"
+            f"<b>{model_path}</b>\n\n"
+            "Please download the model and place it in the correct directory to enable this feature."
+        )
+        dialog.setText(text)
+
+        detailed_text = (
+            "You can download the model from the official GitHub repository.\n\n"
+            "1. Click 'Download Model' to open the releases page.\n"
+            "2. Download the 'orientation_model_v1_0.9753.onnx' file.\n"
+            "3. Place the downloaded file inside the 'models' folder in the application directory.\n"
+            "4. Restart the application or re-run the rotation analysis."
+        )
+        dialog.setInformativeText(detailed_text)
+
+        download_button = dialog.addButton("Download Model", QMessageBox.ButtonRole.ActionRole)
+        ok_button = dialog.addButton(QMessageBox.StandardButton.Ok)
+
+        dialog.setDefaultButton(ok_button)
+
+        download_button.clicked.connect(lambda: webbrowser.open("https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"))
+
+        dialog.exec()
