@@ -161,8 +161,10 @@ class ImagePipeline:
             return None
 
         # Cache key for the final display-sized PIL image
-        display_cache_key = (normalized_path, display_max_size, apply_auto_edits)
-        
+        # Ensure display_max_size is a tuple for the cache key, even if None was passed
+        key_display_size = display_max_size if display_max_size is not None else PRELOAD_MAX_RESOLUTION
+        display_cache_key = (normalized_path, key_display_size, apply_auto_edits)
+
         # 1. Check if display-sized version is already cached
         cached_display_pil = self.preview_cache.get(display_cache_key)
         if cached_display_pil:

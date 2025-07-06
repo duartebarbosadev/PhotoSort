@@ -9,6 +9,7 @@ from .image_features.blur_detector import BlurDetector
 # Define supported image extensions (case-insensitive)
 SUPPORTED_EXTENSIONS = {
     '.jpg', '.jpeg', '.png', '.tif', '.tiff', # Standard formats
+    '.heic', '.heif', # HEIC/HEIF formats
     '.arw', '.cr2', '.cr3', '.nef', '.dng', # Sony, Canon, Nikon, Adobe RAW
     '.orf', '.raf', '.rw2', '.pef', '.srw', # Olympus, Fuji, Panasonic, Pentax, Samsung RAW
     '.raw' # Generic RAW

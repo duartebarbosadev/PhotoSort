@@ -10,7 +10,7 @@ PRELOAD_MAX_RESOLUTION = (1920, 1200) # Fixed high resolution for preloading
 BLUR_DETECTION_PREVIEW_SIZE = (640, 480) # Size for image used in blur detection
 
 # Standard image extensions this processor will handle
-SUPPORTED_STANDARD_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tif', '.tiff'}
+SUPPORTED_STANDARD_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tif', '.tiff', '.heic', '.heif'}
 
 class StandardImageProcessor:
     """Handles loading and processing of standard image formats (JPEG, PNG, etc.)."""
