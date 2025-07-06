@@ -263,7 +263,8 @@ class RotationDetectionWorker(QObject):
                 image_paths=self.image_paths,
                 result_callback=result_callback,
                 progress_callback=progress_callback,
-                should_continue_callback=should_continue_callback
+                should_continue_callback=should_continue_callback,
+                apply_auto_edits=self.apply_auto_edits
             )
             
             if not self._should_stop:

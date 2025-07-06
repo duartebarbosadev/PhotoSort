@@ -30,7 +30,8 @@ class RotationDetector:
     def _detect_rotation_task(
         self,
         image_path: str,
-        result_callback: Optional[Callable[[str, int], None]]
+        result_callback: Optional[Callable[[str, int], None]],
+        apply_auto_edits: bool
     ) -> None:
         """
         Worker task for detecting rotation for a single image using the model.
@@ -40,13 +41,13 @@ class RotationDetector:
             # Use the pipeline to get a cached PIL image for processing
             pil_image = self.image_pipeline.get_pil_image_for_processing(
                 image_path,
-                apply_auto_edits=True, # Use model-specific loading
+                apply_auto_edits=apply_auto_edits, # Use model-specific loading
                 use_preloaded_preview_if_available=False, # Use fresh load to ensure no EXIF
                 apply_exif_transpose=False # Pass the raw pixel data to the model
             )
-
-            # Pass the pre-loaded image to the model detector
-            suggested_rotation = self.model_detector.predict_rotation_angle(image_path, image=pil_image)
+ 
+             # Pass the pre-loaded image to the model detector
+            suggested_rotation = self.model_detector.predict_rotation_angle(image_path, image=pil_image, apply_auto_edits=apply_auto_edits)
             
             if result_callback:
                 result_callback(image_path, suggested_rotation)
@@ -69,6 +70,7 @@ class RotationDetector:
         """
         total_files = len(image_paths)
         processed_count = 0
+        apply_auto_edits = kwargs.get('apply_auto_edits', False)
         
         effective_num_workers = num_workers if num_workers is not None else DEFAULT_NUM_WORKERS
         logging.info(f"Starting model-based rotation detection for {total_files} files, workers: {effective_num_workers}")
@@ -83,7 +85,8 @@ class RotationDetector:
                 future = executor.submit(
                     self._detect_rotation_task,
                     image_path,
-                    result_callback
+                    result_callback,
+                    apply_auto_edits
                 )
                 futures_map[future] = image_path
             

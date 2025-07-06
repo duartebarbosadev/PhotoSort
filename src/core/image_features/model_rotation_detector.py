@@ -41,7 +41,7 @@ def get_data_transforms() -> Dict[str, transforms.Compose]:
         ]),
     }
 
-def load_image_safely(path: str) -> Optional[Image.Image]:
+def load_image_safely(path: str, apply_auto_edits: bool) -> Optional[Image.Image]:
     """
     Loads an image, safely converting it to a 3-channel RGB format.
     Handles both standard and RAW image formats.
@@ -53,7 +53,7 @@ def load_image_safely(path: str) -> Optional[Image.Image]:
         if is_raw_extension(ext):
             # Use the project's RawImageProcessor for RAW files
             logging.debug(f"Using RawImageProcessor to load {normalized_path} for rotation detection.")
-            return RawImageProcessor.load_raw_as_pil(normalized_path, half_size=True, apply_auto_edits=True)
+            return RawImageProcessor.load_raw_as_pil(normalized_path, half_size=True, apply_auto_edits=apply_auto_edits)
         else:
             # Use standard Pillow loading for other formats
             img = Image.open(normalized_path)
@@ -145,7 +145,7 @@ class ModelRotationDetector:
             logging.error(f"Error loading ONNX model from {model_path}: {e}")
             return None, None, None
 
-    def predict_rotation_angle(self, image_path: str, image: Optional[Image.Image] = None) -> int:
+    def predict_rotation_angle(self, image_path: str, image: Optional[Image.Image] = None, apply_auto_edits: bool = False) -> int:
         """
         Predicts the rotation angle for a single image using the ONNX model.
         If an image object is provided, it's used directly. Otherwise, the image is loaded.
@@ -156,7 +156,7 @@ class ModelRotationDetector:
             return 0
         
         if image is None:
-            image = load_image_safely(image_path)
+            image = load_image_safely(image_path, apply_auto_edits=apply_auto_edits)
         
         if image is None:
             logging.warning(f"Could not load or receive image for {image_path}. Skipping rotation detection.")
