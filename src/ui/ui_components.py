@@ -219,3 +219,61 @@ class BlurDetectionWorker(QObject):
                 pass
             else: # Normal finish
                 self.finished.emit()
+# --- Rotation Detection Worker ---
+class RotationDetectionWorker(QObject):
+    """Worker thread for detecting rotation suggestions in images."""
+    
+    progress_update = pyqtSignal(int, int, str)  # current, total, basename
+    rotation_detected = pyqtSignal(str, int)  # image_path, suggested_rotation
+    model_not_found = pyqtSignal(str) # model_path
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    
+    def __init__(self, image_paths: List[str], image_pipeline: ImagePipeline, apply_auto_edits: bool = False, parent=None):
+        super().__init__(parent)
+        self.image_paths = image_paths
+        self.image_pipeline = image_pipeline
+        self.apply_auto_edits = apply_auto_edits
+        self._should_stop = False
+    
+    def stop(self):
+        """Request the worker to stop."""
+        self._should_stop = True
+    
+    def run(self):
+        """Run the rotation detection process."""
+        try:
+            from src.core.image_features.rotation_detector import RotationDetector
+            from src.core.image_features.model_rotation_detector import ModelNotFoundError
+            
+            def result_callback(image_path: str, suggested_rotation: int):
+                if not self._should_stop:
+                    self.rotation_detected.emit(image_path, suggested_rotation)
+            
+            def progress_callback(current: int, total: int, basename: str):
+                if not self._should_stop:
+                    self.progress_update.emit(current, total, basename)
+            
+            def should_continue_callback() -> bool:
+                return not self._should_stop
+            
+            # Pass the image pipeline instance to the detector
+            detector = RotationDetector(self.image_pipeline)
+            detector.detect_rotation_in_batch(
+                image_paths=self.image_paths,
+                result_callback=result_callback,
+                progress_callback=progress_callback,
+                should_continue_callback=should_continue_callback
+            )
+            
+            if not self._should_stop:
+                self.finished.emit()
+        
+        except ModelNotFoundError as e:
+            logging.error(f"Rotation model not found during worker execution: {e}")
+            if not self._should_stop:
+                self.model_not_found.emit(str(e)) # Emit the model path
+        except Exception as e:
+            logging.error(f"Error in rotation detection worker: {e}")
+            if not self._should_stop:
+                self.error.emit(str(e))

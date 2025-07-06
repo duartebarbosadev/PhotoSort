@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         self.apply_auto_edits_enabled = get_auto_edit_photos()
         self.mark_for_deletion_mode_enabled = get_mark_for_deletion_mode()
         self.blur_detection_threshold = 100.0
+        self.rotation_suggestions = {}
  
         # Create filter controls first (needed by menu creation)
         self.filter_combo = QComboBox()
@@ -414,6 +415,17 @@ class MainWindow(QMainWindow):
         # The rating and color controls are now part of the IndividualViewer
         # widgets inside SynchronizedImageViewer, so they are no longer created here.
 
+        self.accept_all_button = QPushButton("Accept All")
+        self.accept_all_button.setVisible(False)
+        self.accept_button = QPushButton("Accept")
+        self.accept_button.setVisible(False)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.accept_button)
+        button_layout.addWidget(self.accept_all_button)
+        
+        center_pane_layout.addLayout(button_layout)
+
         # Create dummy view mode buttons for compatibility (not displayed)
         self.view_list_button = QPushButton("List")
         self.view_list_button.setCheckable(True)
@@ -493,6 +505,9 @@ class MainWindow(QMainWindow):
         
         # Delegate signal connections to the AppController
         self.app_controller.connect_signals()
+
+        self.accept_all_button.clicked.connect(self._accept_all_rotations)
+        self.accept_button.clicked.connect(self._accept_current_rotation)
         logging.debug(f"MainWindow._connect_signals - End: {time.perf_counter() - start_time:.4f}s")
 
     # def _connect_rating_actions(self):
@@ -577,6 +592,8 @@ class MainWindow(QMainWindow):
         else: # Not grouping by similarity
             if self.left_panel.current_view_mode == "date":
                 self._populate_model_by_date(root_item, self.app_state.image_files_data)
+            elif self.left_panel.current_view_mode == "rotation":
+                self._rebuild_rotation_view()
             else:
                 self._populate_model_standard(root_item, self.app_state.image_files_data)
             self.statusBar().showMessage(f"View populated with {len(self.app_state.image_files_data)} images.", 3000)
@@ -642,6 +659,21 @@ class MainWindow(QMainWindow):
 
     def _reload_current_folder(self):
         self.app_controller.reload_current_folder()
+
+    def _rebuild_rotation_view(self):
+        self.file_system_model.clear()
+        root_item = self.file_system_model.invisibleRootItem()
+
+        if not self.rotation_suggestions:
+            no_suggestions_item = QStandardItem("No rotation suggestions available.")
+            no_suggestions_item.setEditable(False)
+            root_item.appendRow(no_suggestions_item)
+            return
+
+        for path, rotation in self.rotation_suggestions.items():
+            item = QStandardItem(os.path.basename(path))
+            item.setData({'path': path, 'rotation': rotation}, Qt.ItemDataRole.UserRole)
+            root_item.appendRow(item)
 
     def _group_images_by_cluster(self) -> Dict[int, List[Dict[str, any]]]:
         images_by_cluster: Dict[int, List[Dict[str, any]]] = {}
@@ -1770,6 +1802,18 @@ class MainWindow(QMainWindow):
             selected_file_paths = self._get_selected_file_paths_from_view()
         
         if not self.app_state.image_files_data: return
+
+        if self.left_panel.current_view_mode == "rotation":
+            self.accept_all_button.setVisible(bool(self.rotation_suggestions))
+            self.accept_button.setVisible(len(selected_file_paths) == 1 and selected_file_paths[0] in self.rotation_suggestions)
+            if len(selected_file_paths) == 1:
+                self._display_side_by_side_comparison(selected_file_paths[0])
+            else:
+                self.advanced_image_viewer.clear()
+            return
+        else:
+            self.accept_all_button.setVisible(False)
+            self.accept_button.setVisible(False)
 
         # When selection changes, clear the focused image path unless it's a single selection
         if len(selected_file_paths) != 1:
@@ -3396,3 +3440,66 @@ class MainWindow(QMainWindow):
                     self._handle_file_selection_changed()
         else:
             logging.warning(f"Could not find QStandardItem for {image_path} to update blur status in UI.")
+
+    def _display_side_by_side_comparison(self, file_path):
+        """Displays the current image and the rotated suggestion side-by-side."""
+        sbs_start_time = time.perf_counter()
+        logging.info(f"SBS_COMP: Start for {os.path.basename(file_path)}")
+
+        if file_path not in self.rotation_suggestions:
+            logging.warning(f"SBS_COMP: File {os.path.basename(file_path)} not in rotation_suggestions.")
+            return
+
+        rotation = self.rotation_suggestions[file_path]
+        logging.info(f"SBS_COMP: Suggestion is {rotation} degrees.")
+
+        t1 = time.perf_counter()
+        # Load ONE base pixmap, respecting the user's current auto-edit setting.
+        # This represents the "current" view of the image.
+        current_pixmap = self.image_pipeline.get_preview_qpixmap(
+            file_path, (8000, 8000), apply_auto_edits=self.apply_auto_edits_enabled
+        )
+        t2 = time.perf_counter()
+        logging.info(f"SBS_COMP: get_preview_qpixmap (base) took: {t2 - t1:.4f}s")
+
+        if current_pixmap and not current_pixmap.isNull():
+            from PyQt6.QtGui import QTransform
+            transform = QTransform()
+            transform.rotate(rotation)
+            
+            t3 = time.perf_counter()
+            suggested_pixmap = current_pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
+            t4 = time.perf_counter()
+            logging.info(f"SBS_COMP: QPixmap.transformed took: {t4 - t3:.4f}s")
+            
+            t5 = time.perf_counter()
+            self.advanced_image_viewer.set_images_data([
+                {'pixmap': current_pixmap, 'path': file_path, 'rating': 0},
+                {'pixmap': suggested_pixmap, 'path': file_path, 'rating': 0}
+            ])
+            t6 = time.perf_counter()
+            logging.info(f"SBS_COMP: advanced_image_viewer.set_images_data took: {t6 - t5:.4f}s")
+        else:
+            logging.warning(f"SBS_COMP: Failed to load base pixmap for {os.path.basename(file_path)}")
+            self.advanced_image_viewer.clear()
+
+        sbs_end_time = time.perf_counter()
+        logging.info(f"SBS_COMP: End. Total time: {sbs_end_time - sbs_start_time:.4f}s")
+
+    def _accept_all_rotations(self):
+        """Applies all suggested rotations."""
+        self.app_controller._apply_approved_rotations(self.rotation_suggestions)
+        self.rotation_suggestions.clear()
+        self._rebuild_rotation_view()
+
+    def _accept_current_rotation(self):
+        selected_paths = self._get_selected_file_paths_from_view()
+        if len(selected_paths) == 1:
+            self._accept_rotation(selected_paths[0])
+
+    def _accept_rotation(self, file_path: str):
+        """Applies a single rotation suggestion."""
+        if file_path in self.rotation_suggestions:
+            rotation = self.rotation_suggestions.pop(file_path)
+            self.app_controller._apply_approved_rotations({file_path: rotation})
+            self._rebuild_rotation_view()

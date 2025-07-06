@@ -227,7 +227,7 @@ class AppController(QObject):
         self.main_window.menu_manager.auto_rotate_action.setEnabled(False)
         
         # Initialize the rotation suggestions storage
-        self.rotation_suggestions = {}
+        self.main_window.rotation_suggestions.clear()
         
         image_paths = [fd['path'] for fd in self.app_state.image_files_data]
         self.worker_manager.start_rotation_detection(image_paths, self.main_window.apply_auto_edits_enabled)
@@ -461,64 +461,32 @@ class AppController(QObject):
 
     def handle_rotation_detected(self, image_path: str, suggested_rotation: int):
         """Handle individual rotation detection results."""
-        if not hasattr(self, 'rotation_suggestions'):
-            self.rotation_suggestions = {}
-        self.rotation_suggestions[image_path] = suggested_rotation
+        if not hasattr(self.main_window, 'rotation_suggestions'):
+            self.main_window.rotation_suggestions = {}
+        self.main_window.rotation_suggestions[image_path] = suggested_rotation
 
     def handle_rotation_detection_finished(self):
         """Handle completion of rotation detection analysis."""
         self.main_window.menu_manager.auto_rotate_action.setEnabled(bool(self.app_state.image_files_data))
 
-        if not hasattr(self, 'rotation_suggestions') or not self.rotation_suggestions:
+        if not self.main_window.rotation_suggestions:
             self.main_window.hide_loading_overlay()
             self.main_window.statusBar().showMessage("Rotation analysis complete. No rotation suggestions found.", 5000)
             return
 
-        logging.info(f"Rotation analysis finished. Received {len(self.rotation_suggestions)} total suggestions.")
+        logging.info(f"Rotation analysis finished. Received {len(self.main_window.rotation_suggestions)} total suggestions.")
 
-        # Filter out images that are already correctly oriented
         final_suggestions = {}
-        self.main_window.update_loading_text("Filtering rotation suggestions...")
-        logging.info("Filtering rotation suggestions based on EXIF data...")
-        for path, model_rotation in self.rotation_suggestions.items():
-            basename = os.path.basename(path)
+        for path, model_rotation in self.main_window.rotation_suggestions.items():
             exif_data = self.app_state.exif_disk_cache.get(path)
             exif_rotation = ImageOrientationHandler.get_rotation_from_exif(exif_data)
-
             net_rotation = ImageOrientationHandler.get_composite_rotation(exif_rotation, model_rotation)
-
-            logging.debug(
-                f"Image: {basename} | "
-                f"EXIF Rotation: {exif_rotation}° | "
-                f"Model Suggestion: {model_rotation}° | "
-                f"Net Required Rotation: {net_rotation}°"
-            )
-
-            # Always store the suggestion, even if rotation is 0, so the dialog can show all images.
-            final_suggestions[path] = {
-                'net_rotation': net_rotation,
-                'model_rotation': model_rotation
-            }
-
             if net_rotation != 0:
-                logging.info(f"-> Found potential rotation for '{basename}' (net: {net_rotation}° / model: {model_rotation}°)")
-            else:
-                logging.info(f"-> Image '{basename}' is correctly oriented.")
+                final_suggestions[path] = net_rotation
 
-        self.rotation_suggestions = final_suggestions # Update self.rotation_suggestions with the new structure
-        # Count only the items that actually need rotation to decide if the dialog should be shown.
-        needs_rotation_count = sum(1 for data in self.rotation_suggestions.values() if data.get('net_rotation') != 0)
-        logging.info(f"Found {needs_rotation_count} images that may need rotation after filtering.")
-
-        if needs_rotation_count == 0:
-            self.main_window.hide_loading_overlay()
-            self.main_window.statusBar().showMessage("Rotation analysis complete. All images are properly oriented.", 5000)
-            logging.info("All images appear to be correctly oriented. Skipping approval dialog.")
-            return
-
-        # Show the approval dialog
-        self.main_window.update_loading_text("Preparing rotation dialog...")
-        self._show_rotation_approval_dialog()
+        self.main_window.rotation_suggestions = final_suggestions
+        self.main_window.hide_loading_overlay()
+        self.main_window.left_panel.set_view_mode_rotation()
 
     def handle_rotation_detection_error(self, message: str):
         """Handle errors during rotation detection."""
@@ -533,36 +501,10 @@ class AppController(QObject):
         self.main_window.statusBar().showMessage("Rotation model not found. Analysis cancelled.", 5000)
         self.main_window.menu_manager.auto_rotate_action.setEnabled(bool(self.app_state.image_files_data))
 
-    def _show_rotation_approval_dialog(self):
-        """Show the rotation approval dialog and handle the results."""
-        logging.info(f"Showing rotation approval dialog for {len(self.rotation_suggestions)} suggestions.")
-        from src.ui.rotation_approval_dialog import RotationApprovalDialog
-        
-        dialog = RotationApprovalDialog(
-            self.rotation_suggestions,
-            self.main_window.image_pipeline,
-            self.main_window.apply_auto_edits_enabled,
-            self.worker_manager,
-            self.main_window
-        )
-        
-        self.main_window.hide_loading_overlay() # Hide overlay just before showing the dialog
-
-        if dialog.exec() == RotationApprovalDialog.DialogCode.Accepted:
-            logging.info("Rotation dialog accepted by user.")
-            approved_rotations = dialog.get_approved_rotations()
-            if approved_rotations:
-                logging.info(f"Applying {len(approved_rotations)} approved rotations.")
-                self._apply_approved_rotations(approved_rotations)
-            else:
-                logging.info("Rotation dialog accepted, but no rotations were selected for application.")
-                self.main_window.statusBar().showMessage("No rotations were approved.", 3000)
-        else:
-            logging.info("Rotation dialog was cancelled by the user.")
-            self.main_window.statusBar().showMessage("Rotation suggestions cancelled.", 3000)
-
     def _apply_approved_rotations(self, approved_rotations: Dict[str, int]):
         """Apply the approved rotations to the images."""
+        apply_start_time = time.perf_counter()
+        logging.info(f"APPLY_ROT: Start for {len(approved_rotations)} approved rotations.")
         from src.core.metadata_processor import MetadataProcessor
         
         total_rotations = len(approved_rotations)
@@ -572,54 +514,57 @@ class AppController(QObject):
         self.main_window.show_loading_overlay("Applying rotations...")
         
         for i, (file_path, rotation_degrees) in enumerate(approved_rotations.items(), 1):
+            single_file_start_time = time.perf_counter()
             try:
-                # Update loading text
                 filename = os.path.basename(file_path)
+                logging.info(f"APPLY_ROT: Processing {i}/{total_rotations}: {filename} for {rotation_degrees} degrees.")
                 progress_text = f"Rotating {i}/{total_rotations}: {filename}"
                 self.main_window.update_loading_text(progress_text)
                 
-                # Convert degrees to rotation direction
-                if rotation_degrees == 90:
-                    direction = 'clockwise'
-                elif rotation_degrees == -90:
-                    direction = 'counterclockwise'
-                elif rotation_degrees == 180:
-                    direction = '180'
+                if rotation_degrees == 90: direction = 'clockwise'
+                elif rotation_degrees == -90: direction = 'counterclockwise'
+                elif rotation_degrees == 180: direction = '180'
                 else:
-                    logging.warning(f"Unsupported rotation angle {rotation_degrees} for {filename}")
+                    logging.warning(f"APPLY_ROT: Unsupported rotation angle {rotation_degrees} for {filename}")
                     continue
                 
-                # Try metadata-only rotation first
+                t1 = time.perf_counter()
                 metadata_success, needs_lossy, message = MetadataProcessor.try_metadata_rotation_first(
                     file_path, direction, self.main_window.app_state.exif_disk_cache
                 )
-                
+                t2 = time.perf_counter()
+                logging.info(f"APPLY_ROT: try_metadata_rotation_first for {filename} took {t2 - t1:.4f}s. Success: {metadata_success}, Needs Lossy: {needs_lossy}")
+
                 if metadata_success:
-                    # Metadata rotation succeeded
                     self._handle_successful_rotation(file_path, direction, f"Rotated {filename} {rotation_degrees}° (lossless)", is_lossy=False)
                     successful_rotations += 1
                 elif needs_lossy:
-                    # Perform lossy rotation without asking (user already approved)
+                    logging.info(f"APPLY_ROT: Performing lossy rotation for {filename}")
+                    t3 = time.perf_counter()
                     success = MetadataProcessor.rotate_image(
                         file_path, direction, update_metadata_only=False,
                         exif_disk_cache=self.main_window.app_state.exif_disk_cache
                     )
+                    t4 = time.perf_counter()
+                    logging.info(f"APPLY_ROT: lossy rotate_image for {filename} took {t4 - t3:.4f}s. Success: {success}")
                     
                     if success:
                         self._handle_successful_rotation(file_path, direction, f"Rotated {filename} {rotation_degrees}° (lossy)", is_lossy=True)
                         successful_rotations += 1
                     else:
-                        logging.error(f"Failed to perform lossy rotation for {filename}")
+                        logging.error(f"APPLY_ROT: Failed to perform lossy rotation for {filename}")
                         failed_rotations += 1
                 else:
-                    logging.error(f"Rotation not supported for {filename}")
+                    logging.error(f"APPLY_ROT: Rotation not supported for {filename}. Message: {message}")
                     failed_rotations += 1
                     
             except Exception as e:
-                logging.error(f"Error rotating {file_path}: {e}")
+                logging.error(f"APPLY_ROT: Unhandled error rotating {file_path}: {e}", exc_info=True)
                 failed_rotations += 1
-        
-        # Hide loading overlay and show results
+            finally:
+                single_file_end_time = time.perf_counter()
+                logging.info(f"APPLY_ROT: Finished processing {os.path.basename(file_path)}. Total time for this file: {single_file_end_time - single_file_start_time:.4f}s")
+
         self.main_window.hide_loading_overlay()
         
         if successful_rotations > 0 and failed_rotations == 0:
@@ -629,30 +574,49 @@ class AppController(QObject):
         elif failed_rotations > 0:
             self.main_window.statusBar().showMessage(f"Failed to apply {failed_rotations} rotations.", 5000)
 
+        apply_end_time = time.perf_counter()
+        logging.info(f"APPLY_ROT: End. Total elapsed time: {apply_end_time - apply_start_time:.4f}s")
+
     def _handle_successful_rotation(self, file_path: str, direction: str, message: str, is_lossy: bool):
-        """Handle successful rotation - update caches and UI (simplified version)."""
-        # Clear image caches so the rotated image will be reloaded
+        """Handle successful rotation - update caches and UI."""
+        handle_start_time = time.perf_counter()
+        filename = os.path.basename(file_path)
+        logging.info(f"HSR: Start for {filename}. Lossy: {is_lossy}. Message: {message}")
+
+        t1 = time.perf_counter()
         self.main_window.image_pipeline.preview_cache.delete_all_for_path(file_path)
         self.main_window.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
-        
-        # Find and update the model item's icon
+        t2 = time.perf_counter()
+        logging.info(f"HSR: Cache clearing for {filename} took {t2 - t1:.4f}s.")
+
+        t3 = time.perf_counter()
         proxy_idx = self.main_window._find_proxy_index_for_path(file_path)
+        t4 = time.perf_counter()
+        logging.info(f"HSR: _find_proxy_index_for_path for {filename} took {t4 - t3:.4f}s.")
+
         if proxy_idx.isValid():
             source_idx = self.main_window.proxy_model.mapToSource(proxy_idx)
             item = self.main_window.file_system_model.itemFromIndex(source_idx)
             if item:
-                # Regenerate and set the new icon for the item
+                t5 = time.perf_counter()
                 new_thumbnail = self.main_window.image_pipeline.get_thumbnail_qpixmap(
                     file_path, apply_auto_edits=self.main_window.apply_auto_edits_enabled
                 )
+                t6 = time.perf_counter()
+                logging.info(f"HSR: get_thumbnail_qpixmap for {filename} took {t6 - t5:.4f}s.")
                 if new_thumbnail:
                     from PyQt6.QtGui import QIcon
                     item.setIcon(QIcon(new_thumbnail))
+                    logging.info(f"HSR: Set new icon for {filename}.")
         
-        # If this is the currently selected image, refresh the preview
         selected_paths = self.main_window._get_selected_file_paths_from_view()
         if file_path in selected_paths:
-            # Trigger a refresh of the current selection
+            logging.info(f"HSR: {filename} is in current selection, triggering selection changed handler.")
+            t7 = time.perf_counter()
             self.main_window._handle_file_selection_changed()
+            t8 = time.perf_counter()
+            logging.info(f"HSR: _handle_file_selection_changed took {t8 - t7:.4f}s.")
         
-        logging.info(message)
+        logging.info(message) # Log the original user-facing message
+        handle_end_time = time.perf_counter()
+        logging.info(f"HSR: End for {filename}. Total time: {handle_end_time - handle_start_time:.4f}s")
