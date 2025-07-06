@@ -10,9 +10,6 @@ from src.core.image_file_ops import ImageFileOperations
 import piexif # For EXIF manipulation with Pillow
 from pillow_heif import register_heif_opener, HeifImageFile # For HEIF/HEIC support
 
-# Register the HEIF opener once
-register_heif_opener()
-
 # Rotation directions
 RotationDirection = Literal['clockwise', 'counterclockwise', '180']
 
@@ -200,6 +197,7 @@ class ImageRotator:
                 try:
                     img.modify_exif({'Exif.Image.Orientation': str(new_orientation)})
                     logging.debug(f"[ImageRotator] Updated EXIF orientation for {os.path.basename(image_path)} using pyexiv2")
+                    pyexiv2_success = True
                 except Exception as e:
                     logging.warning(f"[ImageRotator] pyexiv2 could not update EXIF orientation for {os.path.basename(image_path)}: {e}")
 

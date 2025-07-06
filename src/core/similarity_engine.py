@@ -315,9 +315,9 @@ class SimilarityEngine(QObject):
                     avg_similarity = np.mean(pairwise_similarities[upper_triangle_indices])
                     group_similarities[group_id] = str(round(float(avg_similarity * 100), 2))
                 else:
-                    group_similarities[group_id] = "" # Single image in group, considered 100% similar to itself
+                    group_similarities[group_id] = "100" # Single image in group, considered 100% similar to itself
             else:
-                group_similarities[group_id] = "" # Single image in group, considered 100% similar to itself
+                group_similarities[group_id] = "100" # Single image in group, considered 100% similar to itself
 
         # Prepare the final results dictionary with similarity percentage
         results = {filepaths[i]: f"{labels[i]} - {group_similarities.get(labels[i], '0.0')}%" for i in range(num_samples)}
