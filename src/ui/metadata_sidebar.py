@@ -327,7 +327,7 @@ class MetadataSidebar(QWidget):
         elif self.current_image_path:
             logging.debug(f"[MetadataSidebar] Updating for single image: {self.current_image_path}")
             if self.raw_metadata:
-                logging.debug(f"  Metadata keys ({len(self.raw_metadata)}): {list(self.raw_metadata.keys())}")
+                logging.debug(f"  Metadata keys ({len(self.raw_metadata)}): {list(self.raw_metadata.keys())[:5]}...")  # Log first 20 keys for brevity
         else:
             logging.debug("[MetadataSidebar] Clearing sidebar (no image selected).")
         

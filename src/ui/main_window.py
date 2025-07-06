@@ -1607,6 +1607,7 @@ class MainWindow(QMainWindow):
 
     def _display_single_image_preview(self, file_path: str, file_data_from_model: Optional[Dict[str, Any]]):
         """Handles displaying preview and info for a single selected image."""
+        logging.info(f"Showing image: {os.path.basename(file_path)} (path: {file_path})")
         if not os.path.exists(file_path):
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage(f"Error: File not found - {os.path.basename(file_path)}", 5000)
@@ -1644,6 +1645,7 @@ class MainWindow(QMainWindow):
 
     def _display_rotated_image_preview(self, file_path: str, file_data_from_model: Optional[Dict[str, Any]], preserve_side_by_side: bool):
         """Handles displaying preview after rotation, preserving view mode."""
+        logging.info(f"Showing rotated image: {os.path.basename(file_path)} (path: {file_path})")
         if not os.path.exists(file_path):
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage(f"Error: File not found - {os.path.basename(file_path)}", 5000)
@@ -1713,6 +1715,7 @@ class MainWindow(QMainWindow):
 
     def _display_multi_selection_info(self, selected_paths: List[str]):
         """Handles UI updates when multiple images are selected."""
+        logging.info(f"Showing multiple images: {', '.join(map(os.path.basename, selected_paths))}")
         if not selected_paths:
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage("No items selected.")
@@ -2753,104 +2756,15 @@ class MainWindow(QMainWindow):
         logging.info(f"_update_sidebar_with_current_selection: Updating sidebar for {os.path.basename(file_path)}")
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
 
-    def _rotate_image_clockwise(self, file_path: str):
-        """Rotate the selected image 90° clockwise."""
-        self._perform_image_rotation(file_path, 'clockwise')
-
-    def _rotate_image_counterclockwise(self, file_path: str):
-        """Rotate the selected image 90° counterclockwise."""
-        self._perform_image_rotation(file_path, 'counterclockwise')
-
-    def _rotate_image_180(self, file_path: str):
-        """Rotate the selected image 180°."""
-        self._perform_image_rotation(file_path, '180')
-
-
-    def _perform_image_rotation(self, file_path: str, direction: str):
-        """
-        Perform image rotation with the approach: try metadata first, ask for lossy if needed.
-        
-        Args:
-            file_path: Path to the image file
-            direction: Rotation direction ('clockwise', 'counterclockwise', '180')
-        """
-        if not os.path.exists(file_path):
-            self.statusBar().showMessage("Error: File not found", 3000)
-            return
-
-        filename = os.path.basename(file_path)
-        
-        # Show progress with loading overlay
-        self.show_loading_overlay(f"Rotating {filename}...")
-        self.statusBar().showMessage(f"Rotating {filename}...", 0)
-        QApplication.processEvents()
-
-        try:
-            # First, try metadata-only rotation (lossless)
-            metadata_success, needs_lossy, message = MetadataProcessor.try_metadata_rotation_first(
-                file_path, direction, self.app_state.exif_disk_cache
-            )
-            
-            if metadata_success:
-                # Metadata rotation succeeded - we're done!
-                self._handle_successful_rotation(file_path, direction, message, is_lossy=False)
-                return
-            
-            if not needs_lossy:
-                # Metadata rotation failed and no lossy option available
-                self.statusBar().showMessage(message, 5000)
-                logging.warning(f"{message}")
-                return
-            
-            # Metadata rotation failed but lossy rotation is available
-            # Ask user for confirmation
-            rotation_desc = {
-                'clockwise': '90° clockwise',
-                'counterclockwise': '90° counterclockwise',
-                '180': '180°'
-            }.get(direction, direction)
-
-            proceed, never_ask_again = self.dialog_manager.show_lossy_rotation_confirmation_dialog(
-                filename, rotation_desc)
-
-            # Handle "never ask again" setting
-            if never_ask_again:
-                from src.core.app_settings import set_rotation_confirm_lossy
-                set_rotation_confirm_lossy(False)
-                self.statusBar().showMessage("Lossy rotation confirmations disabled for future operations.", 3000)
-            
-            if not proceed:
-                self.statusBar().showMessage("Rotation cancelled by user.", 3000)
-                return
-            
-            # Perform lossy rotation
-            success = MetadataProcessor.rotate_image(
-                file_path, direction, update_metadata_only=False,
-                exif_disk_cache=self.app_state.exif_disk_cache
-            )
-            
-            if success:
-                lossy_message = f"Rotated {filename} {rotation_desc} (lossy)"
-                self._handle_successful_rotation(file_path, direction, lossy_message, is_lossy=True)
-            else:
-                error_msg = f"Failed to perform lossy rotation for {filename}"
-                self.statusBar().showMessage(error_msg, 5000)
-                logging.error(f"{error_msg}")
-
-        except Exception as e:
-            error_msg = f"Error rotating {filename}: {str(e)}"
-            self.statusBar().showMessage(error_msg, 5000)
-            logging.error(f"{error_msg}", exc_info=True)
-        finally:
-            self.hide_loading_overlay()
-
     def _handle_successful_rotation(self, file_path: str, direction: str, message: str, is_lossy: bool):
         """Handle successful rotation - update caches and UI."""
         filename = os.path.basename(file_path)
         
         # Clear image caches so the rotated image will be reloaded
-        self.image_pipeline.preview_cache.delete_all_for_path(file_path)
-        self.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
+        # Clear ALL image caches so the rotated image will be reloaded.
+        # This is crucial to ensure that subsequent processing (like rotation detection)
+        # gets the new image data and not a stale cached version from the pipeline.
+        self.image_pipeline.clear_all_image_caches()
         
         # Find the model item, update its icon, and get its data
         item_data = None
@@ -2887,14 +2801,17 @@ class MainWindow(QMainWindow):
 
     def _rotate_current_image_clockwise(self):
         """Rotate the currently selected image(s) 90° clockwise (for keyboard shortcut)."""
+        logging.info("Clockwise rotation triggered via shortcut/menu.")
         self._rotate_selected_images('clockwise')
 
     def _rotate_current_image_counterclockwise(self):
         """Rotate the currently selected image(s) 90° counterclockwise (for keyboard shortcut)."""
+        logging.info("Counter-clockwise rotation triggered via shortcut/menu.")
         self._rotate_selected_images('counterclockwise')
 
     def _rotate_current_image_180(self):
         """Rotate the currently selected image(s) 180° (for keyboard shortcut)."""
+        logging.info("180-degree rotation triggered via shortcut/menu.")
         self._rotate_selected_images('180')
 
     def _rotate_selected_images(self, direction: str):
@@ -3445,6 +3362,7 @@ class MainWindow(QMainWindow):
         """Displays the current image and the rotated suggestion side-by-side."""
         sbs_start_time = time.perf_counter()
         logging.info(f"SBS_COMP: Start for {os.path.basename(file_path)}")
+        logging.info(f"Showing side-by-side comparison for: {os.path.basename(file_path)} (path: {file_path})")
 
         if file_path not in self.rotation_suggestions:
             logging.warning(f"SBS_COMP: File {os.path.basename(file_path)} not in rotation_suggestions.")
