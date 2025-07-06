@@ -7,11 +7,22 @@ from PIL import Image, ImageOps
 import pyexiv2
 from pathlib import Path
 from src.core.image_file_ops import ImageFileOperations
+import piexif # For EXIF manipulation with Pillow
+from pillow_heif import register_heif_opener, HeifImageFile # For HEIF/HEIC support
+
+# Register the HEIF opener once
+register_heif_opener()
 
 # Rotation directions
 RotationDirection = Literal['clockwise', 'counterclockwise', '180']
 
 class ImageRotator:
+    # Define supported image formats for different rotation types
+    _RAW_FORMATS_EXIF_ONLY = {'.arw', '.cr2', '.nef', '.dng', '.orf', '.raf', '.rw2', '.pef', '.srw'}
+    _LOSSLESS_JPEG_FORMATS = {'.jpg', '.jpeg'}
+    _LOSSLESS_HEIF_FORMATS = {'.heif', '.heic'} # For lossless HEIF/HEIC rotation via metadata
+    _STANDARD_PIXEL_ROTATION_FORMATS = {'.png', '.tiff', '.tif', '.bmp'} # Removed .heif, .heic
+    _XMP_UPDATE_SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.tiff', '.tif', '.heif', '.heic'}
     """
     Handles image rotation with support for:
     1. Lossless rotation for JPEG files (using jpegtran if available)
@@ -34,6 +45,22 @@ class ImageRotator:
     
     def _get_current_orientation(self, image_path: str) -> int:
         """Get current EXIF orientation value (1-8, default 1)."""
+        file_ext = os.path.splitext(image_path)[1].lower()
+
+        if file_ext in self._LOSSLESS_HEIF_FORMATS:
+            try:
+                with Image.open(image_path) as img:
+                    if isinstance(img, HeifImageFile):
+                        exif_bytes = img.info.get("exif")
+                        if exif_bytes:
+                            exif_dict = piexif.load(exif_bytes)
+                            orientation = exif_dict["0th"].get(piexif.ImageIFD.Orientation)
+                            if orientation:
+                                return int(orientation)
+            except Exception as e:
+                logging.warning(f"[ImageRotator] Could not read HEIF/HEIC orientation from {os.path.basename(image_path)} using pillow-heif: {e}")
+            return 1 # Default if pillow-heif fails or no EXIF
+
         try:
             with pyexiv2.Image(image_path, encoding='utf-8') as img:
                 exif_data = img.read_exif()
@@ -142,7 +169,10 @@ class ImageRotator:
                     save_kwargs['optimize'] = True
                 elif img.format == 'PNG':
                     save_kwargs['optimize'] = True
-                
+                elif img.format in ['HEIF', 'HEIC']: # Pillow-heif handles HEIF/HEIC
+                    # Pillow-heif handles quality and other parameters automatically
+                    pass
+
                 rotated.save(image_path, format=img.format, **save_kwargs)
                 logging.info(f"[ImageRotator] Standard rotation successful: {os.path.basename(image_path)}")
                 return True
@@ -155,36 +185,80 @@ class ImageRotator:
         """
         Update XMP orientation metadata in the image file.
         This ensures proper orientation handling by applications that support XMP.
+        Prioritizes pyexiv2, but uses pillow-heif for HEIF/HEIC.
         """
+        file_ext = os.path.splitext(image_path)[1].lower()
+
+        if file_ext in self._LOSSLESS_HEIF_FORMATS:
+            # Use pillow-heif for HEIF/HEIC metadata update
+            return self._update_heif_orientation_lossless(image_path, new_orientation)
+
+        pyexiv2_success = False
         try:
             with pyexiv2.Image(image_path, encoding='utf-8') as img:
                 # Update EXIF orientation
                 try:
                     img.modify_exif({'Exif.Image.Orientation': str(new_orientation)})
-                    logging.debug(f"[ImageRotator] Updated EXIF orientation for {os.path.basename(image_path)}")
+                    logging.debug(f"[ImageRotator] Updated EXIF orientation for {os.path.basename(image_path)} using pyexiv2")
                 except Exception as e:
-                    logging.warning(f"[ImageRotator] Could not update EXIF orientation for {os.path.basename(image_path)}: {e}")
-                
-                # Try to set XMP orientation if the format supports it
-                file_ext = os.path.splitext(image_path)[1].lower()
-                if file_ext in ['.jpg', '.jpeg', '.tiff', '.tif']:  # Formats that typically support XMP
+                    logging.warning(f"[ImageRotator] pyexiv2 could not update EXIF orientation for {os.path.basename(image_path)}: {e}")
+
+                # Try to set XMP orientation if the format typically supports it via pyexiv2
+                if file_ext in self._XMP_UPDATE_SUPPORTED_EXTENSIONS:
                     try:
-                        # Check if image already has XMP data
+                        # Check if image already has XMP data or if it's a JPEG (which can always get XMP)
                         xmp_data = img.read_xmp()
-                        if xmp_data or file_ext in ['.jpg', '.jpeg']:  # JPEG can always get XMP
+                        if xmp_data or file_ext in ['.jpg', '.jpeg']:
                             img.modify_xmp({'Xmp.tiff.Orientation': str(new_orientation)})
-                            logging.debug(f"[ImageRotator] Updated XMP orientation for {os.path.basename(image_path)}")
+                            logging.debug(f"[ImageRotator] Updated XMP orientation for {os.path.basename(image_path)} using pyexiv2")
+                            pyexiv2_success = True
                     except Exception as e:
-                        logging.debug(f"[ImageRotator] XMP orientation not updated for {os.path.basename(image_path)}: {e}")
-                
-                logging.info(f"[ImageRotator] Orientation metadata updated to {new_orientation}: {os.path.basename(image_path)}")
-                return True
-                
+                        logging.debug(f"[ImageRotator] pyexiv2 XMP orientation not updated for {os.path.basename(image_path)}: {e}")
+
         except Exception as e:
-            logging.warning(f"[ImageRotator] Could not update orientation metadata for {os.path.basename(image_path)}: {e}")
+            logging.warning(f"[ImageRotator] pyexiv2 could not open/process {os.path.basename(image_path)} for metadata update: {e}")
+
+        if pyexiv2_success:
+            logging.info(f"[ImageRotator] Orientation metadata updated to {new_orientation}: {os.path.basename(image_path)}")
+            return True
+        else:
+            logging.warning(f"[ImageRotator] Failed to update orientation metadata for {os.path.basename(image_path)} using pyexiv2.")
             return False
-    
-    def rotate_image(self, image_path: str, direction: RotationDirection, 
+
+    def _update_heif_orientation_lossless(self, image_path: str, new_orientation: int) -> bool:
+        """
+        Update EXIF orientation metadata for HEIF/HEIC files using pillow-heif and piexif.
+        This method aims for lossless metadata update by only modifying the EXIF tag in-place.
+        """
+        try:
+            # 1. Read existing EXIF data using pillow-heif
+            with Image.open(image_path) as img:
+                if not isinstance(img, HeifImageFile):
+                    logging.warning(f"[ImageRotator] Not a HEIF/HEIC file, cannot use pillow-heif specific update: {os.path.basename(image_path)}")
+                    return False
+
+                exif_bytes = img.info.get("exif")
+                if not exif_bytes:
+                    logging.warning(f"[ImageRotator] No EXIF data found in {os.path.basename(image_path)}. Cannot update orientation.")
+                    return False
+
+            # 2. Modify the Orientation tag using piexif
+            exif_dict = piexif.load(exif_bytes)
+            exif_dict["0th"][piexif.ImageIFD.Orientation] = new_orientation
+            new_exif_bytes = piexif.dump(exif_dict)
+
+            # 3. Insert the new EXIF data back into the file using piexif.insert
+            # This should modify the EXIF block in-place without re-encoding the image data.
+            piexif.insert(new_exif_bytes, image_path)
+
+            logging.info(f"[ImageRotator] Lossless HEIF/HEIC metadata update successful using piexif.insert: {os.path.basename(image_path)}")
+            return True
+
+        except Exception as e:
+            logging.error(f"[ImageRotator] Error updating HEIF/HEIC orientation with piexif.insert for {os.path.basename(image_path)}: {e}")
+            return False
+
+    def rotate_image(self, image_path: str, direction: RotationDirection,
                     update_metadata_only: bool = False) -> Tuple[bool, str]:
         """
         Rotate an image in the specified direction.
@@ -218,9 +292,8 @@ class ImageRotator:
         method_used = ""
         
         # Check if this is a RAW format that should only use metadata rotation
-        raw_formats = ['.arw', '.cr2', '.nef', '.dng', '.orf', '.raf', '.rw2', '.pef', '.srw']
-        is_raw_format = file_ext in raw_formats
-        
+        is_raw_format = file_ext in self._RAW_FORMATS_EXIF_ONLY
+
         if update_metadata_only or is_raw_format:
             # Only update metadata, don't rotate pixels
             success = self._update_xmp_orientation(image_path, new_orientation)
@@ -230,7 +303,7 @@ class ImageRotator:
                 method_used = "metadata-only"
         else:
             # Rotate the actual image pixels
-            if file_ext in ['.jpg', '.jpeg'] and self.jpegtran_available:
+            if file_ext in self._LOSSLESS_JPEG_FORMATS and self.jpegtran_available:
                 # Try lossless JPEG rotation first
                 success = self._rotate_jpeg_lossless(image_path, direction)
                 method_used = "lossless JPEG"
@@ -239,17 +312,22 @@ class ImageRotator:
                     # Fallback to standard rotation (lossy for JPEG)
                     success = self._rotate_image_standard(image_path, direction)
                     method_used = "standard (lossy fallback)"
-            else:
-                # Use standard rotation for PNG and other formats (lossy re-encoding)
+            elif file_ext in self._LOSSLESS_HEIF_FORMATS:
+                # Use metadata-only rotation for HEIF/HEIC (lossless)
+                success = self._update_xmp_orientation(image_path, new_orientation)
+                method_used = "lossless HEIF/HEIC (metadata-only)"
+            elif file_ext in self._STANDARD_PIXEL_ROTATION_FORMATS:
+                # Use standard rotation for PNG, TIFF, BMP (lossy re-encoding)
                 success = self._rotate_image_standard(image_path, direction)
-                if file_ext in ['.png']:
-                    method_used = "standard (lossy re-encoding)"
-                else:
-                    method_used = "standard"
-            
-            # Update orientation metadata after rotation
-            # Reset to normal orientation (1) since we've physically rotated the image
-            if success:
+                method_used = "standard (pixel rotation)"
+            else:
+                # This case should ideally not be reached if is_rotation_supported is checked first
+                success = False
+                method_used = "unsupported format for pixel rotation"
+
+            # Update orientation metadata after pixel rotation, resetting to 1
+            # This block should only execute if pixel rotation actually occurred.
+            if success and method_used not in ["lossless HEIF/HEIC (metadata-only)", "metadata-only (RAW format)", "metadata-only"]:
                 self._update_xmp_orientation(image_path, 1)
         
         if success:
@@ -275,11 +353,13 @@ class ImageRotator:
     
     def get_supported_formats(self) -> list[str]:
         """Get list of supported image formats for rotation."""
-        formats = ['.jpg', '.jpeg', '.png', '.tiff', '.tif']
+        formats = list(self._LOSSLESS_JPEG_FORMATS.union(self._LOSSLESS_HEIF_FORMATS).union(self._STANDARD_PIXEL_ROTATION_FORMATS).union(self._RAW_FORMATS_EXIF_ONLY))
         if self.jpegtran_available:
-            formats.append('.jpg (lossless)')
-        return formats
-    
+            formats.append('.jpg (lossless via jpegtran)')
+        formats.append('.heif (lossless via metadata)') # Add specific mention for HEIF/HEIC lossless
+        formats.append('.heic (lossless via metadata)')
+        return sorted(list(set(formats))) # Use set to remove duplicates, then convert to list and sort
+
     def try_metadata_rotation_first(self, image_path: str, direction: RotationDirection) -> Tuple[bool, bool, str]:
         """
         Try metadata-only rotation first (the preferred lossless method).
@@ -309,10 +389,15 @@ class ImageRotator:
             logging.info(f"[ImageRotator] {message}")
             return True, False, message
         else:
-            # Check if this format supports pixel rotation
-            pixel_rotation_formats = ['.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp']
-            raw_formats = ['.arw', '.cr2', '.nef', '.dng', '.orf', '.raf', '.rw2', '.pef', '.srw']
-            
+            # Check if this format supports pixel rotation as a fallback
+            # For HEIF/HEIC, if metadata rotation fails, we don't offer lossy pixel rotation.
+            if file_ext in self._LOSSLESS_HEIF_FORMATS:
+                message = f"Metadata rotation failed for {filename} (HEIF/HEIC). No other lossless rotation method available."
+                return False, False, message
+
+            pixel_rotation_formats = self._LOSSLESS_JPEG_FORMATS.union(self._STANDARD_PIXEL_ROTATION_FORMATS)
+            raw_formats = self._RAW_FORMATS_EXIF_ONLY
+
             if file_ext in pixel_rotation_formats:
                 # Pixel rotation is possible but will be lossy (except lossless JPEG)
                 if file_ext in ['.jpg', '.jpeg'] and self.jpegtran_available:
@@ -334,9 +419,9 @@ class ImageRotator:
         file_ext = Path(image_path).suffix.lower()
         
         # Standard formats that support pixel rotation
-        pixel_rotation_formats = ['.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp']
-        
-        # RAW formats that support metadata-only rotation
-        raw_formats = ['.arw', '.cr2', '.nef', '.dng', '.orf', '.raf', '.rw2', '.pef', '.srw']
-        
-        return file_ext in pixel_rotation_formats or file_ext in raw_formats
+        pixel_rotation_formats = self._LOSSLESS_JPEG_FORMATS.union(self._STANDARD_PIXEL_ROTATION_FORMATS)
+
+        # Formats that support metadata-only rotation (lossless)
+        metadata_only_formats = self._RAW_FORMATS_EXIF_ONLY.union(self._LOSSLESS_HEIF_FORMATS)
+
+        return file_ext in pixel_rotation_formats or file_ext in metadata_only_formats

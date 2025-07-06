@@ -2,13 +2,14 @@ import os
 import time
 import pickle # For caching embeddings
 import logging # Added for startup logging
-from typing import List, Dict, Tuple, Optional, TYPE_CHECKING
+from typing import List, Dict, Tuple, Optional, Union, TYPE_CHECKING
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 # from sentence_transformers import SentenceTransformer # Moved to _load_model
 from PIL import Image # Explicitly import for type hinting if needed
 from src.core.image_pipeline import ImagePipeline # Import ImagePipeline
 from sklearn.cluster import DBSCAN # Import DBSCAN
 import numpy as np # Import numpy for array manipulation
+from sklearn.metrics.pairwise import cosine_similarity # Import for similarity calculation
 # import torch # Import torch for CUDA check - No longer needed here for constant
 from .app_settings import DEFAULT_CLIP_MODEL, is_pytorch_cuda_available # Import from app_settings
 
@@ -27,7 +28,7 @@ EMBEDDING_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'phototagg
 os.makedirs(EMBEDDING_CACHE_DIR, exist_ok=True)
 
 # DBSCAN parameters (can be tuned)
-DBSCAN_EPS = 0.1  # For cosine metric: 1 - cosine_similarity. Smaller eps = higher similarity.
+DBSCAN_EPS = 0.05  # For cosine metric: 1 - cosine_similarity. Smaller eps = higher similarity.
 DBSCAN_MIN_SAMPLES = 2 # Minimum number of images to form a dense region (cluster).
 
 class SimilarityEngine(QObject):
@@ -188,6 +189,9 @@ class SimilarityEngine(QObject):
             try:
                 logging.debug(f"Encoding batch {i//batch_size + 1}/{(total_to_process + batch_size - 1)//batch_size}...")
                 # SentenceTransformer will use its configured device (GPU if available)
+                # Ensure model is not None for type checker
+                if self.model is None:
+                    raise RuntimeError("SentenceTransformer model is not loaded.")
                 batch_embeds = self.model.encode(batch_images, show_progress_bar=False, convert_to_numpy=True)
                 
                 for path_idx, path in enumerate(valid_paths_in_batch):
@@ -289,7 +293,35 @@ class SimilarityEngine(QObject):
             labels = np.zeros(num_samples, dtype=int)
             logging.warning("DBSCAN failed. Assigning all to cluster 0.")
 
-        results = {filepaths[i]: int(labels[i]) for i in range(num_samples)}
+        # Group filepaths by their assigned label
+        grouped_filepaths: Dict[int, List[str]] = {}
+        for i, label in enumerate(labels):
+            grouped_filepaths.setdefault(int(label), []).append(filepaths[i])
+
+        group_similarities: Dict[int, str] = {} # Stores group_id -> average_similarity_percentage
+
+        for group_id, paths_in_group in grouped_filepaths.items():
+            if len(paths_in_group) > 1:
+                # Get embeddings for this group
+                group_embeds = np.array([embeddings[path] for path in paths_in_group], dtype=np.float32)
+
+                # Calculate pairwise cosine similarities
+                pairwise_similarities = cosine_similarity(group_embeds)
+
+                # We want the average of the upper triangle (excluding diagonal which is 1.0)
+                upper_triangle_indices = np.triu_indices(pairwise_similarities.shape[0], k=1)
+
+                if upper_triangle_indices[0].size > 0: # Ensure there are pairs to compare
+                    avg_similarity = np.mean(pairwise_similarities[upper_triangle_indices])
+                    group_similarities[group_id] = str(round(float(avg_similarity * 100), 2))
+                else:
+                    group_similarities[group_id] = "" # Single image in group, considered 100% similar to itself
+            else:
+                group_similarities[group_id] = "" # Single image in group, considered 100% similar to itself
+
+        # Prepare the final results dictionary with similarity percentage
+        results = {filepaths[i]: f"{labels[i]} - {group_similarities.get(labels[i], '0.0')}%" for i in range(num_samples)}
+
         self.clustering_complete.emit(results)
 
 
