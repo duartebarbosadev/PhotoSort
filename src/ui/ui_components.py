@@ -229,10 +229,11 @@ class RotationDetectionWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(str)
     
-    def __init__(self, image_paths: List[str], image_pipeline: ImagePipeline, apply_auto_edits: bool = False, parent=None):
+    def __init__(self, image_paths: List[str], image_pipeline: ImagePipeline, exif_cache: 'ExifCache', apply_auto_edits: bool = False, parent=None):
         super().__init__(parent)
         self.image_paths = image_paths
         self.image_pipeline = image_pipeline
+        self.exif_cache = exif_cache
         self.apply_auto_edits = apply_auto_edits
         self._should_stop = False
     
@@ -258,7 +259,7 @@ class RotationDetectionWorker(QObject):
                 return not self._should_stop
             
             # Pass the image pipeline instance to the detector
-            detector = RotationDetector(self.image_pipeline)
+            detector = RotationDetector(self.image_pipeline, self.exif_cache)
             detector.detect_rotation_in_batch(
                 image_paths=self.image_paths,
                 result_callback=result_callback,

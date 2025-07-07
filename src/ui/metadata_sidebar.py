@@ -611,7 +611,6 @@ class MetadataSidebar(QWidget):
     
     def add_camera_settings_card(self):
         """Add camera and capture settings card"""
-        logging.info(f"[MetadataSidebar] add_camera_settings_card called")
         logging.info(f"[MetadataSidebar] Raw metadata keys available: {len(self.raw_metadata)} total")
         
         # Log some sample keys to debug

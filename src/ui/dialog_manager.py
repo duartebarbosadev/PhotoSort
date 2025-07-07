@@ -417,7 +417,7 @@ class DialogManager:
 
         text = (
             f"The automatic rotation feature requires a model file that was not found at:\n"
-            f"<b>{model_path}</b>\n\n"
+            f"{model_path}\n\n"
             "Please download the model and place it in the correct directory to enable this feature."
         )
         dialog.setText(text)

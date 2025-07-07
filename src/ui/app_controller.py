@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Tuple
 from PyQt6.QtCore import QObject
 
 from src.core.app_settings import add_recent_folder, get_preview_cache_size_bytes
+from src.core.caching.exif_cache import ExifCache
 from src.core.file_scanner import SUPPORTED_EXTENSIONS
 from src.core.image_file_ops import ImageFileOperations
 from src.core.image_pipeline import ImagePipeline
@@ -230,7 +231,7 @@ class AppController(QObject):
         self.main_window.rotation_suggestions.clear()
         
         image_paths = [fd['path'] for fd in self.app_state.image_files_data]
-        self.worker_manager.start_rotation_detection(image_paths, self.main_window.apply_auto_edits_enabled)
+        self.worker_manager.start_rotation_detection(image_paths, self.app_state.exif_disk_cache, self.main_window.apply_auto_edits_enabled)
     
     def reload_current_folder(self):
         if self.app_state.image_files_data: 
@@ -476,13 +477,7 @@ class AppController(QObject):
 
         logging.info(f"Rotation analysis finished. Received {len(self.main_window.rotation_suggestions)} total suggestions.")
 
-        final_suggestions = {}
-        for path, model_rotation in self.main_window.rotation_suggestions.items():
-            exif_data = self.app_state.exif_disk_cache.get(path)
-            exif_rotation = ImageOrientationHandler.get_rotation_from_exif(exif_data)
-            net_rotation = ImageOrientationHandler.get_composite_rotation(exif_rotation, model_rotation)
-            if net_rotation != 0:
-                final_suggestions[path] = net_rotation
+        final_suggestions = {path: rotation for path, rotation in self.main_window.rotation_suggestions.items() if rotation != 0}
 
         self.main_window.rotation_suggestions = final_suggestions
         self.main_window.hide_loading_overlay()
