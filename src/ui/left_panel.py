@@ -86,6 +86,7 @@ class LeftPanel(QWidget):
         self.view_rotation_icon.setToolTip("Rotation View")
         self.view_rotation_icon.setCheckable(True)
         self.view_rotation_icon.setMaximumSize(24, 24)
+        self.view_rotation_icon.setVisible(False) # Hidden by default
 
         view_icons_layout.addWidget(self.view_list_icon)
         view_icons_layout.addWidget(self.view_icons_icon)

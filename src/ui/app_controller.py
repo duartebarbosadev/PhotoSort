@@ -481,6 +481,12 @@ class AppController(QObject):
 
         self.main_window.rotation_suggestions = final_suggestions
         self.main_window.hide_loading_overlay()
+
+        if not self.main_window.rotation_suggestions:
+            self.main_window.statusBar().showMessage("Rotation analysis complete. No rotation suggestions found.", 5000)
+            return
+
+        self.main_window.left_panel.view_rotation_icon.setVisible(True)
         self.main_window.left_panel.set_view_mode_rotation()
 
     def handle_rotation_detection_error(self, message: str):
@@ -571,6 +577,10 @@ class AppController(QObject):
 
         apply_end_time = time.perf_counter()
         logging.info(f"APPLY_ROT: End. Total elapsed time: {apply_end_time - apply_start_time:.4f}s")
+
+        # If no more rotation suggestions, hide the rotation view
+        if not self.main_window.rotation_suggestions:
+            self.main_window._hide_rotation_view()
 
     def _handle_successful_rotation(self, file_path: str, direction: str, message: str, is_lossy: bool):
         """Handle successful rotation - update caches and UI."""

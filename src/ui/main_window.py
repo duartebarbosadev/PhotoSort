@@ -195,15 +195,16 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         logging.info(f"MainWindow.__init__ - _connect_signals done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
         
-        section_start_time = time.perf_counter()
-        self.left_panel.set_view_mode_list()
-        logging.info(f"MainWindow.__init__ - _set_view_mode_list done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
+        
         
         self._update_image_info_label() # Set initial info label text
         logging.info(f"MainWindow.__init__ - _update_image_info_label done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
 
         logging.info(f"MainWindow.__init__ - End (Total: {time.perf_counter() - init_start_time:.4f}s)")
         
+        # Hide rotation view by default
+        self._hide_rotation_view()
+
         # Load initial folder if provided
         if self.initial_folder and os.path.isdir(self.initial_folder):
             QTimer.singleShot(0, lambda: self.app_controller.load_folder(self.initial_folder))
@@ -3421,3 +3422,13 @@ class MainWindow(QMainWindow):
             rotation = self.rotation_suggestions.pop(file_path)
             self.app_controller._apply_approved_rotations({file_path: rotation})
             self._rebuild_rotation_view()
+
+    def _hide_rotation_view(self):
+        """Hides the rotation view and switches back to the default list view."""
+        logging.info("Hiding rotation view as no more suggestions.")
+        self.left_panel.set_view_mode_list()
+        self.accept_all_button.setVisible(False)
+        self.accept_button.setVisible(False)
+        self.left_panel.view_rotation_icon.setVisible(False)
+        self.statusBar().showMessage("All rotation suggestions processed.", 5000)
+        self._rebuild_model_view() # Rebuild view to reflect changes and switch mode
