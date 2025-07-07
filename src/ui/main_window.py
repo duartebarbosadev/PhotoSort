@@ -3406,10 +3406,15 @@ class MainWindow(QMainWindow):
         logging.info(f"SBS_COMP: End. Total time: {sbs_end_time - sbs_start_time:.4f}s")
 
     def _accept_all_rotations(self):
-        """Applies all suggested rotations."""
+        """Applies all suggested rotations and returns to the list view."""
+        if not self.rotation_suggestions:
+            self.statusBar().showMessage("No rotation suggestions to accept.", 3000)
+            return
+
         self.app_controller._apply_approved_rotations(self.rotation_suggestions)
         self.rotation_suggestions.clear()
-        self._rebuild_rotation_view()
+        # hide_rotation_view will switch to list view and rebuild the model
+        self._hide_rotation_view()
 
     def _accept_current_rotation(self):
         selected_paths = self._get_selected_file_paths_from_view()
@@ -3417,11 +3422,51 @@ class MainWindow(QMainWindow):
             self._accept_rotation(selected_paths[0])
 
     def _accept_rotation(self, file_path: str):
-        """Applies a single rotation suggestion."""
+        """Applies a single rotation suggestion and selects the next/previous item."""
         if file_path in self.rotation_suggestions:
+            # Get the list of items before modification to determine the next selection
+            current_items = list(self.rotation_suggestions.keys())
+            try:
+                current_index = current_items.index(file_path)
+            except ValueError:
+                current_index = -1
+
+            # Apply the rotation
             rotation = self.rotation_suggestions.pop(file_path)
             self.app_controller._apply_approved_rotations({file_path: rotation})
+
+            # If no suggestions are left, hide the rotation view and go back to the list view
+            if not self.rotation_suggestions:
+                self._hide_rotation_view()
+                return
+
+            # --- Determine the next item to select ---
+            remaining_items = list(self.rotation_suggestions.keys())
+            path_to_select = None
+
+            if current_index != -1:
+                # If the removed item was the last one, select the new last item (previous)
+                if current_index >= len(remaining_items):
+                    next_index_to_select = len(remaining_items) - 1
+                # Otherwise, select the item that took the place of the removed one (next)
+                else:
+                    next_index_to_select = current_index
+                
+                if 0 <= next_index_to_select < len(remaining_items):
+                    path_to_select = remaining_items[next_index_to_select]
+
+            # Rebuild the view now that an item has been removed
             self._rebuild_rotation_view()
+
+            # Now, select the determined item in the rebuilt view
+            if path_to_select:
+                active_view = self._get_active_file_view()
+                if active_view:
+                    proxy_idx_to_select = self._find_proxy_index_for_path(path_to_select)
+                    if proxy_idx_to_select.isValid():
+                        active_view.setCurrentIndex(proxy_idx_to_select)
+                        active_view.selectionModel().select(proxy_idx_to_select, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                        active_view.scrollTo(proxy_idx_to_select, QAbstractItemView.ScrollHint.EnsureVisible)
 
     def _hide_rotation_view(self):
         """Hides the rotation view and switches back to the default list view."""

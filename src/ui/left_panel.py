@@ -82,7 +82,7 @@ class LeftPanel(QWidget):
         self.view_date_icon.setMaximumSize(24, 24)
 
         self.view_rotation_icon = QPushButton()
-        self.view_rotation_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.view_rotation_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         self.view_rotation_icon.setToolTip("Rotation View")
         self.view_rotation_icon.setCheckable(True)
         self.view_rotation_icon.setMaximumSize(24, 24)
