@@ -2,15 +2,26 @@ from typing import List, Tuple
 import webbrowser
 
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QMessageBox, QFrame, QGridLayout, QSpacerItem,
-    QComboBox, QSizePolicy
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QCheckBox,
+    QMessageBox,
+    QFrame,
+    QGridLayout,
+    QSpacerItem,
+    QComboBox,
+    QSizePolicy,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QPixmap, QPainter, QLinearGradient, QColor
 
 from src.core.app_settings import (
-    get_rotation_confirm_lossy, is_pytorch_cuda_available, get_preview_cache_size_gb,
-    set_preview_cache_size_gb, get_exif_cache_size_mb, set_exif_cache_size_mb
+    get_rotation_confirm_lossy,
+    is_pytorch_cuda_available,
+    get_preview_cache_size_gb,
+    get_exif_cache_size_mb,
 )
 
 
@@ -20,7 +31,7 @@ class DialogManager:
     def __init__(self, parent):
         """
         Initialize the DialogManager.
-        
+
         Args:
             parent: The parent widget, typically the MainWindow.
         """
@@ -50,7 +61,7 @@ class DialogManager:
         # App info (left side)
         app_info_layout = QVBoxLayout()
         app_info_layout.setSpacing(3)
-        
+
         title_label = QLabel("PhotoSort")
         title_label.setObjectName("aboutTitle")
         app_info_layout.addWidget(title_label)
@@ -58,7 +69,6 @@ class DialogManager:
         version_label = QLabel("Version 1.0b")
         version_label.setObjectName("aboutVersion")
         app_info_layout.addWidget(version_label)
-
 
         header_layout.addLayout(app_info_layout)
         header_layout.addStretch()
@@ -85,7 +95,7 @@ class DialogManager:
         tech_items = [
             f"🧠 Embeddings: SentenceTransformer (CLIP) on {'GPU (CUDA)' if is_pytorch_cuda_available() else 'CPU'}",
             f"🔍 {clustering_info}",
-            "📋 Metadata: pyexiv2 • 🎨 Interface: PyQt6 • 🐍 Runtime: Python"
+            "📋 Metadata: pyexiv2 • 🎨 Interface: PyQt6 • 🐍 Runtime: Python",
         ]
 
         for item in tech_items:
@@ -103,7 +113,9 @@ class DialogManager:
         # GitHub button
         github_button = QPushButton("🔗 View on GitHub")
         github_button.setObjectName("aboutGithubButton")
-        github_button.clicked.connect(lambda: webbrowser.open("https://github.com/duartebarbosadev/PhotoSort"))
+        github_button.clicked.connect(
+            lambda: webbrowser.open("https://github.com/duartebarbosadev/PhotoSort")
+        )
         github_layout.addWidget(github_button)
 
         content_layout.addLayout(github_layout)
@@ -112,7 +124,11 @@ class DialogManager:
         main_layout.addLayout(content_layout)
 
         # Spacer
-        main_layout.addSpacerItem(QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
+        main_layout.addSpacerItem(
+            QSpacerItem(
+                20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
+            )
+        )
 
         # Footer with close button
         footer_layout = QHBoxLayout()
@@ -130,14 +146,16 @@ class DialogManager:
 
         dialog.exec()
 
-    def show_lossy_rotation_confirmation_dialog(self, filename: str, rotation_type: str) -> Tuple[bool, bool]:
+    def show_lossy_rotation_confirmation_dialog(
+        self, filename: str, rotation_type: str
+    ) -> Tuple[bool, bool]:
         """
         Show a confirmation dialog for lossy rotation with a 'never ask again' option.
-        
+
         Args:
             filename: The name of the file being rotated.
             rotation_type: A description of the rotation (e.g., "90° clockwise").
-            
+
         Returns:
             A tuple containing (proceed_with_rotation: bool, never_ask_again: bool).
         """
@@ -156,8 +174,8 @@ class DialogManager:
 
         message_text = f"Lossless rotation failed for:\n{filename}"
         warning_text = f"Proceed with lossy rotation {rotation_type}?\nThis will re-encode the image and may reduce quality."
-        
-        if "images" in filename.lower(): # Batch operation
+
+        if "images" in filename.lower():  # Batch operation
             warning_text = f"Proceed with lossy rotation {rotation_type} for all selected images?\nThis will re-encode the images and may reduce quality."
 
         message_label = QLabel(message_text)
@@ -189,11 +207,11 @@ class DialogManager:
         button_layout.addWidget(proceed_button)
 
         layout.addLayout(button_layout)
-        
+
         # Styling is handled by dark_theme.qss
 
         result = dialog.exec()
-        proceed = (result == QDialog.DialogCode.Accepted)
+        proceed = result == QDialog.DialogCode.Accepted
         never_ask_again = never_ask_checkbox.isChecked()
 
         return proceed, never_ask_again
@@ -221,7 +239,9 @@ class DialogManager:
 
         delete_thumb_cache_button = QPushButton("Clear Thumbnail Cache")
         delete_thumb_cache_button.setObjectName("deleteThumbnailCacheButton")
-        delete_thumb_cache_button.clicked.connect(self.parent._clear_thumbnail_cache_action)
+        delete_thumb_cache_button.clicked.connect(
+            self.parent._clear_thumbnail_cache_action
+        )
         thumb_layout.addWidget(delete_thumb_cache_button, 1, 0, 1, 2)
         main_layout.addWidget(thumb_frame)
 
@@ -245,28 +265,47 @@ class DialogManager:
         preview_layout.addWidget(QLabel("Set New Limit (GB):"), 2, 0)
         self.parent.preview_cache_size_combo = QComboBox()
         self.parent.preview_cache_size_combo.setObjectName("previewCacheSizeCombo")
-        self.parent.preview_cache_size_options_gb = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
+        self.parent.preview_cache_size_options_gb = [
+            0.25,
+            0.5,
+            1.0,
+            2.0,
+            4.0,
+            8.0,
+            16.0,
+        ]
         self.parent.preview_cache_size_combo.addItems(
-            [f"{size:.2f} GB" for size in self.parent.preview_cache_size_options_gb])
+            [f"{size:.2f} GB" for size in self.parent.preview_cache_size_options_gb]
+        )
 
         current_conf_gb = get_preview_cache_size_gb()
         try:
-            current_index = self.parent.preview_cache_size_options_gb.index(current_conf_gb)
+            current_index = self.parent.preview_cache_size_options_gb.index(
+                current_conf_gb
+            )
             self.parent.preview_cache_size_combo.setCurrentIndex(current_index)
         except ValueError:
-            self.parent.preview_cache_size_combo.addItem(f"{current_conf_gb:.2f} GB (Custom)")
-            self.parent.preview_cache_size_combo.setCurrentIndex(self.parent.preview_cache_size_combo.count() - 1)
+            self.parent.preview_cache_size_combo.addItem(
+                f"{current_conf_gb:.2f} GB (Custom)"
+            )
+            self.parent.preview_cache_size_combo.setCurrentIndex(
+                self.parent.preview_cache_size_combo.count() - 1
+            )
 
         preview_layout.addWidget(self.parent.preview_cache_size_combo, 2, 1)
 
         apply_preview_limit_button = QPushButton("Apply New Limit")
         apply_preview_limit_button.setObjectName("applyPreviewLimitButton")
-        apply_preview_limit_button.clicked.connect(self.parent._apply_preview_cache_limit_action)
+        apply_preview_limit_button.clicked.connect(
+            self.parent._apply_preview_cache_limit_action
+        )
         preview_layout.addWidget(apply_preview_limit_button, 3, 0, 1, 2)
 
         delete_preview_cache_button = QPushButton("Clear Preview Cache")
         delete_preview_cache_button.setObjectName("deletePreviewCacheButton")
-        delete_preview_cache_button.clicked.connect(self.parent._clear_preview_cache_action)
+        delete_preview_cache_button.clicked.connect(
+            self.parent._clear_preview_cache_action
+        )
         preview_layout.addWidget(delete_preview_cache_button, 4, 0, 1, 2)
         main_layout.addWidget(preview_frame)
 
@@ -291,20 +330,30 @@ class DialogManager:
         self.parent.exif_cache_size_combo = QComboBox()
         self.parent.exif_cache_size_combo.setObjectName("exifCacheSizeCombo")
         self.parent.exif_cache_size_options_mb = [64, 128, 256, 512, 1024]
-        self.parent.exif_cache_size_combo.addItems([f"{size} MB" for size in self.parent.exif_cache_size_options_mb])
+        self.parent.exif_cache_size_combo.addItems(
+            [f"{size} MB" for size in self.parent.exif_cache_size_options_mb]
+        )
 
         current_exif_conf_mb = get_exif_cache_size_mb()
         try:
-            current_exif_index = self.parent.exif_cache_size_options_mb.index(current_exif_conf_mb)
+            current_exif_index = self.parent.exif_cache_size_options_mb.index(
+                current_exif_conf_mb
+            )
             self.parent.exif_cache_size_combo.setCurrentIndex(current_exif_index)
         except ValueError:
-            self.parent.exif_cache_size_combo.addItem(f"{current_exif_conf_mb} MB (Custom)")
-            self.parent.exif_cache_size_combo.setCurrentIndex(self.parent.exif_cache_size_combo.count() - 1)
+            self.parent.exif_cache_size_combo.addItem(
+                f"{current_exif_conf_mb} MB (Custom)"
+            )
+            self.parent.exif_cache_size_combo.setCurrentIndex(
+                self.parent.exif_cache_size_combo.count() - 1
+            )
         exif_layout.addWidget(self.parent.exif_cache_size_combo, 2, 1)
 
         apply_exif_limit_button = QPushButton("Apply New EXIF Limit")
         apply_exif_limit_button.setObjectName("applyExifLimitButton")
-        apply_exif_limit_button.clicked.connect(self.parent._apply_exif_cache_limit_action)
+        apply_exif_limit_button.clicked.connect(
+            self.parent._apply_exif_cache_limit_action
+        )
         exif_layout.addWidget(apply_exif_limit_button, 3, 0, 1, 2)
 
         delete_exif_cache_button = QPushButton("Clear EXIF && Rating Caches")
@@ -313,7 +362,11 @@ class DialogManager:
         exif_layout.addWidget(delete_exif_cache_button, 4, 0, 1, 2)
         main_layout.addWidget(exif_frame)
 
-        main_layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
+        main_layout.addSpacerItem(
+            QSpacerItem(
+                20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
+            )
+        )
         close_button = QPushButton("Close")
         close_button.setObjectName("cacheDialogCloseButton")
         close_button.clicked.connect(dialog.accept)
@@ -326,10 +379,10 @@ class DialogManager:
     def show_confirm_delete_dialog(self, deleted_file_paths: List[str]) -> bool:
         """
         Shows a confirmation dialog for deleting files.
-        
+
         Args:
             deleted_file_paths: A list of paths to the files to be deleted.
-            
+
         Returns:
             True if the user confirms the deletion, False otherwise.
         """
@@ -337,25 +390,33 @@ class DialogManager:
         dialog.setWindowTitle("Confirm Delete")
 
         def get_truncated_path(path):
-            parts = path.replace('\\', '/').split('/')
+            parts = path.replace("\\", "/").split("/")
             return f".../{'/'.join(parts[-4:])}" if len(parts) > 4 else path
 
         num_selected = len(deleted_file_paths)
         if num_selected == 1:
             truncated_path = get_truncated_path(deleted_file_paths[0])
-            dialog.setText(f"Are you sure you want to move this image to the trash?\n\n{truncated_path}")
+            dialog.setText(
+                f"Are you sure you want to move this image to the trash?\n\n{truncated_path}"
+            )
         else:
             if num_selected <= 10:
-                file_list = "\n".join([get_truncated_path(p) for p in deleted_file_paths])
+                file_list = "\n".join(
+                    [get_truncated_path(p) for p in deleted_file_paths]
+                )
                 message = f"Are you sure you want to move {num_selected} images to the trash?\n\n{file_list}"
             else:
-                file_list = "\n".join([get_truncated_path(p) for p in deleted_file_paths[:10]])
+                file_list = "\n".join(
+                    [get_truncated_path(p) for p in deleted_file_paths[:10]]
+                )
                 message = f"Are you sure you want to move {num_selected} images to the trash?\n\n{file_list}\n\n... and {num_selected - 10} more"
             dialog.setText(message)
             dialog.setMinimumSize(600, 400)
 
         dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dialog.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
         dialog.setDefaultButton(QMessageBox.StandardButton.Yes)
 
         yes_button = dialog.button(QMessageBox.StandardButton.Yes)
@@ -371,11 +432,14 @@ class DialogManager:
         reply = dialog.exec()
         return reply == QMessageBox.StandardButton.Yes
 
-    def show_potential_cache_overflow_warning(self, estimated_preview_data_needed_for_folder_bytes: int,
-                                              preview_cache_limit_bytes: int):
+    def show_potential_cache_overflow_warning(
+        self,
+        estimated_preview_data_needed_for_folder_bytes: int,
+        preview_cache_limit_bytes: int,
+    ):
         """
         Shows a warning about potential cache overflow.
-        
+
         Args:
             estimated_preview_data_needed_for_folder_bytes: The estimated size of the folder's previews.
             preview_cache_limit_bytes: The current preview cache limit.
@@ -395,20 +459,22 @@ class DialogManager:
     def show_commit_deletions_dialog(self, count: int) -> bool:
         """
         Shows a confirmation dialog for committing marked deletions.
-        
+
         Args:
             count: The number of files to be deleted.
-            
+
         Returns:
             True if the user confirms, False otherwise.
         """
         reply = QMessageBox.question(
-            self.parent, "Confirm Deletion",
+            self.parent,
+            "Confirm Deletion",
             f"Are you sure you want to move {count} marked image(s) to trash?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.No,
         )
         return reply == QMessageBox.StandardButton.Yes
+
     def show_model_not_found_dialog(self, model_path: str):
         """Show a dialog informing the user that the rotation model is missing."""
         dialog = QMessageBox(self.parent)
@@ -431,11 +497,17 @@ class DialogManager:
         )
         dialog.setInformativeText(detailed_text)
 
-        download_button = dialog.addButton("Download Model", QMessageBox.ButtonRole.ActionRole)
+        download_button = dialog.addButton(
+            "Download Model", QMessageBox.ButtonRole.ActionRole
+        )
         ok_button = dialog.addButton(QMessageBox.StandardButton.Ok)
 
         dialog.setDefaultButton(ok_button)
 
-        download_button.clicked.connect(lambda: webbrowser.open("https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"))
+        download_button.clicked.connect(
+            lambda: webbrowser.open(
+                "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"
+            )
+        )
 
         dialog.exec()

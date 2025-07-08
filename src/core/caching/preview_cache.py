@@ -1,21 +1,25 @@
 import diskcache
 import os
-import logging # Added for startup logging
-import time # Added for startup timing
+import logging  # Added for startup logging
+import time  # Added for startup timing
 from PIL import Image
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 
 # Import the settings function to get the cache size limit
-from src.core.app_settings import get_preview_cache_size_bytes, DEFAULT_PREVIEW_CACHE_SIZE_GB
+from src.core.app_settings import get_preview_cache_size_bytes
 
 # Default path for the preview PIL image cache
-DEFAULT_PREVIEW_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'phototagger_preview_pil_images')
+DEFAULT_PREVIEW_CACHE_DIR = os.path.join(
+    os.path.expanduser("~"), ".cache", "phototagger_preview_pil_images"
+)
+
 
 class PreviewCache:
     """
     Manages a disk-based cache for preview PIL.Image objects.
     The cache size is configurable via app_settings.
     """
+
     def __init__(self, cache_dir: str = DEFAULT_PREVIEW_CACHE_DIR):
         init_start_time = time.perf_counter()
         logging.info(f"PreviewCache.__init__ - Start, dir: {cache_dir}")
@@ -31,10 +35,16 @@ class PreviewCache:
         self._size_limit_bytes = get_preview_cache_size_bytes()
         # Settings for general PIL images, can be adjusted.
         # Using a relatively small disk_min_file_size to ensure even smaller previews are disk-backed if desired.
-        self._cache = diskcache.Cache(directory=cache_dir, size_limit=self._size_limit_bytes, disk_min_file_size=256*1024) # 256KB
-        log_msg = f"[PreviewCache] Initialized at {cache_dir} with size limit {self._size_limit_bytes / (1024*1024*1024):.2f} GB"
+        self._cache = diskcache.Cache(
+            directory=cache_dir,
+            size_limit=self._size_limit_bytes,
+            disk_min_file_size=256 * 1024,
+        )  # 256KB
+        log_msg = f"[PreviewCache] Initialized at {cache_dir} with size limit {self._size_limit_bytes / (1024 * 1024 * 1024):.2f} GB"
         logging.info(f"PreviewCache.__init__ - DiskCache instantiated. {log_msg}")
-        logging.info(f"PreviewCache.__init__ - End: {time.perf_counter() - init_start_time:.4f}s")
+        logging.info(
+            f"PreviewCache.__init__ - End: {time.perf_counter() - init_start_time:.4f}s"
+        )
 
     def get(self, key: Tuple[str, Tuple[int, int], bool]) -> Optional[Image.Image]:
         """
@@ -52,7 +62,9 @@ class PreviewCache:
             if isinstance(cached_item, Image.Image):
                 return cached_item
             elif cached_item is not None:
-                logging.warning(f"Unexpected item type in preview_cache for key {key}. Type: {type(cached_item)}")
+                logging.warning(
+                    f"Unexpected item type in preview_cache for key {key}. Type: {type(cached_item)}"
+                )
                 # self.delete(key)
             return None
         except Exception as e:
@@ -69,7 +81,9 @@ class PreviewCache:
             value (Image.Image): The PIL Image to cache.
         """
         if not isinstance(value, Image.Image):
-            logging.error(f"Attempted to cache non-Image object for key {key}. Type: {type(value)}")
+            logging.error(
+                f"Attempted to cache non-Image object for key {key}. Type: {type(value)}"
+            )
             return
         try:
             file_path = key[0]
@@ -85,7 +99,7 @@ class PreviewCache:
                 self._cache.set(key, value)
         except Exception as e:
             logging.error(f"Error setting item in preview_cache for key {key}: {e}")
-            
+
     def delete(self, key: Tuple[str, Tuple[int, int], bool]) -> None:
         """
         Deletes an item from the cache and updates the path index.
@@ -96,7 +110,7 @@ class PreviewCache:
         try:
             file_path = key[0]
             index_key = f"index_{file_path}"
-            
+
             with self._cache.transact():
                 # Update the index first
                 key_list = self._cache.get(index_key)
@@ -107,7 +121,7 @@ class PreviewCache:
                     else:
                         # If list is empty, remove the index key
                         self._cache.delete(index_key)
-                
+
                 # Now delete the actual data. Use pop for safety.
                 self._cache.pop(key, default=None)
 
@@ -118,14 +132,15 @@ class PreviewCache:
         """
         Deletes all cache entries for a specific file path using an index.
         Falls back to iterating the cache if the index is not found.
-        
+
         Args:
             file_path: The file path to clear from cache.
         """
         try:
             import unicodedata
             import os
-            normalized_path = unicodedata.normalize('NFC', os.path.normpath(file_path))
+
+            normalized_path = unicodedata.normalize("NFC", os.path.normpath(file_path))
             index_key = f"index_{normalized_path}"
 
             # Try the fast, indexed deletion first
@@ -137,31 +152,39 @@ class PreviewCache:
                     for key in key_list:
                         self._cache.pop(key, default=None)
                     self._cache.pop(index_key, default=None)
-                
+
                 if key_list:
-                    logging.info(f"Deleted {len(key_list)} preview cache entries for {os.path.basename(file_path)} using index.")
+                    logging.info(
+                        f"Deleted {len(key_list)} preview cache entries for {os.path.basename(file_path)} using index."
+                    )
                 return
 
             # --- Fallback for caches created before indexing was implemented ---
-            logging.warning(f"No cache index for '{normalized_path}'. Falling back to slow iteration.")
+            logging.warning(
+                f"No cache index for '{normalized_path}'. Falling back to slow iteration."
+            )
             keys_to_delete = []
             for key in self._cache:
                 # Skip index keys
-                if isinstance(key, str) and key.startswith('index_'):
+                if isinstance(key, str) and key.startswith("index_"):
                     continue
 
                 if isinstance(key, tuple) and len(key) > 0 and isinstance(key[0], str):
-                    key_path = unicodedata.normalize('NFC', os.path.normpath(key[0]))
+                    key_path = unicodedata.normalize("NFC", os.path.normpath(key[0]))
                     if key_path == normalized_path:
                         keys_to_delete.append(key)
-            
+
             if keys_to_delete:
                 for key in keys_to_delete:
                     self._cache.pop(key, default=None)
-                logging.info(f"Deleted {len(keys_to_delete)} preview cache entries for {os.path.basename(file_path)} using fallback.")
+                logging.info(
+                    f"Deleted {len(keys_to_delete)} preview cache entries for {os.path.basename(file_path)} using fallback."
+                )
 
         except Exception as e:
-            logging.error(f"Error deleting preview cache entries for path {file_path}: {e}")
+            logging.error(
+                f"Error deleting preview cache entries for path {file_path}: {e}"
+            )
 
     def clear(self) -> None:
         """Clears all items from the cache."""
@@ -181,7 +204,7 @@ class PreviewCache:
         except Exception as e:
             logging.error(f"Error getting preview_cache volume: {e}")
             return 0
-            
+
     def get_current_size_limit_gb(self) -> float:
         """Returns the current configured size limit in GB."""
         return self._size_limit_bytes / (1024 * 1024 * 1024)
@@ -191,11 +214,17 @@ class PreviewCache:
         Closes and reinitializes the cache with the current size limit from app_settings.
         """
         logging.info("Reinitializing preview PIL cache...")
-        self.close() # Close the existing cache
-        
+        self.close()  # Close the existing cache
+
         self._size_limit_bytes = get_preview_cache_size_bytes()
-        self._cache = diskcache.Cache(directory=self._cache_dir, size_limit=self._size_limit_bytes, disk_min_file_size=256*1024)
-        logging.info(f"Reinitialized. New size limit: {self._size_limit_bytes / (1024*1024*1024):.2f} GB.")
+        self._cache = diskcache.Cache(
+            directory=self._cache_dir,
+            size_limit=self._size_limit_bytes,
+            disk_min_file_size=256 * 1024,
+        )
+        logging.info(
+            f"Reinitialized. New size limit: {self._size_limit_bytes / (1024 * 1024 * 1024):.2f} GB."
+        )
 
     def close(self) -> None:
         """Closes the cache."""
