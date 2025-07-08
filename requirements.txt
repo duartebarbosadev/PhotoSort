@@ -1,6 +1,7 @@
 PyQt6
 rawpy
 Pillow
+Pillow-heif
 pyqtdarktheme
 sentence-transformers
 scikit-learn
@@ -9,5 +10,5 @@ diskcache
 send2trash
 opencv-python
 pyexiv2
+piexif
 onnxruntime
-onnxruntime-gpu

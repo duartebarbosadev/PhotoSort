@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox # QMessageBox for global e
 from src.ui.main_window import MainWindow
 from src.core.metadata_processor import MetadataProcessor # For metadata processing
 from src.ui.app_controller import AppController
+from pillow_heif import register_heif_opener
 
 def load_stylesheet(filename="src/ui/dark_theme.qss"):
     """Loads an external QSS stylesheet."""
@@ -86,6 +87,8 @@ def main():
     # --- Enable Faulthandler for crash analysis ---
     import faulthandler
     faulthandler.enable()
+
+    register_heif_opener()
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='PhotoSort')

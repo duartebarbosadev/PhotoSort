@@ -92,7 +92,8 @@ class ZoomableImageView(QGraphicsView):
             self._scene.setSceneRect(QRectF(pixmap.rect()))
             
             # Only auto-fit if the view is properly initialized and visible
-            if self.isVisible() and self.viewport().width() > 0 and self.viewport().height() > 0:
+            viewport = self.viewport()
+            if self.isVisible() and viewport and viewport.width() > 0 and viewport.height() > 0:
                 # Minimal delay to ensure pixmap is rendered before fitting
                 self.fit_in_view()
         else:
@@ -134,10 +135,17 @@ class ZoomableImageView(QGraphicsView):
     def set_zoom_factor(self, factor: float, center_point: Optional[QPointF] = None):
         """Set zoom factor with optional center point"""
         factor = max(self._min_zoom, min(self._max_zoom, factor))
-        
+
+        # If no center point is provided (e.g., keyboard zoom),
+        # use the current viewport center in scene coordinates.
         if center_point is None:
-            center_point = self.mapToScene(self.viewport().rect().center())
-        
+            viewport = self.viewport()
+            if viewport:
+                center_point = self.mapToScene(viewport.rect().center())
+            else:
+                # Fallback if viewport is not available, though it should be by this point
+                center_point = QPointF(0, 0)
+
         # Prevent division by zero
         if self._zoom_factor <= 0:
             self._zoom_factor = 1.0
@@ -145,14 +153,31 @@ class ZoomableImageView(QGraphicsView):
         
         # Calculate the scale change
         scale_change = factor / self._zoom_factor
-        
+
+        # Get the point in view coordinates that corresponds to the scene point
+        # This is the point that should remain fixed relative to the viewport
+        point_in_view_before_scale = self.mapFromScene(center_point)
+
         # Apply the zoom
         self.scale(scale_change, scale_change)
         self._zoom_factor = factor
-        
-        # Center on the specified point
-        self.centerOn(center_point)
-        
+
+        # After scaling, the scene point has moved relative to the viewport.
+        # We need to calculate the new position of the scene point in view coordinates.
+        point_in_view_after_scale = self.mapFromScene(center_point)
+
+        # Calculate the delta needed to move the view so the scene point is back at its original view position
+        delta_x = point_in_view_after_scale.x() - point_in_view_before_scale.x()
+        delta_y = point_in_view_after_scale.y() - point_in_view_before_scale.y()
+
+        # Adjust scrollbars to move the view
+        h_bar = self.horizontalScrollBar()
+        v_bar = self.verticalScrollBar()
+        if h_bar:
+            h_bar.setValue(h_bar.value() + int(delta_x))
+        if v_bar:
+            v_bar.setValue(v_bar.value() + int(delta_y))
+
         self.zoom_changed.emit(self._zoom_factor, center_point)
         
     def zoom_in(self, center_point: Optional[QPointF] = None):
@@ -186,7 +211,11 @@ class ZoomableImageView(QGraphicsView):
             self._zoom_factor = self.transform().m11()
             # Set minimum zoom to current fit level (functional behavior stays the same)
             self._min_zoom = self._zoom_factor
-            center_point = self.mapToScene(self.viewport().rect().center())
+            viewport = self.viewport()
+            if viewport:
+                center_point = self.mapToScene(viewport.rect().center())
+            else:
+                center_point = QPointF(0, 0) # Fallback
             self.zoom_changed.emit(self._zoom_factor, center_point)
             
     def zoom_to_actual_size(self):
@@ -194,10 +223,11 @@ class ZoomableImageView(QGraphicsView):
         if self._empty:
             return
         self.set_zoom_factor(1.0)
-        
-    def wheelEvent(self, event: QWheelEvent):
+
+    def wheelEvent(self, event: Optional[QWheelEvent]):
         """Handle mouse wheel for zooming"""
-        if self._empty:
+        if self._empty or event is None:
+            super().wheelEvent(event) # Call super to ensure event propagation if not handled
             return
             
         # Get the mouse position in scene coordinates
@@ -208,17 +238,25 @@ class ZoomableImageView(QGraphicsView):
             self.zoom_in(mouse_pos)
         else:
             self.zoom_out(mouse_pos)
-            
-    def mousePressEvent(self, event: QMouseEvent):
+
+    def mousePressEvent(self, event: Optional[QMouseEvent]):
         """Handle mouse press for panning"""
+        if event is None:
+            super().mousePressEvent(event)
+            return
+
         if event.button() == Qt.MouseButton.LeftButton:
             self._last_pan_point = event.position()
             self._is_panning = True
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
         super().mousePressEvent(event)
-        
-    def mouseMoveEvent(self, event: QMouseEvent):
+
+    def mouseMoveEvent(self, event: Optional[QMouseEvent]):
         """Handle mouse move for panning and coordinate tracking"""
+        if event is None:
+            super().mouseMoveEvent(event)
+            return
+
         # Emit coordinates for tracking
         scene_pos = self.mapToScene(event.position().toPoint())
         self.coordinates_changed.emit(scene_pos)
@@ -231,23 +269,37 @@ class ZoomableImageView(QGraphicsView):
             # Pan the view
             h_bar = self.horizontalScrollBar()
             v_bar = self.verticalScrollBar()
-            h_bar.setValue(h_bar.value() - int(delta.x()))
-            v_bar.setValue(v_bar.value() - int(delta.y()))
-            
-            center = self.mapToScene(self.viewport().rect().center())
+            if h_bar:
+                h_bar.setValue(h_bar.value() - int(delta.x()))
+            if v_bar:
+                v_bar.setValue(v_bar.value() - int(delta.y()))
+
+            viewport = self.viewport()
+            if viewport:
+                center = self.mapToScene(viewport.rect().center())
+            else:
+                center = QPointF(0, 0) # Fallback
             self.pan_changed.emit(center)
-            
+
         super().mouseMoveEvent(event)
-        
-    def mouseReleaseEvent(self, event: QMouseEvent):
+
+    def mouseReleaseEvent(self, event: Optional[QMouseEvent]):
         """Handle mouse release"""
+        if event is None:
+            super().mouseReleaseEvent(event)
+            return
+
         if event.button() == Qt.MouseButton.LeftButton:
             self._is_panning = False
             self.setCursor(Qt.CursorShape.ArrowCursor)
         super().mouseReleaseEvent(event)
-        
-    def keyPressEvent(self, event: QKeyEvent):
+
+    def keyPressEvent(self, event: Optional[QKeyEvent]):
         """Handle keyboard shortcuts, allowing number keys to propagate up."""
+        if event is None:
+            super().keyPressEvent(event)
+            return
+
         key = event.key()
         logging.debug(f"ZoomableImageView received key: {event.text()}")
 
@@ -306,8 +358,8 @@ class ZoomableImageView(QGraphicsView):
         from PyQt6.QtGui import QFont
         
         text_item = QGraphicsTextItem(text)
-        text_item._is_text_item = True
-        
+        setattr(text_item, '_is_text_item', True)
+
         # Style the text with better contrast
         font = QFont()
         font.setPointSize(14)
@@ -315,8 +367,12 @@ class ZoomableImageView(QGraphicsView):
         text_item.setDefaultTextColor(QColor(180, 180, 180))  # Lighter for better contrast
         
         # Get viewport dimensions
-        viewport_rect = self.viewport().rect()
-        
+        viewport = self.viewport()
+        if viewport:
+            viewport_rect = viewport.rect()
+        else:
+            viewport_rect = QRectF(0, 0, 1, 1) # Fallback to a minimal rect
+
         # Set scene rect to match viewport
         self._scene.setSceneRect(0, 0, viewport_rect.width(), viewport_rect.height())
         
@@ -411,9 +467,10 @@ class IndividualViewer(QWidget):
         
         rating = rating_override
         if rating is None:
-            sender = self.sender()
-            rating = sender.property("ratingValue")
-        
+            sender_obj = self.sender()
+            if sender_obj:
+                rating = sender_obj.property("ratingValue")
+
         if rating is not None:
             self.ratingChanged.emit(self._file_path, rating)
             self.update_rating_display(rating) # Update own display immediately
@@ -451,8 +508,10 @@ class IndividualViewer(QWidget):
                 self.setStyleSheet("IndividualViewer { border: none; }")
             
             # Refresh style
-            self.style().unpolish(self)
-            self.style().polish(self)
+            current_style = self.style()
+            if current_style:
+                current_style.unpolish(self)
+                current_style.polish(self)
 
 class SynchronizedImageViewer(QWidget):
     """
@@ -743,7 +802,7 @@ class SynchronizedImageViewer(QWidget):
                 if pixmap:
                     viewer.set_data(
                         pixmap,
-                        image_data.get('path'),
+                        image_data.get('path', ""), # Ensure path is always a string
                         image_data.get('rating', 0),
                         image_data.get('label')
                     )
