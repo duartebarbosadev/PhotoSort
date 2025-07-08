@@ -3,6 +3,7 @@ from typing import Optional
 import logging
 from typing import Dict, Any
 
+
 class ImageOrientationHandler:
     """Handles EXIF-based image orientation correction."""
 
@@ -30,8 +31,8 @@ class ImageOrientationHandler:
         """
         if not exif_data:
             return 0
-        
-        orientation = exif_data.get('Exif.Image.Orientation')
+
+        orientation = exif_data.get("Exif.Image.Orientation")
         if not orientation:
             return 0
 
@@ -40,20 +41,20 @@ class ImageOrientationHandler:
         except (ValueError, TypeError):
             return 0
 
-        if orientation == 1: # Horizontal (normal)
+        if orientation == 1:  # Horizontal (normal)
             return 0
-        elif orientation == 3: # Rotated 180
+        elif orientation == 3:  # Rotated 180
             return 180
-        elif orientation == 6: # Rotated 90 CW
+        elif orientation == 6:  # Rotated 90 CW
             return 90
-        elif orientation == 8: # Rotated 270 CW (90 CCW)
+        elif orientation == 8:  # Rotated 270 CW (90 CCW)
             return 270
         else:
-            return 0 # Other orientations (like flipped) are not handled as simple rotations
+            return 0  # Other orientations (like flipped) are not handled as simple rotations
 
+    @staticmethod
     def get_composite_rotation(
-        exif_rotation_degrees: int,
-        model_suggestion_degrees: int
+        exif_rotation_degrees: int, model_suggestion_degrees: int
     ) -> int:
         """
         Calculates the net rotation required for an image, considering both its
@@ -82,7 +83,7 @@ class ImageOrientationHandler:
         # Normalize the angle to the range [-180, 180)
         # e.g. 270 degrees becomes -90
         final_rotation = (net_rotation + 180) % 360 - 180
-        
+
         # The UI handles -180 as 180
         if final_rotation == -180:
             final_rotation = 180

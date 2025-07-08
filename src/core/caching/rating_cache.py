@@ -1,20 +1,30 @@
 import diskcache
 import os
-import logging # Added for startup logging
-import time # Added for startup timing
+import logging  # Added for startup logging
+import time  # Added for startup timing
 from typing import Optional
 
 # Default path for the rating cache
-DEFAULT_RATING_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'phototagger_ratings')
-DEFAULT_RATING_CACHE_SIZE_LIMIT_MB = 256 # Default 256MB limit, ratings are small
+DEFAULT_RATING_CACHE_DIR = os.path.join(
+    os.path.expanduser("~"), ".cache", "phototagger_ratings"
+)
+DEFAULT_RATING_CACHE_SIZE_LIMIT_MB = 256  # Default 256MB limit, ratings are small
+
 
 class RatingCache:
     """
     Manages a disk-based cache for image ratings (integers).
     """
-    def __init__(self, cache_dir: str = DEFAULT_RATING_CACHE_DIR, size_limit_mb: int = DEFAULT_RATING_CACHE_SIZE_LIMIT_MB):
+
+    def __init__(
+        self,
+        cache_dir: str = DEFAULT_RATING_CACHE_DIR,
+        size_limit_mb: int = DEFAULT_RATING_CACHE_SIZE_LIMIT_MB,
+    ):
         init_start_time = time.perf_counter()
-        logging.info(f"RatingCache.__init__ - Start, dir: {cache_dir}, size_limit: {size_limit_mb:.2f} MB")
+        logging.info(
+            f"RatingCache.__init__ - Start, dir: {cache_dir}, size_limit: {size_limit_mb:.2f} MB"
+        )
         """
         Initializes the rating cache.
 
@@ -27,10 +37,14 @@ class RatingCache:
         size_limit_bytes = size_limit_mb * 1024 * 1024
         # Ratings are very small, so disk_min_file_size can be small or default.
         # For integers, diskcache might store them efficiently in memory before flushing.
-        self._cache = diskcache.Cache(directory=cache_dir, size_limit=size_limit_bytes, disk_min_file_size=0) # Store even small entries on disk
+        self._cache = diskcache.Cache(
+            directory=cache_dir, size_limit=size_limit_bytes, disk_min_file_size=0
+        )  # Store even small entries on disk
         log_msg = f"[RatingCache] Initialized at {cache_dir} with size limit {size_limit_mb:.2f} MB"
         logging.info(f"RatingCache.__init__ - DiskCache instantiated. {log_msg}")
-        logging.info(f"RatingCache.__init__ - End: {time.perf_counter() - init_start_time:.4f}s")
+        logging.info(
+            f"RatingCache.__init__ - End: {time.perf_counter() - init_start_time:.4f}s"
+        )
 
     def get(self, key: str) -> Optional[int]:
         """
@@ -48,7 +62,9 @@ class RatingCache:
             if isinstance(cached_item, int):
                 return cached_item
             elif cached_item is not None:
-                logging.warning(f"Unexpected item type in rating_cache for key {key}. Type: {type(cached_item)}")
+                logging.warning(
+                    f"Unexpected item type in rating_cache for key {key}. Type: {type(cached_item)}"
+                )
                 # self.delete(key) # Optionally delete malformed entry
             return None
         except Exception as e:
@@ -65,7 +81,9 @@ class RatingCache:
             value (int): The rating to cache.
         """
         if not isinstance(value, int):
-            logging.error(f"Attempted to cache non-integer object for key {key}. Type: {type(value)}")
+            logging.error(
+                f"Attempted to cache non-integer object for key {key}. Type: {type(value)}"
+            )
             return
         try:
             self._cache.set(key, value)
@@ -84,7 +102,7 @@ class RatingCache:
                 del self._cache[key]
         except Exception as e:
             logging.error(f"Error deleting item from rating_cache for key {key}: {e}")
-    
+
     def clear(self) -> None:
         """Clears all items from the cache."""
         try:
