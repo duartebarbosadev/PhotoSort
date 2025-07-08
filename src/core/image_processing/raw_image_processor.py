@@ -50,7 +50,7 @@ class RawImageProcessor:
 
     @staticmethod
     def process_raw_for_thumbnail(
-        image_path: str, 
+        image_path: str,
         apply_auto_edits: bool = False,
         thumbnail_max_size: tuple = THUMBNAIL_MAX_SIZE
     ) -> Optional[Image.Image]:
@@ -120,7 +120,7 @@ class RawImageProcessor:
 
     @staticmethod
     def process_raw_for_preview(
-        image_path: str, 
+        image_path: str,
         apply_auto_edits: bool = False,
         preview_max_resolution: tuple = PRELOAD_MAX_RESOLUTION
     ) -> Optional[Image.Image]:

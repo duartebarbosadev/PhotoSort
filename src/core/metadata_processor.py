@@ -555,3 +555,114 @@ class MetadataProcessor:
        except Exception as e:
            logging.error(f"[MetadataProcessor] Error checking rotation support for {os.path.basename(operational_path)}: {e}", exc_info=True)
            return False
+
+   @staticmethod
+   def set_orientation(image_path: str, orientation: int, exif_disk_cache: Optional[ExifCache] = None) -> bool:
+       """
+       Sets the EXIF orientation tag directly.
+       
+       Args:
+           image_path: Path to the image file
+           orientation: The EXIF orientation value (1-8)
+           exif_disk_cache: Optional cache to invalidate
+           
+       Returns:
+           True if successful, False otherwise
+       """
+       if not (1 <= orientation <= 8):
+           logging.error(f"Invalid EXIF orientation value: {orientation}. Must be between 1 and 8.")
+           return False
+
+       resolved = MetadataProcessor._resolve_path_forms(image_path)
+       if not resolved: return False
+       operational_path, cache_key_path = resolved
+       
+       try:
+           with pyexiv2.Image(operational_path, encoding='utf-8') as img:
+               img.modify_exif({'Exif.Image.Orientation': orientation})
+               logging.info(f"[MetadataProcessor] Set EXIF orientation for {os.path.basename(operational_path)} to {orientation}")
+           
+           if exif_disk_cache:
+               exif_disk_cache.delete(cache_key_path)
+           return True
+       except Exception as e:
+           logging.error(f"[MetadataProcessor] Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}", exc_info=True)
+           return False
+
+   @staticmethod
+   def get_orientation(image_path: str, exif_disk_cache: Optional[ExifCache] = None) -> Optional[int]:
+       """
+       Retrieves the EXIF orientation value from an image.
+       
+       Args:
+           image_path: Path to the image file
+           exif_disk_cache: Optional cache to check first
+           
+       Returns:
+           The orientation value (1-8) or None if not found or on error.
+       """
+       resolved = MetadataProcessor._resolve_path_forms(image_path)
+       if not resolved: return None
+       operational_path, cache_key_path = resolved
+       
+       # Check cache first
+       if exif_disk_cache:
+           cached_data = exif_disk_cache.get(cache_key_path)
+           if cached_data and 'Exif.Image.Orientation' in cached_data:
+               try:
+                   return int(cached_data['Exif.Image.Orientation'])
+               except (ValueError, TypeError):
+                   pass # Fall through to direct read if cached value is invalid
+
+       # If not in cache or cache is not provided, read from file
+       try:
+           with pyexiv2.Image(operational_path, encoding='utf-8') as img:
+               exif_data = img.read_exif()
+               orientation = exif_data.get('Exif.Image.Orientation')
+               if orientation:
+                   return int(orientation)
+               return None
+       except Exception as e:
+           logging.error(f"[MetadataProcessor] Error getting EXIF orientation for {os.path.basename(operational_path)}: {e}", exc_info=True)
+           return None
+
+   @staticmethod
+   def get_orientation_and_dimensions(image_path: str, exif_disk_cache: Optional[ExifCache] = None) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+       """
+       Retrieves orientation, pixel width, and pixel height efficiently.
+       
+       Args:
+           image_path: Path to the image file
+           exif_disk_cache: Optional cache to check first
+           
+       Returns:
+           A tuple (orientation, width, height). Values can be None on error.
+       """
+       resolved = MetadataProcessor._resolve_path_forms(image_path)
+       if not resolved: return None, None, None
+       operational_path, cache_key_path = resolved
+       
+       # Check cache first
+       if exif_disk_cache:
+           cached_data = exif_disk_cache.get(cache_key_path)
+           if cached_data:
+               try:
+                   orientation = int(cached_data.get('Exif.Image.Orientation')) if 'Exif.Image.Orientation' in cached_data else None
+                   width = int(cached_data.get('pixel_width')) if 'pixel_width' in cached_data else None
+                   height = int(cached_data.get('pixel_height')) if 'pixel_height' in cached_data else None
+                   if orientation is not None and width is not None and height is not None:
+                       return orientation, width, height
+               except (ValueError, TypeError):
+                   pass # Fall through to direct read
+
+       # If not in cache or cache is not provided, read from file
+       try:
+           with pyexiv2.Image(operational_path, encoding='utf-8') as img:
+               orientation = img.read_exif().get('Exif.Image.Orientation')
+               orientation = int(orientation) if orientation else None
+               width = img.get_pixel_width()
+               height = img.get_pixel_height()
+               return orientation, width, height
+       except Exception as e:
+           logging.error(f"[MetadataProcessor] Error getting orientation/dimensions for {os.path.basename(operational_path)}: {e}", exc_info=True)
+           return None, None, None

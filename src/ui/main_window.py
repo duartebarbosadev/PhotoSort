@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         self.apply_auto_edits_enabled = get_auto_edit_photos()
         self.mark_for_deletion_mode_enabled = get_mark_for_deletion_mode()
         self.blur_detection_threshold = 100.0
+        self.rotation_suggestions = {}
  
         # Create filter controls first (needed by menu creation)
         self.filter_combo = QComboBox()
@@ -194,15 +195,16 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         logging.info(f"MainWindow.__init__ - _connect_signals done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
         
-        section_start_time = time.perf_counter()
-        self.left_panel.set_view_mode_list()
-        logging.info(f"MainWindow.__init__ - _set_view_mode_list done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
+        
         
         self._update_image_info_label() # Set initial info label text
         logging.info(f"MainWindow.__init__ - _update_image_info_label done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)")
 
         logging.info(f"MainWindow.__init__ - End (Total: {time.perf_counter() - init_start_time:.4f}s)")
         
+        # Hide rotation view by default
+        self._hide_rotation_view()
+
         # Load initial folder if provided
         if self.initial_folder and os.path.isdir(self.initial_folder):
             QTimer.singleShot(0, lambda: self.app_controller.load_folder(self.initial_folder))
@@ -414,6 +416,17 @@ class MainWindow(QMainWindow):
         # The rating and color controls are now part of the IndividualViewer
         # widgets inside SynchronizedImageViewer, so they are no longer created here.
 
+        self.accept_all_button = QPushButton("Accept All")
+        self.accept_all_button.setVisible(False)
+        self.accept_button = QPushButton("Accept")
+        self.accept_button.setVisible(False)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.accept_button)
+        button_layout.addWidget(self.accept_all_button)
+        
+        center_pane_layout.addLayout(button_layout)
+
         # Create dummy view mode buttons for compatibility (not displayed)
         self.view_list_button = QPushButton("List")
         self.view_list_button.setCheckable(True)
@@ -493,6 +506,9 @@ class MainWindow(QMainWindow):
         
         # Delegate signal connections to the AppController
         self.app_controller.connect_signals()
+
+        self.accept_all_button.clicked.connect(self._accept_all_rotations)
+        self.accept_button.clicked.connect(self._accept_current_rotation)
         logging.debug(f"MainWindow._connect_signals - End: {time.perf_counter() - start_time:.4f}s")
 
     # def _connect_rating_actions(self):
@@ -577,6 +593,8 @@ class MainWindow(QMainWindow):
         else: # Not grouping by similarity
             if self.left_panel.current_view_mode == "date":
                 self._populate_model_by_date(root_item, self.app_state.image_files_data)
+            elif self.left_panel.current_view_mode == "rotation":
+                self._rebuild_rotation_view()
             else:
                 self._populate_model_standard(root_item, self.app_state.image_files_data)
             self.statusBar().showMessage(f"View populated with {len(self.app_state.image_files_data)} images.", 3000)
@@ -642,6 +660,21 @@ class MainWindow(QMainWindow):
 
     def _reload_current_folder(self):
         self.app_controller.reload_current_folder()
+
+    def _rebuild_rotation_view(self):
+        self.file_system_model.clear()
+        root_item = self.file_system_model.invisibleRootItem()
+
+        if not self.rotation_suggestions:
+            no_suggestions_item = QStandardItem("No rotation suggestions available.")
+            no_suggestions_item.setEditable(False)
+            root_item.appendRow(no_suggestions_item)
+            return
+
+        for path, rotation in self.rotation_suggestions.items():
+            item = QStandardItem(os.path.basename(path))
+            item.setData({'path': path, 'rotation': rotation}, Qt.ItemDataRole.UserRole)
+            root_item.appendRow(item)
 
     def _group_images_by_cluster(self) -> Dict[int, List[Dict[str, any]]]:
         images_by_cluster: Dict[int, List[Dict[str, any]]] = {}
@@ -1575,6 +1608,7 @@ class MainWindow(QMainWindow):
 
     def _display_single_image_preview(self, file_path: str, file_data_from_model: Optional[Dict[str, Any]]):
         """Handles displaying preview and info for a single selected image."""
+        logging.info(f"Showing image: {os.path.basename(file_path)} (path: {file_path})")
         if not os.path.exists(file_path):
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage(f"Error: File not found - {os.path.basename(file_path)}", 5000)
@@ -1612,6 +1646,7 @@ class MainWindow(QMainWindow):
 
     def _display_rotated_image_preview(self, file_path: str, file_data_from_model: Optional[Dict[str, Any]], preserve_side_by_side: bool):
         """Handles displaying preview after rotation, preserving view mode."""
+        logging.info(f"Showing rotated image: {os.path.basename(file_path)} (path: {file_path})")
         if not os.path.exists(file_path):
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage(f"Error: File not found - {os.path.basename(file_path)}", 5000)
@@ -1681,6 +1716,7 @@ class MainWindow(QMainWindow):
 
     def _display_multi_selection_info(self, selected_paths: List[str]):
         """Handles UI updates when multiple images are selected."""
+        logging.info(f"Showing multiple images: {', '.join(map(os.path.basename, selected_paths))}")
         if not selected_paths:
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage("No items selected.")
@@ -1770,6 +1806,18 @@ class MainWindow(QMainWindow):
             selected_file_paths = self._get_selected_file_paths_from_view()
         
         if not self.app_state.image_files_data: return
+
+        if self.left_panel.current_view_mode == "rotation":
+            self.accept_all_button.setVisible(bool(self.rotation_suggestions))
+            self.accept_button.setVisible(len(selected_file_paths) == 1 and selected_file_paths[0] in self.rotation_suggestions)
+            if len(selected_file_paths) == 1:
+                self._display_side_by_side_comparison(selected_file_paths[0])
+            else:
+                self.advanced_image_viewer.clear()
+            return
+        else:
+            self.accept_all_button.setVisible(False)
+            self.accept_button.setVisible(False)
 
         # When selection changes, clear the focused image path unless it's a single selection
         if len(selected_file_paths) != 1:
@@ -2709,148 +2757,64 @@ class MainWindow(QMainWindow):
         logging.info(f"_update_sidebar_with_current_selection: Updating sidebar for {os.path.basename(file_path)}")
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
 
-    def _rotate_image_clockwise(self, file_path: str):
-        """Rotate the selected image 90° clockwise."""
-        self._perform_image_rotation(file_path, 'clockwise')
-
-    def _rotate_image_counterclockwise(self, file_path: str):
-        """Rotate the selected image 90° counterclockwise."""
-        self._perform_image_rotation(file_path, 'counterclockwise')
-
-    def _rotate_image_180(self, file_path: str):
-        """Rotate the selected image 180°."""
-        self._perform_image_rotation(file_path, '180')
-
-
-    def _perform_image_rotation(self, file_path: str, direction: str):
-        """
-        Perform image rotation with the approach: try metadata first, ask for lossy if needed.
-        
-        Args:
-            file_path: Path to the image file
-            direction: Rotation direction ('clockwise', 'counterclockwise', '180')
-        """
-        if not os.path.exists(file_path):
-            self.statusBar().showMessage("Error: File not found", 3000)
-            return
-
-        filename = os.path.basename(file_path)
-        
-        # Show progress with loading overlay
-        self.show_loading_overlay(f"Rotating {filename}...")
-        self.statusBar().showMessage(f"Rotating {filename}...", 0)
-        QApplication.processEvents()
-
-        try:
-            # First, try metadata-only rotation (lossless)
-            metadata_success, needs_lossy, message = MetadataProcessor.try_metadata_rotation_first(
-                file_path, direction, self.app_state.exif_disk_cache
-            )
-            
-            if metadata_success:
-                # Metadata rotation succeeded - we're done!
-                self._handle_successful_rotation(file_path, direction, message, is_lossy=False)
-                return
-            
-            if not needs_lossy:
-                # Metadata rotation failed and no lossy option available
-                self.statusBar().showMessage(message, 5000)
-                logging.warning(f"{message}")
-                return
-            
-            # Metadata rotation failed but lossy rotation is available
-            # Ask user for confirmation
-            rotation_desc = {
-                'clockwise': '90° clockwise',
-                'counterclockwise': '90° counterclockwise',
-                '180': '180°'
-            }.get(direction, direction)
-
-            proceed, never_ask_again = self.dialog_manager.show_lossy_rotation_confirmation_dialog(
-                filename, rotation_desc)
-
-            # Handle "never ask again" setting
-            if never_ask_again:
-                from src.core.app_settings import set_rotation_confirm_lossy
-                set_rotation_confirm_lossy(False)
-                self.statusBar().showMessage("Lossy rotation confirmations disabled for future operations.", 3000)
-            
-            if not proceed:
-                self.statusBar().showMessage("Rotation cancelled by user.", 3000)
-                return
-            
-            # Perform lossy rotation
-            success = MetadataProcessor.rotate_image(
-                file_path, direction, update_metadata_only=False,
-                exif_disk_cache=self.app_state.exif_disk_cache
-            )
-            
-            if success:
-                lossy_message = f"Rotated {filename} {rotation_desc} (lossy)"
-                self._handle_successful_rotation(file_path, direction, lossy_message, is_lossy=True)
-            else:
-                error_msg = f"Failed to perform lossy rotation for {filename}"
-                self.statusBar().showMessage(error_msg, 5000)
-                logging.error(f"{error_msg}")
-
-        except Exception as e:
-            error_msg = f"Error rotating {filename}: {str(e)}"
-            self.statusBar().showMessage(error_msg, 5000)
-            logging.error(f"{error_msg}", exc_info=True)
-        finally:
-            self.hide_loading_overlay()
-
     def _handle_successful_rotation(self, file_path: str, direction: str, message: str, is_lossy: bool):
         """Handle successful rotation - update caches and UI."""
+        handle_start_time = time.perf_counter()
         filename = os.path.basename(file_path)
-        
-        # Clear image caches so the rotated image will be reloaded
+        logging.info(f"HSR: Start for {filename}. Lossy: {is_lossy}. Message: {message}")
+
+        t1 = time.perf_counter()
         self.image_pipeline.preview_cache.delete_all_for_path(file_path)
         self.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
-        
-        # Find the model item, update its icon, and get its data
-        item_data = None
+        t2 = time.perf_counter()
+        logging.info(f"HSR: Cache clearing for {filename} took {t2 - t1:.4f}s.")
+
+        t3 = time.perf_counter()
         proxy_idx = self._find_proxy_index_for_path(file_path)
+        t4 = time.perf_counter()
+        logging.info(f"HSR: _find_proxy_index_for_path for {filename} took {t4 - t3:.4f}s.")
+
         if proxy_idx.isValid():
             source_idx = self.proxy_model.mapToSource(proxy_idx)
             item = self.file_system_model.itemFromIndex(source_idx)
             if item:
-                item_data = item.data(Qt.ItemDataRole.UserRole)
-                # Regenerate and set the new icon for the item
-                new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(file_path, apply_auto_edits=self.apply_auto_edits_enabled)
+                t5 = time.perf_counter()
+                new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(
+                    file_path, apply_auto_edits=self.apply_auto_edits_enabled
+                )
+                t6 = time.perf_counter()
+                logging.info(f"HSR: get_thumbnail_qpixmap for {filename} took {t6 - t5:.4f}s.")
                 if new_thumbnail:
+                    from PyQt6.QtGui import QIcon
                     item.setIcon(QIcon(new_thumbnail))
-
-        # Check if we're in side-by-side mode to preserve it
-        current_view_mode = self.advanced_image_viewer._get_current_view_mode()
-        is_side_by_side = current_view_mode == "side_by_side"
-
-        # Refresh the current preview if this is the selected image
-        active_view = self._get_active_file_view()
-        if active_view:
-            selected_paths = self._get_selected_file_paths_from_view()
-            if file_path in selected_paths:
-                # This is one of the currently selected images, refresh while preserving view mode
-                self._display_rotated_image_preview(file_path, item_data, is_side_by_side)
+                    logging.info(f"HSR: Set new icon for {filename}.")
         
-        # Update sidebar if visible and showing this image
-        if self.sidebar_visible and hasattr(self, 'metadata_sidebar'):
-            self._update_sidebar_with_current_selection()
+        selected_paths = self._get_selected_file_paths_from_view()
+        if file_path in selected_paths:
+            logging.info(f"HSR: {filename} is in current selection, triggering selection changed handler.")
+            t7 = time.perf_counter()
+            self._handle_file_selection_changed()
+            t8 = time.perf_counter()
+            logging.info(f"HSR: _handle_file_selection_changed took {t8 - t7:.4f}s.")
         
-        # Show success message
         self.statusBar().showMessage(message, 5000)
-        logging.info(f"{message}")
+        logging.info(message) # Log the original user-facing message
+        handle_end_time = time.perf_counter()
+        logging.info(f"HSR: End for {filename}. Total time: {handle_end_time - handle_start_time:.4f}s")
 
     def _rotate_current_image_clockwise(self):
         """Rotate the currently selected image(s) 90° clockwise (for keyboard shortcut)."""
+        logging.info("Clockwise rotation triggered via shortcut/menu.")
         self._rotate_selected_images('clockwise')
 
     def _rotate_current_image_counterclockwise(self):
         """Rotate the currently selected image(s) 90° counterclockwise (for keyboard shortcut)."""
+        logging.info("Counter-clockwise rotation triggered via shortcut/menu.")
         self._rotate_selected_images('counterclockwise')
 
     def _rotate_current_image_180(self):
         """Rotate the currently selected image(s) 180° (for keyboard shortcut)."""
+        logging.info("180-degree rotation triggered via shortcut/menu.")
         self._rotate_selected_images('180')
 
     def _rotate_selected_images(self, direction: str):
@@ -3396,3 +3360,122 @@ class MainWindow(QMainWindow):
                     self._handle_file_selection_changed()
         else:
             logging.warning(f"Could not find QStandardItem for {image_path} to update blur status in UI.")
+
+    def _display_side_by_side_comparison(self, file_path):
+        """Displays the current image and the rotated suggestion side-by-side."""
+        sbs_start_time = time.perf_counter()
+        logging.info(f"SBS_COMP: Start for {os.path.basename(file_path)}")
+        logging.info(f"Showing side-by-side comparison for: {os.path.basename(file_path)} (path: {file_path})")
+
+        if file_path not in self.rotation_suggestions:
+            logging.warning(f"SBS_COMP: File {os.path.basename(file_path)} not in rotation_suggestions.")
+            return
+
+        rotation = self.rotation_suggestions[file_path]
+        logging.info(f"SBS_COMP: Suggestion is {rotation} degrees.")
+
+        t1 = time.perf_counter()
+        # Load ONE base pixmap, respecting the user's current auto-edit setting.
+        # This represents the "current" view of the image.
+        current_pixmap = self.image_pipeline.get_preview_qpixmap(
+            file_path, (8000, 8000), apply_auto_edits=self.apply_auto_edits_enabled
+        )
+        t2 = time.perf_counter()
+        logging.info(f"SBS_COMP: get_preview_qpixmap (base) took: {t2 - t1:.4f}s")
+
+        if current_pixmap and not current_pixmap.isNull():
+            from PyQt6.QtGui import QTransform
+            transform = QTransform()
+            transform.rotate(rotation)
+            
+            t3 = time.perf_counter()
+            suggested_pixmap = current_pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
+            t4 = time.perf_counter()
+            logging.info(f"SBS_COMP: QPixmap.transformed took: {t4 - t3:.4f}s")
+            
+            t5 = time.perf_counter()
+            self.advanced_image_viewer.set_images_data([
+                {'pixmap': current_pixmap, 'path': file_path, 'rating': 0},
+                {'pixmap': suggested_pixmap, 'path': file_path, 'rating': 0}
+            ])
+            t6 = time.perf_counter()
+            logging.info(f"SBS_COMP: advanced_image_viewer.set_images_data took: {t6 - t5:.4f}s")
+        else:
+            logging.warning(f"SBS_COMP: Failed to load base pixmap for {os.path.basename(file_path)}")
+            self.advanced_image_viewer.clear()
+
+        sbs_end_time = time.perf_counter()
+        logging.info(f"SBS_COMP: End. Total time: {sbs_end_time - sbs_start_time:.4f}s")
+
+    def _accept_all_rotations(self):
+        """Applies all suggested rotations and returns to the list view."""
+        if not self.rotation_suggestions:
+            self.statusBar().showMessage("No rotation suggestions to accept.", 3000)
+            return
+
+        self.app_controller._apply_approved_rotations(self.rotation_suggestions)
+        self.rotation_suggestions.clear()
+        # hide_rotation_view will switch to list view and rebuild the model
+        self._hide_rotation_view()
+
+    def _accept_current_rotation(self):
+        selected_paths = self._get_selected_file_paths_from_view()
+        if len(selected_paths) == 1:
+            self._accept_rotation(selected_paths[0])
+
+    def _accept_rotation(self, file_path: str):
+        """Applies a single rotation suggestion and selects the next/previous item."""
+        if file_path in self.rotation_suggestions:
+            # Get the list of items before modification to determine the next selection
+            current_items = list(self.rotation_suggestions.keys())
+            try:
+                current_index = current_items.index(file_path)
+            except ValueError:
+                current_index = -1
+
+            # Apply the rotation
+            rotation = self.rotation_suggestions.pop(file_path)
+            self.app_controller._apply_approved_rotations({file_path: rotation})
+
+            # If no suggestions are left, hide the rotation view and go back to the list view
+            if not self.rotation_suggestions:
+                self._hide_rotation_view()
+                return
+
+            # --- Determine the next item to select ---
+            remaining_items = list(self.rotation_suggestions.keys())
+            path_to_select = None
+
+            if current_index != -1:
+                # If the removed item was the last one, select the new last item (previous)
+                if current_index >= len(remaining_items):
+                    next_index_to_select = len(remaining_items) - 1
+                # Otherwise, select the item that took the place of the removed one (next)
+                else:
+                    next_index_to_select = current_index
+                
+                if 0 <= next_index_to_select < len(remaining_items):
+                    path_to_select = remaining_items[next_index_to_select]
+
+            # Rebuild the view now that an item has been removed
+            self._rebuild_rotation_view()
+
+            # Now, select the determined item in the rebuilt view
+            if path_to_select:
+                active_view = self._get_active_file_view()
+                if active_view:
+                    proxy_idx_to_select = self._find_proxy_index_for_path(path_to_select)
+                    if proxy_idx_to_select.isValid():
+                        active_view.setCurrentIndex(proxy_idx_to_select)
+                        active_view.selectionModel().select(proxy_idx_to_select, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                        active_view.scrollTo(proxy_idx_to_select, QAbstractItemView.ScrollHint.EnsureVisible)
+
+    def _hide_rotation_view(self):
+        """Hides the rotation view and switches back to the default list view."""
+        logging.info("Hiding rotation view as no more suggestions.")
+        self.left_panel.set_view_mode_list()
+        self.accept_all_button.setVisible(False)
+        self.accept_button.setVisible(False)
+        self.left_panel.view_rotation_icon.setVisible(False)
+        self.statusBar().showMessage("All rotation suggestions processed.", 5000)
+        self._rebuild_model_view() # Rebuild view to reflect changes and switch mode

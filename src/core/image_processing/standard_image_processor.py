@@ -75,7 +75,8 @@ class StandardImageProcessor:
     @staticmethod
     def load_as_pil(
         image_path: str,
-        target_mode: str = "RGB"
+        target_mode: str = "RGB",
+        apply_exif_transpose: bool = True
     ) -> Optional[Image.Image]:
         """
         Loads a standard image as a PIL Image object.
@@ -84,7 +85,8 @@ class StandardImageProcessor:
         pil_img = None
         try:
             with Image.open(normalized_path) as img:
-                img = ImageOps.exif_transpose(img) # Correct orientation
+                if apply_exif_transpose:
+                    img = ImageOps.exif_transpose(img) # Correct orientation
                 pil_img = img.convert(target_mode)
             return pil_img
         except UnidentifiedImageError:
