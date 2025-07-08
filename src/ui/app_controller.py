@@ -537,7 +537,7 @@ class AppController(QObject):
                 logging.info(f"APPLY_ROT: try_metadata_rotation_first for {filename} took {t2 - t1:.4f}s. Success: {metadata_success}, Needs Lossy: {needs_lossy}")
 
                 if metadata_success:
-                    self._handle_successful_rotation(file_path, direction, f"Rotated {filename} {rotation_degrees}° (lossless)", is_lossy=False)
+                    self.main_window._handle_successful_rotation(file_path, direction, f"Rotated {filename} {rotation_degrees}° (lossless)", is_lossy=False)
                     successful_rotations += 1
                 elif needs_lossy:
                     logging.info(f"APPLY_ROT: Performing lossy rotation for {filename}")
@@ -550,7 +550,7 @@ class AppController(QObject):
                     logging.info(f"APPLY_ROT: lossy rotate_image for {filename} took {t4 - t3:.4f}s. Success: {success}")
                     
                     if success:
-                        self._handle_successful_rotation(file_path, direction, f"Rotated {filename} {rotation_degrees}° (lossy)", is_lossy=True)
+                        self.main_window._handle_successful_rotation(file_path, direction, f"Rotated {filename} {rotation_degrees}° (lossy)", is_lossy=True)
                         successful_rotations += 1
                     else:
                         logging.error(f"APPLY_ROT: Failed to perform lossy rotation for {filename}")
@@ -581,47 +581,3 @@ class AppController(QObject):
         # If no more rotation suggestions, hide the rotation view
         if not self.main_window.rotation_suggestions:
             self.main_window._hide_rotation_view()
-
-    def _handle_successful_rotation(self, file_path: str, direction: str, message: str, is_lossy: bool):
-        """Handle successful rotation - update caches and UI."""
-        handle_start_time = time.perf_counter()
-        filename = os.path.basename(file_path)
-        logging.info(f"HSR: Start for {filename}. Lossy: {is_lossy}. Message: {message}")
-
-        t1 = time.perf_counter()
-        self.main_window.image_pipeline.preview_cache.delete_all_for_path(file_path)
-        self.main_window.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
-        t2 = time.perf_counter()
-        logging.info(f"HSR: Cache clearing for {filename} took {t2 - t1:.4f}s.")
-
-        t3 = time.perf_counter()
-        proxy_idx = self.main_window._find_proxy_index_for_path(file_path)
-        t4 = time.perf_counter()
-        logging.info(f"HSR: _find_proxy_index_for_path for {filename} took {t4 - t3:.4f}s.")
-
-        if proxy_idx.isValid():
-            source_idx = self.main_window.proxy_model.mapToSource(proxy_idx)
-            item = self.main_window.file_system_model.itemFromIndex(source_idx)
-            if item:
-                t5 = time.perf_counter()
-                new_thumbnail = self.main_window.image_pipeline.get_thumbnail_qpixmap(
-                    file_path, apply_auto_edits=self.main_window.apply_auto_edits_enabled
-                )
-                t6 = time.perf_counter()
-                logging.info(f"HSR: get_thumbnail_qpixmap for {filename} took {t6 - t5:.4f}s.")
-                if new_thumbnail:
-                    from PyQt6.QtGui import QIcon
-                    item.setIcon(QIcon(new_thumbnail))
-                    logging.info(f"HSR: Set new icon for {filename}.")
-        
-        selected_paths = self.main_window._get_selected_file_paths_from_view()
-        if file_path in selected_paths:
-            logging.info(f"HSR: {filename} is in current selection, triggering selection changed handler.")
-            t7 = time.perf_counter()
-            self.main_window._handle_file_selection_changed()
-            t8 = time.perf_counter()
-            logging.info(f"HSR: _handle_file_selection_changed took {t8 - t7:.4f}s.")
-        
-        logging.info(message) # Log the original user-facing message
-        handle_end_time = time.perf_counter()
-        logging.info(f"HSR: End for {filename}. Total time: {handle_end_time - handle_start_time:.4f}s")

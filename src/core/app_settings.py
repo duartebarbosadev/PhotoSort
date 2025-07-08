@@ -17,7 +17,6 @@ SETTINGS_APPLICATION = "PhotoSort"
 PREVIEW_CACHE_SIZE_GB_KEY = "Cache/PreviewCacheSizeGB"
 EXIF_CACHE_SIZE_MB_KEY = "Cache/ExifCacheSizeMB" # For EXIF metadata cache
 ROTATION_CONFIRM_LOSSY_KEY = "UI/RotationConfirmLossy" # Ask before lossy rotation
-ROTATION_DIALOG_ONLY_WHEN_NEEDED_KEY = "UI/RotationDialogOnlyWhenNeeded" # Only show dialog if rotations needed
 AUTO_EDIT_PHOTOS_KEY = "UI/AutoEditPhotos"  # Key for auto edit photos setting
 MARK_FOR_DELETION_MODE_KEY = "UI/MarkForDeletionMode" # Key for mark for deletion mode
 RECENT_FOLDERS_KEY = "UI/RecentFolders" # Key for recent folders list
@@ -79,16 +78,6 @@ def set_rotation_confirm_lossy(confirm: bool):
     """Set whether to confirm lossy rotations."""
     settings = _get_settings()
     settings.setValue(ROTATION_CONFIRM_LOSSY_KEY, confirm)
-
-def get_rotation_dialog_only_when_needed() -> bool:
-    """Get whether to only show rotation dialog when rotations are needed."""
-    settings = _get_settings()
-    return settings.value(ROTATION_DIALOG_ONLY_WHEN_NEEDED_KEY, DEFAULT_ROTATION_DIALOG_ONLY_WHEN_NEEDED, type=bool)
-
-def set_rotation_dialog_only_when_needed(only_when_needed: bool):
-    """Set whether to only show rotation dialog when rotations are needed."""
-    settings = _get_settings()
-    settings.setValue(ROTATION_DIALOG_ONLY_WHEN_NEEDED_KEY, only_when_needed)
 
 # --- Auto Edit Photos Setting ---
 def get_auto_edit_photos() -> bool:

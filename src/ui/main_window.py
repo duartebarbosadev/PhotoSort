@@ -2759,46 +2759,48 @@ class MainWindow(QMainWindow):
 
     def _handle_successful_rotation(self, file_path: str, direction: str, message: str, is_lossy: bool):
         """Handle successful rotation - update caches and UI."""
+        handle_start_time = time.perf_counter()
         filename = os.path.basename(file_path)
-        
-        # Clear image caches so the rotated image will be reloaded
-        # Clear ALL image caches so the rotated image will be reloaded.
-        # This is crucial to ensure that subsequent processing (like rotation detection)
-        # gets the new image data and not a stale cached version from the pipeline.
-        self.image_pipeline.clear_all_image_caches()
-        
-        # Find the model item, update its icon, and get its data
-        item_data = None
+        logging.info(f"HSR: Start for {filename}. Lossy: {is_lossy}. Message: {message}")
+
+        t1 = time.perf_counter()
+        self.image_pipeline.preview_cache.delete_all_for_path(file_path)
+        self.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
+        t2 = time.perf_counter()
+        logging.info(f"HSR: Cache clearing for {filename} took {t2 - t1:.4f}s.")
+
+        t3 = time.perf_counter()
         proxy_idx = self._find_proxy_index_for_path(file_path)
+        t4 = time.perf_counter()
+        logging.info(f"HSR: _find_proxy_index_for_path for {filename} took {t4 - t3:.4f}s.")
+
         if proxy_idx.isValid():
             source_idx = self.proxy_model.mapToSource(proxy_idx)
             item = self.file_system_model.itemFromIndex(source_idx)
             if item:
-                item_data = item.data(Qt.ItemDataRole.UserRole)
-                # Regenerate and set the new icon for the item
-                new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(file_path, apply_auto_edits=self.apply_auto_edits_enabled)
+                t5 = time.perf_counter()
+                new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(
+                    file_path, apply_auto_edits=self.apply_auto_edits_enabled
+                )
+                t6 = time.perf_counter()
+                logging.info(f"HSR: get_thumbnail_qpixmap for {filename} took {t6 - t5:.4f}s.")
                 if new_thumbnail:
+                    from PyQt6.QtGui import QIcon
                     item.setIcon(QIcon(new_thumbnail))
-
-        # Check if we're in side-by-side mode to preserve it
-        current_view_mode = self.advanced_image_viewer._get_current_view_mode()
-        is_side_by_side = current_view_mode == "side_by_side"
-
-        # Refresh the current preview if this is the selected image
-        active_view = self._get_active_file_view()
-        if active_view:
-            selected_paths = self._get_selected_file_paths_from_view()
-            if file_path in selected_paths:
-                # This is one of the currently selected images, refresh while preserving view mode
-                self._display_rotated_image_preview(file_path, item_data, is_side_by_side)
+                    logging.info(f"HSR: Set new icon for {filename}.")
         
-        # Update sidebar if visible and showing this image
-        if self.sidebar_visible and hasattr(self, 'metadata_sidebar'):
-            self._update_sidebar_with_current_selection()
+        selected_paths = self._get_selected_file_paths_from_view()
+        if file_path in selected_paths:
+            logging.info(f"HSR: {filename} is in current selection, triggering selection changed handler.")
+            t7 = time.perf_counter()
+            self._handle_file_selection_changed()
+            t8 = time.perf_counter()
+            logging.info(f"HSR: _handle_file_selection_changed took {t8 - t7:.4f}s.")
         
-        # Show success message
         self.statusBar().showMessage(message, 5000)
-        logging.info(f"{message}")
+        logging.info(message) # Log the original user-facing message
+        handle_end_time = time.perf_counter()
+        logging.info(f"HSR: End for {filename}. Total time: {handle_end_time - handle_start_time:.4f}s")
 
     def _rotate_current_image_clockwise(self):
         """Rotate the currently selected image(s) 90° clockwise (for keyboard shortcut)."""
