@@ -25,7 +25,6 @@ RECENT_FOLDERS_KEY = "UI/RecentFolders" # Key for recent folders list
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0 # Default to 2 GB for preview cache
 DEFAULT_EXIF_CACHE_SIZE_MB = 256 # Default to 256 MB for EXIF cache
 DEFAULT_ROTATION_CONFIRM_LOSSY = True # Default to asking before lossy rotation
-DEFAULT_ROTATION_DIALOG_ONLY_WHEN_NEEDED = True # Default to only showing dialog when needed
 DEFAULT_AUTO_EDIT_PHOTOS = False      # Default auto edit photos setting
 DEFAULT_MARK_FOR_DELETION_MODE = True # Default mark for deletion mode setting
 MAX_RECENT_FOLDERS = 10                 # Max number of recent folders to store
