@@ -99,16 +99,16 @@ class ModelRotationDetector:
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
             cls._instance = super(ModelRotationDetector, cls).__new__(cls)
+            cls._instance.initialized = False
         return cls._instance
 
     def __init__(self, model_path: str = MODEL_PATH):
-        if hasattr(self, "initialized") and self.initialized:
+        if self.initialized:
             return
 
-        self.session = None
-        self.input_name = None
-        self.output_name = None
-        self.initialized = False
+        self.session: Optional[ort.InferenceSession] = None
+        self.input_name: Optional[str] = None
+        self.output_name: Optional[str] = None
 
         try:
             self.transforms = get_data_transforms()["val"]

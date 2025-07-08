@@ -1,5 +1,5 @@
 import rawpy
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError, ImageFile
 import io
 import os
 import logging
@@ -107,14 +107,14 @@ class RawImageProcessor:
         Applies auto-edits (brightness, contrast) if requested.
         """
         normalized_path = os.path.normpath(image_path)
-        final_pil_img = None
+        final_pil_img: Optional[Image.Image] = None
 
         try:
             with rawpy.imread(normalized_path) as raw:
-                temp_pil_img = None
+                temp_pil_img: Optional[Image.Image] = None
                 try:
                     # Attempt to use embedded thumbnail first
-                    thumb = raw.extract_thumb()
+                    thumb: ImageFile = raw.extract_thumb()
                     if (
                         thumb.format == rawpy.ThumbFormat.JPEG
                         and thumb.data is not None
@@ -205,21 +205,21 @@ class RawImageProcessor:
         Applies auto-edits if requested.
         """
         normalized_path = os.path.normpath(image_path)
-        pil_img = None
+        pil_img: Optional[Image.Image] = None
         try:
             with rawpy.imread(normalized_path) as raw:
                 # Attempt 1: Extract a large enough embedded JPEG preview
                 try:
-                    thumb = raw.extract_thumb()
+                    thumb: ImageFile = raw.extract_thumb()
                     if (
                         thumb.format == rawpy.ThumbFormat.JPEG
                         and thumb.data is not None
                     ):
-                        temp_img = Image.open(io.BytesIO(thumb.data))
+                        temp_img: Image.Image = Image.open(io.BytesIO(thumb.data))
                         temp_img = ImageOps.exif_transpose(temp_img)
 
-                        MIN_EMBEDDED_WIDTH = preview_max_resolution[0] // 2
-                        MIN_EMBEDDED_HEIGHT = preview_max_resolution[1] // 2
+                        MIN_EMBEDDED_WIDTH: int = preview_max_resolution[0] // 2
+                        MIN_EMBEDDED_HEIGHT: int = preview_max_resolution[1] // 2
                         if (
                             temp_img.width >= MIN_EMBEDDED_WIDTH
                             and temp_img.height >= MIN_EMBEDDED_HEIGHT
@@ -416,12 +416,12 @@ class RawImageProcessor:
         Uses efficient methods (embedded or half-size postprocess).
         """
         normalized_path = os.path.normpath(image_path)
-        pil_img = None
+        pil_img: Optional[Image.Image] = None
         try:
             with rawpy.imread(normalized_path) as raw:
-                temp_pil_img = None
+                temp_pil_img: Optional[Image.Image] = None
                 try:  # Attempt embedded thumbnail first
-                    thumb = raw.extract_thumb()
+                    thumb: ImageFile = raw.extract_thumb()
                     if (
                         thumb.format == rawpy.ThumbFormat.JPEG
                         and thumb.data is not None

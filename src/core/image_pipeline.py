@@ -469,7 +469,9 @@ class ImagePipeline:
             try:  # Last resort for unknown types
                 img = Image.open(normalized_path)
                 if apply_exif_transpose:
-                    img = self.image_orientation_handler.exif_transpose(img)
+                    img: Image.Image = self.image_orientation_handler.exif_transpose(
+                        img
+                    )
                 pil_img = img.convert(target_mode)
             except Exception:
                 logging.warning(

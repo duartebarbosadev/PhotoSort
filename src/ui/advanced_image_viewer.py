@@ -1,6 +1,6 @@
 import logging
 from typing import Optional, List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import (
     QPixmap,
     QWheelEvent,
@@ -402,9 +402,9 @@ class ZoomableImageView(QGraphicsView):
         # Get viewport dimensions
         viewport = self.viewport()
         if viewport:
-            viewport_rect = viewport.rect()
+            viewport_rect: QRectF = viewport.rect()
         else:
-            viewport_rect = QRectF(0, 0, 1, 1)  # Fallback to a minimal rect
+            viewport_rect = QRectF(0, 0, 1, 1)
 
         # Set scene rect to match viewport
         self._scene.setSceneRect(0, 0, viewport_rect.width(), viewport_rect.height())

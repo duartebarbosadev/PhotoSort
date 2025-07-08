@@ -504,10 +504,11 @@ class DialogManager:
 
         dialog.setDefaultButton(ok_button)
 
-        download_button.clicked.connect(
-            lambda: webbrowser.open(
-                "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"
+        if download_button:
+            download_button.clicked.connect(
+                lambda: webbrowser.open(
+                    "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"
+                )
             )
-        )
 
         dialog.exec()

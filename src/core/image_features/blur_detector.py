@@ -67,7 +67,7 @@ class BlurDetector:
                         ImageOrientationHandler,
                     )  # Local import
 
-                    img = ImageOrientationHandler.exif_transpose(img)
+                    img: Image.Image = ImageOrientationHandler.exif_transpose(img)
                     img.thumbnail(target_size, Image.Resampling.LANCZOS)
                     pil_img = img.convert("RGB")
                 except UnidentifiedImageError:

@@ -869,18 +869,20 @@ class MetadataProcessor:
             if cached_data:
                 try:
                     orientation = (
-                        int(cached_data.get("Exif.Image.Orientation"))
-                        if "Exif.Image.Orientation" in cached_data
-                        else None
+                        (
+                            int(cached_data["Exif.Image.Orientation"])
+                            if cached_data.get("Exif.Image.Orientation") is not None
+                            else None
+                        )
                     )
                     width = (
-                        int(cached_data.get("pixel_width"))
-                        if "pixel_width" in cached_data
+                        int(cached_data["pixel_width"])
+                        if cached_data.get("pixel_width") is not None
                         else None
                     )
                     height = (
-                        int(cached_data.get("pixel_height"))
-                        if "pixel_height" in cached_data
+                        int(cached_data["pixel_height"])
+                        if cached_data.get("pixel_height") is not None
                         else None
                     )
                     if (

@@ -106,7 +106,7 @@ class MetadataCard(QFrame):
 
         self.animation.start()
 
-    def add_info_row(self, label: str, value: str, value_color: str = None):
+    def add_info_row(self, label: str, value: str, value_color: Optional[str] = None):
         """Add an information row to the card"""
         row = QHBoxLayout()
         row.setContentsMargins(0, 1, 0, 1)
@@ -320,7 +320,7 @@ class MetadataSidebar(QWidget):
                 child.widget().deleteLater()
 
     def update_metadata(
-        self, image_path: str, metadata: Dict[str, Any], raw_exif: Dict[str, Any] = None
+        self, image_path: str, metadata: Dict[str, Any], raw_exif: Optional[Dict[str, Any]] = None
     ):
         """Update the sidebar with new metadata, resetting to single-image view."""
         self.comparison_mode = False

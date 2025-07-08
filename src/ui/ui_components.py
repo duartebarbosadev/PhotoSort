@@ -15,7 +15,7 @@ from PyQt6.QtGui import (
     QDropEvent,
     QStandardItem,
 )
-from typing import List
+from typing import List, Optional
 
 from src.core.image_pipeline import ImagePipeline  # For PreviewPreloaderWorker
 from src.core.image_features.blur_detector import (
@@ -36,8 +36,9 @@ class DroppableTreeView(QTreeView):
         self.highlighted_drop_target_index = None
         self.original_item_brush = None
 
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        event.ignore()  # Disable drag and drop
+    def dragEnterEvent(self, event: Optional[QDragEnterEvent]):
+        if event:
+            event.ignore()  # Disable drag and drop
 
     def _clear_drop_highlight(self):
         if (
@@ -54,15 +55,17 @@ class DroppableTreeView(QTreeView):
         self.highlighted_drop_target_index = None
         self.original_item_brush = None
 
-    def dragMoveEvent(self, event: QDragMoveEvent):
-        event.ignore()  # Disable drag and drop
+    def dragMoveEvent(self, event: Optional[QDragMoveEvent]):
+        if event:
+            event.ignore()  # Disable drag and drop
 
     def dragLeaveEvent(self, event):
         self._clear_drop_highlight()
         super().dragLeaveEvent(event)
 
-    def dropEvent(self, event: QDropEvent):
-        event.ignore()  # Disable drag and drop
+    def dropEvent(self, event: Optional[QDropEvent]):
+        if event:
+            event.ignore()  # Disable drag and drop
 
 
 # --- Custom Delegate for Highlighting Focused Image ---
@@ -73,7 +76,10 @@ class FocusHighlightDelegate(QStyledItemDelegate):
         self.main_window = main_window
 
     def paint(
-        self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex
+        self,
+        painter: Optional[QPainter],
+        option: Optional[QStyleOptionViewItem],
+        index: Optional[QModelIndex],
     ):
         # Let the base class handle the default painting (selection, text, icon)
         super().paint(painter, option, index)

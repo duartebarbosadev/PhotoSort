@@ -52,6 +52,7 @@ class ImageOrientationHandler:
         else:
             return 0  # Other orientations (like flipped) are not handled as simple rotations
 
+    @staticmethod
     def get_composite_rotation(
         exif_rotation_degrees: int, model_suggestion_degrees: int
     ) -> int:
