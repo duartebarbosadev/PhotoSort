@@ -32,43 +32,20 @@ class RotationDetector:
     ) -> None:
         """
         Worker task for detecting rotation for a single image.
-        It compares the model's prediction with the current EXIF data
-        to suggest the correct net rotation.
+        The image is first physically rotated according to its EXIF tag,
+        then the model predicts any remaining rotation.
         """
         try:
+            # Get the image with EXIF orientation already applied by the pipeline.
             pil_image = self.image_pipeline.get_pil_image_for_processing(
                 image_path,
                 apply_auto_edits=apply_auto_edits,
                 use_preloaded_preview_if_available=False,
-                apply_exif_transpose=False,
+                apply_exif_transpose=True,  # This is the key change.
             )
-
-            model_suggested_rotation = self.model_detector.predict_rotation_angle(
+        
+            final_suggested_rotation = self.model_detector.predict_rotation_angle(
                 image_path, image=pil_image, apply_auto_edits=apply_auto_edits
-            )
-
-            current_orientation = (
-                MetadataProcessor.get_orientation(image_path, self.exif_cache) or 1
-            )
-
-            EXIF_TO_ANGLE_CW = {
-                1: 0,
-                2: 0,
-                3: 180,
-                4: 180,
-                5: 270,
-                6: 90,
-                7: 90,
-                8: 270,
-            }
-            current_angle_cw = EXIF_TO_ANGLE_CW.get(current_orientation, 0)
-
-            model_angle_cw = (model_suggested_rotation + 360) % 360
-
-            net_rotation_cw = (model_angle_cw - current_angle_cw + 360) % 360
-
-            final_suggested_rotation = (
-                -90 if net_rotation_cw == 270 else net_rotation_cw
             )
 
             if result_callback:

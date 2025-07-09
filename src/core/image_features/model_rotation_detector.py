@@ -1,7 +1,7 @@
 import os
 import logging
 import torchvision.transforms as transforms
-from PIL import Image
+from PIL import Image, ImageOps
 from typing import Optional, Dict
 import onnxruntime as ort
 import numpy as np
@@ -53,7 +53,9 @@ def get_data_transforms() -> Dict[str, transforms.Compose]:
 
 def load_image_safely(path: str, apply_auto_edits: bool) -> Optional[Image.Image]:
     """
-    Loads an image, safely converting it to a 3-channel RGB format.
+    Loads an image, respects EXIF orientation, and safely converts it to a
+    3-channel RGB format. It handles palletized images and images with
+    transparency by compositing them onto a white background.
     Handles both standard and RAW image formats.
     """
     normalized_path = os.path.normpath(path)
@@ -61,7 +63,7 @@ def load_image_safely(path: str, apply_auto_edits: bool) -> Optional[Image.Image
 
     try:
         if is_raw_extension(ext):
-            # Use the project's RawImageProcessor for RAW files
+            # RAW processing is handled by the dedicated processor
             logging.debug(
                 f"Using RawImageProcessor to load {normalized_path} for rotation detection."
             )
@@ -69,15 +71,25 @@ def load_image_safely(path: str, apply_auto_edits: bool) -> Optional[Image.Image
                 normalized_path, half_size=True, apply_auto_edits=apply_auto_edits
             )
         else:
-            # Use standard Pillow loading for other formats
+            # Standard image loading
             img = Image.open(normalized_path)
-            if img.mode in ("RGB", "L"):
+
+            # Respect the EXIF orientation tag before any other processing.
+            img = ImageOps.exif_transpose(img)
+
+            # If the image is already in a simple mode that can be directly
+            # converted to RGB, do it and return.
+            if img.mode in ("RGB", "L"):  # L is grayscale
                 return img.convert("RGB")
 
-            # Handle formats with transparency like PNG
+            # For all other modes (P, PA, RGBA), convert to RGBA first to
+            # standardize and handle transparency correctly.
             rgba_img = img.convert("RGBA")
+
+            # Create a new white background and paste the image onto it.
             background = Image.new("RGB", rgba_img.size, (255, 255, 255))
             background.paste(rgba_img, mask=rgba_img)
+
             return background
 
     except FileNotFoundError:
