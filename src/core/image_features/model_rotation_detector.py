@@ -20,9 +20,8 @@ class ModelNotFoundError(Exception):
 
 # --- Constants for the model ---
 MODEL_SAVE_DIR = "models"
-MODEL_PATH = os.path.join(MODEL_SAVE_DIR, "orientation_model_v1_0.9753.onnx")
+MODEL_PATH = os.path.join(MODEL_SAVE_DIR, "orientation_model_v2_0_9812.onnx")
 IMAGE_SIZE = 384
-NUM_CLASSES = 4
 
 # Map model output index to a rotation angle in degrees for Qt (positive is clockwise).
 CLASS_TO_ANGLE_MAP = {
@@ -121,6 +120,7 @@ class ModelRotationDetector:
         self.session: Optional[ort.InferenceSession] = None
         self.input_name: Optional[str] = None
         self.output_name: Optional[str] = None
+        self.provider_name: Optional[str] = None
 
         try:
             self.transforms = get_data_transforms()["val"]
@@ -137,28 +137,12 @@ class ModelRotationDetector:
                 f"An unexpected error occurred during ModelRotationDetector initialization: {e}"
             )
 
-    def _get_onnx_providers(self) -> list[str]:
-        """Gets available ONNX Runtime providers, preferring GPU if available."""
-        providers = ["CPUExecutionProvider"]
-        available_providers = ort.get_available_providers()
-
-        if "CUDAExecutionProvider" in available_providers:
-            providers.insert(0, "CUDAExecutionProvider")
-            logging.info("ONNX Runtime: Using CUDAExecutionProvider.")
-        elif "DmlExecutionProvider" in available_providers:
-            providers.insert(0, "DmlExecutionProvider")
-            logging.info("ONNX Runtime: Using DmlExecutionProvider for DirectML.")
-        # MPS is for macOS, might not be relevant but good to have
-        elif "CoreMLExecutionProvider" in available_providers:
-            providers.insert(0, "CoreMLExecutionProvider")
-            logging.info("ONNX Runtime: Using CoreMLExecutionProvider.")
-
-        return providers
-
     def _load_onnx_session(
         self, model_path: str
     ) -> tuple[Optional[ort.InferenceSession], Optional[str], Optional[str]]:
-        """Loads the ONNX model into an InferenceSession."""
+        """
+        Loads the ONNX model, selecting the best available provider.
+        """
         if not os.path.exists(model_path):
             logging.error(
                 f"ONNX model file not found at {model_path}. Rotation detection will be disabled. "
@@ -167,17 +151,59 @@ class ModelRotationDetector:
             )
             raise ModelNotFoundError(model_path)
 
+        # Define a priority list for execution providers.
+        PREFERRED_PROVIDERS = [
+            # "TensorrtExecutionProvider",  # For NVIDIA GPUs with TensorRT support (commented out for now)
+            "CUDAExecutionProvider",  # For NVIDIA GPUs
+            "DmlExecutionProvider",  # For DirectML on Windows
+            "MpsExecutionProvider",  # For Apple Silicon (M1/M2/M3) GPUs
+            "ROCmExecutionProvider",  # For AMD GPUs
+            "CoreMLExecutionProvider",  # For Apple devices (can use Neural Engine)
+            "CPUExecutionProvider",  # Universal fallback
+        ]
+
         try:
-            providers = self._get_onnx_providers()
-            session = ort.InferenceSession(model_path, providers=providers)
+            available_providers = ort.get_available_providers()
+            logging.info(f"Available ONNX Runtime providers: {available_providers}")
+
+            chosen_provider = "CPUExecutionProvider"  # Default fallback
+            for provider in PREFERRED_PROVIDERS:
+                if provider in available_providers:
+                    chosen_provider = provider
+                    break
+
+            logging.info(
+                f"Attempting to load ONNX model with provider: {chosen_provider}"
+            )
+
+            # Load the ONNX model with the single, highest-priority available provider
+            session = ort.InferenceSession(model_path, providers=[chosen_provider])
+
+            actual_provider = session.get_providers()[0]
+            self.provider_name = actual_provider
+            logging.info(
+                f"Successfully loaded ONNX model from {model_path} using provider: {actual_provider}"
+            )
+
+            if (
+                chosen_provider != actual_provider
+                and actual_provider == "CPUExecutionProvider"
+            ):
+                logging.warning(
+                    f"Warning: ONNX Runtime fell back to CPU. The chosen provider "
+                    f"'{chosen_provider}' might not be correctly configured."
+                )
+
             input_name = session.get_inputs()[0].name
             output_name = session.get_outputs()[0].name
-            logging.info(
-                f"Successfully loaded ONNX model from {model_path} with providers: {session.get_providers()}"
-            )
             return session, input_name, output_name
+
         except Exception as e:
-            logging.error(f"Error loading ONNX model from {model_path}: {e}")
+            logging.error(f"Error loading ONNX model {model_path}: {e}")
+            logging.error(
+                "If you are trying to use a GPU provider (CUDA, DML, ROCm, MPS), "
+                "please ensure the correct onnxruntime package is installed and any necessary drivers are up to date."
+            )
             return None, None, None
 
     def predict_rotation_angle(

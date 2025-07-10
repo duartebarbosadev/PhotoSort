@@ -212,7 +212,6 @@ class MenuManager:
         view_menu.addAction(self.toggle_metadata_sidebar_action)
 
     def _create_image_menu(self, menu_bar):
-
         image_menu = menu_bar.addMenu("&Image")
 
         image_menu.addAction(self.rotate_clockwise_action)

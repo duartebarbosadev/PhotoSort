@@ -112,18 +112,30 @@ class ImageRotator:
         Calculate new orientation value based on current orientation and rotation direction.
         EXIF orientation values 1-8 represent different rotations and flips.
         """
-        # Orientation transformation matrices for 90° rotations
-        # These handle the 8 possible EXIF orientation states
-        if direction == "clockwise":
-            orientation_map = {1: 6, 2: 7, 3: 8, 4: 5, 5: 2, 6: 3, 7: 4, 8: 1}
-        elif direction == "counterclockwise":
-            orientation_map = {1: 8, 2: 5, 3: 6, 4: 7, 5: 4, 6: 1, 7: 2, 8: 3}
-        elif direction == "180":
-            orientation_map = {1: 3, 2: 4, 3: 1, 4: 2, 5: 6, 6: 5, 7: 8, 8: 7}
-        else:
+        # Maps for primary rotation states (1, 6, 3, 8) which correspond to 0°, 90°, 180°, 270°
+        rotation_map = {
+            "clockwise": {1: 6, 6: 3, 3: 8, 8: 1},
+            "counterclockwise": {1: 8, 8: 3, 3: 6, 6: 1},
+            "180": {1: 3, 3: 1, 6: 8, 8: 6},
+        }
+        # Maps for flipped states (2, 7, 4, 5)
+        flipped_map = {
+            "clockwise": {2: 5, 5: 4, 4: 7, 7: 2},
+            "counterclockwise": {2: 7, 7: 4, 4: 5, 5: 2},
+            "180": {2: 4, 4: 2, 5: 7, 7: 5},
+        }
+
+        if direction not in rotation_map:
             return current_orientation
 
-        return orientation_map.get(current_orientation, 1)
+        # Check if current orientation is a flipped state
+        if current_orientation in flipped_map[direction]:
+            return flipped_map[direction][current_orientation]
+        # Otherwise, use the primary rotation map
+        elif current_orientation in rotation_map[direction]:
+            return rotation_map[direction][current_orientation]
+
+        return current_orientation
 
     def _rotate_jpeg_lossless(
         self, image_path: str, direction: RotationDirection

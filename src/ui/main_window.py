@@ -517,13 +517,26 @@ class MainWindow(QMainWindow):
         # widgets inside SynchronizedImageViewer, so they are no longer created here.
 
         self.accept_all_button = QPushButton("Accept All")
+        self.accept_all_button.setObjectName("acceptAllButton")
         self.accept_all_button.setVisible(False)
         self.accept_button = QPushButton("Accept")
+        self.accept_button.setObjectName("acceptButton")
         self.accept_button.setVisible(False)
+        self.refuse_button = QPushButton("Refuse")
+        self.refuse_button.setObjectName("refuseButton")
+        self.refuse_button.setVisible(False)
+        self.refuse_all_button = QPushButton("Refuse All")
+        self.refuse_all_button.setObjectName("refuseAllButton")
+        self.refuse_all_button.setVisible(False)
 
         button_layout = QHBoxLayout()
+        button_layout.addStretch(1)
         button_layout.addWidget(self.accept_button)
         button_layout.addWidget(self.accept_all_button)
+        button_layout.addSpacing(20)  # Add space between button groups
+        button_layout.addWidget(self.refuse_button)
+        button_layout.addWidget(self.refuse_all_button)
+        button_layout.addStretch(1)
 
         center_pane_layout.addLayout(button_layout)
 
@@ -623,6 +636,8 @@ class MainWindow(QMainWindow):
 
         self.accept_all_button.clicked.connect(self._accept_all_rotations)
         self.accept_button.clicked.connect(self._accept_current_rotation)
+        self.refuse_button.clicked.connect(self._refuse_current_rotation)
+        self.refuse_all_button.clicked.connect(self._refuse_all_rotations)
         logging.debug(
             f"MainWindow._connect_signals - End: {time.perf_counter() - start_time:.4f}s"
         )
@@ -886,8 +901,10 @@ class MainWindow(QMainWindow):
                     image_item = self._create_standard_item(file_data)
                     folder_item.appendRow(image_item)
         else:  # Not showing folders, or grouping by similarity (which creates its own top-level groups)
+
             def image_sort_key_func(fd):
                 return os.path.basename(fd["path"])
+
             parent_data = parent_item.data(Qt.ItemDataRole.UserRole)
             is_cluster_header = isinstance(parent_data, str) and parent_data.startswith(
                 "cluster_header_"
@@ -899,6 +916,7 @@ class MainWindow(QMainWindow):
                     current_cluster_sort_method == "Time"
                     or current_cluster_sort_method == "Similarity then Time"
                 ):
+
                     def image_sort_key_func(fd):
                         return (
                             self.app_state.date_cache.get(fd["path"], date_obj.max),
@@ -1385,7 +1403,9 @@ class MainWindow(QMainWindow):
                         self.advanced_image_viewer.setText("No valid image to select.")
 
             self._update_image_info_label()
-        elif deleted_count == 0 and len(self.original_selection_paths) > 0:  # No items were actually deleted, but some were selected
+        elif (
+            deleted_count == 0 and len(self.original_selection_paths) > 0
+        ):  # No items were actually deleted, but some were selected
             self.statusBar().showMessage(
                 "No valid image files were deleted from selection.", 3000
             )
@@ -2405,19 +2425,40 @@ class MainWindow(QMainWindow):
             return
 
         if self.left_panel.current_view_mode == "rotation":
-            self.accept_all_button.setVisible(bool(self.rotation_suggestions))
-            self.accept_button.setVisible(
-                len(selected_file_paths) == 1
-                and selected_file_paths[0] in self.rotation_suggestions
-            )
-            if len(selected_file_paths) == 1:
-                self._display_side_by_side_comparison(selected_file_paths[0])
+            num_suggestions = len(self.rotation_suggestions)
+            self.accept_all_button.setVisible(num_suggestions > 1)
+            self.refuse_all_button.setVisible(num_suggestions > 1)
+            num_selected = len(selected_file_paths)
+
+            self.accept_button.setVisible(num_selected > 0)
+            self.refuse_button.setVisible(num_selected > 0)
+
+            if num_selected > 0:
+                all_selected_have_suggestion = all(
+                    p in self.rotation_suggestions for p in selected_file_paths
+                )
+                self.accept_button.setEnabled(all_selected_have_suggestion)
+                self.refuse_button.setEnabled(all_selected_have_suggestion)
+
+                if num_selected == 1:
+                    self.accept_button.setText("Accept")
+                    self.refuse_button.setText("Refuse")
+                    self._display_side_by_side_comparison(selected_file_paths[0])
+                else:
+                    self.accept_button.setText(f"Accept ({num_selected})")
+                    self.refuse_button.setText(f"Refuse ({num_selected})")
+                    self.advanced_image_viewer.clear()
+                    self.advanced_image_viewer.setText(
+                        f"{num_selected} items selected for rotation approval."
+                    )
             else:
                 self.advanced_image_viewer.clear()
             return
         else:
             self.accept_all_button.setVisible(False)
             self.accept_button.setVisible(False)
+            self.refuse_button.setVisible(False)
+            self.refuse_all_button.setVisible(False)
 
         # When selection changes, clear the focused image path unless it's a single selection
         if len(selected_file_paths) != 1:
@@ -3353,14 +3394,17 @@ class MainWindow(QMainWindow):
             current_cluster_sort_method == "Time"
             or current_cluster_sort_method == "Similarity then Time"
         ):
+
             def image_sort_key_func(fd):
                 return (
                     self.app_state.date_cache.get(fd["path"], date_obj.max),
                     os.path.basename(fd["path"]),
                 )
         else:  # Default sort (by basename)
+
             def image_sort_key_func(fd):
                 return os.path.basename(fd["path"])
+
         sorted_images_in_cluster_data = sorted(
             images_in_target_cluster, key=image_sort_key_func
         )
@@ -4471,8 +4515,48 @@ class MainWindow(QMainWindow):
 
     def _accept_current_rotation(self):
         selected_paths = self._get_selected_file_paths_from_view()
+        if not selected_paths:
+            return
+
+        # If only one item is selected, use the existing logic to preserve
+        # the behavior of selecting the next item automatically.
         if len(selected_paths) == 1:
             self._accept_rotation(selected_paths[0])
+            return
+
+        # Handle multi-selection for the "Accept (N)" button
+        rotations_to_apply = {
+            path: self.rotation_suggestions[path]
+            for path in selected_paths
+            if path in self.rotation_suggestions
+        }
+
+        if not rotations_to_apply:
+            return
+
+        self.app_controller._apply_approved_rotations(rotations_to_apply)
+
+        # Remove the accepted rotations from the main suggestion list
+        for path in rotations_to_apply:
+            if path in self.rotation_suggestions:
+                del self.rotation_suggestions[path]
+
+        # If no suggestions are left, hide the rotation view and return to list view
+        if not self.rotation_suggestions:
+            self._hide_rotation_view()
+            return
+
+        # Rebuild the rotation view to show the remaining items
+        self._rebuild_rotation_view()
+
+        # After batch-accepting, clear the selection and image preview to provide
+        # a clean state for the user to make their next selection.
+        active_view = self._get_active_file_view()
+        if active_view:
+            active_view.selectionModel().clear()
+            self.advanced_image_viewer.clear()
+            # Hide the button until a new selection is made
+            self.accept_button.setVisible(False)
 
     def _accept_rotation(self, file_path: str):
         """Applies a single rotation suggestion and selects the next/previous item."""
@@ -4484,41 +4568,26 @@ class MainWindow(QMainWindow):
             except ValueError:
                 current_index = -1
 
-            # Apply the rotation
             rotation = self.rotation_suggestions.pop(file_path)
             self.app_controller._apply_approved_rotations({file_path: rotation})
 
-            # If no suggestions are left, hide the rotation view and go back to the list view
             if not self.rotation_suggestions:
                 self._hide_rotation_view()
                 return
 
-            # --- Determine the next item to select ---
             remaining_items = list(self.rotation_suggestions.keys())
             path_to_select = None
+            if current_index != -1 and remaining_items:
+                next_index = min(current_index, len(remaining_items) - 1)
+                path_to_select = remaining_items[next_index]
 
-            if current_index != -1:
-                # If the removed item was the last one, select the new last item (previous)
-                if current_index >= len(remaining_items):
-                    next_index_to_select = len(remaining_items) - 1
-                # Otherwise, select the item that took the place of the removed one (next)
-                else:
-                    next_index_to_select = current_index
-
-                if 0 <= next_index_to_select < len(remaining_items):
-                    path_to_select = remaining_items[next_index_to_select]
-
-            # Rebuild the view now that an item has been removed
             self._rebuild_rotation_view()
 
-            # Now, select the determined item in the rebuilt view
             if path_to_select:
-                active_view = self._get_active_file_view()
-                if active_view:
-                    proxy_idx_to_select = self._find_proxy_index_for_path(
-                        path_to_select
-                    )
-                    if proxy_idx_to_select.isValid():
+                proxy_idx_to_select = self._find_proxy_index_for_path(path_to_select)
+                if proxy_idx_to_select.isValid():
+                    active_view = self._get_active_file_view()
+                    if active_view:
                         active_view.setCurrentIndex(proxy_idx_to_select)
                         active_view.selectionModel().select(
                             proxy_idx_to_select,
@@ -4529,12 +4598,45 @@ class MainWindow(QMainWindow):
                             QAbstractItemView.ScrollHint.EnsureVisible,
                         )
 
+    def _refuse_all_rotations(self):
+        """Refuses all remaining rotation suggestions."""
+        if not self.rotation_suggestions:
+            self.statusBar().showMessage("No rotation suggestions to refuse.", 3000)
+            return
+
+        self.rotation_suggestions.clear()
+        self.statusBar().showMessage(
+            "All rotation suggestions have been refused.", 5000
+        )
+        self._hide_rotation_view()
+
+    def _refuse_current_rotation(self):
+        """Refuses the currently selected rotation suggestions."""
+        selected_paths = self._get_selected_file_paths_from_view()
+        if not selected_paths:
+            return
+
+        for path in selected_paths:
+            if path in self.rotation_suggestions:
+                del self.rotation_suggestions[path]
+
+        if not self.rotation_suggestions:
+            self._hide_rotation_view()
+            return
+
+        self._rebuild_rotation_view()
+        self.advanced_image_viewer.clear()
+        self.accept_button.setVisible(False)
+        self.refuse_button.setVisible(False)
+
     def _hide_rotation_view(self):
         """Hides the rotation view and switches back to the default list view."""
         logging.info("Hiding rotation view as no more suggestions.")
         self.left_panel.set_view_mode_list()
         self.accept_all_button.setVisible(False)
         self.accept_button.setVisible(False)
+        self.refuse_button.setVisible(False)
+        self.refuse_all_button.setVisible(False)
         self.left_panel.view_rotation_icon.setVisible(False)
         self.statusBar().showMessage("All rotation suggestions processed.", 5000)
-        self._rebuild_model_view()  # Rebuild view to reflect changes and switch mode
+        self._rebuild_model_view()

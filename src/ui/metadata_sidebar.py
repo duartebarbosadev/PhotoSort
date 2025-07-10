@@ -320,7 +320,10 @@ class MetadataSidebar(QWidget):
                 child.widget().deleteLater()
 
     def update_metadata(
-        self, image_path: str, metadata: Dict[str, Any], raw_exif: Optional[Dict[str, Any]] = None
+        self,
+        image_path: str,
+        metadata: Dict[str, Any],
+        raw_exif: Optional[Dict[str, Any]] = None,
     ):
         """Update the sidebar with new metadata, resetting to single-image view."""
         self.comparison_mode = False

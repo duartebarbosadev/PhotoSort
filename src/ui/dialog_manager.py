@@ -23,6 +23,10 @@ from src.core.app_settings import (
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
 )
+from src.core.image_features.model_rotation_detector import (
+    ModelRotationDetector,
+    ModelNotFoundError,
+)
 
 
 class DialogManager:
@@ -92,8 +96,21 @@ class DialogManager:
         tech_layout.setContentsMargins(15, 10, 15, 10)
 
         clustering_info = "Clustering Algorithm: DBSCAN (scikit-learn)"
+        # Get ONNX provider information
+        try:
+            model_detector = ModelRotationDetector()
+            if model_detector.initialized:
+                onnx_provider = model_detector.provider_name
+            else:
+                onnx_provider = "N/A (model not loaded)"
+        except ModelNotFoundError:
+            onnx_provider = "N/A (model not found)"
+        except Exception:
+            onnx_provider = "N/A (error)"
+
         tech_items = [
             f"🧠 Embeddings: SentenceTransformer (CLIP) on {'GPU (CUDA)' if is_pytorch_cuda_available() else 'CPU'}",
+            f"🤖 Rotation Model: ONNX Runtime on {onnx_provider}",
             f"🔍 {clustering_info}",
             "📋 Metadata: pyexiv2 • 🎨 Interface: PyQt6 • 🐍 Runtime: Python",
         ]
@@ -491,7 +508,7 @@ class DialogManager:
         detailed_text = (
             "You can download the model from the official GitHub repository.\n\n"
             "1. Click 'Download Model' to open the releases page.\n"
-            "2. Download the 'orientation_model_v1_0.9753.onnx' file.\n"
+            "2. Download the 'orientation_model_v2_0_9812.onnx' file.\n"
             "3. Place the downloaded file inside the 'models' folder in the application directory.\n"
             "4. Restart the application or re-run the rotation analysis."
         )

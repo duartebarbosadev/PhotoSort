@@ -44,6 +44,7 @@ The sidebar provides quick access to image metadata and organizational tools:
   * SentenceTransformers (with CLIP models like `clip-ViT-B-32` for image embeddings)
   * scikit-learn (for DBSCAN clustering)
   * NumPy (for numerical operations)
+  * ONNX Runtime (for AI model inference)
 * **Packaging/Misc**:
   * `send2trash` (for moving files to trash)
 
@@ -56,12 +57,39 @@ The sidebar provides quick access to image metadata and organizational tools:
   * **Windows**: Download from [jpegclub.org](http://jpegclub.org/jpegtran/) or install via Chocolatey: `choco install libjpeg-turbo`
   * **macOS**: `brew install jpeg-turbo`
   * **Linux**: `sudo apt-get install libjpeg-turbo-progs` (Ubuntu/Debian) or `sudo yum install libjpeg-turbo-utils` (RedHat/CentOS)
-* **CUDA (Optional, for GPU Acceleration)**:
-  * For significantly faster image embedding generation (used in Similarity Analysis), a CUDA-enabled NVIDIA GPU is beneficial.
-  * You'll need:
-    1. NVIDIA GPU drivers.
-    2. CUDA Toolkit installed. You can find versions compatible with PyTorch on the [PyTorch website](https://pytorch.org/get-started/locally/).
-  * If CUDA is not available or not set up correctly, the application will automatically fall back to using the CPU for these tasks, which will be slower. The application checks CUDA availability using `torch.cuda.is_available()` (see [`src/core/app_settings.py`](src/core/app_settings.py:18)).
+
+### Hardware Acceleration (Optional, Recommended)
+
+For significantly faster AI-powered features like **Rotation Detection** and **Similarity Analysis**, it is highly recommended to install the appropriate ONNX Runtime package for your hardware. The application will automatically use the best available hardware (GPU > CPU).
+
+First, uninstall the basic CPU package to avoid conflicts:
+
+```bash
+pip uninstall onnxruntime
+```
+
+Then, install the package corresponding to your hardware:
+
+#### For NVIDIA GPUs (CUDA)
+
+```bash
+# Requires NVIDIA CUDA Toolkit & cuDNN
+pip install onnxruntime-gpu
+```
+
+#### For Apple Silicon (M1/M2/M3)
+
+```bash
+# Uses Apple's Metal Performance Shaders (MPS)
+pip install onnxruntime-silicon
+```
+
+#### For AMD GPUs (ROCm) - Untested
+
+```bash
+# Requires AMD ROCm driver/libraries
+pip install onnxruntime-rocm
+```
 
 ### Installation & Running
 
@@ -78,13 +106,13 @@ The sidebar provides quick access to image metadata and organizational tools:
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 3. **Install dependencies:**
-   Ensure your [`requirements.txt`](requirements.txt) is up-to-date with all necessary packages (PyQt6, Pillow, rawpy, opencv-python, sentence-transformers, scikit-learn, numpy, send2trash, pyexiv2
+   Ensure your [`requirements.txt`](requirements.txt) is up-to-date with all necessary packages (PyQt6, Pillow, rawpy, opencv-python, sentence-transformers, scikit-learn, numpy, send2trash, pyexiv2, onnxruntime).
 
    ```bash
    pip install -r requirements.txt
    ```
 4. **Run the application:**
-   The main entry point is [`src/main.py`](src/main.py:147).
+   The main entry point is [`src/main.py`](src/main.py).
 
    ```bash
    python -m src.main [--folder FOLDER_PATH] [--clear-cache]

@@ -1052,8 +1052,19 @@ class SynchronizedImageViewer(QWidget):
                 viewer.image_view.fit_in_view()
 
     def setText(self, text: str):
+        """Clears all viewers, resets to single view, and displays the given text centrally."""
+        # Clear all viewers to remove any existing images or text.
+        for viewer in self.image_viewers:
+            viewer.clear()
+
+        # Set to single view mode to ensure the first viewer takes up all available space.
+        self._set_view_mode("single")
+
+        # Now, set the text on the first viewer, which is now the only one visible.
         if self.image_viewers:
-            self.image_viewers[0].image_view.setText(text)
+            # Use a QTimer to ensure the layout has updated before we set the text.
+            # This helps in correctly centering the text after a mode change.
+            QTimer.singleShot(0, lambda: self.image_viewers[0].image_view.setText(text))
 
     # keyPressEvent is now handled by the MainWindow to make it global.
     # The event filter on the view and the keyPressEvent on the MainWindow

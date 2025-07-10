@@ -1375,3 +1375,44 @@ QPushButton#confirmDeleteNoButton:pressed {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
         stop: 0 #282828, stop: 1 #202020);
 }
+
+/* --- Rotation View Buttons --- */
+QPushButton#acceptButton,
+QPushButton#acceptAllButton {
+    background-color: #28a745;
+    color: #FFFFFF;
+    border: 1px solid #218838;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-weight: bold;
+    margin: 5px;
+}
+QPushButton#acceptButton:hover,
+QPushButton#acceptAllButton:hover {
+    background-color: #218838;
+    border-color: #1e7e34;
+}
+QPushButton#acceptButton:pressed,
+QPushButton#acceptAllButton:pressed {
+    background-color: #1e7e34;
+}
+
+QPushButton#refuseButton,
+QPushButton#refuseAllButton {
+    background-color: #dc3545;
+    color: #FFFFFF;
+    border: 1px solid #c82333;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-weight: bold;
+    margin: 5px;
+}
+QPushButton#refuseButton:hover,
+QPushButton#refuseAllButton:hover {
+    background-color: #c82333;
+    border-color: #bd2130;
+}
+QPushButton#refuseButton:pressed,
+QPushButton#refuseAllButton:pressed {
+    background-color: #bd2130;
+}

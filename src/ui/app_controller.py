@@ -666,6 +666,13 @@ class AppController(QObject):
             )
             return
 
+        num_suggestions = len(self.main_window.rotation_suggestions)
+        logging.info(f"Displaying rotation view with {num_suggestions} suggestions.")
+        self.main_window.statusBar().showMessage(
+            f"Rotation analysis finished. Please review the {num_suggestions} suggestions.",
+            5000,
+        )
+
         self.main_window.left_panel.view_rotation_icon.setVisible(True)
         self.main_window.left_panel.set_view_mode_rotation()
 

@@ -43,7 +43,7 @@ class RotationDetector:
                 use_preloaded_preview_if_available=False,
                 apply_exif_transpose=True,  # This is the key change.
             )
-        
+
             final_suggested_rotation = self.model_detector.predict_rotation_angle(
                 image_path, image=pil_image, apply_auto_edits=apply_auto_edits
             )
