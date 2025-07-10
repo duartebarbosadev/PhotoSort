@@ -508,7 +508,7 @@ class DialogManager:
         detailed_text = (
             "You can download the model from the official GitHub repository.\n\n"
             "1. Click 'Download Model' to open the releases page.\n"
-            "2. Download the 'orientation_model_v2_0_9812.onnx' file.\n"
+            "2. Download the latest 'orientation_model.onnx' file.\n"
             "3. Place the downloaded file inside the 'models' folder in the application directory.\n"
             "4. Restart the application or re-run the rotation analysis."
         )

@@ -1,5 +1,6 @@
 import os
 import logging
+import glob
 import torchvision.transforms as transforms
 from PIL import Image, ImageOps
 from typing import Optional, Dict
@@ -9,6 +10,10 @@ import numpy as np
 from src.core.image_processing.raw_image_processor import (
     is_raw_extension,
     RawImageProcessor,
+)
+from src.core.app_settings import (
+    get_orientation_model_name,
+    set_orientation_model_name,
 )
 
 
@@ -20,15 +25,13 @@ class ModelNotFoundError(Exception):
 
 # --- Constants for the model ---
 MODEL_SAVE_DIR = "models"
-MODEL_PATH = os.path.join(MODEL_SAVE_DIR, "orientation_model_v2_0_9812.onnx")
 IMAGE_SIZE = 384
 
-# Map model output index to a rotation angle in degrees for Qt (positive is clockwise).
 CLASS_TO_ANGLE_MAP = {
-    0: 0,  # Correctly oriented (0°)
-    1: -90,  # Needs 90° Counter-Clockwise rotation
-    2: 180,  # Needs 180° rotation
-    3: 90,  # Needs 90° Clockwise rotation
+    0: 0,    # Correctly oriented
+    1: 90,   # Needs 90° Clockwise rotation to be correct
+    2: 180,  # Needs 180° rotation to be correct
+    3: -90,  # Needs 90° Counter-Clockwise rotation to be correct
 }
 
 
@@ -99,6 +102,19 @@ def load_image_safely(path: str, apply_auto_edits: bool) -> Optional[Image.Image
         return None
 
 
+def find_best_orientation_model() -> Optional[str]:
+    """
+    Finds the best orientation model in the models directory.
+    'Best' is defined as the one with the highest version number or score.
+    """
+    model_pattern = os.path.join(MODEL_SAVE_DIR, "orientation_model*.onnx")
+    models = glob.glob(model_pattern)
+    if not models:
+        return None
+    # Simple sort will work if file names are consistent (e.g., v1, v2)
+    return max(models, key=os.path.basename)
+
+
 class ModelRotationDetector:
     """
     Detects image orientation using a pre-trained ONNX model.
@@ -113,7 +129,7 @@ class ModelRotationDetector:
             cls._instance.initialized = False
         return cls._instance
 
-    def __init__(self, model_path: str = MODEL_PATH):
+    def __init__(self):
         if self.initialized:
             return
 
@@ -121,6 +137,29 @@ class ModelRotationDetector:
         self.input_name: Optional[str] = None
         self.output_name: Optional[str] = None
         self.provider_name: Optional[str] = None
+
+        model_name = get_orientation_model_name()
+        model_path = None
+
+        if model_name:
+            model_path = os.path.join(MODEL_SAVE_DIR, model_name)
+            if not os.path.exists(model_path):
+                logging.warning(
+                    f"Saved model '{model_name}' not found. Searching for a new one."
+                )
+                model_path = None # Reset to trigger auto-detection
+
+        if not model_path:
+            model_path = find_best_orientation_model()
+            if model_path:
+                set_orientation_model_name(os.path.basename(model_path))
+                logging.info(f"Auto-detected orientation model: {os.path.basename(model_path)}")
+
+
+        if not model_path:
+             logging.warning("No orientation model found. Rotation detection disabled.")
+             self.initialized = True # Mark as initialized to prevent re-attempts
+             return
 
         try:
             self.transforms = get_data_transforms()["val"]
