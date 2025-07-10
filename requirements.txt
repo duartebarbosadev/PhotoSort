@@ -12,3 +12,4 @@ opencv-python
 pyexiv2
 piexif
 onnxruntime
+torchvision
