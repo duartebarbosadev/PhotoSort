@@ -1485,6 +1485,14 @@ class MainWindow(QMainWindow):
             ) and not self._is_row_hidden_in_tree_if_applicable(
                 active_view, child_proxy_idx
             ):
+                source_idx = self.proxy_model.mapToSource(child_proxy_idx)
+                item = self.file_system_model.itemFromIndex(source_idx)
+                item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
+                path = item_data.get("path") if isinstance(item_data, dict) else None
+
+                if path and self._is_marked_for_deletion(path):
+                    continue  # Skip this item and keep searching backwards in the loop
+
                 return child_proxy_idx
 
         return QModelIndex()  # No visible image item found in this subtree
@@ -1527,6 +1535,14 @@ class MainWindow(QMainWindow):
             ) and not self._is_row_hidden_in_tree_if_applicable(
                 active_view, sibling_idx
             ):
+                source_idx = self.proxy_model.mapToSource(sibling_idx)
+                item = self.file_system_model.itemFromIndex(source_idx)
+                item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
+                path = item_data.get("path") if isinstance(item_data, dict) else None
+
+                if path and self._is_marked_for_deletion(path):
+                    continue  # Do not add this marked item to the list of siblings
+
                 sibling_image_items.append(sibling_idx)
                 if sibling_idx == current_image_proxy_idx:
                     current_item_local_idx = len(sibling_image_items) - 1
@@ -1667,6 +1683,16 @@ class MainWindow(QMainWindow):
             ) and not self._is_row_hidden_in_tree_if_applicable(
                 active_view, prev_visual_idx
             ):
+                source_idx = self.proxy_model.mapToSource(prev_visual_idx)
+                item = self.file_system_model.itemFromIndex(source_idx)
+                item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
+                path = item_data.get("path") if isinstance(item_data, dict) else None
+
+                if path and self._is_marked_for_deletion(path):
+                    iter_idx = prev_visual_idx  # Continue searching from this point
+                    continue  # Skip this marked item
+
+                # If not marked, this is our item
                 new_selection_candidate = prev_visual_idx
                 logging.debug(
                     f"NAV_UP_SEQ: Found image item directly above: {self._log_qmodelindex(new_selection_candidate)}"
@@ -1732,42 +1758,52 @@ class MainWindow(QMainWindow):
         temp_index = current_index
         iteration_count = 0
 
-        max_iterations = (
-            self.proxy_model.rowCount(QModelIndex())
-            + sum(
-                self.proxy_model.rowCount(self.proxy_model.index(r, 0, QModelIndex()))
-                for r in range(self.proxy_model.rowCount(QModelIndex()))
+        # Determine a safe iteration limit to prevent infinite loops in unexpected scenarios
+        safety_iteration_limit = self.proxy_model.rowCount(QModelIndex()) * 2
+        if self.app_state.image_files_data:
+            safety_iteration_limit = max(
+                safety_iteration_limit, len(self.app_state.image_files_data) * 2
             )
-        ) * 2
-        if max_iterations == 0 and self.app_state.image_files_data:
-            safety_iteration_limit = len(self.app_state.image_files_data) * 2
-        if max_iterations == 0:
+        if safety_iteration_limit == 0:
             safety_iteration_limit = 5000
-        else:
-            safety_iteration_limit = max_iterations
 
         while temp_index.isValid() and iteration_count < safety_iteration_limit:
             iteration_count += 1
+            # 1. Get the item visually below the current one
             temp_index = active_view.indexBelow(temp_index)
+
+            # 2. If we're at the end, stop searching
             if not temp_index.isValid():
                 logging.debug(
                     "NAV_DOWN_SEQ: temp_index became invalid (end of list/parent)."
                 )
                 break
 
-            is_image_item = self._is_valid_image_item(temp_index)
-            if is_image_item:
-                is_hidden = False
-                if isinstance(active_view, QTreeView):
-                    is_hidden = active_view.isRowHidden(
-                        temp_index.row(), temp_index.parent()
-                    )
+            # 3. Check if this new item is a valid image
+            if self._is_valid_image_item(temp_index):
+                # 4. Check if it's hidden (in a collapsed tree node)
+                is_hidden = self._is_row_hidden_in_tree_if_applicable(
+                    active_view, temp_index
+                )
                 if not is_hidden:
+                    # 5. Check if it's marked for deletion
+                    source_idx = self.proxy_model.mapToSource(temp_index)
+                    item = self.file_system_model.itemFromIndex(source_idx)
+                    item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
+                    path = (
+                        item_data.get("path") if isinstance(item_data, dict) else None
+                    )
+
+                    # If marked for deletion, continue the loop to the next item
+                    if path and self._is_marked_for_deletion(path):
+                        continue
+
+                    # 6. If it passes all checks, we've found our target
                     next_item_index = temp_index
                     logging.debug(
                         f"NAV_DOWN_SEQ: Found valid next image item: {self._log_qmodelindex(next_item_index, 'next_item_index')}"
                     )
-                    break
+                    break  # Exit the search loop
 
         if iteration_count >= safety_iteration_limit:
             logging.warning(

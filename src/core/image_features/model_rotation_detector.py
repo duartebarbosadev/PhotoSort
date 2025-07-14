@@ -28,8 +28,8 @@ MODEL_SAVE_DIR = "models"
 IMAGE_SIZE = 384
 
 CLASS_TO_ANGLE_MAP = {
-    0: 0,    # Correctly oriented
-    1: 90,   # Needs 90° Clockwise rotation to be correct
+    0: 0,  # Correctly oriented
+    1: 90,  # Needs 90° Clockwise rotation to be correct
     2: 180,  # Needs 180° rotation to be correct
     3: -90,  # Needs 90° Counter-Clockwise rotation to be correct
 }
@@ -147,19 +147,20 @@ class ModelRotationDetector:
                 logging.warning(
                     f"Saved model '{model_name}' not found. Searching for a new one."
                 )
-                model_path = None # Reset to trigger auto-detection
+                model_path = None  # Reset to trigger auto-detection
 
         if not model_path:
             model_path = find_best_orientation_model()
             if model_path:
                 set_orientation_model_name(os.path.basename(model_path))
-                logging.info(f"Auto-detected orientation model: {os.path.basename(model_path)}")
-
+                logging.info(
+                    f"Auto-detected orientation model: {os.path.basename(model_path)}"
+                )
 
         if not model_path:
-             logging.warning("No orientation model found. Rotation detection disabled.")
-             self.initialized = True # Mark as initialized to prevent re-attempts
-             return
+            logging.warning("No orientation model found. Rotation detection disabled.")
+            self.initialized = True  # Mark as initialized to prevent re-attempts
+            return
 
         try:
             self.transforms = get_data_transforms()["val"]

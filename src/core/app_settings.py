@@ -19,18 +19,20 @@ ROTATION_CONFIRM_LOSSY_KEY = "UI/RotationConfirmLossy"  # Ask before lossy rotat
 AUTO_EDIT_PHOTOS_KEY = "UI/AutoEditPhotos"  # Key for auto edit photos setting
 MARK_FOR_DELETION_MODE_KEY = "UI/MarkForDeletionMode"  # Key for mark for deletion mode
 RECENT_FOLDERS_KEY = "UI/RecentFolders"  # Key for recent folders list
-ORIENTATION_MODEL_NAME_KEY = "Models/OrientationModelName" # Key for the orientation model file name
- 
- # Default values
+ORIENTATION_MODEL_NAME_KEY = (
+    "Models/OrientationModelName"  # Key for the orientation model file name
+)
+
+# Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
 DEFAULT_EXIF_CACHE_SIZE_MB = 256  # Default to 256 MB for EXIF cache
 DEFAULT_ROTATION_CONFIRM_LOSSY = True  # Default to asking before lossy rotation
 DEFAULT_AUTO_EDIT_PHOTOS = False  # Default auto edit photos setting
 DEFAULT_MARK_FOR_DELETION_MODE = True  # Default mark for deletion mode setting
 MAX_RECENT_FOLDERS = 10  # Max number of recent folders to store
-DEFAULT_ORIENTATION_MODEL_NAME = None # Default to None, so we can auto-detect
- 
- # --- Model Settings ---
+DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
+
+# --- Model Settings ---
 DEFAULT_CLIP_MODEL = (
     "sentence-transformers/clip-ViT-B-32"  # Common default, adjust if different
 )
@@ -166,11 +168,12 @@ def is_pytorch_cuda_available() -> bool:
     """Check if PyTorch with CUDA support is available."""
     try:
         import torch
- 
+
         return torch.cuda.is_available()
     except ImportError:
         return False
- 
+
+
 # --- Orientation Model ---
 def get_orientation_model_name() -> str | None:
     """Gets the configured orientation model name from settings."""
