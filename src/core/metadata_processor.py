@@ -493,26 +493,6 @@ class MetadataProcessor:
         return success
 
     @staticmethod
-    def check_availability() -> bool:
-        """
-        Checks if pyexiv2 is available and working.
-        Tries to create a simple Image instance as a test.
-        Returns True if pyexiv2 works, False otherwise.
-        """
-        try:
-            pyexiv2.set_log_level(4)
-
-            # This check is primarily for developer feedback, debug level is appropriate.
-            logger.debug("pyexiv2 availability check successful.")
-            return True
-        except ImportError:
-            logger.error("pyexiv2 not installed (ImportError).", exc_info=True)
-            return False
-        except Exception as e:
-            logger.error(f"pyexiv2 availability check failed: {e}", exc_info=True)
-            return False
-
-    @staticmethod
     def get_detailed_metadata(
         image_path: str, exif_disk_cache: Optional[ExifCache] = None
     ) -> Optional[Dict[str, Any]]:

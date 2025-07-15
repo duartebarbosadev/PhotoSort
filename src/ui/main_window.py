@@ -934,19 +934,15 @@ class MainWindow(QMainWindow):
         return f"{prefix} (Row: {index.row()}, Text: '{item_text}')"
 
     def _is_valid_image_item(self, proxy_index: QModelIndex) -> bool:
-        # logger.debug(f"IS_VALID_IMAGE_ITEM: Checking {self._log_qmodelindex(proxy_index)}")
         if not proxy_index.isValid():
-            # logger.debug(f"IS_VALID_IMAGE_ITEM: Proxy index invalid.")
             return False
 
         source_index = self.proxy_model.mapToSource(proxy_index)
         if not source_index.isValid():
-            # logger.debug(f"IS_VALID_IMAGE_ITEM: Source index invalid for proxy {proxy_index.row()}.")
             return False
 
         item = self.file_system_model.itemFromIndex(source_index)
         if not item:
-            # logger.debug(f"IS_VALID_IMAGE_ITEM: Item from source index is None.")
             return False
 
         item_user_data = item.data(Qt.ItemDataRole.UserRole)
@@ -956,7 +952,6 @@ class MainWindow(QMainWindow):
             and os.path.isfile(item_user_data["path"])
         )
 
-        # logger.debug(f"IS_VALID_IMAGE_ITEM: Result for {os.path.basename(item_user_data.get('path', 'N/A')) if isinstance(item_user_data, dict) else 'NonDictUserData'}: {is_image}")
         return is_image
 
     def _get_active_file_view(self):
@@ -1591,8 +1586,6 @@ class MainWindow(QMainWindow):
             prev_visual_idx = active_view.indexAbove(iter_idx)
 
             if not prev_visual_idx.isValid():
-                # This log is redundant because the failure is captured after the loop.
-                # logger.debug("Navigate up: Reached top of view.")
                 break
 
             if self._is_valid_image_item(
@@ -1630,11 +1623,7 @@ class MainWindow(QMainWindow):
                     )
                     if last_in_group.isValid():
                         new_selection_candidate = last_in_group
-                        # logger.debug(f"NAV_UP_SEQ: Found last image in a NEW group above: {self._log_qmodelindex(new_selection_candidate)}")
                         break
-                # Else (iter_idx.parent() == prev_visual_idx), prev_visual_idx is the header of the group iter_idx is in.
-                # We are moving out of this group. So, we don't enter it again from the bottom.
-                # The iter_idx = prev_visual_idx line below will handle moving past this header.
 
             iter_idx = prev_visual_idx
             if iteration_count == max_iterations - 1:  # Safety break
@@ -1684,8 +1673,6 @@ class MainWindow(QMainWindow):
 
             # 2. If we're at the end, stop searching
             if not temp_index.isValid():
-                # This log is redundant because the failure is captured after the loop.
-                # logger.debug("Navigate down: Reached end of view.")
                 break
 
             # 3. Check if this new item is a valid image
@@ -1730,18 +1717,10 @@ class MainWindow(QMainWindow):
     def _find_first_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
         if not active_view:
-            logger.debug("_find_first_visible_item: No active view")
             return QModelIndex()
-
-        logger.debug(
-            f"_find_first_visible_item: Start, active_view type: {type(active_view).__name__}"
-        )
 
         proxy_model = active_view.model()
         if not isinstance(proxy_model, QSortFilterProxyModel):
-            logger.debug(
-                f"_find_first_visible_item: Model is not QSortFilterProxyModel: {type(proxy_model)}"
-            )
             return QModelIndex()
 
         root_proxy_index = QModelIndex()
@@ -1794,10 +1773,8 @@ class MainWindow(QMainWindow):
         active_view = self._get_active_file_view()
         if not active_view:
             return QModelIndex()
-        logger.debug("FIND_LAST: Start")
         proxy_model = active_view.model()
         if not isinstance(proxy_model, QSortFilterProxyModel):
-            logger.debug("FIND_LAST: Model is not QSortFilterProxyModel.")
             return QModelIndex()
 
         root_proxy_index = QModelIndex()

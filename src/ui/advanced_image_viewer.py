@@ -334,11 +334,9 @@ class ZoomableImageView(QGraphicsView):
             return
 
         key = event.key()
-        # logger.debug(f"ZoomableImageView received key: {event.text()}")
 
         # Let number keys 1-9 pass up to the parent for focus switching
         if Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
-            # logger.debug(f"Propagating key {event.text()} to parent.")
             super().keyPressEvent(event)  # Propagate event to parent
             return
 

@@ -102,11 +102,6 @@ class TestMetadataProcessor:
         self.rating_cache.get.return_value = None
         self.exif_cache.get.return_value = None
 
-    def test_availability_check(self):
-        """Test that pyexiv2 is available and working."""
-        result = MetadataProcessor.check_availability()
-        assert result is True, "pyexiv2 should be available for testing"
-
     def test_batch_display_metadata_basic(self):
         """Test basic batch metadata extraction."""
         if not self.sample_images:
