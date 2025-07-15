@@ -81,7 +81,9 @@ class ImageFileOperations:
             logger.info(f"Moved to trash: {os.path.basename(file_path)}.")
             return True, "File moved to trash."
         except Exception as e:
-            error_msg = f"Error moving file to trash: {os.path.basename(file_path)}: {e}"
+            error_msg = (
+                f"Error moving file to trash: {os.path.basename(file_path)}: {e}"
+            )
             logger.error(error_msg, exc_info=True)
             return False, error_msg
 
@@ -133,6 +135,8 @@ class ImageFileOperations:
             )
             return True, "File replaced successfully."
         except Exception as e:
-            error_msg = f"Error replacing file '{os.path.basename(destination_path)}': {e}"
+            error_msg = (
+                f"Error replacing file '{os.path.basename(destination_path)}': {e}"
+            )
             logger.error(error_msg, exc_info=True)
             return False, error_msg

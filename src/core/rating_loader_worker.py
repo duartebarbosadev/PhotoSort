@@ -73,9 +73,7 @@ class RatingLoaderWorker(QObject):
             return
 
         total_load_start_time = time.perf_counter()
-        logger.info(
-            f"Starting metadata load for {total_files} files."
-        )
+        logger.info(f"Starting metadata load for {total_files} files.")
 
         try:
             # Single batch call to the refactored MetadataHandler
@@ -94,9 +92,7 @@ class RatingLoaderWorker(QObject):
 
             for i, image_path_norm in enumerate(image_paths_to_process):
                 if not self._is_running:
-                    logger.info(
-                        f"Processing stopped by request at index {i}."
-                    )
+                    logger.info(f"Processing stopped by request at index {i}.")
                     break
 
                 metadata = batch_results.get(image_path_norm)
@@ -158,9 +154,7 @@ class RatingLoaderWorker(QObject):
                 metadata_batch_to_emit.clear()
 
         except Exception as e:
-            error_msg = (
-                f"An error occurred during metadata loading: {e}"
-            )
+            error_msg = f"An error occurred during metadata loading: {e}"
             logger.error(error_msg, exc_info=True)
             self.error.emit(error_msg)
 

@@ -70,7 +70,9 @@ class PreviewCache:
                 # self.delete(key)
             return None
         except Exception as e:
-            logger.error(f"Error reading from Preview cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error reading from Preview cache for key '{key}': {e}", exc_info=True
+            )
             return None
 
     def set(self, key: Tuple[str, Tuple[int, int], bool], value: Image.Image) -> None:
@@ -100,7 +102,9 @@ class PreviewCache:
                 # Set the actual data
                 self._cache.set(key, value)
         except Exception as e:
-            logger.error(f"Error writing to Preview cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error writing to Preview cache for key '{key}': {e}", exc_info=True
+            )
 
     def delete(self, key: Tuple[str, Tuple[int, int], bool]) -> None:
         """
@@ -128,7 +132,10 @@ class PreviewCache:
                 self._cache.pop(key, default=None)
 
         except Exception as e:
-            logger.error(f"Error deleting item from Preview cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error deleting item from Preview cache for key '{key}': {e}",
+                exc_info=True,
+            )
 
     def delete_all_for_path(self, file_path: str) -> None:
         """

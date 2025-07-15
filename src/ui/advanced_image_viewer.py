@@ -751,7 +751,9 @@ class SynchronizedImageViewer(QWidget):
 
     def _set_view_mode(self, mode: str, focused_index: int = -1):
         """Set the display mode to single, focused, or side-by-side."""
-        logger.debug(f"Setting view mode to '{mode}' with focused index: {focused_index}")
+        logger.debug(
+            f"Setting view mode to '{mode}' with focused index: {focused_index}"
+        )
         num_images = sum(1 for v in self.image_viewers if v.has_image())
 
         if focused_index != -1:

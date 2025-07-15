@@ -93,7 +93,6 @@ class SimilarityEngine(QObject):
                 model_device = (
                     "cuda" if is_pytorch_cuda_available() else "cpu"
                 )  # Use imported function
-                logger.info(
                 logger.info(f"Attempting to load model on device: '{model_device}'")
                 self.model = SentenceTransformer(self.model_name, device=model_device)
 
@@ -109,7 +108,8 @@ class SimilarityEngine(QObject):
                 ):  # Older sentence-transformers
                     actual_device_str = str(self.model.device)
                 logger.info(
-                logger.info(f"Model '{self.model_name}' loaded on device: {actual_device_str}")
+                    f"Model '{self.model_name}' loaded on device: {actual_device_str}"
+                )
 
                 # Attempt to set use_fast=True (this part is optional, might not apply to all CLIP models)
                 self.progress_update.emit(0, "Model loaded.")
@@ -155,7 +155,8 @@ class SimilarityEngine(QObject):
             )
         except Exception as e:
             logger.error(
-                f"Failed to save embedding cache '{self._cache_path}': {e}", exc_info=True
+                f"Failed to save embedding cache '{self._cache_path}': {e}",
+                exc_info=True,
             )
             self.error.emit(f"Could not save embeddings cache: {e}")
 
@@ -273,7 +274,9 @@ class SimilarityEngine(QObject):
             path: all_embeddings[path] for path in file_paths if path in all_embeddings
         }
         self.embeddings_generated.emit(final_embeddings_for_requested_files)
-        logger.info(f"Finished. Emitted {len(final_embeddings_for_requested_files)} embeddings.")
+        logger.info(
+            f"Finished. Emitted {len(final_embeddings_for_requested_files)} embeddings."
+        )
 
         if self._is_running:  # Only cluster if not stopped
             self.cluster_embeddings(final_embeddings_for_requested_files)
@@ -373,7 +376,9 @@ class SimilarityEngine(QObject):
             self.error.emit(error_msg)
             # Minimal fallback: assign all to cluster 0 if DBSCAN fails
             labels = np.zeros(num_samples, dtype=int)
-            logger.warning("DBSCAN clustering failed. Assigning all items to a single group.")
+            logger.warning(
+                "DBSCAN clustering failed. Assigning all items to a single group."
+            )
 
         # Group filepaths by their assigned label
         grouped_filepaths: Dict[int, List[str]] = {}
@@ -440,7 +445,9 @@ class SimilarityEngine(QObject):
                         elif os.path.isdir(item_path):
                             shutil.rmtree(item_path)
                     except Exception as e:
-                        logger.error(f"Failed to delete {item_path}: {e}", exc_info=True)
+                        logger.error(
+                            f"Failed to delete {item_path}: {e}", exc_info=True
+                        )
                 logger.info("Embedding cache cleared.")
             else:
                 logger.warning(

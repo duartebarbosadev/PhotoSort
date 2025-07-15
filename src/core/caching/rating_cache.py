@@ -70,7 +70,9 @@ class RatingCache:
                 # self.delete(key) # Optionally delete malformed entry
             return None
         except Exception as e:
-            logger.error(f"Error reading from Rating cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error reading from Rating cache for key '{key}': {e}", exc_info=True
+            )
             return None
 
     def set(self, key: str, value: int) -> None:
@@ -90,7 +92,9 @@ class RatingCache:
         try:
             self._cache.set(key, value)
         except Exception as e:
-            logger.error(f"Error writing to Rating cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error writing to Rating cache for key '{key}': {e}", exc_info=True
+            )
 
     def delete(self, key: str) -> None:
         """
@@ -103,7 +107,10 @@ class RatingCache:
             if key in self._cache:
                 del self._cache[key]
         except Exception as e:
-            logger.error(f"Error deleting item from Rating cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error deleting item from Rating cache for key '{key}': {e}",
+                exc_info=True,
+            )
 
     def clear(self) -> None:
         """Clears all items from the cache."""

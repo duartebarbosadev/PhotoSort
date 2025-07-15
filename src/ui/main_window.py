@@ -925,7 +925,7 @@ class MainWindow(QMainWindow):
 
         source_index = self.proxy_model.mapToSource(index)
         item_text = "N/A"
-        
+
         if source_index.isValid():
             item = self.file_system_model.itemFromIndex(source_index)
             if item:
@@ -1217,7 +1217,9 @@ class MainWindow(QMainWindow):
                     if (
                         removed_items_list
                     ):  # takeRow returns a list of QStandardItems removed
-                        logger.debug(f"Successfully removed '{parent_item_candidate.text()}'.")
+                        logger.debug(
+                            f"Successfully removed '{parent_item_candidate.text()}'."
+                        )
                     else:
                         logger.warning(
                             f"takeRow failed to remove '{parent_item_candidate.text()}' from parent {parent_display_name_for_log} at row {item_row}."
@@ -2503,9 +2505,7 @@ class MainWindow(QMainWindow):
             # Update any visible viewer showing this image
             for viewer in self.advanced_image_viewer.image_viewers:
                 if viewer.isVisible() and viewer._file_path == image_path:
-                    logger.debug(
-                        f"Updating viewer for {os.path.basename(image_path)}."
-                    )
+                    logger.debug(f"Updating viewer for {os.path.basename(image_path)}.")
                     viewer.update_rating_display(metadata.get("rating", 0))
 
             # Check if the processed image is part of the current selection
@@ -3610,7 +3610,9 @@ class MainWindow(QMainWindow):
         """Handle successful rotation - update caches and UI."""
         handle_start_time = time.perf_counter()
         filename = os.path.basename(file_path)
-        logger.debug(f"Handling successful rotation for '{filename}' (Lossy: {is_lossy})")
+        logger.debug(
+            f"Handling successful rotation for '{filename}' (Lossy: {is_lossy})"
+        )
 
         t1 = time.perf_counter()
         self.image_pipeline.preview_cache.delete_all_for_path(file_path)

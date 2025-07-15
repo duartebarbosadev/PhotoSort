@@ -530,7 +530,9 @@ class AppController(QObject):
 
     def handle_preview_error(self, message: str):
         logger.error(f"Preview preload failed: {message}", exc_info=True)
-        self.main_window.statusBar().showMessage(f"Preview Preload Error: {message}", 5000)
+        self.main_window.statusBar().showMessage(
+            f"Preview Preload Error: {message}", 5000
+        )
         self.main_window.hide_loading_overlay()
 
     def handle_similarity_progress(self, percentage, message):
@@ -602,15 +604,15 @@ class AppController(QObject):
     def handle_blur_detection_error(self, message: str):
         logger.error(f"Blur detection failed: {message}", exc_info=True)
         self.main_window.hide_loading_overlay()
-        self.main_window.statusBar().showMessage(f"Blur Detection Error: {message}", 8000)
+        self.main_window.statusBar().showMessage(
+            f"Blur Detection Error: {message}", 8000
+        )
         self.main_window.menu_manager.detect_blur_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
 
     def handle_thumbnail_preload_finished(self, all_file_data: List[Dict[str, any]]):
-        logger.debug(
-            "Thumbnail preload finished signal received (deprecated, no-op)."
-        )
+        logger.debug("Thumbnail preload finished signal received (deprecated, no-op).")
         pass
 
     # --- Rotation Detection Handlers ---
@@ -676,7 +678,9 @@ class AppController(QObject):
         """Handle errors during rotation detection."""
         logger.error(f"Rotation detection failed: {message}", exc_info=True)
         self.main_window.hide_loading_overlay()
-        self.main_window.statusBar().showMessage(f"Rotation Detection Error: {message}", 8000)
+        self.main_window.statusBar().showMessage(
+            f"Rotation Detection Error: {message}", 8000
+        )
         self.main_window.menu_manager.auto_rotate_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
@@ -755,7 +759,9 @@ class AppController(QObject):
                         exif_disk_cache=self.main_window.app_state.exif_disk_cache,
                     )
                     t4 = time.perf_counter()
-                    logger.debug(f"Lossy rotation for '{filename}' took {t4 - t3:.2f}s.")
+                    logger.debug(
+                        f"Lossy rotation for '{filename}' took {t4 - t3:.2f}s."
+                    )
 
                     if success:
                         self.main_window._handle_successful_rotation(

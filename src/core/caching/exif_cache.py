@@ -77,7 +77,9 @@ class ExifCache:
                 # self.delete(key) # Optionally delete malformed entry
             return None
         except Exception as e:
-            logger.error(f"Error reading from EXIF cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error reading from EXIF cache for key '{key}': {e}", exc_info=True
+            )
             return None
 
     def set(self, key: str, value: Dict[str, Any]) -> None:
@@ -118,7 +120,10 @@ class ExifCache:
             if key in self._cache:
                 del self._cache[key]
         except Exception as e:
-            logger.error(f"Error deleting item from EXIF cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error deleting item from EXIF cache for key '{key}': {e}",
+                exc_info=True,
+            )
 
     def clear(self) -> None:
         """Clears all items from the cache."""
@@ -157,7 +162,9 @@ class ExifCache:
             size_limit=self._size_limit_bytes,
             disk_min_file_size=4096,
         )
-        logger.info(f"EXIF cache reinitialized. New size limit: {self._size_limit_mb} MB.")
+        logger.info(
+            f"EXIF cache reinitialized. New size limit: {self._size_limit_mb} MB."
+        )
 
     def close(self) -> None:
         """Closes the cache."""

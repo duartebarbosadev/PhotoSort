@@ -68,7 +68,10 @@ class ThumbnailCache:
                 # self.delete(key)
             return None
         except Exception as e:
-            logger.error(f"Error reading from Thumbnail cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error reading from Thumbnail cache for key '{key}': {e}",
+                exc_info=True,
+            )
             return None
 
     def set(self, key: Tuple[str, bool], value: Image.Image) -> None:
@@ -88,7 +91,9 @@ class ThumbnailCache:
         try:
             self._cache.set(key, value)
         except Exception as e:
-            logger.error(f"Error writing to Thumbnail cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error writing to Thumbnail cache for key '{key}': {e}", exc_info=True
+            )
 
     def delete(self, key: Tuple[str, bool]) -> None:
         """
@@ -101,7 +106,10 @@ class ThumbnailCache:
             if key in self._cache:
                 del self._cache[key]
         except Exception as e:
-            logger.error(f"Error deleting item from Thumbnail cache for key '{key}': {e}", exc_info=True)
+            logger.error(
+                f"Error deleting item from Thumbnail cache for key '{key}': {e}",
+                exc_info=True,
+            )
 
     def delete_all_for_path(self, file_path: str) -> None:
         """

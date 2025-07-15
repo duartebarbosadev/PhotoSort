@@ -118,9 +118,7 @@ class ImagePipeline:
         Gets a QPixmap thumbnail for the given image path.
         """
         if not os.path.isfile(image_path):
-            logger.error(
-                f"File does not exist: {image_path}"
-            )
+            logger.error(f"File does not exist: {image_path}")
             return None
 
         pil_img = self._get_pil_thumbnail(image_path, apply_auto_edits)
@@ -304,7 +302,9 @@ class ImagePipeline:
                 try:
                     future.result()  # Check for exceptions from worker
                 except Exception as e:
-                    logger.error("Error during thumbnail preloading task", exc_info=True)
+                    logger.error(
+                        "Error during thumbnail preloading task", exc_info=True
+                    )
 
                 processed_count += 1
                 if progress_callback:
@@ -314,11 +314,11 @@ class ImagePipeline:
                     for f_cancel in futures_map:
                         if not f_cancel.done():
                             f_cancel.cancel()
-                    logger.info(
-                        "Thumbnail preload cancelled during processing."
-                    )
+                    logger.info("Thumbnail preload cancelled during processing.")
                     break
-        logger.info(f"Thumbnail preloading finished. Processed {processed_count}/{total_files}.")
+        logger.info(
+            f"Thumbnail preloading finished. Processed {processed_count}/{total_files}."
+        )
 
     def _ensure_preview_generated_and_cached(
         self, image_path: str, apply_auto_edits: bool
@@ -413,11 +413,11 @@ class ImagePipeline:
                     for f_cancel in futures_map:
                         if not f_cancel.done():
                             f_cancel.cancel()
-                    logger.info(
-                        "Preview preload cancelled during processing."
-                    )
+                    logger.info("Preview preload cancelled during processing.")
                     break
-        logger.info(f"Preview preloading finished. Processed {processed_count}/{total_files}.")
+        logger.info(
+            f"Preview preloading finished. Processed {processed_count}/{total_files}."
+        )
 
     def get_pil_image_for_processing(
         self,

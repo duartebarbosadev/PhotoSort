@@ -120,4 +120,6 @@ class RotationDetector:
                     logger.info("Rotation detection cancelled during processing.")
                     break
 
-        logger.info(f"Rotation detection finished. Processed {processed_count}/{total_files}.")
+        logger.info(
+            f"Rotation detection finished. Processed {processed_count}/{total_files}."
+        )

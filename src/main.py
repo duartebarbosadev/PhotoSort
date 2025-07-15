@@ -155,7 +155,9 @@ def main():
             )  # Ensure root logger captures DEBUG for file handler
             logging.info(f"File logging enabled: {log_file_path}")
         except Exception as e_file_log:
-            logging.error(f"Failed to initialize file logging: {e_file_log}", exc_info=True)
+            logging.error(
+                f"Failed to initialize file logging: {e_file_log}", exc_info=True
+            )
             root_logger.setLevel(logging.INFO)  # Fallback to INFO if file logging fails
     else:
         root_logger.setLevel(

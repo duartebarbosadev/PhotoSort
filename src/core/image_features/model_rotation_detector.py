@@ -97,7 +97,9 @@ def load_image_safely(path: str, apply_auto_edits: bool) -> Optional[Image.Image
             return background
 
     except FileNotFoundError:
-        logger.error(f"File not found for rotation detection: {os.path.basename(normalized_path)}")
+        logger.error(
+            f"File not found for rotation detection: {os.path.basename(normalized_path)}"
+        )
         return None
     except Exception as e:
         logger.error(
@@ -158,10 +160,14 @@ class ModelRotationDetector:
             model_path = find_best_orientation_model()
             if model_path:
                 set_orientation_model_name(os.path.basename(model_path))
-                logger.info(f"Using auto-detected orientation model: {os.path.basename(model_path)}")
+                logger.info(
+                    f"Using auto-detected orientation model: {os.path.basename(model_path)}"
+                )
 
         if not model_path:
-            logger.error("No orientation model found. Rotation detection will be disabled.")
+            logger.error(
+                "No orientation model found. Rotation detection will be disabled."
+            )
             self.initialized = True  # Mark as initialized to prevent re-attempts
             return
 
@@ -176,9 +182,7 @@ class ModelRotationDetector:
             # Re-raise to be caught by the calling worker
             raise
         except Exception as e:
-            logger.error(
-                f"Failed to initialize ModelRotationDetector.", exc_info=True
-            )
+            logger.error(f"Failed to initialize ModelRotationDetector.", exc_info=True)
 
     def _load_onnx_session(
         self, model_path: str

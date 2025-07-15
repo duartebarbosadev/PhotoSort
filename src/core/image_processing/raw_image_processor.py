@@ -27,14 +27,10 @@ def is_raw_extension(ext: str) -> bool:
     global _rawpy_formats_checked, _rawpy_supported_set
     if not _rawpy_formats_checked:
         check_start_time = time.perf_counter()
-        logger.info(
-            "Initializing rawpy supported formats set..."
-        )
+        logger.info("Initializing rawpy supported formats set...")
         try:
             _rawpy_supported_set = rawpy.supported_formats()
-            logger.info(
-                "Successfully retrieved formats from rawpy."
-            )
+            logger.info("Successfully retrieved formats from rawpy.")
         except AttributeError:
             _rawpy_supported_set = {
                 ".arw",

@@ -199,18 +199,14 @@ class MetadataProcessor:
                     )
                     break
             except Exception as e:
-                logger.debug(
-                    f"Error checking path variant '{p_variant}': {e}"
-                )
+                logger.debug(f"Error checking path variant '{p_variant}': {e}")
                 continue
 
         if operational_path_found:
             canonical_cache_path = unicodedata.normalize("NFC", operational_path_found)
             return operational_path_found, canonical_cache_path
         else:
-            logger.warning(
-                f"Could not find accessible file for '{original_path}'"
-            )
+            logger.warning(f"Could not find accessible file for '{original_path}'")
             return None
 
     @staticmethod
@@ -230,9 +226,7 @@ class MetadataProcessor:
         paths_for_pyexiv2_extraction: List[str] = []  # Stores operational paths
 
         start_time = time.perf_counter()
-        logger.info(
-            f"Starting batch metadata fetch for {len(image_paths)} files."
-        )
+        logger.info(f"Starting batch metadata fetch for {len(image_paths)} files.")
 
         for image_path_input in image_paths:
             resolved = MetadataProcessor._resolve_path_forms(image_path_input)
@@ -277,9 +271,7 @@ class MetadataProcessor:
                 cached_metadata = exif_disk_cache.get(cache_key_path)
 
             if cached_metadata:
-                logger.debug(
-                    f"ExifCache HIT for: {os.path.basename(operational_path)}"
-                )
+                logger.debug(f"ExifCache HIT for: {os.path.basename(operational_path)}")
                 results[cache_key_path]["raw_metadata"] = cached_metadata
             else:
                 logger.debug(
@@ -323,7 +315,7 @@ class MetadataProcessor:
                     except Exception as e:
                         logger.error(
                             f"Error extracting metadata for {os.path.basename(op_path)}: {e}",
-                            exc_info=True, # Keep traceback for this critical error
+                            exc_info=True,  # Keep traceback for this critical error
                         )
                         chunk_results.append(
                             {

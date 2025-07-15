@@ -117,7 +117,9 @@ class BlurDetector:
         """
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):
-            logger.error(f"File not found for blur detection: {os.path.basename(normalized_path)}")
+            logger.error(
+                f"File not found for blur detection: {os.path.basename(normalized_path)}"
+            )
             return None
 
         try:
@@ -179,7 +181,9 @@ class BlurDetector:
             if status_update_callback:
                 status_update_callback(image_path, is_blurred)
         except Exception as e:
-            logger.error(f"Error processing '{os.path.basename(image_path)}': {e}", exc_info=True)
+            logger.error(
+                f"Error processing '{os.path.basename(image_path)}': {e}", exc_info=True
+            )
             if status_update_callback:
                 status_update_callback(image_path, None)  # Report error as None
 
@@ -253,4 +257,6 @@ class BlurDetector:
                             f_cancel.cancel()
                     logger.info("Blur detection cancelled during processing.")
                     break
-        logger.info(f"Blur detection finished. Processed {processed_count}/{total_files}.")
+        logger.info(
+            f"Blur detection finished. Processed {processed_count}/{total_files}."
+        )
