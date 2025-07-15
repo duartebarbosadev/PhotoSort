@@ -1,6 +1,8 @@
 import os
 import asyncio
 import logging
+
+logger = logging.getLogger(__name__)
 import time
 from PyQt6.QtCore import QObject, pyqtSignal
 from .image_pipeline import ImagePipeline
@@ -53,19 +55,13 @@ class FileScanner(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         init_start_time = time.perf_counter()
-        logging.info("FileScanner.__init__ - Start")
-        self._is_running = True  # Flag to allow stopping the scan
-        self.blur_detection_threshold = (
-            100.0  # Default threshold, can be made configurable
-        )
+        logger.debug("Initializing FileScanner.")
+        self._is_running = True
+        self.blur_detection_threshold = 100.0
 
-        ip_instantiation_start_time = time.perf_counter()
-        self.image_pipeline = ImagePipeline()  # Instantiate ImagePipeline
-        logging.info(
-            f"FileScanner.__init__ - ImagePipeline instantiated: {time.perf_counter() - ip_instantiation_start_time:.4f}s"
-        )
-        logging.info(
-            f"FileScanner.__init__ - End (Total: {time.perf_counter() - init_start_time:.4f}s)"
+        self.image_pipeline = ImagePipeline()
+        logger.debug(
+            f"FileScanner initialized in {time.perf_counter() - init_start_time:.2f}s."
         )
 
     def stop(self):
@@ -124,7 +120,7 @@ class FileScanner(QObject):
         thumbnail_paths_only = []  # For ImageHandler.preload_thumbnails
 
         try:
-            logging.info(f"Starting scan in directory: {directory_path}")
+            logger.info(f"Starting file scan in: {directory_path}")
             for root, _, files in os.walk(directory_path):
                 if not self._is_running:
                     self.error.emit("Scan cancelled during file discovery.")
@@ -142,23 +138,23 @@ class FileScanner(QObject):
                         if perform_blur_detection:
                             # Perform blur detection
                             # Pass the apply_auto_edits flag to control RAW preview generation for blur detection
-                            logging.debug(
-                                f"Performing blur detection for: {full_path} with threshold {blur_threshold}"
+                            logger.debug(
+                                f"Performing blur detection for: {os.path.basename(full_path)} (Threshold: {blur_threshold})"
                             )
                             is_blurred = BlurDetector.is_image_blurred(
                                 full_path,
-                                threshold=blur_threshold,  # Use the blur_threshold parameter
+                                threshold=blur_threshold,
                                 apply_auto_edits_for_raw_preview=apply_auto_edits,
                             )
 
                         file_info = {"path": full_path, "is_blurred": is_blurred}
                         all_file_data.append(file_info)
-                        thumbnail_paths_only.append(
-                            full_path
-                        )  # Keep a list of paths for thumbnail preloader
+                        thumbnail_paths_only.append(full_path)
 
-                        self.files_found.emit([file_info])  # Emit file info immediately
-                        logging.debug(f"Found: {full_path}, Blurred: {is_blurred}")
+                        self.files_found.emit([file_info])
+                        logger.debug(
+                            f"Found: {os.path.basename(full_path)}, Blurred: {is_blurred}"
+                        )
 
             if not self._is_running:
                 self.error.emit("Scan cancelled before thumbnail preloading.")
@@ -166,31 +162,28 @@ class FileScanner(QObject):
 
             # Preload thumbnails after scanning all files
             if thumbnail_paths_only:
-                logging.info(
-                    f"Preloading {len(thumbnail_paths_only)} thumbnails... (Auto Edits: {apply_auto_edits})"
+                logger.info(
+                    f"Preloading {len(thumbnail_paths_only)} thumbnails (Auto-Edits: {apply_auto_edits})."
                 )
                 # TODO: Consider if preload_thumbnails needs should_continue_callback
                 self.image_pipeline.preload_thumbnails(
                     thumbnail_paths_only, apply_auto_edits=apply_auto_edits
                 )
             else:
-                logging.info("No image files found to preload thumbnails.")
+                logger.warning("No supported image files found to preload.")
 
             if not self._is_running:
                 self.error.emit("Scan cancelled during thumbnail preloading.")
             else:
-                logging.info(
-                    "Thumbnail preloading finished. Emitting thumbnail_preload_finished signal."
-                )
+                logger.debug("Thumbnail preloading complete. Emitting signal.")
                 # Emit the list of dicts, so the receiver has blur info too
                 self.thumbnail_preload_finished.emit(all_file_data)
 
         except Exception as e:
-            self.error.emit(f"Error during scan: {e}")
-            import traceback
-
-            traceback.print_exc()
+            error_msg = f"Error during scan: {e}"
+            logger.error(error_msg, exc_info=True)
+            self.error.emit(error_msg)
         finally:
             if self._is_running:
-                logging.info("Scan finished.")
+                logger.info("File scan finished.")
             self.finished.emit()

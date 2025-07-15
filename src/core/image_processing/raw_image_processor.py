@@ -3,6 +3,8 @@ from PIL import Image, ImageOps, UnidentifiedImageError, ImageFile
 import io
 import os
 import logging
+
+logger = logging.getLogger(__name__)
 import time
 from typing import Optional, Set
 from PIL import ImageEnhance  # Added for brightness adjustment on PIL images
@@ -25,13 +27,13 @@ def is_raw_extension(ext: str) -> bool:
     global _rawpy_formats_checked, _rawpy_supported_set
     if not _rawpy_formats_checked:
         check_start_time = time.perf_counter()
-        logging.info(
-            "raw_image_processor.is_raw_extension - Initializing rawpy supported formats set..."
+        logger.info(
+            "Initializing rawpy supported formats set..."
         )
         try:
             _rawpy_supported_set = rawpy.supported_formats()
-            logging.info(
-                "raw_image_processor.is_raw_extension - Successfully retrieved formats from rawpy.supported_formats()"
+            logger.info(
+                "Successfully retrieved formats from rawpy."
             )
         except AttributeError:
             _rawpy_supported_set = {
@@ -62,15 +64,12 @@ def is_raw_extension(ext: str) -> bool:
                 ".x3f",
                 ".rwl",
             }
-            logging.warning(
-                "raw_image_processor.is_raw_extension - rawpy.supported_formats() not available. Using a fallback list of RAW extensions."
-            )
-            logging.warning(
+            logger.warning(
                 "rawpy.supported_formats() not available. Using a fallback list of RAW extensions."
             )
         except Exception as e:
-            logging.error(
-                f"raw_image_processor.is_raw_extension - Error getting rawpy supported formats: {e}. Using fallback list."
+            logger.error(
+                f"Error getting rawpy supported formats: {e}. Using fallback list."
             )
             _rawpy_supported_set = {
                 ".arw",
@@ -86,8 +85,8 @@ def is_raw_extension(ext: str) -> bool:
                 ".raw",
             }
         _rawpy_formats_checked = True
-        logging.info(
-            f"raw_image_processor.is_raw_extension - rawpy supported formats set initialization complete: {time.perf_counter() - check_start_time:.4f}s. Count: {len(_rawpy_supported_set)}"
+        logger.info(
+            f"rawpy supported formats set initialized in {time.perf_counter() - check_start_time:.4f}s (Count: {len(_rawpy_supported_set)})"
         )
     return ext.lower() in _rawpy_supported_set
 
@@ -119,16 +118,16 @@ class RawImageProcessor:
                         thumb.format == rawpy.ThumbFormat.JPEG
                         and thumb.data is not None
                     ):
-                        logging.debug(
-                            f"Using embedded JPEG thumbnail for: {normalized_path}"
+                        logger.debug(
+                            f"Using embedded JPEG thumbnail for: {os.path.basename(normalized_path)}"
                         )
                         temp_pil_img = Image.open(io.BytesIO(thumb.data))
                         temp_pil_img = ImageOps.exif_transpose(
                             temp_pil_img
                         )  # Correct orientation
                         if apply_auto_edits:
-                            logging.info(
-                                f"Applying auto-edits (autocontrast, brightness) to embedded JPEG for: {normalized_path}"
+                            logger.debug(
+                                f"Applying auto-edits to embedded JPEG for: {os.path.basename(normalized_path)}"
                             )
                             temp_pil_img = ImageOps.autocontrast(temp_pil_img)
                             enhancer = ImageEnhance.Brightness(temp_pil_img)
@@ -141,8 +140,8 @@ class RawImageProcessor:
                     rawpy.LibRawNoThumbnailError,
                     rawpy.LibRawUnsupportedThumbnailError,
                 ):
-                    logging.debug(
-                        f"No suitable embedded thumbnail for {normalized_path}, postprocessing RAW."
+                    logger.debug(
+                        f"No suitable embedded thumbnail for {os.path.basename(normalized_path)}. Post-processing RAW."
                     )
                     # Fallback to processing the main image, optimized with half_size=True
                     postprocess_params = {
@@ -151,22 +150,22 @@ class RawImageProcessor:
                         "half_size": True,
                     }
                     if apply_auto_edits:
-                        logging.info(
-                            f"Applying auto_edits (bright=1.15) via rawpy for: {normalized_path}"
+                        logger.debug(
+                            f"Applying auto-edits (bright=1.15) via rawpy for: {os.path.basename(normalized_path)}"
                         )
                         postprocess_params["bright"] = 1.15
                         postprocess_params["no_auto_bright"] = False
                     else:
-                        logging.info(
-                            f"NOT applying auto_edits (no_auto_bright=True) via rawpy for: {normalized_path}"
+                        logger.debug(
+                            f"Disabling auto-bright via rawpy for: {os.path.basename(normalized_path)}"
                         )
                         postprocess_params["no_auto_bright"] = True
 
                     rgb = raw.postprocess(**postprocess_params)
                     temp_pil_img = Image.fromarray(rgb)
                     if apply_auto_edits:
-                        logging.info(
-                            f"Applying ImageOps.autocontrast post-rawpy for: {normalized_path}"
+                        logger.debug(
+                            f"Applying ImageOps.autocontrast post-rawpy for: {os.path.basename(normalized_path)}"
                         )
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
 
@@ -175,21 +174,28 @@ class RawImageProcessor:
                     final_pil_img = temp_pil_img.convert("RGBA")  # Ensure RGBA
             return final_pil_img
         except UnidentifiedImageError:
-            logging.error(
-                f"Pillow could not identify image file (raw thumbnail gen): {normalized_path}"
+            logger.error(
+                f"Pillow could not identify image from rawpy data for thumbnail: {os.path.basename(normalized_path)}"
             )
             return None
         except rawpy.LibRawIOError as e:
-            logging.error(f"rawpy I/O error for {normalized_path} (thumbnail): {e}")
+            logger.error(
+                "rawpy I/O error for thumbnail '%s': %s",
+                os.path.basename(normalized_path),
+                e,
+            )
             return None
         except rawpy.LibRawUnspecifiedError as e:
-            logging.error(
-                f"rawpy unspecified error for {normalized_path} (thumbnail): {e}"
+            logger.error(
+                "rawpy unspecified error for thumbnail '%s': %s",
+                os.path.basename(normalized_path),
+                e,
             )
             return None
         except Exception as e:
-            logging.error(
-                f"Error in process_raw_for_thumbnail for {normalized_path}: {e} (Type: {type(e).__name__})"
+            logger.error(
+                f"Failed to process RAW thumbnail for '{os.path.basename(normalized_path)}': {e}",
+                exc_info=True,
             )
             return None
 
@@ -224,12 +230,12 @@ class RawImageProcessor:
                             temp_img.width >= MIN_EMBEDDED_WIDTH
                             and temp_img.height >= MIN_EMBEDDED_HEIGHT
                         ):
-                            logging.info(
-                                f"[RawImageProcessor PRELOAD] Using embedded JPEG preview ({temp_img.width}x{temp_img.height}) for: {normalized_path}"
+                            logger.info(
+                                f"Using embedded JPEG preview ({temp_img.width}x{temp_img.height}) for: {os.path.basename(normalized_path)}"
                             )
                             if apply_auto_edits:
-                                logging.info(
-                                    f"[RawImageProcessor PRELOAD] Applying auto-edits (autocontrast, brightness) to embedded JPEG for: {normalized_path}"
+                                logger.debug(
+                                    f"Applying auto-edits to embedded JPEG for: {os.path.basename(normalized_path)}"
                                 )
                                 temp_img = ImageOps.autocontrast(temp_img)
                                 enhancer = ImageEnhance.Brightness(temp_img)
@@ -248,20 +254,20 @@ class RawImageProcessor:
                     rawpy.LibRawNoThumbnailError,
                     rawpy.LibRawUnsupportedThumbnailError,
                 ):
-                    logging.debug(
-                        f"[RawImageProcessor PRELOAD] No suitable embedded thumbnail for {normalized_path}, will postprocess."
+                    logger.debug(
+                        f"No suitable embedded thumbnail for {os.path.basename(normalized_path)}. Post-processing."
                     )
                     pass  # Fall through to postprocessing
                 except Exception as e_thumb:
-                    logging.warning(
-                        f"[RawImageProcessor PRELOAD] Error processing embedded thumbnail for {normalized_path}: {e_thumb}"
+                    logger.warning(
+                        f"Error processing embedded thumbnail for {os.path.basename(normalized_path)}: {e_thumb}"
                     )
                     pass  # Fall through to postprocessing
 
                 # Attempt 2: Fallback to postprocessing (half_size for speed)
                 if pil_img is None:
-                    logging.info(
-                        f"[RawImageProcessor PRELOAD] Falling back to raw.postprocess for: {normalized_path}"
+                    logger.debug(
+                        f"Falling back to raw.postprocess for: {os.path.basename(normalized_path)}"
                     )
                     postprocess_params = {
                         "use_camera_wb": True,
@@ -269,14 +275,14 @@ class RawImageProcessor:
                         "half_size": True,
                     }
                     if apply_auto_edits:
-                        logging.info(
-                            f"[RawImageProcessor PRELOAD] Applying auto_edits (bright=1.15) via rawpy for: {normalized_path}"
+                        logger.debug(
+                            f"Applying auto-edits (bright=1.15) via rawpy for: {os.path.basename(normalized_path)}"
                         )
                         postprocess_params["bright"] = 1.15
                         postprocess_params["no_auto_bright"] = False
                     else:
-                        logging.info(
-                            f"[RawImageProcessor PRELOAD] NOT applying auto_edits (no_auto_bright=True) via rawpy for: {normalized_path}"
+                        logger.debug(
+                            f"Disabling auto-bright via rawpy for: {os.path.basename(normalized_path)}"
                         )
                         postprocess_params["no_auto_bright"] = True
 
@@ -284,8 +290,8 @@ class RawImageProcessor:
                     img_from_raw = Image.fromarray(rgb_array)
 
                     if apply_auto_edits:
-                        logging.info(
-                            f"[RawImageProcessor PRELOAD] Applying ImageOps.autocontrast post-rawpy for: {normalized_path}"
+                        logger.debug(
+                            f"Applying ImageOps.autocontrast post-rawpy for: {os.path.basename(normalized_path)}"
                         )
                         img_from_raw = ImageOps.autocontrast(img_from_raw)
 
@@ -295,21 +301,28 @@ class RawImageProcessor:
                     pil_img = img_from_raw.convert("RGBA")
             return pil_img
         except UnidentifiedImageError:
-            logging.error(
-                f"Pillow could not identify image file (raw preview gen): {normalized_path}"
+            logger.error(
+                f"Pillow could not identify image from rawpy data for preview: {os.path.basename(normalized_path)}"
             )
             return None
         except rawpy.LibRawIOError as e:
-            logging.error(f"rawpy I/O error for {normalized_path} (preview): {e}")
+            logger.error(
+                "rawpy I/O error for preview '%s': %s",
+                os.path.basename(normalized_path),
+                e,
+            )
             return None
         except rawpy.LibRawUnspecifiedError as e:
-            logging.error(
-                f"rawpy unspecified error for {normalized_path} (preview): {e}"
+            logger.error(
+                "rawpy unspecified error for preview '%s': %s",
+                os.path.basename(normalized_path),
+                e,
             )
             return None
         except Exception as e:
-            logging.error(
-                f"Error in process_raw_for_preview for {normalized_path}: {e} (Type: {type(e).__name__})"
+            logger.error(
+                f"Failed to process RAW preview for '{os.path.basename(normalized_path)}': {e}",
+                exc_info=True,
             )
             return None
 
@@ -347,8 +360,8 @@ class RawImageProcessor:
                     postprocess_params.pop("use_camera_wb", None)
 
                 if apply_auto_edits:
-                    logging.info(
-                        f"[RawImageProcessor.load_raw_as_pil] Applying auto-edits (bright=1.25) via rawpy for: {normalized_path}"
+                    logger.debug(
+                        f"Applying auto-edits (bright=1.25) via rawpy for: {os.path.basename(normalized_path)}"
                     )
                     postprocess_params["bright"] = 1.25  # Increased brightness
                     postprocess_params["no_auto_bright"] = (
@@ -359,49 +372,52 @@ class RawImageProcessor:
                     # When auto_edits are OFF, we still want basic rawpy auto-brightening.
                     # So, 'no_auto_bright' remains False (its default in rawpy or explicit here).
                     # We don't set 'bright' here, letting rawpy manage it.
-                    logging.info(
-                        f"[RawImageProcessor.load_raw_as_pil] Auto-edits OFF. Using rawpy default auto-bright for: {normalized_path}"
+                    logger.info(
+                        f"Auto-edits OFF. Using rawpy default auto-bright for: {os.path.basename(normalized_path)}"
                     )
 
                 rgb_array = raw.postprocess(**postprocess_params)
                 pil_img = Image.fromarray(rgb_array)
 
                 if apply_auto_edits:  # Apply PIL enhancements if auto_edits are on
-                    logging.info(
-                        f"[RawImageProcessor.load_raw_as_pil] Applying PIL ImageOps.autocontrast for: {normalized_path}"
+                    logger.info(
+                        f"Applying PIL ImageOps.autocontrast for: {os.path.basename(normalized_path)}"
                     )
                     pil_img = ImageOps.autocontrast(pil_img)
 
-                    logging.info(
-                        f"[RawImageProcessor.load_raw_as_pil] Applying PIL ImageEnhance.Color (1.2) for: {normalized_path}"
+                    logger.info(
+                        f"Applying PIL ImageEnhance.Color (1.2) for: {os.path.basename(normalized_path)}"
                     )
                     color_enhancer = ImageEnhance.Color(pil_img)
                     pil_img = color_enhancer.enhance(1.2)  # Enhance color saturation
 
                     # Optional: Further brightness with PIL if rawpy's `bright` isn't enough
-                    # logging.info(f"[RawImageProcessor.load_raw_as_pil] Applying PIL ImageEnhance.Brightness (1.1) for: {normalized_path}")
+                    # logger.info(f"[RawImageProcessor.load_raw_as_pil] Applying PIL ImageEnhance.Brightness (1.1) for: {normalized_path}")
                     # brightness_enhancer = ImageEnhance.Brightness(pil_img)
                     # pil_img = brightness_enhancer.enhance(1.1)
 
                 return pil_img.convert(target_mode)
         except UnidentifiedImageError:
-            logging.error(
-                f"Pillow could not process data from rawpy (load_raw_as_pil): {normalized_path}"
+            logger.error(
+                f"Pillow could not process data from rawpy: {os.path.basename(normalized_path)}"
             )
             return None
         except rawpy.LibRawIOError as e:
-            logging.error(
-                f"rawpy I/O error for {normalized_path} (load_raw_as_pil): {e}"
+            logger.error(
+                "rawpy I/O error for '%s': %s", os.path.basename(normalized_path), e
             )
             return None
         except rawpy.LibRawUnspecifiedError as e:
-            logging.error(
-                f"rawpy unspecified error for {normalized_path} (load_raw_as_pil): {e}"
+            logger.error(
+                "rawpy unspecified error for '%s': %s",
+                os.path.basename(normalized_path),
+                e,
             )
             return None
         except Exception as e:
-            logging.error(
-                f"Error in load_raw_as_pil for {normalized_path}: {e} (Type: {type(e).__name__})"
+            logger.error(
+                f"Failed to load RAW as PIL for '{os.path.basename(normalized_path)}': {e}",
+                exc_info=True,
             )
             return None
 
@@ -441,22 +457,22 @@ class RawImageProcessor:
                         "half_size": True,
                     }
                     if apply_auto_edits:
-                        logging.info(
-                            f"[RawImageProcessor BLUR_LOAD] Applying auto_edits (bright=1.15) via rawpy for: {normalized_path}"
+                        logger.debug(
+                            f"Applying auto-edits (bright=1.15) for blur detection load: {os.path.basename(normalized_path)}"
                         )
                         postprocess_params["bright"] = 1.15
                         postprocess_params["no_auto_bright"] = False
                     else:
-                        logging.info(
-                            f"[RawImageProcessor BLUR_LOAD] NOT applying auto_edits (no_auto_bright=True) via rawpy for: {normalized_path}"
+                        logger.debug(
+                            f"Disabling auto-bright for blur detection load: {os.path.basename(normalized_path)}"
                         )
                         postprocess_params["no_auto_bright"] = True
 
                     rgb_array = raw.postprocess(**postprocess_params)
                     temp_pil_img = Image.fromarray(rgb_array)
                     if apply_auto_edits:
-                        logging.info(
-                            f"[RawImageProcessor BLUR_LOAD] Applying ImageOps.autocontrast post-rawpy for: {normalized_path}"
+                        logger.debug(
+                            f"Applying ImageOps.autocontrast for blur detection load: {os.path.basename(normalized_path)}"
                         )
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
 
@@ -466,8 +482,8 @@ class RawImageProcessor:
                         apply_auto_edits
                         and raw.extract_thumb().format == rawpy.ThumbFormat.JPEG
                     ):  # A bit of a simplification
-                        logging.info(
-                            f"[RawImageProcessor BLUR_LOAD] Applying auto-edits (autocontrast, brightness) to embedded JPEG for blur detection: {normalized_path}"
+                        logger.debug(
+                            f"Applying auto-edits to embedded JPEG for blur detection: {os.path.basename(normalized_path)}"
                         )
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
                         enhancer = ImageEnhance.Brightness(temp_pil_img)
@@ -477,22 +493,27 @@ class RawImageProcessor:
                     pil_img = temp_pil_img.convert("RGB")
             return pil_img
         except UnidentifiedImageError:
-            logging.error(
-                f"Pillow could not process data from rawpy (blur detection): {normalized_path}"
+            logger.error(
+                f"Pillow could not process data from rawpy for blur detection: {os.path.basename(normalized_path)}"
             )
             return None
         except rawpy.LibRawIOError as e:
-            logging.error(
-                f"rawpy I/O error for {normalized_path} (blur detection): {e}"
+            logger.error(
+                "rawpy I/O error for blur detection '%s': %s",
+                os.path.basename(normalized_path),
+                e,
             )
             return None
         except rawpy.LibRawUnspecifiedError as e:
-            logging.error(
-                f"rawpy unspecified error for {normalized_path} (blur detection): {e}"
+            logger.error(
+                "rawpy unspecified error for blur detection '%s': %s",
+                os.path.basename(normalized_path),
+                e,
             )
             return None
         except Exception as e:
-            logging.error(
-                f"Error in load_raw_for_blur_detection for {normalized_path}: {e} (Type: {type(e).__name__})"
+            logger.error(
+                f"Failed to load RAW for blur detection '{os.path.basename(normalized_path)}'",
+                exc_info=True,
             )
             return None

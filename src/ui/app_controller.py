@@ -1,6 +1,8 @@
 import os
 import time
 import logging
+
+logger = logging.getLogger(__name__)
 from typing import List, Dict, Any, Tuple
 
 from PyQt6.QtCore import QObject
@@ -29,42 +31,39 @@ class AppController(QObject):
     def clear_application_caches():
         """Clears all application caches."""
         start_time = time.perf_counter()
-        logging.info("clear_application_caches - Start")
+        logger.info("Clearing all application caches.")
 
         try:
             pipeline = ImagePipeline()
             pipeline.clear_all_image_caches()
-            logging.info("Image pipeline caches cleared.")
         except Exception as e:
-            logging.error(f"Error clearing image pipeline caches: {e}")
+            logger.error("Error clearing image pipeline caches.", exc_info=True)
 
         try:
             from src.core.similarity_engine import SimilarityEngine
 
             SimilarityEngine.clear_embedding_cache()
         except Exception as e:
-            logging.error(f"Error clearing similarity cache: {e}")
+            logger.error("Error clearing similarity cache.", exc_info=True)
 
         try:
             from src.core.caching.exif_cache import ExifCache
 
             exif_cache = ExifCache()
             exif_cache.clear()
-            logging.info("EXIF metadata cache cleared.")
         except Exception as e:
-            logging.error(f"Error clearing EXIF metadata cache: {e}")
+            logger.error("Error clearing EXIF metadata cache.", exc_info=True)
 
         try:
             from src.core.caching.rating_cache import RatingCache
 
             rating_cache = RatingCache()
             rating_cache.clear()
-            logging.info("Rating cache cleared.")
         except Exception as e:
-            logging.error(f"Error clearing rating cache: {e}")
+            logger.error("Error clearing rating cache.", exc_info=True)
 
-        logging.info(
-            f"clear_application_caches - End: {time.perf_counter() - start_time:.4f}s"
+        logger.info(
+            f"Application caches cleared in {time.perf_counter() - start_time:.2f}s."
         )
 
     """
@@ -160,7 +159,7 @@ class AppController(QObject):
 
     def load_folder(self, folder_path: str):
         load_folder_start_time = time.perf_counter()
-        logging.info(f"AppController.load_folder - Start for: {folder_path}")
+        logger.info(f"Loading folder: %s", folder_path)
         self.main_window.show_loading_overlay("Preparing to scan folder...")
 
         add_recent_folder(folder_path)
@@ -171,14 +170,17 @@ class AppController(QObject):
         )
         preview_cache_limit_bytes = get_preview_cache_size_bytes()
 
-        logging.info(
-            f"Folder Size (Images): {estimated_folder_image_size_bytes / (1024 * 1024):.2f} MB"
+        logger.debug(
+            "Folder Size: %.2f MB",
+            estimated_folder_image_size_bytes / (1024 * 1024),
         )
-        logging.info(
-            f"Preview Cache Limit: {preview_cache_limit_bytes / (1024 * 1024 * 1024):.2f} GB"
+        logger.debug(
+            "Preview Cache Limit: %.2f GB",
+            preview_cache_limit_bytes / (1024 * 1024 * 1024),
         )
-        logging.info(
-            f"Current Preview Cache Usage: {self.main_window.image_pipeline.preview_cache.volume() / (1024 * 1024):.2f} MB"
+        logger.debug(
+            "Current Preview Cache Usage: %.2f MB",
+            self.main_window.image_pipeline.preview_cache.volume() / (1024 * 1024),
         )
 
         PREVIEW_ESTIMATED_SIZE_FACTOR = 1.35
@@ -228,8 +230,8 @@ class AppController(QObject):
         self.main_window.menu_manager.detect_blur_action.setEnabled(False)
         self.main_window.menu_manager.auto_rotate_action.setEnabled(False)
 
-        logging.info(
-            f"AppController.load_folder - Preparing to call start_file_scan. Total time before call: {time.perf_counter() - load_folder_start_time:.4f}s"
+        logger.debug(
+            f"Folder prep complete in {time.perf_counter() - load_folder_start_time:.2f}s. Starting file scan."
         )
         self.worker_manager.start_file_scan(
             folder_path,
@@ -237,12 +239,9 @@ class AppController(QObject):
             perform_blur_detection=False,
             blur_threshold=self.main_window.blur_detection_threshold,
         )
-        logging.info(
-            f"AppController.load_folder - start_file_scan called. Total time for sync part: {time.perf_counter() - load_folder_start_time:.4f}s"
-        )
 
     def start_similarity_analysis(self):
-        logging.info("AppController.start_similarity_analysis called.")
+        logger.info("Starting similarity analysis.")
         if self.worker_manager.is_similarity_worker_running():
             self.main_window.statusBar().showMessage(
                 "Similarity analysis is already in progress.", 3000
@@ -271,7 +270,7 @@ class AppController(QObject):
         )
 
     def start_blur_detection_analysis(self):
-        logging.info("AppController.start_blur_detection_analysis called.")
+        logger.info("Starting blur detection analysis.")
         if not self.app_state.image_files_data:
             self.main_window.statusBar().showMessage(
                 "No images loaded to analyze for blurriness.", 3000
@@ -295,7 +294,7 @@ class AppController(QObject):
 
     def start_auto_rotation_analysis(self):
         """Start the auto rotation analysis process."""
-        logging.info("AppController.start_auto_rotation_analysis called.")
+        logger.info("Starting auto-rotation analysis.")
         if not self.app_state.image_files_data:
             self.main_window.statusBar().showMessage(
                 "No images loaded to analyze for rotation.", 3000
@@ -360,15 +359,15 @@ class AppController(QObject):
                             full_path = os.path.join(root, filename)
                             total_size_bytes += os.path.getsize(full_path)
                         except OSError:
-                            pass
-        except Exception as e:
-            logging.error(f"Error calculating folder image size for {folder_path}: {e}")
+                            pass  # Ignore files that can't be accessed
+        except Exception:
+            logger.error(
+                f"Error calculating folder image size for {folder_path}", exc_info=True
+            )
         return total_size_bytes
 
     def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
-        logging.info(
-            f"AppController._start_preview_preloader called with {len(image_data_list)} items."
-        )
+        logger.info(f"Starting preview preloader for {len(image_data_list)} images.")
         if not image_data_list:
             self.main_window.hide_loading_overlay()
             return
@@ -429,6 +428,7 @@ class AppController(QObject):
         self.main_window._update_image_info_label()
 
     def handle_scan_error(self, message: str):
+        logger.error(f"File scan error: {message}")
         self.main_window.statusBar().showMessage(f"Scan Error: {message}")
         self.main_window.menu_manager.open_folder_action.setEnabled(True)
 
@@ -472,9 +472,7 @@ class AppController(QObject):
         self.main_window._apply_filter()
 
     def handle_rating_load_finished(self):
-        logging.info(
-            "AppController.handle_rating_load_finished: Received RatingLoaderWorker.finished signal."
-        )
+        logger.info("Rating loading finished. Starting preview preloading.")
         self.main_window.statusBar().showMessage(
             "Background rating loading finished.", 3000
         )
@@ -487,7 +485,7 @@ class AppController(QObject):
         self._start_preview_preloader(self.app_state.image_files_data.copy())
 
     def handle_rating_load_error(self, message: str):
-        logging.error(f"Rating Load Error: {message}")
+        logger.error(f"Rating load failed: {message}", exc_info=True)
         self.main_window.statusBar().showMessage(f"Rating Load Error: {message}", 5000)
         if self.app_state.image_files_data:
             self.main_window.update_loading_text(
@@ -516,25 +514,23 @@ class AppController(QObject):
             preview_cache_size_bytes = (
                 self.main_window.image_pipeline.preview_cache.volume()
             )
-            logging.info("--- Cache vs. Image Size Diagnostics (Post-Preload) ---")
-            logging.info(
+            logger.debug("--- Cache vs. Image Size Diagnostics (Post-Preload) ---")
+            logger.debug(
                 f"Total Original Image Size: {total_image_size_bytes / (1024 * 1024):.2f} MB"
             )
-            logging.info(
+            logger.debug(
                 f"Final Preview Cache Size: {preview_cache_size_bytes / (1024 * 1024):.2f} MB"
             )
             if total_image_size_bytes > 0:
                 ratio = (preview_cache_size_bytes / total_image_size_bytes) * 100
-                logging.info(f"Cache-to-Image Size Ratio: {ratio:.2f}%")
-            logging.info("---------------------------------------------------------")
+                logger.debug(f"Cache-to-Image Size Ratio: {ratio:.2f}%")
+            logger.debug("---------------------------------------------------------")
 
         self.main_window._update_image_info_label()
 
     def handle_preview_error(self, message: str):
-        logging.error(f"Preview Preload Error: {message}")
-        self.main_window.statusBar().showMessage(
-            f"Preview Preload Error: {message}", 5000
-        )
+        logger.error(f"Preview preload failed: {message}", exc_info=True)
+        self.main_window.statusBar().showMessage(f"Preview Preload Error: {message}", 5000)
         self.main_window.hide_loading_overlay()
 
     def handle_similarity_progress(self, percentage, message):
@@ -577,6 +573,7 @@ class AppController(QObject):
         self.main_window.hide_loading_overlay()
 
     def handle_similarity_error(self, message):
+        logger.error(f"Similarity analysis failed: {message}", exc_info=True)
         self.main_window.statusBar().showMessage(f"Similarity Error: {message}", 8000)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self.app_state.image_files_data)
@@ -603,17 +600,16 @@ class AppController(QObject):
         )
 
     def handle_blur_detection_error(self, message: str):
+        logger.error(f"Blur detection failed: {message}", exc_info=True)
         self.main_window.hide_loading_overlay()
-        self.main_window.statusBar().showMessage(
-            f"Blur Detection Error: {message}", 8000
-        )
+        self.main_window.statusBar().showMessage(f"Blur Detection Error: {message}", 8000)
         self.main_window.menu_manager.detect_blur_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
 
     def handle_thumbnail_preload_finished(self, all_file_data: List[Dict[str, any]]):
-        logging.debug(
-            "AppController.handle_thumbnail_preload_finished called (now largely deprecated by rating load chain)"
+        logger.debug(
+            "Thumbnail preload finished signal received (deprecated, no-op)."
         )
         pass
 
@@ -647,8 +643,8 @@ class AppController(QObject):
             )
             return
 
-        logging.info(
-            f"Rotation analysis finished. Received {len(self.main_window.rotation_suggestions)} total suggestions."
+        logger.info(
+            f"Rotation analysis finished with {len(self.main_window.rotation_suggestions)} suggestions."
         )
 
         final_suggestions = {
@@ -667,7 +663,7 @@ class AppController(QObject):
             return
 
         num_suggestions = len(self.main_window.rotation_suggestions)
-        logging.info(f"Displaying rotation view with {num_suggestions} suggestions.")
+        logger.info(f"Displaying rotation view with {num_suggestions} suggestions.")
         self.main_window.statusBar().showMessage(
             f"Rotation analysis finished. Please review the {num_suggestions} suggestions.",
             5000,
@@ -678,10 +674,9 @@ class AppController(QObject):
 
     def handle_rotation_detection_error(self, message: str):
         """Handle errors during rotation detection."""
+        logger.error(f"Rotation detection failed: {message}", exc_info=True)
         self.main_window.hide_loading_overlay()
-        self.main_window.statusBar().showMessage(
-            f"Rotation Detection Error: {message}", 8000
-        )
+        self.main_window.statusBar().showMessage(f"Rotation Detection Error: {message}", 8000)
         self.main_window.menu_manager.auto_rotate_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
@@ -700,9 +695,7 @@ class AppController(QObject):
     def _apply_approved_rotations(self, approved_rotations: Dict[str, int]):
         """Apply the approved rotations to the images."""
         apply_start_time = time.perf_counter()
-        logging.info(
-            f"APPLY_ROT: Start for {len(approved_rotations)} approved rotations."
-        )
+        logger.info(f"Applying {len(approved_rotations)} approved rotations.")
         from src.core.metadata_processor import MetadataProcessor
 
         total_rotations = len(approved_rotations)
@@ -717,9 +710,7 @@ class AppController(QObject):
             single_file_start_time = time.perf_counter()
             try:
                 filename = os.path.basename(file_path)
-                logging.info(
-                    f"APPLY_ROT: Processing {i}/{total_rotations}: {filename} for {rotation_degrees} degrees."
-                )
+                logger.debug(f"Applying {rotation_degrees}° rotation to {filename}...")
                 progress_text = f"Rotating {i}/{total_rotations}: {filename}"
                 self.main_window.update_loading_text(progress_text)
 
@@ -730,8 +721,8 @@ class AppController(QObject):
                 elif rotation_degrees == 180:
                     direction = "180"
                 else:
-                    logging.warning(
-                        f"APPLY_ROT: Unsupported rotation angle {rotation_degrees} for {filename}"
+                    logger.warning(
+                        f"Unsupported rotation angle {rotation_degrees} for {filename}"
                     )
                     continue
 
@@ -742,8 +733,8 @@ class AppController(QObject):
                     )
                 )
                 t2 = time.perf_counter()
-                logging.info(
-                    f"APPLY_ROT: try_metadata_rotation_first for {filename} took {t2 - t1:.4f}s. Success: {metadata_success}, Needs Lossy: {needs_lossy}"
+                logger.debug(
+                    f"Metadata rotation for '{filename}' took {t2 - t1:.2f}s. Success: {metadata_success}, Needs Lossy: {needs_lossy}"
                 )
 
                 if metadata_success:
@@ -755,7 +746,7 @@ class AppController(QObject):
                     )
                     successful_rotations += 1
                 elif needs_lossy:
-                    logging.info(f"APPLY_ROT: Performing lossy rotation for {filename}")
+                    logger.info(f"Attempting lossy rotation for '{filename}'.")
                     t3 = time.perf_counter()
                     success = MetadataProcessor.rotate_image(
                         file_path,
@@ -764,9 +755,7 @@ class AppController(QObject):
                         exif_disk_cache=self.main_window.app_state.exif_disk_cache,
                     )
                     t4 = time.perf_counter()
-                    logging.info(
-                        f"APPLY_ROT: lossy rotate_image for {filename} took {t4 - t3:.4f}s. Success: {success}"
-                    )
+                    logger.debug(f"Lossy rotation for '{filename}' took {t4 - t3:.2f}s.")
 
                     if success:
                         self.main_window._handle_successful_rotation(
@@ -777,26 +766,22 @@ class AppController(QObject):
                         )
                         successful_rotations += 1
                     else:
-                        logging.error(
-                            f"APPLY_ROT: Failed to perform lossy rotation for {filename}"
-                        )
+                        logger.error(f"Lossy rotation failed for '{filename}'.")
                         failed_rotations += 1
                 else:
-                    logging.error(
-                        f"APPLY_ROT: Rotation not supported for {filename}. Message: {message}"
-                    )
+                    logger.error(f"Rotation not supported for '{filename}': {message}")
                     failed_rotations += 1
 
-            except Exception as e:
-                logging.error(
-                    f"APPLY_ROT: Unhandled error rotating {file_path}: {e}",
+            except Exception:
+                logger.error(
+                    f"Unhandled error while rotating '{os.path.basename(file_path)}'",
                     exc_info=True,
                 )
                 failed_rotations += 1
             finally:
                 single_file_end_time = time.perf_counter()
-                logging.info(
-                    f"APPLY_ROT: Finished processing {os.path.basename(file_path)}. Total time for this file: {single_file_end_time - single_file_start_time:.4f}s"
+                logger.debug(
+                    f"Finished processing '{os.path.basename(file_path)}' in {single_file_end_time - single_file_start_time:.2f}s."
                 )
 
         self.main_window.hide_loading_overlay()
@@ -816,8 +801,8 @@ class AppController(QObject):
             )
 
         apply_end_time = time.perf_counter()
-        logging.info(
-            f"APPLY_ROT: End. Total elapsed time: {apply_end_time - apply_start_time:.4f}s"
+        logger.info(
+            f"Rotation application finished in {apply_end_time - apply_start_time:.2f}s."
         )
 
         # If no more rotation suggestions, hide the rotation view

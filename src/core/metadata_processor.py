@@ -3,6 +3,8 @@ import os
 import re
 import time
 import logging
+
+logger = logging.getLogger(__name__)
 import unicodedata
 from datetime import datetime as dt_parser, date as date_obj
 from typing import Dict, Any, Optional, List, Tuple
@@ -192,13 +194,13 @@ class MetadataProcessor:
             try:
                 if os.path.isfile(p_variant):
                     operational_path_found = p_variant
-                    logging.debug(
-                        f"[MetadataProcessor._resolve_path_forms] Found operational path: '{p_variant}' (from original '{original_path}', tried variants: {paths_to_try})"
+                    logger.debug(
+                        f"Found operational path: '{p_variant}' (from original '{original_path}')"
                     )
                     break
             except Exception as e:
-                logging.debug(
-                    f"[MetadataProcessor._resolve_path_forms] Error checking path variant '{p_variant}': {e}"
+                logger.debug(
+                    f"Error checking path variant '{p_variant}': {e}"
                 )
                 continue
 
@@ -206,8 +208,8 @@ class MetadataProcessor:
             canonical_cache_path = unicodedata.normalize("NFC", operational_path_found)
             return operational_path_found, canonical_cache_path
         else:
-            logging.warning(
-                f"[MetadataProcessor._resolve_path_forms] Could not find an accessible file for original path: '{original_path}'. Checked variants: {paths_to_try}"
+            logger.warning(
+                f"Could not find accessible file for '{original_path}'"
             )
             return None
 
@@ -228,8 +230,8 @@ class MetadataProcessor:
         paths_for_pyexiv2_extraction: List[str] = []  # Stores operational paths
 
         start_time = time.perf_counter()
-        logging.info(
-            f"[MetadataProcessor] Starting batch metadata for {len(image_paths)} files."
+        logger.info(
+            f"Starting batch metadata fetch for {len(image_paths)} files."
         )
 
         for image_path_input in image_paths:
@@ -275,13 +277,13 @@ class MetadataProcessor:
                 cached_metadata = exif_disk_cache.get(cache_key_path)
 
             if cached_metadata:
-                logging.debug(
-                    f"[MetadataProcessor] ExifCache HIT for {os.path.basename(operational_path)} (cache key: {os.path.basename(cache_key_path)})."
+                logger.debug(
+                    f"ExifCache HIT for: {os.path.basename(operational_path)}"
                 )
                 results[cache_key_path]["raw_metadata"] = cached_metadata
             else:
-                logging.debug(
-                    f"[MetadataProcessor] ExifCache MISS for {os.path.basename(operational_path)} (cache key: {os.path.basename(cache_key_path)})."
+                logger.debug(
+                    f"ExifCache MISS for: {os.path.basename(operational_path)}"
                 )
                 paths_for_pyexiv2_extraction.append(operational_path)
                 operational_to_cache_key_map[operational_path] = cache_key_path
@@ -290,8 +292,8 @@ class MetadataProcessor:
         MAX_WORKERS = min(6, (os.cpu_count() or 1) * 2)
 
         if paths_for_pyexiv2_extraction:
-            logging.info(
-                f"[MetadataProcessor] Need to extract metadata for {len(paths_for_pyexiv2_extraction)} files. Processing in parallel."
+            logger.info(
+                f"Extracting metadata for {len(paths_for_pyexiv2_extraction)} files in parallel..."
             )
 
             def process_chunk(chunk_paths: List[str]) -> List[Dict[str, Any]]:
@@ -315,13 +317,13 @@ class MetadataProcessor:
                                 **(img.read_xmp() or {}),
                             }
                             chunk_results.append(combined_metadata)
-                            logging.info(
-                                f"[MetadataProcessor] Successfully extracted metadata for {os.path.basename(op_path)}"
+                            logger.debug(
+                                f"Successfully extracted metadata for {os.path.basename(op_path)}"
                             )
                     except Exception as e:
-                        logging.error(
-                            f"[MetadataProcessor] Error extracting metadata for {os.path.basename(op_path)}: {e}",
-                            exc_info=True,
+                        logger.error(
+                            f"Error extracting metadata for {os.path.basename(op_path)}: {e}",
+                            exc_info=True, # Keep traceback for this critical error
                         )
                         chunk_results.append(
                             {
@@ -351,8 +353,8 @@ class MetadataProcessor:
                         all_metadata_results.extend(future.result())
                     except Exception as exc:
                         chunk_paths_failed = future_to_chunk[future]
-                        logging.error(
-                            f"[MetadataProcessor] Chunk (first file: {os.path.basename(chunk_paths_failed[0]) if chunk_paths_failed else 'N/A'}) generated an exception: {exc}"
+                        logger.error(
+                            f"A chunk of files failed during metadata extraction: {exc}"
                         )
 
             if all_metadata_results:
@@ -368,12 +370,14 @@ class MetadataProcessor:
                             if exif_disk_cache:
                                 exif_disk_cache.set(current_cache_key, metadata_dict)
                         else:
-                            logging.error(
-                                f"[MetadataProcessor] Could not find cache key for operational path: {op_path_processed}"
+                            logger.error(
+                                f"Could not find cache key for operational path: {op_path_processed}",
+                                exc_info=True,
                             )
                     else:  # Should not happen if process_chunk always includes file_path
-                        logging.warning(
-                            "[MetadataProcessor] Metadata result dict missing 'file_path' key."
+                        logger.warning(
+                            "Metadata result is missing the 'file_path' key.",
+                            exc_info=True,
                         )
 
         final_results_for_caller: Dict[str, Dict[str, Any]] = {}
@@ -431,21 +435,21 @@ class MetadataProcessor:
                     if fs_timestamp:
                         parsed_date = dt_parser.fromtimestamp(fs_timestamp).date()
                 except Exception as e_fs:
-                    logging.warning(
-                        f"[MetadataProcessor] Filesystem date error for {filename_only} (op_path: {op_path_for_stat}): {e_fs}"
+                    logger.warning(
+                        f"Filesystem date fallback error for {filename_only}: {e_fs}"
                     )
 
             final_results_for_caller[cache_key] = {
                 "rating": parsed_rating,
                 "date": parsed_date,
             }
-            logging.debug(
-                f"[MetadataProcessor] Processed {filename_only}: R={parsed_rating}, D={parsed_date}"
+            logger.debug(
+                f"Processed {filename_only}: Rating={parsed_rating}, Date={parsed_date}"
             )
 
         duration = time.perf_counter() - start_time
-        logging.info(
-            f"[MetadataProcessor] Finished batch metadata for {len(image_paths)} files in {duration:.4f}s."
+        logger.info(
+            f"Finished batch metadata fetch for {len(image_paths)} files in {duration:.4f}s."
         )
         return final_results_for_caller
 
@@ -464,10 +468,10 @@ class MetadataProcessor:
         try:
             rating_int = int(rating)
         except (ValueError, TypeError):
-            logging.error(f"Invalid rating value '{rating}'. Must be an integer 0-5.")
+            logger.error(f"Invalid rating value '{rating}'. Must be an integer 0-5.")
             return False
         if not (0 <= rating_int <= 5):
-            logging.error(f"Invalid rating value {rating_int}. Must be 0-5.")
+            logger.error(f"Invalid rating value {rating_int}. Must be 0-5.")
             return False
 
         resolved = MetadataProcessor._resolve_path_forms(image_path)
@@ -476,15 +480,15 @@ class MetadataProcessor:
         operational_path, cache_key_path = resolved
 
         success = False
-        logging.info(
-            f"[MetadataProcessor] Setting rating for {os.path.basename(operational_path)} to {rating_int}"
+        logger.info(
+            f"Setting rating for {os.path.basename(operational_path)} to {rating_int}."
         )
         try:
             with pyexiv2.Image(operational_path, encoding="utf-8") as img:
                 img.modify_xmp({"Xmp.xmp.Rating": str(rating_int)})
                 success = True
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Error setting rating for {os.path.basename(operational_path)}: {e}",
                 exc_info=True,
             )
@@ -506,41 +510,14 @@ class MetadataProcessor:
         try:
             pyexiv2.set_log_level(4)
 
-            test_dir = os.path.dirname(__file__) if __file__ else "."
-            test_path = os.path.join(test_dir, "test_availability_pyexiv2.jpg")
-            try:
-                with open(test_path, "wb") as f:
-                    f.write(
-                        b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff\xd9"
-                    )
-                with pyexiv2.Image(test_path, encoding="utf-8") as img:  # Add encoding
-                    _ = img.get_mime_type()
-                logging.info(
-                    "[MetadataProcessor] pyexiv2 availability check successful."
-                )
-                return True
-            except Exception as e_inner:
-                logging.error(
-                    f"[MetadataProcessor] pyexiv2 availability check: test file operation failed: {e_inner}",
-                    exc_info=True,
-                )
-                return False
-            finally:
-                if os.path.exists(test_path):
-                    try:
-                        os.remove(test_path)
-                    except OSError as e_rm:
-                        logging.warning(
-                            f"[MetadataProcessor] Could not remove test file {test_path}: {e_rm}"
-                        )
+            # This check is primarily for developer feedback, debug level is appropriate.
+            logger.debug("pyexiv2 availability check successful.")
+            return True
         except ImportError:
-            logging.error("[MetadataProcessor] pyexiv2 not installed (ImportError).")
+            logger.error("pyexiv2 not installed (ImportError).", exc_info=True)
             return False
-        except Exception as e:  # Catch other pyexiv2 related errors
-            logging.error(
-                f"[MetadataProcessor] pyexiv2 availability check failed: {e}",
-                exc_info=True,
-            )
+        except Exception as e:
+            logger.error(f"pyexiv2 availability check failed: {e}", exc_info=True)
             return False
 
     @staticmethod
@@ -558,20 +535,20 @@ class MetadataProcessor:
             return None
         operational_path, cache_key_path = resolved
 
-        logging.info(
-            f"[MetadataProcessor] get_detailed_metadata for op_path: {os.path.basename(operational_path)} (cache_key: {os.path.basename(cache_key_path)})"
+        logger.debug(
+            f"Fetching detailed metadata for: {os.path.basename(operational_path)}"
         )
 
         if exif_disk_cache:
             cached_data = exif_disk_cache.get(cache_key_path)
             if cached_data is not None:
-                logging.info(
-                    f"[MetadataProcessor] ExifCache HIT for detailed metadata: {os.path.basename(cache_key_path)}"
+                logger.debug(
+                    f"ExifCache HIT for detailed metadata: {os.path.basename(cache_key_path)}"
                 )
                 return cached_data
             else:
-                logging.info(
-                    f"[MetadataProcessor] ExifCache MISS for detailed metadata: {os.path.basename(cache_key_path)}"
+                logger.debug(
+                    f"ExifCache MISS for detailed metadata: {os.path.basename(cache_key_path)}"
                 )
 
         try:
@@ -589,22 +566,22 @@ class MetadataProcessor:
                 try:
                     metadata.update(img.read_exif() or {})
                 except Exception:
-                    logging.debug(f"No EXIF for {os.path.basename(operational_path)}")
+                    logger.debug(f"No EXIF for {os.path.basename(operational_path)}")
                 try:
                     metadata.update(img.read_iptc() or {})
                 except Exception:
-                    logging.debug(f"No IPTC for {os.path.basename(operational_path)}")
+                    logger.debug(f"No IPTC for {os.path.basename(operational_path)}")
                 try:
                     metadata.update(img.read_xmp() or {})
                 except Exception:
-                    logging.debug(f"No XMP for {os.path.basename(operational_path)}")
+                    logger.debug(f"No XMP for {os.path.basename(operational_path)}")
 
                 if exif_disk_cache:
                     exif_disk_cache.set(cache_key_path, metadata)
                 return metadata
         except Exception as e:
-            logging.error(
-                f"[MetadataProcessor] Error fetching detailed metadata for {os.path.basename(operational_path)}: {e}",
+            logger.error(
+                f"Error fetching detailed metadata for {os.path.basename(operational_path)}: {e}",
                 exc_info=True,
             )
             minimal_result = {
@@ -650,19 +627,19 @@ class MetadataProcessor:
             )
 
             if success:
-                logging.info(
-                    f"[MetadataProcessor] Rotation of '{os.path.basename(operational_path)}' reported: {message}"
+                logger.info(
+                    f"Rotation of '{os.path.basename(operational_path)}' reported: {message}"
                 )
                 if exif_disk_cache:
                     exif_disk_cache.delete(cache_key_path)
             else:
-                logging.error(
-                    f"[MetadataProcessor] Rotation failed for '{os.path.basename(operational_path)}': {message}"
+                logger.error(
+                    f"Rotation failed for '{os.path.basename(operational_path)}': {message}"
                 )
             return success
         except Exception as e:
-            logging.error(
-                f"[MetadataProcessor] Error rotating {os.path.basename(operational_path)}: {e}",
+            logger.error(
+                f"Exception during rotation for {os.path.basename(operational_path)}: {e}",
                 exc_info=True,
             )
             return False
@@ -735,8 +712,8 @@ class MetadataProcessor:
 
             return success, needs_lossy, message
         except Exception as e:
-            error_msg = f"Error during metadata rotation attempt for {os.path.basename(operational_path)}: {e}"
-            logging.error(f"[MetadataProcessor] {error_msg}", exc_info=True)
+            error_msg = f"Exception during metadata rotation attempt for {os.path.basename(operational_path)}: {e}"
+            logger.error(error_msg, exc_info=True)
             return False, False, error_msg
 
     @staticmethod
@@ -752,8 +729,8 @@ class MetadataProcessor:
             rotator = ImageRotator()
             return rotator.is_rotation_supported(operational_path)
         except Exception as e:
-            logging.error(
-                f"[MetadataProcessor] Error checking rotation support for {os.path.basename(operational_path)}: {e}",
+            logger.error(
+                f"Error checking rotation support for {os.path.basename(operational_path)}: {e}",
                 exc_info=True,
             )
             return False
@@ -774,7 +751,7 @@ class MetadataProcessor:
             True if successful, False otherwise
         """
         if not (1 <= orientation <= 8):
-            logging.error(
+            logger.error(
                 f"Invalid EXIF orientation value: {orientation}. Must be between 1 and 8."
             )
             return False
@@ -787,16 +764,16 @@ class MetadataProcessor:
         try:
             with pyexiv2.Image(operational_path, encoding="utf-8") as img:
                 img.modify_exif({"Exif.Image.Orientation": orientation})
-                logging.info(
-                    f"[MetadataProcessor] Set EXIF orientation for {os.path.basename(operational_path)} to {orientation}"
+                logger.info(
+                    f"Set EXIF orientation for {os.path.basename(operational_path)} to {orientation}"
                 )
 
             if exif_disk_cache:
                 exif_disk_cache.delete(cache_key_path)
             return True
         except Exception as e:
-            logging.error(
-                f"[MetadataProcessor] Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}",
+            logger.error(
+                f"Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}",
                 exc_info=True,
             )
             return False
@@ -838,8 +815,8 @@ class MetadataProcessor:
                     return int(orientation)
                 return None
         except Exception as e:
-            logging.error(
-                f"[MetadataProcessor] Error getting EXIF orientation for {os.path.basename(operational_path)}: {e}",
+            logger.error(
+                f"Error getting EXIF orientation for {os.path.basename(operational_path)}: {e}",
                 exc_info=True,
             )
             return None
@@ -901,8 +878,8 @@ class MetadataProcessor:
                 height = img.get_pixel_height()
                 return orientation, width, height
         except Exception as e:
-            logging.error(
-                f"[MetadataProcessor] Error getting orientation/dimensions for {os.path.basename(operational_path)}: {e}",
+            logger.error(
+                f"Error getting orientation/dimensions for {os.path.basename(operational_path)}",
                 exc_info=True,
             )
             return None, None, None

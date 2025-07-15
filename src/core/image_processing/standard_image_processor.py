@@ -3,6 +3,8 @@ import os
 from typing import Optional
 import logging
 
+logger = logging.getLogger(__name__)
+
 # Define a reasonable max size for thumbnails to avoid using too much memory
 # These might be passed in by an orchestrator class later.
 THUMBNAIL_MAX_SIZE = (256, 256)
@@ -47,16 +49,21 @@ class StandardImageProcessor:
                 final_pil_img = img.convert("RGBA")  # Ensure RGBA
             return final_pil_img
         except UnidentifiedImageError:
-            logging.error(
-                f"Pillow could not identify image file (standard thumbnail gen): {normalized_path}"
+            logger.error(
+                f"Pillow could not identify image for thumbnail: {os.path.basename(normalized_path)}",
+                exc_info=True,
             )
             return None
         except FileNotFoundError:
-            logging.error(f"File not found (standard thumbnail gen): {normalized_path}")
+            logger.error(
+                f"File not found for thumbnail: {os.path.basename(normalized_path)}",
+                exc_info=True,
+            )
             return None
         except Exception as e:
-            logging.error(
-                f"Error in process_for_thumbnail for {normalized_path}: {e} (Type: {type(e).__name__})"
+            logger.error(
+                f"Failed to process thumbnail for '{os.path.basename(normalized_path)}': {e}",
+                exc_info=True,
             )
             return None
 
@@ -76,16 +83,21 @@ class StandardImageProcessor:
                 pil_img = img.convert("RGBA")  # Ensure RGBA
             return pil_img
         except UnidentifiedImageError:
-            logging.error(
-                f"Pillow could not identify image file (standard preview gen): {normalized_path}"
+            logger.error(
+                f"Pillow could not identify image for preview: {os.path.basename(normalized_path)}",
+                exc_info=True,
             )
             return None
         except FileNotFoundError:
-            logging.error(f"File not found (standard preview gen): {normalized_path}")
+            logger.error(
+                f"File not found for preview: {os.path.basename(normalized_path)}",
+                exc_info=True,
+            )
             return None
         except Exception as e:
-            logging.error(
-                f"Error in process_for_preview for {normalized_path}: {e} (Type: {type(e).__name__})"
+            logger.error(
+                f"Failed to process preview for '{os.path.basename(normalized_path)}': {e}",
+                exc_info=True,
             )
             return None
 
@@ -105,16 +117,20 @@ class StandardImageProcessor:
                 pil_img = img.convert(target_mode)
             return pil_img
         except UnidentifiedImageError:
-            logging.error(
-                f"Pillow could not identify image file (standard load_as_pil): {normalized_path}"
+            logger.error(
+                f"Pillow could not identify image: {os.path.basename(normalized_path)}",
+                exc_info=True,
             )
             return None
         except FileNotFoundError:
-            logging.error(f"File not found (standard load_as_pil): {normalized_path}")
+            logger.error(
+                f"File not found: {os.path.basename(normalized_path)}", exc_info=True
+            )
             return None
         except Exception as e:
-            logging.error(
-                f"Error in load_as_pil for {normalized_path}: {e} (Type: {type(e).__name__})"
+            logger.error(
+                f"Failed to load image '{os.path.basename(normalized_path)}' as PIL object: {e}",
+                exc_info=True,
             )
             return None
 
@@ -135,17 +151,20 @@ class StandardImageProcessor:
                 pil_img = img.convert("RGB")
             return pil_img
         except UnidentifiedImageError:
-            logging.error(
-                f"Pillow could not identify image file (standard blur detection load): {normalized_path}"
+            logger.error(
+                f"Pillow could not identify image for blur detection: {os.path.basename(normalized_path)}",
+                exc_info=True,
             )
             return None
         except FileNotFoundError:
-            logging.error(
-                f"File not found (standard blur detection load): {normalized_path}"
+            logger.error(
+                f"File not found for blur detection: {os.path.basename(normalized_path)}",
+                exc_info=True,
             )
             return None
         except Exception as e:
-            logging.error(
-                f"Error in load_for_blur_detection for {normalized_path}: {e} (Type: {type(e).__name__})"
+            logger.error(
+                f"Failed to load image for blur detection '{os.path.basename(normalized_path)}'",
+                exc_info=True,
             )
             return None

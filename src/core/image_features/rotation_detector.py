@@ -1,6 +1,8 @@
 import os
 import concurrent.futures
 import logging
+
+logger = logging.getLogger(__name__)
 from typing import Optional, List, Callable, Dict
 
 from src.core.image_features.model_rotation_detector import ModelRotationDetector
@@ -18,11 +20,11 @@ class RotationDetector:
     """
 
     def __init__(self, image_pipeline: ImagePipeline, exif_cache: ExifCache):
-        logging.info("Initializing RotationDetector...")
+        logger.info("Initializing RotationDetector.")
         self.image_pipeline = image_pipeline
         self.model_detector = ModelRotationDetector()
         self.exif_cache = exif_cache
-        logging.info("RotationDetector initialized.")
+        logger.debug("RotationDetector initialized.")
 
     def _detect_rotation_task(
         self,
@@ -52,7 +54,10 @@ class RotationDetector:
                 result_callback(image_path, final_suggested_rotation)
 
         except Exception as e:
-            logging.error(f"Error processing rotation for {image_path}: {e}")
+            logger.error(
+                f"Error processing rotation for '{os.path.basename(image_path)}': {e}",
+                exc_info=True,
+            )
             if result_callback:
                 result_callback(image_path, 0)
 
@@ -75,8 +80,8 @@ class RotationDetector:
         effective_num_workers = (
             num_workers if num_workers is not None else DEFAULT_NUM_WORKERS
         )
-        logging.info(
-            f"Starting model-based rotation detection for {total_files} files, workers: {effective_num_workers}"
+        logger.info(
+            f"Starting rotation detection for {total_files} files (workers: {effective_num_workers})..."
         )
 
         with concurrent.futures.ThreadPoolExecutor(
@@ -95,8 +100,9 @@ class RotationDetector:
                 try:
                     future.result()
                 except Exception as e:
-                    logging.error(
-                        f"Error processing rotation future for {path_for_future}: {e}"
+                    logger.error(
+                        f"Error in rotation detection future for '{os.path.basename(path_for_future)}': {e}",
+                        exc_info=True,
                     )
                     if result_callback:
                         result_callback(path_for_future, 0)
@@ -111,9 +117,7 @@ class RotationDetector:
                     for f_cancel in futures_map:
                         if not f_cancel.done():
                             f_cancel.cancel()
-                    logging.info("Rotation detection cancelled during completion.")
+                    logger.info("Rotation detection cancelled during processing.")
                     break
 
-        logging.info(
-            f"Rotation detection finished. Processed {processed_count}/{total_files} files."
-        )
+        logger.info(f"Rotation detection finished. Processed {processed_count}/{total_files}.")

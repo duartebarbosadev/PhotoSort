@@ -1,6 +1,8 @@
 import os
 import shutil
 import logging
+
+logger = logging.getLogger(__name__)
 from typing import Tuple
 import send2trash
 
@@ -27,7 +29,7 @@ class ImageFileOperations:
             # Attempt to create destination folder if it doesn't exist
             try:
                 os.makedirs(destination_folder, exist_ok=True)
-                logging.info(f"Created destination folder: {destination_folder}")
+                logger.info(f"Created destination folder: {destination_folder}")
             except OSError as e:
                 return (
                     False,
@@ -46,19 +48,19 @@ class ImageFileOperations:
                     destination_folder, f"{base}_{counter}{ext}"
                 )
                 counter += 1
-            logging.info(
-                f"File already exists at original destination. New destination path: {destination_path}"
+            logger.debug(
+                f"Destination file exists. Renaming to: {os.path.basename(destination_path)}."
             )
 
         try:
             shutil.move(source_path, destination_path)
-            logging.info(f"Successfully moved '{source_path}' to '{destination_path}'")
+            logger.info(
+                f"Moved '{os.path.basename(source_path)}' to '{os.path.basename(destination_path)}'."
+            )
             return True, destination_path
         except Exception as e:
-            error_msg = (
-                f"Error moving file '{source_path}' to '{destination_path}': {e}"
-            )
-            logging.error(error_msg)
+            error_msg = f"Error moving file '{os.path.basename(source_path)}': {e}"
+            logger.error(error_msg, exc_info=True)
             return False, error_msg
 
     @staticmethod
@@ -76,11 +78,11 @@ class ImageFileOperations:
             return False, "File does not exist."
         try:
             send2trash.send2trash(file_path)
-            logging.info(f"Successfully moved '{file_path}' to trash.")
+            logger.info(f"Moved to trash: {os.path.basename(file_path)}.")
             return True, "File moved to trash."
         except Exception as e:
-            error_msg = f"Error moving file '{file_path}' to trash: {e}"
-            logging.error(error_msg)
+            error_msg = f"Error moving file to trash: {os.path.basename(file_path)}: {e}"
+            logger.error(error_msg, exc_info=True)
             return False, error_msg
 
     @staticmethod
@@ -99,11 +101,15 @@ class ImageFileOperations:
             return False, "Original file does not exist."
         try:
             os.rename(old_path, new_path)
-            logging.info(f"Successfully renamed '{old_path}' to '{new_path}'.")
+            logger.info(
+                f"Renamed '%s' to '%s'",
+                os.path.basename(old_path),
+                os.path.basename(new_path),
+            )
             return True, "File renamed successfully."
         except OSError as e:
-            error_msg = f"Error renaming file from '{old_path}' to '{new_path}': {e}"
-            logging.error(error_msg)
+            error_msg = f"Error renaming '{os.path.basename(old_path)}': {e}"
+            logger.error(error_msg, exc_info=True)
             return False, error_msg
 
     @staticmethod
@@ -122,13 +128,11 @@ class ImageFileOperations:
             return False, f"Source file not found: {source_path}"
         try:
             shutil.move(source_path, destination_path)
-            logging.info(
-                f"Successfully replaced '{destination_path}' with '{source_path}'."
+            logger.info(
+                f"Replaced '{os.path.basename(destination_path)}' with '{os.path.basename(source_path)}'."
             )
             return True, "File replaced successfully."
         except Exception as e:
-            error_msg = (
-                f"Error replacing file '{destination_path}' with '{source_path}': {e}"
-            )
-            logging.error(error_msg)
+            error_msg = f"Error replacing file '{os.path.basename(destination_path)}': {e}"
+            logger.error(error_msg, exc_info=True)
             return False, error_msg

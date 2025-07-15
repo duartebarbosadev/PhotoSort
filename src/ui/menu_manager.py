@@ -1,4 +1,6 @@
 import logging
+
+logger = logging.getLogger(__name__)
 import os
 import subprocess
 from typing import TYPE_CHECKING
@@ -61,7 +63,7 @@ class MenuManager:
 
     def create_menus(self, menu_bar):
         """Creates all menus and actions."""
-        logging.debug("MenuManager.create_menus - Start")
+        logger.debug("Creating menus...")
         menu_bar.setNativeMenuBar(True)
         self._create_actions()
 
@@ -73,12 +75,12 @@ class MenuManager:
         self._create_settings_menu(menu_bar)
         self._create_help_menu(menu_bar)
 
-        logging.debug("MenuManager.create_menus - End")
+        logger.debug("Menus created.")
 
     def _create_actions(self):
         """Create all QActions for the application."""
         main_win = self.main_window
-        logging.debug("MenuManager._create_actions - Start")
+        logger.debug("Creating actions...")
 
         # Rating actions
         self.rating_actions = {}
@@ -137,7 +139,7 @@ class MenuManager:
         )
         main_win.addAction(self.clear_marked_deletions_action)
 
-        logging.debug("MenuManager._create_actions - End")
+        logger.debug("Actions created.")
 
     def _create_file_menu(self, menu_bar):
         main_win = self.main_window
@@ -467,6 +469,6 @@ class MenuManager:
                         ["xdg-open", os.path.dirname(normalized_path)], check=False
                     )
         except Exception as e:
-            logging.error(
-                f"Error showing '{file_path}' in explorer: {e}", exc_info=True
+            logger.error(
+                f"Failed to open '{file_path}' in file explorer: {e}", exc_info=True
             )

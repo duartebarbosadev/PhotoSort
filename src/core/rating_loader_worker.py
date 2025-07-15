@@ -1,6 +1,8 @@
 import os
 import time
 import logging
+
+logger = logging.getLogger(__name__)
 import traceback  # Keep for error logging in run_load
 from PyQt6.QtCore import QObject, pyqtSignal
 from typing import List, Dict, Any, Optional
@@ -41,7 +43,7 @@ class RatingLoaderWorker(QObject):
 
     def stop(self):
         self._is_running = False
-        logging.info("[RatingLoaderWorker] Stop requested.")
+        logger.info("Stop requested.")
 
     def run_load(self):
         self._is_running = True
@@ -57,7 +59,7 @@ class RatingLoaderWorker(QObject):
         processed_count = 0
 
         if not image_paths_to_process:
-            logging.info("[RatingLoaderWorker] No valid image paths to process.")
+            logger.warning("No valid image paths to process.")
             self.finished.emit()
             return
 
@@ -71,8 +73,8 @@ class RatingLoaderWorker(QObject):
             return
 
         total_load_start_time = time.perf_counter()
-        logging.info(
-            f"[RatingLoaderWorker] Starting batch metadata load for {total_files} files."
+        logger.info(
+            f"Starting metadata load for {total_files} files."
         )
 
         try:
@@ -92,8 +94,8 @@ class RatingLoaderWorker(QObject):
 
             for i, image_path_norm in enumerate(image_paths_to_process):
                 if not self._is_running:
-                    logging.info(
-                        f"[RatingLoaderWorker] Processing stopped during result iteration at index {i}. Path: {image_path_norm}"
+                    logger.info(
+                        f"Processing stopped by request at index {i}."
                     )
                     break
 
@@ -113,8 +115,8 @@ class RatingLoaderWorker(QObject):
                         self._app_state.date_cache.pop(image_path_norm, None)
                     current_metadata_tuple = (image_path_norm, metadata)
                 else:
-                    logging.warning(
-                        f"[RatingLoaderWorker] No metadata returned for {image_path_norm} from batch call."
+                    logger.warning(
+                        f"No metadata returned for {os.path.basename(image_path_norm)} from batch call."
                     )
                     # Still add to batch for UI to know it was processed, with default values
                     current_metadata_tuple = (
@@ -130,8 +132,8 @@ class RatingLoaderWorker(QObject):
                     or processed_count == total_files
                 ):
                     if metadata_batch_to_emit:
-                        logging.debug(
-                            f"[RatingLoaderWorker] Emitting metadata_batch_loaded with {len(metadata_batch_to_emit)} items."
+                        logger.debug(
+                            f"Emitting metadata batch with {len(metadata_batch_to_emit)} items."
                         )
                         self.metadata_batch_loaded.emit(
                             list(metadata_batch_to_emit)
@@ -145,45 +147,38 @@ class RatingLoaderWorker(QObject):
                 ):
                     self.progress_update.emit(processed_count, total_files, basename)
 
-                logging.debug(
-                    f"[RatingLoaderWorker] Processed {processed_count}/{total_files}: {basename}"
-                )
+                logger.debug(f"Processed {processed_count}/{total_files}: {basename}")
 
             # Ensure any remaining items in metadata_batch_to_emit are sent
             if metadata_batch_to_emit:
-                logging.debug(
-                    f"[RatingLoaderWorker] Emitting remaining metadata_batch_loaded with {len(metadata_batch_to_emit)} items."
+                logger.debug(
+                    f"Emitting final metadata batch with {len(metadata_batch_to_emit)} items."
                 )
                 self.metadata_batch_loaded.emit(list(metadata_batch_to_emit))
                 metadata_batch_to_emit.clear()
 
         except Exception as e:
             error_msg = (
-                f"Error during batch metadata loading: {e}\n{traceback.format_exc()}"
+                f"An error occurred during metadata loading: {e}"
             )
-            logging.error(f"[RatingLoaderWorker] {error_msg}")
+            logger.error(error_msg, exc_info=True)
             self.error.emit(error_msg)
 
         total_load_duration = time.perf_counter() - total_load_start_time
         avg_time_per_file = total_load_duration / total_files if total_files > 0 else 0
-        logging.info(
-            f"[RatingLoaderWorker] Finished batch metadata processing for {processed_count}/{total_files} files."
-        )
-        logging.info(
-            f"[RatingLoaderWorker] Total time: {total_load_duration:.2f}s. Average time per file: {avg_time_per_file:.4f}s."
+        logger.info(
+            f"Finished metadata processing for {processed_count}/{total_files} files in {total_load_duration:.2f}s."
         )
 
         try:
-            logging.info(
-                f"[RatingLoaderWorker] Emitting finished signal. self._is_running: {self._is_running}"
-            )
+            logger.debug("Emitting finished signal.")
             self.finished.emit()
-            logging.info("[RatingLoaderWorker] Finished signal emitted successfully.")
+            logger.debug("Finished signal emitted.")
         except Exception as e_finish:
-            logging.error(
-                f"[RatingLoaderWorker] Exception during/after emitting finished signal: {e_finish}",
+            logger.error(
+                f"Exception during finish sequence: {e_finish}",
                 exc_info=True,
             )
             self.error.emit(f"Exception in finish sequence: {e_finish}")
         finally:
-            logging.info("[RatingLoaderWorker] Exiting run_load method.")
+            logger.debug("Exiting run_load method.")
