@@ -1,5 +1,7 @@
 import os
 import logging
+
+logger = logging.getLogger(__name__)
 import subprocess
 import tempfile
 from typing import Literal, Tuple
@@ -55,7 +57,7 @@ class ImageRotator:
 
     def __init__(self):
         self.jpegtran_available = self._check_jpegtran_availability()
-        logging.info(f"[ImageRotator] jpegtran available: {self.jpegtran_available}")
+        logger.info(f"jpegtran availability: {self.jpegtran_available}")
 
     def _check_jpegtran_availability(self) -> bool:
         """Check if jpegtran is available in the system PATH."""
@@ -88,8 +90,8 @@ class ImageRotator:
                             if orientation:
                                 return int(orientation)
             except Exception as e:
-                logging.warning(
-                    f"[ImageRotator] Could not read HEIF/HEIC orientation from {os.path.basename(image_path)} using pillow-heif: {e}"
+                logger.warning(
+                    f"Could not read HEIF/HEIC orientation from '{os.path.basename(image_path)}': {e}"
                 )
             return 1  # Default if pillow-heif fails or no EXIF
 
@@ -100,8 +102,8 @@ class ImageRotator:
                 if orientation:
                     return int(orientation)
         except Exception as e:
-            logging.warning(
-                f"[ImageRotator] Could not read orientation from {os.path.basename(image_path)}: {e}"
+            logger.warning(
+                f"Could not read EXIF orientation from '{os.path.basename(image_path)}': {e}"
             )
         return 1  # Default orientation (no rotation)
 
@@ -176,23 +178,28 @@ class ImageRotator:
                 # Replace original with rotated version
                 success, msg = ImageFileOperations.replace_file(temp_path, image_path)
                 if success:
-                    logging.info(
-                        f"[ImageRotator] Lossless JPEG rotation successful: {os.path.basename(image_path)}"
+                    logger.info(
+                        f"Lossless JPEG rotation successful: {os.path.basename(image_path)}."
                     )
                 else:
-                    logging.error(
-                        f"[ImageRotator] Lossless JPEG rotation failed during file replacement: {msg}"
+                    logger.error(
+                        f"Lossless JPEG rotation failed during file replacement for '{os.path.basename(image_path)}': {msg}"
                     )
                 return success
             else:
-                logging.warning(
-                    f"[ImageRotator] jpegtran failed for {os.path.basename(image_path)}: {result.stderr.decode()}"
+                logger.warning(
+                    "jpegtran command failed for '%s'. Stderr: %s",
+                    os.path.basename(image_path),
+                    result.stderr.decode(),
                 )
                 return False
 
         except Exception as e:
-            logging.error(
-                f"[ImageRotator] Error in lossless JPEG rotation for {os.path.basename(image_path)}: {e}"
+            logger.error(
+                "Error during lossless JPEG rotation for '%s': %s",
+                os.path.basename(image_path),
+                e,
+                exc_info=True,
             )
             return False
         finally:
@@ -243,14 +250,17 @@ class ImageRotator:
                     pass
 
                 rotated.save(image_path, format=img.format, **save_kwargs)
-                logging.info(
-                    f"[ImageRotator] Standard rotation successful: {os.path.basename(image_path)}"
+                logger.info(
+                    f"Standard rotation successful for: {os.path.basename(image_path)}."
                 )
                 return True
 
         except Exception as e:
-            logging.error(
-                f"[ImageRotator] Error in standard rotation for {os.path.basename(image_path)}: {e}"
+            logger.error(
+                "Error during standard rotation for '%s': %s",
+                os.path.basename(image_path),
+                e,
+                exc_info=True,
             )
             return False
 
@@ -272,13 +282,13 @@ class ImageRotator:
                 # Update EXIF orientation
                 try:
                     img.modify_exif({"Exif.Image.Orientation": str(new_orientation)})
-                    logging.debug(
-                        f"[ImageRotator] Updated EXIF orientation for {os.path.basename(image_path)} using pyexiv2"
+                    logger.debug(
+                        f"Updated EXIF orientation for {os.path.basename(image_path)} using pyexiv2."
                     )
                     pyexiv2_success = True
                 except Exception as e:
-                    logging.warning(
-                        f"[ImageRotator] pyexiv2 could not update EXIF orientation for {os.path.basename(image_path)}: {e}"
+                    logger.warning(
+                        f"pyexiv2 could not update EXIF orientation for '{os.path.basename(image_path)}': {e}"
                     )
 
                 # Try to set XMP orientation if the format typically supports it via pyexiv2
@@ -290,28 +300,30 @@ class ImageRotator:
                             img.modify_xmp(
                                 {"Xmp.tiff.Orientation": str(new_orientation)}
                             )
-                            logging.debug(
-                                f"[ImageRotator] Updated XMP orientation for {os.path.basename(image_path)} using pyexiv2"
+                            logger.debug(
+                                f"Updated XMP orientation for {os.path.basename(image_path)} using pyexiv2."
                             )
                             pyexiv2_success = True
                     except Exception as e:
-                        logging.debug(
-                            f"[ImageRotator] pyexiv2 XMP orientation not updated for {os.path.basename(image_path)}: {e}"
+                        logger.debug(
+                            f"pyexiv2 XMP orientation not updated for '{os.path.basename(image_path)}': {e}"
                         )
 
         except Exception as e:
-            logging.warning(
-                f"[ImageRotator] pyexiv2 could not open/process {os.path.basename(image_path)} for metadata update: {e}"
+            logger.warning(
+                f"pyexiv2 could not process '{os.path.basename(image_path)}' for metadata update: {e}"
             )
 
         if pyexiv2_success:
-            logging.info(
-                f"[ImageRotator] Orientation metadata updated to {new_orientation}: {os.path.basename(image_path)}"
+            logger.info(
+                f"Orientation metadata for '%s' updated to %d.",
+                os.path.basename(image_path),
+                new_orientation,
             )
             return True
         else:
-            logging.warning(
-                f"[ImageRotator] Failed to update orientation metadata for {os.path.basename(image_path)} using pyexiv2."
+            logger.warning(
+                f"Failed to update orientation metadata for '{os.path.basename(image_path)}' using pyexiv2."
             )
             return False
 
@@ -326,15 +338,15 @@ class ImageRotator:
             # 1. Read existing EXIF data using pillow-heif
             with Image.open(image_path) as img:
                 if not isinstance(img, HeifImageFile):
-                    logging.warning(
-                        f"[ImageRotator] Not a HEIF/HEIC file, cannot use pillow-heif specific update: {os.path.basename(image_path)}"
+                    logger.warning(
+                        f"Cannot use HEIF-specific update for non-HEIF file: {os.path.basename(image_path)}"
                     )
                     return False
 
                 exif_bytes = img.info.get("exif")
                 if not exif_bytes:
-                    logging.warning(
-                        f"[ImageRotator] No EXIF data found in {os.path.basename(image_path)}. Cannot update orientation."
+                    logger.warning(
+                        f"No EXIF data found in '{os.path.basename(image_path)}'. Cannot update orientation."
                     )
                     return False
 
@@ -347,14 +359,15 @@ class ImageRotator:
             # This should modify the EXIF block in-place without re-encoding the image data.
             piexif.insert(new_exif_bytes, image_path)
 
-            logging.info(
-                f"[ImageRotator] Lossless HEIF/HEIC metadata update successful using piexif.insert: {os.path.basename(image_path)}"
+            logger.info(
+                f"Lossless HEIF/HEIC metadata update successful for: {os.path.basename(image_path)}."
             )
             return True
 
         except Exception as e:
-            logging.error(
-                f"[ImageRotator] Error updating HEIF/HEIC orientation with piexif.insert for {os.path.basename(image_path)}: {e}"
+            logger.error(
+                f"Error updating HEIF/HEIC orientation for '{os.path.basename(image_path)}': {e}",
+                exc_info=True,
             )
             return False
 
@@ -395,8 +408,8 @@ class ImageRotator:
             current_orientation, direction
         )
 
-        logging.info(
-            f"[ImageRotator] Rotating {filename} {direction} (orientation: {current_orientation} -> {new_orientation})"
+        logger.info(
+            f"Rotating '{filename}' {direction} (Orientation: {current_orientation} -> {new_orientation})"
         )
 
         success = False
@@ -447,11 +460,10 @@ class ImageRotator:
 
         if success:
             message = f"Successfully rotated {filename} {direction} using {method_used} method"
-            logging.info(f"[ImageRotator] {message}")
+            logger.info(message)
             return True, message
         else:
-            message = f"Failed to rotate {filename}"
-            logging.error(f"[ImageRotator] {message}")
+            logger.error("Rotation failed for %s: %s", filename, message)
             return False, message
 
     def rotate_clockwise(
@@ -519,7 +531,7 @@ class ImageRotator:
 
         if success:
             message = f"Successfully rotated {filename} {direction} using metadata-only (lossless)"
-            logging.info(f"[ImageRotator] {message}")
+            logger.info(message)
             return True, False, message
         else:
             # Check if this format supports pixel rotation as a fallback

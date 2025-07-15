@@ -1,5 +1,7 @@
 import time
-import logging  # Added for startup logging
+import logging
+
+logger = logging.getLogger(__name__)
 from src.ui.advanced_image_viewer import SynchronizedImageViewer
 from PyQt6.QtWidgets import (
     QMainWindow,
@@ -156,37 +158,23 @@ class MainWindow(QMainWindow):
     def __init__(self, initial_folder=None):
         super().__init__()
         init_start_time = time.perf_counter()
-        logging.info("MainWindow.__init__ - Start")
+        logger.debug("Initializing MainWindow...")
         self.initial_folder = initial_folder
-        self._is_syncing_selection = False  # Flag to prevent selection signal loops
+        self._is_syncing_selection = False
 
         self.image_pipeline = ImagePipeline()
-        logging.info(
-            f"MainWindow.__init__ - ImagePipeline instantiated: {time.perf_counter() - init_start_time:.4f}s"
-        )
         self.app_state = AppState()
-        logging.info(
-            f"MainWindow.__init__ - AppState instantiated: {time.perf_counter() - init_start_time:.4f}s"
-        )
         self.worker_manager = WorkerManager(
             image_pipeline_instance=self.image_pipeline, parent=self
         )
-        logging.info(
-            f"MainWindow.__init__ - WorkerManager instantiated: {time.perf_counter() - init_start_time:.4f}s"
-        )
         self.dialog_manager = DialogManager(self)
-        logging.info(
-            f"MainWindow.__init__ - DialogManager instantiated: {time.perf_counter() - init_start_time:.4f}s"
-        )
         self.app_controller = AppController(
             main_window=self,
             app_state=self.app_state,
             worker_manager=self.worker_manager,
             parent=self,
         )
-        logging.info(
-            f"MainWindow.__init__ - AppController instantiated: {time.perf_counter() - init_start_time:.4f}s"
-        )
+        logger.debug("Core components initialized.")
 
         self.setWindowTitle("PhotoSort")
         self.setGeometry(100, 100, 1200, 800)
@@ -194,7 +182,6 @@ class MainWindow(QMainWindow):
         self.loading_overlay = None
         self.metadata_sidebar = None
         self.sidebar_visible = False
-
         self.thumbnail_delegate = None
         self.show_folders_mode = False
         self.group_by_similarity_mode = False
@@ -203,7 +190,6 @@ class MainWindow(QMainWindow):
         self.blur_detection_threshold = 100.0
         self.rotation_suggestions = {}
 
-        # Create filter controls first (needed by menu creation)
         self.filter_combo = QComboBox()
         self.filter_combo.addItems(
             [
@@ -216,58 +202,30 @@ class MainWindow(QMainWindow):
                 "5 Stars",
             ]
         )
-
         self.cluster_filter_combo = QComboBox()
         self.cluster_filter_combo.addItems(["All Clusters"])
         self.cluster_filter_combo.setEnabled(False)
         self.cluster_filter_combo.setToolTip("Filter images by similarity cluster")
-
         self.cluster_sort_combo = QComboBox()
         self.cluster_sort_combo.addItems(["Time", "Similarity then Time"])
         self.cluster_sort_combo.setEnabled(False)
         self.cluster_sort_combo.setToolTip(
             "Order of clusters when 'Group by Similarity' is active"
         )
+        logger.debug("Filter controls created.")
 
-        section_start_time = time.perf_counter()
         self.menu_manager = MenuManager(self)
         self.menu_manager.create_menus(self.menuBar())
-        logging.info(
-            f"MainWindow.__init__ - MenuManager created: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)"
-        )
-
-        section_start_time = time.perf_counter()
         self._create_widgets()
-        logging.info(
-            f"MainWindow.__init__ - _create_widgets done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)"
-        )
-
-        section_start_time = time.perf_counter()
         self._create_layout()
-        logging.info(
-            f"MainWindow.__init__ - _create_layout done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)"
-        )
-
-        section_start_time = time.perf_counter()
         self._create_loading_overlay()
-        logging.info(
-            f"MainWindow.__init__ - _create_loading_overlay done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)"
-        )
-
-        section_start_time = time.perf_counter()
         self.left_panel.thumbnail_delegate = self.thumbnail_delegate
         self._connect_signals()
-        logging.info(
-            f"MainWindow.__init__ - _connect_signals done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)"
-        )
+        self._update_image_info_label()
+        logger.debug("UI components and signals initialized.")
 
-        self._update_image_info_label()  # Set initial info label text
-        logging.info(
-            f"MainWindow.__init__ - _update_image_info_label done: {time.perf_counter() - section_start_time:.4f}s (Total: {time.perf_counter() - init_start_time:.4f}s)"
-        )
-
-        logging.info(
-            f"MainWindow.__init__ - End (Total: {time.perf_counter() - init_start_time:.4f}s)"
+        logger.info(
+            f"MainWindow initialization complete in {time.perf_counter() - init_start_time:.2f}s."
         )
 
         # Hide rotation view by default
@@ -318,8 +276,8 @@ class MainWindow(QMainWindow):
                             )
                     except OSError as e:
                         # Log lightly, this can be noisy if many files are temporarily unavailable
-                        logging.debug(
-                            f"Could not get size for {file_data.get('path')} for info label: {e}"
+                        logger.warning(
+                            f"Could not get size for '{file_data.get('path', 'Unknown')}' for info label: {e}"
                         )
                 total_size_mb = current_files_size_bytes / (1024 * 1024)
 
@@ -339,17 +297,17 @@ class MainWindow(QMainWindow):
 
     def _create_loading_overlay(self):
         start_time = time.perf_counter()
-        logging.debug("MainWindow._create_loading_overlay - Start")
+        logger.debug("Creating loading overlay...")
         parent_for_overlay = self
         if parent_for_overlay:
             self.loading_overlay = LoadingOverlay(parent_for_overlay)
             self.loading_overlay.hide()
         else:
-            logging.warning(
-                "Could not create loading overlay, parent widget not available yet."
+            logger.warning(
+                "Could not create loading overlay: parent widget not available."
             )
-        logging.debug(
-            f"MainWindow._create_loading_overlay - End: {time.perf_counter() - start_time:.4f}s"
+        logger.debug(
+            f"Loading overlay created in {time.perf_counter() - start_time:.4f}s"
         )
 
     def show_loading_overlay(self, text="Loading..."):
@@ -489,7 +447,7 @@ class MainWindow(QMainWindow):
     def _create_widgets(self):
         """Create the UI widgets."""
         start_time = time.perf_counter()
-        logging.debug("MainWindow._create_widgets - Start")
+        logger.debug("Creating widgets...")
         self.file_system_model = QStandardItemModel()
         self.proxy_model = CustomFilterProxyModel(self)
         self.proxy_model.setSourceModel(self.file_system_model)
@@ -557,14 +515,12 @@ class MainWindow(QMainWindow):
         # No bottom bar - image info will be shown in status bar only
 
         self.statusBar().showMessage("Ready")
-        logging.debug(
-            f"MainWindow._create_widgets - End: {time.perf_counter() - start_time:.4f}s"
-        )
+        logger.debug(f"Widgets created in {time.perf_counter() - start_time:.4f}s.")
 
     def _create_layout(self):
         """Set up the main window layout."""
         start_time = time.perf_counter()
-        logging.debug("MainWindow._create_layout - Start")
+        logger.debug("Creating layout...")
         central_widget = QWidget()
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -593,13 +549,11 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(main_splitter)
 
         self.setCentralWidget(central_widget)
-        logging.debug(
-            f"MainWindow._create_layout - End: {time.perf_counter() - start_time:.4f}s"
-        )
+        logger.debug(f"Layout created in {time.perf_counter() - start_time:.4f}s.")
 
     def _connect_signals(self):
         start_time = time.perf_counter()
-        logging.debug("MainWindow._connect_signals - Start")
+        logger.debug("Connecting signals...")
         # Connect to the new signals from the advanced viewer
         self.advanced_image_viewer.ratingChanged.connect(self._apply_rating)
         self.advanced_image_viewer.focused_image_changed.connect(
@@ -638,9 +592,7 @@ class MainWindow(QMainWindow):
         self.accept_button.clicked.connect(self._accept_current_rotation)
         self.refuse_button.clicked.connect(self._refuse_current_rotation)
         self.refuse_all_button.clicked.connect(self._refuse_all_rotations)
-        logging.debug(
-            f"MainWindow._connect_signals - End: {time.perf_counter() - start_time:.4f}s"
-        )
+        logger.debug(f"Signals connected in {time.perf_counter() - start_time:.4f}s.")
 
     # def _connect_rating_actions(self):
     #     for rating_value, action in self.menu_manager.rating_actions.items():
@@ -965,53 +917,32 @@ class MainWindow(QMainWindow):
                     viewer.update_rating_display(rating)
 
     def _log_qmodelindex(self, index: QModelIndex, prefix: str = "") -> str:
-        if not hasattr(self, "proxy_model") or not hasattr(
-            self, "file_system_model"
-        ):  # Models might not be initialized yet
-            if not index.isValid():
-                return f"{prefix} Invalid QModelIndex (models not ready)"
-            return f"{prefix} QModelIndex(row={index.row()}, col={index.column()}, valid={index.isValid()}) (models not ready)"
+        if not hasattr(self, "proxy_model") or not hasattr(self, "file_system_model"):
+            return f"{prefix} Invalid QModelIndex (models not initialized)"
 
         if not index.isValid():
             return f"{prefix} Invalid QModelIndex"
 
         source_index = self.proxy_model.mapToSource(index)
-        item_text = "N/A (source invalid)"
-        user_data_str = "N/A (source invalid)"
+        item_text = "N/A"
 
         if source_index.isValid():
             item = self.file_system_model.itemFromIndex(source_index)
             if item:
                 item_text = item.text()
-                user_data = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(user_data, dict) and "path" in user_data:
-                    user_data_str = f"path: {os.path.basename(user_data['path'])}"
-                elif isinstance(user_data, str):  # For group headers etc.
-                    user_data_str = f"str_data: '{user_data}'"
-                elif user_data is None:
-                    user_data_str = "None"
-                else:
-                    user_data_str = f"type: {type(user_data)}"
-            else:  # item is None
-                item_text = "N/A (item is None)"
-                user_data_str = "N/A (item is None)"
 
-        return f"{prefix} QModelIndex(proxy_row={index.row()}, proxy_col={index.column()}, text='{item_text}', user_data='{user_data_str}', proxy_valid={index.isValid()}, source_valid={source_index.isValid()})"
+        return f"{prefix} (Row: {index.row()}, Text: '{item_text}')"
 
     def _is_valid_image_item(self, proxy_index: QModelIndex) -> bool:
-        # logging.debug(f"IS_VALID_IMAGE_ITEM: Checking {self._log_qmodelindex(proxy_index)}")
         if not proxy_index.isValid():
-            # logging.debug(f"IS_VALID_IMAGE_ITEM: Proxy index invalid.")
             return False
 
         source_index = self.proxy_model.mapToSource(proxy_index)
         if not source_index.isValid():
-            # logging.debug(f"IS_VALID_IMAGE_ITEM: Source index invalid for proxy {proxy_index.row()}.")
             return False
 
         item = self.file_system_model.itemFromIndex(source_index)
         if not item:
-            # logging.debug(f"IS_VALID_IMAGE_ITEM: Item from source index is None.")
             return False
 
         item_user_data = item.data(Qt.ItemDataRole.UserRole)
@@ -1021,7 +952,6 @@ class MainWindow(QMainWindow):
             and os.path.isfile(item_user_data["path"])
         )
 
-        # logging.debug(f"IS_VALID_IMAGE_ITEM: Result for {os.path.basename(item_user_data.get('path', 'N/A')) if isinstance(item_user_data, dict) else 'NonDictUserData'}: {is_image}")
         return is_image
 
     def _get_active_file_view(self):
@@ -1116,12 +1046,9 @@ class MainWindow(QMainWindow):
         if not active_view:
             return
 
-        visible_paths_before_delete = self._get_all_visible_image_paths()
-        logging.debug(
-            f"MDIT: Visible paths before delete ({len(visible_paths_before_delete)}): {visible_paths_before_delete[:5]}..."
-        )
+        # This function is complex. Let's add more targeted debug logs.
+        logger.debug("Initiating file deletion process.")
 
-        # Get the full selection from the view first, as this is our context for post-deletion navigation.
         self.original_selection_paths = self._get_selected_file_paths_from_view()
 
         # Check if we are in a focused view. If so, we only target that one image for deletion.
@@ -1134,11 +1061,10 @@ class MainWindow(QMainWindow):
 
         if self.was_focused_delete:
             deleted_file_paths = [focused_path_to_delete]
-            logging.info(
-                f"Deletion action focused on single image: {os.path.basename(focused_path_to_delete)}"
+            logger.debug(
+                f"Deleting focused image: {os.path.basename(focused_path_to_delete)}"
             )
         else:
-            # Not a focused view, delete all selected items from original selection
             deleted_file_paths = self.original_selection_paths
 
         if not deleted_file_paths:
@@ -1211,13 +1137,9 @@ class MainWindow(QMainWindow):
                 deleted_count += 1
             except Exception as e:
                 # Log the error to terminal as well for easier debugging
-                logging.error(
-                    f"Error moving '{file_name_to_delete}' to trash: {e}", exc_info=True
-                )
-                QMessageBox.warning(
-                    self,
-                    "Delete Error",
-                    f"Error moving '{file_name_to_delete}' to trash: {e}",
+                logger.error(f"Error moving file to trash: {e}", exc_info=True)
+                self.dialog_manager.show_error_dialog(
+                    "Delete Error", f"Could not move {file_name_to_delete} to trash."
                 )
                 # Optionally, break or continue if one file fails
 
@@ -1225,8 +1147,8 @@ class MainWindow(QMainWindow):
             # Check and remove empty group headers
             # Iterate over a list copy as we might modify the underlying structure
             parents_to_check_for_emptiness = list(affected_source_parent_items)
-            logging.debug(
-                f"MDIT: Checking {len(parents_to_check_for_emptiness)} parent items for emptiness after deletions."
+            logger.debug(
+                f"Checking {len(parents_to_check_for_emptiness)} parent groups for emptiness after deletion."
             )
 
             for parent_item_candidate in parents_to_check_for_emptiness:
@@ -1237,8 +1159,8 @@ class MainWindow(QMainWindow):
                 if (
                     parent_item_candidate.model() is None
                 ):  # Already removed (e.g. child of another removed empty group)
-                    logging.debug(
-                        f"MDIT: Parent candidate '{parent_item_candidate.text()}' no longer in model, skipping."
+                    logger.debug(
+                        f"Parent candidate '{parent_item_candidate.text()}' is no longer in the model, skipping."
                     )
                     continue
 
@@ -1280,8 +1202,8 @@ class MainWindow(QMainWindow):
                             f"'{actual_parent_qstandarditem.text()}'"
                         )
 
-                    logging.debug(
-                        f"MDIT: Attempting to remove empty group header: '{parent_item_candidate.text()}' (item_row {item_row}) from parent {parent_display_name_for_log}"
+                    logger.debug(
+                        f"Removing empty group header '{parent_item_candidate.text()}' (row {item_row}) from parent {parent_display_name_for_log}"
                     )
 
                     # Use takeRow on the QStandardItem that is the actual parent in the model hierarchy
@@ -1290,12 +1212,12 @@ class MainWindow(QMainWindow):
                     if (
                         removed_items_list
                     ):  # takeRow returns a list of QStandardItems removed
-                        logging.debug(
-                            f"MDIT: Successfully removed '{parent_item_candidate.text()}'."
+                        logger.debug(
+                            f"Removed empty group: '{parent_item_candidate.text()}'."
                         )
                     else:
-                        logging.warning(
-                            f"MDIT: takeRow failed to remove '{parent_item_candidate.text()}' from parent {parent_display_name_for_log} at row {item_row}."
+                        logger.warning(
+                            f"Failed to remove empty group '{parent_item_candidate.text()}' from parent {parent_display_name_for_log} at row {item_row}."
                         )
 
             self.statusBar().showMessage(
@@ -1303,12 +1225,10 @@ class MainWindow(QMainWindow):
             )
             active_view.selectionModel().clearSelection()  # Clear old selection to avoid issues
 
-            logging.debug("MDIT: --- New Post Deletion Selection Logic ---")
-
             # Get the state of the view AFTER deletions have occurred.
             visible_paths_after_delete = self._get_all_visible_image_paths()
-            logging.debug(
-                f"MDIT: Visible paths after delete ({len(visible_paths_after_delete)}): {visible_paths_after_delete[:5]}..."
+            logger.debug(
+                f"{len(visible_paths_after_delete)} visible paths remaining after deletion."
             )
 
             # This flag will be used to determine if our special focused-delete logic handled the selection.
@@ -1320,8 +1240,8 @@ class MainWindow(QMainWindow):
                     for p in self.original_selection_paths
                     if p in visible_paths_after_delete
                 ]
-                logging.debug(
-                    f"Post-focused-delete: {len(remaining_selection_paths)} items remain from original selection."
+                logger.debug(
+                    f"Found {len(remaining_selection_paths)} remaining items from original selection."
                 )
 
                 if remaining_selection_paths:
@@ -1358,7 +1278,7 @@ class MainWindow(QMainWindow):
             # Fallback logic for standard deletion or if focused-delete logic fails to find items
             if not selection_handled_by_focus_logic:
                 if not visible_paths_after_delete:
-                    logging.debug("MDIT: No visible image items left after deletion.")
+                    logger.debug("No visible image items left after deletion.")
                     self.advanced_image_viewer.clear()
                     self.advanced_image_viewer.setText("No images left to display.")
                     self.statusBar().showMessage("No images left or visible.")
@@ -1396,8 +1316,8 @@ class MainWindow(QMainWindow):
                         )
                         # The selection change will trigger _handle_file_selection_changed automatically.
                     else:
-                        logging.debug(
-                            "MDIT: Fallback failed. No valid item to select. Clearing UI."
+                        logger.debug(
+                            "Fallback failed. No valid item to select. Clearing UI."
                         )
                         self.advanced_image_viewer.clear()
                         self.advanced_image_viewer.setText("No valid image to select.")
@@ -1498,7 +1418,7 @@ class MainWindow(QMainWindow):
         return QModelIndex()  # No visible image item found in this subtree
 
     def closeEvent(self, event):
-        logging.info("MainWindow.closeEvent - Stopping all workers.")
+        logger.info("Stopping all workers on application close.")
         self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
         event.accept()
 
@@ -1568,9 +1488,7 @@ class MainWindow(QMainWindow):
         )
 
         if not group_images or local_idx == -1:
-            logging.debug(
-                "NAV_LEFT_IN_GROUP: No group images or current item not found in its group."
-            )
+            logger.debug("Navigate left: No sibling images found in the current group.")
             return
 
         new_local_idx = local_idx - 1
@@ -1583,13 +1501,13 @@ class MainWindow(QMainWindow):
             active_view.scrollTo(
                 new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible
             )
-            logging.debug(
-                f"NAV_LEFT_IN_GROUP: Set current index to {self._log_qmodelindex(new_selection_candidate)}"
+            item = self.file_system_model.itemFromIndex(
+                self.proxy_model.mapToSource(new_selection_candidate)
             )
+            if item:
+                logger.debug(f"Navigated left to: {item.text()}")
         else:
-            logging.debug(
-                f"NAV_LEFT_IN_GROUP: Failed to select new item. local_idx={local_idx}, new_local_idx={new_local_idx}, group_size={len(group_images)}"
-            )
+            logger.debug("Navigate left: Could not select a new item in the group.")
 
     def _navigate_right_in_group(self):
         active_view = self._get_active_file_view()
@@ -1609,8 +1527,8 @@ class MainWindow(QMainWindow):
         )
 
         if not group_images or local_idx == -1:
-            logging.debug(
-                "NAV_RIGHT_IN_GROUP: No group images or current item not found in its group."
+            logger.debug(
+                "Navigate right: No sibling images found in the current group."
             )
             return
 
@@ -1626,24 +1544,21 @@ class MainWindow(QMainWindow):
             active_view.scrollTo(
                 new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible
             )
-            logging.debug(
-                f"NAV_RIGHT_IN_GROUP: Set current index to {self._log_qmodelindex(new_selection_candidate)}"
+            item = self.file_system_model.itemFromIndex(
+                self.proxy_model.mapToSource(new_selection_candidate)
             )
+            if item:
+                logger.debug(f"Navigated right to: {item.text()}")
         else:
-            logging.debug(
-                f"NAV_RIGHT_IN_GROUP: Failed to select new item. local_idx={local_idx}, new_local_idx={new_local_idx}, group_size={len(group_images)}"
-            )
+            logger.debug("Navigate right: Could not select a new item in the group.")
 
     def _navigate_up_sequential(self):  # Renamed from _navigate_previous
         active_view = self._get_active_file_view()
         if not active_view:
-            logging.debug("NAV_UP_SEQ: No active view.")
+            logger.debug("Navigate up: No active view found.")
             return
 
         current_proxy_idx = active_view.currentIndex()
-        logging.debug(
-            f"NAV_UP_SEQ: Start. Current Index: {self._log_qmodelindex(current_proxy_idx, 'current_proxy_idx')}"
-        )
 
         if not current_proxy_idx.isValid():
             last_item_index = self._find_last_visible_item()
@@ -1673,9 +1588,6 @@ class MainWindow(QMainWindow):
             prev_visual_idx = active_view.indexAbove(iter_idx)
 
             if not prev_visual_idx.isValid():
-                logging.debug(
-                    "NAV_UP_SEQ: Reached top of view (indexAbove returned invalid)."
-                )
                 break
 
             if self._is_valid_image_item(
@@ -1694,9 +1606,11 @@ class MainWindow(QMainWindow):
 
                 # If not marked, this is our item
                 new_selection_candidate = prev_visual_idx
-                logging.debug(
-                    f"NAV_UP_SEQ: Found image item directly above: {self._log_qmodelindex(new_selection_candidate)}"
+                item = self.file_system_model.itemFromIndex(
+                    self.proxy_model.mapToSource(new_selection_candidate)
                 )
+                if item:
+                    logger.debug(f"Navigated up to: {item.text()}")
                 break
             elif isinstance(active_view, QTreeView) and self._is_expanded_group_header(
                 active_view, prev_visual_idx
@@ -1711,42 +1625,29 @@ class MainWindow(QMainWindow):
                     )
                     if last_in_group.isValid():
                         new_selection_candidate = last_in_group
-                        # logging.debug(f"NAV_UP_SEQ: Found last image in a NEW group above: {self._log_qmodelindex(new_selection_candidate)}")
                         break
-                # Else (iter_idx.parent() == prev_visual_idx), prev_visual_idx is the header of the group iter_idx is in.
-                # We are moving out of this group. So, we don't enter it again from the bottom.
-                # The iter_idx = prev_visual_idx line below will handle moving past this header.
 
             iter_idx = prev_visual_idx
             if iteration_count == max_iterations - 1:  # Safety break
-                logging.warning("NAV_UP_SEQ: Max iterations reached during search.")
+                logger.warning("Navigate up: Max iterations reached, aborting.")
 
         if new_selection_candidate.isValid():
             active_view.setCurrentIndex(new_selection_candidate)
             active_view.scrollTo(
                 new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible
             )
-            # logging.debug(f"NAV_UP_SEQ: Set current index to {self._log_qmodelindex(new_selection_candidate)}")
         else:
-            # logging.debug("NAV_UP_SEQ: No valid previous image item found after search.")
-            pass
+            logger.debug("Navigate up: No previous image found.")
 
     def _navigate_down_sequential(self):  # Renamed from _navigate_next
         active_view = self._get_active_file_view()
         if not active_view:
-            logging.debug("NAV_DOWN_SEQ: No active view.")
+            logger.debug("Navigate down: No active view found.")
             return
 
         current_index = active_view.currentIndex()
-        logging.debug(
-            f"NAV_DOWN_SEQ: Start. Current Index: {self._log_qmodelindex(current_index, 'current_index')}"
-        )
-
         if not current_index.isValid():
             first_item_index = self._find_first_visible_item()
-            logging.debug(
-                f"NAV_DOWN_SEQ: Current index invalid, found first item: {self._log_qmodelindex(first_item_index, 'first_item_index')}"
-            )
             if first_item_index.isValid():
                 active_view.setCurrentIndex(first_item_index)
                 active_view.scrollTo(
@@ -1774,9 +1675,6 @@ class MainWindow(QMainWindow):
 
             # 2. If we're at the end, stop searching
             if not temp_index.isValid():
-                logging.debug(
-                    "NAV_DOWN_SEQ: temp_index became invalid (end of list/parent)."
-                )
                 break
 
             # 3. Check if this new item is a valid image
@@ -1800,57 +1698,40 @@ class MainWindow(QMainWindow):
 
                     # 6. If it passes all checks, we've found our target
                     next_item_index = temp_index
-                    logging.debug(
-                        f"NAV_DOWN_SEQ: Found valid next image item: {self._log_qmodelindex(next_item_index, 'next_item_index')}"
+                    item = self.file_system_model.itemFromIndex(
+                        self.proxy_model.mapToSource(next_item_index)
                     )
+                    if item:
+                        logger.debug(f"Navigated down to: {item.text()}")
                     break  # Exit the search loop
 
         if iteration_count >= safety_iteration_limit:
-            logging.warning(
-                f"NAV_DOWN_SEQ: Hit safety iteration limit ({safety_iteration_limit})."
-            )
+            logger.warning("Navigate down: Max iterations reached, aborting.")
 
         if next_item_index.isValid():
             active_view.setCurrentIndex(next_item_index)
             active_view.scrollTo(
                 next_item_index, QAbstractItemView.ScrollHint.EnsureVisible
             )
-            logging.debug(
-                f"NAV_DOWN_SEQ: Set current index to {self._log_qmodelindex(next_item_index)}"
-            )
         else:
-            logging.debug("NAV_DOWN_SEQ: No valid next image item found.")
+            logger.debug("Navigate down: No next image found.")
 
     def _find_first_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
         if not active_view:
-            logging.debug("_find_first_visible_item: No active view")
             return QModelIndex()
-
-        logging.debug(
-            f"_find_first_visible_item: Start, active_view type: {type(active_view).__name__}"
-        )
 
         proxy_model = active_view.model()
         if not isinstance(proxy_model, QSortFilterProxyModel):
-            logging.debug(
-                f"_find_first_visible_item: Model is not QSortFilterProxyModel: {type(proxy_model)}"
-            )
             return QModelIndex()
 
         root_proxy_index = QModelIndex()
         proxy_row_count = proxy_model.rowCount(root_proxy_index)
-        logging.debug(
-            f"[DEBUG] _find_first_visible_item: {proxy_row_count} top-level rows in proxy model"
-        )
-
         if isinstance(active_view, QTreeView):
-            logging.debug("_find_first_visible_item: Using TreeView logic")
             q = [
                 proxy_model.index(r, 0, root_proxy_index)
                 for r in range(proxy_row_count)
             ]
-            logging.debug(f"_find_first_visible_item: Initial queue size: {len(q)}")
 
             head = 0
             while head < len(q):
@@ -1859,20 +1740,11 @@ class MainWindow(QMainWindow):
                 if not current_proxy_idx.isValid():
                     continue
 
-                logging.debug(
-                    f"_find_first_visible_item: Checking row {current_proxy_idx.row()}"
-                )
-
                 if not active_view.isRowHidden(
                     current_proxy_idx.row(), current_proxy_idx.parent()
                 ):
                     if self._is_valid_image_item(current_proxy_idx):
-                        logging.debug(
-                            f"[DEBUG] _find_first_visible_item: Found first valid image at row {current_proxy_idx.row()}"
-                        )
                         return current_proxy_idx
-
-                    # Check if it's an expanded group with children
                     source_idx_for_children_check = proxy_model.mapToSource(
                         current_proxy_idx
                     )
@@ -1883,56 +1755,28 @@ class MainWindow(QMainWindow):
                                 source_idx_for_children_check
                             )
                         )
-
                     if (
                         item_for_children_check
                         and proxy_model.hasChildren(current_proxy_idx)
                         and active_view.isExpanded(current_proxy_idx)
                     ):
-                        logging.debug(
-                            f"[DEBUG] _find_first_visible_item: Row {current_proxy_idx.row()} is expanded, adding children"
-                        )
                         for child_row in range(proxy_model.rowCount(current_proxy_idx)):
                             q.append(proxy_model.index(child_row, 0, current_proxy_idx))
-                else:
-                    logging.debug(
-                        f"[DEBUG] _find_first_visible_item: Row {current_proxy_idx.row()} is hidden"
-                    )
-
-            logging.debug(
-                "[DEBUG] _find_first_visible_item: No visible image item found in TreeView"
-            )
             return QModelIndex()
-
         elif isinstance(active_view, QListView):
-            logging.debug("[DEBUG] _find_first_visible_item: Using ListView logic")
             for r in range(proxy_row_count):
                 proxy_idx = proxy_model.index(r, 0, root_proxy_index)
-                logging.debug(
-                    f"[DEBUG] _find_first_visible_item: Checking ListView row {r}"
-                )
                 if self._is_valid_image_item(proxy_idx):
-                    logging.debug(
-                        f"[DEBUG] _find_first_visible_item: Found first valid image at ListView row {r}"
-                    )
                     return proxy_idx
-
-            logging.debug(
-                "[DEBUG] _find_first_visible_item: No visible image item found in ListView"
-            )
             return QModelIndex()
-
-        logging.debug("[DEBUG] _find_first_visible_item: Unknown view type")
         return QModelIndex()
 
     def _find_last_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
         if not active_view:
             return QModelIndex()
-        logging.debug("FIND_LAST: Start")
         proxy_model = active_view.model()
         if not isinstance(proxy_model, QSortFilterProxyModel):
-            logging.debug("FIND_LAST: Model is not QSortFilterProxyModel.")
             return QModelIndex()
 
         root_proxy_index = QModelIndex()
@@ -1987,9 +1831,6 @@ class MainWindow(QMainWindow):
                     ):
                         for child_row in range(proxy_model.rowCount(current_proxy_idx)):
                             q.append(proxy_model.index(child_row, 0, current_proxy_idx))
-            logging.debug(
-                f"FIND_LAST (Tree): Traversed all, last valid found: {self._log_qmodelindex(last_found_valid_image)}"
-            )
             return last_found_valid_image
 
         elif isinstance(active_view, QListView):
@@ -1997,16 +1838,12 @@ class MainWindow(QMainWindow):
                 proxy_model.rowCount(root_proxy_index) - 1, -1, -1
             ):  # Iterate backwards
                 proxy_idx = proxy_model.index(r, 0, root_proxy_index)
-                # logging.debug(f"FIND_LAST (List): Checking row {r}: {self._log_qmodelindex(proxy_idx)}")
                 if self._is_valid_image_item(proxy_idx):
-                    logging.debug(
-                        f"FIND_LAST (List): Found last at row {r}: {self._log_qmodelindex(proxy_idx)}"
-                    )
                     return proxy_idx
-            logging.debug("FIND_LAST (List): No visible image item found.")
+            logger.debug("Find last item (List): No visible image item found.")
             return QModelIndex()
 
-        logging.debug("FIND_LAST: Unknown view type or scenario.")
+        logger.debug("Find last item: Unknown view type or scenario.")
         return QModelIndex()
 
     def _get_all_visible_image_paths(self) -> List[str]:
@@ -2019,8 +1856,8 @@ class MainWindow(QMainWindow):
         proxy_model = active_view.model()
         # Ensure model is a QSortFilterProxyModel, as it holds the filtered/sorted view
         if not isinstance(proxy_model, QSortFilterProxyModel):
-            logging.warning(
-                "_get_all_visible_image_paths: Active view's model is not QSortFilterProxyModel."
+            logger.warning(
+                "Cannot get visible paths: Active view's model is not a QSortFilterProxyModel."
             )
             return paths
 
@@ -2084,8 +1921,8 @@ class MainWindow(QMainWindow):
 
         proxy_model = active_view.model()
         if not isinstance(proxy_model, QSortFilterProxyModel):
-            logging.warning(
-                "_find_proxy_index_for_path: Active view's model is not QSortFilterProxyModel."
+            logger.warning(
+                "Cannot find proxy index: Active view's model is not a QSortFilterProxyModel."
             )
             return QModelIndex()
 
@@ -2166,7 +2003,7 @@ class MainWindow(QMainWindow):
     ) -> Optional[Dict[str, Any]]:
         """Gets metadata from AppState caches. Assumes caches are populated by RatingLoaderWorker."""
         if not os.path.isfile(file_path):
-            logging.warning(
+            logger.warning(
                 f"[_get_cached_metadata_for_selection] File not found: {file_path}"
             )
             return None
@@ -2185,9 +2022,7 @@ class MainWindow(QMainWindow):
         self, file_path: str, file_data_from_model: Optional[Dict[str, Any]]
     ):
         """Handles displaying preview and info for a single selected image."""
-        logging.info(
-            f"Showing image: {os.path.basename(file_path)} (path: {file_path})"
-        )
+        logger.debug(f"Displaying single image preview: {os.path.basename(file_path)}")
         if not os.path.exists(file_path):
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage(
@@ -2241,9 +2076,7 @@ class MainWindow(QMainWindow):
         preserve_side_by_side: bool,
     ):
         """Handles displaying preview after rotation, preserving view mode."""
-        logging.info(
-            f"Showing rotated image: {os.path.basename(file_path)} (path: {file_path})"
-        )
+        logger.debug(f"Displaying rotated image preview: {os.path.basename(file_path)}")
         if not os.path.exists(file_path):
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage(
@@ -2334,9 +2167,7 @@ class MainWindow(QMainWindow):
 
     def _display_multi_selection_info(self, selected_paths: List[str]):
         """Handles UI updates when multiple images are selected."""
-        logging.info(
-            f"Showing multiple images: {', '.join(map(os.path.basename, selected_paths))}"
-        )
+        logger.debug(f"Displaying {len(selected_paths)} images side-by-side.")
         if not selected_paths:
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage("No items selected.")
@@ -2409,7 +2240,7 @@ class MainWindow(QMainWindow):
                             f"Comparing {len(images_data_for_viewer)} images. Similarity (first 2): {similarity:.4f}"
                         )
                     except Exception as e:
-                        logging.error(f"Error calculating similarity: {e}")
+                        logger.error(f"Error calculating similarity: {e}")
                 else:
                     self.statusBar().showMessage(
                         f"Comparing {len(images_data_for_viewer)} images."
@@ -2451,7 +2282,7 @@ class MainWindow(QMainWindow):
 
         if override_selected_paths is not None:
             selected_file_paths = override_selected_paths
-            logging.debug(
+            logger.debug(
                 f"_handle_file_selection_changed: Using overridden selection of {len(selected_file_paths)} paths."
             )
         else:
@@ -2460,6 +2291,7 @@ class MainWindow(QMainWindow):
         if not self.app_state.image_files_data:
             return
 
+        # In rotation view, update the accept/refuse buttons based on selection
         if self.left_panel.current_view_mode == "rotation":
             num_suggestions = len(self.rotation_suggestions)
             self.accept_all_button.setVisible(num_suggestions > 1)
@@ -2528,7 +2360,7 @@ class MainWindow(QMainWindow):
     def _apply_filter(self):
         # Guard: Don't apply filters if no images are loaded yet
         if not self.app_state.image_files_data:
-            logging.debug("_apply_filter called but no images loaded, skipping")
+            logger.debug("_apply_filter called but no images loaded, skipping")
             return
 
         search_text = self.left_panel.search_input.text().lower()
@@ -2562,11 +2394,11 @@ class MainWindow(QMainWindow):
         # Rest of your existing code...
 
     def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
-        logging.info(
+        logger.info(
             f"<<< ENTRY >>> _start_preview_preloader called with {len(image_data_list)} items."
         )
         if not image_data_list:
-            logging.info(
+            logger.info(
                 "_start_preview_preloader: image_data_list is empty. Hiding overlay."
             )
             self.hide_loading_overlay()
@@ -2577,12 +2409,12 @@ class MainWindow(QMainWindow):
             for fd in image_data_list
             if fd and isinstance(fd, dict) and "path" in fd
         ]
-        logging.info(
+        logger.info(
             f"_start_preview_preloader: Extracted {len(paths_for_preloader)} paths for preloader."
         )
 
         if not paths_for_preloader:
-            logging.info(
+            logger.info(
                 "_start_preview_preloader: No valid paths_for_preloader. Hiding overlay."
             )
             self.hide_loading_overlay()
@@ -2591,26 +2423,26 @@ class MainWindow(QMainWindow):
         self.update_loading_text(
             f"Preloading previews ({len(paths_for_preloader)} images)..."
         )
-        logging.info(
+        logger.info(
             f"_start_preview_preloader: Calling worker_manager.start_preview_preload for {len(paths_for_preloader)} paths."
         )
         try:
-            logging.info(
+            logger.info(
                 f"_start_preview_preloader: --- CALLING --- worker_manager.start_preview_preload for {len(paths_for_preloader)} paths."
             )
             self.worker_manager.start_preview_preload(
                 paths_for_preloader, self.apply_auto_edits_enabled
             )
-            logging.info(
+            logger.info(
                 "_start_preview_preloader: --- RETURNED --- worker_manager.start_preview_preload call successful."
             )
         except Exception as e_preview_preload:
-            logging.error(
+            logger.error(
                 f"_start_preview_preloader: Error calling worker_manager.start_preview_preload: {e_preview_preload}",
                 exc_info=True,
             )
             self.hide_loading_overlay()  # Ensure overlay is hidden on error
-        logging.info("<<< EXIT >>> _start_preview_preloader.")
+        logger.info("<<< EXIT >>> _start_preview_preloader.")
 
     # Slot for WorkerManager's file_scan_thumbnail_preload_finished signal
     # This signal is now deprecated in favor of chaining after rating load.
@@ -2620,15 +2452,13 @@ class MainWindow(QMainWindow):
         # Now, preview preloading is kicked off after rating loading finishes.
         # self.update_loading_text("Thumbnails preloaded. Starting preview preloading...")
         # self._start_preview_preloader(all_file_data)
-        logging.debug(
-            "_handle_thumbnail_preload_finished called (now largely deprecated by rating load chain)"
-        )
+        logger.debug("Thumbnail preload finished (now a deprecated signal).")
         pass  # Intentionally do nothing here, preview starts after rating load now
 
     # --- Rating Loader Worker Handlers ---
     def _handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0
-        logging.debug(
+        logger.debug(
             f"Rating load progress: {percentage}% ({current}/{total}) - {basename}"
         )
         self.update_loading_text(
@@ -2638,7 +2468,7 @@ class MainWindow(QMainWindow):
     def _handle_metadata_batch_loaded(
         self, metadata_batch: List[Tuple[str, Dict[str, Any]]]
     ):
-        logging.debug(f"Metadata batch loaded with {len(metadata_batch)} items.")
+        logger.debug(f"Metadata batch loaded with {len(metadata_batch)} items.")
 
         currently_selected_paths = self._get_selected_file_paths_from_view()
 
@@ -2647,27 +2477,25 @@ class MainWindow(QMainWindow):
             if not metadata:
                 continue
 
-            logging.debug(
+            logger.debug(
                 f"Processing metadata from batch for {os.path.basename(image_path)}: {metadata}"
             )
 
             # Update any visible viewer showing this image
             for viewer in self.advanced_image_viewer.image_viewers:
                 if viewer.isVisible() and viewer._file_path == image_path:
-                    logging.debug(
-                        f"Updating viewer for {os.path.basename(image_path)}."
-                    )
+                    logger.debug(f"Updating viewer for {os.path.basename(image_path)}.")
                     viewer.update_rating_display(metadata.get("rating", 0))
 
             # Check if the processed image is part of the current selection
             if image_path in currently_selected_paths:
-                logging.debug(
+                logger.debug(
                     f"Batch contains a selected item: {os.path.basename(image_path)}. Marking for UI refresh."
                 )
                 needs_active_selection_refresh = True
 
         if needs_active_selection_refresh:
-            logging.debug(
+            logger.debug(
                 "Triggering _handle_file_selection_changed after processing batch due to active item update."
             )
             self._handle_file_selection_changed()
@@ -2676,42 +2504,42 @@ class MainWindow(QMainWindow):
         self._apply_filter()
 
     def _handle_rating_load_finished(self):
-        logging.info(
+        logger.info(
             "_handle_rating_load_finished: Received RatingLoaderWorker.finished signal."
         )
         self.statusBar().showMessage("Background rating loading finished.", 3000)
 
         if not self.app_state.image_files_data:
-            logging.info(
+            logger.info(
                 "_handle_rating_load_finished: No image files data found in app_state. Hiding loading overlay."
             )
             self.hide_loading_overlay()
             return
 
-        logging.info(
+        logger.info(
             "_handle_rating_load_finished: image_files_data found. Preparing to start preview preloader."
         )
         self.update_loading_text("Ratings loaded. Preloading previews...")
         try:
-            logging.info(
+            logger.info(
                 "_handle_rating_load_finished: --- CALLING --- _start_preview_preloader."
             )
             self._start_preview_preloader(
                 self.app_state.image_files_data.copy()
             )  # Pass a copy
-            logging.info(
+            logger.info(
                 "_handle_rating_load_finished: --- RETURNED --- _start_preview_preloader call completed."
             )
         except Exception as e_start_preview:
-            logging.error(
+            logger.error(
                 f"_handle_rating_load_finished: Error calling _start_preview_preloader: {e_start_preview}",
                 exc_info=True,
             )
             self.hide_loading_overlay()  # Ensure overlay is hidden on error
-        logging.info("<<< EXIT >>> _handle_rating_load_finished.")
+        logger.info("<<< EXIT >>> _handle_rating_load_finished.")
 
     def _handle_rating_load_error(self, message: str):
-        logging.error(f"Rating Load Error: {message}")
+        logger.error(f"Rating Load Error: {message}")
         self.statusBar().showMessage(f"Rating Load Error: {message}", 5000)
         # Still proceed to preview preloading even if rating load had errors for some files
         if self.app_state.image_files_data:
@@ -2724,15 +2552,15 @@ class MainWindow(QMainWindow):
 
     # Slot for WorkerManager's preview_preload_progress signal
     def _handle_preview_progress(self, percentage: int, message: str):
-        logging.debug(
+        logger.debug(
             f"<<< ENTRY >>> _handle_preview_progress: {percentage}% - {message}"
         )
         self.update_loading_text(message)
-        logging.debug("<<< EXIT >>> _handle_preview_progress.")
+        logger.debug("<<< EXIT >>> _handle_preview_progress.")
 
     # Slot for WorkerManager's preview_preload_finished signal
     def _handle_preview_finished(self):
-        logging.debug(
+        logger.debug(
             "<<< ENTRY >>> _handle_preview_finished: Received PreviewPreloaderWorker.finished signal."
         )
         auto_edits_status = "enabled" if self.apply_auto_edits_enabled else "disabled"
@@ -2740,7 +2568,7 @@ class MainWindow(QMainWindow):
             f"Previews regenerated with Auto RAW edits {auto_edits_status}.", 5000
         )
         self.hide_loading_overlay()
-        logging.debug("_handle_preview_finished: Loading overlay hidden.")
+        logger.debug("_handle_preview_finished: Loading overlay hidden.")
 
         # Log final cache vs image size
         if self.app_state.current_folder_path:
@@ -2748,31 +2576,31 @@ class MainWindow(QMainWindow):
                 self.app_state.current_folder_path
             )
             preview_cache_size_bytes = self.image_pipeline.preview_cache.volume()
-            logging.info("--- Cache vs. Image Size Diagnostics (Post-Preload) ---")
-            logging.info(
+            logger.info("--- Cache vs. Image Size Diagnostics (Post-Preload) ---")
+            logger.info(
                 f"Total Original Image Size: {total_image_size_bytes / (1024 * 1024):.2f} MB"
             )
-            logging.info(
+            logger.info(
                 f"Final Preview Cache Size: {preview_cache_size_bytes / (1024 * 1024):.2f} MB"
             )
             if total_image_size_bytes > 0:
                 ratio = (preview_cache_size_bytes / total_image_size_bytes) * 100
-                logging.info(f"Cache-to-Image Size Ratio: {ratio:.2f}%")
-            logging.info("---------------------------------------------------------")
+                logger.info(f"Cache-to-Image Size Ratio: {ratio:.2f}%")
+            logger.info("---------------------------------------------------------")
 
         self._update_image_info_label()  # Update UI with final cache size
 
         # WorkerManager handles thread cleanup
-        logging.info("<<< EXIT >>> _handle_preview_finished.")
+        logger.info("<<< EXIT >>> _handle_preview_finished.")
 
     # Slot for WorkerManager's preview_preload_error signal
     def _handle_preview_error(self, message: str):
-        logging.info(f"<<< ENTRY >>> _handle_preview_error: {message}")
-        logging.error(f"Preview Preload Error: {message}")
+        logger.info(f"<<< ENTRY >>> _handle_preview_error: {message}")
+        logger.error(f"Preview Preload Error: {message}")
         self.statusBar().showMessage(f"Preview Preload Error: {message}", 5000)
         self.hide_loading_overlay()
         # WorkerManager handles thread cleanup
-        logging.info("<<< EXIT >>> _handle_preview_error.")
+        logger.info("<<< EXIT >>> _handle_preview_error.")
 
     def _toggle_folder_visibility(self, checked: bool):
         self.show_folders_mode = checked
@@ -2910,7 +2738,7 @@ class MainWindow(QMainWindow):
         return item
 
     def _start_similarity_analysis(self):
-        logging.info("_start_similarity_analysis called.")
+        logger.info("_start_similarity_analysis called.")
         if self.worker_manager.is_similarity_worker_running():
             self.statusBar().showMessage(
                 "Similarity analysis is already in progress.", 3000
@@ -3064,7 +2892,7 @@ class MainWindow(QMainWindow):
                                 np.array(cluster_embeddings, dtype=np.float32), axis=0
                             )
                 except Exception as e:  # Catch potential errors in np.mean, like empty list or dtype issues
-                    logging.error(
+                    logger.error(
                         f"Error calculating centroid for cluster {cluster_id}: {e}"
                     )
                     pass
@@ -3140,7 +2968,7 @@ class MainWindow(QMainWindow):
                             else transformed_centroids[i]
                         )
             except Exception as e:
-                logging.error(f"Error during PCA for cluster sorting: {e}")
+                logger.error(f"Error during PCA for cluster sorting: {e}")
 
         cluster_timestamps = self._get_cluster_timestamps(images_by_cluster, date_cache)
         sortable_clusters = []
@@ -3221,7 +3049,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(status_message, 4000)
 
     def _start_blur_detection_analysis(self):
-        logging.info("_start_blur_detection_analysis called.")
+        logger.info("_start_blur_detection_analysis called.")
         if not self.app_state.image_files_data:
             self.statusBar().showMessage(
                 "No images loaded to analyze for blurriness.", 3000
@@ -3344,7 +3172,7 @@ class MainWindow(QMainWindow):
                 if selected_item == item_to_update:
                     self._handle_file_selection_changed()  # Re-process selection to update main view
         else:
-            logging.warning(
+            logger.warning(
                 f"Could not find QStandardItem for {image_path} to update blur status in UI."
             )
 
@@ -3368,7 +3196,7 @@ class MainWindow(QMainWindow):
         if active_view_from_event is not active_view:
             # This could happen if the event filter is somehow triggered for a non-active view
             # or if keyPressEvent calls this when focus is not on the primary view.
-            logging.warning(
+            logger.warning(
                 "_perform_group_selection_from_key: Event source mismatch with _get_active_file_view()."
             )
             return False  # Don't handle if view context is mismatched
@@ -3671,14 +3499,14 @@ class MainWindow(QMainWindow):
         """Update sidebar with the currently selected image metadata"""
 
         if not self.metadata_sidebar or not self.sidebar_visible:
-            logging.debug(
+            logger.debug(
                 "_update_sidebar_with_current_selection: Sidebar not available or not visible"
             )
             return
 
         active_view = self._get_active_file_view()
         if not active_view:
-            logging.debug("_update_sidebar_with_current_selection: No active view")
+            logger.debug("_update_sidebar_with_current_selection: No active view")
             self.metadata_sidebar.show_placeholder()
             return
 
@@ -3686,7 +3514,7 @@ class MainWindow(QMainWindow):
         if not current_proxy_idx.isValid() or not self._is_valid_image_item(
             current_proxy_idx
         ):
-            logging.debug(
+            logger.debug(
                 "_update_sidebar_with_current_selection: No valid image item selected"
             )
             self.metadata_sidebar.show_placeholder()
@@ -3696,25 +3524,25 @@ class MainWindow(QMainWindow):
         source_idx = self.proxy_model.mapToSource(current_proxy_idx)
         item = self.file_system_model.itemFromIndex(source_idx)
         if not item:
-            logging.warning(
+            logger.warning(
                 "_update_sidebar_with_current_selection: No item from source index"
             )
             return
 
         item_data = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(item_data, dict) or "path" not in item_data:
-            logging.warning("_update_sidebar_with_current_selection: Invalid item data")
+            logger.warning("_update_sidebar_with_current_selection: Invalid item data")
             return
 
         file_path = item_data["path"]
         file_ext = os.path.splitext(file_path)[1].lower()
 
-        logging.info(
+        logger.info(
             f"_update_sidebar_with_current_selection: Processing {os.path.basename(file_path)} (extension: {file_ext})"
         )
 
         if not os.path.exists(file_path):
-            logging.error(
+            logger.error(
                 f"_update_sidebar_with_current_selection: File does not exist: {file_path}"
             )
             return
@@ -3722,17 +3550,17 @@ class MainWindow(QMainWindow):
         # Get cached metadata
         metadata = self._get_cached_metadata_for_selection(file_path)
         if not metadata:
-            logging.warning(
+            logger.warning(
                 f"_update_sidebar_with_current_selection: No cached metadata for {os.path.basename(file_path)}"
             )
             return
 
-        logging.info(
+        logger.info(
             f"_update_sidebar_with_current_selection: Got cached metadata for {os.path.basename(file_path)}: {metadata}"
         )
 
         # Get detailed EXIF data for sidebar - now much cleaner
-        logging.info(
+        logger.info(
             f"_update_sidebar_with_current_selection: Calling get_detailed_metadata for {os.path.basename(file_path)}"
         )
         raw_exif = MetadataProcessor.get_detailed_metadata(
@@ -3740,17 +3568,17 @@ class MainWindow(QMainWindow):
         )
 
         if not raw_exif:
-            logging.warning(
+            logger.warning(
                 f"_update_sidebar_with_current_selection: No raw EXIF data returned for {os.path.basename(file_path)}"
             )
             raw_exif = {}
         else:
-            logging.info(
+            logger.info(
                 f"_update_sidebar_with_current_selection: Got {len(raw_exif)} raw EXIF keys for {os.path.basename(file_path)}"
             )
 
         # Update sidebar
-        logging.info(
+        logger.info(
             f"_update_sidebar_with_current_selection: Updating sidebar for {os.path.basename(file_path)}"
         )
         self.metadata_sidebar.update_metadata(file_path, metadata, raw_exif)
@@ -3761,20 +3589,20 @@ class MainWindow(QMainWindow):
         """Handle successful rotation - update caches and UI."""
         handle_start_time = time.perf_counter()
         filename = os.path.basename(file_path)
-        logging.info(
-            f"HSR: Start for {filename}. Lossy: {is_lossy}. Message: {message}"
+        logger.debug(
+            f"Handling successful rotation for '{filename}' (Lossy: {is_lossy})"
         )
 
         t1 = time.perf_counter()
         self.image_pipeline.preview_cache.delete_all_for_path(file_path)
         self.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
         t2 = time.perf_counter()
-        logging.info(f"HSR: Cache clearing for {filename} took {t2 - t1:.4f}s.")
+        logger.info(f"HSR: Cache clearing for {filename} took {t2 - t1:.4f}s.")
 
         t3 = time.perf_counter()
         proxy_idx = self._find_proxy_index_for_path(file_path)
         t4 = time.perf_counter()
-        logging.info(
+        logger.info(
             f"HSR: _find_proxy_index_for_path for {filename} took {t4 - t3:.4f}s."
         )
 
@@ -3787,45 +3615,45 @@ class MainWindow(QMainWindow):
                     file_path, apply_auto_edits=self.apply_auto_edits_enabled
                 )
                 t6 = time.perf_counter()
-                logging.info(
+                logger.info(
                     f"HSR: get_thumbnail_qpixmap for {filename} took {t6 - t5:.4f}s."
                 )
                 if new_thumbnail:
                     from PyQt6.QtGui import QIcon
 
                     item.setIcon(QIcon(new_thumbnail))
-                    logging.info(f"HSR: Set new icon for {filename}.")
+                    logger.info(f"HSR: Set new icon for {filename}.")
 
         selected_paths = self._get_selected_file_paths_from_view()
         if file_path in selected_paths:
-            logging.info(
+            logger.info(
                 f"HSR: {filename} is in current selection, triggering selection changed handler."
             )
             t7 = time.perf_counter()
             self._handle_file_selection_changed()
             t8 = time.perf_counter()
-            logging.info(f"HSR: _handle_file_selection_changed took {t8 - t7:.4f}s.")
+            logger.info(f"HSR: _handle_file_selection_changed took {t8 - t7:.4f}s.")
 
         self.statusBar().showMessage(message, 5000)
-        logging.info(message)  # Log the original user-facing message
+        logger.info(message)  # Log the original user-facing message
         handle_end_time = time.perf_counter()
-        logging.info(
+        logger.info(
             f"HSR: End for {filename}. Total time: {handle_end_time - handle_start_time:.4f}s"
         )
 
     def _rotate_current_image_clockwise(self):
         """Rotate the currently selected image(s) 90° clockwise (for keyboard shortcut)."""
-        logging.info("Clockwise rotation triggered via shortcut/menu.")
+        logger.info("Clockwise rotation triggered via shortcut/menu.")
         self._rotate_selected_images("clockwise")
 
     def _rotate_current_image_counterclockwise(self):
         """Rotate the currently selected image(s) 90° counterclockwise (for keyboard shortcut)."""
-        logging.info("Counter-clockwise rotation triggered via shortcut/menu.")
+        logger.info("Counter-clockwise rotation triggered via shortcut/menu.")
         self._rotate_selected_images("counterclockwise")
 
     def _rotate_current_image_180(self):
         """Rotate the currently selected image(s) 180° (for keyboard shortcut)."""
-        logging.info("180-degree rotation triggered via shortcut/menu.")
+        logger.info("180-degree rotation triggered via shortcut/menu.")
         self._rotate_selected_images("180")
 
     def _rotate_selected_images(self, direction: str):
@@ -3893,7 +3721,7 @@ class MainWindow(QMainWindow):
 
                 if not needs_lossy:
                     # Metadata rotation failed and no lossy option available
-                    logging.warning(
+                    logger.warning(
                         f"Rotation failed for {os.path.basename(file_path)}: {message}"
                     )
                     failed_rotations += 1
@@ -3981,13 +3809,13 @@ class MainWindow(QMainWindow):
                     )
                     successful_rotations += 1
                 else:
-                    logging.error(
+                    logger.error(
                         f"Failed to perform lossy rotation for {os.path.basename(file_path)}"
                     )
                     failed_rotations += 1
 
             except Exception as e:
-                logging.error(
+                logger.error(
                     f"Error rotating {os.path.basename(file_path)}: {str(e)}",
                     exc_info=True,
                 )
@@ -4079,7 +3907,7 @@ class MainWindow(QMainWindow):
                 self.app_state.remove_data_for_path(file_path)
                 deleted_count += 1
             except Exception as e:
-                logging.error(f"Error moving marked file '{file_path}' to trash: {e}")
+                logger.error(f"Error moving marked file '{file_path}' to trash: {e}")
 
         if deleted_count > 0:
             for parent_idx, rows in source_indices_by_parent.items():
@@ -4188,7 +4016,7 @@ class MainWindow(QMainWindow):
                             item.setText(new_filename)
                             item.setForeground(QColor("#FFB366"))
             except OSError as e:
-                logging.error(f"Error toggling mark for '{filename}': {e}")
+                logger.error(f"Error toggling mark for '{filename}': {e}")
                 self.statusBar().showMessage(
                     f"Error toggling mark for '{filename}': {e}", 5000
                 )
@@ -4272,7 +4100,7 @@ class MainWindow(QMainWindow):
                             item.setForeground(QApplication.palette().text().color())
                             item.setText(new_filename)
             except OSError as e:
-                logging.error(f"Error clearing mark for '{filename}': {e}")
+                logger.error(f"Error clearing mark for '{filename}': {e}")
 
         if not unmarked_new_paths:
             return
@@ -4389,7 +4217,7 @@ class MainWindow(QMainWindow):
         # Get the active view from the LeftPanel, not from the MainWindow itself.
         active_view = self.left_panel.get_active_view()
         if not active_view:
-            logging.warning(
+            logger.warning(
                 f"Could not get active view to update blur status for {image_path}"
             )
             return
@@ -4475,26 +4303,26 @@ class MainWindow(QMainWindow):
                 if selected_item == item_to_update:
                     self._handle_file_selection_changed()
         else:
-            logging.warning(
+            logger.warning(
                 f"Could not find QStandardItem for {image_path} to update blur status in UI."
             )
 
     def _display_side_by_side_comparison(self, file_path):
         """Displays the current image and the rotated suggestion side-by-side."""
         sbs_start_time = time.perf_counter()
-        logging.info(f"SBS_COMP: Start for {os.path.basename(file_path)}")
-        logging.info(
+        logger.info(f"SBS_COMP: Start for {os.path.basename(file_path)}")
+        logger.info(
             f"Showing side-by-side comparison for: {os.path.basename(file_path)} (path: {file_path})"
         )
 
         if file_path not in self.rotation_suggestions:
-            logging.warning(
+            logger.warning(
                 f"SBS_COMP: File {os.path.basename(file_path)} not in rotation_suggestions."
             )
             return
 
         rotation = self.rotation_suggestions[file_path]
-        logging.info(f"SBS_COMP: Suggestion is {rotation} degrees.")
+        logger.info(f"SBS_COMP: Suggestion is {rotation} degrees.")
 
         t1 = time.perf_counter()
         # Load ONE base pixmap, respecting the user's current auto-edit setting.
@@ -4503,7 +4331,7 @@ class MainWindow(QMainWindow):
             file_path, (8000, 8000), apply_auto_edits=self.apply_auto_edits_enabled
         )
         t2 = time.perf_counter()
-        logging.info(f"SBS_COMP: get_preview_qpixmap (base) took: {t2 - t1:.4f}s")
+        logger.info(f"SBS_COMP: get_preview_qpixmap (base) took: {t2 - t1:.4f}s")
 
         if current_pixmap and not current_pixmap.isNull():
             from PyQt6.QtGui import QTransform
@@ -4516,7 +4344,7 @@ class MainWindow(QMainWindow):
                 transform, Qt.TransformationMode.SmoothTransformation
             )
             t4 = time.perf_counter()
-            logging.info(f"SBS_COMP: QPixmap.transformed took: {t4 - t3:.4f}s")
+            logger.info(f"SBS_COMP: QPixmap.transformed took: {t4 - t3:.4f}s")
 
             t5 = time.perf_counter()
             self.advanced_image_viewer.set_images_data(
@@ -4526,17 +4354,17 @@ class MainWindow(QMainWindow):
                 ]
             )
             t6 = time.perf_counter()
-            logging.info(
+            logger.info(
                 f"SBS_COMP: advanced_image_viewer.set_images_data took: {t6 - t5:.4f}s"
             )
         else:
-            logging.warning(
+            logger.warning(
                 f"SBS_COMP: Failed to load base pixmap for {os.path.basename(file_path)}"
             )
             self.advanced_image_viewer.clear()
 
         sbs_end_time = time.perf_counter()
-        logging.info(f"SBS_COMP: End. Total time: {sbs_end_time - sbs_start_time:.4f}s")
+        logger.info(f"SBS_COMP: End. Total time: {sbs_end_time - sbs_start_time:.4f}s")
 
     def _accept_all_rotations(self):
         """Applies all suggested rotations and returns to the list view."""
@@ -4667,7 +4495,7 @@ class MainWindow(QMainWindow):
 
     def _hide_rotation_view(self):
         """Hides the rotation view and switches back to the default list view."""
-        logging.info("Hiding rotation view as no more suggestions.")
+        logger.info("Hiding rotation view as no more suggestions.")
         self.left_panel.set_view_mode_list()
         self.accept_all_button.setVisible(False)
         self.accept_button.setVisible(False)

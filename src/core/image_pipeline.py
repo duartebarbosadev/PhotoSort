@@ -1,6 +1,8 @@
 import os
 import time
-import logging  # Added for startup logging
+import logging
+
+logger = logging.getLogger(__name__)
 from typing import Optional, List, Dict, Tuple, Callable
 from PIL import Image
 from PIL.ImageQt import ImageQt
@@ -34,7 +36,7 @@ class ImagePipeline:
         preview_cache_dir: Optional[str] = None,
     ):
         init_start_time = time.perf_counter()
-        logging.info("ImagePipeline.__init__ - Start")
+        logger.info("Initializing ImagePipeline...")
 
         tc_start_time = time.perf_counter()
         self.thumbnail_cache = (
@@ -42,8 +44,8 @@ class ImagePipeline:
             if thumbnail_cache_dir
             else ThumbnailCache()
         )
-        logging.info(
-            f"ImagePipeline.__init__ - ThumbnailCache instantiated: {time.perf_counter() - tc_start_time:.4f}s"
+        logger.debug(
+            f"ThumbnailCache instantiated in {time.perf_counter() - tc_start_time:.4f}s"
         )
 
         pc_start_time = time.perf_counter()
@@ -52,21 +54,19 @@ class ImagePipeline:
             if preview_cache_dir
             else PreviewCache()
         )
-        logging.info(
-            f"ImagePipeline.__init__ - PreviewCache instantiated: {time.perf_counter() - pc_start_time:.4f}s"
+        logger.debug(
+            f"PreviewCache instantiated in {time.perf_counter() - pc_start_time:.4f}s"
         )
 
         self.image_orientation_handler = (
             ImageOrientationHandler()
         )  # Instantiate if it has non-static methods or state
-        logging.info(
-            f"ImagePipeline.__init__ - ImageOrientationHandler instantiated: {time.perf_counter() - init_start_time:.4f}s"
-        )
+        logger.debug("ImageOrientationHandler instantiated.")
 
         # For concurrent operations
         self._num_workers = min(os.cpu_count() or 4, 8)
-        logging.info(
-            f"ImagePipeline.__init__ - End (Total: {time.perf_counter() - init_start_time:.4f}s), num_workers set to {self._num_workers}"
+        logger.info(
+            f"ImagePipeline initialized in {time.perf_counter() - init_start_time:.4f}s (workers: {self._num_workers})"
         )
 
     def _get_pil_thumbnail(
@@ -81,6 +81,9 @@ class ImagePipeline:
 
         cached_img = self.thumbnail_cache.get(cache_key)
         if cached_img:
+            logger.debug(
+                f"Thumbnail cache HIT for: {os.path.basename(normalized_path)} (Auto-Edits: {apply_auto_edits})"
+            )
             return cached_img
 
         pil_img: Optional[Image.Image] = None
@@ -95,8 +98,8 @@ class ImagePipeline:
                 normalized_path, THUMBNAIL_MAX_SIZE
             )
         else:
-            logging.warning(
-                f"Unsupported extension for thumbnail: {ext} for path {normalized_path}"
+            logger.warning(
+                f"Unsupported extension for thumbnail: {ext} for '{os.path.basename(normalized_path)}'"
             )
             return None
 
@@ -115,18 +118,17 @@ class ImagePipeline:
         Gets a QPixmap thumbnail for the given image path.
         """
         if not os.path.isfile(image_path):
-            logging.error(
-                f"File does not exist for get_thumbnail_qpixmap: {image_path}"
-            )
+            logger.error(f"File does not exist: {image_path}")
             return None
 
         pil_img = self._get_pil_thumbnail(image_path, apply_auto_edits)
         if pil_img:
             try:
                 return QPixmap.fromImage(ImageQt(pil_img))
-            except Exception as e:
-                logging.error(
-                    f"Error converting PIL thumbnail to QPixmap for {image_path}: {e}"
+            except Exception:
+                logger.error(
+                    f"Error converting PIL thumbnail to QPixmap for {os.path.basename(image_path)}",
+                    exc_info=True,
                 )
         return None
 
@@ -178,8 +180,8 @@ class ImagePipeline:
                 temp_pil_img.thumbnail(target_resolution, Image.Resampling.LANCZOS)
                 pil_img = temp_pil_img
         else:
-            logging.warning(
-                f"Unsupported extension for display preview: {ext} for path {normalized_path}"
+            logger.warning(
+                f"Unsupported extension for display preview: {ext} for '{os.path.basename(normalized_path)}'"
             )
             return None
 
@@ -202,9 +204,7 @@ class ImagePipeline:
         """
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):
-            logging.error(
-                f"File does not exist for get_preview_qpixmap: {normalized_path}"
-            )
+            logger.error(f"File does not exist: {normalized_path}")
             return None
 
         # Cache key for the final display-sized PIL image
@@ -217,7 +217,9 @@ class ImagePipeline:
         # 1. Check if display-sized version is already cached
         cached_display_pil = self.preview_cache.get(display_cache_key)
         if cached_display_pil:
-            logging.debug(f"Preview cache HIT for DISPLAY size: {normalized_path}")
+            logger.debug(
+                f"Display cache HIT: {os.path.basename(normalized_path)} (Size: {key_display_size})"
+            )
             return QPixmap.fromImage(ImageQt(cached_display_pil))
 
         # 2. Check if a high-resolution PRELOADED version is cached
@@ -226,8 +228,8 @@ class ImagePipeline:
         cached_high_res_pil = self.preview_cache.get(preload_cache_key)
 
         if cached_high_res_pil:
-            logging.debug(
-                f"Preview cache HIT for PRELOADED high-res: {normalized_path}. Resizing..."
+            logger.debug(
+                f"Preview cache HIT (High-Res): {os.path.basename(normalized_path)}. Resizing for display."
             )
             display_pil_img = cached_high_res_pil.copy()
             if display_max_size:
@@ -239,8 +241,8 @@ class ImagePipeline:
             return QPixmap.fromImage(ImageQt(display_pil_img))
 
         # 3. Generate fresh for display size, then cache
-        logging.debug(
-            f"Preview cache MISS for ALL: {normalized_path}. Generating for display..."
+        logger.debug(
+            f"Preview cache MISS for {os.path.basename(normalized_path)}. Generating on-demand..."
         )
         generated_display_pil = self._generate_pil_preview_for_display(
             normalized_path, display_max_size, apply_auto_edits
@@ -249,7 +251,10 @@ class ImagePipeline:
             self.preview_cache.set(display_cache_key, generated_display_pil)
             return QPixmap.fromImage(ImageQt(generated_display_pil))
 
-        logging.error(f"Failed to generate or retrieve preview for {normalized_path}")
+        logger.error(
+            f"Failed to generate or retrieve preview for {os.path.basename(normalized_path)}",
+            exc_info=True,
+        )
         return None
 
     def _ensure_thumbnail_generated_and_cached(
@@ -271,8 +276,8 @@ class ImagePipeline:
         total_files = len(image_paths)
         processed_count = 0
 
-        logging.info(
-            f"Starting thumbnail preload for {total_files} files, workers: {self._num_workers}"
+        logger.info(
+            f"Preloading thumbnails for {total_files} files (workers: {self._num_workers})..."
         )
 
         with concurrent.futures.ThreadPoolExecutor(
@@ -281,8 +286,8 @@ class ImagePipeline:
             futures_map: Dict[concurrent.futures.Future, str] = {}
             for image_path in image_paths:
                 if should_continue_callback and not should_continue_callback():
-                    logging.info(
-                        "Thumbnail preload cancellation requested, stopping new tasks."
+                    logger.info(
+                        "Thumbnail preload cancelled by request. Halting new tasks."
                     )
                     break
                 future = executor.submit(
@@ -297,7 +302,9 @@ class ImagePipeline:
                 try:
                     future.result()  # Check for exceptions from worker
                 except Exception as e:
-                    logging.error(f"Error preloading thumbnail for a file: {e}")
+                    logger.error(
+                        "Error during thumbnail preloading task", exc_info=True
+                    )
 
                 processed_count += 1
                 if progress_callback:
@@ -307,12 +314,10 @@ class ImagePipeline:
                     for f_cancel in futures_map:
                         if not f_cancel.done():
                             f_cancel.cancel()
-                    logging.info(
-                        "Thumbnail preload processing cancelled during completion."
-                    )
+                    logger.info("Thumbnail preload cancelled during processing.")
                     break
-        logging.info(
-            f"Thumbnail preload finished. Processed {processed_count}/{total_files} files."
+        logger.info(
+            f"Thumbnail preloading finished. Processed {processed_count}/{total_files}."
         )
 
     def _ensure_preview_generated_and_cached(
@@ -342,8 +347,8 @@ class ImagePipeline:
                 normalized_path, PRELOAD_MAX_RESOLUTION
             )
         else:
-            logging.warning(
-                f"Unsupported extension for preview preload: {ext} for {normalized_path}"
+            logger.warning(
+                f"Unsupported extension for preview preload: {ext} for '{os.path.basename(normalized_path)}'"
             )
             return False  # Or log error
 
@@ -351,12 +356,15 @@ class ImagePipeline:
             # pil_img = self.image_orientation_handler.exif_transpose(pil_img) # Processors should handle this.
             self.preview_cache.set(preload_cache_key, pil_img)
             duration = time.time() - start_time
-            logging.info(
-                f"Generated/cached preview for {normalized_path} in {duration:.2f}s"
+            logger.debug(
+                f"Generated preview for {os.path.basename(normalized_path)} in {duration:.2f}s"
             )
             return True
         else:
-            logging.error(f"Failed to generate preview for {normalized_path}")
+            logger.error(
+                f"Failed to generate preview for {os.path.basename(normalized_path)}",
+                exc_info=True,
+            )
             return False
 
     def preload_previews(
@@ -370,8 +378,8 @@ class ImagePipeline:
         total_files = len(image_paths)
         processed_count = 0
 
-        logging.info(
-            f"Starting preview preload for {total_files} files, workers: {self._num_workers}"
+        logger.info(
+            f"Preloading previews for {total_files} files (workers: {self._num_workers})..."
         )
 
         with concurrent.futures.ThreadPoolExecutor(
@@ -380,8 +388,8 @@ class ImagePipeline:
             futures_map: Dict[concurrent.futures.Future, str] = {}
             for image_path in image_paths:
                 if should_continue_callback and not should_continue_callback():
-                    logging.info(
-                        "Preview preload cancellation requested, stopping new tasks."
+                    logger.info(
+                        "Preview preload cancelled by request. Halting new tasks."
                     )
                     break
                 future = executor.submit(
@@ -396,7 +404,7 @@ class ImagePipeline:
                 try:
                     future.result()  # Check for exceptions
                 except Exception as e:
-                    logging.error(f"Error preloading preview for a file: {e}")
+                    logger.error("Error during preview preloading task", exc_info=True)
 
                 processed_count += 1
                 if progress_callback:
@@ -405,12 +413,10 @@ class ImagePipeline:
                     for f_cancel in futures_map:
                         if not f_cancel.done():
                             f_cancel.cancel()
-                    logging.info(
-                        "Preview preload processing cancelled during completion."
-                    )
+                    logger.info("Preview preload cancelled during processing.")
                     break
-        logging.info(
-            f"Preview preload finished. Processed {processed_count}/{total_files} files."
+        logger.info(
+            f"Preview preloading finished. Processed {processed_count}/{total_files}."
         )
 
     def get_pil_image_for_processing(
@@ -433,8 +439,8 @@ class ImagePipeline:
             preload_key = (normalized_path, PRELOAD_MAX_RESOLUTION, apply_auto_edits)
             cached_preview = self.preview_cache.get(preload_key)
             if cached_preview:
-                logging.debug(
-                    f"Using preloaded preview for processing: {normalized_path}"
+                logger.debug(
+                    f"Using preloaded preview for processing: {os.path.basename(normalized_path)}"
                 )
                 return (
                     cached_preview.convert(target_mode)
@@ -443,8 +449,8 @@ class ImagePipeline:
                 )
 
             # Log the cache miss only when we intended to use the cache
-            logging.debug(
-                f"No suitable preloaded preview, loading directly for processing: {normalized_path}"
+            logger.debug(
+                f"No preloaded preview found. Loading directly: {os.path.basename(normalized_path)}"
             )
 
         # Fallback to loading directly
@@ -474,18 +480,18 @@ class ImagePipeline:
                     )
                 pil_img = img.convert(target_mode)
             except Exception:
-                logging.warning(
-                    f"Unsupported extension for get_pil_image_for_processing: {ext} for {normalized_path}"
+                logger.warning(
+                    f"Unsupported extension for processing: {ext} for '{os.path.basename(normalized_path)}'"
                 )
 
         return pil_img
 
     def clear_all_image_caches(self):
         """Clears both thumbnail and preview caches."""
-        logging.info("Clearing all image caches...")
+        logger.warning("Clearing all image caches (thumbnails and previews)...")
         self.thumbnail_cache.clear()
         self.preview_cache.clear()
-        logging.info("All image caches cleared.")
+        logger.info("All image caches have been cleared.")
 
     def reinitialize_preview_cache_from_settings(self):
         """Reinitializes the preview cache using current application settings."""

@@ -1,6 +1,8 @@
 from PIL import Image, ImageOps
 from typing import Optional
 import logging
+
+logger = logging.getLogger(__name__)
 from typing import Dict, Any
 
 
@@ -20,7 +22,7 @@ class ImageOrientationHandler:
             return ImageOps.exif_transpose(image)
         except Exception as e:
             # Log error or handle as appropriate, for now, return original image
-            logging.warning(f"Could not apply EXIF transpose: {e}")
+            logger.warning("Could not apply EXIF transpose: %s", e, exc_info=True)
             return image
 
     @staticmethod

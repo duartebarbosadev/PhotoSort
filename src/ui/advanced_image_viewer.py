@@ -1,4 +1,6 @@
 import logging
+
+logger = logging.getLogger(__name__)
 from typing import Optional, List, Dict, Any
 from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import (
@@ -332,13 +334,9 @@ class ZoomableImageView(QGraphicsView):
             return
 
         key = event.key()
-        logging.debug(f"ZoomableImageView received key: {event.text()}")
 
         # Let number keys 1-9 pass up to the parent for focus switching
         if Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
-            logging.debug(
-                f"ZoomableImageView propagating key {event.text()} to parent."
-            )
             super().keyPressEvent(event)  # Propagate event to parent
             return
 
@@ -751,8 +749,8 @@ class SynchronizedImageViewer(QWidget):
 
     def _set_view_mode(self, mode: str, focused_index: int = -1):
         """Set the display mode to single, focused, or side-by-side."""
-        logging.debug(
-            f"Setting view mode to '{mode}' with focused_index: {focused_index}"
+        logger.debug(
+            f"Setting view mode to '{mode}' with focused index: {focused_index}"
         )
         num_images = sum(1 for v in self.image_viewers if v.has_image())
 
@@ -762,7 +760,7 @@ class SynchronizedImageViewer(QWidget):
         # If going to single mode with multiple images, switch to focused mode instead
         if mode == "single" and num_images > 1:
             mode = "focused"
-            logging.debug("Switching mode to 'focused' because num_images > 1")
+            logger.debug("Switching to 'focused' mode (more than one image present).")
 
         self._view_mode = mode
 

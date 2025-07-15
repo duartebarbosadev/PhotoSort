@@ -5,6 +5,8 @@ Displays comprehensive image metadata in a modern, elegant sidebar
 
 import os
 import logging
+
+logger = logging.getLogger(__name__)
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from PyQt6.QtWidgets import (
@@ -336,34 +338,32 @@ class MetadataSidebar(QWidget):
     def _delayed_update(self):
         """Perform the actual metadata update"""
         if self.comparison_mode:
-            logging.debug(
-                f"[MetadataSidebar] Updating in comparison mode for: {self.current_image_paths_for_comparison}"
+            logger.debug(
+                f"Updating sidebar for {len(self.current_image_paths_for_comparison)} images."
             )
             if self.raw_metadata_for_comparison:
                 if (
                     len(self.raw_metadata_for_comparison) > 0
                     and self.raw_metadata_for_comparison[0]
                 ):
-                    logging.debug(
-                        f"  Image 1 metadata keys ({len(self.raw_metadata_for_comparison[0])}): {list(self.raw_metadata_for_comparison[0].keys())}"
+                    logger.debug(
+                        f"  Image 1 metadata keys: {len(self.raw_metadata_for_comparison[0])}"
                     )
                 if (
                     len(self.raw_metadata_for_comparison) > 1
                     and self.raw_metadata_for_comparison[1]
                 ):
-                    logging.debug(
-                        f"  Image 2 metadata keys ({len(self.raw_metadata_for_comparison[1])}): {list(self.raw_metadata_for_comparison[1].keys())}"
+                    logger.debug(
+                        f"  Image 2 metadata keys: {len(self.raw_metadata_for_comparison[1])}"
                     )
         elif self.current_image_path:
-            logging.debug(
-                f"[MetadataSidebar] Updating for single image: {self.current_image_path}"
+            logger.debug(
+                f"Updating sidebar for: {os.path.basename(self.current_image_path)}"
             )
             if self.raw_metadata:
-                logging.debug(
-                    f"  Metadata keys ({len(self.raw_metadata)}): {list(self.raw_metadata.keys())[:5]}..."
-                )  # Log first 5 keys for brevity
+                logger.debug(f"  Raw metadata keys: {len(self.raw_metadata)}")
         else:
-            logging.debug("[MetadataSidebar] Clearing sidebar (no image selected).")
+            logger.debug("Clearing sidebar (no image selected).")
 
         if not self.current_image_path and not self.comparison_mode:
             self.show_placeholder()
@@ -391,7 +391,7 @@ class MetadataSidebar(QWidget):
             self.content_layout.addStretch()
 
         except Exception as e:
-            logging.error(f"Error updating metadata sidebar: {e}", exc_info=True)
+            logger.error(f"Error updating metadata sidebar: {e}", exc_info=True)
             self.show_error_message(str(e))
 
     def _format_display_value(
@@ -424,34 +424,32 @@ class MetadataSidebar(QWidget):
 
         try:
             if fmt == "aperture":
-                logging.debug(
-                    f"Formatting aperture. Value: '{value}', Type: {type(value)}"
-                )
+                # logger.debug(f"Formatting aperture. Value: '{value}', Type: {type(value)}")
                 try:
                     # Handle objects with numerator/denominator (like pyexiv2.Rational)
                     if hasattr(value, "numerator") and hasattr(value, "denominator"):
-                        logging.debug("Is Rational-like object.")
+                        # logger.debug("Aperture is a Rational-like object.")
                         if value.denominator == 0:
                             return str(value)  # Avoid division by zero
                         val = float(value.numerator) / float(value.denominator)
                     # Handle string fractions that are not Rational objects
                     elif isinstance(value, str) and "/" in value:
-                        logging.debug("Is string fraction.")
+                        # logger.debug("Aperture is a string fraction.")
                         num, den = value.split("/")
                         if float(den) == 0:
                             return value  # Avoid division by zero
                         val = float(num) / float(den)
                     # Handle other numeric types (including numeric strings)
                     else:
-                        logging.debug("Is other numeric type.")
+                        # logger.debug("Aperture is another numeric type.")
                         val = float(value)
 
                     formatted_val = f"f/{val:.1f}".replace(".0", "")
-                    logging.debug(f"Formatted aperture to: {formatted_val}")
+                    # logger.debug(f"Formatted aperture to: {formatted_val}")
                     return formatted_val
                 except (ValueError, TypeError, ZeroDivisionError) as e:
-                    logging.warning(
-                        f"Could not format aperture value '{value}'. Error: {e}"
+                    logger.warning(
+                        f"Could not format aperture value '{value}'.", exc_info=False
                     )
                     return str(value)  # Fallback for any other case
             if fmt == "megapixels":
@@ -890,13 +888,11 @@ class MetadataSidebar(QWidget):
 
     def add_camera_settings_card(self):
         """Add camera and capture settings card"""
-        logging.info(
-            f"[MetadataSidebar] Raw metadata keys available: {len(self.raw_metadata)} total"
-        )
+        # logger.info(f"Raw metadata keys available: {len(self.raw_metadata)} total")
 
         # Log some sample keys to debug
         sample_keys = list(self.raw_metadata.keys())[:20]
-        logging.info(f"[MetadataSidebar] Sample metadata keys: {sample_keys}")
+        # logger.info(f"Sample metadata keys: {sample_keys}")
 
         card = MetadataCard("Camera & Settings", "📷")
 
@@ -914,7 +910,7 @@ class MetadataSidebar(QWidget):
             or self.raw_metadata.get("Model")
         )
 
-        logging.info(f"[MetadataSidebar] Camera make: '{make}', model: '{model}'")
+        logger.debug(f"Camera make: '{make}', model: '{model}'")
 
         # Only add camera info if we have some data, or show that it's not available
         if make or model:
@@ -925,7 +921,7 @@ class MetadataSidebar(QWidget):
             elif make:
                 camera = make
 
-            logging.info(f"[MetadataSidebar] Final camera string: '{camera}'")
+            logger.debug(f"Final camera string: '{camera}'")
             card.add_info_row("Camera", camera)
         else:
             # Check if this might be a screenshot or non-camera image
@@ -1194,7 +1190,7 @@ class MetadataSidebar(QWidget):
         if not self.raw_metadata:
             return
 
-        logging.info(
+        logger.info(
             f"[MetadataSidebar] add_debug_metadata_card called with {len(self.raw_metadata)} keys"
         )
         card = MetadataCard("Debug: Raw Metadata", "🔍")

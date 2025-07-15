@@ -1,6 +1,8 @@
 import diskcache
 import os
-import logging  # Added for startup logging
+import logging
+
+logger = logging.getLogger(__name__)
 import time  # Added for startup timing
 from typing import Optional, Dict, Any
 
@@ -24,8 +26,8 @@ class ExifCache:
         init_start_time = time.perf_counter()
         # size_limit_mb is now fetched from app_settings
         self._size_limit_mb = get_exif_cache_size_mb()
-        logging.info(
-            f"ExifCache.__init__ - Start, dir: {cache_dir}, configured size_limit: {self._size_limit_mb} MB"
+        logger.info(
+            f"Initializing EXIF cache: {cache_dir} (Size Limit: {self._size_limit_mb} MB)"
         )
         """
         Initializes the EXIF metadata cache.
@@ -47,10 +49,10 @@ class ExifCache:
             size_limit=self._size_limit_bytes,
             disk_min_file_size=4096,
         )  # Store larger items on disk
-        log_msg = f"[ExifCache] Initialized at {cache_dir} with size limit {self._size_limit_bytes / (1024 * 1024):.2f} MB"
-        logging.info(f"ExifCache.__init__ - DiskCache instantiated. {log_msg}")
-        logging.info(
-            f"ExifCache.__init__ - End: {time.perf_counter() - init_start_time:.4f}s"
+        log_msg = f"EXIF cache initialized at {cache_dir} with size limit {self._size_limit_bytes / (1024 * 1024):.2f} MB"
+        logger.info(log_msg)
+        logger.debug(
+            f"Initialization complete in {time.perf_counter() - init_start_time:.4f}s"
         )
 
     def get(self, key: str) -> Optional[Dict[str, Any]]:
@@ -69,13 +71,15 @@ class ExifCache:
             if isinstance(cached_item, dict):
                 return cached_item
             elif cached_item is not None:
-                logging.warning(
-                    f"Unexpected item type in exif_cache for key {key}. Type: {type(cached_item)}"
+                logger.warning(
+                    f"Invalid item type in EXIF cache for key '{key}': {type(cached_item)}"
                 )
                 # self.delete(key) # Optionally delete malformed entry
             return None
         except Exception as e:
-            logging.error(f"Error accessing exif_cache for key {key}: {e}")
+            logger.error(
+                f"Error reading from EXIF cache for key '{key}': {e}", exc_info=True
+            )
             return None
 
     def set(self, key: str, value: Dict[str, Any]) -> None:
@@ -88,20 +92,21 @@ class ExifCache:
             value (Dict[str, Any]): The metadata dictionary to cache.
         """
         if not isinstance(value, dict):
-            logging.error(
-                f"[ExifCache] Attempted to cache non-dictionary object for key {os.path.basename(key)}. Type: {type(value)}"
+            logger.error(
+                f"Attempted to cache non-dictionary object for key '{os.path.basename(key)}'. Type: {type(value)}"
             )
             return
         try:
             file_ext = os.path.splitext(key)[1].lower()
             if file_ext == ".arw":
-                logging.info(
-                    f"[ExifCache] Caching ARW metadata for {os.path.basename(key)}: {len(value)} keys"
+                logger.debug(
+                    f"Caching ARW metadata for {os.path.basename(key)}: {len(value)} keys"
                 )
             self._cache.set(key, value)
         except Exception as e:
-            logging.error(
-                f"[ExifCache] Error setting item in exif_cache for key {os.path.basename(key)}: {e}"
+            logger.error(
+                f"Error writing to EXIF cache for key '{os.path.basename(key)}': {e}",
+                exc_info=True,
             )
 
     def delete(self, key: str) -> None:
@@ -115,16 +120,19 @@ class ExifCache:
             if key in self._cache:
                 del self._cache[key]
         except Exception as e:
-            logging.error(f"Error deleting item from exif_cache for key {key}: {e}")
+            logger.error(
+                f"Error deleting item from EXIF cache for key '{key}': {e}",
+                exc_info=True,
+            )
 
     def clear(self) -> None:
         """Clears all items from the cache."""
         try:
             count = len(self._cache)
             self._cache.clear()
-            logging.info(f"Cleared {count} items.")
+            logger.info(f"Cleared {count} items from EXIF cache.")
         except Exception as e:
-            logging.error(f"Error clearing exif_cache: {e}")
+            logger.error(f"Error clearing EXIF cache: {e}", exc_info=True)
 
     def volume(self) -> int:
         """
@@ -133,7 +141,7 @@ class ExifCache:
         try:
             return self._cache.volume()
         except Exception as e:
-            logging.error(f"Error getting exif_cache volume: {e}")
+            logger.error(f"Error getting EXIF cache volume: {e}", exc_info=True)
             return 0
 
     def get_current_size_limit_mb(self) -> int:
@@ -144,7 +152,7 @@ class ExifCache:
         """
         Closes and reinitializes the cache with the current size limit from app_settings.
         """
-        logging.info("Reinitializing EXIF cache...")
+        logger.info("Reinitializing EXIF cache with new settings...")
         self.close()  # Close the existing cache
 
         self._size_limit_mb = get_exif_cache_size_mb()
@@ -154,15 +162,17 @@ class ExifCache:
             size_limit=self._size_limit_bytes,
             disk_min_file_size=4096,
         )
-        logging.info(f"Reinitialized. New size limit: {self._size_limit_mb} MB.")
+        logger.info(
+            f"EXIF cache reinitialized. New size limit: {self._size_limit_mb} MB."
+        )
 
     def close(self) -> None:
         """Closes the cache."""
         try:
             self._cache.close()
-            logging.info("Cache closed.")
+            logger.debug("EXIF cache closed.")
         except Exception as e:
-            logging.error(f"Error closing exif_cache: {e}")
+            logger.error("Error closing EXIF cache.", exc_info=True)
 
     def __contains__(self, key: str) -> bool:
         return key in self._cache

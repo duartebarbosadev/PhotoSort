@@ -1,5 +1,7 @@
 import os
 import logging
+
+logger = logging.getLogger(__name__)
 import glob
 import torchvision.transforms as transforms
 from PIL import Image, ImageOps
@@ -66,8 +68,8 @@ def load_image_safely(path: str, apply_auto_edits: bool) -> Optional[Image.Image
     try:
         if is_raw_extension(ext):
             # RAW processing is handled by the dedicated processor
-            logging.debug(
-                f"Using RawImageProcessor to load {normalized_path} for rotation detection."
+            logger.debug(
+                f"Using RawImageProcessor for rotation detection: {os.path.basename(normalized_path)}"
             )
             return RawImageProcessor.load_raw_as_pil(
                 normalized_path, half_size=True, apply_auto_edits=apply_auto_edits
@@ -95,10 +97,15 @@ def load_image_safely(path: str, apply_auto_edits: bool) -> Optional[Image.Image
             return background
 
     except FileNotFoundError:
-        logging.error(f"File not found during safe load: {normalized_path}")
+        logger.error(
+            f"File not found for rotation detection: {os.path.basename(normalized_path)}"
+        )
         return None
     except Exception as e:
-        logging.error(f"Error loading image {normalized_path} safely: {e}")
+        logger.error(
+            f"Error loading image '{os.path.basename(normalized_path)}' for rotation detection: {e}",
+            exc_info=True,
+        )
         return None
 
 
@@ -144,8 +151,8 @@ class ModelRotationDetector:
         if model_name:
             model_path = os.path.join(MODEL_SAVE_DIR, model_name)
             if not os.path.exists(model_path):
-                logging.warning(
-                    f"Saved model '{model_name}' not found. Searching for a new one."
+                logger.warning(
+                    f"Saved model '{model_name}' not found. Searching for a fallback."
                 )
                 model_path = None  # Reset to trigger auto-detection
 
@@ -153,12 +160,14 @@ class ModelRotationDetector:
             model_path = find_best_orientation_model()
             if model_path:
                 set_orientation_model_name(os.path.basename(model_path))
-                logging.info(
-                    f"Auto-detected orientation model: {os.path.basename(model_path)}"
+                logger.info(
+                    f"Using auto-detected orientation model: {os.path.basename(model_path)}"
                 )
 
         if not model_path:
-            logging.warning("No orientation model found. Rotation detection disabled.")
+            logger.error(
+                "No orientation model found. Rotation detection will be disabled."
+            )
             self.initialized = True  # Mark as initialized to prevent re-attempts
             return
 
@@ -168,14 +177,12 @@ class ModelRotationDetector:
                 model_path
             )
             self.initialized = True
-            logging.info("ModelRotationDetector initialized with ONNX.")
+            logger.info(f"Initialized with ONNX provider: {self.provider_name}")
         except ModelNotFoundError:
             # Re-raise to be caught by the calling worker
             raise
         except Exception as e:
-            logging.error(
-                f"An unexpected error occurred during ModelRotationDetector initialization: {e}"
-            )
+            logger.error(f"Failed to initialize ModelRotationDetector.", exc_info=True)
 
     def _load_onnx_session(
         self, model_path: str
@@ -184,11 +191,11 @@ class ModelRotationDetector:
         Loads the ONNX model, selecting the best available provider.
         """
         if not os.path.exists(model_path):
-            logging.error(
-                f"ONNX model file not found at {model_path}. Rotation detection will be disabled. "
-                f"Please download the model from https://github.com/duartebarbosadev/deep-image-orientation-detection "
-                f"and place it in the '{MODEL_SAVE_DIR}' directory."
+            msg = (
+                f"ONNX model file not found at '{model_path}'. Rotation detection will be disabled. "
+                "Please download the model from the project's GitHub page and place it in the 'models' directory."
             )
+            logger.error(msg)
             raise ModelNotFoundError(model_path)
 
         # Define a priority list for execution providers.
@@ -204,7 +211,7 @@ class ModelRotationDetector:
 
         try:
             available_providers = ort.get_available_providers()
-            logging.info(f"Available ONNX Runtime providers: {available_providers}")
+            logger.debug(f"Available ONNX Runtime providers: {available_providers}")
 
             chosen_provider = "CPUExecutionProvider"  # Default fallback
             for provider in PREFERRED_PROVIDERS:
@@ -212,8 +219,8 @@ class ModelRotationDetector:
                     chosen_provider = provider
                     break
 
-            logging.info(
-                f"Attempting to load ONNX model with provider: {chosen_provider}"
+            logger.info(
+                f"Attempting to load ONNX model with provider: '{chosen_provider}'"
             )
 
             # Load the ONNX model with the single, highest-priority available provider
@@ -221,17 +228,17 @@ class ModelRotationDetector:
 
             actual_provider = session.get_providers()[0]
             self.provider_name = actual_provider
-            logging.info(
-                f"Successfully loaded ONNX model from {model_path} using provider: {actual_provider}"
+            logger.info(
+                f"ONNX model '{os.path.basename(model_path)}' loaded using: {actual_provider}"
             )
 
             if (
                 chosen_provider != actual_provider
                 and actual_provider == "CPUExecutionProvider"
             ):
-                logging.warning(
-                    f"Warning: ONNX Runtime fell back to CPU. The chosen provider "
-                    f"'{chosen_provider}' might not be correctly configured."
+                logger.warning(
+                    f"ONNX Runtime fell back to CPU. The recommended provider "
+                    f"'{chosen_provider}' may not be correctly configured."
                 )
 
             input_name = session.get_inputs()[0].name
@@ -239,10 +246,9 @@ class ModelRotationDetector:
             return session, input_name, output_name
 
         except Exception as e:
-            logging.error(f"Error loading ONNX model {model_path}: {e}")
-            logging.error(
-                "If you are trying to use a GPU provider (CUDA, DML, ROCm, MPS), "
-                "please ensure the correct onnxruntime package is installed and any necessary drivers are up to date."
+            logger.error(f"Error loading ONNX model '{model_path}': {e}", exc_info=True)
+            logger.warning(
+                "If using a GPU, ensure the correct onnxruntime package and drivers are installed."
             )
             return None, None, None
 
@@ -258,15 +264,15 @@ class ModelRotationDetector:
         Returns 0, 90, 180, or -90.
         """
         if self.session is None:
-            logging.warning("ONNX session is not loaded. Skipping prediction.")
+            logger.debug("ONNX session not loaded. Skipping rotation prediction.")
             return 0
 
         if image is None:
             image = load_image_safely(image_path, apply_auto_edits=apply_auto_edits)
 
         if image is None:
-            logging.warning(
-                f"Could not load or receive image for {image_path}. Skipping rotation detection."
+            logger.warning(
+                f"Could not load image for '{os.path.basename(image_path)}'. Skipping rotation detection."
             )
             return 0
 
@@ -282,14 +288,14 @@ class ModelRotationDetector:
             predicted_class = int(predicted_idx)
             angle = CLASS_TO_ANGLE_MAP.get(predicted_class, 0)
 
-            logging.info(
-                f"Model predicting rotation for: {os.path.basename(image_path)}"
-            )
-            logging.debug(
-                f"-> Image: '{os.path.basename(image_path)}' | Prediction: {predicted_class} -> Angle: {angle}°"
+            logger.debug(
+                f"Rotation for '{os.path.basename(image_path)}': Prediction={predicted_class}, Angle={angle}°"
             )
 
             return angle
         except Exception as e:
-            logging.error(f"Error during ONNX inference for {image_path}: {e}")
+            logger.error(
+                f"Error during ONNX inference for {os.path.basename(image_path)}",
+                exc_info=True,
+            )
             return 0

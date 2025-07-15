@@ -1,6 +1,8 @@
 import diskcache
 import os
-import logging  # Added for startup logging
+import logging
+
+logger = logging.getLogger(__name__)
 import time  # Added for startup timing
 from typing import Optional
 
@@ -22,8 +24,8 @@ class RatingCache:
         size_limit_mb: int = DEFAULT_RATING_CACHE_SIZE_LIMIT_MB,
     ):
         init_start_time = time.perf_counter()
-        logging.info(
-            f"RatingCache.__init__ - Start, dir: {cache_dir}, size_limit: {size_limit_mb:.2f} MB"
+        logger.info(
+            f"Initializing Rating cache: {cache_dir} (Size Limit: {size_limit_mb:.2f} MB)"
         )
         """
         Initializes the rating cache.
@@ -40,10 +42,10 @@ class RatingCache:
         self._cache = diskcache.Cache(
             directory=cache_dir, size_limit=size_limit_bytes, disk_min_file_size=0
         )  # Store even small entries on disk
-        log_msg = f"[RatingCache] Initialized at {cache_dir} with size limit {size_limit_mb:.2f} MB"
-        logging.info(f"RatingCache.__init__ - DiskCache instantiated. {log_msg}")
-        logging.info(
-            f"RatingCache.__init__ - End: {time.perf_counter() - init_start_time:.4f}s"
+        log_msg = f"Rating cache initialized at {cache_dir} with size limit {size_limit_mb:.2f} MB"
+        logger.info(log_msg)
+        logger.debug(
+            f"Initialization complete in {time.perf_counter() - init_start_time:.4f}s"
         )
 
     def get(self, key: str) -> Optional[int]:
@@ -62,13 +64,15 @@ class RatingCache:
             if isinstance(cached_item, int):
                 return cached_item
             elif cached_item is not None:
-                logging.warning(
-                    f"Unexpected item type in rating_cache for key {key}. Type: {type(cached_item)}"
+                logger.warning(
+                    f"Invalid item type in Rating cache for key '{key}': {type(cached_item)}"
                 )
                 # self.delete(key) # Optionally delete malformed entry
             return None
         except Exception as e:
-            logging.error(f"Error accessing rating_cache for key {key}: {e}")
+            logger.error(
+                f"Error reading from Rating cache for key '{key}': {e}", exc_info=True
+            )
             return None
 
     def set(self, key: str, value: int) -> None:
@@ -81,14 +85,16 @@ class RatingCache:
             value (int): The rating to cache.
         """
         if not isinstance(value, int):
-            logging.error(
-                f"Attempted to cache non-integer object for key {key}. Type: {type(value)}"
+            logger.error(
+                f"Attempted to cache non-integer object for key '{key}'. Type: {type(value)}"
             )
             return
         try:
             self._cache.set(key, value)
         except Exception as e:
-            logging.error(f"Error setting item in rating_cache for key {key}: {e}")
+            logger.error(
+                f"Error writing to Rating cache for key '{key}': {e}", exc_info=True
+            )
 
     def delete(self, key: str) -> None:
         """
@@ -101,16 +107,19 @@ class RatingCache:
             if key in self._cache:
                 del self._cache[key]
         except Exception as e:
-            logging.error(f"Error deleting item from rating_cache for key {key}: {e}")
+            logger.error(
+                f"Error deleting item from Rating cache for key '{key}': {e}",
+                exc_info=True,
+            )
 
     def clear(self) -> None:
         """Clears all items from the cache."""
         try:
             count = len(self._cache)
             self._cache.clear()
-            logging.info(f"Cleared {count} items.")
+            logger.info(f"Cleared {count} items from Rating cache.")
         except Exception as e:
-            logging.error(f"Error clearing rating_cache: {e}")
+            logger.error(f"Error clearing Rating cache: {e}", exc_info=True)
 
     def volume(self) -> int:
         """
@@ -119,16 +128,16 @@ class RatingCache:
         try:
             return self._cache.volume()
         except Exception as e:
-            logging.error(f"Error getting rating_cache volume: {e}")
+            logger.error(f"Error getting Rating cache volume: {e}", exc_info=True)
             return 0
 
     def close(self) -> None:
         """Closes the cache."""
         try:
             self._cache.close()
-            logging.info("Cache closed.")
+            logger.debug("Rating cache closed.")
         except Exception as e:
-            logging.error(f"Error closing rating_cache: {e}")
+            logger.error("Error closing Rating cache.", exc_info=True)
 
     def __contains__(self, key: str) -> bool:
         return key in self._cache

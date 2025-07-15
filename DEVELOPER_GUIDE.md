@@ -65,7 +65,17 @@ The application is structured into two main packages: `core` and `ui`.
 
 ## 3. Coding Conventions
 
-- **Logging**: All logging should be done using the `logging` module. Use `logging.debug()` for detailed development information and `logging.info()` for general application flow. Errors should be logged with `logging.error()` or `logging.warning()`. **Do not use `print()` statements.**
+- **Logging**: Use Python's `logging` module for all logging. **Do not use `print()`**.
+
+  - **Style**: Keep messages concise, human-readable, and provide context.
+    - **Good**: `logger.info(f"Initializing EXIF cache: {cache_dir} (Size Limit: {self._size_limit_mb} MB)")`
+    - **Bad**: `ExifCache.__init__ - Start, dir: {cache_dir}, configured size_limit: {self._size_limit_mb} MB`
+
+  - **Log Levels**:
+    - `debug()`: For detailed debugging (variable states, function calls).
+    - `info()`: For major application events (startup, folder loaded).
+    - `warning()`: For non-critical issues.
+    - `error()`: For errors preventing an operation. Include `exc_info=True` for exceptions.
 - **Code Comments**: Write meaningful comments that explain the intent or the "why" behind a piece of code, especially for complex algorithms or non-obvious design choices. The code itself should explain the "how". Avoid comments that merely restate what the code does.
 - **Separation of Concerns**: Keep UI logic separate from business logic. The `core` package should not depend on the `ui` package. The `ui` package, specifically `MainWindow`, should be as "dumb" as possible, delegating all logic to the `AppController`.
 - **File Operations**: All file system operations (move, rename, delete) MUST be handled by the `ImageFileOperations` class in `src/core/image_file_ops.py`. This ensures that file manipulations are centralized and handled consistently.

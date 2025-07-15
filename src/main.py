@@ -28,14 +28,14 @@ def load_stylesheet(filename="src/ui/dark_theme.qss"):
             # Fallback if running from src directory itself? Less likely.
             style_path = filename
             if not os.path.exists(style_path):
-                logging.warning(f"Stylesheet '{filename}' not found at expected paths.")
+                logging.warning(f"Stylesheet not found: {filename}")
                 return ""  # Return empty string if not found
 
-        logging.info(f"Loading stylesheet from: {style_path}")
+        logging.info(f"Loading stylesheet: {style_path}")
         with open(style_path, "r") as f:
             return f.read()
     except Exception as e:
-        logging.error(f"Error loading stylesheet '{filename}': {e}")
+        logging.error(f"Failed to load stylesheet '{filename}': {e}")
         return ""  # Return empty on error
 
 
@@ -44,7 +44,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
     """Handles any unhandled exception, logs it, and shows an error dialog."""
     # Don't show a dialog for KeyboardInterrupt (Ctrl+C)
     if issubclass(exc_type, KeyboardInterrupt):
-        logging.warning("Application terminated by user (KeyboardInterrupt).")
+        logging.info("Application terminated by user.")
         # Let the default handler take over to exit
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
@@ -55,7 +55,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
     )
 
     # Log the critical error
-    logging.critical(f"Unhandled Exception:\n{error_message_details}")
+    logging.critical(f"Unhandled exception occurred:\n{error_message_details}")
 
     # Attempt to show a user-friendly dialog
     app_instance = QApplication.instance()  # Check if QApplication exists
@@ -81,17 +81,16 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
             error_box.exec()
         except Exception as e_msgbox:
             logging.error(
-                f"Failed to show QMessageBox for unhandled exception: {str(e_msgbox)}\n"
-                f"Original error was:\n{error_message_details}"
+                f"Failed to display error dialog: {str(e_msgbox)}\nOriginal error:\n{error_message_details}"
             )
             # Fallback to stderr if QMessageBox fails
             logging.critical(
-                f"Unhandled exception (QMessageBox failed):\n{error_message_details}"
+                f"Unhandled exception caught (dialog failed):\n{error_message_details}"
             )
     else:
         # QApplication not yet initialized or already destroyed, print to stderr
         logging.critical(
-            f"Unhandled exception (QApplication not available):\n{main_error_text}\nDetails:\n{error_message_details}"
+            f"Unhandled exception caught (QApplication not available):\n{error_message_details}"
         )
 
     # Python will typically terminate after an unhandled exception and its excepthook.
@@ -129,7 +128,7 @@ def main():
 
     # Create our desired formatter
     formatter = logging.Formatter(
-        fmt="%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
+        fmt="%(asctime)s - %(levelname)-8s - [%(name)s] - [%(filename)s:%(lineno)d] - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
@@ -154,16 +153,18 @@ def main():
             root_logger.setLevel(
                 logging.DEBUG
             )  # Ensure root logger captures DEBUG for file handler
-            logging.info(f"File logging ENABLED and initialized at: {log_file_path}")
+            logging.info(f"File logging enabled: {log_file_path}")
         except Exception as e_file_log:
-            logging.error(f"Failed to initialize file logging: {e_file_log}")
+            logging.error(
+                f"Failed to initialize file logging: {e_file_log}", exc_info=True
+            )
             root_logger.setLevel(logging.INFO)  # Fallback to INFO if file logging fails
     else:
         root_logger.setLevel(
             logging.DEBUG
         )  # Default to DEBUG if file logging is not enabled
         logging.info(
-            "File logging is DISABLED (set PHOTOSORT_ENABLE_FILE_LOGGING=true to enable)."
+            "File logging disabled. To enable, set PHOTOSORT_ENABLE_FILE_LOGGING=true."
         )
 
         # --- Suppress verbose third-party loggers ---
@@ -176,24 +177,24 @@ def main():
 
     # --- Setup Global Exception Hook ---
     sys.excepthook = global_exception_handler  # Assign the function
-    logging.info("Global exception hook (sys.excepthook) set.")
+    logging.debug("Global exception hook set.")
     # --- End Global Exception Hook Setup ---
 
     main_start_time = time.perf_counter()
-    logging.info("Application main - Start")
+    logging.info("Application starting...")
 
     # Handle clear-cache argument
     if args.clear_cache:
         clear_application_caches_start_time = time.perf_counter()
         AppController.clear_application_caches()
         logging.info(
-            f"Application main - clear_application_caches (via --clear-cache): {time.perf_counter() - clear_application_caches_start_time:.4f}s"
+            f"Caches cleared via command line in {time.perf_counter() - clear_application_caches_start_time:.4f}s"
         )
 
     app_instantiation_start_time = time.perf_counter()
     app = QApplication(sys.argv)
-    logging.info(
-        f"Application main - QApplication instantiated: {time.perf_counter() - app_instantiation_start_time:.4f}s"
+    logging.debug(
+        f"QApplication instantiated in {time.perf_counter() - app_instantiation_start_time:.4f}s"
     )
 
     # Load and apply the stylesheet
@@ -201,25 +202,22 @@ def main():
     stylesheet = load_stylesheet()
     if stylesheet:
         app.setStyleSheet(stylesheet)
-        logging.info(
-            f"Application main - Stylesheet loaded and applied: {time.perf_counter() - stylesheet_load_start_time:.4f}s"
+        logging.debug(
+            f"Stylesheet loaded and applied in {time.perf_counter() - stylesheet_load_start_time:.4f}s"
         )
     else:
-        logging.warning("Stylesheet not loaded, using default application style.")
-        logging.info(
-            f"Application main - Stylesheet loading attempted (not found/error): {time.perf_counter() - stylesheet_load_start_time:.4f}s"
-        )
+        logging.warning("Stylesheet not found. Using default style.")
 
     mainwindow_instantiation_start_time = time.perf_counter()
     window = MainWindow(initial_folder=args.folder)
-    logging.info(
-        f"Application main - MainWindow instantiated: {time.perf_counter() - mainwindow_instantiation_start_time:.4f}s"
+    logging.debug(
+        f"MainWindow instantiated in {time.perf_counter() - mainwindow_instantiation_start_time:.4f}s"
     )
 
     window_show_start_time = time.perf_counter()
     window.show()
-    logging.info(
-        f"Application main - window.show() called: {time.perf_counter() - window_show_start_time:.4f}s"
+    logging.debug(
+        f"MainWindow shown in {time.perf_counter() - window_show_start_time:.4f}s"
     )
 
     # Clear caches on exit
@@ -231,11 +229,11 @@ def main():
     # app.aboutToQuit.connect(RatingHandler.stop_exiftool) # Uncomment if using persistent handler
 
     logging.info(
-        f"Application main - Entering app.exec(). Total setup time: {time.perf_counter() - main_start_time:.4f}s"
+        f"Application setup complete in {time.perf_counter() - main_start_time:.4f}s. Entering event loop."
     )
     exit_code = app.exec()
     logging.info(
-        f"Application main - Exited app.exec() with code {exit_code}. Total runtime: {time.perf_counter() - main_start_time:.4f}s"
+        f"Application exited with code {exit_code}. Total runtime: {time.perf_counter() - main_start_time:.4f}s"
     )
     sys.exit(exit_code)
 

@@ -24,6 +24,8 @@ from src.core.image_features.blur_detector import (
 from src.core.caching.exif_cache import ExifCache  # Added for RotationDetectionWorker
 import logging
 
+logger = logging.getLogger(__name__)
+
 
 # --- Custom Tree View for Drag and Drop ---
 class DroppableTreeView(QTreeView):
@@ -213,7 +215,7 @@ class PreviewPreloaderWorker(QObject):
             )
         except Exception as e:
             err_msg = f"Error during preview preloading thread: {e}"
-            logging.error(err_msg)
+            logger.error(err_msg, exc_info=True)
             self.error.emit(err_msg)
         finally:
             if self._is_running:
@@ -262,7 +264,7 @@ class BlurDetectionWorker(QObject):
             )
         except Exception as e:
             err_msg = f"Error during batch blur detection: {e}"
-            logging.error(err_msg)
+            logger.error(err_msg, exc_info=True)
             self.error.emit(err_msg)
         finally:
             if (
@@ -339,10 +341,10 @@ class RotationDetectionWorker(QObject):
                 self.finished.emit()
 
         except ModelNotFoundError as e:
-            logging.error(f"Rotation model not found during worker execution: {e}")
+            logger.error(f"Rotation model not found during worker execution: {e}")
             if not self._should_stop:
                 self.model_not_found.emit(str(e))  # Emit the model path
         except Exception as e:
-            logging.error(f"Error in rotation detection worker: {e}")
+            logger.error(f"Error in rotation detection worker: {e}")
             if not self._should_stop:
                 self.error.emit(str(e))
