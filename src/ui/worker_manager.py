@@ -108,7 +108,11 @@ class WorkerManager(QObject):
                 try:
                     worker_stop_method()
                 except Exception as e:
-                    logger.error("Error calling worker stop method.", exc_info=True)
+                     logger.error(
+                        f"Error calling worker stop method for thread {thread}. "
+                        f"Worker stop method: {worker_stop_method}.",
+                        exc_info=True
+                    )
             thread.quit()
             if not thread.wait(5000):  # Wait 5 seconds
                 logger.warning(f"Thread {thread} did not quit gracefully. Terminating.")
@@ -125,7 +129,7 @@ class WorkerManager(QObject):
         if self.scanner_thread:
             self.scanner_thread.deleteLater()
             self.scanner_thread = None
-        logger.info("File scanner thread and worker cleaned up.")
+        logger.debug("File scanner thread and worker cleaned up.")
 
     # --- File Scanner Management ---
     def start_file_scan(

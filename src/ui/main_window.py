@@ -1212,7 +1212,9 @@ class MainWindow(QMainWindow):
                     if (
                         removed_items_list
                     ):  # takeRow returns a list of QStandardItems removed
-                        logger.debug(f"Removed empty group: '{parent_item_candidate.text()}'.")
+                        logger.debug(
+                            f"Removed empty group: '{parent_item_candidate.text()}'."
+                        )
                     else:
                         logger.warning(
                             f"Failed to remove empty group '{parent_item_candidate.text()}' from parent {parent_display_name_for_log} at row {item_row}."
@@ -1225,7 +1227,9 @@ class MainWindow(QMainWindow):
 
             # Get the state of the view AFTER deletions have occurred.
             visible_paths_after_delete = self._get_all_visible_image_paths()
-            logger.debug(f"{len(visible_paths_after_delete)} visible paths remaining after deletion.")
+            logger.debug(
+                f"{len(visible_paths_after_delete)} visible paths remaining after deletion."
+            )
 
             # This flag will be used to determine if our special focused-delete logic handled the selection.
             selection_handled_by_focus_logic = False
@@ -1523,7 +1527,9 @@ class MainWindow(QMainWindow):
         )
 
         if not group_images or local_idx == -1:
-            logger.debug("Navigate right: No sibling images found in the current group.")
+            logger.debug(
+                "Navigate right: No sibling images found in the current group."
+            )
             return
 
         new_local_idx = local_idx + 1
