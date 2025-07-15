@@ -1047,7 +1047,7 @@ class MainWindow(QMainWindow):
             return
 
         # This function is complex. Let's add more targeted debug logs.
-        logger.debug("Initiating file deletion.")
+        logger.debug("Initiating file deletion process.")
 
         self.original_selection_paths = self._get_selected_file_paths_from_view()
 
@@ -1062,7 +1062,7 @@ class MainWindow(QMainWindow):
         if self.was_focused_delete:
             deleted_file_paths = [focused_path_to_delete]
             logger.debug(
-                f"Deletion focused on single image: {os.path.basename(focused_path_to_delete)}"
+                f"Deleting focused image: {os.path.basename(focused_path_to_delete)}"
             )
         else:
             deleted_file_paths = self.original_selection_paths
@@ -1148,7 +1148,7 @@ class MainWindow(QMainWindow):
             # Iterate over a list copy as we might modify the underlying structure
             parents_to_check_for_emptiness = list(affected_source_parent_items)
             logger.debug(
-                f"Checking {len(parents_to_check_for_emptiness)} parent items for emptiness after deletions."
+                f"Checking {len(parents_to_check_for_emptiness)} parent groups for emptiness after deletion."
             )
 
             for parent_item_candidate in parents_to_check_for_emptiness:
@@ -1160,7 +1160,7 @@ class MainWindow(QMainWindow):
                     parent_item_candidate.model() is None
                 ):  # Already removed (e.g. child of another removed empty group)
                     logger.debug(
-                        f"Parent candidate '{parent_item_candidate.text()}' no longer in model, skipping."
+                        f"Parent candidate '{parent_item_candidate.text()}' is no longer in the model, skipping."
                     )
                     continue
 
@@ -1203,7 +1203,7 @@ class MainWindow(QMainWindow):
                         )
 
                     logger.debug(
-                        f"Attempting to remove empty group header: '{parent_item_candidate.text()}' (row {item_row}) from parent {parent_display_name_for_log}"
+                        f"Removing empty group header '{parent_item_candidate.text()}' (row {item_row}) from parent {parent_display_name_for_log}"
                     )
 
                     # Use takeRow on the QStandardItem that is the actual parent in the model hierarchy
@@ -1212,12 +1212,10 @@ class MainWindow(QMainWindow):
                     if (
                         removed_items_list
                     ):  # takeRow returns a list of QStandardItems removed
-                        logger.debug(
-                            f"Successfully removed '{parent_item_candidate.text()}'."
-                        )
+                        logger.debug(f"Removed empty group: '{parent_item_candidate.text()}'.")
                     else:
                         logger.warning(
-                            f"takeRow failed to remove '{parent_item_candidate.text()}' from parent {parent_display_name_for_log} at row {item_row}."
+                            f"Failed to remove empty group '{parent_item_candidate.text()}' from parent {parent_display_name_for_log} at row {item_row}."
                         )
 
             self.statusBar().showMessage(
@@ -1227,9 +1225,7 @@ class MainWindow(QMainWindow):
 
             # Get the state of the view AFTER deletions have occurred.
             visible_paths_after_delete = self._get_all_visible_image_paths()
-            logger.debug(
-                f"Visible paths after delete ({len(visible_paths_after_delete)}): {visible_paths_after_delete[:5]}..."
-            )
+            logger.debug(f"{len(visible_paths_after_delete)} visible paths remaining after deletion.")
 
             # This flag will be used to determine if our special focused-delete logic handled the selection.
             selection_handled_by_focus_logic = False
@@ -1241,7 +1237,7 @@ class MainWindow(QMainWindow):
                     if p in visible_paths_after_delete
                 ]
                 logger.debug(
-                    f"{len(remaining_selection_paths)} items remain from original selection."
+                    f"Found {len(remaining_selection_paths)} remaining items from original selection."
                 )
 
                 if remaining_selection_paths:
@@ -1418,7 +1414,7 @@ class MainWindow(QMainWindow):
         return QModelIndex()  # No visible image item found in this subtree
 
     def closeEvent(self, event):
-        logger.info("MainWindow.closeEvent - Stopping all workers.")
+        logger.info("Stopping all workers on application close.")
         self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
         event.accept()
 
@@ -1488,7 +1484,7 @@ class MainWindow(QMainWindow):
         )
 
         if not group_images or local_idx == -1:
-            logger.debug("Navigate left: No group images found.")
+            logger.debug("Navigate left: No sibling images found in the current group.")
             return
 
         new_local_idx = local_idx - 1
@@ -1505,9 +1501,9 @@ class MainWindow(QMainWindow):
                 self.proxy_model.mapToSource(new_selection_candidate)
             )
             if item:
-                logger.debug(f"Navigating left to: {item.text()}")
+                logger.debug(f"Navigated left to: {item.text()}")
         else:
-            logger.debug("Navigate left: Failed to select new item in group.")
+            logger.debug("Navigate left: Could not select a new item in the group.")
 
     def _navigate_right_in_group(self):
         active_view = self._get_active_file_view()
@@ -1527,7 +1523,7 @@ class MainWindow(QMainWindow):
         )
 
         if not group_images or local_idx == -1:
-            logger.debug("Navigate right: No group images found.")
+            logger.debug("Navigate right: No sibling images found in the current group.")
             return
 
         new_local_idx = local_idx + 1
@@ -1546,14 +1542,14 @@ class MainWindow(QMainWindow):
                 self.proxy_model.mapToSource(new_selection_candidate)
             )
             if item:
-                logger.debug(f"Navigating right to: {item.text()}")
+                logger.debug(f"Navigated right to: {item.text()}")
         else:
-            logger.debug("Navigate right: Failed to select new item in group.")
+            logger.debug("Navigate right: Could not select a new item in the group.")
 
     def _navigate_up_sequential(self):  # Renamed from _navigate_previous
         active_view = self._get_active_file_view()
         if not active_view:
-            logger.debug("Navigate up: No active view.")
+            logger.debug("Navigate up: No active view found.")
             return
 
         current_proxy_idx = active_view.currentIndex()
@@ -1608,7 +1604,7 @@ class MainWindow(QMainWindow):
                     self.proxy_model.mapToSource(new_selection_candidate)
                 )
                 if item:
-                    logger.debug(f"Navigating up to: {item.text()}")
+                    logger.debug(f"Navigated up to: {item.text()}")
                 break
             elif isinstance(active_view, QTreeView) and self._is_expanded_group_header(
                 active_view, prev_visual_idx
@@ -1627,7 +1623,7 @@ class MainWindow(QMainWindow):
 
             iter_idx = prev_visual_idx
             if iteration_count == max_iterations - 1:  # Safety break
-                logger.warning("Navigate up: Max iterations reached.")
+                logger.warning("Navigate up: Max iterations reached, aborting.")
 
         if new_selection_candidate.isValid():
             active_view.setCurrentIndex(new_selection_candidate)
@@ -1635,12 +1631,12 @@ class MainWindow(QMainWindow):
                 new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible
             )
         else:
-            logger.debug("Navigate up: No valid previous image found.")
+            logger.debug("Navigate up: No previous image found.")
 
     def _navigate_down_sequential(self):  # Renamed from _navigate_next
         active_view = self._get_active_file_view()
         if not active_view:
-            logger.debug("Navigate down: No active view.")
+            logger.debug("Navigate down: No active view found.")
             return
 
         current_index = active_view.currentIndex()
@@ -1700,11 +1696,11 @@ class MainWindow(QMainWindow):
                         self.proxy_model.mapToSource(next_item_index)
                     )
                     if item:
-                        logger.debug(f"Navigating down to: {item.text()}")
+                        logger.debug(f"Navigated down to: {item.text()}")
                     break  # Exit the search loop
 
         if iteration_count >= safety_iteration_limit:
-            logger.warning("Navigate down: Max iterations reached.")
+            logger.warning("Navigate down: Max iterations reached, aborting.")
 
         if next_item_index.isValid():
             active_view.setCurrentIndex(next_item_index)
@@ -1712,7 +1708,7 @@ class MainWindow(QMainWindow):
                 next_item_index, QAbstractItemView.ScrollHint.EnsureVisible
             )
         else:
-            logger.debug("Navigate down: No valid next image found.")
+            logger.debug("Navigate down: No next image found.")
 
     def _find_first_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
@@ -1838,10 +1834,10 @@ class MainWindow(QMainWindow):
                 proxy_idx = proxy_model.index(r, 0, root_proxy_index)
                 if self._is_valid_image_item(proxy_idx):
                     return proxy_idx
-            logger.debug("FIND_LAST (List): No visible image item found.")
+            logger.debug("Find last item (List): No visible image item found.")
             return QModelIndex()
 
-        logger.debug("FIND_LAST: Unknown view type or scenario.")
+        logger.debug("Find last item: Unknown view type or scenario.")
         return QModelIndex()
 
     def _get_all_visible_image_paths(self) -> List[str]:
@@ -1855,7 +1851,7 @@ class MainWindow(QMainWindow):
         # Ensure model is a QSortFilterProxyModel, as it holds the filtered/sorted view
         if not isinstance(proxy_model, QSortFilterProxyModel):
             logger.warning(
-                "_get_all_visible_image_paths: Active view's model is not QSortFilterProxyModel."
+                "Cannot get visible paths: Active view's model is not a QSortFilterProxyModel."
             )
             return paths
 
@@ -1920,7 +1916,7 @@ class MainWindow(QMainWindow):
         proxy_model = active_view.model()
         if not isinstance(proxy_model, QSortFilterProxyModel):
             logger.warning(
-                "_find_proxy_index_for_path: Active view's model is not QSortFilterProxyModel."
+                "Cannot find proxy index: Active view's model is not a QSortFilterProxyModel."
             )
             return QModelIndex()
 
