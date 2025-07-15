@@ -387,11 +387,6 @@ class RawImageProcessor:
                     color_enhancer = ImageEnhance.Color(pil_img)
                     pil_img = color_enhancer.enhance(1.2)  # Enhance color saturation
 
-                    # Optional: Further brightness with PIL if rawpy's `bright` isn't enough
-                    # logger.info(f"[RawImageProcessor.load_raw_as_pil] Applying PIL ImageEnhance.Brightness (1.1) for: {normalized_path}")
-                    # brightness_enhancer = ImageEnhance.Brightness(pil_img)
-                    # pil_img = brightness_enhancer.enhance(1.1)
-
                 return pil_img.convert(target_mode)
         except UnidentifiedImageError:
             logger.error(

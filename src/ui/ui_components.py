@@ -215,7 +215,7 @@ class PreviewPreloaderWorker(QObject):
             )
         except Exception as e:
             err_msg = f"Error during preview preloading thread: {e}"
-            logger.error(err_msg)
+            logger.error(err_msg, exc_info=True)
             self.error.emit(err_msg)
         finally:
             if self._is_running:
@@ -264,7 +264,7 @@ class BlurDetectionWorker(QObject):
             )
         except Exception as e:
             err_msg = f"Error during batch blur detection: {e}"
-            logger.error(err_msg)
+            logger.error(err_msg, exc_info=True)
             self.error.emit(err_msg)
         finally:
             if (
