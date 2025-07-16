@@ -334,11 +334,13 @@ class RawImageProcessor:
         demosaic_algorithm: Optional[
             rawpy.DemosaicAlgorithm
         ] = None,  # e.g. rawpy.DemosaicAlgorithm.AAHD
+        force_default_brightness: bool = False,
     ) -> Optional[Image.Image]:
         """
         Loads a RAW image as a PIL Image object, with more granular control over rawpy postprocessing.
         'apply_auto_edits' will enable brightness adjustment and auto-contrast.
-        For more direct control, use specific rawpy parameters.
+        'force_default_brightness' can be used with 'apply_auto_edits' to skip the
+        extra brightness factor, which is useful for post-rotation processing.
         """
         normalized_path = os.path.normpath(image_path)
         try:
@@ -356,26 +358,28 @@ class RawImageProcessor:
                     postprocess_params.pop("use_camera_wb", None)
 
                 if apply_auto_edits:
-                    logger.debug(
-                        f"Applying auto-edits (bright=1.25) via rawpy for: {os.path.basename(normalized_path)}"
-                    )
-                    postprocess_params["bright"] = 1.25  # Increased brightness
-                    postprocess_params["no_auto_bright"] = (
-                        False  # Ensure rawpy's auto bright is not disabled
-                    )
-                    # Other params like 'gamma' can be added if specific adjustments are needed
+                    if not force_default_brightness:
+                        logger.debug(
+                            f"Applying auto-edits (bright=1.25) via rawpy for: {os.path.basename(normalized_path)}"
+                        )
+                        postprocess_params["bright"] = 1.25  # Apply custom brightness
+                    else:
+                        logger.debug(
+                            f"Applying auto-edits but forcing default brightness for: {os.path.basename(normalized_path)}"
+                        )
+                    postprocess_params["no_auto_bright"] = False
                 else:
-                    # When auto_edits are OFF, we still want basic rawpy auto-brightening.
-                    # So, 'no_auto_bright' remains False (its default in rawpy or explicit here).
-                    # We don't set 'bright' here, letting rawpy manage it.
+                    # When auto_edits are OFF, disable rawpy's auto-brightening
                     logger.info(
-                        f"Auto-edits OFF. Using rawpy default auto-bright for: {os.path.basename(normalized_path)}"
+                        f"Auto-edits OFF. Disabling rawpy auto-bright for: {os.path.basename(normalized_path)}"
                     )
+                    postprocess_params["no_auto_bright"] = True
 
                 rgb_array = raw.postprocess(**postprocess_params)
                 pil_img = Image.fromarray(rgb_array)
 
-                if apply_auto_edits:  # Apply PIL enhancements if auto_edits are on
+                # Apply PIL enhancements if auto_edits are on, regardless of brightness setting
+                if apply_auto_edits:
                     logger.info(
                         f"Applying PIL ImageOps.autocontrast for: {os.path.basename(normalized_path)}"
                     )

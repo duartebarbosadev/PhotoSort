@@ -3630,9 +3630,23 @@ class MainWindow(QMainWindow):
                 f"HSR: {filename} is in current selection, triggering selection changed handler."
             )
             t7 = time.perf_counter()
-            self._handle_file_selection_changed()
+
+            # Pre-cache the correctly generated preview before the selection handler runs
+            self.image_pipeline.get_preview_qpixmap(
+                file_path,
+                display_max_size=(8000, 8000),
+                apply_auto_edits=self.apply_auto_edits_enabled,
+                force_regenerate=True,
+                force_default_brightness=True,  # This is the key change
+            )
+            logger.info(
+                f"HSR: Pre-cached non-brightened preview for {filename} in {time.perf_counter() - t7:.4f}s"
+            )
+
             t8 = time.perf_counter()
-            logger.info(f"HSR: _handle_file_selection_changed took {t8 - t7:.4f}s.")
+            self._handle_file_selection_changed()
+            t9 = time.perf_counter()
+            logger.info(f"HSR: _handle_file_selection_changed took {t9 - t8:.4f}s.")
 
         self.statusBar().showMessage(message, 5000)
         logger.info(message)  # Log the original user-facing message

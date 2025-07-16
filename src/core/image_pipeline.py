@@ -137,6 +137,7 @@ class ImagePipeline:
         image_path: str,
         display_max_size: Optional[Tuple[int, int]],
         apply_auto_edits: bool = False,
+        force_default_brightness: bool = False,
     ) -> Optional[Image.Image]:
         """
         Generates a PIL image sized for display, without using preload cache.
@@ -165,6 +166,7 @@ class ImagePipeline:
                 target_mode="RGBA",
                 apply_auto_edits=apply_auto_edits,
                 half_size=False,  # Use full processing for better quality display master
+                force_default_brightness=force_default_brightness,
             )
             if temp_pil_img:
                 temp_pil_img.thumbnail(target_resolution, Image.Resampling.LANCZOS)
@@ -195,6 +197,8 @@ class ImagePipeline:
             Tuple[int, int]
         ],  # Max size for the QPixmap to be displayed
         apply_auto_edits: bool = False,
+        force_regenerate: bool = False,
+        force_default_brightness: bool = False,
     ) -> Optional[QPixmap]:
         """
         Gets a QPixmap preview for the image path, scaled to display_max_size.
@@ -215,12 +219,13 @@ class ImagePipeline:
         display_cache_key = (normalized_path, key_display_size, apply_auto_edits)
 
         # 1. Check if display-sized version is already cached
-        cached_display_pil = self.preview_cache.get(display_cache_key)
-        if cached_display_pil:
-            logger.debug(
-                f"Display cache HIT: {os.path.basename(normalized_path)} (Size: {key_display_size})"
-            )
-            return QPixmap.fromImage(ImageQt(cached_display_pil))
+        if not force_regenerate:
+            cached_display_pil = self.preview_cache.get(display_cache_key)
+            if cached_display_pil:
+                logger.debug(
+                    f"Display cache HIT: {os.path.basename(normalized_path)} (Size: {key_display_size})"
+                )
+                return QPixmap.fromImage(ImageQt(cached_display_pil))
 
         # 2. Check if a high-resolution PRELOADED version is cached
         # Key for preloaded high-res version (uses PRELOAD_MAX_RESOLUTION)
@@ -245,7 +250,10 @@ class ImagePipeline:
             f"Preview cache MISS for {os.path.basename(normalized_path)}. Generating on-demand..."
         )
         generated_display_pil = self._generate_pil_preview_for_display(
-            normalized_path, display_max_size, apply_auto_edits
+            normalized_path,
+            display_max_size,
+            apply_auto_edits,
+            force_default_brightness,
         )
         if generated_display_pil:
             self.preview_cache.set(display_cache_key, generated_display_pil)
