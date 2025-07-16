@@ -348,3 +348,59 @@ class RotationDetectionWorker(QObject):
             logger.error(f"Error in rotation detection worker: {e}")
             if not self._should_stop:
                 self.error.emit(str(e))
+
+
+# --- Similarity Engine Worker ---
+class SimilarityWorker(QObject):
+    """Worker for running similarity analysis in the background."""
+
+    progress_update = pyqtSignal(int, str)
+    embeddings_generated = pyqtSignal(object)  # Using object to pass dict
+    clustering_complete = pyqtSignal(object)  # Using object to pass dict
+    error = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, file_paths: List[str], apply_auto_edits: bool, parent=None):
+        super().__init__(parent)
+        self.file_paths = file_paths
+        self.apply_auto_edits = apply_auto_edits
+        self._is_running = True
+        self.similarity_engine = None
+
+    def stop(self):
+        self._is_running = False
+        if self.similarity_engine:
+            self.similarity_engine.stop()
+
+    def run(self):
+        """The main method that will be executed in the new thread."""
+        self._is_running = True
+        try:
+            from src.core.similarity_engine import SimilarityEngine
+
+            # 1. Instantiate the engine inside the worker thread
+            self.similarity_engine = SimilarityEngine()
+
+            # 2. Connect its signals to this worker's signals
+            self.similarity_engine.progress_update.connect(self.progress_update)
+            self.similarity_engine.embeddings_generated.connect(
+                self.embeddings_generated
+            )
+            self.similarity_engine.clustering_complete.connect(self.clustering_complete)
+            self.similarity_engine.error.connect(self.error)
+
+            # 3. Connect the final signal to this worker's finished signal
+            self.similarity_engine.clustering_complete.connect(self.finished)
+            self.similarity_engine.error.connect(self.finished)
+
+            # 4. Start the process
+            self.similarity_engine.generate_embeddings_for_files(
+                self.file_paths, self.apply_auto_edits
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Error initializing or running SimilarityEngine: {e}", exc_info=True
+            )
+            self.error.emit(str(e))
+            self.finished.emit()

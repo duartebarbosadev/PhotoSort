@@ -12,6 +12,7 @@ from src.ui.ui_components import (
     PreviewPreloaderWorker,
     BlurDetectionWorker,
     RotationDetectionWorker,
+    SimilarityWorker,
 )
 from src.core.image_pipeline import ImagePipeline  # Needed for PreviewPreloaderWorker
 from src.core.rating_loader_worker import (
@@ -82,9 +83,7 @@ class WorkerManager(QObject):
         self.file_scanner: Optional[FileScanner] = None
 
         self.similarity_thread: Optional[QThread] = None
-        self.similarity_engine: Optional["SimilarityEngine"] = (
-            None  # Use string literal for type hint
-        )
+        self.similarity_worker: Optional["SimilarityWorker"] = None
 
         self.preview_preloader_thread: Optional[QThread] = None
         self.preview_preloader_worker: Optional[PreviewPreloaderWorker] = None
@@ -108,10 +107,10 @@ class WorkerManager(QObject):
                 try:
                     worker_stop_method()
                 except Exception as e:
-                     logger.error(
+                    logger.error(
                         f"Error calling worker stop method for thread {thread}. "
                         f"Worker stop method: {worker_stop_method}.",
-                        exc_info=True
+                        exc_info=True,
                     )
             thread.quit()
             if not thread.wait(5000):  # Wait 5 seconds
@@ -185,9 +184,9 @@ class WorkerManager(QObject):
             self.scanner_thread = temp_thread
 
     def _cleanup_similarity_refs(self):
-        if self.similarity_engine:
-            self.similarity_engine.deleteLater()
-            self.similarity_engine = None
+        if self.similarity_worker:
+            self.similarity_worker.deleteLater()
+            self.similarity_worker = None
         if self.similarity_thread:
             self.similarity_thread.deleteLater()
             self.similarity_thread = None
@@ -197,40 +196,32 @@ class WorkerManager(QObject):
     def start_similarity_analysis(self, file_paths: List[str], apply_auto_edits: bool):
         self.stop_similarity_analysis()
         self.similarity_thread = QThread()
-        from src.core.similarity_engine import SimilarityEngine  # Lazy import
+        self.similarity_worker = SimilarityWorker(file_paths, apply_auto_edits)
+        self.similarity_worker.moveToThread(self.similarity_thread)
 
-        self.similarity_engine = SimilarityEngine()
-        self.similarity_engine.moveToThread(self.similarity_thread)
-
-        self.similarity_engine.progress_update.connect(self.similarity_progress)
-        self.similarity_engine.embeddings_generated.connect(
+        # Connect signals from the new worker to the manager's signals
+        self.similarity_worker.progress_update.connect(self.similarity_progress)
+        self.similarity_worker.embeddings_generated.connect(
             self.similarity_embeddings_generated
         )
-        self.similarity_engine.clustering_complete.connect(
+        self.similarity_worker.clustering_complete.connect(
             self.similarity_clustering_complete
         )
-        self.similarity_engine.error.connect(self.similarity_error)
+        self.similarity_worker.error.connect(self.similarity_error)
+        self.similarity_worker.finished.connect(self.similarity_thread.quit)
 
-        self.similarity_thread.started.connect(
-            lambda: self.similarity_engine.generate_embeddings_for_files(
-                file_paths, apply_auto_edits
-            )
-        )
-        # Similarity engine's process has multiple stages, quit on clustering_complete or error
-        self.similarity_clustering_complete.connect(self.similarity_thread.quit)
-        self.similarity_error.connect(self.similarity_thread.quit)
-
+        self.similarity_thread.started.connect(self.similarity_worker.run)
         self.similarity_thread.finished.connect(self._cleanup_similarity_refs)
 
         self.similarity_thread.start()
         logger.info("Similarity engine thread started.")
 
     def stop_similarity_analysis(self):
-        worker_stop = self.similarity_engine.stop if self.similarity_engine else None
+        worker_stop = self.similarity_worker.stop if self.similarity_worker else None
         temp_thread, _ = self._terminate_thread(self.similarity_thread, worker_stop)
         if temp_thread is None:
             self.similarity_thread = None
-            self.similarity_engine = None
+            self.similarity_worker = None
         else:
             self.similarity_thread = temp_thread
 
