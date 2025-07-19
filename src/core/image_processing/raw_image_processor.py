@@ -11,14 +11,15 @@ from PIL import ImageEnhance  # Added for brightness adjustment on PIL images
 from src.core.app_settings import (
     RAW_AUTO_EDIT_BRIGHTNESS_STANDARD,
     RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED,
+    THUMBNAIL_MAX_SIZE,
+    PRELOAD_MAX_RESOLUTION,
+    BLUR_DETECTION_PREVIEW_SIZE,
 )
 
 # Define a reasonable max size for thumbnails to avoid using too much memory
 # These might be passed in by an orchestrator class later, but for now,
 # they are here as they were in the original ImageHandler logic for these operations.
-THUMBNAIL_MAX_SIZE = (256, 256)
-PRELOAD_MAX_RESOLUTION = (1920, 1200)  # Fixed high resolution for preloading
-BLUR_DETECTION_PREVIEW_SIZE = (640, 480)  # Size for image used in blur detection
+# Constants moved to app_settings
 
 
 # Helper function to check RAW extensions safely

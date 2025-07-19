@@ -52,6 +52,13 @@ DEFAULT_BLUR_DETECTION_THRESHOLD = 100.0  # Default threshold for blur detection
 DEFAULT_MAX_ITERATIONS = 5000  # Default maximum iterations for various loops
 DEFAULT_SAFETY_ITERATION_MULTIPLIER = 2  # Multiplier for safety iteration limits
 
+# Batch processing
+METADATA_PROCESSING_CHUNK_SIZE = 25  # Chunk size for metadata processing
+METADATA_EMIT_BATCH_SIZE = 50  # Batch size for metadata emission
+
+# Preview size estimation
+PREVIEW_ESTIMATED_SIZE_FACTOR = 1.35  # Factor for estimating preview sizes
+
 # --- AI/ML Constants ---
 # DBSCAN clustering parameters
 DBSCAN_EPS = 0.05  # For cosine metric: 1 - cosine_similarity. Smaller eps = higher similarity
@@ -61,6 +68,9 @@ DEFAULT_SIMILARITY_BATCH_SIZE = 16  # Default batch size for similarity processi
 # RAW image processing
 RAW_AUTO_EDIT_BRIGHTNESS_STANDARD = 1.15  # Standard brightness adjustment for RAW auto-edits
 RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED = 1.25  # Enhanced brightness adjustment for RAW auto-edits
+
+# Model settings
+ROTATION_MODEL_IMAGE_SIZE = 384  # Image size for rotation detection model
 
 # --- Cache Constants ---
 # Thumbnail cache
@@ -79,6 +89,12 @@ DEFAULT_RATING_CACHE_SIZE_LIMIT_MB = 256  # Default 256MB limit for rating cache
 # --- File Operation Constants ---
 # Rotation timeout
 JPEGTRAN_TIMEOUT_SECONDS = 5  # Timeout for jpegtran version check
+
+# --- Image Processing Constants ---
+# Image size settings
+THUMBNAIL_MAX_SIZE = (256, 256)  # Maximum size for thumbnails
+PRELOAD_MAX_RESOLUTION = (1920, 1200)  # Fixed high resolution for preloading
+BLUR_DETECTION_PREVIEW_SIZE = (640, 480)  # Size for image used in blur detection
 
 # --- Model Settings ---
 DEFAULT_CLIP_MODEL = (

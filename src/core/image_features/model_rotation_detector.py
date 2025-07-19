@@ -16,6 +16,7 @@ from src.core.image_processing.raw_image_processor import (
 from src.core.app_settings import (
     get_orientation_model_name,
     set_orientation_model_name,
+    ROTATION_MODEL_IMAGE_SIZE,
 )
 
 
@@ -27,7 +28,7 @@ class ModelNotFoundError(Exception):
 
 # --- Constants for the model ---
 MODEL_SAVE_DIR = "models"
-IMAGE_SIZE = 384
+IMAGE_SIZE = ROTATION_MODEL_IMAGE_SIZE
 
 CLASS_TO_ANGLE_MAP = {
     0: 0,  # Correctly oriented

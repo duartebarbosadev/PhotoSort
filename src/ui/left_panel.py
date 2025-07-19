@@ -11,6 +11,12 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QSize
+from src.core.app_settings import (
+    FIXED_ICON_SIZE,
+    FIXED_GRID_WIDTH,
+    FIXED_GRID_HEIGHT,
+    GRID_SPACING,
+)
 
 from src.ui.ui_components import DroppableTreeView, FocusHighlightDelegate
 
@@ -350,9 +356,7 @@ class LeftPanel(QWidget):
             return
 
         # Fixed grid layout to prevent filename length from affecting layout
-        FIXED_ICON_SIZE = 96  # Fixed icon size
-        FIXED_GRID_SIZE = QSize(128, 148)  # Fixed grid cell size (width, height)
-        GRID_SPACING = 4
+        FIXED_GRID_SIZE = QSize(FIXED_GRID_WIDTH, FIXED_GRID_HEIGHT)  # Fixed grid cell size (width, height)
 
         # Set fixed icon size and grid properties
         self.grid_display_view.setIconSize(QSize(FIXED_ICON_SIZE, FIXED_ICON_SIZE))
