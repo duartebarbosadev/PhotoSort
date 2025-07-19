@@ -9,6 +9,7 @@ from PIL import Image, ImageOps
 import pyexiv2
 from pathlib import Path
 from src.core.image_file_ops import ImageFileOperations
+from src.core.app_settings import JPEGTRAN_TIMEOUT_SECONDS
 import piexif  # For EXIF manipulation with Pillow
 from pillow_heif import HeifImageFile  # For HEIF/HEIC support
 
@@ -63,7 +64,7 @@ class ImageRotator:
         """Check if jpegtran is available in the system PATH."""
         try:
             result = subprocess.run(
-                ["jpegtran", "-version"], capture_output=True, text=True, timeout=5
+                ["jpegtran", "-version"], capture_output=True, text=True, timeout=JPEGTRAN_TIMEOUT_SECONDS
             )
             return result.returncode == 0
         except (

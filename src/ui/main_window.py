@@ -66,6 +66,12 @@ from src.core.app_settings import (
     set_auto_edit_photos,
     get_mark_for_deletion_mode,
     set_mark_for_deletion_mode,
+    DEFAULT_BLUR_DETECTION_THRESHOLD,
+    DEFAULT_MAX_ITERATIONS,
+    DEFAULT_SAFETY_ITERATION_MULTIPLIER,
+    LEFT_PANEL_STRETCH,
+    CENTER_PANEL_STRETCH,
+    RIGHT_PANEL_STRETCH,
 )
 from src.ui.app_state import AppState
 from src.ui.ui_components import LoadingOverlay
@@ -187,7 +193,7 @@ class MainWindow(QMainWindow):
         self.group_by_similarity_mode = False
         self.apply_auto_edits_enabled = get_auto_edit_photos()
         self.mark_for_deletion_mode_enabled = get_mark_for_deletion_mode()
-        self.blur_detection_threshold = 100.0
+        self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
         self.rotation_suggestions = {}
 
         self.filter_combo = QComboBox()
@@ -538,9 +544,9 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(self.metadata_sidebar)
 
         # Set stretch factors: left=1, center=3, right=1 (when visible)
-        main_splitter.setStretchFactor(0, 1)  # Left pane
-        main_splitter.setStretchFactor(1, 3)  # Center pane
-        main_splitter.setStretchFactor(2, 1)  # Right pane (sidebar)
+        main_splitter.setStretchFactor(0, LEFT_PANEL_STRETCH)  # Left pane
+        main_splitter.setStretchFactor(1, CENTER_PANEL_STRETCH)  # Center pane
+        main_splitter.setStretchFactor(2, RIGHT_PANEL_STRETCH)  # Right pane (sidebar)
 
         # Initially hide the sidebar by setting its size to 0
         main_splitter.setSizes([350, 850, 0])
@@ -1582,7 +1588,7 @@ class MainWindow(QMainWindow):
         if max_iterations == 0 and self.app_state and self.app_state.image_files_data:
             max_iterations = len(self.app_state.image_files_data) * 5
         if max_iterations == 0:
-            max_iterations = 5000
+            max_iterations = DEFAULT_MAX_ITERATIONS
 
         for iteration_count in range(max_iterations):
             prev_visual_idx = active_view.indexAbove(iter_idx)
@@ -1660,13 +1666,13 @@ class MainWindow(QMainWindow):
         iteration_count = 0
 
         # Determine a safe iteration limit to prevent infinite loops in unexpected scenarios
-        safety_iteration_limit = self.proxy_model.rowCount(QModelIndex()) * 2
+        safety_iteration_limit = self.proxy_model.rowCount(QModelIndex()) * DEFAULT_SAFETY_ITERATION_MULTIPLIER
         if self.app_state.image_files_data:
             safety_iteration_limit = max(
-                safety_iteration_limit, len(self.app_state.image_files_data) * 2
+                safety_iteration_limit, len(self.app_state.image_files_data) * DEFAULT_SAFETY_ITERATION_MULTIPLIER
             )
         if safety_iteration_limit == 0:
-            safety_iteration_limit = 5000
+            safety_iteration_limit = DEFAULT_MAX_ITERATIONS
 
         while temp_index.isValid() and iteration_count < safety_iteration_limit:
             iteration_count += 1

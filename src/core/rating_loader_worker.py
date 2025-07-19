@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 
 from src.core.metadata_processor import MetadataProcessor
 from src.core.caching.rating_cache import RatingCache
+from src.core.app_settings import METADATA_EMIT_BATCH_SIZE
 from src.ui.app_state import AppState
 
 # DEFAULT_METADATA_WORKERS is no longer needed as batching is handled by MetadataProcessor
@@ -83,7 +84,7 @@ class RatingLoaderWorker(QObject):
                 self._app_state.exif_disk_cache,
             )
 
-            METADATA_EMIT_BATCH_SIZE = 50
+            # Use centralized batch size constant
             PROGRESS_EMIT_INTERVAL = (
                 20  # Emit progress every 20 files, or if it's the last one
             )
