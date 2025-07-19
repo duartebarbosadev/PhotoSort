@@ -32,6 +32,54 @@ DEFAULT_MARK_FOR_DELETION_MODE = True  # Default mark for deletion mode setting
 MAX_RECENT_FOLDERS = 10  # Max number of recent folders to store
 DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
 
+# --- UI Constants ---
+# Grid view settings
+FIXED_ICON_SIZE = 96  # Fixed icon size for grid view
+FIXED_GRID_WIDTH = 128  # Fixed grid cell width
+FIXED_GRID_HEIGHT = 148  # Fixed grid cell height  
+GRID_SPACING = 4  # Spacing between grid items
+
+# Main window layout
+LEFT_PANEL_STRETCH = 1  # Left panel stretch factor
+CENTER_PANEL_STRETCH = 3  # Center panel stretch factor
+RIGHT_PANEL_STRETCH = 1  # Right panel stretch factor
+
+# --- Processing Constants ---
+# Blur detection
+DEFAULT_BLUR_DETECTION_THRESHOLD = 100.0  # Default threshold for blur detection
+
+# Iteration limits for safety
+DEFAULT_MAX_ITERATIONS = 5000  # Default maximum iterations for various loops
+DEFAULT_SAFETY_ITERATION_MULTIPLIER = 2  # Multiplier for safety iteration limits
+
+# --- AI/ML Constants ---
+# DBSCAN clustering parameters
+DBSCAN_EPS = 0.05  # For cosine metric: 1 - cosine_similarity. Smaller eps = higher similarity
+DBSCAN_MIN_SAMPLES = 2  # Minimum number of images to form a dense region (cluster)
+DEFAULT_SIMILARITY_BATCH_SIZE = 16  # Default batch size for similarity processing
+
+# RAW image processing
+RAW_AUTO_EDIT_BRIGHTNESS_STANDARD = 1.15  # Standard brightness adjustment for RAW auto-edits
+RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED = 1.25  # Enhanced brightness adjustment for RAW auto-edits
+
+# --- Cache Constants ---
+# Thumbnail cache
+DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES = 2**30  # 1 GB default for thumbnail cache
+THUMBNAIL_MIN_FILE_SIZE = 1024 * 1024  # 1 MB minimum file size for disk caching
+
+# Preview cache  
+PREVIEW_CACHE_MIN_FILE_SIZE = 256 * 1024  # 256 KB minimum file size for disk caching
+
+# EXIF cache
+EXIF_CACHE_MIN_FILE_SIZE = 4096  # 4 KB minimum file size for disk caching
+
+# Rating cache
+DEFAULT_RATING_CACHE_SIZE_LIMIT_MB = 256  # Default 256MB limit for rating cache
+
+# --- File Operation Constants ---
+# Rotation timeout
+JPEGTRAN_TIMEOUT_SECONDS = 5  # Timeout for jpegtran version check
+
 # --- Model Settings ---
 DEFAULT_CLIP_MODEL = (
     "sentence-transformers/clip-ViT-B-32"  # Common default, adjust if different

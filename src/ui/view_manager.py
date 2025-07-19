@@ -2,6 +2,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from PyQt6.QtCore import QSize
 from PyQt6.QtWidgets import QListView
+from src.core.app_settings import (
+    FIXED_ICON_SIZE,
+    FIXED_GRID_WIDTH,
+    FIXED_GRID_HEIGHT,
+    GRID_SPACING,
+)
 
 if TYPE_CHECKING:
     from src.ui.main_window import MainWindow
@@ -137,9 +143,7 @@ class ViewManager:
             return
 
         # Fixed grid layout to prevent filename length from affecting layout
-        FIXED_ICON_SIZE = 96  # Fixed icon size
-        FIXED_GRID_SIZE = QSize(128, 148)  # Fixed grid cell size (width, height)
-        GRID_SPACING = 4
+        FIXED_GRID_SIZE = QSize(FIXED_GRID_WIDTH, FIXED_GRID_HEIGHT)  # Fixed grid cell size (width, height)
 
         # Set fixed icon size and grid properties
         self.left_panel.grid_display_view.setIconSize(

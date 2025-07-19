@@ -8,7 +8,7 @@ from PIL import Image
 from typing import Optional, Tuple
 
 # Import the settings function to get the cache size limit
-from src.core.app_settings import get_preview_cache_size_bytes
+from src.core.app_settings import get_preview_cache_size_bytes, PREVIEW_CACHE_MIN_FILE_SIZE
 
 # Default path for the preview PIL image cache
 DEFAULT_PREVIEW_CACHE_DIR = os.path.join(
@@ -40,7 +40,7 @@ class PreviewCache:
         self._cache = diskcache.Cache(
             directory=cache_dir,
             size_limit=self._size_limit_bytes,
-            disk_min_file_size=256 * 1024,
+            disk_min_file_size=PREVIEW_CACHE_MIN_FILE_SIZE,
         )  # 256KB
         log_msg = f"Preview cache initialized at {cache_dir} with size limit {self._size_limit_bytes / (1024 * 1024 * 1024):.2f} GB"
         logger.info(log_msg)
@@ -230,7 +230,7 @@ class PreviewCache:
         self._cache = diskcache.Cache(
             directory=self._cache_dir,
             size_limit=self._size_limit_bytes,
-            disk_min_file_size=256 * 1024,
+            disk_min_file_size=PREVIEW_CACHE_MIN_FILE_SIZE,
         )
         logger.info(
             f"Preview cache reinitialized. New size limit: {self.get_current_size_limit_gb():.2f} GB."

@@ -5,12 +5,12 @@ import logging
 logger = logging.getLogger(__name__)
 import time  # Added for startup timing
 from typing import Optional
+from src.core.app_settings import DEFAULT_RATING_CACHE_SIZE_LIMIT_MB
 
 # Default path for the rating cache
 DEFAULT_RATING_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".cache", "phototagger_ratings"
 )
-DEFAULT_RATING_CACHE_SIZE_LIMIT_MB = 256  # Default 256MB limit, ratings are small
 
 
 class RatingCache:
