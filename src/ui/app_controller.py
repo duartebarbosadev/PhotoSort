@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import concurrent.futures
 
 logger = logging.getLogger(__name__)
 from typing import List, Dict, Any, Tuple
@@ -696,102 +697,124 @@ class AppController(QObject):
             bool(self.app_state.image_files_data)
         )
 
-    def _apply_approved_rotations(self, approved_rotations: Dict[str, int]):
-        """Apply the approved rotations to the images."""
-        apply_start_time = time.perf_counter()
-        logger.info(f"Applying {len(approved_rotations)} approved rotations.")
+    def _rotate_single_image_worker(
+        self, file_path: str, rotation_degrees: int
+    ) -> Tuple[str, bool, str, bool]:
+        """
+        Worker function for rotating a single image in parallel.
+        
+        Returns:
+            Tuple of (file_path, success, message, is_lossy)
+        """
         from src.core.metadata_processor import MetadataProcessor
+        
+        filename = os.path.basename(file_path)
+        logger.debug(f"Processing {rotation_degrees}° rotation for {filename}...")
+        
+        try:
+            # Map rotation degrees to direction
+            if rotation_degrees == 90:
+                direction = "clockwise"
+            elif rotation_degrees == -90:
+                direction = "counterclockwise"
+            elif rotation_degrees == 180:
+                direction = "180"
+            else:
+                logger.warning(f"Unsupported rotation angle {rotation_degrees} for {filename}")
+                return file_path, False, f"Unsupported rotation angle {rotation_degrees}", False
+
+            # Try metadata rotation first
+            metadata_success, needs_lossy, message = (
+                MetadataProcessor.try_metadata_rotation_first(
+                    file_path, direction, self.main_window.app_state.exif_disk_cache
+                )
+            )
+
+            if metadata_success:
+                return file_path, True, f"Rotated {filename} {rotation_degrees}° (lossless)", False
+            elif needs_lossy:
+                # Attempt lossy rotation
+                success = MetadataProcessor.rotate_image(
+                    file_path,
+                    direction,
+                    update_metadata_only=False,
+                    exif_disk_cache=self.main_window.app_state.exif_disk_cache,
+                )
+                if success:
+                    return file_path, True, f"Rotated {filename} {rotation_degrees}° (lossy)", True
+                else:
+                    return file_path, False, f"Lossy rotation failed for {filename}", False
+            else:
+                return file_path, False, f"Rotation not supported for {filename}: {message}", False
+
+        except Exception as e:
+            logger.error(f"Error rotating {filename}: {e}", exc_info=True)
+            return file_path, False, f"Error rotating {filename}: {str(e)}", False
+
+    def _apply_approved_rotations(self, approved_rotations: Dict[str, int]):
+        """Apply the approved rotations to the images in parallel."""
+        apply_start_time = time.perf_counter()
+        logger.info(f"Applying {len(approved_rotations)} approved rotations in parallel.")
 
         total_rotations = len(approved_rotations)
         successful_rotations = 0
         failed_rotations = 0
+        processed_count = 0
 
         self.main_window.show_loading_overlay("Applying rotations...")
 
-        for i, (file_path, rotation_degrees) in enumerate(
-            approved_rotations.items(), 1
-        ):
-            single_file_start_time = time.perf_counter()
-            try:
-                filename = os.path.basename(file_path)
-                logger.debug(f"Applying {rotation_degrees}° rotation to {filename}...")
-                progress_text = f"Rotating {i}/{total_rotations}: {filename}"
-                self.main_window.update_loading_text(progress_text)
+        # Determine number of workers (follow existing pattern from RotationDetector)
+        num_workers = min(os.cpu_count() or 4, 8)
+        logger.info(f"Using {num_workers} workers for parallel rotation processing...")
 
-                if rotation_degrees == 90:
-                    direction = "clockwise"
-                elif rotation_degrees == -90:
-                    direction = "counterclockwise"
-                elif rotation_degrees == 180:
-                    direction = "180"
-                else:
-                    logger.warning(
-                        f"Unsupported rotation angle {rotation_degrees} for {filename}"
-                    )
-                    continue
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all rotation tasks
+            future_to_path = {
+                executor.submit(self._rotate_single_image_worker, file_path, rotation_degrees): file_path
+                for file_path, rotation_degrees in approved_rotations.items()
+            }
 
-                t1 = time.perf_counter()
-                metadata_success, needs_lossy, message = (
-                    MetadataProcessor.try_metadata_rotation_first(
-                        file_path, direction, self.main_window.app_state.exif_disk_cache
-                    )
-                )
-                t2 = time.perf_counter()
-                logger.debug(
-                    f"Metadata rotation for '{filename}' took {t2 - t1:.2f}s. Success: {metadata_success}, Needs Lossy: {needs_lossy}"
-                )
+            # Process completed tasks
+            for future in concurrent.futures.as_completed(future_to_path):
+                original_path = future_to_path[future]
+                try:
+                    file_path, success, message, is_lossy = future.result()
+                    processed_count += 1
 
-                if metadata_success:
-                    self.main_window._handle_successful_rotation(
-                        file_path,
-                        direction,
-                        f"Rotated {filename} {rotation_degrees}° (lossless)",
-                        is_lossy=False,
-                    )
-                    successful_rotations += 1
-                elif needs_lossy:
-                    logger.info(f"Attempting lossy rotation for '{filename}'.")
-                    t3 = time.perf_counter()
-                    success = MetadataProcessor.rotate_image(
-                        file_path,
-                        direction,
-                        update_metadata_only=False,
-                        exif_disk_cache=self.main_window.app_state.exif_disk_cache,
-                    )
-                    t4 = time.perf_counter()
-                    logger.debug(
-                        f"Lossy rotation for '{filename}' took {t4 - t3:.2f}s."
-                    )
+                    # Update progress
+                    filename = os.path.basename(file_path)
+                    progress_text = f"Processed {processed_count}/{total_rotations}: {filename}"
+                    self.main_window.update_loading_text(progress_text)
 
                     if success:
+                        # Determine direction for UI callback
+                        rotation_degrees = approved_rotations[file_path]
+                        if rotation_degrees == 90:
+                            direction = "clockwise"
+                        elif rotation_degrees == -90:
+                            direction = "counterclockwise"
+                        elif rotation_degrees == 180:
+                            direction = "180"
+                        else:
+                            direction = "unknown"
+
                         self.main_window._handle_successful_rotation(
-                            file_path,
-                            direction,
-                            f"Rotated {filename} {rotation_degrees}° (lossy)",
-                            is_lossy=True,
+                            file_path, direction, message, is_lossy=is_lossy
                         )
                         successful_rotations += 1
                     else:
-                        logger.error(f"Lossy rotation failed for '{filename}'.")
+                        logger.error(f"Rotation failed for '{filename}': {message}")
                         failed_rotations += 1
-                else:
-                    logger.error(f"Rotation not supported for '{filename}': {message}")
-                    failed_rotations += 1
 
-            except Exception:
-                logger.error(
-                    f"Unhandled error while rotating '{os.path.basename(file_path)}'",
-                    exc_info=True,
-                )
-                failed_rotations += 1
-            finally:
-                single_file_end_time = time.perf_counter()
-                logger.debug(
-                    f"Finished processing '{os.path.basename(file_path)}' in {single_file_end_time - single_file_start_time:.2f}s."
-                )
+                except Exception as e:
+                    filename = os.path.basename(original_path)
+                    logger.error(f"Error processing rotation future for '{filename}': {e}", exc_info=True)
+                    failed_rotations += 1
+                    processed_count += 1
 
         self.main_window.hide_loading_overlay()
 
+        # Show completion status
         if successful_rotations > 0 and failed_rotations == 0:
             self.main_window.statusBar().showMessage(
                 f"Successfully applied {successful_rotations} rotations.", 5000
@@ -808,7 +831,8 @@ class AppController(QObject):
 
         apply_end_time = time.perf_counter()
         logger.info(
-            f"Rotation application finished in {apply_end_time - apply_start_time:.2f}s."
+            f"Parallel rotation application finished in {apply_end_time - apply_start_time:.2f}s. "
+            f"Processed {processed_count} images with {num_workers} workers."
         )
 
         # If no more rotation suggestions, hide the rotation view

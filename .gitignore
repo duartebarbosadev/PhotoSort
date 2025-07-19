@@ -2,6 +2,9 @@ sample*/
 !tests/samples/
 models/
 
+# Test files
+test_parallel_rotation.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
