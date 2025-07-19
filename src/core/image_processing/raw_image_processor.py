@@ -19,7 +19,6 @@ from src.core.app_settings import (
 # Define a reasonable max size for thumbnails to avoid using too much memory
 # These might be passed in by an orchestrator class later, but for now,
 # they are here as they were in the original ImageHandler logic for these operations.
-# Constants moved to app_settings
 
 
 # Helper function to check RAW extensions safely

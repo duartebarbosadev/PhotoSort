@@ -40,7 +40,7 @@ EMBEDDING_CACHE_DIR = os.path.join(
 )
 os.makedirs(EMBEDDING_CACHE_DIR, exist_ok=True)
 
-# DBSCAN parameters (can be tuned) - moved to app_settings
+
 
 
 class SimilarityEngine(QObject):
