@@ -5,7 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 from typing import Optional, List, Dict, Tuple, Callable
 from PIL import Image
-from PIL.ImageQt import ImageQt
+from PIL.ImageQt import toqpixmap
 from PyQt6.QtGui import QPixmap
 import concurrent.futures
 
@@ -124,7 +124,7 @@ class ImagePipeline:
         pil_img = self._get_pil_thumbnail(image_path, apply_auto_edits)
         if pil_img:
             try:
-                return QPixmap.fromImage(ImageQt(pil_img))
+                return QPixmap(toqpixmap(pil_img))
             except Exception:
                 logger.error(
                     f"Error converting PIL thumbnail to QPixmap for {os.path.basename(image_path)}",
@@ -225,7 +225,7 @@ class ImagePipeline:
                 logger.debug(
                     f"Display cache HIT: {os.path.basename(normalized_path)} (Size: {key_display_size})"
                 )
-                return QPixmap.fromImage(ImageQt(cached_display_pil))
+                return QPixmap(toqpixmap(cached_display_pil))
 
         # 2. Check if a high-resolution PRELOADED version is cached
         # Key for preloaded high-res version (uses PRELOAD_MAX_RESOLUTION)
@@ -243,7 +243,7 @@ class ImagePipeline:
             self.preview_cache.set(
                 display_cache_key, display_pil_img
             )  # Cache the resized version
-            return QPixmap.fromImage(ImageQt(display_pil_img))
+            return QPixmap(toqpixmap(display_pil_img))
 
         # 3. Generate fresh for display size, then cache
         logger.debug(
@@ -257,7 +257,7 @@ class ImagePipeline:
         )
         if generated_display_pil:
             self.preview_cache.set(display_cache_key, generated_display_pil)
-            return QPixmap.fromImage(ImageQt(generated_display_pil))
+            return QPixmap(toqpixmap(generated_display_pil))
 
         logger.error(
             f"Failed to generate or retrieve preview for {os.path.basename(normalized_path)}",
