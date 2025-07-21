@@ -960,22 +960,6 @@ class MainWindow(QMainWindow):
     def _get_active_file_view(self):
         return self.left_panel.get_active_view() if self.left_panel else None
 
-    # resizeEvent needs to be defined before it's called by super() or other events
-    def eventFilter(self, source, event):
-        if event.type() == QEvent.Type.KeyPress:
-            key_sequence_str = QKeySequence(event.key() | int(event.modifiers())).toString()
-            logger.debug(f"Key press event: {key_sequence_str}")
-
-            for action in self.findChildren(QAction):
-                if not action.shortcut().isEmpty():
-                    shortcut_str = action.shortcut().toString()
-                    if shortcut_str == key_sequence_str:
-                        logger.debug(f"Shortcut match found: {shortcut_str}. Triggering action.")
-                        action.trigger()
-                        return True
-
-        return super().eventFilter(source, event)
-
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
         if (

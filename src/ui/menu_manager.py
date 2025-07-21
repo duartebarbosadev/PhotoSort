@@ -51,13 +51,26 @@ class MenuManager:
         self.rotate_clockwise_action: QAction
         self.rotate_counterclockwise_action: QAction
         self.rotate_180_action: QAction
+        self.accept_rotation_action: QAction
+        self.decline_rotation_action: QAction
+        self.accept_all_rotations_action: QAction
         self.mark_for_delete_action: QAction
         self.unmark_for_delete_action: QAction
         self.commit_deletions_action: QAction
         self.clear_marked_deletions_action: QAction
 
+        # Viewer Actions
+        self.zoom_in_action: QAction
+        self.zoom_out_action: QAction
+        self.fit_to_view_action: QAction
+        self.actual_size_action: QAction
+        self.single_view_action: QAction
+        self.side_by_side_view_action: QAction
+        self.sync_pan_zoom_action: QAction
+
         # Other global actions
         self.find_action: QAction
+        self.about_action: QAction
         self.rating_actions: dict[int, QAction] = {}
         self.image_focus_actions: dict[int, QAction] = {}
 
@@ -82,15 +95,12 @@ class MenuManager:
         main_win = self.main_window
         logger.debug("Creating actions...")
 
-        # Rating actions
-        self.rating_actions = {}
-
         self.find_action = QAction("Find", main_win)
         self.find_action.setShortcut(QKeySequence.StandardKey.Find)
         self.find_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         main_win.addAction(self.find_action)
 
-        # Rotation actions
+        # --- Rotation Actions ---
         self.rotate_clockwise_action = QAction("Rotate Clockwise", main_win)
         self.rotate_clockwise_action.setShortcut(QKeySequence("R"))
         self.rotate_clockwise_action.setShortcutContext(
@@ -114,7 +124,20 @@ class MenuManager:
         )
         main_win.addAction(self.rotate_180_action)
 
-        # Focus actions
+        # --- Rotation Suggestion Actions ---
+        self.accept_rotation_action = QAction("Accept Rotation", main_win)
+        self.accept_rotation_action.setShortcut(QKeySequence("Enter"))
+        main_win.addAction(self.accept_rotation_action)
+
+        self.decline_rotation_action = QAction("Decline Rotation", main_win)
+        self.decline_rotation_action.setShortcut(QKeySequence("Esc"))
+        main_win.addAction(self.decline_rotation_action)
+
+        self.accept_all_rotations_action = QAction("Accept All Rotations", main_win)
+        self.accept_all_rotations_action.setShortcut(QKeySequence("Shift+Enter"))
+        main_win.addAction(self.accept_all_rotations_action)
+
+        # --- Focus Actions ---
         self.image_focus_actions = {}
         for i in range(1, 10):
             action = QAction(main_win)
@@ -264,16 +287,12 @@ class MenuManager:
         image_menu.addAction(self.rotate_counterclockwise_action)
         image_menu.addAction(self.rotate_180_action)
         image_menu.addSeparator()
-        self.accept_rotation_action = QAction("Accept Rotation", self.main_window)
-        self.accept_rotation_action.setShortcut(QKeySequence("Enter"))
+
         image_menu.addAction(self.accept_rotation_action)
-        self.decline_rotation_action = QAction("Decline Rotation", self.main_window)
-        self.decline_rotation_action.setShortcut(QKeySequence("Esc"))
         image_menu.addAction(self.decline_rotation_action)
-        self.accept_all_rotations_action = QAction("Accept All Rotations", self.main_window)
-        self.accept_all_rotations_action.setShortcut(QKeySequence("Shift+Enter"))
         image_menu.addAction(self.accept_all_rotations_action)
         image_menu.addSeparator()
+
         image_menu.addAction(self.mark_for_delete_action)
         image_menu.addAction(self.commit_deletions_action)
         image_menu.addAction(self.clear_marked_deletions_action)
@@ -347,8 +366,6 @@ class MenuManager:
 
     def _create_help_menu(self, menu_bar):
         help_menu = menu_bar.addMenu("&Help")
-        about_action = QAction("&About", self.main_window)
-        about_action.triggered.connect(self.dialog_manager.show_about_dialog)
         help_menu.addAction(self.about_action)
 
     def connect_signals(self):
@@ -366,9 +383,7 @@ class MenuManager:
         self.group_by_similarity_action.toggled.connect(
             main_win._toggle_group_by_similarity
         )
-        self.toggle_thumbnails_action.toggled.connect(
-            main_win._toggle_thumbnail_view
-        )  # Just rebuild view on toggle
+        self.toggle_thumbnails_action.toggled.connect(main_win._toggle_thumbnail_view)
         self.analyze_similarity_action.triggered.connect(
             main_win.app_controller.start_similarity_analysis
         )
@@ -406,7 +421,7 @@ class MenuManager:
         )
         self.unmark_for_delete_action.triggered.connect(
             main_win._mark_selection_for_deletion
-        )  # Same action toggles
+        )
         self.commit_deletions_action.triggered.connect(
             main_win._commit_marked_deletions
         )
@@ -415,20 +430,35 @@ class MenuManager:
         )
 
         # Zoom actions
-        self.zoom_in_action.triggered.connect(main_win.advanced_image_viewer._zoom_in_all)
-        self.zoom_out_action.triggered.connect(main_win.advanced_image_viewer._zoom_out_all)
-        self.fit_to_view_action.triggered.connect(main_win.advanced_image_viewer._fit_all)
-        self.actual_size_action.triggered.connect(main_win.advanced_image_viewer._actual_size_all)
+        self.zoom_in_action.triggered.connect(
+            main_win.advanced_image_viewer._zoom_in_all
+        )
+        self.zoom_out_action.triggered.connect(
+            main_win.advanced_image_viewer._zoom_out_all
+        )
+        self.fit_to_view_action.triggered.connect(
+            main_win.advanced_image_viewer._fit_all
+        )
+        self.actual_size_action.triggered.connect(
+            main_win.advanced_image_viewer._actual_size_all
+        )
 
         # View mode actions
-        self.single_view_action.triggered.connect(lambda: main_win.advanced_image_viewer._set_view_mode("single"))
-        self.side_by_side_view_action.triggered.connect(lambda: main_win.advanced_image_viewer._set_view_mode("side_by_side"))
-        self.sync_pan_zoom_action.triggered.connect(main_win.advanced_image_viewer._toggle_sync)
+        self.single_view_action.triggered.connect(
+            lambda: main_win.advanced_image_viewer._set_view_mode("single")
+        )
+        self.side_by_side_view_action.triggered.connect(
+            lambda: main_win.advanced_image_viewer._set_view_mode("side_by_side")
+        )
+        self.sync_pan_zoom_action.triggered.connect(
+            main_win.advanced_image_viewer._toggle_sync
+        )
 
         # Other Actions
         self.find_action.triggered.connect(main_win._focus_search_input)
         for action in self.image_focus_actions.values():
             action.triggered.connect(main_win._handle_image_focus_shortcut)
+        self.about_action.triggered.connect(self.dialog_manager.show_about_dialog)
 
     def update_recent_folders_menu(self):
         """Update the 'Open Recent' menu with the latest list of folders."""
@@ -477,7 +507,6 @@ class MenuManager:
         if MetadataProcessor.is_rotation_supported(file_path):
             selected_paths = main_win._get_selected_file_paths_from_view()
             num_selected = len(selected_paths) if len(selected_paths) > 1 else 1
-
             label_suffix = f" {num_selected} Images" if num_selected > 1 else ""
 
             rotate_cw = QAction(f"Rotate{label_suffix} 90° Clockwise", main_win)
