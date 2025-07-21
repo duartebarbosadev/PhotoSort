@@ -171,28 +171,59 @@ pip install onnxruntime-rocm
    * Toggle "Enable Auto RAW Edits" for automatic adjustments to RAW previews.
 10. **Keyboard Shortcuts**: Speed up your workflow with these shortcuts:
 
-    * **Rating**:
-      * `CTRL+0` - `CTRL+5`: Assign 0 to 5 stars to the selected image.
-    * **Navigation**:
-      * `Down Arrow/Up Arrow`: Navigate to the next/previous image.
-      * `Left Arrow/Right Arrow`: Navigate to the previous/next image of the same group (doesn't jump groups automatically).
-    * **File Operations**:
-      * `Delete`: Move the selected image to the system trash.
-    * **Image Rotation**:
-      * `Ctrl+R`: Rotate selected image 90° clockwise.
-      * `Ctrl+Shift+R`: Rotate selected image 90° counterclockwise.
-      * `Ctrl+Alt+R`: Rotate selected image 180°.
-    * **Interface**:
-      * `Ctrl+F` (or `Cmd+F` on macOS): Focus the search input field for instant filename filtering.
-      * `Esc`: If the search input is focused, unfocus it and return focus to the image list/grid.
-      * `I`: Toggle image details sidebar.
-    * **Settings**:
-      * Rotation confirmation preferences can be disabled via the lossy rotation dialog's "Don't ask again" checkbox.
-    * **Similarity Group Navigation** (when "Group by Similarity" is active):
-      * `1` through `9`: Jump to the 1st through 9th image within the currently selected/viewed similarity cluster.
-    * **Command-line Arguments**:
-      * `--folder FOLDER_PATH`: Open the specified folder immediately after startup
-      * `--clear-cache`: Clear all image and metadata caches before starting
+**File Management**
+*   **Open Folder:** `Cmd+O`
+*   **Open Recent Folder:** No shortcut
+*   **Exit:** `Cmd+Q`
+
+**Image Viewing and Navigation**
+*   **Show/Hide Image Details Sidebar:** `I`
+*   **Find Image:** `Cmd+F`
+*   **Focus on a specific image in the grid (1-9):** `1` through `9`
+*   **Zoom In:** `+` or `=`
+*   **Zoom Out:** `-`
+*   **Fit to View:** `0`
+*   **Actual Size (100%):** `A`
+*   **Single View:** `F1`
+*   **Side by Side View:** `F2`
+*   **Synchronize Pan & Zoom:** `F3`
+
+**Image Rotation**
+*   **Rotate Clockwise:** `R`
+*   **Rotate Counterclockwise:** `Shift+R`
+*   **Rotate 180°:** `Alt+R`
+*   **Accept Rotation:** `Enter`
+*   **Decline Rotation:** `Esc`
+*   **Accept All Rotations:** `Shift+Enter`
+
+**Image Analysis and Organization**
+*   **Show Images in Folders:** `F`
+*   **Group by Similarity:** `G`
+*   **Show Thumbnails:** `T`
+*   **Analyze Similarity:** `Ctrl+S`
+*   **Detect Blurriness:** `Ctrl+B`
+*   **Auto Rotate Images:** `Ctrl+R`
+
+**Filtering and Sorting**
+*   **Filter by Rating:** No shortcut
+*   **Filter by Cluster:** No shortcut
+*   **Sort Clusters:** No shortcut
+
+**Image Deletion**
+*   **Mark for Deletion:** `D`
+*   **Commit Marked Deletions:** `Shift+D`
+*   **Clear Marked Deletions:** `Alt+D`
+
+**Rating**
+*   **Rate 0-5:** `Ctrl+0` through `Ctrl+5`
+
+**Application Settings**
+*   **Manage Cache:** `F9`
+*   **Enable Auto RAW Edits:** `F10`
+*   **Toggle "Mark for Deletion" Mode:** `F11`
+
+**Help**
+*   **About:** `F12`
 
 ## Future Enhancements (Ideas)
 
