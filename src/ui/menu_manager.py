@@ -100,7 +100,7 @@ class MenuManager:
         self.find_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         main_win.addAction(self.find_action)
 
-        # --- Rotation Actions ---
+        # Rotation Actions
         self.rotate_clockwise_action = QAction("Rotate Clockwise", main_win)
         self.rotate_clockwise_action.setShortcut(QKeySequence("R"))
         self.rotate_clockwise_action.setShortcutContext(
@@ -124,7 +124,7 @@ class MenuManager:
         )
         main_win.addAction(self.rotate_180_action)
 
-        # --- Rotation Suggestion Actions ---
+        # Rotation Suggestion Actions
         self.accept_rotation_action = QAction("Accept Rotation", main_win)
         self.accept_rotation_action.setShortcut(QKeySequence("Enter"))
         main_win.addAction(self.accept_rotation_action)
@@ -137,7 +137,7 @@ class MenuManager:
         self.accept_all_rotations_action.setShortcut(QKeySequence("Shift+Enter"))
         main_win.addAction(self.accept_all_rotations_action)
 
-        # --- Focus Actions ---
+        # Focus Actions
         self.image_focus_actions = {}
         for i in range(1, 10):
             action = QAction(main_win)
@@ -169,6 +169,7 @@ class MenuManager:
         main_win.addAction(self.single_view_action)
 
         self.side_by_side_view_action = QAction("Side by Side View", main_win)
+        self.side_by_side_view_action.setShortcut(QKeySequence("F2"))
         main_win.addAction(self.side_by_side_view_action)
 
         self.sync_pan_zoom_action = QAction("Synchronize Pan & Zoom", main_win)
@@ -231,7 +232,7 @@ class MenuManager:
         self.group_by_similarity_action.setCheckable(True)
         self.group_by_similarity_action.setChecked(False)
         self.group_by_similarity_action.setEnabled(False)
-        self.group_by_similarity_action.setShortcut(QKeySequence("G"))
+        self.group_by_similarity_action.setShortcut(QKeySequence("S"))
         view_menu.addAction(self.group_by_similarity_action)
 
         view_menu.addSeparator()
@@ -449,7 +450,7 @@ class MenuManager:
             lambda: main_win.advanced_image_viewer._set_view_mode("side_by_side")
         )
         self.sync_pan_zoom_action.triggered.connect(
-            main_win.advanced_image_viewer._toggle_sync
+            main_win.advanced_image_viewer.sync_button.toggle
         )
 
         # Other Actions
