@@ -51,9 +51,6 @@ class MenuManager:
         self.rotate_clockwise_action: QAction
         self.rotate_counterclockwise_action: QAction
         self.rotate_180_action: QAction
-        self.accept_rotation_action: QAction
-        self.decline_rotation_action: QAction
-        self.accept_all_rotations_action: QAction
         self.mark_for_delete_action: QAction
         self.unmark_for_delete_action: QAction
         self.commit_deletions_action: QAction
@@ -123,19 +120,6 @@ class MenuManager:
             Qt.ShortcutContext.ApplicationShortcut
         )
         main_win.addAction(self.rotate_180_action)
-
-        # Rotation Suggestion Actions
-        self.accept_rotation_action = QAction("Accept Rotation", main_win)
-        self.accept_rotation_action.setShortcut(QKeySequence("Enter"))
-        main_win.addAction(self.accept_rotation_action)
-
-        self.decline_rotation_action = QAction("Decline Rotation", main_win)
-        self.decline_rotation_action.setShortcut(QKeySequence("Esc"))
-        main_win.addAction(self.decline_rotation_action)
-
-        self.accept_all_rotations_action = QAction("Accept All Rotations", main_win)
-        self.accept_all_rotations_action.setShortcut(QKeySequence("Shift+Enter"))
-        main_win.addAction(self.accept_all_rotations_action)
 
         # Focus Actions
         self.image_focus_actions = {}
@@ -285,11 +269,6 @@ class MenuManager:
         image_menu.addAction(self.rotate_clockwise_action)
         image_menu.addAction(self.rotate_counterclockwise_action)
         image_menu.addAction(self.rotate_180_action)
-        image_menu.addSeparator()
-
-        image_menu.addAction(self.accept_rotation_action)
-        image_menu.addAction(self.decline_rotation_action)
-        image_menu.addAction(self.accept_all_rotations_action)
         image_menu.addSeparator()
 
         image_menu.addAction(self.mark_for_delete_action)
