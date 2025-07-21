@@ -166,11 +166,9 @@ class MenuManager:
 
         # View mode actions
         self.single_view_action = QAction("Single View", main_win)
-        self.single_view_action.setShortcut(QKeySequence("F1"))
         main_win.addAction(self.single_view_action)
 
         self.side_by_side_view_action = QAction("Side by Side View", main_win)
-        self.side_by_side_view_action.setShortcut(QKeySequence("F2"))
         main_win.addAction(self.side_by_side_view_action)
 
         self.sync_pan_zoom_action = QAction("Synchronize Pan & Zoom", main_win)

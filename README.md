@@ -14,7 +14,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * **Blur Detection**: Automatically identify and flag blurry photos.
   * **Similarity Analysis**: Group visually similar images to easily spot duplicates or near-duplicates.
 * **Efficient Workflow**:
-  * **Advanced Filtering System**: 
+  * **Advanced Filtering System**:
     * Filter images by ratings (Show All, 1+ Stars, 2+ Stars, etc.)
     * Filter by similarity clusters when grouping is active
     * Combine text search with rating and cluster filters
@@ -126,104 +126,62 @@ pip install onnxruntime-rocm
    #       python -m src.main --folder "C:/Users/MyUser/Pictures" --clear-cache
    ```
 
-## Usage
-
-1. **Open Folder**: Use "File" > "Open Folder..." to select a directory containing your images.
-2. **Scanning**: The application will scan for supported image files. Thumbnails and metadata will be loaded.
-3. **Navigate & View**:
-
-   * Use the left pane to browse files and folders.
-   * Switch between List, Icons, Grid, or Date views using the buttons at the bottom.
-   * Select an image to see a larger preview in the center pane.
-4. **Rate & Label**:
-
-   * Use the star buttons (or number keys 0-5) under the preview to assign ratings.
-   * Use the color squares to assign labels.
-5. **Analyze Images**:
-
-   * **Detect Blurriness**: Go to "View" > "Detect Blurriness" to analyze images. Blurred images will be visually indicated.
-   * **Analyze Similarity**: Go to "View" > "Analyze Similarity" to generate embeddings and cluster similar photos. Use the "Group by Similarity" option and cluster filters to explore groups.
-6. **Search & Filter**: 
-   * **Real-time Search**: Use the search bar at the bottom to instantly filter images by filename. Results update as you type.
-   * **Rating Filters**: Use the rating dropdown to show only images with specific star ratings (Show All, 1+ Stars, 2+ Stars, etc.).
-   * **Similarity Filters**: When "Group by Similarity" is active, use the cluster filter to view specific similarity groups.
-   * **Combined Filtering**: All filters work together - combine search text with rating and cluster filters for precise results.
-7. **Rotate Images**:
-
-   * **Via Context Menu**: Right-click any image → choose rotation direction (90° clockwise, counterclockwise, or 180°).
-   * **Via Keyboard**: Use `R` (clockwise), `Shift+R` (counterclockwise), or `Alt+R` (180°).
-   * **Via Image Menu**: Access rotation commands through the "Image" menu.
-   * **Intelligent Rotation Process**:
-     1. **Metadata-First**: Always attempts lossless XMP orientation metadata update first
-     2. **Smart Fallback**: If metadata rotation fails, offers appropriate alternatives based on format:
-        * **JPEG**: Lossless `jpegtran` rotation → Lossy re-encoding (with user confirmation)
-        * **PNG/TIFF/BMP**: Metadata -> Lossy re-encoding (with user confirmation)
-        * **RAW formats**: Metadata-only
-     3. **User Control**: Asks for confirmation before quality-reducing operations
-   * **Quality Preservation**: Maximizes image quality by prioritizing lossless methods
-   * **Transparent Feedback**: Clear messages indicate whether rotation was lossless or lossy
-8. **Delete**:
-
-   * Select an image and press `Delete` to move it to the trash.
-9. **Settings**:
-
-   * Access "Settings" > "Manage Cache" to clear thumbnail/preview caches or adjust the preview cache size limit.
-   * Toggle "Enable Auto RAW Edits" for automatic adjustments to RAW previews.
-10. **Keyboard Shortcuts**: Speed up your workflow with these shortcuts:
+## **Keyboard Shortcuts**: 
 
 **File Management**
-*   **Open Folder:** `Cmd+O`
-*   **Open Recent Folder:** No shortcut
-*   **Exit:** `Cmd+Q`
+
+* **Open Folder:** `Cmd+O`
+* **Open Recent Folder:** No shortcut
+* **Exit:** `Cmd+Q`
 
 **Image Viewing and Navigation**
-*   **Show/Hide Image Details Sidebar:** `I`
-*   **Find Image:** `Cmd+F`
-*   **Focus on a specific image in the grid (1-9):** `1` through `9`
-*   **Zoom In:** `+` or `=`
-*   **Zoom Out:** `-`
-*   **Fit to View:** `0`
-*   **Actual Size (100%):** `A`
-*   **Single View:** `F1`
-*   **Side by Side View:** `F2`
-*   **Synchronize Pan & Zoom:** `F3`
+
+* **Show/Hide Image Details Sidebar:** `I`
+* **Find Image:** `Cmd+F`
+* **Focus on a specific image in the grid (1-9):** `1` through `9`
+* **Zoom In:** `+` or `=`
+* **Zoom Out:** `-`
+* **Fit to View:** `0`
+* **Actual Size (100%):** `A`
+* **Synchronize Pan & Zoom:** `F3`
 
 **Image Rotation**
-*   **Rotate Clockwise:** `R`
-*   **Rotate Counterclockwise:** `Shift+R`
-*   **Rotate 180°:** `Alt+R`
-*   **Accept Rotation:** `Enter`
-*   **Decline Rotation:** `Esc`
-*   **Accept All Rotations:** `Shift+Enter`
+
+* **Rotate Clockwise:** `R`
+* **Rotate Counterclockwise:** `Shift+R`
+* **Rotate 180°:** `Alt+R`
+* **Accept Rotation:** `Enter`
+* **Decline Rotation:** `Esc`
+* **Accept All Rotations:** `Shift+Enter`
 
 **Image Analysis and Organization**
-*   **Show Images in Folders:** `F`
-*   **Group by Similarity:** `G`
-*   **Show Thumbnails:** `T`
-*   **Analyze Similarity:** `Ctrl+S`
-*   **Detect Blurriness:** `Ctrl+B`
-*   **Auto Rotate Images:** `Ctrl+R`
 
-**Filtering and Sorting**
-*   **Filter by Rating:** No shortcut
-*   **Filter by Cluster:** No shortcut
-*   **Sort Clusters:** No shortcut
+* **Show Images in Folders:** `F`
+* **Group by Similarity:** `G`
+* **Show Thumbnails:** `T`
+* **Analyze Similarity:** `Ctrl+S`
+* **Detect Blurriness:** `Ctrl+B`
+* **Auto Rotate Images:** `Ctrl+R`
 
 **Image Deletion**
-*   **Mark for Deletion:** `D`
-*   **Commit Marked Deletions:** `Shift+D`
-*   **Clear Marked Deletions:** `Alt+D`
+
+* **Mark for Deletion:** `D`
+* **Commit Marked Deletions:** `Shift+D`
+* **Clear Marked Deletions:** `Alt+D`
 
 **Rating**
-*   **Rate 0-5:** `Ctrl+0` through `Ctrl+5`
+
+* **Rate 0-5:** `Ctrl+0` through `Ctrl+5`
 
 **Application Settings**
-*   **Manage Cache:** `F9`
-*   **Enable Auto RAW Edits:** `F10`
-*   **Toggle "Mark for Deletion" Mode:** `F11`
+
+* **Manage Cache:** `F9`
+* **Enable Auto RAW Edits:** `F10`
+* **Toggle "Mark for Deletion" Mode:** `F11`
 
 **Help**
-*   **About:** `F12`
+
+* **About:** `F12`
 
 ## Future Enhancements (Ideas)
 
