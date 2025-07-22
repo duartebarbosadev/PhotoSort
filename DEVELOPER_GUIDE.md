@@ -50,6 +50,8 @@ The application is structured into two main packages: `core` and `ui`.
    - The `AppController` then calls the relevant service in the `core` package. For any file system operations, the `AppController` must call the appropriate method in `ImageFileOperations`.
    - If the feature involves a long-running task, the `AppController` should use the `WorkerManager` to run it in the background. The `WorkerManager` will then emit signals with the results, which the `AppController` will catch to update the `AppState` and the UI.
 4. At the end, update this document if necessary.
+5. **Shortcuts**: All actions must have a corresponding shortcut.
+
 
 ### Example: Adding a "Detect Duplicates" Feature
 

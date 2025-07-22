@@ -134,7 +134,6 @@ QTreeView::item:hover:!selected, QListView::item:hover:!selected {
 /* Grid view specific styling for consistent layout */
 QListView[viewMode="IconMode"] {
     /* Fixed grid size to maintain consistent layout */
-    gridSize: 128px 148px;
     spacing: 4px;
 }
 
