@@ -413,6 +413,9 @@ class AppController(QObject):
         self.main_window.menu_manager.auto_rotate_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
+        self.main_window.menu_manager.group_by_similarity_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
 
         self.main_window._rebuild_model_view()
 
@@ -563,7 +566,6 @@ class AppController(QObject):
             ["All Clusters"] + [f"Cluster {cid}" for cid in cluster_ids]
         )
         self.main_window.cluster_filter_combo.setEnabled(True)
-        self.main_window.menu_manager.group_by_similarity_action.setEnabled(True)
         self.main_window.menu_manager.group_by_similarity_action.setChecked(True)
         if (
             self.main_window.menu_manager.group_by_similarity_action.isChecked()

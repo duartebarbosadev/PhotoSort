@@ -592,7 +592,6 @@ class MainWindow(QMainWindow):
         self.accept_all_button.clicked.connect(self._accept_all_rotations)
         self.accept_button.clicked.connect(self._accept_current_rotation)
         self.refuse_button.clicked.connect(self._refuse_current_rotation)
-        self.refuse_all_button.clicked.connect(self._refuse_all_rotations)
         logger.debug(f"Signals connected in {time.perf_counter() - start_time:.4f}s.")
 
     # def _connect_rating_actions(self):
@@ -619,6 +618,9 @@ class MainWindow(QMainWindow):
             self.app_controller.load_folder(folder_path)
         else:
             self.statusBar().showMessage("Folder selection cancelled.")
+
+    def _toggle_thumbnail_view(self, checked):
+        self._rebuild_model_view()
 
     def _rebuild_model_view(
         self,
@@ -958,7 +960,6 @@ class MainWindow(QMainWindow):
     def _get_active_file_view(self):
         return self.left_panel.get_active_view() if self.left_panel else None
 
-    # resizeEvent needs to be defined before it's called by super() or other events
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
         if (
@@ -2310,8 +2311,8 @@ class MainWindow(QMainWindow):
                 self.refuse_button.setEnabled(all_selected_have_suggestion)
 
                 if num_selected == 1:
-                    self.accept_button.setText("Accept")
-                    self.refuse_button.setText("Refuse")
+                    self.accept_button.setText("Accept (Y)")
+                    self.refuse_button.setText("Refuse (N)")
                     self._display_side_by_side_comparison(selected_file_paths[0])
                 else:
                     self.accept_button.setText(f"Accept ({num_selected})")
@@ -2615,24 +2616,26 @@ class MainWindow(QMainWindow):
             self.left_panel.set_view_mode_date()
 
     def _toggle_group_by_similarity(self, checked: bool):
-        if not self.app_state.cluster_results and checked:
-            self.menu_manager.group_by_similarity_action.setChecked(False)
-            self.statusBar().showMessage(
-                "Cannot group: Run 'Analyze Similarity' first.", 3000
-            )
-            return
+        # Always update the mode first, as it's needed by handle_clustering_complete
         self.group_by_similarity_mode = checked
-        if checked and self.app_state.cluster_results:
+        self.menu_manager.group_by_similarity_action.setChecked(
+            checked
+        )  # Keep the UI in sync
+
+        if checked and not self.app_state.cluster_results:
+            self.app_controller.start_similarity_analysis()
+            # The view will be rebuilt by handle_clustering_complete once analysis is done
+            return  # Exit here, as handle_clustering_complete will handle the rest
+
+        # If not checking, or if already clustered, proceed to rebuild view
+        if checked:  # Only show sort options if grouping is active
             self.menu_manager.cluster_sort_action.setVisible(True)
             self.cluster_sort_combo.setEnabled(True)
         else:
             self.menu_manager.cluster_sort_action.setVisible(False)
             self.cluster_sort_combo.setEnabled(False)
-            if (
-                checked and not self.app_state.cluster_results
-            ):  # Should not happen if initial check passed
-                self.menu_manager.group_by_similarity_action.setChecked(False)
-                self.group_by_similarity_mode = False
+
+        # Rebuild view if not waiting for analysis, or if unchecking
         if self.left_panel.current_view_mode == "list":
             self.left_panel.set_view_mode_list()
         elif self.left_panel.current_view_mode == "icons":
