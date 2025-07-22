@@ -126,7 +126,7 @@ pip install onnxruntime-rocm
    #       python -m src.main --folder "C:/Users/MyUser/Pictures" --clear-cache
    ```
 
-## **Keyboard Shortcuts**: 
+## **Keyboard Shortcuts**:
 
 **File Management**
 
@@ -144,20 +144,23 @@ pip install onnxruntime-rocm
 * **Fit to View:** `0`
 * **Actual Size (100%):** `A`
 * **Synchronize Pan & Zoom:** `F3`
+* **Side by Side View:** `F2`
 
 **Image Rotation**
 
+* **Auto Rotate Images:** `Ctrl+R`
 * **Rotate Clockwise:** `R`
 * **Rotate Counterclockwise:** `Shift+R`
 * **Rotate 180°:** `Alt+R`
-* **Accept Rotation:** `Enter`
-* **Decline Rotation:** `Esc`
-* **Accept All Rotations:** `Shift+Enter`
+* **Accept Rotation Suggestion:** `Y`
+* **Decline Rotation Suggestion:** `N`
+* **Accept All Rotations Suggestions:** `Shift+Y`
+* **Decline All Rotations Suggestions:** `Shift+N` 
 
 **Image Analysis and Organization**
 
 * **Show Images in Folders:** `F`
-* **Group by Similarity:** `G`
+* **Group by Similarity:** `S`
 * **Show Thumbnails:** `T`
 * **Analyze Similarity:** `Ctrl+S`
 * **Detect Blurriness:** `Ctrl+B`

@@ -133,11 +133,11 @@ class MenuManager:
 
         # Zoom actions
         self.zoom_in_action = QAction("Zoom In", main_win)
-        self.zoom_in_action.setShortcut(QKeySequence("+"))
+        self.zoom_in_action.setShortcut(QKeySequence.StandardKey.ZoomIn)
         main_win.addAction(self.zoom_in_action)
 
         self.zoom_out_action = QAction("Zoom Out", main_win)
-        self.zoom_out_action.setShortcut(QKeySequence("-"))
+        self.zoom_out_action.setShortcut(QKeySequence.StandardKey.ZoomOut)
         main_win.addAction(self.zoom_out_action)
 
         self.fit_to_view_action = QAction("Fit to View", main_win)
