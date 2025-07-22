@@ -8,7 +8,10 @@ from PIL import Image
 from typing import Optional, Tuple
 
 # Import the settings function to get the cache size limit
-from src.core.app_settings import get_preview_cache_size_bytes, PREVIEW_CACHE_MIN_FILE_SIZE
+from src.core.app_settings import (
+    get_preview_cache_size_bytes,
+    PREVIEW_CACHE_MIN_FILE_SIZE,
+)
 
 # Default path for the preview PIL image cache
 DEFAULT_PREVIEW_CACHE_DIR = os.path.join(

@@ -1667,10 +1667,15 @@ class MainWindow(QMainWindow):
         iteration_count = 0
 
         # Determine a safe iteration limit to prevent infinite loops in unexpected scenarios
-        safety_iteration_limit = self.proxy_model.rowCount(QModelIndex()) * DEFAULT_SAFETY_ITERATION_MULTIPLIER
+        safety_iteration_limit = (
+            self.proxy_model.rowCount(QModelIndex())
+            * DEFAULT_SAFETY_ITERATION_MULTIPLIER
+        )
         if self.app_state.image_files_data:
             safety_iteration_limit = max(
-                safety_iteration_limit, len(self.app_state.image_files_data) * DEFAULT_SAFETY_ITERATION_MULTIPLIER
+                safety_iteration_limit,
+                len(self.app_state.image_files_data)
+                * DEFAULT_SAFETY_ITERATION_MULTIPLIER,
             )
         if safety_iteration_limit == 0:
             safety_iteration_limit = DEFAULT_MAX_ITERATIONS

@@ -143,7 +143,9 @@ class ViewManager:
             return
 
         # Fixed grid layout to prevent filename length from affecting layout
-        FIXED_GRID_SIZE = QSize(FIXED_GRID_WIDTH, FIXED_GRID_HEIGHT)  # Fixed grid cell size (width, height)
+        FIXED_GRID_SIZE = QSize(
+            FIXED_GRID_WIDTH, FIXED_GRID_HEIGHT
+        )  # Fixed grid cell size (width, height)
 
         # Set fixed icon size and grid properties
         self.left_panel.grid_display_view.setIconSize(

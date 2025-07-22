@@ -36,7 +36,7 @@ DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
 # Grid view settings
 FIXED_ICON_SIZE = 96  # Fixed icon size for grid view
 FIXED_GRID_WIDTH = 128  # Fixed grid cell width
-FIXED_GRID_HEIGHT = 148  # Fixed grid cell height  
+FIXED_GRID_HEIGHT = 148  # Fixed grid cell height
 GRID_SPACING = 4  # Spacing between grid items
 
 # Main window layout
@@ -61,23 +61,31 @@ PREVIEW_ESTIMATED_SIZE_FACTOR = 1.35  # Factor for estimating preview sizes
 
 # --- AI/ML Constants ---
 # DBSCAN clustering parameters
-DBSCAN_EPS = 0.05  # For cosine metric: 1 - cosine_similarity. Smaller eps = higher similarity
+DBSCAN_EPS = (
+    0.05  # For cosine metric: 1 - cosine_similarity. Smaller eps = higher similarity
+)
 DBSCAN_MIN_SAMPLES = 2  # Minimum number of images to form a dense region (cluster)
 DEFAULT_SIMILARITY_BATCH_SIZE = 16  # Default batch size for similarity processing
 
 # RAW image processing
-RAW_AUTO_EDIT_BRIGHTNESS_STANDARD = 1.15  # Standard brightness adjustment for RAW auto-edits
-RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED = 1.25  # Enhanced brightness adjustment for RAW auto-edits
+RAW_AUTO_EDIT_BRIGHTNESS_STANDARD = (
+    1.15  # Standard brightness adjustment for RAW auto-edits
+)
+RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED = (
+    1.25  # Enhanced brightness adjustment for RAW auto-edits
+)
 
 # Model settings
 ROTATION_MODEL_IMAGE_SIZE = 384  # Image size for rotation detection model
 
 # --- Cache Constants ---
 # Thumbnail cache
-DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES = 2**30  # 1 GiB (1,073,741,824 bytes) default for thumbnail cache
+DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES = (
+    2**30
+)  # 1 GiB (1,073,741,824 bytes) default for thumbnail cache
 THUMBNAIL_MIN_FILE_SIZE = 1024 * 1024  # 1 MB minimum file size for disk caching
 
-# Preview cache  
+# Preview cache
 PREVIEW_CACHE_MIN_FILE_SIZE = 256 * 1024  # 256 KB minimum file size for disk caching
 
 # EXIF cache

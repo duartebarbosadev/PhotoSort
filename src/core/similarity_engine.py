@@ -41,8 +41,6 @@ EMBEDDING_CACHE_DIR = os.path.join(
 os.makedirs(EMBEDDING_CACHE_DIR, exist_ok=True)
 
 
-
-
 class SimilarityEngine(QObject):
     """
     Handles image feature extraction (embeddings) using CLIP models

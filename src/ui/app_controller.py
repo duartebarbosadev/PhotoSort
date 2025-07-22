@@ -7,7 +7,11 @@ from typing import List, Dict, Any, Tuple
 
 from PyQt6.QtCore import QObject
 
-from src.core.app_settings import add_recent_folder, get_preview_cache_size_bytes, PREVIEW_ESTIMATED_SIZE_FACTOR
+from src.core.app_settings import (
+    add_recent_folder,
+    get_preview_cache_size_bytes,
+    PREVIEW_ESTIMATED_SIZE_FACTOR,
+)
 from src.core.file_scanner import SUPPORTED_EXTENSIONS
 from src.core.image_file_ops import ImageFileOperations
 from src.core.image_pipeline import ImagePipeline

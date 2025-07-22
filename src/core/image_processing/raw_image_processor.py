@@ -366,7 +366,9 @@ class RawImageProcessor:
                         logger.debug(
                             f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED}) via rawpy for: {os.path.basename(normalized_path)}"
                         )
-                        postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED  # Apply custom brightness
+                        postprocess_params["bright"] = (
+                            RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED  # Apply custom brightness
+                        )
                     else:
                         logger.debug(
                             f"Applying auto-edits but forcing default brightness for: {os.path.basename(normalized_path)}"

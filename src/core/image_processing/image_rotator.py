@@ -64,7 +64,10 @@ class ImageRotator:
         """Check if jpegtran is available in the system PATH."""
         try:
             result = subprocess.run(
-                ["jpegtran", "-version"], capture_output=True, text=True, timeout=JPEGTRAN_TIMEOUT_SECONDS
+                ["jpegtran", "-version"],
+                capture_output=True,
+                text=True,
+                timeout=JPEGTRAN_TIMEOUT_SECONDS,
             )
             return result.returncode == 0
         except (

@@ -7,7 +7,11 @@ import time  # Added for startup timing
 from typing import Optional, Dict, Any
 
 # Import the settings functions to get the cache size limit
-from src.core.app_settings import get_exif_cache_size_bytes, get_exif_cache_size_mb, EXIF_CACHE_MIN_FILE_SIZE
+from src.core.app_settings import (
+    get_exif_cache_size_bytes,
+    get_exif_cache_size_mb,
+    EXIF_CACHE_MIN_FILE_SIZE,
+)
 
 # Default path for the EXIF metadata cache
 DEFAULT_EXIF_CACHE_DIR = os.path.join(
