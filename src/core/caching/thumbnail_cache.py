@@ -6,6 +6,10 @@ logger = logging.getLogger(__name__)
 import time  # Added for startup timing
 from PIL import Image
 from typing import Optional, Tuple
+from src.core.app_settings import (
+    DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES,
+    THUMBNAIL_MIN_FILE_SIZE,
+)
 
 # Default path for the thumbnail cache
 DEFAULT_THUMBNAIL_CACHE_DIR = os.path.join(
@@ -19,7 +23,9 @@ class ThumbnailCache:
     """
 
     def __init__(
-        self, cache_dir: str = DEFAULT_THUMBNAIL_CACHE_DIR, size_limit: int = 2**30
+        self,
+        cache_dir: str = DEFAULT_THUMBNAIL_CACHE_DIR,
+        size_limit: int = DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES,
     ):  # Default 1GB limit
         init_start_time = time.perf_counter()
         logger.info(
@@ -36,7 +42,9 @@ class ThumbnailCache:
         self._cache_dir = cache_dir
         # Settings for general PIL images, can be adjusted
         self._cache = diskcache.Cache(
-            directory=cache_dir, size_limit=size_limit, disk_min_file_size=1024 * 1024
+            directory=cache_dir,
+            size_limit=size_limit,
+            disk_min_file_size=THUMBNAIL_MIN_FILE_SIZE,
         )
         log_msg = f"Thumbnail cache initialized at {cache_dir} with size limit {size_limit / (1024 * 1024):.2f} MB"
         logger.info(log_msg)

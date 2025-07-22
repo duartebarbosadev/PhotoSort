@@ -13,6 +13,7 @@ import concurrent.futures
 from src.core.caching.rating_cache import RatingCache
 from src.core.caching.exif_cache import ExifCache
 from src.core.image_processing.image_rotator import ImageRotator, RotationDirection
+from src.core.app_settings import METADATA_PROCESSING_CHUNK_SIZE
 
 # Preferred EXIF/XMP date tags in order of preference
 DATE_TAGS_PREFERENCE: List[str] = [
@@ -280,7 +281,7 @@ class MetadataProcessor:
                 paths_for_pyexiv2_extraction.append(operational_path)
                 operational_to_cache_key_map[operational_path] = cache_key_path
 
-        CHUNK_SIZE = 25
+        CHUNK_SIZE = METADATA_PROCESSING_CHUNK_SIZE
         MAX_WORKERS = min(6, (os.cpu_count() or 1) * 2)
 
         if paths_for_pyexiv2_extraction:

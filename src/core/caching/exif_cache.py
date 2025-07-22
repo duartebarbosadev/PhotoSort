@@ -7,7 +7,11 @@ import time  # Added for startup timing
 from typing import Optional, Dict, Any
 
 # Import the settings functions to get the cache size limit
-from src.core.app_settings import get_exif_cache_size_bytes, get_exif_cache_size_mb
+from src.core.app_settings import (
+    get_exif_cache_size_bytes,
+    get_exif_cache_size_mb,
+    EXIF_CACHE_MIN_FILE_SIZE,
+)
 
 # Default path for the EXIF metadata cache
 DEFAULT_EXIF_CACHE_DIR = os.path.join(
@@ -47,7 +51,7 @@ class ExifCache:
         self._cache = diskcache.Cache(
             directory=cache_dir,
             size_limit=self._size_limit_bytes,
-            disk_min_file_size=4096,
+            disk_min_file_size=EXIF_CACHE_MIN_FILE_SIZE,
         )  # Store larger items on disk
         log_msg = f"EXIF cache initialized at {cache_dir} with size limit {self._size_limit_bytes / (1024 * 1024):.2f} MB"
         logger.info(log_msg)
@@ -160,7 +164,7 @@ class ExifCache:
         self._cache = diskcache.Cache(
             directory=self._cache_dir,
             size_limit=self._size_limit_bytes,
-            disk_min_file_size=4096,
+            disk_min_file_size=EXIF_CACHE_MIN_FILE_SIZE,
         )
         logger.info(
             f"EXIF cache reinitialized. New size limit: {self._size_limit_mb} MB."

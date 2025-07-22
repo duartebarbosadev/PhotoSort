@@ -8,13 +8,17 @@ logger = logging.getLogger(__name__)
 import time
 from typing import Optional, Set
 from PIL import ImageEnhance  # Added for brightness adjustment on PIL images
+from src.core.app_settings import (
+    RAW_AUTO_EDIT_BRIGHTNESS_STANDARD,
+    RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED,
+    THUMBNAIL_MAX_SIZE,
+    PRELOAD_MAX_RESOLUTION,
+    BLUR_DETECTION_PREVIEW_SIZE,
+)
 
 # Define a reasonable max size for thumbnails to avoid using too much memory
 # These might be passed in by an orchestrator class later, but for now,
 # they are here as they were in the original ImageHandler logic for these operations.
-THUMBNAIL_MAX_SIZE = (256, 256)
-PRELOAD_MAX_RESOLUTION = (1920, 1200)  # Fixed high resolution for preloading
-BLUR_DETECTION_PREVIEW_SIZE = (640, 480)  # Size for image used in blur detection
 
 
 # Helper function to check RAW extensions safely
@@ -147,9 +151,9 @@ class RawImageProcessor:
                     }
                     if apply_auto_edits:
                         logger.debug(
-                            f"Applying auto-edits (bright=1.15) via rawpy for: {os.path.basename(normalized_path)}"
+                            f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_STANDARD}) via rawpy for: {os.path.basename(normalized_path)}"
                         )
-                        postprocess_params["bright"] = 1.15
+                        postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_STANDARD
                         postprocess_params["no_auto_bright"] = False
                     else:
                         logger.debug(
@@ -272,9 +276,9 @@ class RawImageProcessor:
                     }
                     if apply_auto_edits:
                         logger.debug(
-                            f"Applying auto-edits (bright=1.15) via rawpy for: {os.path.basename(normalized_path)}"
+                            f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_STANDARD}) via rawpy for: {os.path.basename(normalized_path)}"
                         )
-                        postprocess_params["bright"] = 1.15
+                        postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_STANDARD
                         postprocess_params["no_auto_bright"] = False
                     else:
                         logger.debug(
@@ -360,9 +364,11 @@ class RawImageProcessor:
                 if apply_auto_edits:
                     if not force_default_brightness:
                         logger.debug(
-                            f"Applying auto-edits (bright=1.25) via rawpy for: {os.path.basename(normalized_path)}"
+                            f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED}) via rawpy for: {os.path.basename(normalized_path)}"
                         )
-                        postprocess_params["bright"] = 1.25  # Apply custom brightness
+                        postprocess_params["bright"] = (
+                            RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED  # Apply custom brightness
+                        )
                     else:
                         logger.debug(
                             f"Applying auto-edits but forcing default brightness for: {os.path.basename(normalized_path)}"
@@ -453,9 +459,9 @@ class RawImageProcessor:
                     }
                     if apply_auto_edits:
                         logger.debug(
-                            f"Applying auto-edits (bright=1.15) for blur detection load: {os.path.basename(normalized_path)}"
+                            f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_STANDARD}) for blur detection load: {os.path.basename(normalized_path)}"
                         )
-                        postprocess_params["bright"] = 1.15
+                        postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_STANDARD
                         postprocess_params["no_auto_bright"] = False
                     else:
                         logger.debug(

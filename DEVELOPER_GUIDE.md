@@ -9,7 +9,7 @@ The application is structured into two main packages: `core` and `ui`.
 - **`src/`**: The root source directory.
   - **`main.py`**: The application entry point. Handles application setup, command-line argument parsing, and instantiates the `MainWindow`.
   - **`core/`**: Contains the application's business logic, independent of the UI.
-    - **`app_settings.py`**: Manages persistent application settings using `QSettings`. All settings-related logic (getting, setting, defaults) should be here.
+    - **`app_settings.py`**: Manages persistent application settings using `QSettings` and centralizes all configurable constants. All settings-related logic (getting, setting, defaults) and hardcoded values should be here.
     - **`caching/`**: Caching mechanisms for thumbnails, previews, ratings, and EXIF data. To add a new cache, create a new class in this directory following the existing examples. The rating cache is cleared alongside the EXIF cache.
     - **`image_features/`**: Image analysis features like blur detection. New features that analyze image properties should be added here.
       - **`model_rotation_detector.py`**: Implements the deep learning model (ONNX) for detecting image orientation.
@@ -66,6 +66,8 @@ The application is structured into two main packages: `core` and `ui`.
    - Finally, the `AppController` would update the `AppState` and call a method in `MainWindow` to display the results to the user.
 
 ## 3. Coding Conventions
+
+- **Configuration Constants**: All hardcoded values, thresholds, and configurable parameters must be centralized in `src/core/app_settings.py`. This includes UI dimensions, processing thresholds, cache sizes, AI/ML parameters, and other constants. Never use hardcoded values directly in the code - always import from `app_settings.py`.
 
 - **Logging**: Use Python's `logging` module for all logging. **Do not use `print()`**.
 

@@ -19,6 +19,9 @@ from sklearn.metrics.pairwise import (
 from .app_settings import (
     DEFAULT_CLIP_MODEL,
     is_pytorch_cuda_available,
+    DBSCAN_EPS,
+    DBSCAN_MIN_SAMPLES,
+    DEFAULT_SIMILARITY_BATCH_SIZE,
 )  # Import from app_settings
 
 if TYPE_CHECKING:
@@ -36,12 +39,6 @@ EMBEDDING_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".cache", "phototagger_embeddings"
 )
 os.makedirs(EMBEDDING_CACHE_DIR, exist_ok=True)
-
-# DBSCAN parameters (can be tuned)
-DBSCAN_EPS = (
-    0.05  # For cosine metric: 1 - cosine_similarity. Smaller eps = higher similarity.
-)
-DBSCAN_MIN_SAMPLES = 2  # Minimum number of images to form a dense region (cluster).
 
 
 class SimilarityEngine(QObject):
@@ -189,7 +186,7 @@ class SimilarityEngine(QObject):
 
         processed_count = 0
         new_embeddings = {}
-        batch_size = 16
+        batch_size = DEFAULT_SIMILARITY_BATCH_SIZE
 
         for i in range(0, total_to_process, batch_size):
             if not self._is_running:
