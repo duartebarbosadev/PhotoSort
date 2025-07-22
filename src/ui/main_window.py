@@ -2615,24 +2615,26 @@ class MainWindow(QMainWindow):
             self.left_panel.set_view_mode_date()
 
     def _toggle_group_by_similarity(self, checked: bool):
-        if not self.app_state.cluster_results and checked:
-            self.menu_manager.group_by_similarity_action.setChecked(False)
-            self.statusBar().showMessage(
-                "Cannot group: Run 'Analyze Similarity' first.", 3000
-            )
-            return
+        # Always update the mode first, as it's needed by handle_clustering_complete
         self.group_by_similarity_mode = checked
-        if checked and self.app_state.cluster_results:
+        self.menu_manager.group_by_similarity_action.setChecked(
+            checked
+        )  # Keep the UI in sync
+
+        if checked and not self.app_state.cluster_results:
+            self.app_controller.start_similarity_analysis()
+            # The view will be rebuilt by handle_clustering_complete once analysis is done
+            return  # Exit here, as handle_clustering_complete will handle the rest
+
+        # If not checking, or if already clustered, proceed to rebuild view
+        if checked:  # Only show sort options if grouping is active
             self.menu_manager.cluster_sort_action.setVisible(True)
             self.cluster_sort_combo.setEnabled(True)
         else:
             self.menu_manager.cluster_sort_action.setVisible(False)
             self.cluster_sort_combo.setEnabled(False)
-            if (
-                checked and not self.app_state.cluster_results
-            ):  # Should not happen if initial check passed
-                self.menu_manager.group_by_similarity_action.setChecked(False)
-                self.group_by_similarity_mode = False
+
+        # Rebuild view if not waiting for analysis, or if unchecking
         if self.left_panel.current_view_mode == "list":
             self.left_panel.set_view_mode_list()
         elif self.left_panel.current_view_mode == "icons":
