@@ -144,6 +144,7 @@ pip install onnxruntime-rocm
 * **Fit to View:** `0`
 * **Actual Size (100%):** `A`
 * **Synchronize Pan & Zoom:** `F3`
+* **Single View:** `F1`
 * **Side by Side View:** `F2`
 
 **Image Rotation**
