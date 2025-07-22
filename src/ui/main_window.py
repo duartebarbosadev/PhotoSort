@@ -591,7 +591,6 @@ class MainWindow(QMainWindow):
         self.accept_all_button.clicked.connect(self._accept_all_rotations)
         self.accept_button.clicked.connect(self._accept_current_rotation)
         self.refuse_button.clicked.connect(self._refuse_current_rotation)
-        self.refuse_all_button.clicked.connect(self._refuse_all_rotations)
         logger.debug(f"Signals connected in {time.perf_counter() - start_time:.4f}s.")
 
     # def _connect_rating_actions(self):
@@ -618,6 +617,9 @@ class MainWindow(QMainWindow):
             self.app_controller.load_folder(folder_path)
         else:
             self.statusBar().showMessage("Folder selection cancelled.")
+
+    def _toggle_thumbnail_view(self, checked):
+        self._rebuild_model_view()
 
     def _rebuild_model_view(
         self,
@@ -957,7 +959,6 @@ class MainWindow(QMainWindow):
     def _get_active_file_view(self):
         return self.left_panel.get_active_view() if self.left_panel else None
 
-    # resizeEvent needs to be defined before it's called by super() or other events
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
         if (
@@ -2309,8 +2310,8 @@ class MainWindow(QMainWindow):
                 self.refuse_button.setEnabled(all_selected_have_suggestion)
 
                 if num_selected == 1:
-                    self.accept_button.setText("Accept")
-                    self.refuse_button.setText("Refuse")
+                    self.accept_button.setText("Accept (Y)")
+                    self.refuse_button.setText("Refuse (N)")
                     self._display_side_by_side_comparison(selected_file_paths[0])
                 else:
                     self.accept_button.setText(f"Accept ({num_selected})")
