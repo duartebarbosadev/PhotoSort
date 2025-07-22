@@ -74,7 +74,7 @@ ROTATION_MODEL_IMAGE_SIZE = 384  # Image size for rotation detection model
 
 # --- Cache Constants ---
 # Thumbnail cache
-DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES = 2**30  # 1 GB default for thumbnail cache
+DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES = 2**30  # 1 GiB (1,073,741,824 bytes) default for thumbnail cache
 THUMBNAIL_MIN_FILE_SIZE = 1024 * 1024  # 1 MB minimum file size for disk caching
 
 # Preview cache  
