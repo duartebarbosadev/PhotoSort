@@ -572,6 +572,9 @@ class MainWindow(QMainWindow):
         # Connect UI component signals
         self.left_panel.tree_display_view.installEventFilter(self)
         self.left_panel.grid_display_view.installEventFilter(self)
+        self.left_panel.rotation_suggestions_view.installEventFilter(self)
+        for viewer in self.advanced_image_viewer.image_viewers:
+            viewer.image_view.installEventFilter(self)
         self.left_panel.tree_display_view.clicked.connect(self._handle_tree_view_click)
         self.left_panel.tree_display_view.customContextMenuRequested.connect(
             self.menu_manager.show_image_context_menu
@@ -991,6 +994,7 @@ class MainWindow(QMainWindow):
         # or fallbacks if focus is not on the views.
 
         key = event.key()
+        modifiers = event.modifiers()
 
         # Escape key to clear focus from search input (if it has focus)
         if key == Qt.Key.Key_Escape:
@@ -3286,10 +3290,16 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             # Ensure the event is for one of our views
-            if (
+            is_left_panel_view = (
                 obj is self.left_panel.tree_display_view
                 or obj is self.left_panel.grid_display_view
-            ):
+                or obj is self.left_panel.rotation_suggestions_view
+            )
+            is_image_viewer = any(
+                obj is v.image_view for v in self.advanced_image_viewer.image_viewers
+            )
+
+            if is_left_panel_view or is_image_viewer:
                 key_event: QKeyEvent = event
                 key = key_event.key()
                 modifiers = key_event.modifiers()
@@ -3311,6 +3321,23 @@ class MainWindow(QMainWindow):
                 search_has_focus = self.left_panel.search_input.hasFocus()
 
                 if not search_has_focus:
+                    # Rotation view-specific shortcuts
+                    if self.left_panel.current_view_mode == "rotation":
+                        if key == Qt.Key.Key_Y:
+                            if modifiers == Qt.KeyboardModifier.ShiftModifier:
+                                self._accept_all_rotations()
+                                return True
+                            elif modifiers == Qt.KeyboardModifier.NoModifier:
+                                self._accept_current_rotation()
+                                return True
+                        elif key == Qt.Key.Key_N:
+                            if modifiers == Qt.KeyboardModifier.ShiftModifier:
+                                self._refuse_all_rotations()
+                                return True
+                            elif modifiers == Qt.KeyboardModifier.NoModifier:
+                                self._refuse_current_rotation()
+                                return True
+
                     # --- Modifier-based actions ---
                     is_unmodified = modifiers == Qt.KeyboardModifier.NoModifier
                     is_control_or_meta = modifiers in (
@@ -4379,12 +4406,6 @@ class MainWindow(QMainWindow):
     def _accept_current_rotation(self):
         selected_paths = self._get_selected_file_paths_from_view()
         if not selected_paths:
-            return
-
-        # If only one item is selected, use the existing logic to preserve
-        # the behavior of selecting the next item automatically.
-        if len(selected_paths) == 1:
-            self._accept_rotation(selected_paths[0])
             return
 
         # Handle multi-selection for the "Accept (N)" button
