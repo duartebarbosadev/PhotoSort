@@ -48,6 +48,8 @@ class StandardImageProcessor:
             with Image.open(normalized_path) as img:
                 if apply_orientation:
                     img = ImageOps.exif_transpose(img)  # Correct orientation
+                else:
+                    img = img  # Explicitly assign the original image
                 img.thumbnail(thumbnail_max_size, Image.Resampling.LANCZOS)
                 final_pil_img = img.convert("RGBA")  # Ensure RGBA
             return final_pil_img
