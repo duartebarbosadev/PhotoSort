@@ -647,7 +647,9 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No images loaded.", 3000)
             return
 
-        if self.group_by_similarity_mode:
+        if self.left_panel.current_view_mode == "rotation":
+            self._rebuild_rotation_view()
+        elif self.group_by_similarity_mode:
             if not self.app_state.cluster_results:
                 no_cluster_item = QStandardItem("Run 'Analyze Similarity' to group.")
                 no_cluster_item.setEditable(False)
@@ -709,8 +711,6 @@ class MainWindow(QMainWindow):
         else:  # Not grouping by similarity
             if self.left_panel.current_view_mode == "date":
                 self._populate_model_by_date(root_item, self.app_state.image_files_data)
-            elif self.left_panel.current_view_mode == "rotation":
-                self._rebuild_rotation_view()
             else:
                 self._populate_model_standard(
                     root_item, self.app_state.image_files_data
