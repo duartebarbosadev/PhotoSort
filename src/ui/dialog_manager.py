@@ -1,5 +1,6 @@
 from typing import List, Tuple
 import webbrowser
+import os
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -14,8 +15,12 @@ from PyQt6.QtWidgets import (
     QSpacerItem,
     QComboBox,
     QSizePolicy,
+    QScrollArea,
+    QListWidget,
+    QListWidgetItem,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QIcon
 
 from src.core.app_settings import (
     get_rotation_confirm_lossy,
@@ -393,6 +398,95 @@ class DialogManager:
         dialog.setLayout(main_layout)
         dialog.exec()
 
+    def _show_delete_confirmation_dialog(
+        self, files: List[str], title_text: str, message_text: str
+    ) -> bool:
+        """
+        Shows a custom, reusable confirmation dialog for deleting files,
+        displaying thumbnails of the images to be deleted.
+
+        Args:
+            files: A list of paths to the files to be deleted.
+            title_text: The window title for the dialog.
+            message_text: The main message to display to the user.
+
+        Returns:
+            True if the user confirms, False otherwise.
+        """
+        dialog = QDialog(self.parent)
+        dialog.setWindowTitle(title_text)
+        dialog.setObjectName("deleteConfirmationDialog")
+        dialog.setModal(True)
+        dialog.setMinimumSize(600, 450)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(15, 15, 15, 15)
+
+        title = QLabel(message_text)
+        title.setObjectName("deleteDialogTitle")
+        layout.addWidget(title)
+
+        info_label = QLabel("The following images will be moved to the system trash:")
+        info_label.setObjectName("deleteDialogInfo")
+        layout.addWidget(info_label)
+
+        # Scroll area for the list of images
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setObjectName("deleteDialogScrollArea")
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
+        # Use QListWidget for thumbnails and filenames
+        list_widget = QListWidget()
+        list_widget.setObjectName("deleteDialogListWidget")
+        list_widget.setIconSize(QSize(128, 128))
+        list_widget.setViewMode(QListWidget.ViewMode.IconMode)
+        list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
+        list_widget.setMovement(QListWidget.Movement.Static)
+        list_widget.setWordWrap(True)
+        list_widget.setSpacing(10)
+
+        # Populate the list
+        for file_path in files:
+            # Get thumbnail with orientation correction
+            thumbnail_pixmap = self.parent.image_pipeline.get_thumbnail_qpixmap(
+                file_path,
+                apply_auto_edits=self.parent.apply_auto_edits_enabled,
+                apply_orientation=True,  # Ensure orientation is applied
+            )
+            if thumbnail_pixmap:
+                icon = QIcon(thumbnail_pixmap)
+                item = QListWidgetItem(icon, os.path.basename(file_path))
+                item.setSizeHint(QSize(148, 168))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                list_widget.addItem(item)
+
+        scroll_area.setWidget(list_widget)
+        layout.addWidget(scroll_area)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(15)  # Add spacing between buttons
+        button_layout.addStretch()
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("deleteDialogCancelButton")
+        cancel_button.setMinimumSize(120, 40)  # Make button larger
+        cancel_button.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_button)
+
+        confirm_button = QPushButton("Confirm Move to Trash")
+        confirm_button.setObjectName("deleteDialogConfirmButton")
+        confirm_button.setMinimumSize(200, 40)  # Make button larger
+        confirm_button.setDefault(True)
+        confirm_button.clicked.connect(dialog.accept)
+        button_layout.addWidget(confirm_button)
+
+        layout.addLayout(button_layout)
+
+        result = dialog.exec()
+        return result == QDialog.DialogCode.Accepted
+
     def show_confirm_delete_dialog(self, deleted_file_paths: List[str]) -> bool:
         """
         Shows a confirmation dialog for deleting files.
@@ -403,51 +497,15 @@ class DialogManager:
         Returns:
             True if the user confirms the deletion, False otherwise.
         """
-        dialog = QMessageBox(self.parent)
-        dialog.setWindowTitle("Confirm Delete")
-
-        def get_truncated_path(path):
-            parts = path.replace("\\", "/").split("/")
-            return f".../{'/'.join(parts[-4:])}" if len(parts) > 4 else path
-
         num_selected = len(deleted_file_paths)
         if num_selected == 1:
-            truncated_path = get_truncated_path(deleted_file_paths[0])
-            dialog.setText(
-                f"Are you sure you want to move this image to the trash?\n\n{truncated_path}"
-            )
+            message = "Are you sure you want to move this image to the trash?"
         else:
-            if num_selected <= 10:
-                file_list = "\n".join(
-                    [get_truncated_path(p) for p in deleted_file_paths]
-                )
-                message = f"Are you sure you want to move {num_selected} images to the trash?\n\n{file_list}"
-            else:
-                file_list = "\n".join(
-                    [get_truncated_path(p) for p in deleted_file_paths[:10]]
-                )
-                message = f"Are you sure you want to move {num_selected} images to the trash?\n\n{file_list}\n\n... and {num_selected - 10} more"
-            dialog.setText(message)
-            dialog.setMinimumSize(600, 400)
+            message = f"Are you sure you want to move these {num_selected} images to the trash?"
 
-        dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setStandardButtons(
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        return self._show_delete_confirmation_dialog(
+            files=deleted_file_paths, title_text="Confirm Delete", message_text=message
         )
-        dialog.setDefaultButton(QMessageBox.StandardButton.Yes)
-
-        yes_button = dialog.button(QMessageBox.StandardButton.Yes)
-        if yes_button:
-            yes_button.setObjectName("confirmDeleteYesButton")
-
-        no_button = dialog.button(QMessageBox.StandardButton.No)
-        if no_button:
-            no_button.setObjectName("confirmDeleteNoButton")
-
-        # Styling is handled by dark_theme.qss
-
-        reply = dialog.exec()
-        return reply == QMessageBox.StandardButton.Yes
 
     def show_potential_cache_overflow_warning(
         self,
@@ -473,24 +531,22 @@ class DialogManager:
         )
         QMessageBox.warning(self.parent, "Potential Cache Overflow", warning_msg)
 
-    def show_commit_deletions_dialog(self, count: int) -> bool:
+    def show_commit_deletions_dialog(self, marked_files: List[str]) -> bool:
         """
         Shows a confirmation dialog for committing marked deletions.
 
         Args:
-            count: The number of files to be deleted.
+            marked_files: The list of files to be deleted.
 
         Returns:
             True if the user confirms, False otherwise.
         """
-        reply = QMessageBox.question(
-            self.parent,
-            "Confirm Deletion",
-            f"Are you sure you want to move {count} marked image(s) to trash?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        count = len(marked_files)
+        return self._show_delete_confirmation_dialog(
+            files=marked_files,
+            title_text="Confirm Deletion",
+            message_text=f"Are you sure you want to move {count} marked image(s) to trash?",
         )
-        return reply == QMessageBox.StandardButton.Yes
 
     def show_model_not_found_dialog(self, model_path: str):
         """Show a dialog informing the user that the rotation model is missing."""
