@@ -2290,6 +2290,15 @@ class MainWindow(QMainWindow):
         deselected=None,
         override_selected_paths: Optional[List[str]] = None,
     ):
+        # If the user is typing in the search bar, filtering the model can
+        # trigger selection changes. We want to ignore these automated changes
+        # to prevent the image preview from updating and stealing focus from the search bar.
+        if self.left_panel.search_input.hasFocus():
+            logger.info(
+                "Search input is active, skipping selection change handler to maintain focus."
+            )
+            return
+
         if self._is_syncing_selection and override_selected_paths is None:
             return
 
@@ -2373,10 +2382,12 @@ class MainWindow(QMainWindow):
     def _apply_filter(self):
         # Guard: Don't apply filters if no images are loaded yet
         if not self.app_state.image_files_data:
-            logger.debug("_apply_filter called but no images loaded, skipping")
+            logger.debug("Filter skipped: No images loaded.")
             return
 
-        search_text = self.left_panel.search_input.text().lower()
+        search_text = self.left_panel.search_input.text()
+        logger.info(f"Applying filters. Search term: '{search_text}'")
+        search_text = search_text.lower()
         selected_filter_text = self.filter_combo.currentText()
         selected_cluster_text = self.cluster_filter_combo.currentText()
         target_cluster_id = -1
@@ -2403,8 +2414,6 @@ class MainWindow(QMainWindow):
         )  # ← Changed from UserRole to DisplayRole
 
         self.proxy_model.invalidateFilter()
-
-        # Rest of your existing code...
 
     def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
         logger.info(
@@ -3250,7 +3259,7 @@ class MainWindow(QMainWindow):
                 ):
                     try:
                         determined_cluster_id = int(item_data.split("_")[-1])
-                    except ValueError:
+                    except (ValueError, IndexError):
                         pass
                     break
                 search_idx = search_idx.parent()
