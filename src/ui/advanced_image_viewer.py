@@ -439,6 +439,10 @@ class IndividualViewer(QWidget):
         self._setup_ui()
         self._connect_signals()
 
+    def get_file_path(self) -> Optional[str]:
+        """Get the file path of the currently displayed image."""
+        return self._file_path
+
     def _setup_ui(self):
         """Setup the layout with image view and control bar."""
         layout = QVBoxLayout(self)

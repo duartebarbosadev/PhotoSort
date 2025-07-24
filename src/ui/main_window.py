@@ -1055,31 +1055,27 @@ class MainWindow(QMainWindow):
         if not active_view:
             return
 
-        # --- Pre-deletion information gathering ---
-        active_view = self._get_active_file_view()  # Get active_view once
-        if not active_view:
-            return
-
         # This function is complex. Let's add more targeted debug logs.
         logger.debug("Initiating file deletion process.")
 
+        # --- Pre-deletion information gathering ---
         self.original_selection_paths = self._get_selected_file_paths_from_view()
-
-        # Check if we are in a focused view. If so, we only target that one image for deletion.
         focused_path_to_delete = (
             self.advanced_image_viewer.get_focused_image_path_if_any()
         )
-        self.was_focused_delete = (
-            focused_path_to_delete is not None
-        )  # Store state for post-deletion logic
 
-        if self.was_focused_delete:
+        # If a single image is focused in the viewer from a multi-selection,
+        # we prioritize deleting only that focused image.
+        if focused_path_to_delete:
             deleted_file_paths = [focused_path_to_delete]
+            self.was_focused_delete = True
             logger.debug(
                 f"Deleting focused image: {os.path.basename(focused_path_to_delete)}"
             )
         else:
+            # Otherwise, delete the entire selection from the list/grid view.
             deleted_file_paths = self.original_selection_paths
+            self.was_focused_delete = False
 
         if not deleted_file_paths:
             self.statusBar().showMessage("No image(s) selected to delete.", 3000)
@@ -3631,16 +3627,22 @@ class MainWindow(QMainWindow):
 
     def _rotate_selected_images(self, direction: str):
         """Rotate all currently selected images in the specified direction."""
-        selected_paths = self._get_selected_file_paths_from_view()
+        focused_path = self.advanced_image_viewer.get_focused_image_path_if_any()
+
+        if focused_path:
+            # If a single image is focused in the viewer (from a multi-select),
+            # only rotate that specific image.
+            selected_paths = [focused_path]
+            logger.debug(
+                f"Rotation action targeting focused image: {os.path.basename(focused_path)}"
+            )
+        else:
+            # Otherwise, rotate all images in the current selection from the list/grid view.
+            selected_paths = self._get_selected_file_paths_from_view()
 
         if not selected_paths:
-            # If no selection, fall back to current image
-            file_path = self._get_current_selected_image_path()
-            if file_path:
-                selected_paths = [file_path]
-            else:
-                self.statusBar().showMessage("No images selected for rotation.", 3000)
-                return
+            self.statusBar().showMessage("No images selected for rotation.", 3000)
+            return
 
         # Filter out files that don't support rotation
         rotation_supported_paths = []
@@ -3930,41 +3932,42 @@ class MainWindow(QMainWindow):
         if not active_view:
             return
 
-        selected_paths = self._get_selected_file_paths_from_view()
-        if not selected_paths:
+        original_selection_paths = self._get_selected_file_paths_from_view()
+        focused_path = self.advanced_image_viewer.get_focused_image_path_if_any()
+
+        if focused_path:
+            paths_to_act_on = [focused_path]
+            logger.debug(
+                f"Mark for deletion action targeting focused image: {os.path.basename(focused_path)}"
+            )
+        else:
+            paths_to_act_on = original_selection_paths
+
+        if not paths_to_act_on:
             self.statusBar().showMessage(
                 "No images selected to mark for deletion.", 3000
             )
             return
 
-        # --- Pre-find indices before model changes ---
         path_index_map = {
-            path: self._find_proxy_index_for_path(path) for path in selected_paths
+            path: self._find_proxy_index_for_path(path) for path in paths_to_act_on
         }
+        rename_map = {}
 
-        changed_new_paths = []
-
-        # --- Mark files and update model items in place ---
-        for old_path in selected_paths:
+        for old_path in paths_to_act_on:
             is_marked = self._is_marked_for_deletion(old_path)
-
-            directory = os.path.dirname(old_path)
-            filename = os.path.basename(old_path)
-
-            if is_marked:
-                # Unmark it
-                new_filename = filename.replace(" (DELETED)", "")
-            else:
-                # Mark it
-                name, ext = os.path.splitext(filename)
-                new_filename = f"{name} (DELETED){ext}"
-
+            directory, filename = os.path.split(old_path)
+            new_filename = (
+                filename.replace(" (DELETED)", "")
+                if is_marked
+                else f"{os.path.splitext(filename)[0]} (DELETED){os.path.splitext(filename)[1]}"
+            )
             new_path = os.path.join(directory, new_filename)
 
             try:
                 self.app_controller.rename_image(old_path, new_path)
                 self.app_state.update_path(old_path, new_path)
-                changed_new_paths.append(new_path)
+                rename_map[old_path] = new_path
 
                 proxy_idx = path_index_map.get(old_path)
                 if proxy_idx and proxy_idx.isValid():
@@ -3974,19 +3977,17 @@ class MainWindow(QMainWindow):
                         item_data = item.data(Qt.ItemDataRole.UserRole)
                         item_data["path"] = new_path
                         item.setData(item_data, Qt.ItemDataRole.UserRole)
-
+                        item.setText(new_filename)
                         if is_marked:  # Unmarking
                             is_blurred = item_data.get("is_blurred")
-                            if is_blurred is True:
+                            if is_blurred:
                                 item.setForeground(QColor(Qt.GlobalColor.red))
                                 item.setText(new_filename + " (Blurred)")
                             else:
                                 item.setForeground(
                                     QApplication.palette().text().color()
                                 )
-                                item.setText(new_filename)
                         else:  # Marking
-                            item.setText(new_filename)
                             item.setForeground(QColor("#FFB366"))
             except OSError as e:
                 logger.error(f"Error toggling mark for '{filename}': {e}")
@@ -3994,32 +3995,39 @@ class MainWindow(QMainWindow):
                     f"Error toggling mark for '{filename}': {e}", 5000
                 )
 
-        if not changed_new_paths:
+        if not rename_map:
             return
 
         self.statusBar().showMessage(
-            f"Toggled mark for {len(changed_new_paths)} image(s).", 5000
+            f"Toggled mark for {len(rename_map)} image(s).", 5000
         )
-
-        # Invalidate the model to re-sort/re-filter, then wait for it to process
         self.proxy_model.invalidate()
         QApplication.processEvents()
 
-        # --- Reselect items ---
+        final_selection_paths = [rename_map.get(p, p) for p in original_selection_paths]
+        self._handle_file_selection_changed(
+            override_selected_paths=final_selection_paths
+        )
+
+        if focused_path:
+            new_focused_path = rename_map.get(focused_path, focused_path)
+            self.advanced_image_viewer.set_focused_viewer_by_path(new_focused_path)
+
         selection = QItemSelection()
         first_idx = QModelIndex()
-
-        for path in changed_new_paths:
+        for path in final_selection_paths:
             proxy_idx = self._find_proxy_index_for_path(path)
             if proxy_idx.isValid():
                 selection.select(proxy_idx, proxy_idx)
                 if not first_idx.isValid():
                     first_idx = proxy_idx
 
-        if not selection.isEmpty() and active_view:
+        if not selection.isEmpty():
+            active_view.selectionModel().blockSignals(True)
             active_view.selectionModel().select(
                 selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
             )
+            active_view.selectionModel().blockSignals(False)
             if first_idx.isValid():
                 active_view.scrollTo(
                     first_idx, QAbstractItemView.ScrollHint.EnsureVisible
