@@ -3250,7 +3250,7 @@ class MainWindow(QMainWindow):
                 ):
                     try:
                         determined_cluster_id = int(item_data.split("_")[-1])
-                    except (ValueError, IndexError):
+                    except ValueError:
                         pass
                     break
                 search_idx = search_idx.parent()
