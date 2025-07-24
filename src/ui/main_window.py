@@ -569,6 +569,7 @@ class MainWindow(QMainWindow):
         # Connect UI component signals
         self.left_panel.tree_display_view.installEventFilter(self)
         self.left_panel.grid_display_view.installEventFilter(self)
+        self.left_panel.tree_display_view.clicked.connect(self._handle_tree_view_click)
         self.left_panel.tree_display_view.customContextMenuRequested.connect(
             self.menu_manager.show_image_context_menu
         )
@@ -3194,153 +3195,107 @@ class MainWindow(QMainWindow):
     def _perform_group_selection_from_key(
         self, key: int, active_view_from_event: QWidget
     ) -> bool:
-        """
-        Handles selection of an image within the current cluster based on a numeric key (1-9).
-        Called by eventFilter or potentially keyPressEvent.
-        Returns True if event was handled, False otherwise.
-        """
-        if not self.group_by_similarity_mode:  # Guard: only if in correct mode
+        if not self.group_by_similarity_mode:
             return False
 
-        target_image_index_in_cluster = key - Qt.Key.Key_1  # 0-indexed
-
-        # active_view_from_event is the QTreeView or QListView that received the event
-        # Ensure it's the one we expect for current UI state.
+        target_index = key - Qt.Key.Key_1
         active_view = self._get_active_file_view()
-        if active_view_from_event is not active_view:
-            # This could happen if the event filter is somehow triggered for a non-active view
-            # or if keyPressEvent calls this when focus is not on the primary view.
-            logger.warning(
-                "_perform_group_selection_from_key: Event source mismatch with _get_active_file_view()."
-            )
-            return False  # Don't handle if view context is mismatched
 
-        if not active_view:
+        if active_view_from_event is not active_view or not active_view:
             return False
 
         current_proxy_idx = active_view.currentIndex()
         if not current_proxy_idx.isValid():
-            return False  # No current item to determine cluster from
-
-        # Determine the cluster ID of the currently selected/focused item's group
-        determined_cluster_id = None
-        search_idx = current_proxy_idx
-        while search_idx.isValid():
-            s_idx = self.proxy_model.mapToSource(search_idx)
-            item_at_search = self.file_system_model.itemFromIndex(s_idx)
-            if not item_at_search:
-                break
-            current_item_user_data = item_at_search.data(Qt.ItemDataRole.UserRole)
-
-            if (
-                isinstance(current_item_user_data, dict)
-                and "path" in current_item_user_data
-            ):
-                image_path = current_item_user_data["path"]
-                if os.path.exists(image_path):  # Check path exists before cache lookup
-                    determined_cluster_id = self.app_state.cluster_results.get(
-                        image_path
-                    )
-                    break
-            elif isinstance(
-                current_item_user_data, str
-            ) and current_item_user_data.startswith("cluster_header_"):
-                try:
-                    determined_cluster_id = int(current_item_user_data.split("_")[-1])
-                except ValueError:
-                    pass
-                break
-
-            parent_of_search_idx = search_idx.parent()
-            if (
-                not parent_of_search_idx.isValid() and search_idx.isValid()
-            ):  # Reached top-level proxy item
-                break
-            search_idx = parent_of_search_idx
-
-        if determined_cluster_id is None:
-            return False  # Could not determine current cluster
-
-        images_by_cluster_map = self._group_images_by_cluster()
-        images_in_target_cluster = images_by_cluster_map.get(determined_cluster_id, [])
-        if not images_in_target_cluster:
             return False
 
-        # Sort images within the cluster consistent with display order
-        current_cluster_sort_method = self.cluster_sort_combo.currentText()
-        if (
-            current_cluster_sort_method == "Time"
-            or current_cluster_sort_method == "Similarity then Time"
-        ):
+        selected_paths = self._get_selected_file_paths_from_view()
+        is_multi_select_context = len(selected_paths) > 1
+        images_to_consider_paths = []
 
-            def image_sort_key_func(fd):
-                return (
-                    self.app_state.date_cache.get(fd["path"], date_obj.max),
-                    os.path.basename(fd["path"]),
-                )
-        else:  # Default sort (by basename)
+        # Determine the pool of images to select from
+        if is_multi_select_context:
+            focused_path = self.app_state.focused_image_path
+            if not focused_path and current_proxy_idx.isValid():
+                source_idx = self.proxy_model.mapToSource(current_proxy_idx)
+                item = self.file_system_model.itemFromIndex(source_idx)
+                if item and isinstance(item.data(Qt.ItemDataRole.UserRole), dict):
+                    focused_path = item.data(Qt.ItemDataRole.UserRole).get("path")
 
-            def image_sort_key_func(fd):
-                return os.path.basename(fd["path"])
-
-        sorted_images_in_cluster_data = sorted(
-            images_in_target_cluster, key=image_sort_key_func
-        )
-
-        if 0 <= target_image_index_in_cluster < len(sorted_images_in_cluster_data):
-            target_file_data_dict = sorted_images_in_cluster_data[
-                target_image_index_in_cluster
-            ]
-            target_file_path = target_file_data_dict["path"]
-
-            # Find the proxy QModelIndex for the target_file_path within its cluster header
-            proxy_root = QModelIndex()
-            cluster_header_proxy_idx = QModelIndex()
-            for r in range(self.proxy_model.rowCount(proxy_root)):
-                idx = self.proxy_model.index(r, 0, proxy_root)
-                s_idx_header = self.proxy_model.mapToSource(idx)
-                header_item = self.file_system_model.itemFromIndex(s_idx_header)
-                if header_item:
-                    header_data = header_item.data(Qt.ItemDataRole.UserRole)
-                    if (
-                        isinstance(header_data, str)
-                        and header_data == f"cluster_header_{determined_cluster_id}"
-                    ):
-                        cluster_header_proxy_idx = idx
+            if focused_path:
+                current_cluster_id = self.app_state.cluster_results.get(focused_path)
+                if current_cluster_id is not None:
+                    images_to_consider_paths = [
+                        p
+                        for p in selected_paths
+                        if self.app_state.cluster_results.get(p) == current_cluster_id
+                    ]
+        else:  # Single or no selection: use the whole group
+            determined_cluster_id = None
+            search_idx = current_proxy_idx
+            while search_idx.isValid():
+                s_idx = self.proxy_model.mapToSource(search_idx)
+                item = self.file_system_model.itemFromIndex(s_idx)
+                if not item:
+                    break
+                item_data = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(item_data, dict) and "path" in item_data:
+                    image_path = item_data["path"]
+                    if os.path.exists(image_path):
+                        determined_cluster_id = self.app_state.cluster_results.get(
+                            image_path
+                        )
                         break
+                elif isinstance(item_data, str) and item_data.startswith(
+                    "cluster_header_"
+                ):
+                    try:
+                        determined_cluster_id = int(item_data.split("_")[-1])
+                    except ValueError:
+                        pass
+                    break
+                search_idx = search_idx.parent()
 
-            if not cluster_header_proxy_idx.isValid():
-                return False  # Cluster header not found in proxy model
+            if determined_cluster_id is not None:
+                images_by_cluster = self._group_images_by_cluster()
+                images_in_group_data = images_by_cluster.get(determined_cluster_id, [])
+                images_to_consider_paths = [d["path"] for d in images_in_group_data]
 
-            target_proxy_idx_to_select = QModelIndex()
-            for r_child in range(self.proxy_model.rowCount(cluster_header_proxy_idx)):
-                child_proxy_idx = self.proxy_model.index(
-                    r_child, 0, cluster_header_proxy_idx
-                )
-                child_source_idx = self.proxy_model.mapToSource(child_proxy_idx)
-                child_item = self.file_system_model.itemFromIndex(child_source_idx)
-                if child_item:
-                    child_item_user_data = child_item.data(Qt.ItemDataRole.UserRole)
-                    if (
-                        isinstance(child_item_user_data, dict)
-                        and child_item_user_data.get("path") == target_file_path
-                    ):
-                        target_proxy_idx_to_select = child_proxy_idx
-                        break
+        if not images_to_consider_paths:
+            return False
 
-            if target_proxy_idx_to_select.isValid():
-                active_view.setCurrentIndex(target_proxy_idx_to_select)
-                active_view.selectionModel().select(
-                    target_proxy_idx_to_select,
-                    QItemSelectionModel.SelectionFlag.ClearAndSelect,
-                )
-                active_view.scrollTo(
-                    target_proxy_idx_to_select,
-                    QAbstractItemView.ScrollHint.EnsureVisible,
-                )
-                return True  # Event handled successfully
+        # Sort the paths to match display order
+        def sort_key(path):
+            date = self.app_state.date_cache.get(path, date_obj.max)
+            basename = os.path.basename(path)
+            sort_mode = self.cluster_sort_combo.currentText()
+            if sort_mode == "Time" or sort_mode == "Similarity then Time":
+                return (date, basename)
+            return basename
 
-        return False  # Index out of bounds or other failure
+        sorted_paths = sorted(images_to_consider_paths, key=sort_key)
+
+        if 0 <= target_index < len(sorted_paths):
+            target_path = sorted_paths[target_index]
+            proxy_idx_to_select = self._find_proxy_index_for_path(target_path)
+
+            if proxy_idx_to_select.isValid():
+                if is_multi_select_context:
+                    # In multi-select, just change the focus in the viewer
+                    self.advanced_image_viewer.set_focused_viewer_by_path(target_path)
+                else:
+                    # In single-select, change the selection in the tree view
+                    active_view.setCurrentIndex(proxy_idx_to_select)
+                    active_view.selectionModel().select(
+                        proxy_idx_to_select,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    )
+                    active_view.scrollTo(
+                        proxy_idx_to_select,
+                        QAbstractItemView.ScrollHint.EnsureVisible,
+                    )
+                return True
+
+        return False
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
@@ -4532,3 +4487,35 @@ class MainWindow(QMainWindow):
         self.left_panel.view_rotation_icon.setVisible(False)
         self.statusBar().showMessage("All rotation suggestions processed.", 5000)
         self._rebuild_model_view()
+
+    def _handle_tree_view_click(self, proxy_index: QModelIndex):
+        if not proxy_index.isValid() or not self.group_by_similarity_mode:
+            return
+
+        source_index = self.proxy_model.mapToSource(proxy_index)
+        item = self.file_system_model.itemFromIndex(source_index)
+
+        if not item:
+            return
+
+        item_data = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(item_data, str) and item_data.startswith("cluster_header_"):
+            active_view = self._get_active_file_view()
+            if not active_view or not isinstance(active_view, QTreeView):
+                return
+
+            selection = QItemSelection()
+            for row in range(item.rowCount()):
+                child_item = item.child(row)
+                if child_item:
+                    child_source_index = child_item.index()
+                    child_proxy_index = self.proxy_model.mapFromSource(
+                        child_source_index
+                    )
+                    if child_proxy_index.isValid():
+                        selection.select(child_proxy_index, child_proxy_index)
+
+            if not selection.isEmpty():
+                active_view.selectionModel().select(
+                    selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                )

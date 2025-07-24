@@ -830,6 +830,13 @@ class SynchronizedImageViewer(QWidget):
         if 0 <= index < num_images:
             self._set_view_mode("focused", focused_index=index)
 
+    def set_focused_viewer_by_path(self, file_path: str):
+        """Public method to set the focused viewer by file path."""
+        for i, viewer in enumerate(self.image_viewers):
+            if viewer.get_file_path() == file_path:
+                self.set_focused_viewer(i)
+                return
+
     def _fit_visible_images_after_layout_change(self):
         for viewer in self.image_viewers:
             if viewer.isVisible() and viewer.has_image():
@@ -928,6 +935,21 @@ class SynchronizedImageViewer(QWidget):
         for viewer in self.image_viewers:
             viewer.clear()
         self._set_view_mode("single")
+
+    def setText(self, text: str):
+        """Clears all viewers, resets to single view, and displays the given text centrally."""
+        # Clear all viewers to remove any existing images or text.
+        for viewer in self.image_viewers:
+            viewer.clear()
+
+        # Set to single view mode to ensure the first viewer takes up all available space.
+        self._set_view_mode("single")
+
+        # Now, set the text on the first viewer, which is now the only one visible.
+        if self.image_viewers:
+            # Use a QTimer to ensure the layout has updated before we set the text.
+            # This helps in correctly centering the text after a mode change.
+            QTimer.singleShot(0, lambda: self.image_viewers[0].image_view.setText(text))
 
     def _zoom_in_all(self):
         for viewer in self.image_viewers:
