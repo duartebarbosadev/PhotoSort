@@ -3290,41 +3290,59 @@ class MainWindow(QMainWindow):
                 obj is self.left_panel.tree_display_view
                 or obj is self.left_panel.grid_display_view
             ):
-                key_event: QKeyEvent = event  # Cast event to QKeyEvent
+                key_event: QKeyEvent = event
                 key = key_event.key()
+                modifiers = key_event.modifiers()
+
+                # --- Enhanced Logging ---
+                mod_str = []
+                if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                    mod_str.append("Shift")
+                if modifiers & Qt.KeyboardModifier.ControlModifier:
+                    mod_str.append("Ctrl")
+                if modifiers & Qt.KeyboardModifier.AltModifier:
+                    mod_str.append("Alt")
+                if modifiers & Qt.KeyboardModifier.MetaModifier:
+                    mod_str.append("Meta/Cmd")
+                logger.debug(
+                    f"KeyPress in view: Key={key}, Modifiers=[{', '.join(mod_str)}]"
+                )
 
                 search_has_focus = self.left_panel.search_input.hasFocus()
 
-                # Handle Arrow Keys & Delete for navigation (if search input doesn't have focus on the view itself)
-                if not search_has_focus:  # Only act if search input doesn't have focus
-                    # Rating shortcuts (Ctrl+0 to Ctrl+5)
-                    if (
-                        key_event.modifiers() == Qt.KeyboardModifier.ControlModifier
-                        and Qt.Key.Key_0 <= key <= Qt.Key.Key_5
-                    ):
+                if not search_has_focus:
+                    # --- Modifier-based actions ---
+                    is_unmodified = modifiers == Qt.KeyboardModifier.NoModifier
+                    is_control_or_meta = modifiers in (
+                        Qt.KeyboardModifier.ControlModifier,
+                        Qt.KeyboardModifier.MetaModifier,
+                    )
+
+                    # Rating shortcuts (Ctrl/Cmd + 0-5)
+                    if is_control_or_meta and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
                         return True
 
-                    if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
-                        self._navigate_left_in_group()
-                        return True
-                    elif key == Qt.Key.Key_Right or key == Qt.Key.Key_D:
-                        self._navigate_right_in_group()
-                        return True
-                    elif key == Qt.Key.Key_Up or key == Qt.Key.Key_W:
-                        self._navigate_up_sequential()
-                        return True
-                    elif key == Qt.Key.Key_Down or key == Qt.Key.Key_S:
-                        self._navigate_down_sequential()
-                        return True
-                    elif key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
-                        self._handle_delete_action()
-                        return True
+                    # --- Custom navigation for UNMODIFIED arrow keys ---
+                    if is_unmodified:
+                        if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
+                            self._navigate_left_in_group()
+                            return True
+                        if key == Qt.Key.Key_Right or key == Qt.Key.Key_D:
+                            self._navigate_right_in_group()
+                            return True
+                        if key == Qt.Key.Key_Up or key == Qt.Key.Key_W:
+                            self._navigate_up_sequential()
+                            return True
+                        if key == Qt.Key.Key_Down or key == Qt.Key.Key_S:
+                            self._navigate_down_sequential()
+                            return True
+                        if key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
+                            self._handle_delete_action()
+                            return True
 
-                # Numeric key (1-9) handling was moved to MainWindow.keyPressEvent to make it global.
-
-        # Pass unhandled events to the base class
+        # For all other key presses (including Shift+Arrows), pass the event on.
         return super().eventFilter(obj, event)
 
     def _toggle_metadata_sidebar(self, checked: bool):
