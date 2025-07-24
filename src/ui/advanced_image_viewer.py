@@ -566,6 +566,7 @@ class SynchronizedImageViewer(QWidget):
     # Forward signals from IndividualViewer instances
     ratingChanged = pyqtSignal(str, int)
     focused_image_changed = pyqtSignal(int, str)  # index, file_path
+    side_by_side_availability_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -745,7 +746,9 @@ class SynchronizedImageViewer(QWidget):
         self.sync_button.setVisible(visible_viewers > 1)
 
         num_images_loaded = sum(1 for v in self.image_viewers if v.has_image())
-        self.side_by_side_btn.setEnabled(num_images_loaded >= 2)
+        is_available = num_images_loaded >= 2
+        self.side_by_side_btn.setEnabled(is_available)
+        self.side_by_side_availability_changed.emit(is_available)
 
     def _set_view_mode(self, mode: str, focused_index: int = -1):
         """Set the display mode to single, focused, or side-by-side."""
@@ -833,7 +836,7 @@ class SynchronizedImageViewer(QWidget):
     def set_focused_viewer_by_path(self, file_path: str):
         """Public method to set the focused viewer by file path."""
         for i, viewer in enumerate(self.image_viewers):
-            if viewer.get_file_path() == file_path:
+            if viewer._file_path == file_path:
                 self.set_focused_viewer(i)
                 return
 

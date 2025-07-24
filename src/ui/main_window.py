@@ -565,6 +565,9 @@ class MainWindow(QMainWindow):
         self.advanced_image_viewer.focused_image_changed.connect(
             self._handle_focused_image_changed
         )
+        self.advanced_image_viewer.side_by_side_availability_changed.connect(
+            self._on_side_by_side_availability_changed
+        )
 
         # Connect UI component signals
         self.left_panel.tree_display_view.installEventFilter(self)
@@ -1014,17 +1017,20 @@ class MainWindow(QMainWindow):
         if index is None:
             return
 
-        # This logic is now independent of focus.
-        # It will trigger regardless of which widget is active.
-        if self.group_by_similarity_mode:
-            # In group mode, numbers select within a cluster.
-            # We use the key directly (1-9) for this logic.
+        selected_paths = self._get_selected_file_paths_from_view()
+        num_selected = len(selected_paths)
+
+        # CASE 1: In group mode with a single image selected (or no selection),
+        # numbers select the Nth image within the current item's group.
+        if self.group_by_similarity_mode and num_selected <= 1:
             key = index + Qt.Key.Key_1
             active_view = self._get_active_file_view()
             if active_view and self._perform_group_selection_from_key(key, active_view):
                 return  # Handled
+
+        # CASE 2: In all other cases (not group mode, OR group mode with multi-select),
+        # numbers switch focus among the selected images in the viewer (basic action).
         else:
-            # In other modes, numbers switch focus in multi-select/side-by-side.
             num_images = sum(
                 1 for v in self.advanced_image_viewer.image_viewers if v.has_image()
             )
@@ -3217,57 +3223,36 @@ class MainWindow(QMainWindow):
         if not current_proxy_idx.isValid():
             return False
 
-        selected_paths = self._get_selected_file_paths_from_view()
-        is_multi_select_context = len(selected_paths) > 1
+        # This function is now only called in single-selection contexts.
+        # We determine the group from the currently focused item and select the Nth image from it.
         images_to_consider_paths = []
-
-        # Determine the pool of images to select from
-        if is_multi_select_context:
-            focused_path = self.app_state.focused_image_path
-            if not focused_path and current_proxy_idx.isValid():
-                source_idx = self.proxy_model.mapToSource(current_proxy_idx)
-                item = self.file_system_model.itemFromIndex(source_idx)
-                if item and isinstance(item.data(Qt.ItemDataRole.UserRole), dict):
-                    focused_path = item.data(Qt.ItemDataRole.UserRole).get("path")
-
-            if focused_path:
-                current_cluster_id = self.app_state.cluster_results.get(focused_path)
-                if current_cluster_id is not None:
-                    images_to_consider_paths = [
-                        p
-                        for p in selected_paths
-                        if self.app_state.cluster_results.get(p) == current_cluster_id
-                    ]
-        else:  # Single or no selection: use the whole group
-            determined_cluster_id = None
-            search_idx = current_proxy_idx
-            while search_idx.isValid():
-                s_idx = self.proxy_model.mapToSource(search_idx)
-                item = self.file_system_model.itemFromIndex(s_idx)
-                if not item:
+        determined_cluster_id = None
+        search_idx = current_proxy_idx
+        while search_idx.isValid():
+            s_idx = self.proxy_model.mapToSource(search_idx)
+            item = self.file_system_model.itemFromIndex(s_idx)
+            if not item:
+                break
+            item_data = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(item_data, dict) and "path" in item_data:
+                image_path = item_data["path"]
+                if os.path.exists(image_path):
+                    determined_cluster_id = self.app_state.cluster_results.get(
+                        image_path
+                    )
                     break
-                item_data = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(item_data, dict) and "path" in item_data:
-                    image_path = item_data["path"]
-                    if os.path.exists(image_path):
-                        determined_cluster_id = self.app_state.cluster_results.get(
-                            image_path
-                        )
-                        break
-                elif isinstance(item_data, str) and item_data.startswith(
-                    "cluster_header_"
-                ):
-                    try:
-                        determined_cluster_id = int(item_data.split("_")[-1])
-                    except (ValueError, IndexError):
-                        pass
-                    break
-                search_idx = search_idx.parent()
+            elif isinstance(item_data, str) and item_data.startswith("cluster_header_"):
+                try:
+                    determined_cluster_id = int(item_data.split("_")[-1])
+                except (ValueError, IndexError):
+                    pass
+                break
+            search_idx = search_idx.parent()
 
-            if determined_cluster_id is not None:
-                images_by_cluster = self._group_images_by_cluster()
-                images_in_group_data = images_by_cluster.get(determined_cluster_id, [])
-                images_to_consider_paths = [d["path"] for d in images_in_group_data]
+        if determined_cluster_id is not None:
+            images_by_cluster = self._group_images_by_cluster()
+            images_in_group_data = images_by_cluster.get(determined_cluster_id, [])
+            images_to_consider_paths = [d["path"] for d in images_in_group_data]
 
         if not images_to_consider_paths:
             return False
@@ -3288,20 +3273,16 @@ class MainWindow(QMainWindow):
             proxy_idx_to_select = self._find_proxy_index_for_path(target_path)
 
             if proxy_idx_to_select.isValid():
-                if is_multi_select_context:
-                    # In multi-select, just change the focus in the viewer
-                    self.advanced_image_viewer.set_focused_viewer_by_path(target_path)
-                else:
-                    # In single-select, change the selection in the tree view
-                    active_view.setCurrentIndex(proxy_idx_to_select)
-                    active_view.selectionModel().select(
-                        proxy_idx_to_select,
-                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
-                    )
-                    active_view.scrollTo(
-                        proxy_idx_to_select,
-                        QAbstractItemView.ScrollHint.EnsureVisible,
-                    )
+                # In single-select, change the selection in the tree view
+                active_view.setCurrentIndex(proxy_idx_to_select)
+                active_view.selectionModel().select(
+                    proxy_idx_to_select,
+                    QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                )
+                active_view.scrollTo(
+                    proxy_idx_to_select,
+                    QAbstractItemView.ScrollHint.EnsureVisible,
+                )
                 return True
 
         return False
@@ -4528,3 +4509,7 @@ class MainWindow(QMainWindow):
                 active_view.selectionModel().select(
                     selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
                 )
+
+    def _on_side_by_side_availability_changed(self, is_available: bool):
+        """Enable/disable the side-by-side view action based on availability."""
+        self.menu_manager.side_by_side_view_action.setEnabled(is_available)
