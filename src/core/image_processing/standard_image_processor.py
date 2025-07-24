@@ -35,7 +35,9 @@ class StandardImageProcessor:
 
     @staticmethod
     def process_for_thumbnail(
-        image_path: str, thumbnail_max_size: tuple = THUMBNAIL_MAX_SIZE
+        image_path: str,
+        thumbnail_max_size: tuple = THUMBNAIL_MAX_SIZE,
+        apply_orientation: bool = True,
     ) -> Optional[Image.Image]:
         """
         Generates a PIL.Image thumbnail from a standard image file.
@@ -44,7 +46,8 @@ class StandardImageProcessor:
         final_pil_img = None
         try:
             with Image.open(normalized_path) as img:
-                img = ImageOps.exif_transpose(img)  # Correct orientation
+                if apply_orientation:
+                    img = ImageOps.exif_transpose(img)  # Correct orientation
                 img.thumbnail(thumbnail_max_size, Image.Resampling.LANCZOS)
                 final_pil_img = img.convert("RGBA")  # Ensure RGBA
             return final_pil_img

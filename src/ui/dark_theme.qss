@@ -106,6 +106,7 @@ QTreeView, QListView {
     padding: 4px; /* Minimal padding */
     alternate-background-color: #2A2A2A; /* Subtle alternation */
     outline: 0; /* Remove focus outline */
+    qproperty-wordWrap: true; /* Enable word wrapping for item text */
 }
 QTreeView::item {
     background-color: transparent;
@@ -142,10 +143,6 @@ QListView[viewMode="IconMode"]::item {
     height: 140px;
     margin: 4px;
     text-align: center;
-    /* Force text wrapping for long filenames */
-    word-wrap: break-word;
-    /* Ensure text doesn't overflow */
-    text-overflow: ellipsis;
 }
 
 QTreeView::branch {

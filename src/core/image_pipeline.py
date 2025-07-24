@@ -70,19 +70,23 @@ class ImagePipeline:
         )
 
     def _get_pil_thumbnail(
-        self, image_path: str, apply_auto_edits: bool = False
+        self,
+        image_path: str,
+        apply_auto_edits: bool = False,
+        apply_orientation: bool = False,
     ) -> Optional[Image.Image]:
         """
         Internal method to get/generate a PIL thumbnail.
         Checks cache first, then generates and caches.
         """
         normalized_path = os.path.normpath(image_path)
-        cache_key = (normalized_path, apply_auto_edits)  # Key for thumbnail cache
+        # Add apply_orientation to the cache key to store oriented/unoriented versions separately
+        cache_key = (normalized_path, apply_auto_edits, apply_orientation)
 
         cached_img = self.thumbnail_cache.get(cache_key)
         if cached_img:
             logger.debug(
-                f"Thumbnail cache HIT for: {os.path.basename(normalized_path)} (Auto-Edits: {apply_auto_edits})"
+                f"Thumbnail cache HIT for: {os.path.basename(normalized_path)} (Auto-Edits: {apply_auto_edits}, Orientation: {apply_orientation})"
             )
             return cached_img
 
@@ -94,8 +98,10 @@ class ImagePipeline:
                 normalized_path, apply_auto_edits, THUMBNAIL_MAX_SIZE
             )
         elif ext in SUPPORTED_STANDARD_EXTENSIONS:
+            # For standard images, we pass apply_orientation down, as the processor
+            # is responsible for reading the EXIF data.
             pil_img = StandardImageProcessor.process_for_thumbnail(
-                normalized_path, THUMBNAIL_MAX_SIZE
+                normalized_path, THUMBNAIL_MAX_SIZE, apply_orientation
             )
         else:
             logger.warning(
@@ -104,24 +110,39 @@ class ImagePipeline:
             return None
 
         if pil_img:
-            # Ensure orientation is corrected before caching, though processors might do it.
-            # For consistency, good to call it here if processors don't always.
-            # Current processors (Raw/Std) already handle exif_transpose internally.
-            # pil_img = self.image_orientation_handler.exif_transpose(pil_img)
+            # If the processor for standard images did not handle orientation,
+            # or for RAW images where it's applied post-processing, handle it here.
+            # The StandardImageProcessor now handles it, so this is mainly for RAW
+            # or as a fallback.
+            if apply_orientation and not (
+                ext in SUPPORTED_STANDARD_EXTENSIONS
+            ):  # Assume standard processor handled it
+                pil_img = self.image_orientation_handler.exif_transpose(pil_img)
+
             self.thumbnail_cache.set(cache_key, pil_img)
         return pil_img
 
     def get_thumbnail_qpixmap(
-        self, image_path: str, apply_auto_edits: bool = False
+        self,
+        image_path: str,
+        apply_auto_edits: bool = False,
+        apply_orientation: bool = False,
     ) -> Optional[QPixmap]:
         """
         Gets a QPixmap thumbnail for the given image path.
+
+        Args:
+            image_path: The path to the image.
+            apply_auto_edits: Whether to apply auto-edits (for RAW files).
+            apply_orientation: Whether to apply EXIF orientation to the thumbnail.
         """
         if not os.path.isfile(image_path):
             logger.error(f"File does not exist: {image_path}")
             return None
 
-        pil_img = self._get_pil_thumbnail(image_path, apply_auto_edits)
+        pil_img = self._get_pil_thumbnail(
+            image_path, apply_auto_edits, apply_orientation
+        )
         if pil_img:
             try:
                 return QPixmap.fromImage(ImageQt(pil_img))

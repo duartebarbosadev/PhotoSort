@@ -3904,7 +3904,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No images are marked for deletion.", 3000)
             return
 
-        if not self.dialog_manager.show_commit_deletions_dialog(len(marked_files)):
+        if not self.dialog_manager.show_commit_deletions_dialog(marked_files):
             return
 
         # --- Pre-computation for next selection ---
