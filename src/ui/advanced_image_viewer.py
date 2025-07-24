@@ -836,7 +836,7 @@ class SynchronizedImageViewer(QWidget):
     def set_focused_viewer_by_path(self, file_path: str):
         """Public method to set the focused viewer by file path."""
         for i, viewer in enumerate(self.image_viewers):
-            if viewer._file_path == file_path:
+            if viewer.get_file_path() == file_path:
                 self.set_focused_viewer(i)
                 return
 
