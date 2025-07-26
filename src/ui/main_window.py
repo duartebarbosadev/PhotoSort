@@ -3292,7 +3292,7 @@ class MainWindow(QMainWindow):
             is_left_panel_view = obj in self._left_panel_views
             is_image_viewer = obj in self._image_viewer_views
 
-            logger.debug(f"EventFilter KeyPress: obj={obj.__class__.__name__}, is_left_panel_view={is_left_panel_view}, is_image_viewer={is_image_viewer}")
+            logger.debug("EventFilter KeyPress: obj=%s, is_left_panel_view=%s, is_image_viewer=%s", obj.__class__.__name__, is_left_panel_view, is_image_viewer)
 
             if is_left_panel_view or is_image_viewer:
                 key_event: QKeyEvent = event
