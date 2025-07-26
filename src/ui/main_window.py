@@ -3374,21 +3374,21 @@ class MainWindow(QMainWindow):
                     
                     # --- Navigation with Ctrl modifier (bypasses deleted file skipping) ---
                     elif modifiers == Qt.KeyboardModifier.ControlModifier:
-                        logger.info(f"Ctrl+Arrow key detected: {key} - Navigation with deleted file bypass")
+                        logger.debug(f"Ctrl+Arrow key detected: {key} - Navigation with deleted file bypass")
                         if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
-                            logger.info(f"Ctrl+Arrow key pressed: LEFT/A - Starting navigation (bypass deleted)")
+                            logger.debug(f"Ctrl+Arrow key pressed: LEFT/A - Starting navigation (bypass deleted)")
                             self._navigate_left_in_group(skip_deleted=False)
                             return True
                         if key == Qt.Key.Key_Right or key == Qt.Key.Key_D:
-                            logger.info(f"Ctrl+Arrow key pressed: RIGHT/D - Starting navigation (bypass deleted)")
+                            logger.debug(f"Ctrl+Arrow key pressed: RIGHT/D - Starting navigation (bypass deleted)")
                             self._navigate_right_in_group(skip_deleted=False)
                             return True
                         if key == Qt.Key.Key_Up or key == Qt.Key.Key_W:
-                            logger.info(f"Ctrl+Arrow key pressed: UP/W - Starting navigation (bypass deleted)")
+                            logger.debug(f"Ctrl+Arrow key pressed: UP/W - Starting navigation (bypass deleted)")
                             self._navigate_up_sequential(skip_deleted=False)
                             return True
                         if key == Qt.Key.Key_Down or key == Qt.Key.Key_S:
-                            logger.info(f"Ctrl+Arrow key pressed: DOWN/S - Starting navigation (bypass deleted)")
+                            logger.debug(f"Ctrl+Arrow key pressed: DOWN/S - Starting navigation (bypass deleted)")
                             self._navigate_down_sequential(skip_deleted=False)
                             return True
                     else:
