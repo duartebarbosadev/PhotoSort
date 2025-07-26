@@ -1671,11 +1671,11 @@ class MainWindow(QMainWindow):
                         prev_visual_idx, skip_deleted=skip_deleted
                     )
                     if last_in_group.isValid():
-                        # This item is already validated, so we can select it directly
-                        self._validate_and_select_image_candidate(
+                        # Validate the item before selecting it
+                        if self._validate_and_select_image_candidate(
                             last_in_group, "up", skip_deleted
-                        )
-                        return
+                        ):
+                            return
 
             iter_idx = prev_visual_idx
             if iteration_count == max_iterations - 1:  # Safety break
