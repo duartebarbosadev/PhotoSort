@@ -167,6 +167,10 @@ class MainWindow(QMainWindow):
         logger.debug("Initializing MainWindow...")
         self.initial_folder = initial_folder
         self._is_syncing_selection = False
+        self._left_panel_views = set()
+        self._image_viewer_views = set()
+        self._left_panel_views = set()
+        self._image_viewer_views = set()
 
         self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
@@ -461,6 +465,18 @@ class MainWindow(QMainWindow):
 
         self.left_panel = LeftPanel(self.proxy_model, self.app_state, self)
 
+        self._left_panel_views = {
+            self.left_panel.tree_display_view,
+            self.left_panel.grid_display_view,
+            self.left_panel.rotation_suggestions_view,
+        }
+
+        self._left_panel_views = {
+            self.left_panel.tree_display_view,
+            self.left_panel.grid_display_view,
+            self.left_panel.rotation_suggestions_view,
+        }
+
         self.center_pane_container = QWidget()
         self.center_pane_container.setObjectName("center_pane_container")
         center_pane_layout = QVBoxLayout(self.center_pane_container)
@@ -476,6 +492,9 @@ class MainWindow(QMainWindow):
         # Keep a reference to the first viewer for backward compatibility if needed,
         # but primary interaction is now with the SynchronizedImageViewer itself.
         self.image_view = self.advanced_image_viewer.image_viewers[0].image_view
+        self._image_viewer_views = {
+            v.image_view for v in self.advanced_image_viewer.image_viewers
+        }
 
         # The rating and color controls are now part of the IndividualViewer
         # widgets inside SynchronizedImageViewer, so they are no longer created here.
@@ -3290,14 +3309,8 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             # Ensure the event is for one of our views
-            is_left_panel_view = (
-                obj is self.left_panel.tree_display_view
-                or obj is self.left_panel.grid_display_view
-                or obj is self.left_panel.rotation_suggestions_view
-            )
-            is_image_viewer = any(
-                obj is v.image_view for v in self.advanced_image_viewer.image_viewers
-            )
+            is_left_panel_view = obj in self._left_panel_views
+            is_image_viewer = obj in self._image_viewer_views
 
             if is_left_panel_view or is_image_viewer:
                 key_event: QKeyEvent = event
