@@ -3351,7 +3351,7 @@ class MainWindow(QMainWindow):
                         self._apply_rating_to_selection(rating)
                         return True                    # --- Custom navigation for UNMODIFIED arrow keys ---
                     if is_unmodified_or_keypad:
-                        logger.info(f"Unmodified/keypad key detected: {key} (modifiers: {modifiers})")
+                        logger.debug("Unmodified/keypad key detected: %s (modifiers: %s)", key, modifiers)
                         if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
                             logger.info(f"Arrow key pressed: LEFT/A - Starting navigation")
                             self._navigate_left_in_group(skip_deleted=True)
