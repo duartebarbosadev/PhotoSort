@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QStyle,  # For standard icons
     QAbstractItemView,
-    QMessageBox,
     QApplication,  # For selection and edit triggersor dialogs
 )
 import os  # <-- Add import os at the top level
@@ -167,8 +166,6 @@ class MainWindow(QMainWindow):
         logger.debug("Initializing MainWindow...")
         self.initial_folder = initial_folder
         self._is_syncing_selection = False
-        self._left_panel_views = set()
-        self._image_viewer_views = set()
         self._left_panel_views = set()
         self._image_viewer_views = set()
 
@@ -464,12 +461,6 @@ class MainWindow(QMainWindow):
         self.proxy_model.app_state_ref = self.app_state  # Link AppState to proxy model
 
         self.left_panel = LeftPanel(self.proxy_model, self.app_state, self)
-
-        self._left_panel_views = {
-            self.left_panel.tree_display_view,
-            self.left_panel.grid_display_view,
-            self.left_panel.rotation_suggestions_view,
-        }
 
         self._left_panel_views = {
             self.left_panel.tree_display_view,
@@ -1013,7 +1004,6 @@ class MainWindow(QMainWindow):
         # or fallbacks if focus is not on the views.
 
         key = event.key()
-        modifiers = event.modifiers()
 
         # Escape key to clear focus from search input (if it has focus)
         if key == Qt.Key.Key_Escape:
