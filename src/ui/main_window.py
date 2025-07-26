@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QStyle,  # For standard icons
     QAbstractItemView,
-    QMessageBox,
     QApplication,  # For selection and edit triggersor dialogs
 )
 import os  # <-- Add import os at the top level
@@ -167,6 +166,8 @@ class MainWindow(QMainWindow):
         logger.debug("Initializing MainWindow...")
         self.initial_folder = initial_folder
         self._is_syncing_selection = False
+        self._left_panel_views = set()
+        self._image_viewer_views = set()
 
         self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
@@ -461,6 +462,12 @@ class MainWindow(QMainWindow):
 
         self.left_panel = LeftPanel(self.proxy_model, self.app_state, self)
 
+        self._left_panel_views = {
+            self.left_panel.tree_display_view,
+            self.left_panel.grid_display_view,
+            self.left_panel.rotation_suggestions_view,
+        }
+
         self.center_pane_container = QWidget()
         self.center_pane_container.setObjectName("center_pane_container")
         center_pane_layout = QVBoxLayout(self.center_pane_container)
@@ -476,6 +483,9 @@ class MainWindow(QMainWindow):
         # Keep a reference to the first viewer for backward compatibility if needed,
         # but primary interaction is now with the SynchronizedImageViewer itself.
         self.image_view = self.advanced_image_viewer.image_viewers[0].image_view
+        self._image_viewer_views = {
+            v.image_view for v in self.advanced_image_viewer.image_viewers
+        }
 
         # The rating and color controls are now part of the IndividualViewer
         # widgets inside SynchronizedImageViewer, so they are no longer created here.
@@ -572,6 +582,9 @@ class MainWindow(QMainWindow):
         # Connect UI component signals
         self.left_panel.tree_display_view.installEventFilter(self)
         self.left_panel.grid_display_view.installEventFilter(self)
+        self.left_panel.rotation_suggestions_view.installEventFilter(self)
+        for viewer in self.advanced_image_viewer.image_viewers:
+            viewer.image_view.installEventFilter(self)
         self.left_panel.tree_display_view.clicked.connect(self._handle_tree_view_click)
         self.left_panel.tree_display_view.customContextMenuRequested.connect(
             self.menu_manager.show_image_context_menu
@@ -3286,10 +3299,10 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             # Ensure the event is for one of our views
-            if (
-                obj is self.left_panel.tree_display_view
-                or obj is self.left_panel.grid_display_view
-            ):
+            is_left_panel_view = obj in self._left_panel_views
+            is_image_viewer = obj in self._image_viewer_views
+
+            if is_left_panel_view or is_image_viewer:
                 key_event: QKeyEvent = event
                 key = key_event.key()
                 modifiers = key_event.modifiers()
@@ -3311,6 +3324,23 @@ class MainWindow(QMainWindow):
                 search_has_focus = self.left_panel.search_input.hasFocus()
 
                 if not search_has_focus:
+                    # Rotation view-specific shortcuts
+                    if self.left_panel.current_view_mode == "rotation":
+                        if key == Qt.Key.Key_Y:
+                            if modifiers == Qt.KeyboardModifier.ShiftModifier:
+                                self._accept_all_rotations()
+                                return True
+                            elif modifiers == Qt.KeyboardModifier.NoModifier:
+                                self._accept_current_rotation()
+                                return True
+                        elif key == Qt.Key.Key_N:
+                            if modifiers == Qt.KeyboardModifier.ShiftModifier:
+                                self._refuse_all_rotations()
+                                return True
+                            elif modifiers == Qt.KeyboardModifier.NoModifier:
+                                self._refuse_current_rotation()
+                                return True
+
                     # --- Modifier-based actions ---
                     is_unmodified = modifiers == Qt.KeyboardModifier.NoModifier
                     is_control_or_meta = modifiers in (
@@ -4381,13 +4411,7 @@ class MainWindow(QMainWindow):
         if not selected_paths:
             return
 
-        # If only one item is selected, use the existing logic to preserve
-        # the behavior of selecting the next item automatically.
-        if len(selected_paths) == 1:
-            self._accept_rotation(selected_paths[0])
-            return
-
-        # Handle multi-selection for the "Accept (N)" button
+        # Handle multi-selection for applying rotations. This method is triggered by the "Accept (N)" button in the UI.
         rotations_to_apply = {
             path: self.rotation_suggestions[path]
             for path in selected_paths
