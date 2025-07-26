@@ -4411,7 +4411,7 @@ class MainWindow(QMainWindow):
         if not selected_paths:
             return
 
-        # Handle multi-selection for the "Accept (N)" button
+        # Handle multi-selection for applying rotations. This method is triggered by the "Accept (N)" button in the UI.
         rotations_to_apply = {
             path: self.rotation_suggestions[path]
             for path in selected_paths
