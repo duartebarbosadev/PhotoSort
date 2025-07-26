@@ -3394,7 +3394,7 @@ class MainWindow(QMainWindow):
                     else:
                         logger.info(f"Key with modifiers detected: {key}, modifiers: {modifiers}")
             else:
-                logger.info(f"EventFilter: Key press not from tracked views, obj={obj.__class__.__name__ if obj else 'None'}")
+                logger.debug(f"EventFilter: Key press not from tracked views, obj={obj.__class__.__name__ if obj else 'None'}")
 
         # For all other key presses (including Shift+Arrows), pass the event on.
         return super().eventFilter(obj, event)
