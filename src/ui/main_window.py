@@ -3374,21 +3374,20 @@ class MainWindow(QMainWindow):
                     # --- Navigation with Ctrl modifier (bypasses deleted file skipping) ---
                     elif modifiers == Qt.KeyboardModifier.ControlModifier:
                         logger.debug(f"Ctrl+Arrow key detected: {key} - Navigation with deleted file bypass")
-                        if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
-                            logger.debug(f"Ctrl+Arrow key pressed: LEFT/A - Starting navigation (bypass deleted)")
-                            self._navigate_left_in_group(skip_deleted=False)
-                            return True
-                        if key == Qt.Key.Key_Right or key == Qt.Key.Key_D:
-                            logger.debug(f"Ctrl+Arrow key pressed: RIGHT/D - Starting navigation (bypass deleted)")
-                            self._navigate_right_in_group(skip_deleted=False)
-                            return True
-                        if key == Qt.Key.Key_Up or key == Qt.Key.Key_W:
-                            logger.debug(f"Ctrl+Arrow key pressed: UP/W - Starting navigation (bypass deleted)")
-                            self._navigate_up_sequential(skip_deleted=False)
-                            return True
-                        if key == Qt.Key.Key_Down or key == Qt.Key.Key_S:
-                            logger.debug(f"Ctrl+Arrow key pressed: DOWN/S - Starting navigation (bypass deleted)")
-                            self._navigate_down_sequential(skip_deleted=False)
+                        ctrl_arrow_actions = {
+                            Qt.Key.Key_Left: ("LEFT/A", self._navigate_left_in_group),
+                            Qt.Key.Key_A: ("LEFT/A", self._navigate_left_in_group),
+                            Qt.Key.Key_Right: ("RIGHT/D", self._navigate_right_in_group),
+                            Qt.Key.Key_D: ("RIGHT/D", self._navigate_right_in_group),
+                            Qt.Key.Key_Up: ("UP/W", self._navigate_up_sequential),
+                            Qt.Key.Key_W: ("UP/W", self._navigate_up_sequential),
+                            Qt.Key.Key_Down: ("DOWN/S", self._navigate_down_sequential),
+                            Qt.Key.Key_S: ("DOWN/S", self._navigate_down_sequential),
+                        }
+                        if key in ctrl_arrow_actions:
+                            direction, action = ctrl_arrow_actions[key]
+                            logger.debug(f"Ctrl+Arrow key pressed: {direction} - Starting navigation (bypass deleted)")
+                            action(skip_deleted=False)
                             return True
                     else:
                         logger.info(f"Key with modifiers detected: {key}, modifiers: {modifiers}")
