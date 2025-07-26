@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QStyle,  # For standard icons
     QAbstractItemView,
-    QMessageBox,
     QApplication,  # For selection and edit triggersor dialogs
 )
 import os  # <-- Add import os at the top level
