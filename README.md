@@ -186,7 +186,7 @@ Logs will be saved to `~/.photosort_logs/photosort_app.log`.
   * Automatically skips files marked for deletion (with "(DELETED)" in filename)
   * Left/Right (or H/L): Navigate within the same group/folder
   * Up/Down (or K/J): Navigate sequentially through all visible images
-* **Navigate Including Deleted Images:** `Ctrl+Arrow Keys` or `Ctrl+H/J/K/L`
+* **Navigate Including Deleted Images:** `Ctrl+Arrow Keys` or `Ctrl+H/J/K/L` (or `Cmd+Arrow Keys` / `Cmd+H/J/K/L` on macOS)
   * Same navigation as above, but **does not skip** files marked for deletion
   * Useful for reviewing files before committing deletions
   * Allows access to deleted files for comparison or unmarking
