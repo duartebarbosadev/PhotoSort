@@ -197,6 +197,17 @@ class MainWindow(QMainWindow):
         self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
         self.rotation_suggestions = {}
 
+        self.navigation_keys = {
+            Qt.Key.Key_Left: ("LEFT/H", self._navigate_left_in_group),
+            Qt.Key.Key_H: ("LEFT/H", self._navigate_left_in_group),
+            Qt.Key.Key_Right: ("RIGHT/L", self._navigate_right_in_group),
+            Qt.Key.Key_L: ("RIGHT/L", self._navigate_right_in_group),
+            Qt.Key.Key_Up: ("UP/K", self._navigate_up_sequential),
+            Qt.Key.Key_K: ("UP/K", self._navigate_up_sequential),
+            Qt.Key.Key_Down: ("DOWN/J", self._navigate_down_sequential),
+            Qt.Key.Key_J: ("DOWN/J", self._navigate_down_sequential),
+        }
+
         self.filter_combo = QComboBox()
         self.filter_combo.addItems(
             [
@@ -3286,29 +3297,12 @@ class MainWindow(QMainWindow):
         the 'skip deleted' logic.
         Returns True if the key was handled, False otherwise.
         """
-        if key == Qt.Key.Key_Left or key == Qt.Key.Key_H:
+        if key in self.navigation_keys:
+            direction_name, nav_func = self.navigation_keys[key]
             logger.debug(
-                "Modified arrow key pressed: LEFT/H - Starting navigation (bypass deleted)"
+                f"Modified arrow key pressed: {direction_name} - Starting navigation (bypass deleted)"
             )
-            self._navigate_left_in_group(skip_deleted=False)
-            return True
-        if key == Qt.Key.Key_Right or key == Qt.Key.Key_L:
-            logger.debug(
-                "Modified arrow key pressed: RIGHT/L - Starting navigation (bypass deleted)"
-            )
-            self._navigate_right_in_group(skip_deleted=False)
-            return True
-        if key == Qt.Key.Key_Up or key == Qt.Key.Key_K:
-            logger.debug(
-                "Modified arrow key pressed: UP/K - Starting navigation (bypass deleted)"
-            )
-            self._navigate_up_sequential(skip_deleted=False)
-            return True
-        if key == Qt.Key.Key_Down or key == Qt.Key.Key_J:
-            logger.debug(
-                "Modified arrow key pressed: DOWN/J - Starting navigation (bypass deleted)"
-            )
-            self._navigate_down_sequential(skip_deleted=False)
+            nav_func(skip_deleted=False)
             return True
         return False
 
@@ -3388,29 +3382,12 @@ class MainWindow(QMainWindow):
                         logger.debug(
                             f"Unmodified/keypad key detected: {key} (modifiers: {modifiers})"
                         )
-                        if key == Qt.Key.Key_Left or key == Qt.Key.Key_H:
+                        if key in self.navigation_keys:
+                            direction_name, nav_func = self.navigation_keys[key]
                             logger.debug(
-                                f"Arrow key pressed: LEFT/H - Starting navigation"
+                                f"Arrow key pressed: {direction_name} - Starting navigation"
                             )
-                            self._navigate_left_in_group(skip_deleted=True)
-                            return True
-                        if key == Qt.Key.Key_Right or key == Qt.Key.Key_L:
-                            logger.debug(
-                                f"Arrow key pressed: RIGHT/L - Starting navigation"
-                            )
-                            self._navigate_right_in_group(skip_deleted=True)
-                            return True
-                        if key == Qt.Key.Key_Up or key == Qt.Key.Key_K:
-                            logger.debug(
-                                f"Arrow key pressed: UP/K - Starting navigation"
-                            )
-                            self._navigate_up_sequential(skip_deleted=True)
-                            return True
-                        if key == Qt.Key.Key_Down or key == Qt.Key.Key_J:
-                            logger.debug(
-                                f"Arrow key pressed: DOWN/J - Starting navigation"
-                            )
-                            self._navigate_down_sequential(skip_deleted=True)
+                            nav_func(skip_deleted=True)
                             return True
                         if key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
                             self._handle_delete_action()
