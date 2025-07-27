@@ -3374,12 +3374,9 @@ class MainWindow(QMainWindow):
                         Qt.KeyboardModifier.ControlModifier,
                         Qt.KeyboardModifier.MetaModifier,
                     )
-                    has_control_or_meta = bool(
-                        modifiers
-                        & (
-                            Qt.KeyboardModifier.ControlModifier
-                            | Qt.KeyboardModifier.MetaModifier
-                        )
+                    has_control_or_meta = modifiers & (
+                        Qt.KeyboardModifier.ControlModifier
+                        | Qt.KeyboardModifier.MetaModifier
                     )
 
                     # Rating shortcuts (Ctrl/Cmd + 0-5) - MUST be an exact modifier match.
