@@ -1575,12 +1575,21 @@ class MainWindow(QMainWindow):
             self._validate_and_select_image_candidate(candidate_idx, "left", False)
             return
 
-        # If skipping, iterate backwards from the current position to find the next valid item.
-        # This loop runs at most `num_items` times. The complexity is linear (O(k)) with respect to group size,
-        # as the inner validation is a fast O(1) operation.
-        for i in range(1, num_items + 1):
-            # Calculate the index of the candidate item, moving circularly backwards.
-            candidate_local_idx = (local_idx - i + num_items) % num_items
+        # Precompute the indices of non-deleted items in the group.
+        non_deleted_indices = [
+            idx for idx in range(num_items) if not self._is_item_deleted(group_images[idx])
+        ]
+
+        # If no non-deleted items are found, log and return.
+        if not non_deleted_indices:
+            logger.debug("Navigate left: All items in group are marked for deletion.")
+            return
+
+        # Find the next valid item by navigating circularly through non-deleted indices.
+        for i in range(1, len(non_deleted_indices) + 1):
+            candidate_local_idx = non_deleted_indices[
+                (non_deleted_indices.index(local_idx) - i) % len(non_deleted_indices)
+            ]
             candidate_idx = group_images[candidate_local_idx]
 
             # Attempt to select the candidate. If it's valid, the function returns True.
