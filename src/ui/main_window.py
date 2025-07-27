@@ -3350,7 +3350,7 @@ class MainWindow(QMainWindow):
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
                         return True
-                    
+
                     # --- Custom navigation for UNMODIFIED arrow keys ---
                     if is_unmodified_or_keypad:
                         logger.debug(
