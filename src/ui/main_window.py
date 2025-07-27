@@ -3291,18 +3291,22 @@ class MainWindow(QMainWindow):
 
         return False
 
-    def _handle_modified_arrow_key_navigation(self, key: int) -> bool:
+    def _dispatch_navigation(self, key: int, is_modified: bool) -> bool:
         """
-        Handles arrow key navigation when Ctrl or Cmd is pressed, which bypasses
-        the 'skip deleted' logic.
-        Returns True if the key was handled, False otherwise.
+        Dispatches a navigation action based on key and modifier.
+        Returns True if navigation was handled, False otherwise.
         """
         if key in self.navigation_keys:
             direction_name, nav_func = self.navigation_keys[key]
+            skip_deleted = not is_modified
+
+            log_prefix = "Modified arrow" if is_modified else "Arrow"
+            log_suffix = " (bypass deleted)" if is_modified else ""
             logger.debug(
-                f"Modified arrow key pressed: {direction_name} - Starting navigation (bypass deleted)"
+                f"{log_prefix} key pressed: {direction_name} - Starting navigation{log_suffix}"
             )
-            nav_func(skip_deleted=False)
+
+            nav_func(skip_deleted=skip_deleted)
             return True
         return False
 
@@ -3377,36 +3381,16 @@ class MainWindow(QMainWindow):
                         self._apply_rating_to_selection(rating)
                         return True
 
-                    # --- Custom navigation for UNMODIFIED arrow keys ---
+                    # --- Arrow Key Navigation ---
                     if is_unmodified_or_keypad:
-                        logger.debug(
-                            f"Unmodified/keypad key detected: {key} (modifiers: {modifiers})"
-                        )
-                        if key in self.navigation_keys:
-                            direction_name, nav_func = self.navigation_keys[key]
-                            logger.debug(
-                                f"Arrow key pressed: {direction_name} - Starting navigation"
-                            )
-                            nav_func(skip_deleted=True)
+                        if self._dispatch_navigation(key, is_modified=False):
                             return True
                         if key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
                             self._handle_delete_action()
                             return True
 
-                    # --- Navigation with Ctrl or Cmd modifier (bypasses deleted file skipping) ---
-                    elif modifiers in (
-                        Qt.KeyboardModifier.ControlModifier,
-                        Qt.KeyboardModifier.MetaModifier,
-                    ):
-                        mod_name = (
-                            "Ctrl"
-                            if modifiers == Qt.KeyboardModifier.ControlModifier
-                            else "Cmd"
-                        )
-                        logger.debug(
-                            f"{mod_name}+Arrow key detected: {key} - Navigation with deleted file bypass"
-                        )
-                        if self._handle_modified_arrow_key_navigation(key):
+                    elif is_control_or_meta:
+                        if self._dispatch_navigation(key, is_modified=True):
                             return True
                     else:
                         logger.debug(
