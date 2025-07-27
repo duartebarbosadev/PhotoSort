@@ -1577,7 +1577,7 @@ class MainWindow(QMainWindow):
 
         # Precompute the indices of non-deleted items in the group.
         non_deleted_indices = [
-            idx for idx in range(num_items) if not self._is_item_deleted(group_images[idx])
+            idx for idx in range(num_items) if not self._is_marked_for_deletion(group_images[idx].path)
         ]
 
         # If no non-deleted items are found, log and return.
