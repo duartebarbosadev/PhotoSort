@@ -3400,7 +3400,7 @@ class MainWindow(QMainWindow):
                             return True
                         if key == Qt.Key.Key_Up or key == Qt.Key.Key_W:
                             logger.debug(
-                                f"Arrow key pressed: UP/W - Starting navigation"
+                                "Arrow key pressed: UP/W - Starting navigation"
                             )
                             self._navigate_up_sequential(skip_deleted=True)
                             return True
