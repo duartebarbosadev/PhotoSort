@@ -3378,9 +3378,8 @@ class MainWindow(QMainWindow):
                     if is_control_or_meta and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
-                        return (
-                            True  # --- Custom navigation for UNMODIFIED arrow keys ---
-                        )
+                        # --- Custom navigation for UNMODIFIED arrow keys ---
+                        return True
                     if is_unmodified_or_keypad:
                         logger.debug(
                             "Unmodified/keypad key detected: %s (modifiers: %s)",
