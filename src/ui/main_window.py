@@ -3396,7 +3396,7 @@ class MainWindow(QMainWindow):
                             self._navigate_left_in_group(skip_deleted=False)
                             return True
                         if key == Qt.Key.Key_Right or key == Qt.Key.Key_L:
-                            logger.info(
+                            logger.debug(
                                 f"Ctrl+Arrow key pressed: RIGHT/L - Starting navigation (bypass deleted)"
                             )
                             self._navigate_right_in_group(skip_deleted=False)
@@ -3413,8 +3413,6 @@ class MainWindow(QMainWindow):
                             )
                             self._navigate_down_sequential(skip_deleted=False)
                             return True
-                        else:
-                            logger.debug(f"Ctrl+Key detected but not handled: key={key}")
 
                     # On Mac, Cmd key might be used instead of Ctrl for some operations
                     elif modifiers == Qt.KeyboardModifier.MetaModifier:
@@ -3440,7 +3438,7 @@ class MainWindow(QMainWindow):
                             self._navigate_up_sequential(skip_deleted=False)
                             return True
                         if key == Qt.Key.Key_Down or key == Qt.Key.Key_J:
-                            logger.info(
+                            logger.debug(
                                 f"Cmd+Arrow key pressed: DOWN/J - Starting navigation (bypass deleted)"
                             )
                             self._navigate_down_sequential(skip_deleted=False)
