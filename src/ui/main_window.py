@@ -3300,7 +3300,8 @@ class MainWindow(QMainWindow):
             direction_name, nav_func = self.navigation_keys[key]
             skip_deleted = not is_modified
 
-            log_prefix = "Modified arrow" if is_modified else "Arrow"
+            key_type = "arrow" if direction_name in ["Up", "Down", "Left", "Right"] else "navigation"
+            log_prefix = f"Modified {key_type}" if is_modified else key_type.capitalize()
             log_suffix = " (bypass deleted)" if is_modified else ""
             logger.debug(
                 f"{log_prefix} key pressed: {direction_name} - Starting navigation{log_suffix}"
