@@ -3445,8 +3445,6 @@ class MainWindow(QMainWindow):
                             )
                             self._navigate_down_sequential(skip_deleted=False)
                             return True
-                        else:
-                            logger.debug(f"Cmd+Key detected but not handled: key={key}")
                     else:
                         logger.debug(
                             f"Key with modifiers detected: {key}, modifiers: {modifiers}"
