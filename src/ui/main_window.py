@@ -1392,7 +1392,7 @@ class MainWindow(QMainWindow):
         return is_group and active_view.isExpanded(proxy_idx)
 
     def _find_last_visible_image_item_in_subtree(
-        self, parent_proxy_idx: QModelIndex
+        self, parent_proxy_idx: QModelIndex, skip_deleted: bool = True
     ) -> QModelIndex:
         active_view = self._get_active_file_view()
         # Ensure active_view and its model are valid
@@ -1433,7 +1433,7 @@ class MainWindow(QMainWindow):
                 item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
                 path = item_data.get("path") if isinstance(item_data, dict) else None
 
-                if path and self._is_marked_for_deletion(path):
+                if skip_deleted and path and self._is_marked_for_deletion(path):
                     continue  # Skip this item and keep searching backwards in the loop
 
                 return child_proxy_idx
@@ -1492,7 +1492,58 @@ class MainWindow(QMainWindow):
 
         return parent_proxy_idx, sibling_image_items, current_item_local_idx
 
-    def _navigate_left_in_group(self):
+    def _validate_and_select_image_candidate(
+        self, candidate_idx: QModelIndex, direction: str, skip_deleted: bool
+    ) -> bool:
+        """
+        Validates if a QModelIndex is a selectable image item, and if so, selects it.
+        This includes checking if the item is marked for deletion.
+
+        Args:
+            candidate_idx: The QModelIndex of the potential item.
+            direction: A string ("left", "right", "up", "down") for logging.
+            skip_deleted: If True, items marked for deletion will be skipped.
+
+        Returns:
+            True if the item was valid and selected (signaling to stop searching).
+            False if the item was skipped or invalid (signaling to continue searching).
+        """
+        active_view = self._get_active_file_view()
+        if not self._is_valid_image_item(
+            candidate_idx
+        ) or self._is_row_hidden_in_tree_if_applicable(active_view, candidate_idx):
+            return False
+
+        source_idx = self.proxy_model.mapToSource(candidate_idx)
+        item = self.file_system_model.itemFromIndex(source_idx)
+        item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
+        path = item_data.get("path") if isinstance(item_data, dict) else None
+
+        logger.debug(f"Navigate {direction}: Checking candidate item - Path: {path}")
+
+        if skip_deleted and path and self._is_marked_for_deletion(path):
+            logger.debug(
+                f"Navigate {direction}: Skipping deleted item: {os.path.basename(path)}"
+            )
+            return False
+
+        if skip_deleted:
+            logger.debug(
+                f"Navigate {direction}: Found valid item: {os.path.basename(path) if path else 'Unknown'}"
+            )
+        else:
+            logger.debug(
+                f"Navigate {direction} (bypass deleted): Moving to: {os.path.basename(path) if path else 'Unknown'}"
+            )
+
+        active_view.setCurrentIndex(candidate_idx)
+        active_view.scrollTo(candidate_idx, QAbstractItemView.ScrollHint.EnsureVisible)
+        if item:
+            logger.debug(f"Navigated {direction} to: {item.text()}")
+
+        return True
+
+    def _navigate_left_in_group(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
             return
@@ -1500,7 +1551,6 @@ class MainWindow(QMainWindow):
         if not current_proxy_idx.isValid() or not self._is_valid_image_item(
             current_proxy_idx
         ):
-            # If no valid image selected, try to select the first one in view
             first_item = self._find_first_visible_item()
             if first_item.isValid():
                 active_view.setCurrentIndex(first_item)
@@ -1514,25 +1564,20 @@ class MainWindow(QMainWindow):
             logger.debug("Navigate left: No sibling images found in the current group.")
             return
 
-        new_local_idx = local_idx - 1
-        if new_local_idx < 0:  # Was first, wrap to last
-            new_local_idx = len(group_images) - 1
+        num_items = len(group_images)
+        if num_items == 0:
+            return
 
-        if 0 <= new_local_idx < len(group_images):
-            new_selection_candidate = group_images[new_local_idx]
-            active_view.setCurrentIndex(new_selection_candidate)
-            active_view.scrollTo(
-                new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible
-            )
-            item = self.file_system_model.itemFromIndex(
-                self.proxy_model.mapToSource(new_selection_candidate)
-            )
-            if item:
-                logger.debug(f"Navigated left to: {item.text()}")
-        else:
-            logger.debug("Navigate left: Could not select a new item in the group.")
+        # Since _get_current_group_sibling_images already returns a list of non-deleted items,
+        # we can simply calculate the next index. The `skip_deleted` parameter is handled by that function.
+        new_local_idx = (local_idx - 1 + num_items) % num_items
+        candidate_idx = group_images[new_local_idx]
 
-    def _navigate_right_in_group(self):
+        # We call the validator just to perform the selection action.
+        # Passing skip_deleted=False because we know the item is not deleted.
+        self._validate_and_select_image_candidate(candidate_idx, "left", False)
+
+    def _navigate_right_in_group(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
             return
@@ -1555,27 +1600,20 @@ class MainWindow(QMainWindow):
             )
             return
 
-        new_local_idx = local_idx + 1
-        if new_local_idx >= len(group_images):  # Was last, wrap to first
-            new_local_idx = 0
+        num_items = len(group_images)
+        if num_items == 0:
+            return
 
-        if (
-            0 <= new_local_idx < len(group_images)
-        ):  # Ensure index is still valid after wrap
-            new_selection_candidate = group_images[new_local_idx]
-            active_view.setCurrentIndex(new_selection_candidate)
-            active_view.scrollTo(
-                new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible
-            )
-            item = self.file_system_model.itemFromIndex(
-                self.proxy_model.mapToSource(new_selection_candidate)
-            )
-            if item:
-                logger.debug(f"Navigated right to: {item.text()}")
-        else:
-            logger.debug("Navigate right: Could not select a new item in the group.")
+        # Since _get_current_group_sibling_images already returns a list of non-deleted items,
+        # we can simply calculate the next index. The `skip_deleted` parameter is handled by that function.
+        new_local_idx = (local_idx + 1) % num_items
+        candidate_idx = group_images[new_local_idx]
 
-    def _navigate_up_sequential(self):  # Renamed from _navigate_previous
+        # We call the validator just to perform the selection action.
+        # Passing skip_deleted=False because we know the item is not deleted.
+        self._validate_and_select_image_candidate(candidate_idx, "right", False)
+
+    def _navigate_up_sequential(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
             logger.debug("Navigate up: No active view found.")
@@ -1592,7 +1630,6 @@ class MainWindow(QMainWindow):
                 )
             return
 
-        new_selection_candidate = QModelIndex()
         iter_idx = current_proxy_idx
 
         max_iterations = (
@@ -1613,56 +1650,34 @@ class MainWindow(QMainWindow):
             if not prev_visual_idx.isValid():
                 break
 
-            if self._is_valid_image_item(
-                prev_visual_idx
-            ) and not self._is_row_hidden_in_tree_if_applicable(
+            if self._validate_and_select_image_candidate(
+                prev_visual_idx, "up", skip_deleted
+            ):
+                return
+
+            if isinstance(active_view, QTreeView) and self._is_expanded_group_header(
                 active_view, prev_visual_idx
             ):
-                source_idx = self.proxy_model.mapToSource(prev_visual_idx)
-                item = self.file_system_model.itemFromIndex(source_idx)
-                item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
-                path = item_data.get("path") if isinstance(item_data, dict) else None
-
-                if path and self._is_marked_for_deletion(path):
-                    iter_idx = prev_visual_idx  # Continue searching from this point
-                    continue  # Skip this marked item
-
-                # If not marked, this is our item
-                new_selection_candidate = prev_visual_idx
-                item = self.file_system_model.itemFromIndex(
-                    self.proxy_model.mapToSource(new_selection_candidate)
-                )
-                if item:
-                    logger.debug(f"Navigated up to: {item.text()}")
-                break
-            elif isinstance(active_view, QTreeView) and self._is_expanded_group_header(
-                active_view, prev_visual_idx
-            ):
-                # If prev_visual_idx is an expanded group header.
-                # We enter it ONLY IF it's not the immediate parent of iter_idx (the item we are moving up from).
-                # If it IS the parent of iter_idx, we are trying to navigate *out* of iter_idx's group,
-                # so we should skip this header and let iter_idx become this header to search above it.
                 if iter_idx.parent() != prev_visual_idx:
                     last_in_group = self._find_last_visible_image_item_in_subtree(
-                        prev_visual_idx
+                        prev_visual_idx, skip_deleted=skip_deleted
                     )
-                    if last_in_group.isValid():
-                        new_selection_candidate = last_in_group
-                        break
+                    # Validate the item before selecting it
+                    if (
+                        last_in_group.isValid()
+                        and self._validate_and_select_image_candidate(
+                            last_in_group, "up", skip_deleted
+                        )
+                    ):
+                        return
 
             iter_idx = prev_visual_idx
             if iteration_count == max_iterations - 1:  # Safety break
                 logger.warning("Navigate up: Max iterations reached, aborting.")
 
-        if new_selection_candidate.isValid():
-            active_view.setCurrentIndex(new_selection_candidate)
-            active_view.scrollTo(
-                new_selection_candidate, QAbstractItemView.ScrollHint.EnsureVisible
-            )
-        else:
-            logger.debug("Navigate up: No previous image found.")
+        logger.debug("Navigate up: No previous image found.")
 
-    def _navigate_down_sequential(self):  # Renamed from _navigate_next
+    def _navigate_down_sequential(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
             logger.debug("Navigate down: No active view found.")
@@ -1678,7 +1693,6 @@ class MainWindow(QMainWindow):
                 )
             return
 
-        next_item_index = QModelIndex()
         temp_index = current_index
         iteration_count = 0
 
@@ -1701,48 +1715,18 @@ class MainWindow(QMainWindow):
             # 1. Get the item visually below the current one
             temp_index = active_view.indexBelow(temp_index)
 
-            # 2. If we're at the end, stop searching
             if not temp_index.isValid():
                 break
 
-            # 3. Check if this new item is a valid image
-            if self._is_valid_image_item(temp_index):
-                # 4. Check if it's hidden (in a collapsed tree node)
-                is_hidden = self._is_row_hidden_in_tree_if_applicable(
-                    active_view, temp_index
-                )
-                if not is_hidden:
-                    # 5. Check if it's marked for deletion
-                    source_idx = self.proxy_model.mapToSource(temp_index)
-                    item = self.file_system_model.itemFromIndex(source_idx)
-                    item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
-                    path = (
-                        item_data.get("path") if isinstance(item_data, dict) else None
-                    )
-
-                    # If marked for deletion, continue the loop to the next item
-                    if path and self._is_marked_for_deletion(path):
-                        continue
-
-                    # 6. If it passes all checks, we've found our target
-                    next_item_index = temp_index
-                    item = self.file_system_model.itemFromIndex(
-                        self.proxy_model.mapToSource(next_item_index)
-                    )
-                    if item:
-                        logger.debug(f"Navigated down to: {item.text()}")
-                    break  # Exit the search loop
+            if self._validate_and_select_image_candidate(
+                temp_index, "down", skip_deleted
+            ):
+                return
 
         if iteration_count >= safety_iteration_limit:
             logger.warning("Navigate down: Max iterations reached, aborting.")
 
-        if next_item_index.isValid():
-            active_view.setCurrentIndex(next_item_index)
-            active_view.scrollTo(
-                next_item_index, QAbstractItemView.ScrollHint.EnsureVisible
-            )
-        else:
-            logger.debug("Navigate down: No next image found.")
+        logger.debug("Navigate down: No next image found.")
 
     def _find_first_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
@@ -3303,6 +3287,14 @@ class MainWindow(QMainWindow):
             is_image_viewer = obj in self._image_viewer_views
 
             if is_left_panel_view or is_image_viewer:
+                logger.debug(
+                    "EventFilter KeyPress: obj=%s, is_left_panel_view=%s, is_image_viewer=%s",
+                    obj.__class__.__name__,
+                    is_left_panel_view,
+                    is_image_viewer,
+                )
+
+            if is_left_panel_view or is_image_viewer:
                 key_event: QKeyEvent = event
                 key = key_event.key()
                 modifiers = key_event.modifiers()
@@ -3343,6 +3335,11 @@ class MainWindow(QMainWindow):
 
                     # --- Modifier-based actions ---
                     is_unmodified = modifiers == Qt.KeyboardModifier.NoModifier
+                    # On Mac, arrow keys often have KeypadModifier, so treat that as unmodified too
+                    is_unmodified_or_keypad = modifiers in (
+                        Qt.KeyboardModifier.NoModifier,
+                        Qt.KeyboardModifier.KeypadModifier,
+                    )
                     is_control_or_meta = modifiers in (
                         Qt.KeyboardModifier.ControlModifier,
                         Qt.KeyboardModifier.MetaModifier,
@@ -3353,24 +3350,74 @@ class MainWindow(QMainWindow):
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
                         return True
-
                     # --- Custom navigation for UNMODIFIED arrow keys ---
-                    if is_unmodified:
+                    if is_unmodified_or_keypad:
+                        logger.debug(
+                            "Unmodified/keypad key detected: %s (modifiers: %s)",
+                            key,
+                            modifiers,
+                        )
                         if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
-                            self._navigate_left_in_group()
+                            logger.debug(
+                                "Arrow key pressed: LEFT/A - Starting navigation"
+                            )
+                            self._navigate_left_in_group(skip_deleted=True)
                             return True
                         if key == Qt.Key.Key_Right or key == Qt.Key.Key_D:
-                            self._navigate_right_in_group()
+                            logger.debug(
+                                "Arrow key pressed: RIGHT/D - Starting navigation"
+                            )
+                            self._navigate_right_in_group(skip_deleted=True)
                             return True
                         if key == Qt.Key.Key_Up or key == Qt.Key.Key_W:
-                            self._navigate_up_sequential()
+                            logger.debug(
+                                "Arrow key pressed: UP/W - Starting navigation"
+                            )
+                            self._navigate_up_sequential(skip_deleted=True)
                             return True
                         if key == Qt.Key.Key_Down or key == Qt.Key.Key_S:
-                            self._navigate_down_sequential()
+                            logger.debug(
+                                "Arrow key pressed: DOWN/S - Starting navigation"
+                            )
+                            self._navigate_down_sequential(skip_deleted=True)
                             return True
                         if key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
                             self._handle_delete_action()
                             return True
+
+                    # --- Navigation with Ctrl modifier (bypasses deleted file skipping) ---
+                    elif modifiers == Qt.KeyboardModifier.ControlModifier:
+                        logger.debug(
+                            f"Ctrl+Arrow key detected: {key} - Navigation with deleted file bypass"
+                        )
+                        ctrl_arrow_actions = {
+                            Qt.Key.Key_Left: ("LEFT/A", self._navigate_left_in_group),
+                            Qt.Key.Key_A: ("LEFT/A", self._navigate_left_in_group),
+                            Qt.Key.Key_Right: (
+                                "RIGHT/D",
+                                self._navigate_right_in_group,
+                            ),
+                            Qt.Key.Key_D: ("RIGHT/D", self._navigate_right_in_group),
+                            Qt.Key.Key_Up: ("UP/W", self._navigate_up_sequential),
+                            Qt.Key.Key_W: ("UP/W", self._navigate_up_sequential),
+                            Qt.Key.Key_Down: ("DOWN/S", self._navigate_down_sequential),
+                            Qt.Key.Key_S: ("DOWN/S", self._navigate_down_sequential),
+                        }
+                        if key in ctrl_arrow_actions:
+                            direction, action = ctrl_arrow_actions[key]
+                            logger.debug(
+                                f"Ctrl+Arrow key pressed: {direction} - Starting navigation (bypass deleted)"
+                            )
+                            action(skip_deleted=False)
+                            return True
+                    else:
+                        logger.debug(
+                            f"Key with modifiers detected: {key}, modifiers: {modifiers}"
+                        )
+            else:
+                logger.debug(
+                    f"EventFilter: Key press not from tracked views, obj={obj.__class__.__name__ if obj else 'None'}"
+                )
 
         # For all other key presses (including Shift+Arrows), pass the event on.
         return super().eventFilter(obj, event)
@@ -3881,7 +3928,10 @@ class MainWindow(QMainWindow):
 
     def _is_marked_for_deletion(self, file_path: str) -> bool:
         """Checks if a file is marked for deletion by its name."""
-        return "(DELETED)" in os.path.basename(file_path)
+        basename = os.path.basename(file_path)
+        is_marked = "(DELETED)" in basename
+        logger.debug(f"Checking deletion mark for '{basename}': {is_marked}")
+        return is_marked
 
     def _commit_marked_deletions(self):
         """Finds all marked files and moves them to trash, updating the view in-place."""
@@ -3969,10 +4019,6 @@ class MainWindow(QMainWindow):
                 active_view.scrollTo(
                     next_proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible
                 )
-
-    def _is_marked_for_deletion(self, file_path: str) -> bool:
-        """Checks if a file is marked for deletion by its name."""
-        return "(DELETED)" in os.path.basename(file_path)
 
     def _mark_selection_for_deletion(self):
         """Toggles the deletion mark for selected files by renaming them, updating the model in-place."""

@@ -91,6 +91,17 @@ pip install onnxruntime-silicon
 pip install onnxruntime-rocm
 ```
 
+### AI Model Setup (Required for Rotation Detection)
+
+To use the **Auto Rotate Images** feature (`Ctrl+R`), you need to download the pre-trained orientation detection model.
+
+1.  **Create a `models` directory** in the root of the project.
+2.  **Download the model file**:
+    *   **Link**: [Download orientation_model_v2_0.9882.onnx from Hugging Face](https://huggingface.co/DuarteBarbosa/deep-image-orientation-detection/tree/main)
+3.  **Place the downloaded model file inside the `models` directory.**
+
+The application will automatically detect and load the model when you use the rotation detection feature.
+
 ### Installation & Running
 
 1. **Clone the repository (if applicable):**
@@ -125,6 +136,28 @@ pip install onnxruntime-rocm
    #   Open folder and clear caches:
    #       python -m src.main --folder "C:/Users/MyUser/Pictures" --clear-cache
    ```
+
+### Exporting Logs
+
+To capture detailed logs for debugging, you can enable file logging by setting an environment variable before running the application.
+
+*   **macOS/Linux**:
+    ```bash
+    export PHOTOSORT_ENABLE_FILE_LOGGING=true
+    python -m src.main
+    ```
+*   **Windows (Command Prompt)**:
+    ```bash
+    set PHOTOSORT_ENABLE_FILE_LOGGING=true
+    python -m src.main
+    ```
+*   **Windows (PowerShell)**:
+    ```powershell
+    $env:PHOTOSORT_ENABLE_FILE_LOGGING="true"
+    python -m src.main
+    ```
+
+Logs will be saved to `~/.photosort_logs/photosort_app.log`.
 
 ## **Keyboard Shortcuts**:
 
