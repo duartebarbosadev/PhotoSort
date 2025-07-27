@@ -3406,7 +3406,7 @@ class MainWindow(QMainWindow):
                             return True
                         if key == Qt.Key.Key_Down or key == Qt.Key.Key_S:
                             logger.debug(
-                                f"Arrow key pressed: DOWN/S - Starting navigation"
+                                "Arrow key pressed: DOWN/S - Starting navigation"
                             )
                             self._navigate_down_sequential(skip_deleted=True)
                             return True
