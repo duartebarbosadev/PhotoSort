@@ -1,9 +1,8 @@
 from PIL import Image, ImageOps
-from typing import Optional
+from typing import Optional, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
-from typing import Dict, Any
 
 
 class ImageOrientationHandler:

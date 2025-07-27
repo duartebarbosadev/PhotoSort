@@ -5,8 +5,6 @@ Displays comprehensive image metadata in a modern, elegant sidebar
 
 import os
 import logging
-
-logger = logging.getLogger(__name__)
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from PyQt6.QtWidgets import (
@@ -21,6 +19,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
+
+logger = logging.getLogger(__name__)
 
 
 class MetadataCard(QFrame):
@@ -181,7 +181,6 @@ class MetadataCard(QFrame):
 
         unique_values = set(str(v) for v in values if v is not None and str(v) != "N/A")
         all_same = len(unique_values) <= 1
-        # first_valid_value = next((str(v) for v in values if v is not None and str(v) != "N/A"), None) # F841: Local variable `first_valid_value` is assigned to but never used
 
         for value in values:
             value_str = str(value) if value is not None else "N/A"
@@ -888,11 +887,6 @@ class MetadataSidebar(QWidget):
 
     def add_camera_settings_card(self):
         """Add camera and capture settings card"""
-        # logger.info(f"Raw metadata keys available: {len(self.raw_metadata)} total")
-
-        # Log some sample keys to debug
-        sample_keys = list(self.raw_metadata.keys())[:20]
-        # logger.info(f"Sample metadata keys: {sample_keys}")
 
         card = MetadataCard("Camera & Settings", "📷")
 

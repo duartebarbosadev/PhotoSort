@@ -1,6 +1,4 @@
 import logging
-
-logger = logging.getLogger(__name__)
 import os
 import subprocess
 from typing import TYPE_CHECKING
@@ -11,6 +9,8 @@ from PyQt6.QtWidgets import QMenu, QStyle, QWidget, QWidgetAction, QHBoxLayout, 
 
 from src.core.metadata_processor import MetadataProcessor
 from src.core.app_settings import get_recent_folders
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.ui.main_window import MainWindow

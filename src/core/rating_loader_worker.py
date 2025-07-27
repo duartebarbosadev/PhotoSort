@@ -1,8 +1,6 @@
 import os
 import time
 import logging
-
-logger = logging.getLogger(__name__)
 from PyQt6.QtCore import QObject, pyqtSignal
 from typing import List, Dict, Any, Optional
 
@@ -10,6 +8,8 @@ from src.core.metadata_processor import MetadataProcessor
 from src.core.caching.rating_cache import RatingCache
 from src.core.app_settings import METADATA_EMIT_BATCH_SIZE
 from src.ui.app_state import AppState
+
+logger = logging.getLogger(__name__)
 
 # DEFAULT_METADATA_WORKERS is no longer needed as batching is handled by MetadataProcessor
 
@@ -159,7 +159,6 @@ class RatingLoaderWorker(QObject):
             self.error.emit(error_msg)
 
         total_load_duration = time.perf_counter() - total_load_start_time
-        avg_time_per_file = total_load_duration / total_files if total_files > 0 else 0
         logger.info(
             f"Finished metadata processing for {processed_count}/{total_files} files in {total_load_duration:.2f}s."
         )

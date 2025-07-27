@@ -1,6 +1,4 @@
 import logging
-
-logger = logging.getLogger(__name__)
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
@@ -21,6 +19,8 @@ from src.core.rating_loader_worker import (
 from src.core.caching.rating_cache import RatingCache  # For type hinting
 from src.core.caching.exif_cache import ExifCache  # Added for RotationDetectionWorker
 from src.ui.app_state import AppState  # For type hinting
+
+logger = logging.getLogger(__name__)
 
 if (
     TYPE_CHECKING

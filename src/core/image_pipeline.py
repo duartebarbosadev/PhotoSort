@@ -1,8 +1,6 @@
 import os
 import time
 import logging
-
-logger = logging.getLogger(__name__)
 from typing import Optional, List, Dict, Tuple, Callable
 from PIL import Image
 from PIL.ImageQt import ImageQt
@@ -17,6 +15,8 @@ from .image_processing.standard_image_processor import (
 from .image_processing.image_orientation_handler import ImageOrientationHandler
 from .caching.thumbnail_cache import ThumbnailCache
 from .caching.preview_cache import PreviewCache
+
+logger = logging.getLogger(__name__)
 
 # Default sizes and resolutions (can be made configurable or passed in)
 THUMBNAIL_MAX_SIZE: Tuple[int, int] = (256, 256)

@@ -13,7 +13,7 @@ if project_root not in sys.path:
 
 # Try to import the modules we need
 try:
-    from src.core.image_processing.image_rotator import ImageRotator, RotationDirection
+    from src.core.image_processing.image_rotator import ImageRotator
     from src.core.metadata_processor import MetadataProcessor
     from src.core.caching.exif_cache import ExifCache
 
@@ -70,7 +70,7 @@ class TestImageRotator:
             if os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
-                except:
+                except Exception:
                     pass
 
     def _create_temp_copy(self, source_path: str) -> str:
@@ -100,20 +100,20 @@ class TestImageRotator:
     def test_is_rotation_supported(self):
         """Test rotation support checking for different formats."""
         # Test supported formats (pixel rotation)
-        assert self.rotator.is_rotation_supported("test.jpg") == True
-        assert self.rotator.is_rotation_supported("test.jpeg") == True
-        assert self.rotator.is_rotation_supported("test.png") == True
-        assert self.rotator.is_rotation_supported("test.tiff") == True
+        assert self.rotator.is_rotation_supported("test.jpg")
+        assert self.rotator.is_rotation_supported("test.jpeg")
+        assert self.rotator.is_rotation_supported("test.png")
+        assert self.rotator.is_rotation_supported("test.tiff")
 
         # Test supported RAW formats (metadata-only rotation)
-        assert self.rotator.is_rotation_supported("test.arw") == True
-        assert self.rotator.is_rotation_supported("test.cr2") == True
-        assert self.rotator.is_rotation_supported("test.nef") == True
-        assert self.rotator.is_rotation_supported("test.dng") == True
+        assert self.rotator.is_rotation_supported("test.arw")
+        assert self.rotator.is_rotation_supported("test.cr2")
+        assert self.rotator.is_rotation_supported("test.nef")
+        assert self.rotator.is_rotation_supported("test.dng")
 
         # Test unsupported formats
-        assert self.rotator.is_rotation_supported("test.txt") == False
-        assert self.rotator.is_rotation_supported("test.mp4") == False
+        assert not self.rotator.is_rotation_supported("test.txt")
+        assert not self.rotator.is_rotation_supported("test.mp4")
 
     def test_get_current_orientation(self):
         """Test reading current EXIF orientation."""
@@ -187,7 +187,7 @@ class TestImageRotator:
         success, message = self.rotator.rotate_image(
             "/nonexistent/file.jpg", "clockwise"
         )
-        assert success == False
+        assert not success
         assert "not found" in message.lower()
 
         # Test with invalid direction
@@ -196,7 +196,7 @@ class TestImageRotator:
             success, message = self.rotator.rotate_image(
                 temp_image, "invalid_direction"
             )
-            assert success == False
+            assert not success
 
 
 @pytest.mark.skipif(
@@ -234,7 +234,7 @@ class TestMetadataProcessorRotation:
             if os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
-                except:
+                except Exception:
                     pass
 
     def _create_temp_copy(self, source_path: str) -> str:
@@ -259,7 +259,7 @@ class TestMetadataProcessorRotation:
             # Check based on file extension
             ext = os.path.splitext(image_path)[1].lower()
             if ext in [".jpg", ".jpeg", ".png", ".tiff", ".tif"]:
-                assert supported == True
+                assert supported
             logging.info(
                 f"Rotation support for {os.path.basename(image_path)} ({ext}): {supported}"
             )
@@ -331,7 +331,6 @@ class TestMetadataProcessorRotation:
 
         # Get original file info
         original_size = os.path.getsize(temp_image)
-        original_mtime = os.path.getmtime(temp_image)
 
         success = MetadataProcessor.rotate_image(
             temp_image,
@@ -357,11 +356,11 @@ class TestMetadataProcessorRotation:
         """Test error handling in MetadataProcessor rotation methods."""
         # Test with non-existent file
         success = MetadataProcessor.rotate_clockwise("/nonexistent/file.jpg")
-        assert success == False
+        assert not success
 
         # Test with invalid path
         success = MetadataProcessor.rotate_counterclockwise("")
-        assert success == False
+        assert not success
 
 
 @pytest.mark.skipif(
@@ -396,7 +395,7 @@ class TestRotationIntegration:
             if os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
-                except:
+                except Exception:
                     pass
 
     def _create_temp_copy(self, source_path: str) -> str:
@@ -418,13 +417,11 @@ class TestRotationIntegration:
         temp_image = self._create_temp_copy(source_image)
 
         # Get original metadata
-        original_metadata = MetadataProcessor.get_batch_display_metadata([temp_image])
-        original_detailed = MetadataProcessor.get_detailed_metadata(temp_image)
 
         # Perform 4 clockwise rotations
         for i in range(4):
             success = MetadataProcessor.rotate_clockwise(temp_image)
-            assert success == True, f"Rotation {i + 1} failed"
+            assert success, f"Rotation {i + 1} failed"
             assert os.path.exists(temp_image), f"File missing after rotation {i + 1}"
 
         # Check that we're back to original orientation
@@ -457,7 +454,7 @@ class TestRotationIntegration:
 
         for rotate_func, description in rotations:
             success = rotate_func(temp_image)
-            assert success == True, f"{description} rotation failed"
+            assert success, f"{description} rotation failed"
             assert os.path.exists(temp_image), (
                 f"File missing after {description} rotation"
             )

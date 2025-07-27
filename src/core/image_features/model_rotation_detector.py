@@ -1,7 +1,5 @@
 import os
 import logging
-
-logger = logging.getLogger(__name__)
 import glob
 import torchvision.transforms as transforms
 from PIL import Image, ImageOps
@@ -18,6 +16,8 @@ from src.core.app_settings import (
     set_orientation_model_name,
     ROTATION_MODEL_IMAGE_SIZE,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ModelNotFoundError(Exception):

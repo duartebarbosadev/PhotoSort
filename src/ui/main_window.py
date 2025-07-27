@@ -1,7 +1,5 @@
 import time
 import logging
-
-logger = logging.getLogger(__name__)
 from src.ui.advanced_image_viewer import SynchronizedImageViewer
 from PyQt6.QtWidgets import (
     QMainWindow,
@@ -80,6 +78,8 @@ from src.ui.dialog_manager import DialogManager
 from src.ui.left_panel import LeftPanel
 from src.ui.app_controller import AppController
 from src.ui.menu_manager import MenuManager
+
+logger = logging.getLogger(__name__)
 
 
 # --- Custom Proxy Model for Filtering ---
@@ -1026,9 +1026,6 @@ class MainWindow(QMainWindow):
                 event.accept()
                 return
 
-        # Other global shortcuts for MainWindow could be here.
-        # e.g. Ctrl+F is handled by QAction self.find_action
-
         super().keyPressEvent(event)  # Pass to super for any other default handling
 
     def _handle_image_focus_shortcut(self):
@@ -1084,6 +1081,7 @@ class MainWindow(QMainWindow):
 
         # --- Pre-deletion information gathering ---
         self.original_selection_paths = self._get_selected_file_paths_from_view()
+        visible_paths_before_delete = self._get_all_visible_image_paths()
         focused_path_to_delete = (
             self.advanced_image_viewer.get_focused_image_path_if_any()
         )

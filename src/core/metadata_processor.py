@@ -3,8 +3,6 @@ import os
 import re
 import time
 import logging
-
-logger = logging.getLogger(__name__)
 import unicodedata
 from datetime import datetime as dt_parser, date as date_obj
 from typing import Dict, Any, Optional, List, Tuple
@@ -14,6 +12,8 @@ from src.core.caching.rating_cache import RatingCache
 from src.core.caching.exif_cache import ExifCache
 from src.core.image_processing.image_rotator import ImageRotator, RotationDirection
 from src.core.app_settings import METADATA_PROCESSING_CHUNK_SIZE
+
+logger = logging.getLogger(__name__)
 
 # Preferred EXIF/XMP date tags in order of preference
 DATE_TAGS_PREFERENCE: List[str] = [
@@ -345,7 +345,6 @@ class MetadataProcessor:
                     try:
                         all_metadata_results.extend(future.result())
                     except Exception as exc:
-                        chunk_paths_failed = future_to_chunk[future]
                         logger.error(
                             f"A chunk of files failed during metadata extraction: {exc}"
                         )

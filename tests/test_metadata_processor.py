@@ -1,4 +1,4 @@
-import pyexiv2  # Must be first import
+import pyexiv2  # noqa: F401  # This must be the first import or else it will cause a silent crash on windows
 import pytest
 import os
 import sys
@@ -311,7 +311,7 @@ class TestMetadataProcessor:
         self.exif_cache.get.side_effect = cache_side_effect
 
         # Second call - should use cache
-        results2 = MetadataProcessor.get_batch_display_metadata(
+        MetadataProcessor.get_batch_display_metadata(
             self.sample_images,
             rating_disk_cache=self.rating_cache,
             exif_disk_cache=self.exif_cache,

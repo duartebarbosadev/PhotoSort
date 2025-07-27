@@ -1,10 +1,10 @@
 import os
 import shutil
 import logging
-
-logger = logging.getLogger(__name__)
 from typing import Tuple
 import send2trash
+
+logger = logging.getLogger(__name__)
 
 
 class ImageFileOperations:

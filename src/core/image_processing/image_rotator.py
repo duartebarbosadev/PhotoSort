@@ -1,7 +1,5 @@
 import os
 import logging
-
-logger = logging.getLogger(__name__)
 import subprocess
 import tempfile
 from typing import Literal, Tuple
@@ -12,6 +10,8 @@ from src.core.image_file_ops import ImageFileOperations
 from src.core.app_settings import JPEGTRAN_TIMEOUT_SECONDS
 import piexif  # For EXIF manipulation with Pillow
 from pillow_heif import HeifImageFile  # For HEIF/HEIC support
+
+logger = logging.getLogger(__name__)
 
 # Rotation directions
 RotationDirection = Literal["clockwise", "counterclockwise", "180"]

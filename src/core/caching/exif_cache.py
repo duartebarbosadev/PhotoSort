@@ -1,8 +1,6 @@
 import diskcache
 import os
 import logging
-
-logger = logging.getLogger(__name__)
 import time  # Added for startup timing
 from typing import Optional, Dict, Any
 
@@ -12,6 +10,8 @@ from src.core.app_settings import (
     get_exif_cache_size_mb,
     EXIF_CACHE_MIN_FILE_SIZE,
 )
+
+logger = logging.getLogger(__name__)
 
 # Default path for the EXIF metadata cache
 DEFAULT_EXIF_CACHE_DIR = os.path.join(

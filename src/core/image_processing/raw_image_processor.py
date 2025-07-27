@@ -3,8 +3,6 @@ from PIL import Image, ImageOps, UnidentifiedImageError, ImageFile
 import io
 import os
 import logging
-
-logger = logging.getLogger(__name__)
 import time
 from typing import Optional, Set
 from PIL import ImageEnhance  # Added for brightness adjustment on PIL images
@@ -15,6 +13,8 @@ from src.core.app_settings import (
     PRELOAD_MAX_RESOLUTION,
     BLUR_DETECTION_PREVIEW_SIZE,
 )
+
+logger = logging.getLogger(__name__)
 
 # Define a reasonable max size for thumbnails to avoid using too much memory
 # These might be passed in by an orchestrator class later, but for now,
