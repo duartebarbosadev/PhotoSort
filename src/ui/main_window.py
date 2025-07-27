@@ -3365,37 +3365,43 @@ class MainWindow(QMainWindow):
                                 return True
 
                     # --- Modifier-based actions ---
-                    is_unmodified = modifiers == Qt.KeyboardModifier.NoModifier
                     # On Mac, arrow keys often have KeypadModifier, so treat that as unmodified too
                     is_unmodified_or_keypad = modifiers in (
                         Qt.KeyboardModifier.NoModifier,
                         Qt.KeyboardModifier.KeypadModifier,
                     )
-                    is_control_or_meta = modifiers in (
+                    is_control_or_meta_exact = modifiers in (
                         Qt.KeyboardModifier.ControlModifier,
                         Qt.KeyboardModifier.MetaModifier,
                     )
+                    has_control_or_meta = bool(
+                        modifiers
+                        & (
+                            Qt.KeyboardModifier.ControlModifier
+                            | Qt.KeyboardModifier.MetaModifier
+                        )
+                    )
 
-                    # Rating shortcuts (Ctrl/Cmd + 0-5)
-                    if is_control_or_meta and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
+                    # Rating shortcuts (Ctrl/Cmd + 0-5) - MUST be an exact modifier match.
+                    if is_control_or_meta_exact and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
                         return True
 
                     # --- Arrow Key Navigation ---
-                    if is_unmodified_or_keypad:
+                    # For navigation, Ctrl/Cmd has precedence for "modified" navigation, even with Shift.
+                    if has_control_or_meta:
+                        if self._dispatch_navigation(key, is_modified=True):
+                            return True
+                    elif is_unmodified_or_keypad:
                         if self._dispatch_navigation(key, is_modified=False):
                             return True
                         if key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
                             self._handle_delete_action()
                             return True
-
-                    elif is_control_or_meta:
-                        if self._dispatch_navigation(key, is_modified=True):
-                            return True
                     else:
                         logger.debug(
-                            f"Key with other modifiers detected: {key}, modifiers: {modifiers}"
+                            f"Key with other modifiers detected (passing to default handler): {key}, modifiers: {modifiers}"
                         )
             else:
                 logger.debug(
