@@ -197,6 +197,17 @@ class MainWindow(QMainWindow):
         self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
         self.rotation_suggestions = {}
 
+        self.navigation_keys = {
+            Qt.Key.Key_Left: ("LEFT/H", self._navigate_left_in_group),
+            Qt.Key.Key_H: ("LEFT/H", self._navigate_left_in_group),
+            Qt.Key.Key_Right: ("RIGHT/L", self._navigate_right_in_group),
+            Qt.Key.Key_L: ("RIGHT/L", self._navigate_right_in_group),
+            Qt.Key.Key_Up: ("UP/K", self._navigate_up_sequential),
+            Qt.Key.Key_K: ("UP/K", self._navigate_up_sequential),
+            Qt.Key.Key_Down: ("DOWN/J", self._navigate_down_sequential),
+            Qt.Key.Key_J: ("DOWN/J", self._navigate_down_sequential),
+        }
+
         self.filter_combo = QComboBox()
         self.filter_combo.addItems(
             [
@@ -3280,6 +3291,26 @@ class MainWindow(QMainWindow):
 
         return False
 
+    def _dispatch_navigation(self, key: int, is_modified: bool) -> bool:
+        """
+        Dispatches a navigation action based on key and modifier.
+        Returns True if navigation was handled, False otherwise.
+        """
+        if key in self.navigation_keys:
+            direction_name, nav_func = self.navigation_keys[key]
+            skip_deleted = not is_modified
+
+            key_type = "arrow" if direction_name in ["Up", "Down", "Left", "Right"] else "navigation"
+            log_prefix = f"Modified {key_type}" if is_modified else key_type.capitalize()
+            log_suffix = " (bypass deleted)" if is_modified else ""
+            logger.debug(
+                f"{log_prefix} key pressed: {direction_name} - Starting navigation{log_suffix}"
+            )
+
+            nav_func(skip_deleted=skip_deleted)
+            return True
+        return False
+
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             # Ensure the event is for one of our views
@@ -3334,85 +3365,40 @@ class MainWindow(QMainWindow):
                                 return True
 
                     # --- Modifier-based actions ---
-                    is_unmodified = modifiers == Qt.KeyboardModifier.NoModifier
                     # On Mac, arrow keys often have KeypadModifier, so treat that as unmodified too
                     is_unmodified_or_keypad = modifiers in (
                         Qt.KeyboardModifier.NoModifier,
                         Qt.KeyboardModifier.KeypadModifier,
                     )
-                    is_control_or_meta = modifiers in (
+                    is_control_or_meta_exact = modifiers in (
                         Qt.KeyboardModifier.ControlModifier,
                         Qt.KeyboardModifier.MetaModifier,
                     )
+                    has_control_or_meta = modifiers & (
+                        Qt.KeyboardModifier.ControlModifier
+                        | Qt.KeyboardModifier.MetaModifier
+                    )
 
-                    # Rating shortcuts (Ctrl/Cmd + 0-5)
-                    if is_control_or_meta and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
+                    # Rating shortcuts (Ctrl/Cmd + 0-5) - MUST be an exact modifier match.
+                    if is_control_or_meta_exact and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
                         return True
-                    # --- Custom navigation for UNMODIFIED arrow keys ---
-                    if is_unmodified_or_keypad:
-                        logger.debug(
-                            "Unmodified/keypad key detected: %s (modifiers: %s)",
-                            key,
-                            modifiers,
-                        )
-                        if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
-                            logger.debug(
-                                "Arrow key pressed: LEFT/A - Starting navigation"
-                            )
-                            self._navigate_left_in_group(skip_deleted=True)
+
+                    # --- Arrow Key Navigation ---
+                    # For navigation, Ctrl/Cmd has precedence for "modified" navigation, even with Shift.
+                    if has_control_or_meta:
+                        if self._dispatch_navigation(key, is_modified=True):
                             return True
-                        if key == Qt.Key.Key_Right or key == Qt.Key.Key_D:
-                            logger.debug(
-                                "Arrow key pressed: RIGHT/D - Starting navigation"
-                            )
-                            self._navigate_right_in_group(skip_deleted=True)
-                            return True
-                        if key == Qt.Key.Key_Up or key == Qt.Key.Key_W:
-                            logger.debug(
-                                "Arrow key pressed: UP/W - Starting navigation"
-                            )
-                            self._navigate_up_sequential(skip_deleted=True)
-                            return True
-                        if key == Qt.Key.Key_Down or key == Qt.Key.Key_S:
-                            logger.debug(
-                                "Arrow key pressed: DOWN/S - Starting navigation"
-                            )
-                            self._navigate_down_sequential(skip_deleted=True)
+                    elif is_unmodified_or_keypad:
+                        if self._dispatch_navigation(key, is_modified=False):
                             return True
                         if key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
                             self._handle_delete_action()
                             return True
-
-                    # --- Navigation with Ctrl modifier (bypasses deleted file skipping) ---
-                    elif modifiers == Qt.KeyboardModifier.ControlModifier:
-                        logger.debug(
-                            f"Ctrl+Arrow key detected: {key} - Navigation with deleted file bypass"
-                        )
-                        ctrl_arrow_actions = {
-                            Qt.Key.Key_Left: ("LEFT/A", self._navigate_left_in_group),
-                            Qt.Key.Key_A: ("LEFT/A", self._navigate_left_in_group),
-                            Qt.Key.Key_Right: (
-                                "RIGHT/D",
-                                self._navigate_right_in_group,
-                            ),
-                            Qt.Key.Key_D: ("RIGHT/D", self._navigate_right_in_group),
-                            Qt.Key.Key_Up: ("UP/W", self._navigate_up_sequential),
-                            Qt.Key.Key_W: ("UP/W", self._navigate_up_sequential),
-                            Qt.Key.Key_Down: ("DOWN/S", self._navigate_down_sequential),
-                            Qt.Key.Key_S: ("DOWN/S", self._navigate_down_sequential),
-                        }
-                        if key in ctrl_arrow_actions:
-                            direction, action = ctrl_arrow_actions[key]
-                            logger.debug(
-                                f"Ctrl+Arrow key pressed: {direction} - Starting navigation (bypass deleted)"
-                            )
-                            action(skip_deleted=False)
-                            return True
                     else:
                         logger.debug(
-                            f"Key with modifiers detected: {key}, modifiers: {modifiers}"
+                            f"Key with other modifiers detected (passing to default handler): {key}, modifiers: {modifiers}"
                         )
             else:
                 logger.debug(
