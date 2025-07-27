@@ -3280,6 +3280,38 @@ class MainWindow(QMainWindow):
 
         return False
 
+    def _handle_modified_arrow_key_navigation(self, key: int) -> bool:
+        """
+        Handles arrow key navigation when Ctrl or Cmd is pressed, which bypasses
+        the 'skip deleted' logic.
+        Returns True if the key was handled, False otherwise.
+        """
+        if key == Qt.Key.Key_Left or key == Qt.Key.Key_H:
+            logger.debug(
+                "Modified arrow key pressed: LEFT/H - Starting navigation (bypass deleted)"
+            )
+            self._navigate_left_in_group(skip_deleted=False)
+            return True
+        if key == Qt.Key.Key_Right or key == Qt.Key.Key_L:
+            logger.debug(
+                "Modified arrow key pressed: RIGHT/L - Starting navigation (bypass deleted)"
+            )
+            self._navigate_right_in_group(skip_deleted=False)
+            return True
+        if key == Qt.Key.Key_Up or key == Qt.Key.Key_K:
+            logger.debug(
+                "Modified arrow key pressed: UP/K - Starting navigation (bypass deleted)"
+            )
+            self._navigate_up_sequential(skip_deleted=False)
+            return True
+        if key == Qt.Key.Key_Down or key == Qt.Key.Key_J:
+            logger.debug(
+                "Modified arrow key pressed: DOWN/J - Starting navigation (bypass deleted)"
+            )
+            self._navigate_down_sequential(skip_deleted=False)
+            return True
+        return False
+
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             # Ensure the event is for one of our views
@@ -3384,68 +3416,24 @@ class MainWindow(QMainWindow):
                             self._handle_delete_action()
                             return True
 
-                    # --- Navigation with Ctrl modifier (bypasses deleted file skipping) ---
-                    elif modifiers == Qt.KeyboardModifier.ControlModifier:
-                        logger.debug(
-                            f"Ctrl+Arrow key detected: {key} - Navigation with deleted file bypass"
+                    # --- Navigation with Ctrl or Cmd modifier (bypasses deleted file skipping) ---
+                    elif modifiers in (
+                        Qt.KeyboardModifier.ControlModifier,
+                        Qt.KeyboardModifier.MetaModifier,
+                    ):
+                        mod_name = (
+                            "Ctrl"
+                            if modifiers == Qt.KeyboardModifier.ControlModifier
+                            else "Cmd"
                         )
-                        if key == Qt.Key.Key_Left or key == Qt.Key.Key_H:
-                            logger.debug(
-                                f"Ctrl+Arrow key pressed: LEFT/H - Starting navigation (bypass deleted)"
-                            )
-                            self._navigate_left_in_group(skip_deleted=False)
-                            return True
-                        if key == Qt.Key.Key_Right or key == Qt.Key.Key_L:
-                            logger.debug(
-                                f"Ctrl+Arrow key pressed: RIGHT/L - Starting navigation (bypass deleted)"
-                            )
-                            self._navigate_right_in_group(skip_deleted=False)
-                            return True
-                        if key == Qt.Key.Key_Up or key == Qt.Key.Key_K:
-                            logger.debug(
-                                f"Ctrl+Arrow key pressed: UP/K - Starting navigation (bypass deleted)"
-                            )
-                            self._navigate_up_sequential(skip_deleted=False)
-                            return True
-                        if key == Qt.Key.Key_Down or key == Qt.Key.Key_J:
-                            logger.debug(
-                                f"Ctrl+Arrow key pressed: DOWN/J - Starting navigation (bypass deleted)"
-                            )
-                            self._navigate_down_sequential(skip_deleted=False)
-                            return True
-
-                    # On Mac, Cmd key might be used instead of Ctrl for some operations
-                    elif modifiers == Qt.KeyboardModifier.MetaModifier:
                         logger.debug(
-                            f"Cmd+Arrow key detected (Mac): {key} - Navigation with deleted file bypass"
+                            f"{mod_name}+Arrow key detected: {key} - Navigation with deleted file bypass"
                         )
-                        if key == Qt.Key.Key_Left or key == Qt.Key.Key_H:
-                            logger.debug(
-                                f"Cmd+Arrow key pressed: LEFT/H - Starting navigation (bypass deleted)"
-                            )
-                            self._navigate_left_in_group(skip_deleted=False)
-                            return True
-                        if key == Qt.Key.Key_Right or key == Qt.Key.Key_L:
-                            logger.debug(
-                                f"Cmd+Arrow key pressed: RIGHT/L - Starting navigation (bypass deleted)"
-                            )
-                            self._navigate_right_in_group(skip_deleted=False)
-                            return True
-                        if key == Qt.Key.Key_Up or key == Qt.Key.Key_K:
-                            logger.debug(
-                                f"Cmd+Arrow key pressed: UP/K - Starting navigation (bypass deleted)"
-                            )
-                            self._navigate_up_sequential(skip_deleted=False)
-                            return True
-                        if key == Qt.Key.Key_Down or key == Qt.Key.Key_J:
-                            logger.debug(
-                                f"Cmd+Arrow key pressed: DOWN/J - Starting navigation (bypass deleted)"
-                            )
-                            self._navigate_down_sequential(skip_deleted=False)
+                        if self._handle_modified_arrow_key_navigation(key):
                             return True
                     else:
                         logger.debug(
-                            f"Key with modifiers detected: {key}, modifiers: {modifiers}"
+                            f"Key with other modifiers detected: {key}, modifiers: {modifiers}"
                         )
             else:
                 logger.debug(
