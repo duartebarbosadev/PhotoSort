@@ -1492,57 +1492,6 @@ class MainWindow(QMainWindow):
 
         return parent_proxy_idx, sibling_image_items, current_item_local_idx
 
-    def _validate_and_select_image_candidate(
-        self, candidate_idx: QModelIndex, direction: str, skip_deleted: bool
-    ) -> bool:
-        """
-        Validates if a QModelIndex is a selectable image item, and if so, selects it.
-        This includes checking if the item is marked for deletion.
-
-        Args:
-            candidate_idx: The QModelIndex of the potential item.
-            direction: A string ("left", "right", "up", "down") for logging.
-            skip_deleted: If True, items marked for deletion will be skipped.
-
-        Returns:
-            True if the item was valid and selected (signaling to stop searching).
-            False if the item was skipped or invalid (signaling to continue searching).
-        """
-        active_view = self._get_active_file_view()
-        if not self._is_valid_image_item(
-            candidate_idx
-        ) or self._is_row_hidden_in_tree_if_applicable(active_view, candidate_idx):
-            return False
-
-        source_idx = self.proxy_model.mapToSource(candidate_idx)
-        item = self.file_system_model.itemFromIndex(source_idx)
-        item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
-        path = item_data.get("path") if isinstance(item_data, dict) else None
-
-        logger.debug(f"Navigate {direction}: Checking candidate item - Path: {path}")
-
-        if skip_deleted and path and self._is_marked_for_deletion(path):
-            logger.debug(
-                f"Navigate {direction}: Skipping deleted item: {os.path.basename(path)}"
-            )
-            return False
-
-        if skip_deleted:
-            logger.debug(
-                f"Navigate {direction}: Found valid item: {os.path.basename(path) if path else 'Unknown'}"
-            )
-        else:
-            logger.debug(
-                f"Navigate {direction} (bypass deleted): Moving to: {os.path.basename(path) if path else 'Unknown'}"
-            )
-
-        active_view.setCurrentIndex(candidate_idx)
-        active_view.scrollTo(candidate_idx, QAbstractItemView.ScrollHint.EnsureVisible)
-        if item:
-            logger.debug(f"Navigated {direction} to: {item.text()}")
-
-        return True
-
     def _navigate_left_in_group(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
@@ -3350,34 +3299,33 @@ class MainWindow(QMainWindow):
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
                         return True
+                    
                     # --- Custom navigation for UNMODIFIED arrow keys ---
                     if is_unmodified_or_keypad:
                         logger.debug(
-                            "Unmodified/keypad key detected: %s (modifiers: %s)",
-                            key,
-                            modifiers,
+                            f"Unmodified/keypad key detected: {key} (modifiers: {modifiers})"
                         )
-                        if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
+                        if key == Qt.Key.Key_Left or key == Qt.Key.Key_H:
                             logger.debug(
-                                "Arrow key pressed: LEFT/A - Starting navigation"
+                                f"Arrow key pressed: LEFT/H - Starting navigation"
                             )
                             self._navigate_left_in_group(skip_deleted=True)
                             return True
-                        if key == Qt.Key.Key_Right or key == Qt.Key.Key_D:
+                        if key == Qt.Key.Key_Right or key == Qt.Key.Key_L:
                             logger.debug(
-                                "Arrow key pressed: RIGHT/D - Starting navigation"
+                                f"Arrow key pressed: RIGHT/L - Starting navigation"
                             )
                             self._navigate_right_in_group(skip_deleted=True)
                             return True
-                        if key == Qt.Key.Key_Up or key == Qt.Key.Key_W:
+                        if key == Qt.Key.Key_Up or key == Qt.Key.Key_K:
                             logger.debug(
-                                "Arrow key pressed: UP/W - Starting navigation"
+                                f"Arrow key pressed: UP/K - Starting navigation"
                             )
                             self._navigate_up_sequential(skip_deleted=True)
                             return True
-                        if key == Qt.Key.Key_Down or key == Qt.Key.Key_S:
+                        if key == Qt.Key.Key_Down or key == Qt.Key.Key_J:
                             logger.debug(
-                                "Arrow key pressed: DOWN/S - Starting navigation"
+                                f"Arrow key pressed: DOWN/J - Starting navigation"
                             )
                             self._navigate_down_sequential(skip_deleted=True)
                             return True
@@ -3390,26 +3338,64 @@ class MainWindow(QMainWindow):
                         logger.debug(
                             f"Ctrl+Arrow key detected: {key} - Navigation with deleted file bypass"
                         )
-                        ctrl_arrow_actions = {
-                            Qt.Key.Key_Left: ("LEFT/A", self._navigate_left_in_group),
-                            Qt.Key.Key_A: ("LEFT/A", self._navigate_left_in_group),
-                            Qt.Key.Key_Right: (
-                                "RIGHT/D",
-                                self._navigate_right_in_group,
-                            ),
-                            Qt.Key.Key_D: ("RIGHT/D", self._navigate_right_in_group),
-                            Qt.Key.Key_Up: ("UP/W", self._navigate_up_sequential),
-                            Qt.Key.Key_W: ("UP/W", self._navigate_up_sequential),
-                            Qt.Key.Key_Down: ("DOWN/S", self._navigate_down_sequential),
-                            Qt.Key.Key_S: ("DOWN/S", self._navigate_down_sequential),
-                        }
-                        if key in ctrl_arrow_actions:
-                            direction, action = ctrl_arrow_actions[key]
+                        if key == Qt.Key.Key_Left or key == Qt.Key.Key_H:
                             logger.debug(
-                                f"Ctrl+Arrow key pressed: {direction} - Starting navigation (bypass deleted)"
+                                f"Ctrl+Arrow key pressed: LEFT/H - Starting navigation (bypass deleted)"
                             )
-                            action(skip_deleted=False)
+                            self._navigate_left_in_group(skip_deleted=False)
                             return True
+                        if key == Qt.Key.Key_Right or key == Qt.Key.Key_L:
+                            logger.info(
+                                f"Ctrl+Arrow key pressed: RIGHT/L - Starting navigation (bypass deleted)"
+                            )
+                            self._navigate_right_in_group(skip_deleted=False)
+                            return True
+                        if key == Qt.Key.Key_Up or key == Qt.Key.Key_K:
+                            logger.debug(
+                                f"Ctrl+Arrow key pressed: UP/K - Starting navigation (bypass deleted)"
+                            )
+                            self._navigate_up_sequential(skip_deleted=False)
+                            return True
+                        if key == Qt.Key.Key_Down or key == Qt.Key.Key_J:
+                            logger.debug(
+                                f"Ctrl+Arrow key pressed: DOWN/J - Starting navigation (bypass deleted)"
+                            )
+                            self._navigate_down_sequential(skip_deleted=False)
+                            return True
+                        else:
+                            logger.debug(f"Ctrl+Key detected but not handled: key={key}")
+
+                    # On Mac, Cmd key might be used instead of Ctrl for some operations
+                    elif modifiers == Qt.KeyboardModifier.MetaModifier:
+                        logger.debug(
+                            f"Cmd+Arrow key detected (Mac): {key} - Navigation with deleted file bypass"
+                        )
+                        if key == Qt.Key.Key_Left or key == Qt.Key.Key_H:
+                            logger.debug(
+                                f"Cmd+Arrow key pressed: LEFT/H - Starting navigation (bypass deleted)"
+                            )
+                            self._navigate_left_in_group(skip_deleted=False)
+                            return True
+                        if key == Qt.Key.Key_Right or key == Qt.Key.Key_L:
+                            logger.debug(
+                                f"Cmd+Arrow key pressed: RIGHT/L - Starting navigation (bypass deleted)"
+                            )
+                            self._navigate_right_in_group(skip_deleted=False)
+                            return True
+                        if key == Qt.Key.Key_Up or key == Qt.Key.Key_K:
+                            logger.debug(
+                                f"Cmd+Arrow key pressed: UP/K - Starting navigation (bypass deleted)"
+                            )
+                            self._navigate_up_sequential(skip_deleted=False)
+                            return True
+                        if key == Qt.Key.Key_Down or key == Qt.Key.Key_J:
+                            logger.info(
+                                f"Cmd+Arrow key pressed: DOWN/J - Starting navigation (bypass deleted)"
+                            )
+                            self._navigate_down_sequential(skip_deleted=False)
+                            return True
+                        else:
+                            logger.debug(f"Cmd+Key detected but not handled: key={key}")
                     else:
                         logger.debug(
                             f"Key with modifiers detected: {key}, modifiers: {modifiers}"
