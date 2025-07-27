@@ -1492,6 +1492,57 @@ class MainWindow(QMainWindow):
 
         return parent_proxy_idx, sibling_image_items, current_item_local_idx
 
+    def _validate_and_select_image_candidate(
+        self, candidate_idx: QModelIndex, direction: str, skip_deleted: bool
+    ) -> bool:
+        """
+        Validates if a QModelIndex is a selectable image item, and if so, selects it.
+        This includes checking if the item is marked for deletion.
+
+        Args:
+            candidate_idx: The QModelIndex of the potential item.
+            direction: A string ("left", "right", "up", "down") for logging.
+            skip_deleted: If True, items marked for deletion will be skipped.
+
+        Returns:
+            True if the item was valid and selected (signaling to stop searching).
+            False if the item was skipped or invalid (signaling to continue searching).
+        """
+        active_view = self._get_active_file_view()
+        if not self._is_valid_image_item(
+            candidate_idx
+        ) or self._is_row_hidden_in_tree_if_applicable(active_view, candidate_idx):
+            return False
+
+        source_idx = self.proxy_model.mapToSource(candidate_idx)
+        item = self.file_system_model.itemFromIndex(source_idx)
+        item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
+        path = item_data.get("path") if isinstance(item_data, dict) else None
+
+        logger.debug(f"Navigate {direction}: Checking candidate item - Path: {path}")
+
+        if skip_deleted and path and self._is_marked_for_deletion(path):
+            logger.debug(
+                f"Navigate {direction}: Skipping deleted item: {os.path.basename(path)}"
+            )
+            return False
+
+        if skip_deleted:
+            logger.debug(
+                f"Navigate {direction}: Found valid item: {os.path.basename(path) if path else 'Unknown'}"
+            )
+        else:
+            logger.debug(
+                f"Navigate {direction} (bypass deleted): Moving to: {os.path.basename(path) if path else 'Unknown'}"
+            )
+
+        active_view.setCurrentIndex(candidate_idx)
+        active_view.scrollTo(candidate_idx, QAbstractItemView.ScrollHint.EnsureVisible)
+        if item:
+            logger.debug(f"Navigated {direction} to: {item.text()}")
+
+        return True
+
     def _navigate_left_in_group(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
