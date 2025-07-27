@@ -1522,17 +1522,17 @@ class MainWindow(QMainWindow):
         logger.info(f"Navigate {direction}: Checking candidate item - Path: {path}")
 
         if skip_deleted and path and self._is_marked_for_deletion(path):
-            logger.info(
+            logger.debug(
                 f"Navigate {direction}: Skipping deleted item: {os.path.basename(path)}"
             )
             return False
 
         if skip_deleted:
-            logger.info(
+            logger.debug(
                 f"Navigate {direction}: Found valid item: {os.path.basename(path) if path else 'Unknown'}"
             )
         else:
-            logger.info(
+            logger.debug(
                 f"Navigate {direction} (bypass deleted): Moving to: {os.path.basename(path) if path else 'Unknown'}"
             )
 
@@ -1551,7 +1551,6 @@ class MainWindow(QMainWindow):
         if not current_proxy_idx.isValid() or not self._is_valid_image_item(
             current_proxy_idx
         ):
-            # If no valid image selected, try to select the first one in view
             first_item = self._find_first_visible_item()
             if first_item.isValid():
                 active_view.setCurrentIndex(first_item)
@@ -1566,19 +1565,27 @@ class MainWindow(QMainWindow):
             return
 
         num_items = len(group_images)
-        new_local_idx = (local_idx - 1 + num_items) % num_items
-
-        if not skip_deleted:
-            self._validate_and_select_image_candidate(
-                group_images[new_local_idx], "left", False
-            )
+        if num_items == 0:
             return
 
-        for _ in range(num_items):
-            candidate_idx = group_images[new_local_idx]
+        # If not skipping deleted items, just move to the next item directly.
+        if not skip_deleted:
+            candidate_local_idx = (local_idx - 1 + num_items) % num_items
+            candidate_idx = group_images[candidate_local_idx]
+            self._validate_and_select_image_candidate(candidate_idx, "left", False)
+            return
+
+        # If skipping, iterate backwards from the current position to find the next valid item.
+        # This loop runs at most `num_items` times. The complexity is linear (O(k)) with respect to group size,
+        # as the inner validation is a fast O(1) operation.
+        for i in range(1, num_items + 1):
+            # Calculate the index of the candidate item, moving circularly backwards.
+            candidate_local_idx = (local_idx - i + num_items) % num_items
+            candidate_idx = group_images[candidate_local_idx]
+
+            # Attempt to select the candidate. If it's valid, the function returns True.
             if self._validate_and_select_image_candidate(candidate_idx, "left", True):
-                return
-            new_local_idx = (new_local_idx - 1 + num_items) % num_items
+                return  # Found a valid item, so we exit.
 
         logger.debug("Navigate left: All items in group are marked for deletion.")
 
@@ -1606,23 +1613,27 @@ class MainWindow(QMainWindow):
             return
 
         num_items = len(group_images)
-        new_local_idx = (local_idx + 1) % num_items
-
-        if not skip_deleted:
-            self._validate_and_select_image_candidate(
-                group_images[new_local_idx], "right", False
-            )
+        if num_items == 0:
             return
 
-        for _ in range(num_items):
-            candidate_idx = group_images[new_local_idx]
+        if not skip_deleted:
+            candidate_local_idx = (local_idx + 1) % num_items
+            candidate_idx = group_images[candidate_local_idx]
+            self._validate_and_select_image_candidate(candidate_idx, "right", False)
+            return
+
+        # If skipping, iterate forwards from the current position to find the next valid item.
+        # The complexity is linear (O(k)) with respect to group size.
+        for i in range(1, num_items + 1):
+            candidate_local_idx = (local_idx + i) % num_items
+            candidate_idx = group_images[candidate_local_idx]
+
             if self._validate_and_select_image_candidate(candidate_idx, "right", True):
                 return
-            new_local_idx = (new_local_idx + 1) % num_items
 
         logger.debug("Navigate right: All items in group are marked for deletion.")
 
-    def _navigate_up_sequential(self, skip_deleted=True):  # Renamed from _navigate_previous
+    def _navigate_up_sequential(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
             logger.debug("Navigate up: No active view found.")
@@ -1659,7 +1670,9 @@ class MainWindow(QMainWindow):
             if not prev_visual_idx.isValid():
                 break
 
-            if self._validate_and_select_image_candidate(prev_visual_idx, "up", skip_deleted):
+            if self._validate_and_select_image_candidate(
+                prev_visual_idx, "up", skip_deleted
+            ):
                 return
 
             if isinstance(active_view, QTreeView) and self._is_expanded_group_header(
@@ -1669,12 +1682,14 @@ class MainWindow(QMainWindow):
                     last_in_group = self._find_last_visible_image_item_in_subtree(
                         prev_visual_idx, skip_deleted=skip_deleted
                     )
-                    if last_in_group.isValid():
-                        # Validate the item before selecting it
-                        if self._validate_and_select_image_candidate(
+                    # Validate the item before selecting it
+                    if (
+                        last_in_group.isValid()
+                        and self._validate_and_select_image_candidate(
                             last_in_group, "up", skip_deleted
-                        ):
-                            return
+                        )
+                    ):
+                        return
 
             iter_idx = prev_visual_idx
             if iteration_count == max_iterations - 1:  # Safety break
@@ -1682,7 +1697,7 @@ class MainWindow(QMainWindow):
 
         logger.debug("Navigate up: No previous image found.")
 
-    def _navigate_down_sequential(self, skip_deleted=True):  # Renamed from _navigate_next
+    def _navigate_down_sequential(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
             logger.debug("Navigate down: No active view found.")
@@ -3292,7 +3307,12 @@ class MainWindow(QMainWindow):
             is_image_viewer = obj in self._image_viewer_views
 
             if is_left_panel_view or is_image_viewer:
-                logger.debug("EventFilter KeyPress: obj=%s, is_left_panel_view=%s, is_image_viewer=%s", obj.__class__.__name__, is_left_panel_view, is_image_viewer)
+                logger.debug(
+                    "EventFilter KeyPress: obj=%s, is_left_panel_view=%s, is_image_viewer=%s",
+                    obj.__class__.__name__,
+                    is_left_panel_view,
+                    is_image_viewer,
+                )
 
             if is_left_panel_view or is_image_viewer:
                 key_event: QKeyEvent = event
@@ -3349,36 +3369,55 @@ class MainWindow(QMainWindow):
                     if is_control_or_meta and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
-                        return True                    # --- Custom navigation for UNMODIFIED arrow keys ---
+                        return (
+                            True  # --- Custom navigation for UNMODIFIED arrow keys ---
+                        )
                     if is_unmodified_or_keypad:
-                        logger.debug("Unmodified/keypad key detected: %s (modifiers: %s)", key, modifiers)
+                        logger.debug(
+                            "Unmodified/keypad key detected: %s (modifiers: %s)",
+                            key,
+                            modifiers,
+                        )
                         if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
-                            logger.info(f"Arrow key pressed: LEFT/A - Starting navigation")
+                            logger.debug(
+                                f"Arrow key pressed: LEFT/A - Starting navigation"
+                            )
                             self._navigate_left_in_group(skip_deleted=True)
                             return True
                         if key == Qt.Key.Key_Right or key == Qt.Key.Key_D:
-                            logger.info(f"Arrow key pressed: RIGHT/D - Starting navigation")
+                            logger.debug(
+                                f"Arrow key pressed: RIGHT/D - Starting navigation"
+                            )
                             self._navigate_right_in_group(skip_deleted=True)
                             return True
                         if key == Qt.Key.Key_Up or key == Qt.Key.Key_W:
-                            logger.info(f"Arrow key pressed: UP/W - Starting navigation")
+                            logger.debug(
+                                f"Arrow key pressed: UP/W - Starting navigation"
+                            )
                             self._navigate_up_sequential(skip_deleted=True)
                             return True
                         if key == Qt.Key.Key_Down or key == Qt.Key.Key_S:
-                            logger.info(f"Arrow key pressed: DOWN/S - Starting navigation")
+                            logger.debug(
+                                f"Arrow key pressed: DOWN/S - Starting navigation"
+                            )
                             self._navigate_down_sequential(skip_deleted=True)
                             return True
                         if key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
                             self._handle_delete_action()
                             return True
-                    
+
                     # --- Navigation with Ctrl modifier (bypasses deleted file skipping) ---
                     elif modifiers == Qt.KeyboardModifier.ControlModifier:
-                        logger.debug(f"Ctrl+Arrow key detected: {key} - Navigation with deleted file bypass")
+                        logger.debug(
+                            f"Ctrl+Arrow key detected: {key} - Navigation with deleted file bypass"
+                        )
                         ctrl_arrow_actions = {
                             Qt.Key.Key_Left: ("LEFT/A", self._navigate_left_in_group),
                             Qt.Key.Key_A: ("LEFT/A", self._navigate_left_in_group),
-                            Qt.Key.Key_Right: ("RIGHT/D", self._navigate_right_in_group),
+                            Qt.Key.Key_Right: (
+                                "RIGHT/D",
+                                self._navigate_right_in_group,
+                            ),
                             Qt.Key.Key_D: ("RIGHT/D", self._navigate_right_in_group),
                             Qt.Key.Key_Up: ("UP/W", self._navigate_up_sequential),
                             Qt.Key.Key_W: ("UP/W", self._navigate_up_sequential),
@@ -3387,13 +3426,19 @@ class MainWindow(QMainWindow):
                         }
                         if key in ctrl_arrow_actions:
                             direction, action = ctrl_arrow_actions[key]
-                            logger.debug(f"Ctrl+Arrow key pressed: {direction} - Starting navigation (bypass deleted)")
+                            logger.debug(
+                                f"Ctrl+Arrow key pressed: {direction} - Starting navigation (bypass deleted)"
+                            )
                             action(skip_deleted=False)
                             return True
                     else:
-                        logger.info(f"Key with modifiers detected: {key}, modifiers: {modifiers}")
+                        logger.debug(
+                            f"Key with modifiers detected: {key}, modifiers: {modifiers}"
+                        )
             else:
-                logger.debug(f"EventFilter: Key press not from tracked views, obj={obj.__class__.__name__ if obj else 'None'}")
+                logger.debug(
+                    f"EventFilter: Key press not from tracked views, obj={obj.__class__.__name__ if obj else 'None'}"
+                )
 
         # For all other key presses (including Shift+Arrows), pass the event on.
         return super().eventFilter(obj, event)
