@@ -1519,7 +1519,7 @@ class MainWindow(QMainWindow):
         item_data = item.data(Qt.ItemDataRole.UserRole) if item else None
         path = item_data.get("path") if isinstance(item_data, dict) else None
 
-        logger.info(f"Navigate {direction}: Checking candidate item - Path: {path}")
+        logger.debug(f"Navigate {direction}: Checking candidate item - Path: {path}")
 
         if skip_deleted and path and self._is_marked_for_deletion(path):
             logger.debug(
@@ -1568,35 +1568,14 @@ class MainWindow(QMainWindow):
         if num_items == 0:
             return
 
-        # If not skipping deleted items, just move to the next item directly.
-        if not skip_deleted:
-            candidate_local_idx = (local_idx - 1 + num_items) % num_items
-            candidate_idx = group_images[candidate_local_idx]
-            self._validate_and_select_image_candidate(candidate_idx, "left", False)
-            return
+        # Since _get_current_group_sibling_images already returns a list of non-deleted items,
+        # we can simply calculate the next index. The `skip_deleted` parameter is handled by that function.
+        new_local_idx = (local_idx - 1 + num_items) % num_items
+        candidate_idx = group_images[new_local_idx]
 
-        # Precompute the indices of non-deleted items in the group.
-        non_deleted_indices = [
-            idx for idx in range(num_items) if not self._is_marked_for_deletion(group_images[idx].path)
-        ]
-
-        # If no non-deleted items are found, log and return.
-        if not non_deleted_indices:
-            logger.debug("Navigate left: All items in group are marked for deletion.")
-            return
-
-        # Find the next valid item by navigating circularly through non-deleted indices.
-        for i in range(1, len(non_deleted_indices) + 1):
-            candidate_local_idx = non_deleted_indices[
-                (non_deleted_indices.index(local_idx) - i) % len(non_deleted_indices)
-            ]
-            candidate_idx = group_images[candidate_local_idx]
-
-            # Attempt to select the candidate. If it's valid, the function returns True.
-            if self._validate_and_select_image_candidate(candidate_idx, "left", True):
-                return  # Found a valid item, so we exit.
-
-        logger.debug("Navigate left: All items in group are marked for deletion.")
+        # We call the validator just to perform the selection action.
+        # Passing skip_deleted=False because we know the item is not deleted.
+        self._validate_and_select_image_candidate(candidate_idx, "left", False)
 
     def _navigate_right_in_group(self, skip_deleted=True):
         active_view = self._get_active_file_view()
@@ -1625,22 +1604,14 @@ class MainWindow(QMainWindow):
         if num_items == 0:
             return
 
-        if not skip_deleted:
-            candidate_local_idx = (local_idx + 1) % num_items
-            candidate_idx = group_images[candidate_local_idx]
-            self._validate_and_select_image_candidate(candidate_idx, "right", False)
-            return
+        # Since _get_current_group_sibling_images already returns a list of non-deleted items,
+        # we can simply calculate the next index. The `skip_deleted` parameter is handled by that function.
+        new_local_idx = (local_idx + 1) % num_items
+        candidate_idx = group_images[new_local_idx]
 
-        # If skipping, iterate forwards from the current position to find the next valid item.
-        # The complexity is linear (O(k)) with respect to group size.
-        for i in range(1, num_items + 1):
-            candidate_local_idx = (local_idx + i) % num_items
-            candidate_idx = group_images[candidate_local_idx]
-
-            if self._validate_and_select_image_candidate(candidate_idx, "right", True):
-                return
-
-        logger.debug("Navigate right: All items in group are marked for deletion.")
+        # We call the validator just to perform the selection action.
+        # Passing skip_deleted=False because we know the item is not deleted.
+        self._validate_and_select_image_candidate(candidate_idx, "right", False)
 
     def _navigate_up_sequential(self, skip_deleted=True):
         active_view = self._get_active_file_view()
@@ -3378,8 +3349,8 @@ class MainWindow(QMainWindow):
                     if is_control_or_meta and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
-                        # --- Custom navigation for UNMODIFIED arrow keys ---
                         return True
+                    # --- Custom navigation for UNMODIFIED arrow keys ---
                     if is_unmodified_or_keypad:
                         logger.debug(
                             "Unmodified/keypad key detected: %s (modifiers: %s)",
@@ -3388,13 +3359,13 @@ class MainWindow(QMainWindow):
                         )
                         if key == Qt.Key.Key_Left or key == Qt.Key.Key_A:
                             logger.debug(
-                                f"Arrow key pressed: LEFT/A - Starting navigation"
+                                "Arrow key pressed: LEFT/A - Starting navigation"
                             )
                             self._navigate_left_in_group(skip_deleted=True)
                             return True
                         if key == Qt.Key.Key_Right or key == Qt.Key.Key_D:
                             logger.debug(
-                                f"Arrow key pressed: RIGHT/D - Starting navigation"
+                                "Arrow key pressed: RIGHT/D - Starting navigation"
                             )
                             self._navigate_right_in_group(skip_deleted=True)
                             return True
