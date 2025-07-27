@@ -3,7 +3,6 @@ import time
 import logging
 
 logger = logging.getLogger(__name__)
-import traceback  # Keep for error logging in run_load
 from PyQt6.QtCore import QObject, pyqtSignal
 from typing import List, Dict, Any, Optional
 

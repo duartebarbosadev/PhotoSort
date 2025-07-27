@@ -175,7 +175,7 @@ class ExifCache:
         try:
             self._cache.close()
             logger.debug("EXIF cache closed.")
-        except Exception as e:
+        except Exception:
             logger.error("Error closing EXIF cache.", exc_info=True)
 
     def __contains__(self, key: str) -> bool:

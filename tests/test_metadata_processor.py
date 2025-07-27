@@ -6,8 +6,7 @@ import tempfile
 import shutil
 import unicodedata
 from datetime import date
-from unittest.mock import Mock, patch
-from typing import Dict, Any
+from unittest.mock import Mock
 import logging
 
 # Add the project root to Python path so we can import src modules

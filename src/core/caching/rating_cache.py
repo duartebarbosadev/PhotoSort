@@ -136,7 +136,7 @@ class RatingCache:
         try:
             self._cache.close()
             logger.debug("Rating cache closed.")
-        except Exception as e:
+        except Exception:
             logger.error("Error closing Rating cache.", exc_info=True)
 
     def __contains__(self, key: str) -> bool:

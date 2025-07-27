@@ -104,7 +104,7 @@ class ImageFileOperations:
         try:
             os.rename(old_path, new_path)
             logger.info(
-                f"Renamed '%s' to '%s'",
+                "Renamed '%s' to '%s'",
                 os.path.basename(old_path),
                 os.path.basename(new_path),
             )

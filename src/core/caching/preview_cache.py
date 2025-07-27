@@ -244,7 +244,7 @@ class PreviewCache:
         try:
             self._cache.close()
             logger.debug("Preview cache closed.")
-        except Exception as e:
+        except Exception:
             logger.error("Error closing Preview cache.", exc_info=True)
 
     def __contains__(self, key: Tuple[str, Tuple[int, int], bool]) -> bool:

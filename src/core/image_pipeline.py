@@ -114,8 +114,8 @@ class ImagePipeline:
             # or for RAW images where it's applied post-processing, handle it here.
             # The StandardImageProcessor now handles it, so this is mainly for RAW
             # or as a fallback.
-            if apply_orientation and not (
-                ext in SUPPORTED_STANDARD_EXTENSIONS
+            if (
+                apply_orientation and ext not in SUPPORTED_STANDARD_EXTENSIONS
             ):  # Assume standard processor handled it
                 pil_img = self.image_orientation_handler.exif_transpose(pil_img)
 
@@ -330,7 +330,7 @@ class ImagePipeline:
                 _ = futures_map[future]  # path, if needed for logging
                 try:
                     future.result()  # Check for exceptions from worker
-                except Exception as e:
+                except Exception:
                     logger.error(
                         "Error during thumbnail preloading task", exc_info=True
                     )
@@ -432,7 +432,7 @@ class ImagePipeline:
                 _ = futures_map[future]  # path
                 try:
                     future.result()  # Check for exceptions
-                except Exception as e:
+                except Exception:
                     logger.error("Error during preview preloading task", exc_info=True)
 
                 processed_count += 1

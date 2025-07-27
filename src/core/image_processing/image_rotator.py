@@ -320,7 +320,7 @@ class ImageRotator:
 
         if pyexiv2_success:
             logger.info(
-                f"Orientation metadata for '%s' updated to %d.",
+                "Orientation metadata for '%s' updated to %d.",
                 os.path.basename(image_path),
                 new_orientation,
             )

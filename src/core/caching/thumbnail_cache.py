@@ -180,7 +180,7 @@ class ThumbnailCache:
         try:
             self._cache.close()
             logger.debug("Thumbnail cache closed.")
-        except Exception as e:
+        except Exception:
             logger.error("Error closing Thumbnail cache.", exc_info=True)
 
     def __contains__(self, key: Tuple[str, bool]) -> bool:

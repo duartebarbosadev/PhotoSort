@@ -1,12 +1,9 @@
-import pyexiv2  # Must be first import
 import pytest
 import os
 import sys
 import tempfile
 import shutil
-import unicodedata
-from unittest.mock import Mock, patch
-from typing import Dict, Any
+from unittest.mock import Mock
 import logging
 
 # Add the project root to Python path so we can import src modules

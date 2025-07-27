@@ -2,7 +2,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 from typing import Optional, List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal, QTimer, QRect
+from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal, QTimer
 from PyQt6.QtGui import (
     QPixmap,
     QWheelEvent,

@@ -512,7 +512,7 @@ class RawImageProcessor:
                 e,
             )
             return None
-        except Exception as e:
+        except Exception:
             logger.error(
                 f"Failed to load RAW for blur detection '{os.path.basename(normalized_path)}'",
                 exc_info=True,

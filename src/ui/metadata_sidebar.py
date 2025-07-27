@@ -447,7 +447,7 @@ class MetadataSidebar(QWidget):
                     formatted_val = f"f/{val:.1f}".replace(".0", "")
                     # logger.debug(f"Formatted aperture to: {formatted_val}")
                     return formatted_val
-                except (ValueError, TypeError, ZeroDivisionError) as e:
+                except (ValueError, TypeError, ZeroDivisionError):
                     logger.warning(
                         f"Could not format aperture value '{value}'.", exc_info=False
                     )

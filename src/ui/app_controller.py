@@ -40,14 +40,14 @@ class AppController(QObject):
         try:
             pipeline = ImagePipeline()
             pipeline.clear_all_image_caches()
-        except Exception as e:
+        except Exception:
             logger.error("Error clearing image pipeline caches.", exc_info=True)
 
         try:
             from src.core.similarity_engine import SimilarityEngine
 
             SimilarityEngine.clear_embedding_cache()
-        except Exception as e:
+        except Exception:
             logger.error("Error clearing similarity cache.", exc_info=True)
 
         try:
@@ -55,7 +55,7 @@ class AppController(QObject):
 
             exif_cache = ExifCache()
             exif_cache.clear()
-        except Exception as e:
+        except Exception:
             logger.error("Error clearing EXIF metadata cache.", exc_info=True)
 
         try:
@@ -63,7 +63,7 @@ class AppController(QObject):
 
             rating_cache = RatingCache()
             rating_cache.clear()
-        except Exception as e:
+        except Exception:
             logger.error("Error clearing rating cache.", exc_info=True)
 
         logger.info(
@@ -163,7 +163,7 @@ class AppController(QObject):
 
     def load_folder(self, folder_path: str):
         load_folder_start_time = time.perf_counter()
-        logger.info(f"Loading folder: %s", folder_path)
+        logger.info("Loading folder: %s", folder_path)
         self.main_window.show_loading_overlay("Preparing to scan folder...")
 
         add_recent_folder(folder_path)

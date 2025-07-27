@@ -182,8 +182,8 @@ class ModelRotationDetector:
         except ModelNotFoundError:
             # Re-raise to be caught by the calling worker
             raise
-        except Exception as e:
-            logger.error(f"Failed to initialize ModelRotationDetector.", exc_info=True)
+        except Exception:
+            logger.error("Failed to initialize ModelRotationDetector.", exc_info=True)
 
     def _load_onnx_session(
         self, model_path: str
@@ -294,7 +294,7 @@ class ModelRotationDetector:
             )
 
             return angle
-        except Exception as e:
+        except Exception:
             logger.error(
                 f"Error during ONNX inference for {os.path.basename(image_path)}",
                 exc_info=True,

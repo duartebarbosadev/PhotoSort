@@ -850,7 +850,7 @@ class MetadataProcessor:
                 width = img.get_pixel_width()
                 height = img.get_pixel_height()
                 return orientation, width, height
-        except Exception as e:
+        except Exception:
             logger.error(
                 f"Error getting orientation/dimensions for {os.path.basename(operational_path)}",
                 exc_info=True,
