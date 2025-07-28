@@ -1,6 +1,6 @@
 import logging
 from typing import Optional, List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal, QTimer, QPoint
 from PyQt6.QtGui import (
     QPixmap,
     QWheelEvent,
@@ -9,6 +9,8 @@ from PyQt6.QtGui import (
     QPainter,
     QBrush,
     QColor,
+    QAction,
+    QIcon,
 )
 from PyQt6.QtWidgets import (
     QWidget,
@@ -23,6 +25,8 @@ from PyQt6.QtWidgets import (
     QSlider,
     QSplitter,
     QButtonGroup,
+    QMenu,
+    QStyle,
 )
 
 logger = logging.getLogger(__name__)
@@ -430,6 +434,12 @@ class IndividualViewer(QWidget):
 
     # Signals to bubble up to the main window/controller
     ratingChanged = pyqtSignal(str, int)  # file_path, rating
+    deleteRequested = pyqtSignal(str)  # file_path
+    deleteOthersRequested = pyqtSignal(str)  # file_path of the image to keep
+    markAsDeletedRequested = pyqtSignal(str)  # file_path
+    markOthersAsDeletedRequested = pyqtSignal(str)  # file_path of the image to keep
+    unmarkAsDeletedRequested = pyqtSignal(str)  # file_path
+    unmarkOthersAsDeletedRequested = pyqtSignal(str)  # file_path of the image to keep
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -442,6 +452,38 @@ class IndividualViewer(QWidget):
     def get_file_path(self) -> Optional[str]:
         """Get the file path of the currently displayed image."""
         return self._file_path
+
+    def _is_marked_for_deletion(self) -> bool:
+        """Check if the current file is marked for deletion."""
+        if self._file_path:
+            # Find the SynchronizedImageViewer parent (grandparent of the QSplitter)
+            parent = self.parent()
+            if parent:
+                grandparent = parent.parent()
+                if grandparent and hasattr(grandparent, "is_marked_for_deletion"):
+                    return grandparent.is_marked_for_deletion(self._file_path)
+        return False
+
+    def _has_any_marked_for_deletion(self) -> bool:
+        """Check if there are any files marked for deletion."""
+        # Find the SynchronizedImageViewer parent (grandparent of the QSplitter)
+        parent = self.parent()
+        if parent:
+            grandparent = parent.parent()
+            if grandparent and hasattr(grandparent, "has_any_marked_for_deletion"):
+                return grandparent.has_any_marked_for_deletion()
+        return False
+
+    def _is_single_image_mode(self) -> bool:
+        """Check if we're in a mode where there are no other images to affect."""
+        # Find the SynchronizedImageViewer parent (grandparent of the QSplitter)
+        parent = self.parent()
+        if parent:
+            grandparent = parent.parent()
+            if grandparent and hasattr(grandparent, "is_single_image_mode"):
+                return grandparent.is_single_image_mode()
+        # Default to True (hide others) if we can't determine the mode
+        return True
 
     def _setup_ui(self):
         """Setup the layout with image view and control bar."""
@@ -487,22 +529,19 @@ class IndividualViewer(QWidget):
             layout.addWidget(btn)
             self.star_buttons.append(btn)
 
-        self.clear_rating_button = QPushButton("X")
-        self.clear_rating_button.setToolTip("Clear rating (0 stars)")
-        layout.addWidget(self.clear_rating_button)
+        self.delete_button = QPushButton("🗑️")
+        self.delete_button.setToolTip("Delete image (Backspace)")
+        layout.addWidget(self.delete_button)
 
         return widget
 
     def _connect_signals(self):
         """Connect button signals to handlers."""
         for i, btn in enumerate(self.star_buttons):
-            # Use lambda with default parameter to capture the rating value correctly
             btn.clicked.connect(
                 lambda checked, rating=i + 1: self._on_rating_button_clicked(rating)
             )
-        self.clear_rating_button.clicked.connect(
-            lambda: self._on_rating_button_clicked(0)
-        )
+        self.delete_button.clicked.connect(self._on_delete_button_clicked)
 
     def _on_rating_button_clicked(self, rating_override=None):
         """Handle rating button clicks and emit signal."""
@@ -515,9 +554,28 @@ class IndividualViewer(QWidget):
             if sender_obj:
                 rating = sender_obj.property("ratingValue")
 
+        # Implement toggle functionality: if the same rating is clicked again, clear the rating
+        current_rating = 0
+        # Get the current display rating from the buttons
+        for i, btn in enumerate(self.star_buttons):
+            if btn.text() == "★":
+                current_rating = i + 1
+
+        # If the clicked rating is the same as the current rating, clear the rating
+        if rating == current_rating:
+            rating = 0
+
         if rating is not None:
             self.ratingChanged.emit(self._file_path, rating)
             self.update_rating_display(rating)  # Update own display immediately
+
+    def _on_delete_button_clicked(self):
+        """Handle delete button click."""
+        if self._file_path is None:
+            return
+        # Emit a signal to the main window to handle the deletion
+        # We'll need to add this signal to the IndividualViewer class
+        self.deleteRequested.emit(self._file_path)
 
     def set_data(
         self, pixmap: QPixmap, file_path: str, rating: int, label: Optional[str]
@@ -561,6 +619,84 @@ class IndividualViewer(QWidget):
                 current_style.unpolish(self)
                 current_style.polish(self)
 
+    def mousePressEvent(self, event: QMouseEvent):
+        """Handle mouse press events to show context menu on right-click."""
+        if event.button() == Qt.MouseButton.RightButton and self._file_path is not None:
+            self._show_context_menu(event.pos())
+        else:
+            super().mousePressEvent(event)
+
+    def _show_context_menu(self, position: QPoint):
+        """Show context menu with delete options."""
+        menu = QMenu(self)
+
+        # Delete action
+        delete_action = QAction("Delete", self)
+        delete_action.triggered.connect(
+            lambda: self.deleteRequested.emit(self._file_path)
+        )
+        menu.addAction(delete_action)
+
+        # Check if we're in single image mode (no other images to affect)
+        is_single_mode = self._is_single_image_mode()
+        
+        # Delete Others action - only show if not in single image mode
+        if not is_single_mode:
+            delete_others_action = QAction("Delete Others", self)
+            delete_others_action.triggered.connect(
+                lambda: self.deleteOthersRequested.emit(self._file_path)
+            )
+            menu.addAction(delete_others_action)
+
+        # Add separator
+        menu.addSeparator()
+
+        # Toggle Mark for Deletion action
+        is_marked = self._is_marked_for_deletion()
+        mark_toggle_action = QAction(
+            "Unmark for Deletion" if is_marked else "Mark for Deletion", self
+        )
+        mark_toggle_action.triggered.connect(
+            lambda: (
+                self.unmarkAsDeletedRequested.emit(self._file_path)
+                if is_marked
+                else self.markAsDeletedRequested.emit(self._file_path)
+            )
+        )
+
+        # Add visual indication of marked state
+        if is_marked:
+            mark_toggle_action.setIcon(
+                QIcon(
+                    self.style().standardIcon(QStyle.StandardPixmap.SP_DialogYesButton)
+                )
+            )
+
+        menu.addAction(mark_toggle_action)
+
+        # Mark Others as Deleted action - only show if not in single image mode
+        if not is_single_mode:
+            mark_others_deleted_action = QAction("Mark Others as Deleted", self)
+            mark_others_deleted_action.triggered.connect(
+                lambda: self.markOthersAsDeletedRequested.emit(self._file_path)
+            )
+            menu.addAction(mark_others_deleted_action)
+
+        # Add separator
+        menu.addSeparator()
+
+        # Unmark Others as Deleted action
+        # Only show this option if there are any files marked for deletion AND not in single mode
+        if not is_single_mode and self._has_any_marked_for_deletion():
+            unmark_others_deleted_action = QAction("Unmark Others as Deleted", self)
+            unmark_others_deleted_action.triggered.connect(
+                lambda: self.unmarkOthersAsDeletedRequested.emit(self._file_path)
+            )
+            menu.addAction(unmark_others_deleted_action)
+
+        # Show menu at the cursor position
+        menu.exec(self.mapToGlobal(position))
+
 
 class SynchronizedImageViewer(QWidget):
     """
@@ -569,6 +705,13 @@ class SynchronizedImageViewer(QWidget):
 
     # Forward signals from IndividualViewer instances
     ratingChanged = pyqtSignal(str, int)
+    deleteRequested = pyqtSignal(str)  # file_path
+    deleteOthersRequested = pyqtSignal(str)  # file_path of the image to keep
+    deleteMultipleRequested = pyqtSignal(list)  # list of file_paths to delete
+    markAsDeletedRequested = pyqtSignal(str)  # file_path
+    markOthersAsDeletedRequested = pyqtSignal(str)  # file_path of the image to keep
+    unmarkAsDeletedRequested = pyqtSignal(str)  # file_path
+    unmarkOthersAsDeletedRequested = pyqtSignal(str)  # file_path of the image to keep
     focused_image_changed = pyqtSignal(int, str)  # index, file_path
     side_by_side_availability_changed = pyqtSignal(bool)
 
@@ -580,11 +723,41 @@ class SynchronizedImageViewer(QWidget):
         self._updating_sync = False
         self._focused_index = 0
         self._view_mode = "single"
+        self._is_marked_for_deletion_func = None
+        self._has_any_marked_for_deletion_func = None
 
         self._setup_ui()
         self.setFocusPolicy(
             Qt.FocusPolicy.StrongFocus
         )  # Allow widget to receive key events
+
+    def set_is_marked_for_deletion_func(self, func):
+        """Set the function to check if a file is marked for deletion."""
+        self._is_marked_for_deletion_func = func
+
+    def set_has_any_marked_for_deletion_func(self, func):
+        """Set the function to check if there are any files marked for deletion."""
+        self._has_any_marked_for_deletion_func = func
+
+    def is_single_image_mode(self) -> bool:
+        """
+        Check if we're in a mode where there are no other images to affect.
+        Returns True if we're in single or focused mode (only one image visible),
+        False if we're in side-by-side mode (multiple images visible).
+        """
+        return self._view_mode in ["single", "focused"]
+
+    def is_marked_for_deletion(self, file_path: str) -> bool:
+        """Check if a file is marked for deletion."""
+        if self._is_marked_for_deletion_func:
+            return self._is_marked_for_deletion_func(file_path)
+        return False
+
+    def has_any_marked_for_deletion(self) -> bool:
+        """Check if there are any files marked for deletion."""
+        if self._has_any_marked_for_deletion_func:
+            return self._has_any_marked_for_deletion_func()
+        return False
 
     def _setup_ui(self):
         """Setup the user interface with a modern, sleek toolbar."""
@@ -735,6 +908,14 @@ class SynchronizedImageViewer(QWidget):
         viewer.image_view.zoom_changed.connect(self._on_zoom_changed)
         viewer.image_view.pan_changed.connect(self._on_pan_changed)
         viewer.ratingChanged.connect(self.ratingChanged)
+        viewer.deleteRequested.connect(self.deleteRequested)
+        viewer.deleteOthersRequested.connect(self._on_delete_others_requested)
+        viewer.markAsDeletedRequested.connect(self.markAsDeletedRequested)
+        viewer.markOthersAsDeletedRequested.connect(self.markOthersAsDeletedRequested)
+        viewer.unmarkAsDeletedRequested.connect(self.unmarkAsDeletedRequested)
+        viewer.unmarkOthersAsDeletedRequested.connect(
+            self.unmarkOthersAsDeletedRequested
+        )
         self.image_viewers.append(viewer)
         self.viewer_splitter.addWidget(viewer)
         return viewer
@@ -1072,6 +1253,18 @@ class SynchronizedImageViewer(QWidget):
             if viewer.image_view != sender_view and viewer.isVisible():
                 viewer.image_view.centerOn(center_point)
         self._updating_sync = False
+
+    def _on_delete_others_requested(self, file_path_to_keep: str):
+        """Handle delete others request by collecting file paths and emitting a bulk delete signal."""
+        file_paths_to_delete = []
+        for viewer in self.image_viewers:
+            # Collect all other images except the one that requested to keep
+            if viewer._file_path is not None and viewer._file_path != file_path_to_keep:
+                file_paths_to_delete.append(viewer._file_path)
+
+        # Emit the bulk delete request if there are files to delete
+        if file_paths_to_delete:
+            self.deleteMultipleRequested.emit(file_paths_to_delete)
 
     def fit_to_viewport(self):
         for viewer in self.image_viewers:

@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QSplitter,
     QFileDialog,
-    QTreeView,  # Replaced QListWidget with QTreeView
+    QTreeView,
     QPushButton,
     QListView,
     QComboBox,
@@ -16,8 +16,8 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,  # For selection and edit triggersor dialogs
 )
-import os  # <-- Add import os at the top level
-from datetime import date as date_obj  # For date type hinting and objects
+import os
+from datetime import date as date_obj
 from typing import (
     List,
     Dict,
@@ -48,12 +48,9 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_similarity  # Add cosine_similarity import
 
-# from src.core.file_scanner import FileScanner # Now managed by WorkerManager
-# from src.core.similarity_engine import SimilarityEngine # Now managed by WorkerManager
-# from src.core.similarity_engine import PYTORCH_CUDA_AVAILABLE # Import PyTorch CUDA info <-- ENSURE REMOVED
 from src.core.image_pipeline import ImagePipeline
+from src.core.image_file_ops import ImageFileOperations
 
-# from src.core.image_features.blur_detector import BlurDetector # Now managed by WorkerManager
 from src.core.metadata_processor import MetadataProcessor  # New metadata processor
 from src.core.app_settings import (
     get_preview_cache_size_gb,
@@ -580,6 +577,29 @@ class MainWindow(QMainWindow):
         logger.debug("Connecting signals...")
         # Connect to the new signals from the advanced viewer
         self.advanced_image_viewer.ratingChanged.connect(self._apply_rating)
+        self.advanced_image_viewer.deleteRequested.connect(self._delete_image)
+        self.advanced_image_viewer.deleteMultipleRequested.connect(
+            self._delete_multiple_images
+        )
+        self.advanced_image_viewer.markAsDeletedRequested.connect(
+            self._mark_image_for_deletion
+        )
+        self.advanced_image_viewer.markOthersAsDeletedRequested.connect(
+            self._mark_others_for_deletion
+        )
+        self.advanced_image_viewer.unmarkAsDeletedRequested.connect(
+            self._unmark_image_for_deletion
+        )
+        self.advanced_image_viewer.unmarkOthersAsDeletedRequested.connect(
+            self._unmark_others_for_deletion
+        )
+        # Set the function to check deletion state
+        self.advanced_image_viewer.set_is_marked_for_deletion_func(
+            self._is_marked_for_deletion
+        )
+        self.advanced_image_viewer.set_has_any_marked_for_deletion_func(
+            self._has_any_marked_for_deletion
+        )
         self.advanced_image_viewer.focused_image_changed.connect(
             self._handle_focused_image_changed
         )
@@ -948,6 +968,77 @@ class MainWindow(QMainWindow):
             for viewer in self.advanced_image_viewer.image_viewers:
                 if viewer.isVisible() and viewer._file_path == path:
                     viewer.update_rating_display(rating)
+
+    def _delete_image(self, file_path: str):
+        """Delete a single image file."""
+        logger.debug(f"Deleting image: {file_path}")
+        if not os.path.exists(file_path):
+            logger.warning(f"File does not exist: {file_path}")
+            return
+
+        # Show confirmation dialog
+        if not self.dialog_manager.show_confirm_delete_dialog([file_path]):
+            logger.debug("User cancelled deletion")
+            return
+
+        # Move to trash
+        logger.info(f"Moving file to trash: {file_path}")
+        success, message = ImageFileOperations.move_to_trash(file_path)
+        if success:
+            # Remove from app state
+            self.app_state.remove_data_for_path(file_path)
+            self.statusBar().showMessage(f"Deleted {os.path.basename(file_path)}", 5000)
+            logger.info(f"Successfully deleted: {file_path}")
+            # Refresh the view
+            self._handle_file_selection_changed()
+            # Reapply filters to hide deleted items
+            self._apply_filter()
+        else:
+            self.statusBar().showMessage(
+                f"Failed to delete {os.path.basename(file_path)}: {message}", 5000
+            )
+            logger.error(f"Failed to delete {file_path}: {message}")
+
+    def _delete_multiple_images(self, file_paths: List[str]):
+        """Delete multiple image files at once."""
+        logger.debug(f"Deleting multiple images: {file_paths}")
+
+        # Filter out non-existent files
+        existing_file_paths = [path for path in file_paths if os.path.exists(path)]
+        if not existing_file_paths:
+            logger.warning("No valid files to delete")
+            return
+
+        # Show confirmation dialog for all files at once
+        if not self.dialog_manager.show_confirm_delete_dialog(existing_file_paths):
+            logger.debug("User cancelled deletion")
+            return
+
+        # Delete each file
+        deleted_count = 0
+        for file_path in existing_file_paths:
+            logger.info(f"Moving file to trash: {file_path}")
+            success, message = ImageFileOperations.move_to_trash(file_path)
+            if success:
+                # Remove from app state
+                self.app_state.remove_data_for_path(file_path)
+                logger.info(f"Successfully deleted: {file_path}")
+                deleted_count += 1
+            else:
+                self.statusBar().showMessage(
+                    f"Failed to delete {os.path.basename(file_path)}: {message}", 5000
+                )
+                logger.error(f"Failed to delete {file_path}: {message}")
+
+        # Show status message
+        if deleted_count > 0:
+            self.statusBar().showMessage(f"Deleted {deleted_count} image(s)", 5000)
+            # Refresh the view
+            self._handle_file_selection_changed()
+            # Reapply filters to hide deleted items
+            self._apply_filter()
+        elif len(existing_file_paths) > 0:
+            self.statusBar().showMessage("Failed to delete any images", 5000)
 
     def _log_qmodelindex(self, index: QModelIndex, prefix: str = "") -> str:
         if not hasattr(self, "proxy_model") or not hasattr(self, "file_system_model"):
@@ -3910,6 +4001,12 @@ class MainWindow(QMainWindow):
         logger.debug(f"Checking deletion mark for '{file_path}': {is_marked}")
         return is_marked
 
+    def _has_any_marked_for_deletion(self) -> bool:
+        """Checks if there are any files marked for deletion."""
+        has_marked = len(self.app_state.get_marked_files()) > 0
+        logger.debug(f"Checking if any files are marked for deletion: {has_marked}")
+        return has_marked
+
     def _commit_marked_deletions(self):
         """Finds all marked files and moves them to trash, updating the view in-place."""
         active_view = self._get_active_file_view()
@@ -4071,28 +4168,194 @@ class MainWindow(QMainWindow):
             override_selected_paths=original_selection_paths
         )
 
-        if focused_path:
-            self.advanced_image_viewer.set_focused_viewer_by_path(focused_path)
+    def _mark_image_for_deletion(self, file_path: str):
+        """Marks a single image for deletion, updating the model in-place."""
+        if not file_path:
+            return
 
-        selection = QItemSelection()
-        first_idx = QModelIndex()
-        for path in original_selection_paths:
+        # Mark the file for deletion in the app state
+        is_marked = self._is_marked_for_deletion(file_path)
+        if is_marked:
+            self.app_state.unmark_for_deletion(file_path)
+        else:
+            self.app_state.mark_for_deletion(file_path)
+
+        # Update the UI
+        proxy_idx = self._find_proxy_index_for_path(file_path)
+        if proxy_idx and proxy_idx.isValid():
+            source_idx = self.proxy_model.mapToSource(proxy_idx)
+            item = self.file_system_model.itemFromIndex(source_idx)
+            if item:
+                item_data = item.data(Qt.ItemDataRole.UserRole)
+                if is_marked:  # Unmarking
+                    is_blurred = item_data.get("is_blurred")
+                    if is_blurred:
+                        item.setForeground(QColor(Qt.GlobalColor.red))
+                        item.setText(os.path.basename(file_path) + " (Blurred)")
+                    else:
+                        item.setForeground(QApplication.palette().text().color())
+                    # Reset the text to the original filename
+                    item.setText(
+                        os.path.basename(file_path)
+                        + (" (Blurred)" if is_blurred else "")
+                    )
+                else:  # Marking
+                    item.setForeground(QColor("#FFB366"))
+                    # Keep the original filename but add (DELETED) suffix to indicate it's marked
+                    # If the file is also blurred, we need to keep the (Blurred) suffix
+                    is_blurred = item_data.get("is_blurred")
+                    if is_blurred:
+                        item.setText(
+                            os.path.basename(file_path) + " (DELETED) (Blurred)"
+                        )
+                    else:
+                        item.setText(os.path.basename(file_path) + " (DELETED)")
+
+        self.statusBar().showMessage(f"Marked 1 image for deletion.", 5000)
+        self.proxy_model.invalidate()
+        QApplication.processEvents()
+
+    def _mark_others_for_deletion(self, file_path_to_keep: str):
+        """Marks all other images in the split view for deletion, updating the model in-place."""
+        if not file_path_to_keep:
+            return
+
+        # Get all image file paths from the split view
+        all_image_paths = []
+        for viewer in self.advanced_image_viewer.image_viewers:
+            if viewer._file_path is not None:
+                all_image_paths.append(viewer._file_path)
+
+        # Filter out the file path to keep
+        paths_to_mark = [path for path in all_image_paths if path != file_path_to_keep]
+
+        if not paths_to_mark:
+            self.statusBar().showMessage("No other images to mark for deletion.", 3000)
+            return
+
+        # Mark all other images for deletion
+        marked_count = 0
+        for path in paths_to_mark:
+            # Only mark if not already marked
+            if not self._is_marked_for_deletion(path):
+                self.app_state.mark_for_deletion(path)
+                marked_count += 1
+
+        # Update the UI for all marked images
+        for path in paths_to_mark:
             proxy_idx = self._find_proxy_index_for_path(path)
-            if proxy_idx.isValid():
-                selection.select(proxy_idx, proxy_idx)
-                if not first_idx.isValid():
-                    first_idx = proxy_idx
+            if proxy_idx and proxy_idx.isValid():
+                source_idx = self.proxy_model.mapToSource(proxy_idx)
+                item = self.file_system_model.itemFromIndex(source_idx)
+                if item:
+                    item_data = item.data(Qt.ItemDataRole.UserRole)
+                    # Marking
+                    item.setForeground(QColor("#FFB366"))
+                    # Keep the original filename but add (DELETED) suffix to indicate it's marked
+                    # If the file is also blurred, we need to keep the (Blurred) suffix
+                    is_blurred = item_data.get("is_blurred")
+                    if is_blurred:
+                        item.setText(os.path.basename(path) + " (DELETED) (Blurred)")
+                    else:
+                        item.setText(os.path.basename(path) + " (DELETED)")
 
-        if not selection.isEmpty():
-            active_view.selectionModel().blockSignals(True)
-            active_view.selectionModel().select(
-                selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
-            )
-            active_view.selectionModel().blockSignals(False)
-            if first_idx.isValid():
-                active_view.scrollTo(
-                    first_idx, QAbstractItemView.ScrollHint.EnsureVisible
+        self.statusBar().showMessage(
+            f"Marked {marked_count} other image(s) for deletion.", 5000
+        )
+        self.proxy_model.invalidate()
+        QApplication.processEvents()
+
+    def _unmark_image_for_deletion(self, file_path: str):
+        """Unmarks a single image for deletion, updating the model in-place."""
+        if not file_path:
+            return
+
+        # Check if the file is actually marked for deletion
+        if not self._is_marked_for_deletion(file_path):
+            self.statusBar().showMessage("Image is not marked for deletion.", 3000)
+            return
+
+        # Unmark the file for deletion in the app state
+        self.app_state.unmark_for_deletion(file_path)
+
+        # Update the UI
+        proxy_idx = self._find_proxy_index_for_path(file_path)
+        if proxy_idx and proxy_idx.isValid():
+            source_idx = self.proxy_model.mapToSource(proxy_idx)
+            item = self.file_system_model.itemFromIndex(source_idx)
+            if item:
+                item_data = item.data(Qt.ItemDataRole.UserRole)
+                # Unmarking
+                is_blurred = item_data.get("is_blurred")
+                if is_blurred:
+                    item.setForeground(QColor(Qt.GlobalColor.red))
+                    item.setText(os.path.basename(file_path) + " (Blurred)")
+                else:
+                    item.setForeground(QApplication.palette().text().color())
+                # Reset the text to the original filename
+                item.setText(
+                    os.path.basename(file_path) + (" (Blurred)" if is_blurred else "")
                 )
+
+        self.statusBar().showMessage(f"Unmarked 1 image for deletion.", 5000)
+        self.proxy_model.invalidate()
+        QApplication.processEvents()
+
+    def _unmark_others_for_deletion(self, file_path_to_keep: str):
+        """Unmarks all other images in the split view for deletion, updating the model in-place."""
+        if not file_path_to_keep:
+            return
+
+        # Get all image file paths from the split view
+        all_image_paths = []
+        for viewer in self.advanced_image_viewer.image_viewers:
+            if viewer._file_path is not None:
+                all_image_paths.append(viewer._file_path)
+
+        # Filter out the file path to keep
+        paths_to_unmark = [
+            path for path in all_image_paths if path != file_path_to_keep
+        ]
+
+        if not paths_to_unmark:
+            self.statusBar().showMessage(
+                "No other images to unmark for deletion.", 3000
+            )
+            return
+
+        # Unmark all other images for deletion
+        unmarked_count = 0
+        for path in paths_to_unmark:
+            # Only unmark if actually marked
+            if self._is_marked_for_deletion(path):
+                self.app_state.unmark_for_deletion(path)
+                unmarked_count += 1
+
+        # Update the UI for all unmarked images
+        for path in paths_to_unmark:
+            proxy_idx = self._find_proxy_index_for_path(path)
+            if proxy_idx and proxy_idx.isValid():
+                source_idx = self.proxy_model.mapToSource(proxy_idx)
+                item = self.file_system_model.itemFromIndex(source_idx)
+                if item:
+                    item_data = item.data(Qt.ItemDataRole.UserRole)
+                    # Unmarking
+                    is_blurred = item_data.get("is_blurred")
+                    if is_blurred:
+                        item.setForeground(QColor(Qt.GlobalColor.red))
+                        item.setText(os.path.basename(path) + " (Blurred)")
+                    else:
+                        item.setForeground(QApplication.palette().text().color())
+                    # Reset the text to the original filename
+                    item.setText(
+                        os.path.basename(path) + (" (Blurred)" if is_blurred else "")
+                    )
+
+        self.statusBar().showMessage(
+            f"Unmarked {unmarked_count} other image(s) for deletion.", 5000
+        )
+        self.proxy_model.invalidate()
+        QApplication.processEvents()
 
     def _clear_all_deletion_marks(self):
         """Unmarks all marked files, updating the view in-place."""
