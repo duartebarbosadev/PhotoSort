@@ -29,6 +29,7 @@ class AppState:
             RatingCache()
         )  # Instance of the new disk cache for ratings
         self.exif_disk_cache = ExifCache()  # Instance of the new disk cache for EXIF data, now reads size from app_settings
+        self.marked_for_deletion: set = set()  # Set of file paths marked for deletion
 
         # Could also hold current folder path, filter states, etc. if desired.
         self.current_folder_path: Optional[str] = None
@@ -43,6 +44,7 @@ class AppState:
         self.date_cache.clear()
         self.cluster_results.clear()
         self.embeddings_cache.clear()
+        self.marked_for_deletion.clear()  # Clear marked for deletion set
         if self.rating_disk_cache:
             self.rating_disk_cache.clear()  # Decide if folder clear should wipe the whole disk cache
         if self.exif_disk_cache:
@@ -115,3 +117,23 @@ class AppState:
             if file_data.get("path") == file_path:
                 return file_data
         return None
+
+    def mark_for_deletion(self, file_path: str):
+        """Marks a file for deletion."""
+        self.marked_for_deletion.add(file_path)
+
+    def unmark_for_deletion(self, file_path: str):
+        """Unmarks a file for deletion."""
+        self.marked_for_deletion.discard(file_path)
+
+    def is_marked_for_deletion(self, file_path: str) -> bool:
+        """Checks if a file is marked for deletion."""
+        return file_path in self.marked_for_deletion
+
+    def get_marked_files(self) -> List[str]:
+        """Returns a list of all files marked for deletion."""
+        return list(self.marked_for_deletion)
+
+    def clear_all_deletion_marks(self):
+        """Clears all deletion marks."""
+        self.marked_for_deletion.clear()

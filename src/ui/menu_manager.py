@@ -45,7 +45,6 @@ class MenuManager:
         # Settings Menu
         self.manage_cache_action: QAction
         self.toggle_auto_edits_action: QAction
-        self.toggle_mark_for_deletion_action: QAction
 
         # Image Menu
         self.rotate_clockwise_action: QAction
@@ -330,19 +329,6 @@ class MenuManager:
         self.toggle_auto_edits_action.setShortcut(QKeySequence("F10"))
         settings_menu.addAction(self.toggle_auto_edits_action)
 
-        self.toggle_mark_for_deletion_action = QAction(
-            "Mark for Deletion (vs. Direct Delete)", main_win
-        )
-        self.toggle_mark_for_deletion_action.setCheckable(True)
-        self.toggle_mark_for_deletion_action.setChecked(
-            main_win.mark_for_deletion_mode_enabled
-        )
-        self.toggle_mark_for_deletion_action.setToolTip(
-            "If checked, the Delete key will mark files for later deletion. If unchecked, it will move them to trash immediately."
-        )
-        self.toggle_mark_for_deletion_action.setShortcut(QKeySequence("F11"))
-        settings_menu.addAction(self.toggle_mark_for_deletion_action)
-
     def _create_help_menu(self, menu_bar):
         help_menu = menu_bar.addMenu("&Help")
         help_menu.addAction(self.about_action)
@@ -382,9 +368,6 @@ class MenuManager:
         )
         self.toggle_auto_edits_action.toggled.connect(
             main_win._handle_toggle_auto_edits
-        )
-        self.toggle_mark_for_deletion_action.toggled.connect(
-            main_win._handle_toggle_mark_for_deletion_mode
         )
 
         # Image Menu
