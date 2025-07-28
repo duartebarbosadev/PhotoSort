@@ -1,7 +1,5 @@
 import os
 import logging
-
-logger = logging.getLogger(__name__)
 import subprocess
 import tempfile
 from typing import Literal, Tuple
@@ -12,6 +10,8 @@ from src.core.image_file_ops import ImageFileOperations
 from src.core.app_settings import JPEGTRAN_TIMEOUT_SECONDS
 import piexif  # For EXIF manipulation with Pillow
 from pillow_heif import HeifImageFile  # For HEIF/HEIC support
+
+logger = logging.getLogger(__name__)
 
 # Rotation directions
 RotationDirection = Literal["clockwise", "counterclockwise", "180"]
@@ -320,7 +320,7 @@ class ImageRotator:
 
         if pyexiv2_success:
             logger.info(
-                f"Orientation metadata for '%s' updated to %d.",
+                "Orientation metadata for '%s' updated to %d.",
                 os.path.basename(image_path),
                 new_orientation,
             )

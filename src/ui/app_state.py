@@ -1,10 +1,10 @@
 from typing import Dict, Any, List, Optional
 from datetime import date as date_obj
 import logging
-
-logger = logging.getLogger(__name__)
 from src.core.caching.rating_cache import RatingCache
 from src.core.caching.exif_cache import ExifCache  # Import ExifCache
+
+logger = logging.getLogger(__name__)
 
 
 class AppState:

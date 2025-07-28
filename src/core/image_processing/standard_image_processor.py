@@ -165,7 +165,7 @@ class StandardImageProcessor:
                 exc_info=True,
             )
             return None
-        except Exception as e:
+        except Exception:
             logger.error(
                 f"Failed to load image for blur detection '{os.path.basename(normalized_path)}'",
                 exc_info=True,

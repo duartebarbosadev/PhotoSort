@@ -1,10 +1,10 @@
 import os
 import shutil
 import logging
-
-logger = logging.getLogger(__name__)
 from typing import Tuple
 import send2trash
+
+logger = logging.getLogger(__name__)
 
 
 class ImageFileOperations:
@@ -104,7 +104,7 @@ class ImageFileOperations:
         try:
             os.rename(old_path, new_path)
             logger.info(
-                f"Renamed '%s' to '%s'",
+                "Renamed '%s' to '%s'",
                 os.path.basename(old_path),
                 os.path.basename(new_path),
             )

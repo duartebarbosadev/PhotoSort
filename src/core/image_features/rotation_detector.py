@@ -1,14 +1,13 @@
 import os
 import concurrent.futures
 import logging
-
-logger = logging.getLogger(__name__)
 from typing import Optional, List, Callable, Dict
 
 from src.core.image_features.model_rotation_detector import ModelRotationDetector
-from src.core.metadata_processor import MetadataProcessor
 from src.core.image_pipeline import ImagePipeline
 from src.core.caching.exif_cache import ExifCache
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_NUM_WORKERS = min(os.cpu_count() or 4, 8)
 

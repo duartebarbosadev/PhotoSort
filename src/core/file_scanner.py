@@ -1,12 +1,12 @@
 import os
 import asyncio
 import logging
-
-logger = logging.getLogger(__name__)
 import time
 from PyQt6.QtCore import QObject, pyqtSignal
 from .image_pipeline import ImagePipeline
 from .image_features.blur_detector import BlurDetector
+
+logger = logging.getLogger(__name__)
 
 # Define supported image extensions (case-insensitive)
 SUPPORTED_EXTENSIONS = {

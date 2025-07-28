@@ -1,8 +1,6 @@
 import diskcache
 import os
 import logging
-
-logger = logging.getLogger(__name__)
 import time  # Added for startup timing
 from PIL import Image
 from typing import Optional, Tuple
@@ -10,6 +8,8 @@ from src.core.app_settings import (
     DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES,
     THUMBNAIL_MIN_FILE_SIZE,
 )
+
+logger = logging.getLogger(__name__)
 
 # Default path for the thumbnail cache
 DEFAULT_THUMBNAIL_CACHE_DIR = os.path.join(
@@ -180,7 +180,7 @@ class ThumbnailCache:
         try:
             self._cache.close()
             logger.debug("Thumbnail cache closed.")
-        except Exception as e:
+        except Exception:
             logger.error("Error closing Thumbnail cache.", exc_info=True)
 
     def __contains__(self, key: Tuple[str, bool]) -> bool:

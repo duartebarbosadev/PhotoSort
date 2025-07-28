@@ -1,7 +1,5 @@
 import os
 import logging
-
-logger = logging.getLogger(__name__)
 import glob
 import torchvision.transforms as transforms
 from PIL import Image, ImageOps
@@ -18,6 +16,8 @@ from src.core.app_settings import (
     set_orientation_model_name,
     ROTATION_MODEL_IMAGE_SIZE,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ModelNotFoundError(Exception):
@@ -182,8 +182,8 @@ class ModelRotationDetector:
         except ModelNotFoundError:
             # Re-raise to be caught by the calling worker
             raise
-        except Exception as e:
-            logger.error(f"Failed to initialize ModelRotationDetector.", exc_info=True)
+        except Exception:
+            logger.error("Failed to initialize ModelRotationDetector.", exc_info=True)
 
     def _load_onnx_session(
         self, model_path: str
@@ -294,7 +294,7 @@ class ModelRotationDetector:
             )
 
             return angle
-        except Exception as e:
+        except Exception:
             logger.error(
                 f"Error during ONNX inference for {os.path.basename(image_path)}",
                 exc_info=True,

@@ -6,8 +6,6 @@ from typing import Optional, Tuple, List, Dict, Callable
 import concurrent.futures
 import logging
 
-logger = logging.getLogger(__name__)
-
 # Assuming these processors are in the new structure
 from src.core.image_processing.raw_image_processor import (
     RawImageProcessor,
@@ -17,6 +15,11 @@ from src.core.image_processing.standard_image_processor import (
     StandardImageProcessor,
     SUPPORTED_STANDARD_EXTENSIONS,
 )
+from src.core.image_processing.image_orientation_handler import (
+    ImageOrientationHandler,
+)  # Local import
+
+logger = logging.getLogger(__name__)
 
 # Default size for the image used in blur detection
 BLUR_DETECTION_PREVIEW_SIZE: Tuple[int, int] = (640, 480)
@@ -65,10 +68,6 @@ class BlurDetector:
                     img = Image.open(normalized_path)
                     # StandardImageProcessor.load_for_blur_detection already handles exif_transpose
                     # So, if we directly use Image.open, we should also apply it.
-                    from src.core.image_processing.image_orientation_handler import (
-                        ImageOrientationHandler,
-                    )  # Local import
-
                     img: Image.Image = ImageOrientationHandler.exif_transpose(img)
                     img.thumbnail(target_size, Image.Resampling.LANCZOS)
                     pil_img = img.convert("RGB")

@@ -1,11 +1,11 @@
 import diskcache
 import os
 import logging
-
-logger = logging.getLogger(__name__)
 import time  # Added for startup timing
 from typing import Optional
 from src.core.app_settings import DEFAULT_RATING_CACHE_SIZE_LIMIT_MB
+
+logger = logging.getLogger(__name__)
 
 # Default path for the rating cache
 DEFAULT_RATING_CACHE_DIR = os.path.join(
@@ -136,7 +136,7 @@ class RatingCache:
         try:
             self._cache.close()
             logger.debug("Rating cache closed.")
-        except Exception as e:
+        except Exception:
             logger.error("Error closing Rating cache.", exc_info=True)
 
     def __contains__(self, key: str) -> bool:

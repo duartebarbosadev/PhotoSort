@@ -1,6 +1,4 @@
 import logging
-
-logger = logging.getLogger(__name__)
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
@@ -22,10 +20,12 @@ from src.core.caching.rating_cache import RatingCache  # For type hinting
 from src.core.caching.exif_cache import ExifCache  # Added for RotationDetectionWorker
 from src.ui.app_state import AppState  # For type hinting
 
+logger = logging.getLogger(__name__)
+
 if (
     TYPE_CHECKING
 ):  # Allow type hinting for SimilarityEngine without circular import/eager load
-    from src.core.similarity_engine import SimilarityEngine
+    pass
 
 
 class WorkerManager(QObject):
@@ -106,7 +106,7 @@ class WorkerManager(QObject):
             if worker_stop_method:
                 try:
                     worker_stop_method()
-                except Exception as e:
+                except Exception:
                     logger.error(
                         f"Error calling worker stop method for thread {thread}. "
                         f"Worker stop method: {worker_stop_method}.",

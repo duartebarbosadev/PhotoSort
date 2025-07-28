@@ -2,20 +2,15 @@ import os
 import time
 import pickle  # For caching embeddings
 import logging
-
-logger = logging.getLogger(__name__)
 from typing import List, Dict, Optional, TYPE_CHECKING
 from PyQt6.QtCore import QObject, pyqtSignal
-
-# from sentence_transformers import SentenceTransformer # Moved to _load_model
-from src.core.image_pipeline import ImagePipeline  # Import ImagePipeline
-from sklearn.cluster import DBSCAN  # Import DBSCAN
 import numpy as np  # Import numpy for array manipulation
+from sklearn.cluster import DBSCAN
 from sklearn.metrics.pairwise import (
     cosine_similarity,
 )  # Import for similarity calculation
 
-# import torch # Import torch for CUDA check - No longer needed here for constant
+from src.core.image_pipeline import ImagePipeline
 from .app_settings import (
     DEFAULT_CLIP_MODEL,
     is_pytorch_cuda_available,
@@ -23,6 +18,8 @@ from .app_settings import (
     DBSCAN_MIN_SAMPLES,
     DEFAULT_SIMILARITY_BATCH_SIZE,
 )  # Import from app_settings
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from sentence_transformers import (

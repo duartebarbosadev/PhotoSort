@@ -1,8 +1,6 @@
 import diskcache
 import os
 import logging
-
-logger = logging.getLogger(__name__)
 import time  # Added for startup timing
 from PIL import Image
 from typing import Optional, Tuple
@@ -12,6 +10,8 @@ from src.core.app_settings import (
     get_preview_cache_size_bytes,
     PREVIEW_CACHE_MIN_FILE_SIZE,
 )
+
+logger = logging.getLogger(__name__)
 
 # Default path for the preview PIL image cache
 DEFAULT_PREVIEW_CACHE_DIR = os.path.join(
@@ -244,7 +244,7 @@ class PreviewCache:
         try:
             self._cache.close()
             logger.debug("Preview cache closed.")
-        except Exception as e:
+        except Exception:
             logger.error("Error closing Preview cache.", exc_info=True)
 
     def __contains__(self, key: Tuple[str, Tuple[int, int], bool]) -> bool:
