@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QApplication
 
 from src.core.app_settings import (
     get_rotation_confirm_lossy,
@@ -497,6 +498,29 @@ class DialogManager:
         Returns:
             True if the user confirms the deletion, False otherwise.
         """
+        # Preload thumbnails with progress indication
+        if deleted_file_paths:
+            self.parent.show_loading_overlay(
+                f"Loading previews for {len(deleted_file_paths)} images..."
+            )
+            QApplication.processEvents()  # Ensure overlay appears immediately
+
+            def progress_callback(processed: int, total: int):
+                self.parent.update_loading_text(
+                    f"Loading previews for {len(deleted_file_paths)} images... ({processed}/{total})"
+                )
+                QApplication.processEvents()
+
+            # Preload thumbnails for the files to be deleted
+            self.parent.image_pipeline.preload_thumbnails(
+                deleted_file_paths,
+                apply_auto_edits=self.parent.apply_auto_edits_enabled,
+                progress_callback=progress_callback,
+            )
+
+            self.parent.hide_loading_overlay()
+            QApplication.processEvents()
+
         num_selected = len(deleted_file_paths)
         if num_selected == 1:
             message = "Are you sure you want to move this image to the trash?"
@@ -541,6 +565,29 @@ class DialogManager:
         Returns:
             True if the user confirms, False otherwise.
         """
+        # Preload thumbnails with progress indication
+        if marked_files:
+            self.parent.show_loading_overlay(
+                f"Loading previews for {len(marked_files)} images..."
+            )
+            QApplication.processEvents()  # Ensure overlay appears immediately
+
+            def progress_callback(processed: int, total: int):
+                self.parent.update_loading_text(
+                    f"Loading previews for {len(marked_files)} images... ({processed}/{total})"
+                )
+                QApplication.processEvents()
+
+            # Preload thumbnails for the files to be deleted
+            self.parent.image_pipeline.preload_thumbnails(
+                marked_files,
+                apply_auto_edits=self.parent.apply_auto_edits_enabled,
+                progress_callback=progress_callback,
+            )
+
+            self.parent.hide_loading_overlay()
+            QApplication.processEvents()
+
         count = len(marked_files)
         return self._show_delete_confirmation_dialog(
             files=marked_files,
