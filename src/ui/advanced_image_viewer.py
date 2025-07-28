@@ -639,7 +639,7 @@ class IndividualViewer(QWidget):
 
         # Check if we're in single image mode (no other images to affect)
         is_single_mode = self._is_single_image_mode()
-        
+
         # Delete Others action - only show if not in single image mode
         if not is_single_mode:
             delete_others_action = QAction("Delete Others", self)
