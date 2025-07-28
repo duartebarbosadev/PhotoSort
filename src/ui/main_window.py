@@ -61,8 +61,6 @@ from src.core.app_settings import (
     set_exif_cache_size_mb,
     get_auto_edit_photos,
     set_auto_edit_photos,
-    get_mark_for_deletion_mode,
-    set_mark_for_deletion_mode,
     DEFAULT_BLUR_DETECTION_THRESHOLD,
     DEFAULT_MAX_ITERATIONS,
     DEFAULT_SAFETY_ITERATION_MULTIPLIER,
@@ -193,7 +191,6 @@ class MainWindow(QMainWindow):
         self.show_folders_mode = False
         self.group_by_similarity_mode = False
         self.apply_auto_edits_enabled = get_auto_edit_photos()
-        self.mark_for_deletion_mode_enabled = get_mark_for_deletion_mode()
         self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
         self.rotation_suggestions = {}
 
@@ -1066,10 +1063,7 @@ class MainWindow(QMainWindow):
         self.left_panel.search_input.selectAll()
 
     def _handle_delete_action(self):
-        if self.mark_for_deletion_mode_enabled:
-            self._mark_selection_for_deletion()
-        else:
-            self._move_current_image_to_trash()
+        self._move_current_image_to_trash()
 
     def _move_current_image_to_trash(self):
         active_view = self._get_active_file_view()
@@ -2759,7 +2753,11 @@ class MainWindow(QMainWindow):
             item.setForeground(
                 QColor("#FFB366")
             )  # Orange/Amber color to indicate marked status
-            item.setText(item_text)
+            # Add (DELETED) suffix to indicate it's marked
+            if is_blurred is True:
+                item.setText(item_text + " (DELETED) (Blurred)")
+            else:
+                item.setText(item_text + " (DELETED)")
         elif is_blurred is True:
             item.setForeground(QColor(Qt.GlobalColor.red))
             item.setText(item_text + " (Blurred)")
@@ -3069,16 +3067,6 @@ class MainWindow(QMainWindow):
             f"Regenerating previews with Auto RAW edits {'enabled' if checked else 'disabled'}...",
             0,
         )
-
-    def _handle_toggle_mark_for_deletion_mode(self, checked: bool):
-        self.mark_for_deletion_mode_enabled = checked
-        set_mark_for_deletion_mode(checked)
-        status_message = (
-            "Delete key will now mark files for deletion."
-            if checked
-            else "Delete key will now move files to trash directly."
-        )
-        self.statusBar().showMessage(status_message, 4000)
 
     def _start_blur_detection_analysis(self):
         logger.info("_start_blur_detection_analysis called.")
@@ -3917,10 +3905,9 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
 
     def _is_marked_for_deletion(self, file_path: str) -> bool:
-        """Checks if a file is marked for deletion by its name."""
-        basename = os.path.basename(file_path)
-        is_marked = "(DELETED)" in basename
-        logger.debug(f"Checking deletion mark for '{basename}': {is_marked}")
+        """Checks if a file is marked for deletion."""
+        is_marked = self.app_state.is_marked_for_deletion(file_path)
+        logger.debug(f"Checking deletion mark for '{file_path}': {is_marked}")
         return is_marked
 
     def _commit_marked_deletions(self):
@@ -3930,11 +3917,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No folder loaded.", 3000)
             return
 
-        marked_files = [
-            f["path"]
-            for f in self.app_state.image_files_data
-            if self._is_marked_for_deletion(f["path"])
-        ]
+        marked_files = self.app_state.get_marked_files()
         if not marked_files:
             self.statusBar().showMessage("No images are marked for deletion.", 3000)
             return
@@ -4011,7 +3994,7 @@ class MainWindow(QMainWindow):
                 )
 
     def _mark_selection_for_deletion(self):
-        """Toggles the deletion mark for selected files by renaming them, updating the model in-place."""
+        """Toggles the deletion mark for selected files, updating the model in-place."""
         active_view = self._get_active_file_view()
         if not active_view:
             return
@@ -4036,70 +4019,64 @@ class MainWindow(QMainWindow):
         path_index_map = {
             path: self._find_proxy_index_for_path(path) for path in paths_to_act_on
         }
-        rename_map = {}
+        marked_count = 0
 
-        for old_path in paths_to_act_on:
-            is_marked = self._is_marked_for_deletion(old_path)
-            directory, filename = os.path.split(old_path)
-            new_filename = (
-                filename.replace(" (DELETED)", "")
-                if is_marked
-                else f"{os.path.splitext(filename)[0]} (DELETED){os.path.splitext(filename)[1]}"
-            )
-            new_path = os.path.join(directory, new_filename)
+        for file_path in paths_to_act_on:
+            is_marked = self._is_marked_for_deletion(file_path)
 
-            try:
-                self.app_controller.rename_image(old_path, new_path)
-                self.app_state.update_path(old_path, new_path)
-                rename_map[old_path] = new_path
+            # Toggle the mark status
+            if is_marked:
+                self.app_state.unmark_for_deletion(file_path)
+            else:
+                self.app_state.mark_for_deletion(file_path)
 
-                proxy_idx = path_index_map.get(old_path)
-                if proxy_idx and proxy_idx.isValid():
-                    source_idx = self.proxy_model.mapToSource(proxy_idx)
-                    item = self.file_system_model.itemFromIndex(source_idx)
-                    if item:
-                        item_data = item.data(Qt.ItemDataRole.UserRole)
-                        item_data["path"] = new_path
-                        item.setData(item_data, Qt.ItemDataRole.UserRole)
-                        item.setText(new_filename)
-                        if is_marked:  # Unmarking
-                            is_blurred = item_data.get("is_blurred")
-                            if is_blurred:
-                                item.setForeground(QColor(Qt.GlobalColor.red))
-                                item.setText(new_filename + " (Blurred)")
-                            else:
-                                item.setForeground(
-                                    QApplication.palette().text().color()
-                                )
-                        else:  # Marking
-                            item.setForeground(QColor("#FFB366"))
-            except OSError as e:
-                logger.error(f"Error toggling mark for '{filename}': {e}")
-                self.statusBar().showMessage(
-                    f"Error toggling mark for '{filename}': {e}", 5000
-                )
+            marked_count += 1
 
-        if not rename_map:
-            return
+            proxy_idx = path_index_map.get(file_path)
+            if proxy_idx and proxy_idx.isValid():
+                source_idx = self.proxy_model.mapToSource(proxy_idx)
+                item = self.file_system_model.itemFromIndex(source_idx)
+                if item:
+                    item_data = item.data(Qt.ItemDataRole.UserRole)
+                    if is_marked:  # Unmarking
+                        is_blurred = item_data.get("is_blurred")
+                        if is_blurred:
+                            item.setForeground(QColor(Qt.GlobalColor.red))
+                            item.setText(os.path.basename(file_path) + " (Blurred)")
+                        else:
+                            item.setForeground(QApplication.palette().text().color())
+                        # Reset the text to the original filename
+                        item.setText(
+                            os.path.basename(file_path)
+                            + (" (Blurred)" if is_blurred else "")
+                        )
+                    else:  # Marking
+                        item.setForeground(QColor("#FFB366"))
+                        # Keep the original filename but add (DELETED) suffix to indicate it's marked
+                        # If the file is also blurred, we need to keep the (Blurred) suffix
+                        is_blurred = item_data.get("is_blurred")
+                        if is_blurred:
+                            item.setText(
+                                os.path.basename(file_path) + " (DELETED) (Blurred)"
+                            )
+                        else:
+                            item.setText(os.path.basename(file_path) + " (DELETED)")
 
-        self.statusBar().showMessage(
-            f"Toggled mark for {len(rename_map)} image(s).", 5000
-        )
+        self.statusBar().showMessage(f"Toggled mark for {marked_count} image(s).", 5000)
         self.proxy_model.invalidate()
         QApplication.processEvents()
 
-        final_selection_paths = [rename_map.get(p, p) for p in original_selection_paths]
+        # Keep the same selection behavior
         self._handle_file_selection_changed(
-            override_selected_paths=final_selection_paths
+            override_selected_paths=original_selection_paths
         )
 
         if focused_path:
-            new_focused_path = rename_map.get(focused_path, focused_path)
-            self.advanced_image_viewer.set_focused_viewer_by_path(new_focused_path)
+            self.advanced_image_viewer.set_focused_viewer_by_path(focused_path)
 
         selection = QItemSelection()
         first_idx = QModelIndex()
-        for path in final_selection_paths:
+        for path in original_selection_paths:
             proxy_idx = self._find_proxy_index_for_path(path)
             if proxy_idx.isValid():
                 selection.select(proxy_idx, proxy_idx)
@@ -4123,78 +4100,84 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No folder loaded.", 3000)
             return
 
-        marked_files = [
-            f["path"]
-            for f in self.app_state.image_files_data
-            if self._is_marked_for_deletion(f["path"])
-        ]
+        marked_files = self.app_state.get_marked_files()
         if not marked_files:
             self.statusBar().showMessage("No images are marked for deletion.", 3000)
             return
 
-        unmarked_new_paths = []
-        path_index_map = {
-            path: self._find_proxy_index_for_path(path) for path in marked_files
-        }
+        # Clear all marks from the app state
+        self.app_state.clear_all_deletion_marks()
 
-        for old_path in marked_files:
-            directory = os.path.dirname(old_path)
-            filename = os.path.basename(old_path)
-            new_filename = filename.replace(" (DELETED)", "")
-            new_path = os.path.join(directory, new_filename)
+        # Update the UI for each marked file
+        for file_path in marked_files:
+            proxy_idx = self._find_proxy_index_for_path(file_path)
+            if proxy_idx and proxy_idx.isValid():
+                source_idx = self.proxy_model.mapToSource(proxy_idx)
+                item = self.file_system_model.itemFromIndex(source_idx)
+                if item:
+                    item_data = item.data(Qt.ItemDataRole.UserRole)
+                    # Reset the color to the original
+                    is_blurred = item_data.get("is_blurred")
+                    if is_blurred:
+                        item.setForeground(QColor(Qt.GlobalColor.red))
+                        item.setText(os.path.basename(file_path) + " (Blurred)")
+                    else:
+                        item.setForeground(QApplication.palette().text().color())
+                        item.setText(os.path.basename(file_path))
 
-            try:
-                self.app_controller.rename_image(old_path, new_path)
-                self.app_state.update_path(old_path, new_path)
-                unmarked_new_paths.append(new_path)
+        self.statusBar().showMessage(
+            f"Cleared deletion marks for {len(marked_files)} image(s).", 5000
+        )
+        self.proxy_model.invalidate()
+        QApplication.processEvents()
 
-                proxy_idx = path_index_map.get(old_path)
-                if proxy_idx and proxy_idx.isValid():
-                    source_idx = self.proxy_model.mapToSource(proxy_idx)
-                    item = self.file_system_model.itemFromIndex(source_idx)
-                    if item:
-                        item_data = item.data(Qt.ItemDataRole.UserRole)
-                        item_data["path"] = new_path
-                        item.setData(item_data, Qt.ItemDataRole.UserRole)
-
-                        is_blurred = item_data.get("is_blurred")
-                        if is_blurred is True:
-                            item.setForeground(QColor(Qt.GlobalColor.red))
-                            item.setText(new_filename + " (Blurred)")
-                        else:
-                            item.setForeground(QApplication.palette().text().color())
-                            item.setText(new_filename)
-            except OSError as e:
-                logger.error(f"Error clearing mark for '{filename}': {e}")
-
-        if not unmarked_new_paths:
+        visible_paths = self._get_all_visible_image_paths()
+        if not visible_paths:
+            self.advanced_image_viewer.clear()
             return
 
-        self.proxy_model.invalidate()
-        self.statusBar().showMessage(
-            f"Cleared deletion marks for {len(unmarked_new_paths)} image(s).", 5000
+        first_path = marked_files[0]
+        first_proxy_idx = self._find_proxy_index_for_path(first_path)
+        if first_proxy_idx.isValid():
+            active_view = self._get_active_file_view()
+            if active_view:
+                active_view.setCurrentIndex(first_proxy_idx)
+                active_view.selectionModel().select(
+                    first_proxy_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                )
+                active_view.scrollTo(
+                    first_proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible
+                )
+
+        final_selection_paths = [path for path in marked_files]
+        self._handle_file_selection_changed(
+            override_selected_paths=final_selection_paths
         )
 
-        QApplication.processEvents()
-        active_view = self._get_active_file_view()
+        if first_path:
+            self.advanced_image_viewer.set_focused_viewer_by_path(first_path)
+
         selection = QItemSelection()
         first_idx = QModelIndex()
-
-        for path in unmarked_new_paths:
+        for path in final_selection_paths:
             proxy_idx = self._find_proxy_index_for_path(path)
             if proxy_idx.isValid():
                 selection.select(proxy_idx, proxy_idx)
                 if not first_idx.isValid():
                     first_idx = proxy_idx
 
-        if not selection.isEmpty() and active_view:
-            active_view.selectionModel().select(
-                selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
-            )
-            if first_idx.isValid():
-                active_view.scrollTo(
-                    first_idx, QAbstractItemView.ScrollHint.EnsureVisible
+        if not selection.isEmpty():
+            active_view = self._get_active_file_view()
+            if active_view:
+                active_view.selectionModel().blockSignals(True)
+                active_view.selectionModel().select(
+                    selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
                 )
+                active_view.selectionModel().blockSignals(False)
+                if first_idx.isValid():
+                    active_view.scrollTo(
+                        first_idx, QAbstractItemView.ScrollHint.EnsureVisible
+                    )
 
     def _get_current_selected_image_path(self) -> Optional[str]:
         """Get the file path of the currently selected image."""
@@ -4351,7 +4334,7 @@ class MainWindow(QMainWindow):
 
             if is_marked_deleted:
                 item_to_update.setForeground(QColor("#FFB366"))
-                # The name already contains "(DELETED)", so no need to add suffix
+                # The file is marked for deletion, so we just need to update the color
                 item_to_update.setText(original_text)
             elif is_blurred:
                 item_to_update.setForeground(QColor(Qt.GlobalColor.red))
