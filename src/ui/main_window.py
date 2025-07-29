@@ -1535,6 +1535,28 @@ class MainWindow(QMainWindow):
         return QModelIndex()  # No visible image item found in this subtree
 
     def closeEvent(self, event):
+        # Check if there are any files marked for deletion
+        marked_files = self.app_state.get_marked_files()
+        if marked_files:
+            # Show the close confirmation dialog
+            choice = self.dialog_manager.show_close_confirmation_dialog(marked_files)
+
+            if choice == "commit":
+                # Commit the deletions and then close
+                self._commit_marked_deletions()
+                # Continue with closing
+            elif choice == "ignore":
+                # Ignore the marked files and close
+                # Clear the marked files from app_state
+                self.app_state.marked_for_deletion.clear()
+                # Update the UI to reflect that files are no longer marked
+                self._refresh_visible_items_icons()
+                # Continue with closing
+            else:
+                # Cancel closing
+                event.ignore()
+                return
+
         logger.info("Stopping all workers on application close.")
         self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
         event.accept()
@@ -4211,7 +4233,7 @@ class MainWindow(QMainWindow):
                     else:
                         item.setText(os.path.basename(file_path) + " (DELETED)")
 
-        self.statusBar().showMessage(f"Marked 1 image for deletion.", 5000)
+        self.statusBar().showMessage("Marked 1 image for deletion.", 5000)
         self.proxy_model.invalidate()
         QApplication.processEvents()
 
@@ -4297,7 +4319,7 @@ class MainWindow(QMainWindow):
                     os.path.basename(file_path) + (" (Blurred)" if is_blurred else "")
                 )
 
-        self.statusBar().showMessage(f"Unmarked 1 image for deletion.", 5000)
+        self.statusBar().showMessage("Unmarked 1 image for deletion.", 5000)
         self.proxy_model.invalidate()
         QApplication.processEvents()
 
