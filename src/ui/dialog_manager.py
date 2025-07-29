@@ -595,6 +595,127 @@ class DialogManager:
             message_text=f"Are you sure you want to move {count} marked image(s) to trash?",
         )
 
+    def show_close_confirmation_dialog(self, marked_files: List[str]) -> str:
+        """
+        Shows a confirmation dialog when closing the application with marked files.
+
+        Args:
+            marked_files: The list of files marked for deletion.
+
+        Returns:
+            A string indicating the user's choice: "commit", "ignore", or "cancel".
+        """
+        dialog = QDialog(self.parent)
+        dialog.setWindowTitle("Confirm Close")
+        dialog.setObjectName("closeConfirmationDialog")
+        dialog.setModal(True)
+        dialog.setMinimumSize(500, 300)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        # Title
+        title = QLabel("Uncommitted Deletions")
+        title.setObjectName("closeDialogTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        # Message
+        message = QLabel(
+            f"You have {len(marked_files)} image(s) marked for deletion that have not been committed.\n\n"
+            "What would you like to do?"
+        )
+        message.setObjectName("closeDialogMessage")
+        message.setWordWrap(True)
+        layout.addWidget(message)
+
+        # Scroll area for the list of images
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setObjectName("closeDialogScrollArea")
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
+        # Use QListWidget for thumbnails and filenames
+        list_widget = QListWidget()
+        list_widget.setObjectName("closeDialogListWidget")
+        list_widget.setIconSize(QSize(64, 64))  # Smaller thumbnails for this dialog
+        list_widget.setViewMode(QListWidget.ViewMode.IconMode)
+        list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
+        list_widget.setMovement(QListWidget.Movement.Static)
+        list_widget.setWordWrap(True)
+        list_widget.setSpacing(5)
+
+        # Populate the list
+        for file_path in marked_files:
+            # Get thumbnail with orientation correction
+            thumbnail_pixmap = self.parent.image_pipeline.get_thumbnail_qpixmap(
+                file_path,
+                apply_auto_edits=self.parent.apply_auto_edits_enabled,
+                apply_orientation=True,  # Ensure orientation is applied
+            )
+            if thumbnail_pixmap:
+                # Scale down the thumbnail to fit the icon size
+                scaled_pixmap = thumbnail_pixmap.scaled(
+                    64,
+                    64,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                icon = QIcon(scaled_pixmap)
+            else:
+                # Fallback to a generic icon if thumbnail generation fails
+                icon = self.parent.style().standardIcon(
+                    QStyle.StandardPixmap.SP_FileIcon
+                )
+
+            item = QListWidgetItem(icon, os.path.basename(file_path))
+            item.setSizeHint(QSize(84, 104))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            list_widget.addItem(item)
+
+        scroll_area.setWidget(list_widget)
+        layout.addWidget(scroll_area)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+
+        # Cancel button (don't close)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("closeDialogCancelButton")
+        cancel_button.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_button)
+
+        # Ignore button (close without committing)
+        ignore_button = QPushButton("Ignore and Close")
+        ignore_button.setObjectName("closeDialogIgnoreButton")
+        ignore_button.clicked.connect(
+            lambda: dialog.done(1)
+        )  # Custom result code for "ignore"
+        button_layout.addWidget(ignore_button)
+
+        # Commit button (commit and then close)
+        commit_button = QPushButton("Commit and Close")
+        commit_button.setObjectName("closeDialogCommitButton")
+        commit_button.clicked.connect(
+            lambda: dialog.done(2)
+        )  # Custom result code for "commit"
+        commit_button.setDefault(True)
+        button_layout.addWidget(commit_button)
+
+        layout.addLayout(button_layout)
+
+        # Show the dialog and return the user's choice
+        result = dialog.exec()
+
+        if result == 1:  # Ignore
+            return "ignore"
+        elif result == 2:  # Commit
+            return "commit"
+        else:  # Cancel or closed
+            return "cancel"
+
     def show_model_not_found_dialog(self, model_path: str):
         """Show a dialog informing the user that the rotation model is missing."""
         dialog = QMessageBox(self.parent)
