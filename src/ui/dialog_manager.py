@@ -605,6 +605,29 @@ class DialogManager:
         Returns:
             A string indicating the user's choice: "commit", "ignore", or "cancel".
         """
+        # Preload thumbnails with progress indication
+        if marked_files:
+            self.parent.show_loading_overlay(
+                f"Loading previews for {len(marked_files)} images..."
+            )
+            QApplication.processEvents()  # Ensure overlay appears immediately
+
+            def progress_callback(processed: int, total: int):
+                self.parent.update_loading_text(
+                    f"Loading previews for {len(marked_files)} images... ({processed}/{total})"
+                )
+                QApplication.processEvents()
+
+            # Preload thumbnails for the files to be deleted
+            self.parent.image_pipeline.preload_thumbnails(
+                marked_files,
+                apply_auto_edits=self.parent.apply_auto_edits_enabled,
+                progress_callback=progress_callback,
+            )
+
+            self.parent.hide_loading_overlay()
+            QApplication.processEvents()
+
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Confirm Close")
         dialog.setObjectName("closeConfirmationDialog")

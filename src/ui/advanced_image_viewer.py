@@ -359,7 +359,7 @@ class ZoomableImageView(QGraphicsView):
 
     def clear(self):
         """Clear the image display with smooth transition"""
-        logger.debug("ZoomableImageView.clear called")
+        logger.debug("ZoomableImageView cleared")
         # Remove any lingering text items
         for item in self._scene.items():
             if hasattr(item, "_is_text_item"):
@@ -587,6 +587,7 @@ class IndividualViewer(QWidget):
         """Set all data for the viewer at once."""
         self._file_path = file_path
         self.image_view.set_image(pixmap)
+        logger.debug(f"Updating rating display to {rating}")
         self.update_rating_display(rating)
 
     def update_rating_display(self, rating: int):
@@ -958,8 +959,10 @@ class SynchronizedImageViewer(QWidget):
         self._view_mode = mode
 
         if mode == "focused":
+            logger.debug(f"Configuring focused mode with index {self._focused_index}")
             for i, viewer in enumerate(self.image_viewers):
                 is_focused = i == self._focused_index
+                logger.debug(f"Viewer {i} focused: {is_focused}")
                 viewer.setVisible(is_focused)
                 viewer.set_selected(is_focused)
             if (
@@ -967,33 +970,47 @@ class SynchronizedImageViewer(QWidget):
                 and self.image_viewers[self._focused_index].has_image()
             ):
                 path = self.image_viewers[self._focused_index]._file_path
+                logger.debug(
+                    f"Emitting focused_image_changed for index {self._focused_index}, path: {path}"
+                )
                 self.focused_image_changed.emit(
                     self._focused_index, path if path else ""
                 )
             self.single_view_btn.setChecked(True)
 
         elif mode == "single":
+            logger.debug("Configuring single mode")
             for i, viewer in enumerate(self.image_viewers):
                 is_first = i == 0
+                logger.debug(f"Viewer {i} visible: {is_first}")
                 viewer.setVisible(is_first)
                 viewer.set_selected(is_first and num_images > 0)
             if len(self.image_viewers) > 0 and self.image_viewers[0].has_image():
                 path = self.image_viewers[0]._file_path
+                logger.debug(
+                    f"Emitting focused_image_changed for single mode, path: {path}"
+                )
                 self.focused_image_changed.emit(0, path if path else "")
             self.single_view_btn.setChecked(True)
 
         elif mode == "side_by_side":
             logger.debug("Configuring side-by-side mode")
             # When returning to side-by-side, clear any focused image state
+            logger.debug(
+                "Emitting focused_image_changed with empty state for side-by-side mode"
+            )
             self.focused_image_changed.emit(-1, "")  # index=-1, empty path
 
             num_active_viewers = sum(1 for v in self.image_viewers if v.has_image())
             logger.debug(f"Number of active viewers: {num_active_viewers}")
             if num_active_viewers == 0:
                 num_active_viewers = 1  # Show at least one empty viewer
+                logger.debug("Setting num_active_viewers to 1 (no images)")
 
             for i, viewer in enumerate(self.image_viewers):
-                viewer.setVisible(i < num_active_viewers)
+                visible = i < num_active_viewers
+                logger.debug(f"Viewer {i} visible: {visible}")
+                viewer.setVisible(visible)
                 viewer.set_selected(False)  # No selection in side-by-side
 
             if (
@@ -1002,6 +1019,7 @@ class SynchronizedImageViewer(QWidget):
                 and num_active_viewers > 0
             ):
                 total_width = self.viewer_splitter.width()
+                logger.debug(f"Splitter total width: {total_width}")
                 if total_width > 0:
                     base_size = total_width // num_active_viewers
                     remainder = total_width % num_active_viewers
@@ -1012,11 +1030,13 @@ class SynchronizedImageViewer(QWidget):
                     sizes.extend(
                         [0] * (self.viewer_splitter.count() - num_active_viewers)
                     )
+                    logger.debug(f"Setting splitter sizes: {sizes}")
                     self.viewer_splitter.setSizes(sizes)
 
             self.side_by_side_btn.setChecked(True)
 
         self._update_controls_visibility()
+        logger.debug("Scheduling fit_visible_images_after_layout_change")
         QTimer.singleShot(50, self._fit_visible_images_after_layout_change)
 
     def set_focused_viewer(self, index: int):
