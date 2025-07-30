@@ -4404,7 +4404,7 @@ class MainWindow(QMainWindow):
                     else:
                         item.setText(os.path.basename(file_path) + " (DELETED)")
 
-        self.statusBar().showMessage(f"Marked 1 image for deletion.", 5000)
+        self.statusBar().showMessage("Marked 1 image for deletion.", 5000)
         self.proxy_model.invalidate()
         QApplication.processEvents()
 
@@ -4490,7 +4490,7 @@ class MainWindow(QMainWindow):
                     os.path.basename(file_path) + (" (Blurred)" if is_blurred else "")
                 )
 
-        self.statusBar().showMessage(f"Unmarked 1 image for deletion.", 5000)
+        self.statusBar().showMessage("Unmarked 1 image for deletion.", 5000)
         self.proxy_model.invalidate()
         QApplication.processEvents()
 
