@@ -1,6 +1,7 @@
 from typing import Dict, Any, List, Optional
 from datetime import date as date_obj
 import logging
+import os
 from src.core.caching.rating_cache import RatingCache
 from src.core.caching.exif_cache import ExifCache  # Import ExifCache
 
@@ -54,17 +55,31 @@ class AppState:
 
     def remove_data_for_path(self, file_path: str):
         """Removes all cached data associated with a specific file path."""
+        logger.info(f"Removing all cached data for file: {os.path.basename(file_path)}")
+
+        original_count = len(self.image_files_data)
         self.image_files_data = [
             fd for fd in self.image_files_data if fd.get("path") != file_path
         ]
-        self.rating_cache.pop(file_path, None)  # In-memory dict
+        removed_from_image_files = original_count - len(self.image_files_data)
+
+        rating_removed = self.rating_cache.pop(file_path, None)  # In-memory dict
         if self.rating_disk_cache:
             self.rating_disk_cache.delete(file_path)  # Disk cache
         if self.exif_disk_cache:
             self.exif_disk_cache.delete(file_path)  # Exif Disk cache
-        self.date_cache.pop(file_path, None)
-        self.cluster_results.pop(file_path, None)
-        self.embeddings_cache.pop(file_path, None)
+        date_removed = self.date_cache.pop(file_path, None)
+        cluster_removed = self.cluster_results.pop(file_path, None)
+        embedding_removed = self.embeddings_cache.pop(file_path, None)
+
+        logger.debug(
+            f"Removed data for {os.path.basename(file_path)}: "
+            f"image_files_data={removed_from_image_files}, "
+            f"rating_cache={rating_removed is not None}, "
+            f"date_cache={date_removed is not None}, "
+            f"cluster_results={cluster_removed is not None}, "
+            f"embeddings_cache={embedding_removed is not None}"
+        )
 
     def update_path(self, old_path: str, new_path: str):
         """Updates all cache entries and data references from an old path to a new path."""
@@ -120,20 +135,30 @@ class AppState:
 
     def mark_for_deletion(self, file_path: str):
         """Marks a file for deletion."""
+        logger.info(f"Marking file for deletion: {os.path.basename(file_path)}")
         self.marked_for_deletion.add(file_path)
 
     def unmark_for_deletion(self, file_path: str):
         """Unmarks a file for deletion."""
+        logger.info(f"Unmarking file for deletion: {os.path.basename(file_path)}")
         self.marked_for_deletion.discard(file_path)
 
     def is_marked_for_deletion(self, file_path: str) -> bool:
         """Checks if a file is marked for deletion."""
-        return file_path in self.marked_for_deletion
+        is_marked = file_path in self.marked_for_deletion
+        logger.debug(
+            f"Checking if file is marked for deletion: {os.path.basename(file_path)} - {is_marked}"
+        )
+        return is_marked
 
     def get_marked_files(self) -> List[str]:
         """Returns a list of all files marked for deletion."""
-        return list(self.marked_for_deletion)
+        marked_files = list(self.marked_for_deletion)
+        logger.debug(f"Retrieved {len(marked_files)} marked files")
+        return marked_files
 
     def clear_all_deletion_marks(self):
         """Clears all deletion marks."""
+        count = len(self.marked_for_deletion)
+        logger.info(f"Clearing all deletion marks ({count} files)")
         self.marked_for_deletion.clear()

@@ -1,6 +1,7 @@
 from typing import List, Tuple
 import webbrowser
 import os
+import logging
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -18,6 +19,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QListWidget,
     QListWidgetItem,
+    QStyle,
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon
@@ -34,6 +36,8 @@ from src.core.image_features.model_rotation_detector import (
     ModelNotFoundError,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class DialogManager:
     """A manager class for handling the creation of dialogs."""
@@ -49,6 +53,7 @@ class DialogManager:
 
     def show_about_dialog(self):
         """Show the 'About' dialog with application and technology information."""
+        logger.info("Showing about dialog")
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("About PhotoSort")
         dialog.setObjectName("aboutDialog")
@@ -168,6 +173,7 @@ class DialogManager:
         # Styling is handled by dark_theme.qss
 
         dialog.exec()
+        logger.info("Closed about dialog")
 
     def show_lossy_rotation_confirmation_dialog(
         self, filename: str, rotation_type: str
@@ -182,7 +188,12 @@ class DialogManager:
         Returns:
             A tuple containing (proceed_with_rotation: bool, never_ask_again: bool).
         """
+        logger.info(f"Showing lossy rotation confirmation dialog for {filename}")
+
         if not get_rotation_confirm_lossy():
+            logger.info(
+                "Lossy rotation confirmation disabled, proceeding without asking"
+            )
             return True, False  # Proceed without asking if the setting is disabled
 
         dialog = QDialog(self.parent)
@@ -237,10 +248,16 @@ class DialogManager:
         proceed = result == QDialog.DialogCode.Accepted
         never_ask_again = never_ask_checkbox.isChecked()
 
+        logger.info(
+            f"User {'proceeded' if proceed else 'cancelled'} lossy rotation dialog, "
+            f"never ask again: {never_ask_again}"
+        )
+
         return proceed, never_ask_again
 
     def show_cache_management_dialog(self):
         """Show the cache management dialog."""
+        logger.info("Showing cache management dialog")
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Cache Management")
         dialog.setObjectName("cacheManagementDialog")
@@ -398,6 +415,7 @@ class DialogManager:
         self.parent._update_cache_dialog_labels()
         dialog.setLayout(main_layout)
         dialog.exec()
+        logger.info("Closed cache management dialog")
 
     def _show_delete_confirmation_dialog(
         self, files: List[str], title_text: str, message_text: str
@@ -414,6 +432,10 @@ class DialogManager:
         Returns:
             True if the user confirms, False otherwise.
         """
+        logger.info(
+            f"Showing delete confirmation dialog: {title_text} for {len(files)} files"
+        )
+
         dialog = QDialog(self.parent)
         dialog.setWindowTitle(title_text)
         dialog.setObjectName("deleteConfirmationDialog")
@@ -486,7 +508,11 @@ class DialogManager:
         layout.addLayout(button_layout)
 
         result = dialog.exec()
-        return result == QDialog.DialogCode.Accepted
+        confirmed = result == QDialog.DialogCode.Accepted
+        logger.info(
+            f"User {'confirmed' if confirmed else 'cancelled'} delete confirmation dialog"
+        )
+        return confirmed
 
     def show_confirm_delete_dialog(self, deleted_file_paths: List[str]) -> bool:
         """
@@ -498,6 +524,10 @@ class DialogManager:
         Returns:
             True if the user confirms the deletion, False otherwise.
         """
+        logger.info(
+            f"Showing confirm delete dialog for {len(deleted_file_paths)} files"
+        )
+
         # Preload thumbnails with progress indication
         if deleted_file_paths:
             self.parent.show_loading_overlay(
@@ -527,9 +557,14 @@ class DialogManager:
         else:
             message = f"Are you sure you want to move these {num_selected} images to the trash?"
 
-        return self._show_delete_confirmation_dialog(
+        result = self._show_delete_confirmation_dialog(
             files=deleted_file_paths, title_text="Confirm Delete", message_text=message
         )
+
+        logger.info(
+            f"User {'confirmed' if result else 'cancelled'} confirm delete dialog"
+        )
+        return result
 
     def show_potential_cache_overflow_warning(
         self,
@@ -543,6 +578,12 @@ class DialogManager:
             estimated_preview_data_needed_for_folder_bytes: The estimated size of the folder's previews.
             preview_cache_limit_bytes: The current preview cache limit.
         """
+        logger.info(
+            f"Showing potential cache overflow warning: "
+            f"estimated {estimated_preview_data_needed_for_folder_bytes / (1024 * 1024):.2f} MB needed, "
+            f"limit {preview_cache_limit_bytes / (1024 * 1024 * 1024):.2f} GB"
+        )
+
         warning_msg = (
             f"The images in the selected folder are estimated to require approximately "
             f"{estimated_preview_data_needed_for_folder_bytes / (1024 * 1024):.2f} MB for their previews. "
@@ -554,6 +595,7 @@ class DialogManager:
             "Settings > Manage Cache for a smoother experience, or select a smaller folder."
         )
         QMessageBox.warning(self.parent, "Potential Cache Overflow", warning_msg)
+        logger.info("Closed potential cache overflow warning dialog")
 
     def show_commit_deletions_dialog(self, marked_files: List[str]) -> bool:
         """
@@ -565,6 +607,8 @@ class DialogManager:
         Returns:
             True if the user confirms, False otherwise.
         """
+        logger.info(f"Showing commit deletions dialog for {len(marked_files)} files")
+
         # Preload thumbnails with progress indication
         if marked_files:
             self.parent.show_loading_overlay(
@@ -589,11 +633,30 @@ class DialogManager:
             QApplication.processEvents()
 
         count = len(marked_files)
-        return self._show_delete_confirmation_dialog(
+        result = self._show_delete_confirmation_dialog(
             files=marked_files,
             title_text="Confirm Deletion",
             message_text=f"Are you sure you want to move {count} marked image(s) to trash?",
         )
+
+        logger.info(
+            f"User {'confirmed' if result else 'cancelled'} commit deletions dialog"
+        )
+        return result
+
+    def log_dialog_interaction(self, dialog_name: str, action: str, details: str = ""):
+        """
+        Log user interactions with dialogs.
+
+        Args:
+            dialog_name: Name of the dialog
+            action: Action taken by user
+            details: Additional details about the action
+        """
+        log_message = f"Dialog Interaction: {dialog_name} - {action}"
+        if details:
+            log_message += f" - {details}"
+        logger.info(log_message)
 
     def show_close_confirmation_dialog(self, marked_files: List[str]) -> str:
         """
@@ -730,17 +793,30 @@ class DialogManager:
         layout.addLayout(button_layout)
 
         # Show the dialog and return the user's choice
+        logger.info(
+            f"Showing close confirmation dialog with {len(marked_files)} marked files"
+        )
         result = dialog.exec()
 
         if result == 1:  # Ignore
+            self.log_dialog_interaction(
+                "Close Confirmation", "Ignore and Close", f"{len(marked_files)} files"
+            )
             return "ignore"
         elif result == 2:  # Commit
+            self.log_dialog_interaction(
+                "Close Confirmation", "Commit and Close", f"{len(marked_files)} files"
+            )
             return "commit"
         else:  # Cancel or closed
+            self.log_dialog_interaction(
+                "Close Confirmation", "Cancel", f"{len(marked_files)} files"
+            )
             return "cancel"
 
     def show_model_not_found_dialog(self, model_path: str):
         """Show a dialog informing the user that the rotation model is missing."""
+        logger.info(f"Showing model not found dialog for path: {model_path}")
         dialog = QMessageBox(self.parent)
         dialog.setWindowTitle("Rotation Model Not Found")
         dialog.setIcon(QMessageBox.Icon.Warning)
@@ -776,3 +852,4 @@ class DialogManager:
             )
 
         dialog.exec()
+        logger.info("Closed model not found dialog")

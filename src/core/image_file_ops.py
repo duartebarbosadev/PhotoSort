@@ -75,6 +75,9 @@ class ImageFileOperations:
             tuple: (bool, str) indicating success and a message.
         """
         if not os.path.exists(file_path):
+            logger.warning(
+                f"File does not exist when trying to move to trash: {file_path}"
+            )
             return False, "File does not exist."
         try:
             send2trash.send2trash(file_path)

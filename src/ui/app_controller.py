@@ -338,9 +338,17 @@ class AppController(QObject):
 
     def move_to_trash(self, file_path: str):
         """Moves a file to the system's trash."""
+        logger.info(f"Moving file to trash: {os.path.basename(file_path)}")
         success, message = ImageFileOperations.move_to_trash(file_path)
         if not success:
+            logger.error(
+                f"Failed to move file to trash: {os.path.basename(file_path)} - {message}"
+            )
             self.main_window.statusBar().showMessage(message, 5000)
+        else:
+            logger.info(
+                f"Successfully moved file to trash: {os.path.basename(file_path)}"
+            )
 
     def rename_image(self, old_path: str, new_path: str):
         """Renames an image file."""
