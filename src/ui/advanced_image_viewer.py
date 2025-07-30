@@ -585,6 +585,7 @@ class IndividualViewer(QWidget):
         self, pixmap: QPixmap, file_path: str, rating: int, label: Optional[str]
     ):
         """Set all data for the viewer at once."""
+        logger.debug(f"IndividualViewer.set_data called with file_path: {file_path}")
         self._file_path = file_path
         self.image_view.set_image(pixmap)
         logger.debug(f"Updating rating display to {rating}")
@@ -597,7 +598,7 @@ class IndividualViewer(QWidget):
 
     def clear(self):
         """Clear the viewer and its associated data."""
-        logger.debug("IndividualViewer.clear called")
+        logger.debug("Clearing image_view")
         self._file_path = None
         self.image_view.clear()
         self.update_rating_display(0)
@@ -947,8 +948,10 @@ class SynchronizedImageViewer(QWidget):
             f"Setting view mode to '{mode}' with focused index: {focused_index}"
         )
         num_images = sum(1 for v in self.image_viewers if v.has_image())
+        logger.debug(f"Number of viewers with images: {num_images}")
 
         if focused_index != -1:
+            logger.debug(f"Setting focused index to {focused_index}")
             self._focused_index = focused_index
 
         # If going to single mode with multiple images, switch to focused mode instead
@@ -956,6 +959,7 @@ class SynchronizedImageViewer(QWidget):
             mode = "focused"
             logger.debug("Switching to 'focused' mode (more than one image present).")
 
+        logger.debug(f"Setting internal view mode to '{mode}'")
         self._view_mode = mode
 
         if mode == "focused":
@@ -1094,6 +1098,9 @@ class SynchronizedImageViewer(QWidget):
         for i, viewer in enumerate(self.image_viewers):
             if i == viewer_index:
                 pixmap = image_data.get("pixmap")
+                logger.debug(
+                    f"Setting data for viewer {i}, pixmap valid: {bool(pixmap)}"
+                )
                 if pixmap:
                     viewer.set_data(
                         pixmap,
@@ -1102,8 +1109,10 @@ class SynchronizedImageViewer(QWidget):
                         image_data.get("label"),
                     )
                 else:
+                    logger.debug(f"Clearing viewer {i} due to invalid pixmap")
                     viewer.clear()  # Clear if pixmap is invalid
             else:
+                logger.debug(f"Clearing viewer {i}")
                 viewer.clear()
 
         # If not preserving view mode, set to single/focused view
