@@ -108,6 +108,7 @@ class ZoomableImageView(QGraphicsView):
 
     def set_image(self, pixmap: QPixmap):
         """Set the image to display with smooth transition"""
+        logger.debug(f"ZoomableImageView set image called with pixmap: {pixmap}")
         if pixmap and not pixmap.isNull():
             # Remove any lingering text items before showing the new image
             for item in self._scene.items():
@@ -358,6 +359,7 @@ class ZoomableImageView(QGraphicsView):
 
     def clear(self):
         """Clear the image display with smooth transition"""
+        logger.debug("ZoomableImageView.clear called")
         # Remove any lingering text items
         for item in self._scene.items():
             if hasattr(item, "_is_text_item"):
@@ -371,9 +373,11 @@ class ZoomableImageView(QGraphicsView):
 
     def setText(self, text: str):
         """Set text display with improved rendering"""
+        logger.debug(f"ZoomableImageView.setText called with text: {text}")
 
         # Only proceed if we actually want to show text
         if not text or text.strip() == "":
+            logger.debug("Text is empty, returning")
             return
 
         # Remove any existing text items first
@@ -592,6 +596,7 @@ class IndividualViewer(QWidget):
 
     def clear(self):
         """Clear the viewer and its associated data."""
+        logger.debug("IndividualViewer.clear called")
         self._file_path = None
         self.image_view.clear()
         self.update_rating_display(0)
@@ -978,10 +983,12 @@ class SynchronizedImageViewer(QWidget):
             self.single_view_btn.setChecked(True)
 
         elif mode == "side_by_side":
+            logger.debug("Configuring side-by-side mode")
             # When returning to side-by-side, clear any focused image state
             self.focused_image_changed.emit(-1, "")  # index=-1, empty path
 
             num_active_viewers = sum(1 for v in self.image_viewers if v.has_image())
+            logger.debug(f"Number of active viewers: {num_active_viewers}")
             if num_active_viewers == 0:
                 num_active_viewers = 1  # Show at least one empty viewer
 
@@ -1054,9 +1061,13 @@ class SynchronizedImageViewer(QWidget):
         preserve_view_mode: bool = False,
     ):
         """Sets the data for a single viewer and clears others."""
+        logger.debug(
+            f"set image data {image_data} called with viewer_index={viewer_index}, preserve_view_mode={preserve_view_mode}"
+        )
 
         # Ensure we have at least one viewer
         if not self.image_viewers:
+            logger.debug("Creating first viewer")
             self._create_viewer()
 
         # Update all viewers: set data for the target, clear others
@@ -1077,6 +1088,7 @@ class SynchronizedImageViewer(QWidget):
 
         # If not preserving view mode, set to single/focused view
         if not preserve_view_mode:
+            logger.debug("Setting view mode to single")
             # When a new single image is set, it becomes the new focus.
             # We must reset the focused index to 0 (where the new image is displayed)
             # to prevent the viewer from reverting to a stale focused index.
@@ -1120,21 +1132,28 @@ class SynchronizedImageViewer(QWidget):
         self._set_view_mode("side_by_side")
 
     def clear(self):
-        for viewer in self.image_viewers:
+        logger.debug("clear called")
+        for i, viewer in enumerate(self.image_viewers):
+            logger.debug(f"Clearing viewer {i}")
             viewer.clear()
+        logger.debug("Setting view mode to single")
         self._set_view_mode("single")
 
     def setText(self, text: str):
         """Clears all viewers, resets to single view, and displays the given text centrally."""
+        logger.debug(f"setText called with: {text}")
         # Clear all viewers to remove any existing images or text.
-        for viewer in self.image_viewers:
+        for i, viewer in enumerate(self.image_viewers):
+            logger.debug(f"Clearing viewer {i}")
             viewer.clear()
 
         # Set to single view mode to ensure the first viewer takes up all available space.
+        logger.debug("Setting view mode to single")
         self._set_view_mode("single")
 
         # Now, set the text on the first viewer, which is now the only one visible.
         if self.image_viewers:
+            logger.debug("Setting text on first viewer")
             # Use a QTimer to ensure the layout has updated before we set the text.
             # This helps in correctly centering the text after a mode change.
             QTimer.singleShot(0, lambda: self.image_viewers[0].image_view.setText(text))

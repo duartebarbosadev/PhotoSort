@@ -227,6 +227,7 @@ class ImagePipeline:
         2. Checks cache for high-resolution preloaded PIL image, then resizes.
         3. Generates fresh PIL image for display size, caches it, then converts.
         """
+        logger.debug(f"Obtaining preview QPixmap called for: {image_path}")
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):
             logger.error(f"File does not exist: {normalized_path}")
@@ -247,6 +248,10 @@ class ImagePipeline:
                     f"Display cache HIT: {os.path.basename(normalized_path)} (Size: {key_display_size})"
                 )
                 return QPixmap.fromImage(ImageQt(cached_display_pil))
+            else:
+                logger.debug(
+                    f"Display cache MISS: {os.path.basename(normalized_path)} (Size: {key_display_size})"
+                )
 
         # 2. Check if a high-resolution PRELOADED version is cached
         # Key for preloaded high-res version (uses PRELOAD_MAX_RESOLUTION)

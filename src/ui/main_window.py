@@ -640,7 +640,7 @@ class MainWindow(QMainWindow):
         self.app_controller.connect_signals()
 
         self.accept_all_button.clicked.connect(self._accept_all_rotations)
-        self.accept_button.clicked.connect(self._accept_current_rotation)
+        self.accept_button.clicked.connect(self._on_accept_button_clicked)
         self.refuse_button.clicked.connect(self._refuse_current_rotation)
         logger.debug(f"Signals connected in {time.perf_counter() - start_time:.4f}s.")
 
@@ -1362,6 +1362,9 @@ class MainWindow(QMainWindow):
                 )
 
                 if remaining_selection_paths:
+                    logger.debug(
+                        f"Handling focused delete with {len(remaining_selection_paths)} remaining paths: {remaining_selection_paths}"
+                    )
                     self._handle_file_selection_changed(
                         override_selected_paths=remaining_selection_paths
                     )
@@ -1377,23 +1380,40 @@ class MainWindow(QMainWindow):
                                 first_proxy_idx_to_select = proxy_idx
 
                     if not selection.isEmpty():
+                        logger.debug(
+                            f"Setting selection with {len(selection.indexes())} indexes"
+                        )
                         selection_model = active_view.selectionModel()
                         selection_model.blockSignals(True)
+                        # Set the current index first
+                        if first_proxy_idx_to_select.isValid():
+                            active_view.setCurrentIndex(first_proxy_idx_to_select)
                         selection_model.select(
                             selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
                         )
                         selection_model.blockSignals(False)
 
                         if first_proxy_idx_to_select.isValid():
+                            logger.debug(
+                                f"Scrolling to first selected item: {first_proxy_idx_to_select}"
+                            )
                             active_view.scrollTo(
                                 first_proxy_idx_to_select,
                                 QAbstractItemView.ScrollHint.EnsureVisible,
                             )
 
+                        # Explicitly call _handle_file_selection_changed to ensure viewer updates
+                        logger.debug(
+                            "Explicitly calling _handle_file_selection_changed after focused delete selection update"
+                        )
+                        # Add a small delay to ensure the selection model has time to update
+                        QTimer.singleShot(0, self._handle_file_selection_changed)
+
                     selection_handled_by_focus_logic = True
 
             # Fallback logic for standard deletion or if focused-delete logic fails to find items
             if not selection_handled_by_focus_logic:
+                logger.debug("Using fallback logic for selection after deletion")
                 if not visible_paths_after_delete:
                     logger.debug("No visible image items left after deletion.")
                     self.advanced_image_viewer.clear()
@@ -1417,11 +1437,18 @@ class MainWindow(QMainWindow):
                     )
                     target_idx_in_new_list = max(0, target_idx_in_new_list)
 
+                    logger.debug(
+                        f"Selecting item at index {target_idx_in_new_list} from {len(visible_paths_after_delete)} remaining items"
+                    )
+
                     next_item_to_select_proxy_idx = self._find_proxy_index_for_path(
                         visible_paths_after_delete[target_idx_in_new_list]
                     )
 
                     if next_item_to_select_proxy_idx.isValid():
+                        logger.debug(
+                            f"Setting current index and selection for item: {visible_paths_after_delete[target_idx_in_new_list]}"
+                        )
                         active_view.setCurrentIndex(next_item_to_select_proxy_idx)
                         active_view.selectionModel().select(
                             next_item_to_select_proxy_idx,
@@ -1431,7 +1458,12 @@ class MainWindow(QMainWindow):
                             next_item_to_select_proxy_idx,
                             QAbstractItemView.ScrollHint.EnsureVisible,
                         )
-                        # The selection change will trigger _handle_file_selection_changed automatically.
+                        # Explicitly call _handle_file_selection_changed to ensure viewer updates
+                        logger.debug(
+                            "Explicitly calling _handle_file_selection_changed after selection update"
+                        )
+                        # Add a small delay to ensure the selection model has time to update
+                        QTimer.singleShot(0, self._handle_file_selection_changed)
                     else:
                         logger.debug(
                             "Fallback failed. No valid item to select. Clearing UI."
@@ -2152,6 +2184,7 @@ class MainWindow(QMainWindow):
         """Handles displaying preview and info for a single selected image."""
         logger.debug(f"Displaying single image preview: {os.path.basename(file_path)}")
         if not os.path.exists(file_path):
+            logger.warning(f"File not found: {file_path}")
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage(
                 f"Error: File not found - {os.path.basename(file_path)}", 5000
@@ -2166,6 +2199,7 @@ class MainWindow(QMainWindow):
             )
             return
 
+        logger.debug(f"Getting preview pixmap for {file_path}")
         pixmap = self.image_pipeline.get_preview_qpixmap(
             file_path,
             display_max_size=(8000, 8000),
@@ -2173,11 +2207,15 @@ class MainWindow(QMainWindow):
         )
 
         if not pixmap or pixmap.isNull():
+            logger.debug(
+                f"Preview pixmap unavailable, trying thumbnail for {file_path}"
+            )
             pixmap = self.image_pipeline.get_thumbnail_qpixmap(
                 file_path, apply_auto_edits=self.apply_auto_edits_enabled
             )
 
         if pixmap and not pixmap.isNull():
+            logger.debug(f"Setting image data for {file_path}")
             image_data = {
                 "pixmap": pixmap,
                 "path": file_path,
@@ -2188,6 +2226,7 @@ class MainWindow(QMainWindow):
                 file_path, metadata, pixmap, file_data_from_model
             )
         else:
+            logger.debug(f"Failed to load image data for {file_path}")
             self.advanced_image_viewer.setText("Failed to load image")
             self.statusBar().showMessage(
                 f"Error: Could not load image data for {os.path.basename(file_path)}",
@@ -2195,6 +2234,7 @@ class MainWindow(QMainWindow):
             )
 
         if self.sidebar_visible:
+            logger.debug("Updating sidebar with current selection")
             self._update_sidebar_with_current_selection()
 
     def _display_rotated_image_preview(
@@ -2387,14 +2427,18 @@ class MainWindow(QMainWindow):
 
     def _handle_no_selection_or_non_image(self):
         """Handles UI updates when no valid image is selected."""
+        logger.debug("_handle_no_selection_or_non_image called")
         if not self.app_state.image_files_data:
+            logger.debug("No image files data, returning early")
             return
 
         # Clear focused image path and repaint view to remove underline
         if self.app_state.focused_image_path:
+            logger.debug("Clearing focused image path")
             self.app_state.focused_image_path = None
             self._get_active_file_view().viewport().update()
 
+        logger.debug("Clearing viewer and setting 'Select an image' text")
         self.advanced_image_viewer.clear()
         self.advanced_image_viewer.setText("Select an image to view details.")
         self.statusBar().showMessage("Ready")
@@ -2415,22 +2459,30 @@ class MainWindow(QMainWindow):
             return
 
         if self._is_syncing_selection and override_selected_paths is None:
+            logger.debug("_handle_file_selection_changed: Skipping due to sync lock")
             return
 
         if override_selected_paths is not None:
             selected_file_paths = override_selected_paths
             logger.debug(
-                f"_handle_file_selection_changed: Using overridden selection of {len(selected_file_paths)} paths."
+                f"_handle_file_selection_changed: Using overridden selection of {len(selected_file_paths)} paths: {selected_file_paths}"
             )
         else:
             selected_file_paths = self._get_selected_file_paths_from_view()
+            logger.debug(
+                f"_handle_file_selection_changed: Retrieved {len(selected_file_paths)} paths from view: {selected_file_paths}"
+            )
 
         if not self.app_state.image_files_data:
+            logger.debug(
+                "_handle_file_selection_changed: No image files data available"
+            )
             return
 
         # In rotation view, update the accept/refuse buttons based on selection
         if self.left_panel.current_view_mode == "rotation":
             num_suggestions = len(self.rotation_suggestions)
+            logger.debug(f"Rotation view with {num_suggestions} suggestions")
             self.accept_all_button.setVisible(num_suggestions > 1)
             self.refuse_all_button.setVisible(num_suggestions > 1)
             num_selected = len(selected_file_paths)
@@ -2442,14 +2494,23 @@ class MainWindow(QMainWindow):
                 all_selected_have_suggestion = all(
                     p in self.rotation_suggestions for p in selected_file_paths
                 )
+                logger.debug(
+                    f"Selected items have suggestions: {all_selected_have_suggestion}"
+                )
                 self.accept_button.setEnabled(all_selected_have_suggestion)
                 self.refuse_button.setEnabled(all_selected_have_suggestion)
 
                 if num_selected == 1:
+                    logger.debug(
+                        f"Displaying side-by-side comparison for: {selected_file_paths[0]}"
+                    )
                     self.accept_button.setText("Accept (Y)")
                     self.refuse_button.setText("Refuse (N)")
                     self._display_side_by_side_comparison(selected_file_paths[0])
                 else:
+                    logger.debug(
+                        f"Displaying multi-selection info for {num_selected} items"
+                    )
                     self.accept_button.setText(f"Accept ({num_selected})")
                     self.refuse_button.setText(f"Refuse ({num_selected})")
                     self.advanced_image_viewer.clear()
@@ -2457,9 +2518,11 @@ class MainWindow(QMainWindow):
                         f"{num_selected} items selected for rotation approval."
                     )
             else:
+                logger.debug("No items selected in rotation view")
                 self.advanced_image_viewer.clear()
             return
         else:
+            logger.debug("Not in rotation view, hiding rotation buttons")
             self.accept_all_button.setVisible(False)
             self.accept_button.setVisible(False)
             self.refuse_button.setVisible(False)
@@ -2467,7 +2530,11 @@ class MainWindow(QMainWindow):
 
         # When selection changes, clear the focused image path unless it's a single selection
         if len(selected_file_paths) != 1:
+            logger.debug(
+                f"Selection count is {len(selected_file_paths)}, not single selection"
+            )
             if self.app_state.focused_image_path:
+                logger.debug("Clearing focused image path")
                 self.app_state.focused_image_path = None
                 active_view = self._get_active_file_view()
                 if active_view:
@@ -2475,6 +2542,7 @@ class MainWindow(QMainWindow):
 
         if len(selected_file_paths) == 1:
             file_path = selected_file_paths[0]
+            logger.debug(f"Single selection: {file_path}")
             # This is a single selection, so it's also the "focused" image.
             self.app_state.focused_image_path = file_path
             active_view = self._get_active_file_view()
@@ -2482,14 +2550,17 @@ class MainWindow(QMainWindow):
                 active_view.viewport().update()
 
             file_data_from_model = self._get_cached_metadata_for_selection(file_path)
+            logger.debug(f"Displaying single image preview for: {file_path}")
             # This will force the viewer into single-view mode.
             self._display_single_image_preview(file_path, file_data_from_model)
 
         elif len(selected_file_paths) >= 2:
+            logger.debug(f"Multi-selection with {len(selected_file_paths)} items")
             # This will force the viewer into side-by-side mode.
             self._display_multi_selection_info(selected_file_paths)
 
         else:  # No selection
+            logger.debug("No selection, handling no selection case")
             self._handle_no_selection_or_non_image()
             if self.sidebar_visible and self.metadata_sidebar:
                 self.metadata_sidebar.show_placeholder()
@@ -4233,7 +4304,7 @@ class MainWindow(QMainWindow):
                     else:
                         item.setText(os.path.basename(file_path) + " (DELETED)")
 
-        self.statusBar().showMessage("Marked 1 image for deletion.", 5000)
+        self.statusBar().showMessage(f"Marked 1 image for deletion.", 5000)
         self.proxy_model.invalidate()
         QApplication.processEvents()
 
@@ -4319,7 +4390,7 @@ class MainWindow(QMainWindow):
                     os.path.basename(file_path) + (" (Blurred)" if is_blurred else "")
                 )
 
-        self.statusBar().showMessage("Unmarked 1 image for deletion.", 5000)
+        self.statusBar().showMessage(f"Unmarked 1 image for deletion.", 5000)
         self.proxy_model.invalidate()
         QApplication.processEvents()
 
@@ -4749,45 +4820,114 @@ class MainWindow(QMainWindow):
             # Hide the button until a new selection is made
             self.accept_button.setVisible(False)
 
-    def _accept_rotation(self, file_path: str):
-        """Applies a single rotation suggestion and selects the next/previous item."""
-        if file_path in self.rotation_suggestions:
-            # Get the list of items before modification to determine the next selection
-            current_items = list(self.rotation_suggestions.keys())
-            try:
-                current_index = current_items.index(file_path)
-            except ValueError:
-                current_index = -1
+        def _accept_rotation(self, file_path: str):
+            """Applies a single rotation suggestion and selects the next/previous item."""
+            if file_path in self.rotation_suggestions:
+                # Get the list of items before modification to determine the next selection
+                current_items = list(self.rotation_suggestions.keys())
+                try:
+                    current_index = current_items.index(file_path)
+                except ValueError:
+                    current_index = -1
 
-            rotation = self.rotation_suggestions.pop(file_path)
-            self.app_controller._apply_approved_rotations({file_path: rotation})
+                rotation = self.rotation_suggestions.pop(file_path)
+                self.app_controller._apply_approved_rotations({file_path: rotation})
 
-            if not self.rotation_suggestions:
-                self._hide_rotation_view()
-                return
+                if not self.rotation_suggestions:
+                    self._hide_rotation_view()
+                    return
 
-            remaining_items = list(self.rotation_suggestions.keys())
-            path_to_select = None
-            if current_index != -1 and remaining_items:
-                next_index = min(current_index, len(remaining_items) - 1)
-                path_to_select = remaining_items[next_index]
+                remaining_items = list(self.rotation_suggestions.keys())
+                path_to_select = None
+                if current_index != -1 and remaining_items:
+                    # Select the next item in the list
+                    next_index = min(current_index, len(remaining_items) - 1)
+                    path_to_select = remaining_items[next_index]
 
-            self._rebuild_rotation_view()
+                self._rebuild_rotation_view()
 
-            if path_to_select:
-                proxy_idx_to_select = self._find_proxy_index_for_path(path_to_select)
-                if proxy_idx_to_select.isValid():
-                    active_view = self._get_active_file_view()
-                    if active_view:
-                        active_view.setCurrentIndex(proxy_idx_to_select)
-                        active_view.selectionModel().select(
-                            proxy_idx_to_select,
-                            QItemSelectionModel.SelectionFlag.ClearAndSelect,
-                        )
-                        active_view.scrollTo(
-                            proxy_idx_to_select,
-                            QAbstractItemView.ScrollHint.EnsureVisible,
-                        )
+                if path_to_select:
+                    proxy_idx_to_select = self._find_proxy_index_for_path(
+                        path_to_select
+                    )
+                    if proxy_idx_to_select.isValid():
+                        active_view = self._get_active_file_view()
+                        if active_view:
+                            active_view.setCurrentIndex(proxy_idx_to_select)
+                            active_view.selectionModel().select(
+                                proxy_idx_to_select,
+                                QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                            )
+                            active_view.scrollTo(
+                                proxy_idx_to_select,
+                                QAbstractItemView.ScrollHint.EnsureVisible,
+                            )
+
+    def _on_accept_button_clicked(self):
+        """Handle accept button click with automatic navigation in rotation view."""
+        # Check if we're in rotation view mode
+        if self.left_panel.current_view_mode == "rotation":
+            # Use the new method that automatically moves to the next item
+            self._accept_single_rotation_and_move_to_next()
+        else:
+            # Use the standard method for other views
+            self._accept_current_rotation()
+
+    def _accept_single_rotation_and_move_to_next(self):
+        """Applies a single rotation suggestion and automatically moves to the next item."""
+        # Get the currently selected path
+        selected_paths = self._get_selected_file_paths_from_view()
+        if not selected_paths or len(selected_paths) != 1:
+            # If not exactly one item selected, fall back to the standard accept behavior
+            self._accept_current_rotation()
+            return
+
+        file_path = selected_paths[0]
+        if file_path not in self.rotation_suggestions:
+            return
+
+        # Apply the rotation for the current item
+        rotation = self.rotation_suggestions.pop(file_path)
+        self.app_controller._apply_approved_rotations({file_path: rotation})
+
+        # Check if there are any remaining suggestions
+        if not self.rotation_suggestions:
+            self._hide_rotation_view()
+            return
+
+        # Get the list of remaining items
+        remaining_items = list(self.rotation_suggestions.keys())
+
+        # Find the current item's index in the original list to determine the next item
+        # We'll select the next item in the list
+        path_to_select = remaining_items[0] if remaining_items else None
+
+        # Rebuild the rotation view to show the remaining items
+        self._rebuild_rotation_view()
+
+        # Select the next item
+        if path_to_select:
+            proxy_idx_to_select = self._find_proxy_index_for_path(path_to_select)
+            if proxy_idx_to_select.isValid():
+                active_view = self._get_active_file_view()
+                if active_view:
+                    active_view.setCurrentIndex(proxy_idx_to_select)
+                    active_view.selectionModel().select(
+                        proxy_idx_to_select,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    )
+                    active_view.scrollTo(
+                        proxy_idx_to_select,
+                        QAbstractItemView.ScrollHint.EnsureVisible,
+                    )
+        else:
+            # If no item to select, clear the selection and image preview
+            active_view = self._get_active_file_view()
+            if active_view:
+                active_view.selectionModel().clear()
+            self.advanced_image_viewer.clear()
+            self.accept_button.setVisible(False)
+            self.refuse_button.setVisible(False)
 
     def _refuse_all_rotations(self):
         """Refuses all remaining rotation suggestions."""
