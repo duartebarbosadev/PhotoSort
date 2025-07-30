@@ -1570,14 +1570,19 @@ class MainWindow(QMainWindow):
         # Check if there are any files marked for deletion
         marked_files = self.app_state.get_marked_files()
         if marked_files:
+            logger.info(
+                f"Found {len(marked_files)} marked files on close, showing confirmation dialog"
+            )
             # Show the close confirmation dialog
             choice = self.dialog_manager.show_close_confirmation_dialog(marked_files)
 
             if choice == "commit":
+                logger.info("User chose to commit deletions on close")
                 # Commit the deletions and then close
-                self._commit_marked_deletions()
+                self._commit_marked_deletions_without_confirmation()
                 # Continue with closing
             elif choice == "ignore":
+                logger.info("User chose to ignore deletions on close")
                 # Ignore the marked files and close
                 # Clear the marked files from app_state
                 self.app_state.marked_for_deletion.clear()
@@ -1585,6 +1590,7 @@ class MainWindow(QMainWindow):
                 self._refresh_visible_items_icons()
                 # Continue with closing
             else:
+                logger.info("User cancelled close operation")
                 # Cancel closing
                 event.ignore()
                 return
@@ -4101,28 +4107,45 @@ class MainWindow(QMainWindow):
         return has_marked
 
     def _commit_marked_deletions(self):
-        """Finds all marked files and moves them to trash, updating the view in-place."""
+        """Finds all marked files and moves them to trash with confirmation, updating the view in-place."""
+        logger.info("Starting commit marked deletions with confirmation")
+
         active_view = self._get_active_file_view()
         if not self.app_state.current_folder_path or not active_view:
             self.statusBar().showMessage("No folder loaded.", 3000)
+            logger.info("No folder loaded, aborting commit marked deletions")
             return
 
         marked_files = self.app_state.get_marked_files()
         if not marked_files:
             self.statusBar().showMessage("No images are marked for deletion.", 3000)
+            logger.info(
+                "No images marked for deletion, aborting commit marked deletions"
+            )
             return
 
         if not self.dialog_manager.show_commit_deletions_dialog(marked_files):
+            logger.info("User cancelled commit deletions dialog")
             return
+
+        logger.info(f"User confirmed deletion of {len(marked_files)} files")
 
         # --- Pre-computation for next selection ---
         visible_paths_before = self._get_all_visible_image_paths()
+        logger.debug(f"Visible paths before deletion: {visible_paths_before}")
+        logger.debug(f"Marked files for deletion: {marked_files}")
+
+        # Find the index of the first marked file in the visible list
         first_marked_index = -1
         if visible_paths_before and marked_files:
             try:
                 first_marked_index = visible_paths_before.index(marked_files[0])
+                logger.debug(f"First marked file index: {first_marked_index}")
             except ValueError:
                 first_marked_index = 0
+                logger.debug(
+                    "First marked file not found in visible paths, using index 0"
+                )
 
         # --- Group indices by parent for safe removal ---
         source_indices_by_parent = {}
@@ -4142,6 +4165,7 @@ class MainWindow(QMainWindow):
                 self.app_controller.move_to_trash(file_path)
                 self.app_state.remove_data_for_path(file_path)
                 deleted_count += 1
+                logger.info(f"Moved file to trash: {os.path.basename(file_path)}")
             except Exception as e:
                 logger.error(f"Error moving marked file '{file_path}' to trash: {e}")
 
@@ -4160,28 +4184,227 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Committed {deleted_count} deletions.", 5000)
             QApplication.processEvents()
 
-            # --- Select next item ---
-            visible_paths_after = self._get_all_visible_image_paths()
-            if not visible_paths_after:
-                self.advanced_image_viewer.clear()
-                return
-
-            next_idx_pos = (
-                min(first_marked_index, len(visible_paths_after) - 1)
-                if first_marked_index != -1
-                else 0
+            # --- Select next item using the same logic as single deletion ---
+            visible_paths_after_delete = self._get_all_visible_image_paths()
+            logger.debug(
+                f"{len(visible_paths_after_delete)} visible paths remaining after deletion."
             )
-            next_path_to_select = visible_paths_after[max(0, next_idx_pos)]
-            next_proxy_idx = self._find_proxy_index_for_path(next_path_to_select)
+            logger.debug(f"Visible paths after deletion: {visible_paths_after_delete}")
 
-            if next_proxy_idx.isValid():
-                active_view.setCurrentIndex(next_proxy_idx)
-                active_view.selectionModel().select(
-                    next_proxy_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect
+            if not visible_paths_after_delete:
+                logger.debug("No visible image items left after deletion.")
+                self.advanced_image_viewer.clear()
+                self.advanced_image_viewer.setText("No images left to display.")
+                self.statusBar().showMessage("No images left or visible.")
+            else:
+                # Use the same logic as _move_current_image_to_trash for selecting the next item
+                first_deleted_path_idx_in_visible_list = -1
+                if visible_paths_before and marked_files:
+                    try:
+                        first_deleted_path_idx_in_visible_list = (
+                            visible_paths_before.index(marked_files[0])
+                        )
+                        logger.debug(
+                            f"First deleted path index in visible list: {first_deleted_path_idx_in_visible_list}"
+                        )
+                    except ValueError:
+                        first_deleted_path_idx_in_visible_list = 0
+                        logger.debug(
+                            "First deleted path not found in visible paths, using index 0"
+                        )
+                elif visible_paths_before:
+                    first_deleted_path_idx_in_visible_list = 0
+                    logger.debug("Using index 0 for first deleted path")
+
+                # Select the next item in the list, not the item at the same index
+                target_idx_in_new_list = first_deleted_path_idx_in_visible_list
+                if target_idx_in_new_list >= len(visible_paths_after_delete):
+                    target_idx_in_new_list = len(visible_paths_after_delete) - 1
+
+                logger.debug(
+                    f"Selecting item at index {target_idx_in_new_list} from {len(visible_paths_after_delete)} remaining items"
                 )
-                active_view.scrollTo(
-                    next_proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible
+
+                next_item_to_select_proxy_idx = self._find_proxy_index_for_path(
+                    visible_paths_after_delete[target_idx_in_new_list]
                 )
+
+                if next_item_to_select_proxy_idx.isValid():
+                    logger.debug(
+                        f"Setting current index and selection for item: {visible_paths_after_delete[target_idx_in_new_list]}"
+                    )
+                    active_view.setCurrentIndex(next_item_to_select_proxy_idx)
+                    active_view.selectionModel().select(
+                        next_item_to_select_proxy_idx,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    )
+                    active_view.scrollTo(
+                        next_item_to_select_proxy_idx,
+                        QAbstractItemView.ScrollHint.EnsureVisible,
+                    )
+                    # Explicitly call _handle_file_selection_changed to ensure viewer updates
+                    logger.debug(
+                        "Explicitly calling _handle_file_selection_changed after selection update"
+                    )
+                    # Add a small delay to ensure the selection model has time to update
+                    QTimer.singleShot(0, self._handle_file_selection_changed)
+                else:
+                    logger.debug(
+                        "Fallback failed. No valid item to select. Clearing UI."
+                    )
+                    self.advanced_image_viewer.clear()
+                    self.advanced_image_viewer.setText("No valid image to select.")
+
+            self._update_image_info_label()
+
+        logger.info(f"Completed committing {deleted_count} deletions with confirmation")
+
+    def _commit_marked_deletions_without_confirmation(self):
+        """Finds all marked files and moves them to trash without confirmation, updating the view in-place."""
+        active_view = self._get_active_file_view()
+        if not self.app_state.current_folder_path or not active_view:
+            self.statusBar().showMessage("No folder loaded.", 3000)
+            return
+
+        marked_files = self.app_state.get_marked_files()
+        if not marked_files:
+            self.statusBar().showMessage("No images are marked for deletion.", 3000)
+            return
+
+        logger.info(
+            f"Committing {len(marked_files)} marked deletions without confirmation"
+        )
+
+        # --- Pre-computation for next selection ---
+        visible_paths_before = self._get_all_visible_image_paths()
+        logger.debug(f"Visible paths before deletion: {visible_paths_before}")
+        logger.debug(f"Marked files for deletion: {marked_files}")
+
+        # Find the index of the first marked file in the visible list
+        first_marked_index = -1
+        if visible_paths_before and marked_files:
+            try:
+                first_marked_index = visible_paths_before.index(marked_files[0])
+                logger.debug(f"First marked file index: {first_marked_index}")
+            except ValueError:
+                first_marked_index = 0
+                logger.debug(
+                    "First marked file not found in visible paths, using index 0"
+                )
+
+        # --- Group indices by parent for safe removal ---
+        source_indices_by_parent = {}
+        for path in marked_files:
+            proxy_idx = self._find_proxy_index_for_path(path)
+            if proxy_idx.isValid():
+                source_idx = self.proxy_model.mapToSource(proxy_idx)
+                parent_idx = source_idx.parent()
+                if parent_idx not in source_indices_by_parent:
+                    source_indices_by_parent[parent_idx] = []
+                source_indices_by_parent[parent_idx].append(source_idx.row())
+
+        # --- Delete files and update model ---
+        deleted_count = 0
+        for file_path in marked_files:
+            try:
+                self.app_controller.move_to_trash(file_path)
+                self.app_state.remove_data_for_path(file_path)
+                deleted_count += 1
+                logger.info(f"Moved file to trash: {os.path.basename(file_path)}")
+            except Exception as e:
+                logger.error(f"Error moving marked file '{file_path}' to trash: {e}")
+
+        if deleted_count > 0:
+            for parent_idx, rows in source_indices_by_parent.items():
+                parent_item = (
+                    self.file_system_model.itemFromIndex(parent_idx)
+                    if parent_idx.isValid()
+                    else self.file_system_model.invisibleRootItem()
+                )
+                if parent_item:
+                    for row in sorted(rows, reverse=True):
+                        parent_item.takeRow(row)
+
+            self.proxy_model.invalidate()
+            self.statusBar().showMessage(f"Committed {deleted_count} deletions.", 5000)
+            QApplication.processEvents()
+
+            # --- Select next item using the same logic as single deletion ---
+            visible_paths_after_delete = self._get_all_visible_image_paths()
+            logger.debug(
+                f"{len(visible_paths_after_delete)} visible paths remaining after deletion."
+            )
+            logger.debug(f"Visible paths after deletion: {visible_paths_after_delete}")
+
+            if not visible_paths_after_delete:
+                logger.debug("No visible image items left after deletion.")
+                self.advanced_image_viewer.clear()
+                self.advanced_image_viewer.setText("No images left to display.")
+                self.statusBar().showMessage("No images left or visible.")
+            else:
+                # Use the same logic as _move_current_image_to_trash for selecting the next item
+                first_deleted_path_idx_in_visible_list = -1
+                if visible_paths_before and marked_files:
+                    try:
+                        first_deleted_path_idx_in_visible_list = (
+                            visible_paths_before.index(marked_files[0])
+                        )
+                        logger.debug(
+                            f"First deleted path index in visible list: {first_deleted_path_idx_in_visible_list}"
+                        )
+                    except ValueError:
+                        first_deleted_path_idx_in_visible_list = 0
+                        logger.debug(
+                            "First deleted path not found in visible paths, using index 0"
+                        )
+                elif visible_paths_before:
+                    first_deleted_path_idx_in_visible_list = 0
+                    logger.debug("Using index 0 for first deleted path")
+
+                # Select the next item in the list, not the item at the same index
+                target_idx_in_new_list = first_deleted_path_idx_in_visible_list
+                if target_idx_in_new_list >= len(visible_paths_after_delete):
+                    target_idx_in_new_list = len(visible_paths_after_delete) - 1
+
+                logger.debug(
+                    f"Selecting item at index {target_idx_in_new_list} from {len(visible_paths_after_delete)} remaining items"
+                )
+
+                next_item_to_select_proxy_idx = self._find_proxy_index_for_path(
+                    visible_paths_after_delete[target_idx_in_new_list]
+                )
+
+                if next_item_to_select_proxy_idx.isValid():
+                    logger.debug(
+                        f"Setting current index and selection for item: {visible_paths_after_delete[target_idx_in_new_list]}"
+                    )
+                    active_view.setCurrentIndex(next_item_to_select_proxy_idx)
+                    active_view.selectionModel().select(
+                        next_item_to_select_proxy_idx,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    )
+                    active_view.scrollTo(
+                        next_item_to_select_proxy_idx,
+                        QAbstractItemView.ScrollHint.EnsureVisible,
+                    )
+                    # Explicitly call _handle_file_selection_changed to ensure viewer updates
+                    logger.debug(
+                        "Explicitly calling _handle_file_selection_changed after selection update"
+                    )
+                    # Add a small delay to ensure the selection model has time to update
+                    QTimer.singleShot(0, self._handle_file_selection_changed)
+                else:
+                    logger.debug(
+                        "Fallback failed. No valid item to select. Clearing UI."
+                    )
+                    self.advanced_image_viewer.clear()
+                    self.advanced_image_viewer.setText("No valid image to select.")
+
+            self._update_image_info_label()
+
+        logger.info(
+            f"Completed committing {deleted_count} deletions without confirmation"
+        )
 
     def _mark_selection_for_deletion(self):
         """Toggles the deletion mark for selected files, updating the model in-place."""
