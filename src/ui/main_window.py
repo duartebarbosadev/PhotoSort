@@ -73,6 +73,7 @@ from src.ui.dialog_manager import DialogManager
 from src.ui.left_panel import LeftPanel
 from src.ui.app_controller import AppController
 from src.ui.menu_manager import MenuManager
+from src.ui.selection_utils import find_next_visible_path_after_deletions
 
 logger = logging.getLogger(__name__)
 
@@ -4176,6 +4177,9 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.error(f"Error moving marked file '{file_path}' to trash: {e}")
 
+        # Clear the marked files from app state after successful deletion
+        self.app_state.clear_all_deletion_marks()
+
         if deleted_count > 0:
             for parent_idx, rows in source_indices_by_parent.items():
                 parent_item = (
@@ -4191,12 +4195,32 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Committed {deleted_count} deletions.", 5000)
             QApplication.processEvents()
 
-            # --- Select next item using the same logic as single deletion ---
+            # --- Select next item using robust advancement to next valid image ---
             visible_paths_after_delete = self._get_all_visible_image_paths()
             logger.debug(
                 f"{len(visible_paths_after_delete)} visible paths remaining after deletion."
             )
             logger.debug(f"Visible paths after deletion: {visible_paths_after_delete}")
+
+            # Determine the anchor path for selection after deletion
+            # This determines which image position to use as reference for finding the next selection
+            current_selected_path_before = self.app_state.focused_image_path or self._get_current_selected_image_path()
+            
+            # If the current selection is one of the deleted files, use it as anchor
+            # This will ensure we select the next image after the deleted one
+            if current_selected_path_before in marked_files:
+                anchor_path = current_selected_path_before
+            # If there are deleted files and current selection is not one of them,
+            # use the first deleted file as anchor for better UX
+            # This handles cases where user marks files for deletion without having them selected
+            elif marked_files:
+                anchor_path = marked_files[0]  # Use first deleted file as reference point
+            # Fallback to current selection
+            else:
+                anchor_path = current_selected_path_before
+                
+            logger.debug(f"Current selected (focused) path before deletion: {current_selected_path_before}")
+            logger.debug(f"Anchor path for selection after deletion: {anchor_path}")
 
             if not visible_paths_after_delete:
                 logger.debug("No visible image items left after deletion.")
@@ -4204,61 +4228,43 @@ class MainWindow(QMainWindow):
                 self.advanced_image_viewer.setText("No images left to display.")
                 self.statusBar().showMessage("No images left or visible.")
             else:
-                # Use the same logic as _move_current_image_to_trash for selecting the next item
-                first_deleted_path_idx_in_visible_list = -1
-                if visible_paths_before and marked_files:
-                    try:
-                        first_deleted_path_idx_in_visible_list = (
-                            visible_paths_before.index(marked_files[0])
-                        )
-                        logger.debug(
-                            f"First deleted path index in visible list: {first_deleted_path_idx_in_visible_list}"
-                        )
-                    except ValueError:
-                        first_deleted_path_idx_in_visible_list = 0
-                        logger.debug(
-                            "First deleted path not found in visible paths, using index 0"
-                        )
-                elif visible_paths_before:
-                    first_deleted_path_idx_in_visible_list = 0
-                    logger.debug("Using index 0 for first deleted path")
-
-                # Select the next item in the list, not the item at the same index
-                target_idx_in_new_list = first_deleted_path_idx_in_visible_list
-                if target_idx_in_new_list >= len(visible_paths_after_delete):
-                    target_idx_in_new_list = len(visible_paths_after_delete) - 1
-
-                logger.debug(
-                    f"Selecting item at index {target_idx_in_new_list} from {len(visible_paths_after_delete)} remaining items"
+                # Always find the best next selection. The function is smart enough
+                # to keep the current selection if it's still valid.
+                logger.debug("Finding next selection after deletion.")
+                next_path = find_next_visible_path_after_deletions(
+                    visible_paths_before,
+                    marked_files,
+                    anchor_path,
+                    visible_paths_after_delete,
                 )
 
-                next_item_to_select_proxy_idx = self._find_proxy_index_for_path(
-                    visible_paths_after_delete[target_idx_in_new_list]
-                )
-
-                if next_item_to_select_proxy_idx.isValid():
-                    logger.debug(
-                        f"Setting current index and selection for item: {visible_paths_after_delete[target_idx_in_new_list]}"
-                    )
-                    active_view.setCurrentIndex(next_item_to_select_proxy_idx)
-                    active_view.selectionModel().select(
-                        next_item_to_select_proxy_idx,
-                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
-                    )
-                    active_view.scrollTo(
-                        next_item_to_select_proxy_idx,
-                        QAbstractItemView.ScrollHint.EnsureVisible,
-                    )
-                    # Explicitly call _handle_file_selection_changed to ensure viewer updates
-                    logger.debug(
-                        "Explicitly calling _handle_file_selection_changed after selection update"
-                    )
-                    # Add a small delay to ensure the selection model has time to update
-                    QTimer.singleShot(0, self._handle_file_selection_changed)
+                if next_path:
+                    next_proxy_idx = self._find_proxy_index_for_path(next_path)
+                    if next_proxy_idx.isValid():
+                        logger.debug(f"Next path to select: {next_path}")
+                        active_view.setCurrentIndex(next_proxy_idx)
+                        active_view.selectionModel().select(
+                            next_proxy_idx,
+                            QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                        )
+                        active_view.scrollTo(
+                            next_proxy_idx,
+                            QAbstractItemView.ScrollHint.EnsureVisible,
+                        )
+                        # The selection change will trigger the preview update.
+                        # We might need to manually trigger if the selection doesn't change
+                        # but this is safer.
+                        QTimer.singleShot(0, self._handle_file_selection_changed)
+                    else:
+                        logger.warning(
+                            f"Could not find a valid proxy index for the next path: {next_path}"
+                        )
+                        self.advanced_image_viewer.clear()
+                        self.advanced_image_viewer.setText(
+                            "Could not select next image."
+                        )
                 else:
-                    logger.debug(
-                        "Fallback failed. No valid item to select. Clearing UI."
-                    )
+                    logger.debug("No next valid path found; clearing UI.")
                     self.advanced_image_viewer.clear()
                     self.advanced_image_viewer.setText("No valid image to select.")
 
@@ -4709,6 +4715,7 @@ class MainWindow(QMainWindow):
 
             # Reset the flag after the event queue is cleared to prevent loops
             QTimer.singleShot(0, lambda: setattr(self, "_is_syncing_selection", False))
+
 
     def _update_item_blur_status(self, image_path: str, is_blurred: bool):
         """
