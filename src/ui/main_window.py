@@ -2472,12 +2472,12 @@ class MainWindow(QMainWindow):
         if override_selected_paths is not None:
             selected_file_paths = override_selected_paths
             logger.debug(
-                f"_handle_file_selection_changed: Using overridden selection of {len(selected_file_paths)} paths: {selected_file_paths}"
+                f"_handle_file_selection_changed: Using overridden selection of {len(selected_file_paths)} paths"
             )
         else:
             selected_file_paths = self._get_selected_file_paths_from_view()
             logger.debug(
-                f"_handle_file_selection_changed: Retrieved {len(selected_file_paths)} paths from view: {selected_file_paths}"
+                f"_handle_file_selection_changed: Retrieved {len(selected_file_paths)} paths from view"
             )
 
         if not self.app_state.image_files_data:
@@ -2537,9 +2537,7 @@ class MainWindow(QMainWindow):
 
         # When selection changes, clear the focused image path unless it's a single selection
         if len(selected_file_paths) != 1:
-            logger.debug(
-                f"Selection count is {len(selected_file_paths)}, not single selection"
-            )
+            logger.debug(f"Selection is not single (count={len(selected_file_paths)})")
             if self.app_state.focused_image_path:
                 logger.debug("Clearing focused image path")
                 self.app_state.focused_image_path = None
@@ -2549,7 +2547,8 @@ class MainWindow(QMainWindow):
 
         if len(selected_file_paths) == 1:
             file_path = selected_file_paths[0]
-            logger.debug(f"Single selection: {file_path}")
+            # Avoid logging full path each change; keep concise
+            logger.debug("Handling single selection")
             # This is a single selection, so it's also the "focused" image.
             self.app_state.focused_image_path = file_path
             active_view = self._get_active_file_view()
@@ -2562,12 +2561,12 @@ class MainWindow(QMainWindow):
             self._display_single_image_preview(file_path, file_data_from_model)
 
         elif len(selected_file_paths) >= 2:
-            logger.debug(f"Multi-selection with {len(selected_file_paths)} items")
+            logger.debug(f"Handling multi-selection (count={len(selected_file_paths)})")
             # This will force the viewer into side-by-side mode.
             self._display_multi_selection_info(selected_file_paths)
 
         else:  # No selection
-            logger.debug("No selection, handling no selection case")
+            logger.debug("Handling no selection")
             self._handle_no_selection_or_non_image()
             if self.sidebar_visible and self.metadata_sidebar:
                 self.metadata_sidebar.show_placeholder()
@@ -4200,12 +4199,15 @@ class MainWindow(QMainWindow):
             logger.debug(
                 f"{len(visible_paths_after_delete)} visible paths remaining after deletion."
             )
-            logger.debug(f"Visible paths after deletion: {visible_paths_after_delete}")
+            logger.debug("Visible paths after deletion list suppressed for brevity")
 
             # Determine the anchor path for selection after deletion
             # This determines which image position to use as reference for finding the next selection
-            current_selected_path_before = self.app_state.focused_image_path or self._get_current_selected_image_path()
-            
+            current_selected_path_before = (
+                self.app_state.focused_image_path
+                or self._get_current_selected_image_path()
+            )
+
             # If the current selection is one of the deleted files, use it as anchor
             # This will ensure we select the next image after the deleted one
             if current_selected_path_before in marked_files:
@@ -4214,12 +4216,16 @@ class MainWindow(QMainWindow):
             # use the first deleted file as anchor for better UX
             # This handles cases where user marks files for deletion without having them selected
             elif marked_files:
-                anchor_path = marked_files[0]  # Use first deleted file as reference point
+                anchor_path = marked_files[
+                    0
+                ]  # Use first deleted file as reference point
             # Fallback to current selection
             else:
                 anchor_path = current_selected_path_before
-                
-            logger.debug(f"Current selected (focused) path before deletion: {current_selected_path_before}")
+
+            logger.debug(
+                f"Current selected (focused) path before deletion: {current_selected_path_before}"
+            )
             logger.debug(f"Anchor path for selection after deletion: {anchor_path}")
 
             if not visible_paths_after_delete:
@@ -4241,7 +4247,7 @@ class MainWindow(QMainWindow):
                 if next_path:
                     next_proxy_idx = self._find_proxy_index_for_path(next_path)
                     if next_proxy_idx.isValid():
-                        logger.debug(f"Next path to select: {next_path}")
+                        logger.debug("Selecting next path after deletion")
                         active_view.setCurrentIndex(next_proxy_idx)
                         active_view.selectionModel().select(
                             next_proxy_idx,
@@ -4715,7 +4721,6 @@ class MainWindow(QMainWindow):
 
             # Reset the flag after the event queue is cleared to prevent loops
             QTimer.singleShot(0, lambda: setattr(self, "_is_syncing_selection", False))
-
 
     def _update_item_blur_status(self, image_path: str, is_blurred: bool):
         """
