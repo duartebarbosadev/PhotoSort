@@ -67,42 +67,52 @@ def _parse_exif_date(date_string: str) -> Optional[date_obj]:
     if not date_string or not isinstance(date_string, str):
         return None
 
-    date_string = date_string.strip()
-    date_string_no_frac = date_string.split(".")[0]
-    date_string_no_tz = date_string_no_frac
-    if "Z" in date_string_no_tz:  # Handle 'Z' for UTC
-        date_string_no_tz = date_string_no_tz.split("Z")[0]
-    # Robust timezone offset removal
-    tz_match = re.search(r"[+-]\d{2}(:?\d{2})?$", date_string_no_tz)
-    if tz_match:
-        date_string_no_tz = date_string_no_tz[: tz_match.start()]
+    s = date_string.strip()
+    if not s:
+        return None
 
-    formats_to_try = [
+    # Strip trailing fractional seconds for common cases while keeping delimiters
+    # e.g. "2023-12-25 14:30:45.123" -> "2023-12-25 14:30:45"
+    s = re.sub(r"(\d{2}:\d{2}:\d{2})\.\d+$", r"\1", s)
+
+    # Strip trailing 'Z' UTC suffix
+    if s.endswith("Z"):
+        s = s[:-1]
+
+    # Remove timezone offset like +01:00 or -0300 at the end
+    s = re.sub(r"[+-]\d{2}:?\d{2}$", "", s).strip()
+
+    # Try date-time formats first, then date-only formats
+    datetime_formats = [
         "%Y:%m:%d %H:%M:%S",
         "%Y-%m-%d %H:%M:%S",
         "%Y/%m/%d %H:%M:%S",
         "%Y.%m.%d %H:%M:%S",
         "%Y-%m-%dT%H:%M:%S",
+    ]
+    date_only_formats = [
         "%Y:%m:%d",
         "%Y-%m-%d",
         "%Y/%m/%d",
         "%Y.%m.%d",
     ]
-    parsed_date = None
-    for fmt in formats_to_try:
+
+    # First pass: try to parse as full datetime
+    for fmt in datetime_formats:
         try:
-            string_to_parse = date_string_no_tz
-            # If format is date-only, try parsing only the date part of the string
-            if "T" not in fmt and " " not in fmt:
-                if "T" in string_to_parse:
-                    string_to_parse = string_to_parse.split("T")[0]
-                elif " " in string_to_parse:
-                    string_to_parse = string_to_parse.split(" ")[0]
-            parsed_date = dt_parser.strptime(string_to_parse, fmt).date()
-            break
-        except (ValueError, TypeError):  # Catch TypeError as well
+            return dt_parser.strptime(s, fmt).date()
+        except (ValueError, TypeError):
             continue
-    return parsed_date
+
+    # Second pass: if there's a time component, trim it and try date-only formats
+    s_date_part = s.split("T")[0].split(" ")[0]
+    for fmt in date_only_formats:
+        try:
+            return dt_parser.strptime(s_date_part, fmt).date()
+        except (ValueError, TypeError):
+            continue
+
+    return None
 
 
 def _parse_date_from_filename(filename: str) -> Optional[date_obj]:
@@ -220,6 +230,11 @@ class MetadataProcessor:
         Fetches and parses essential metadata for a batch of images.
         Uses ExifCache first, then pyexiv2 in parallel for remaining files.
         Populates caches and applies date fallbacks.
+
+        Returns per canonical NFC path a dict with keys at least:
+        - rating: int
+        - label: Optional[str]
+        - date: Optional[date]
         """
         results: Dict[str, Dict[str, Any]] = {}
         # Stores operational_path -> cache_key_path mapping for files needing extraction
@@ -228,6 +243,10 @@ class MetadataProcessor:
 
         start_time = time.perf_counter()
         logger.info(f"Starting batch metadata fetch for {len(image_paths)} files.")
+
+        def _init_result_dict() -> Dict[str, Any]:
+            # Ensure required keys exist for tests and callers
+            return {"rating": 0, "label": None, "date": None, "raw_metadata": None}
 
         for image_path_input in image_paths:
             resolved = MetadataProcessor._resolve_path_forms(image_path_input)
@@ -240,11 +259,7 @@ class MetadataProcessor:
             )
 
             if not resolved:
-                results[result_key_for_this_file] = {
-                    "rating": 0,
-                    "date": None,
-                    "raw_metadata": None,
-                }
+                results[result_key_for_this_file] = _init_result_dict()
                 minimal_data = {
                     "file_path": result_key_for_this_file,
                     "file_size": "Unknown",
@@ -261,11 +276,7 @@ class MetadataProcessor:
                 continue
 
             operational_path, cache_key_path = resolved
-            results[cache_key_path] = {
-                "rating": 0,
-                "date": None,
-                "raw_metadata": None,
-            }  # Use canonical key
+            results[cache_key_path] = _init_result_dict()  # Use canonical key
 
             cached_metadata: Optional[Dict[str, Any]] = None
             if exif_disk_cache:
@@ -292,7 +303,19 @@ class MetadataProcessor:
             def process_chunk(chunk_paths: List[str]) -> List[Dict[str, Any]]:
                 chunk_results = []
                 for op_path in chunk_paths:  # op_path is the operational_path
-                    # file_ext = os.path.splitext(op_path)[1].lower() # F841: Local variable `file_ext` is assigned to but never used
+                    # Quick existence guard to avoid noisy errors for removed/missing files
+                    if not os.path.isfile(op_path):
+                        logger.warning(
+                            f"Skipping metadata extraction for missing file: {op_path}"
+                        )
+                        chunk_results.append(
+                            {
+                                "file_path": op_path,
+                                "file_size": "Unknown",
+                                "error": "File missing at extraction time",
+                            }
+                        )
+                        continue
                     try:
                         with pyexiv2.Image(
                             op_path, encoding="utf-8"
@@ -314,19 +337,38 @@ class MetadataProcessor:
                                 f"Successfully extracted metadata for {os.path.basename(op_path)}"
                             )
                     except Exception as e:
-                        logger.error(
-                            f"Error extracting metadata for {os.path.basename(op_path)}: {e}",
-                            exc_info=True,  # Keep traceback for this critical error
+                        # pyexiv2 raises RuntimeError for many IO issues; downshift errno=2 to warning without traceback
+                        msg = str(e)
+                        is_missing = (
+                            ("No such file or directory" in msg)
+                            or ("errno = 2" in msg)
+                            or (not os.path.isfile(op_path))
                         )
-                        chunk_results.append(
-                            {
-                                "file_path": op_path,
-                                "file_size": os.path.getsize(op_path)
-                                if os.path.isfile(op_path)
-                                else "Unknown",
-                                "error": f"Extraction failed: {e}",
-                            }
-                        )
+                        if is_missing:
+                            logger.warning(
+                                f"Skipping missing file during metadata extraction: {op_path} ({msg})"
+                            )
+                            chunk_results.append(
+                                {
+                                    "file_path": op_path,
+                                    "file_size": "Unknown",
+                                    "error": f"Extraction skipped (missing): {msg}",
+                                }
+                            )
+                        else:
+                            logger.error(
+                                f"Error extracting metadata for {os.path.basename(op_path)}: {e}",
+                                exc_info=True,
+                            )
+                            chunk_results.append(
+                                {
+                                    "file_path": op_path,
+                                    "file_size": os.path.getsize(op_path)
+                                    if os.path.isfile(op_path)
+                                    else "Unknown",
+                                    "error": f"Extraction failed: {e}",
+                                }
+                            )
                 return chunk_results
 
             all_metadata_results = []
@@ -374,18 +416,16 @@ class MetadataProcessor:
 
         final_results_for_caller: Dict[str, Dict[str, Any]] = {}
         for cache_key, data_dict in results.items():  # cache_key is NFC normalized
-            filename_only = os.path.basename(
-                cache_key
-            )  # Basename of the cache key for logging
+            filename_only = os.path.basename(cache_key)  # For logging
             parsed_rating, parsed_date = 0, None
+            parsed_label: Optional[str] = None
             raw_metadata = data_dict["raw_metadata"]
 
-            if (
-                raw_metadata and "error" not in raw_metadata
-            ):  # Check if metadata is valid
-                # ... (parsing logic for rating, date from raw_metadata as before) ...
-                rating_raw_val = raw_metadata.get("Xmp.xmp.Rating")  # etc.
+            if raw_metadata and "error" not in raw_metadata:
+                # Rating
+                rating_raw_val = raw_metadata.get("Xmp.xmp.Rating")
                 parsed_rating = _parse_rating(rating_raw_val)
+                # Date
                 for date_tag in DATE_TAGS_PREFERENCE:
                     date_string = raw_metadata.get(date_tag)
                     if date_string:
@@ -393,17 +433,21 @@ class MetadataProcessor:
                         if dt_obj_val:
                             parsed_date = dt_obj_val
                             break
+                # Label
+                label_val = raw_metadata.get("Xmp.xmp.Label")
+                if label_val is not None:
+                    try:
+                        parsed_label = (
+                            str(label_val) if str(label_val).strip() != "" else None
+                        )
+                    except Exception:
+                        parsed_label = None
 
-            # Date fallbacks (applied whether raw_metadata was present or not, if date still None)
+            # Date fallback from filename
             if parsed_date is None:
-                parsed_date = _parse_date_from_filename(
-                    filename_only
-                )  # Use basename of cache_key
+                parsed_date = _parse_date_from_filename(filename_only)
 
-            # Filesystem date fallback: requires an operational_path.
-            # This is tricky here as we only have cache_key. For files that were resolved,
-            # we'd need to retrieve their operational_path. For now, skip if only cache_key is available.
-            # Or, if raw_metadata contains 'file_path' which is operational_path, use it.
+            # Filesystem date fallback if we have an operational path
             op_path_for_stat = raw_metadata.get("file_path") if raw_metadata else None
             if (
                 parsed_date is None
@@ -411,18 +455,14 @@ class MetadataProcessor:
                 and os.path.isfile(op_path_for_stat)
             ):
                 try:
-                    # ... (filesystem date logic using op_path_for_stat as before) ...
                     fs_timestamp: Optional[float] = None
                     stat_result = os.stat(op_path_for_stat)
-                    # Prefer birthtime if available and seems valid, else mtime
                     if (
                         hasattr(stat_result, "st_birthtime")
                         and stat_result.st_birthtime > 0
                     ):
                         fs_timestamp = stat_result.st_birthtime
-                    if (
-                        fs_timestamp is None or fs_timestamp < 1000000
-                    ):  # Heuristic for invalid birthtime values
+                    if fs_timestamp is None or fs_timestamp < 1000000:
                         fs_timestamp = stat_result.st_mtime
                     if fs_timestamp:
                         parsed_date = dt_parser.fromtimestamp(fs_timestamp).date()
@@ -430,13 +470,12 @@ class MetadataProcessor:
                     logger.warning(
                         f"Filesystem date fallback error for {filename_only}: {e_fs}"
                     )
-
             final_results_for_caller[cache_key] = {
                 "rating": parsed_rating,
                 "date": parsed_date,
             }
             logger.debug(
-                f"Processed {filename_only}: Rating={parsed_rating}, Date={parsed_date}"
+                f"Processed {filename_only}: Rating={parsed_rating}, Label={parsed_label}, Date={parsed_date}"
             )
 
         duration = time.perf_counter() - start_time
@@ -523,6 +562,19 @@ class MetadataProcessor:
                     f"ExifCache MISS for detailed metadata: {os.path.basename(cache_key_path)}"
                 )
 
+        # Existence guard first
+        if not os.path.isfile(operational_path):
+            msg = "File missing at detailed metadata read"
+            logger.info(f"{msg}: {operational_path}")
+            minimal_result = {
+                "file_path": operational_path,
+                "file_size": "Unknown",
+                "error": msg,
+            }
+            if exif_disk_cache:
+                exif_disk_cache.set(cache_key_path, minimal_result)
+            return minimal_result
+
         try:
             with pyexiv2.Image(operational_path, encoding="utf-8") as img:
                 metadata = {
@@ -552,10 +604,21 @@ class MetadataProcessor:
                     exif_disk_cache.set(cache_key_path, metadata)
                 return metadata
         except Exception as e:
-            logger.error(
-                f"Error fetching detailed metadata for {os.path.basename(operational_path)}: {e}",
-                exc_info=True,
+            msg = str(e)
+            is_missing = (
+                ("No such file or directory" in msg)
+                or ("errno = 2" in msg)
+                or (not os.path.isfile(operational_path))
             )
+            if is_missing:
+                logger.warning(
+                    f"Skipping missing file during detailed metadata read: {operational_path} ({msg})"
+                )
+            else:
+                logger.error(
+                    f"Error fetching detailed metadata for {os.path.basename(operational_path)}: {e}",
+                    exc_info=True,
+                )
             minimal_result = {
                 "file_path": operational_path,
                 "file_size": "Unknown",
@@ -733,6 +796,12 @@ class MetadataProcessor:
             return False
         operational_path, cache_key_path = resolved
 
+        # Existence guard
+        if not os.path.isfile(operational_path):
+            logger.warning(
+                f"Cannot set EXIF orientation; file missing: {operational_path}"
+            )
+            return False
         try:
             with pyexiv2.Image(operational_path, encoding="utf-8") as img:
                 img.modify_exif({"Exif.Image.Orientation": orientation})
@@ -744,10 +813,20 @@ class MetadataProcessor:
                 exif_disk_cache.delete(cache_key_path)
             return True
         except Exception as e:
-            logger.error(
-                f"Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}",
-                exc_info=True,
-            )
+            msg = str(e)
+            if (
+                ("No such file or directory" in msg)
+                or ("errno = 2" in msg)
+                or (not os.path.isfile(operational_path))
+            ):
+                logger.warning(
+                    f"File missing while setting EXIF orientation: {operational_path} ({msg})"
+                )
+            else:
+                logger.error(
+                    f"Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}",
+                    exc_info=True,
+                )
             return False
 
     @staticmethod
@@ -779,6 +858,12 @@ class MetadataProcessor:
                     pass  # Fall through to direct read if cached value is invalid
 
         # If not in cache or cache is not provided, read from file
+        # Existence guard
+        if not os.path.isfile(operational_path):
+            logger.info(
+                f"File missing when querying EXIF orientation: {operational_path}"
+            )
+            return None
         try:
             with pyexiv2.Image(operational_path, encoding="utf-8") as img:
                 exif_data = img.read_exif()
@@ -787,10 +872,20 @@ class MetadataProcessor:
                     return int(orientation)
                 return None
         except Exception as e:
-            logger.error(
-                f"Error getting EXIF orientation for {os.path.basename(operational_path)}: {e}",
-                exc_info=True,
-            )
+            msg = str(e)
+            if (
+                ("No such file or directory" in msg)
+                or ("errno = 2" in msg)
+                or (not os.path.isfile(operational_path))
+            ):
+                logger.warning(
+                    f"File missing while reading EXIF orientation: {operational_path} ({msg})"
+                )
+            else:
+                logger.error(
+                    f"Error getting EXIF orientation for {os.path.basename(operational_path)}: {e}",
+                    exc_info=True,
+                )
             return None
 
     @staticmethod
@@ -842,6 +937,12 @@ class MetadataProcessor:
                     pass  # Fall through to direct read
 
         # If not in cache or cache is not provided, read from file
+        # Existence guard
+        if not os.path.isfile(operational_path):
+            logger.info(
+                f"File missing when reading orientation/dimensions: {operational_path}"
+            )
+            return None, None, None
         try:
             with pyexiv2.Image(operational_path, encoding="utf-8") as img:
                 orientation = img.read_exif().get("Exif.Image.Orientation")
@@ -849,9 +950,19 @@ class MetadataProcessor:
                 width = img.get_pixel_width()
                 height = img.get_pixel_height()
                 return orientation, width, height
-        except Exception:
-            logger.error(
-                f"Error getting orientation/dimensions for {os.path.basename(operational_path)}",
-                exc_info=True,
-            )
+        except Exception as e:
+            msg = str(e)
+            if (
+                ("No such file or directory" in msg)
+                or ("errno = 2" in msg)
+                or (not os.path.isfile(operational_path))
+            ):
+                logger.warning(
+                    f"File missing while reading orientation/dimensions: {operational_path} ({msg})"
+                )
+            else:
+                logger.error(
+                    f"Error getting orientation/dimensions for {os.path.basename(operational_path)}: {e}",
+                    exc_info=True,
+                )
             return None, None, None

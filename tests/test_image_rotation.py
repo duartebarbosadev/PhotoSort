@@ -1,3 +1,4 @@
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 import pytest
 import os
 import sys
@@ -34,9 +35,6 @@ except ImportError as e:
         pass
 
 
-@pytest.mark.skipif(
-    not IMPORTS_AVAILABLE, reason=f"Required modules not available: {IMPORT_ERROR}"
-)
 class TestImageRotator:
     """Tests for the ImageRotator class."""
 
@@ -199,9 +197,6 @@ class TestImageRotator:
             assert not success
 
 
-@pytest.mark.skipif(
-    not IMPORTS_AVAILABLE, reason=f"Required modules not available: {IMPORT_ERROR}"
-)
 class TestMetadataProcessorRotation:
     """Tests for MetadataProcessor rotation methods."""
 
@@ -363,9 +358,6 @@ class TestMetadataProcessorRotation:
         assert not success
 
 
-@pytest.mark.skipif(
-    not IMPORTS_AVAILABLE, reason=f"Required modules not available: {IMPORT_ERROR}"
-)
 class TestRotationIntegration:
     """Integration tests for the complete rotation system."""
 

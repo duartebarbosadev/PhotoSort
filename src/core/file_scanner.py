@@ -134,6 +134,13 @@ class FileScanner(QObject):
                     if ext in SUPPORTED_EXTENSIONS:
                         full_path = os.path.normpath(os.path.join(root, filename))
 
+                        # Hard existence check to avoid downstream missing-file errors
+                        if not os.path.isfile(full_path):
+                            logger.info(
+                                f"Skipping missing file during scan: {full_path}"
+                            )
+                            continue
+
                         is_blurred = None  # Initialize as None
                         if perform_blur_detection:
                             # Perform blur detection
@@ -141,11 +148,18 @@ class FileScanner(QObject):
                             logger.debug(
                                 f"Performing blur detection for: {os.path.basename(full_path)} (Threshold: {blur_threshold})"
                             )
-                            is_blurred = BlurDetector.is_image_blurred(
-                                full_path,
-                                threshold=blur_threshold,
-                                apply_auto_edits_for_raw_preview=apply_auto_edits,
-                            )
+                            try:
+                                is_blurred = BlurDetector.is_image_blurred(
+                                    full_path,
+                                    threshold=blur_threshold,
+                                    apply_auto_edits_for_raw_preview=apply_auto_edits,
+                                )
+                            except Exception as e:
+                                # Do not break scanning on blur detection failure; mark unknown
+                                logger.warning(
+                                    f"Blur detection failed for {full_path}: {e}"
+                                )
+                                is_blurred = None
 
                         file_info = {"path": full_path, "is_blurred": is_blurred}
                         all_file_data.append(file_info)
@@ -162,13 +176,23 @@ class FileScanner(QObject):
 
             # Preload thumbnails after scanning all files
             if thumbnail_paths_only:
-                logger.info(
-                    f"Preloading {len(thumbnail_paths_only)} thumbnails (Auto-Edits: {apply_auto_edits})."
-                )
-                # TODO: Consider if preload_thumbnails needs should_continue_callback
-                self.image_pipeline.preload_thumbnails(
-                    thumbnail_paths_only, apply_auto_edits=apply_auto_edits
-                )
+                # Filter again to ensure files still exist before preloading
+                existing_for_thumbs = [
+                    p for p in thumbnail_paths_only if os.path.isfile(p)
+                ]
+                if existing_for_thumbs:
+                    logger.info(
+                        f"Preloading {len(existing_for_thumbs)} thumbnails (Auto-Edits: {apply_auto_edits})."
+                    )
+
+                    try:
+                        self.image_pipeline.preload_thumbnails(
+                            existing_for_thumbs, apply_auto_edits=apply_auto_edits
+                        )
+                    except Exception as e:
+                        logger.error(f"Thumbnail preloading failed: {e}", exc_info=True)
+                else:
+                    logger.warning("No existing files left to preload thumbnails for.")
             else:
                 logger.warning("No supported image files found to preload.")
 

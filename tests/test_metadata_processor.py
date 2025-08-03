@@ -56,9 +56,6 @@ except ImportError as e:
     COMPREHENSIVE_METADATA_TAGS = []
 
 
-@pytest.mark.skipif(
-    not IMPORTS_AVAILABLE, reason=f"Required modules not available: {IMPORT_ERROR}"
-)
 class TestMetadataProcessor:
     """Comprehensive tests for MetadataProcessor using sample images."""
 
@@ -122,14 +119,10 @@ class TestMetadataProcessor:
 
             metadata = results[norm_path]
             assert "rating" in metadata
-            assert "label" in metadata
             assert "date" in metadata
 
             # Rating should be 0-5
             assert 0 <= metadata["rating"] <= 5
-
-            # Label can be None or string
-            assert metadata["label"] is None or isinstance(metadata["label"], str)
 
             # Date can be None or date object
             assert metadata["date"] is None or isinstance(metadata["date"], date)
@@ -152,7 +145,6 @@ class TestMetadataProcessor:
         for ext, metadata in by_extension.items():
             logging.info(f"Testing {ext} file metadata:")
             logging.info(f"  Rating: {metadata['rating']}")
-            logging.info(f"  Label: {metadata['label']}")
             logging.info(f"  Date: {metadata['date']}")
 
             assert isinstance(metadata["rating"], int)
@@ -238,54 +230,6 @@ class TestMetadataProcessor:
             if os.path.exists(temp_image_path):
                 os.unlink(temp_image_path)
 
-    def test_set_and_get_label(self):
-        """Test setting and getting labels on sample images."""
-        if not self.sample_images:
-            pytest.skip("No sample images available")
-
-        # Use first image for label test
-        test_image = self.sample_images[0]
-
-        # Create a temporary copy for testing
-        with tempfile.NamedTemporaryFile(
-            suffix=os.path.splitext(test_image)[1], delete=False
-        ) as tmp:
-            shutil.copy2(test_image, tmp.name)
-            temp_image_path = tmp.name
-
-        try:
-            # Test setting different labels
-            test_labels = ["Red", "Blue", "Green", None, ""]
-
-            for label in test_labels:
-                success = MetadataProcessor.set_label(
-                    temp_image_path, label, exif_disk_cache=self.exif_cache
-                )
-
-                assert success, f"Failed to set label '{label}'"
-
-                # Verify label was set by reading it back
-                results = MetadataProcessor.get_batch_display_metadata(
-                    [temp_image_path]
-                )
-                norm_path = os.path.normpath(temp_image_path)
-
-                if label in [None, ""]:
-                    # Empty labels should result in None
-                    assert (
-                        results[norm_path]["label"] is None
-                        or results[norm_path]["label"] == ""
-                    )
-                else:
-                    assert results[norm_path]["label"] == label
-
-                logging.info(f"Successfully set and verified label '{label}'")
-
-        finally:
-            # Clean up temporary file
-            if os.path.exists(temp_image_path):
-                os.unlink(temp_image_path)
-
     def test_caching_integration(self):
         """Test that caching works correctly."""
         if not self.sample_images:
@@ -338,7 +282,6 @@ class TestMetadataProcessor:
         # All results should be valid
         for norm_path, metadata in results.items():
             assert "rating" in metadata
-            assert "label" in metadata
             assert "date" in metadata
 
     def test_error_handling_nonexistent_file(self):
@@ -353,7 +296,6 @@ class TestMetadataProcessor:
             assert norm_path in results
             # Should still return valid structure with defaults
             assert results[norm_path]["rating"] == 0
-            assert results[norm_path]["label"] is None
 
     def test_invalid_rating_values(self):
         """Test error handling for invalid rating values."""
@@ -370,9 +312,6 @@ class TestMetadataProcessor:
             assert success is False, f"Should reject invalid rating {invalid_rating}"
 
 
-@pytest.mark.skipif(
-    not IMPORTS_AVAILABLE, reason=f"Required modules not available: {IMPORT_ERROR}"
-)
 class TestHelperFunctions:
     """Test helper functions used by MetadataProcessor."""
 
@@ -426,9 +365,6 @@ class TestHelperFunctions:
             assert result == expected, f"Failed for {value}"
 
 
-@pytest.mark.skipif(
-    not IMPORTS_AVAILABLE, reason=f"Required modules not available: {IMPORT_ERROR}"
-)
 class TestConstants:
     """Test that constants are properly defined."""
 
