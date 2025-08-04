@@ -1,6 +1,10 @@
 import time
 import logging
-from src.ui.advanced_image_viewer import SynchronizedImageViewer
+import os
+from datetime import date as date_obj
+from typing import List, Dict, Optional, Any, Tuple, TYPE_CHECKING
+
+# Qt imports kept, but avoid importing heavy UI submodules at module import time
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -16,15 +20,6 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,  # For selection and edit triggersor dialogs
 )
-import os
-from datetime import date as date_obj
-from typing import (
-    List,
-    Dict,
-    Optional,
-    Any,
-    Tuple,
-)  # Import List and Dict for type hinting, Optional, Any, Tuple
 from PyQt6.QtCore import (
     Qt,
     QModelIndex,
@@ -44,13 +39,18 @@ from PyQt6.QtGui import (
     QStandardItem,
     QResizeEvent,
 )
-import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.metrics.pairwise import cosine_similarity  # Add cosine_similarity import
 
+# Defer heavy/optional libs until actually used to avoid slow module import
+# import numpy as np
+# from sklearn.decomposition import PCA
+# from sklearn.metrics.pairwise import cosine_similarity
+# Provide type-only imports to satisfy linters without runtime cost
+if TYPE_CHECKING:  # pragma: no cover
+    from src.ui.app_state import AppState as _AppStateType
+
+# Core lightweight imports
 from src.core.image_pipeline import ImagePipeline
 from src.core.image_file_ops import ImageFileOperations
-
 from src.core.metadata_processor import MetadataProcessor  # New metadata processor
 from src.core.app_settings import (
     get_preview_cache_size_gb,
@@ -65,17 +65,43 @@ from src.core.app_settings import (
     CENTER_PANEL_STRETCH,
     RIGHT_PANEL_STRETCH,
 )
-from src.ui.app_state import AppState
-from src.ui.ui_components import LoadingOverlay
-from src.ui.worker_manager import WorkerManager
-from src.ui.metadata_sidebar import MetadataSidebar
-from src.ui.dialog_manager import DialogManager
-from src.ui.left_panel import LeftPanel
-from src.ui.app_controller import AppController
-from src.ui.menu_manager import MenuManager
-from src.ui.selection_utils import find_next_visible_path_after_deletions
-
 logger = logging.getLogger(__name__)
+
+
+# Lazy-load heavy scientific stack on first use to avoid NameError later
+def _ensure_numpy_sklearn_loaded():
+    global np, PCA, cosine_similarity
+    try:
+        np  # type: ignore[name-defined]
+        PCA  # type: ignore[name-defined]
+        cosine_similarity  # type: ignore[name-defined]
+    except NameError:
+        import importlib
+
+        globals()["np"] = importlib.import_module("numpy")
+        globals()["PCA"] = importlib.import_module("sklearn.decomposition").PCA
+        globals()["cosine_similarity"] = importlib.import_module(
+            "sklearn.metrics.pairwise"
+        ).cosine_similarity
+        logger.debug("Lazy-loaded numpy and scikit-learn modules.")
+
+
+# Lazy-load heavy scientific stack on first use to avoid NameError later
+def _ensure_numpy_sklearn_loaded():
+    global np, PCA, cosine_similarity
+    try:
+        np  # type: ignore[name-defined]
+        PCA  # type: ignore[name-defined]
+        cosine_similarity  # type: ignore[name-defined]
+    except NameError:
+        import importlib
+
+        np = importlib.import_module("numpy")
+        PCA = importlib.import_module("sklearn.decomposition").PCA
+        cosine_similarity = importlib.import_module(
+            "sklearn.metrics.pairwise"
+        ).cosine_similarity
+        logger.debug("Lazy-loaded numpy and scikit-learn modules.")
 
 
 # --- Custom Proxy Model for Filtering ---
@@ -84,7 +110,7 @@ class CustomFilterProxyModel(QSortFilterProxyModel):
         super().__init__(parent)
         self.current_rating_filter = "Show All"
         self.current_cluster_filter_id = -1
-        self.app_state_ref: Optional[AppState] = None
+        self.app_state_ref: Optional["_AppStateType"] = None
         self.show_folders_mode_ref = False
         self.current_view_mode_ref = "list"
 
@@ -165,13 +191,35 @@ class MainWindow(QMainWindow):
         self._left_panel_views = set()
         self._image_viewer_views = set()
 
+        # Lazy import UI-layer modules that drag many transitive imports
+        _t0 = time.perf_counter()
+        from src.ui.ui_components import LoadingOverlay  # local import
+        from src.ui.metadata_sidebar import MetadataSidebar  # local import
+        from src.ui.dialog_manager import DialogManager  # local import
+        from src.ui.left_panel import LeftPanel  # local import
+        from src.ui.app_controller import AppController  # local import
+        from src.ui.menu_manager import MenuManager  # local import
+        from src.ui.app_state import AppState  # local import
+        from src.ui.worker_manager import WorkerManager  # local import
+
+        # assign to instance for later access in methods without re-importing
+        self.LeftPanel = LeftPanel
+        self.LoadingOverlay = LoadingOverlay
+        self.DialogManager = DialogManager
+        self.MetadataSidebar = MetadataSidebar
+        self.MenuManagerCls = MenuManager
+        self.AppControllerCls = AppController
+        logger.debug(f"UI submodules imported in {time.perf_counter() - _t0:.4f}s")
+
         self.image_pipeline = ImagePipeline()
+ 
+        # Instantiate core/state components after runtime imports
         self.app_state = AppState()
         self.worker_manager = WorkerManager(
             image_pipeline_instance=self.image_pipeline, parent=self
         )
-        self.dialog_manager = DialogManager(self)
-        self.app_controller = AppController(
+        self.dialog_manager = self.DialogManager(self)
+        self.app_controller = self.AppControllerCls(
             main_window=self,
             app_state=self.app_state,
             worker_manager=self.worker_manager,
@@ -227,7 +275,7 @@ class MainWindow(QMainWindow):
         )
         logger.debug("Filter controls created.")
 
-        self.menu_manager = MenuManager(self)
+        self.menu_manager = self.MenuManagerCls(self)
         self.menu_manager.create_menus(self.menuBar())
         self._create_widgets()
         self._create_layout()
@@ -313,7 +361,7 @@ class MainWindow(QMainWindow):
         logger.debug("Creating loading overlay...")
         parent_for_overlay = self
         if parent_for_overlay:
-            self.loading_overlay = LoadingOverlay(parent_for_overlay)
+            self.loading_overlay = self.LoadingOverlay(parent_for_overlay)
             self.loading_overlay.hide()
         else:
             logger.warning(
@@ -466,7 +514,7 @@ class MainWindow(QMainWindow):
         self.proxy_model.setSourceModel(self.file_system_model)
         self.proxy_model.app_state_ref = self.app_state  # Link AppState to proxy model
 
-        self.left_panel = LeftPanel(self.proxy_model, self.app_state, self)
+        self.left_panel = self.LeftPanel(self.proxy_model, self.app_state, self)
 
         self._left_panel_views = {
             self.left_panel.tree_display_view,
@@ -481,7 +529,10 @@ class MainWindow(QMainWindow):
         center_pane_layout.setSpacing(0)
 
         # Advanced image viewer instead of simple QLabel
-        self.advanced_image_viewer = SynchronizedImageViewer()
+        # Lazy import viewer to reduce module import time
+        from src.ui.advanced_image_viewer import SynchronizedImageViewer as _SIVRuntime
+ 
+        self.advanced_image_viewer = _SIVRuntime()
         self.advanced_image_viewer.setObjectName("advanced_image_viewer")
         self.advanced_image_viewer.setMinimumSize(400, 300)
         center_pane_layout.addWidget(self.advanced_image_viewer, 1)
@@ -555,7 +606,7 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(self.center_pane_container)
 
         # Create metadata sidebar and add to splitter
-        self.metadata_sidebar = MetadataSidebar(self)
+        self.metadata_sidebar = self.MetadataSidebar(self)
         self.metadata_sidebar.hide_requested.connect(self._hide_metadata_sidebar)
         main_splitter.addWidget(self.metadata_sidebar)
 
@@ -3089,7 +3140,8 @@ class MainWindow(QMainWindow):
         self,
         images_by_cluster: Dict[int, List[Dict[str, any]]],
         embeddings_cache: Dict[str, List[float]],
-    ) -> Dict[int, np.ndarray]:
+    ) -> Dict[int, "np.ndarray"]:
+        _ensure_numpy_sklearn_loaded()
         centroids = {}
         if not embeddings_cache:
             return centroids
@@ -3683,7 +3735,9 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(self.advanced_viewer_window)
 
         # Create the synchronized viewer
-        self.sync_viewer = SynchronizedImageViewer()
+        from src.ui.advanced_image_viewer import SynchronizedImageViewer as _SIVRuntime
+
+        self.sync_viewer = _SIVRuntime()
         layout.addWidget(self.sync_viewer)
 
         # Load images
@@ -4237,7 +4291,7 @@ class MainWindow(QMainWindow):
                 # Always find the best next selection. The function is smart enough
                 # to keep the current selection if it's still valid.
                 logger.debug("Finding next selection after deletion.")
-                next_path = find_next_visible_path_after_deletions(
+                next_path = self._find_next_visible_path_after_deletions_fn(
                     visible_paths_before,
                     marked_files,
                     anchor_path,
