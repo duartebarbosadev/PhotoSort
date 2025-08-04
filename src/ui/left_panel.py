@@ -48,7 +48,6 @@ class LeftPanel(QWidget):
         self.view_list_icon.clicked.connect(self.set_view_mode_list)
         self.view_icons_icon.clicked.connect(self.set_view_mode_icons)
         self.view_grid_icon.clicked.connect(self.set_view_mode_grid)
-        self.view_date_icon.clicked.connect(self.set_view_mode_date)
         self.view_rotation_icon.clicked.connect(self.set_view_mode_rotation)
         self.rotation_suggestions_view.selectionModel().selectionChanged.connect(
             self.main_window._handle_file_selection_changed
@@ -98,13 +97,6 @@ class LeftPanel(QWidget):
         self.view_grid_icon.setCheckable(True)
         self.view_grid_icon.setMaximumSize(24, 24)
 
-        self.view_date_icon = QPushButton()
-        self.view_date_icon.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
-        )
-        self.view_date_icon.setToolTip("Date View")
-        self.view_date_icon.setCheckable(True)
-        self.view_date_icon.setMaximumSize(24, 24)
 
         self.view_rotation_icon = QPushButton()
         self.view_rotation_icon.setIcon(
@@ -118,7 +110,6 @@ class LeftPanel(QWidget):
         view_icons_layout.addWidget(self.view_list_icon)
         view_icons_layout.addWidget(self.view_icons_icon)
         view_icons_layout.addWidget(self.view_grid_icon)
-        view_icons_layout.addWidget(self.view_date_icon)
         view_icons_layout.addWidget(self.view_rotation_icon)
         view_icons_layout.addStretch()
         search_layout.addWidget(view_icons_container)
@@ -202,7 +193,7 @@ class LeftPanel(QWidget):
             return self.grid_display_view
         elif self.current_view_mode == "rotation":
             return self.rotation_suggestions_view
-        # "list", "icons", "date" all use tree_display_view
+        # "list", "icons" use tree_display_view
         return self.tree_display_view
 
     def set_view_mode_list(self):
@@ -336,7 +327,6 @@ class LeftPanel(QWidget):
         self.view_list_icon.setChecked(False)
         self.view_icons_icon.setChecked(False)
         self.view_grid_icon.setChecked(False)
-        self.view_date_icon.setChecked(False)
         self.view_rotation_icon.setChecked(False)
 
         # Set the active icon button
@@ -346,8 +336,6 @@ class LeftPanel(QWidget):
             self.view_icons_icon.setChecked(True)
         elif self.current_view_mode == "grid":
             self.view_grid_icon.setChecked(True)
-        elif self.current_view_mode == "date":
-            self.view_date_icon.setChecked(True)
         elif self.current_view_mode == "rotation":
             self.view_rotation_icon.setChecked(True)
 

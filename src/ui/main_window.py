@@ -746,21 +746,15 @@ class MainWindow(QMainWindow):
                 root_item.appendRow(cluster_item)
                 files_in_cluster = images_by_cluster[cluster_id]
                 total_clustered_images += len(files_in_cluster)
-                if self.left_panel.current_view_mode == "date":
-                    self._populate_model_by_date(cluster_item, files_in_cluster)
-                else:
-                    self._populate_model_standard(cluster_item, files_in_cluster)
+                self._populate_model_standard(cluster_item, files_in_cluster)
             self.statusBar().showMessage(
                 f"Grouped {total_clustered_images} images into {len(sorted_cluster_ids)} clusters.",
                 3000,
             )
         else:  # Not grouping by similarity
-            if self.left_panel.current_view_mode == "date":
-                self._populate_model_by_date(root_item, self.app_state.image_files_data)
-            else:
-                self._populate_model_standard(
-                    root_item, self.app_state.image_files_data
-                )
+            self._populate_model_standard(
+                root_item, self.app_state.image_files_data
+            )
             self.statusBar().showMessage(
                 f"View populated with {len(self.app_state.image_files_data)} images.",
                 3000,

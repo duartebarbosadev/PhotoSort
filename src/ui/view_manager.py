@@ -32,7 +32,6 @@ class ViewManager:
         self.left_panel.view_list_icon.clicked.connect(self.set_view_mode_list)
         self.left_panel.view_icons_icon.clicked.connect(self.set_view_mode_icons)
         self.left_panel.view_grid_icon.clicked.connect(self.set_view_mode_grid)
-        self.left_panel.view_date_icon.clicked.connect(self.set_view_mode_date)
 
     def set_view_mode_list(self):
         self.current_view_mode = "list"
@@ -106,19 +105,6 @@ class ViewManager:
             self.update_grid_view_layout()  # Then adjust layout
             self.left_panel.grid_display_view.setFocus()
 
-    def set_view_mode_date(self):
-        self.current_view_mode = "date"
-        self.left_panel.tree_display_view.setVisible(True)
-        self.left_panel.grid_display_view.setVisible(False)
-        self.left_panel.tree_display_view.setIconSize(QSize(16, 16))
-        self.left_panel.tree_display_view.setIndentation(20)
-        self.left_panel.tree_display_view.setRootIsDecorated(True)
-        self.left_panel.tree_display_view.setItemsExpandable(True)
-        if self.left_panel.tree_display_view.itemDelegate() is self.thumbnail_delegate:
-            self.left_panel.tree_display_view.setItemDelegate(None)
-        self.update_view_button_states()
-        self.main_window._rebuild_model_view()
-        self.left_panel.tree_display_view.setFocus()
 
     def update_view_button_states(self):
         """Update the visual state of view mode icon buttons"""
@@ -126,7 +112,6 @@ class ViewManager:
         self.left_panel.view_list_icon.setChecked(False)
         self.left_panel.view_icons_icon.setChecked(False)
         self.left_panel.view_grid_icon.setChecked(False)
-        self.left_panel.view_date_icon.setChecked(False)
 
         # Set the active icon button
         if self.current_view_mode == "list":
@@ -135,8 +120,6 @@ class ViewManager:
             self.left_panel.view_icons_icon.setChecked(True)
         elif self.current_view_mode == "grid":
             self.left_panel.view_grid_icon.setChecked(True)
-        elif self.current_view_mode == "date":
-            self.left_panel.view_date_icon.setChecked(True)
 
     def update_grid_view_layout(self):
         if not self.left_panel.grid_display_view.isVisible():
