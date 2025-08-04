@@ -179,6 +179,10 @@ Logs will be saved to `~/.photosort_logs/photosort_app.log`.
 * **Synchronize Pan & Zoom:** `F3`
 * **Single View:** `F1`
 * **Side by Side View:** `F2`
+* **List View:** `Alt+1`
+* **Icons View:** `Alt+2`
+* **Grid View:** `Alt+3`
+* **Rotation View:** `Alt+4`
 
 **Arrow Key Navigation**
 

@@ -39,6 +39,12 @@ class MenuManager:
         self.auto_rotate_action: QAction
         self.toggle_metadata_sidebar_action: QAction
 
+        # New: View Mode Shortcut Actions
+        self.view_list_action: QAction
+        self.view_icons_action: QAction
+        self.view_grid_action: QAction
+        self.view_rotation_action: QAction
+
         # Filter Menu
         self.cluster_sort_action: QWidgetAction
 
@@ -160,6 +166,27 @@ class MenuManager:
         self.sync_pan_zoom_action.setShortcut(QKeySequence("F3"))
         main_win.addAction(self.sync_pan_zoom_action)
 
+        # New: View switching shortcuts
+        self.view_list_action = QAction("List View", main_win)
+        self.view_list_action.setShortcut(QKeySequence("Alt+1"))
+        self.view_list_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        main_win.addAction(self.view_list_action)
+
+        self.view_icons_action = QAction("Icons View", main_win)
+        self.view_icons_action.setShortcut(QKeySequence("Alt+2"))
+        self.view_icons_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        main_win.addAction(self.view_icons_action)
+
+        self.view_grid_action = QAction("Grid View", main_win)
+        self.view_grid_action.setShortcut(QKeySequence("Alt+3"))
+        self.view_grid_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        main_win.addAction(self.view_grid_action)
+
+        self.view_rotation_action = QAction("Rotation View", main_win)
+        self.view_rotation_action.setShortcut(QKeySequence("Alt+4"))
+        self.view_rotation_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        main_win.addAction(self.view_rotation_action)
+
         # Deletion marking actions
         self.mark_for_delete_action = QAction("Mark for Deletion", main_win)
         self.mark_for_delete_action.setShortcut(QKeySequence("D"))
@@ -226,6 +253,14 @@ class MenuManager:
         self.toggle_thumbnails_action.setChecked(True)
         self.toggle_thumbnails_action.setShortcut(QKeySequence("T"))
         view_menu.addAction(self.toggle_thumbnails_action)
+
+        view_menu.addSeparator()
+
+        # New: View mode entries with shortcuts
+        view_menu.addAction(self.view_list_action)
+        view_menu.addAction(self.view_icons_action)
+        view_menu.addAction(self.view_grid_action)
+        view_menu.addAction(self.view_rotation_action)
 
         view_menu.addSeparator()
 
@@ -369,6 +404,12 @@ class MenuManager:
         self.toggle_auto_edits_action.toggled.connect(
             main_win._handle_toggle_auto_edits
         )
+
+        # View switching shortcuts
+        self.view_list_action.triggered.connect(main_win.left_panel.set_view_mode_list)
+        self.view_icons_action.triggered.connect(main_win.left_panel.set_view_mode_icons)
+        self.view_grid_action.triggered.connect(main_win.left_panel.set_view_mode_grid)
+        self.view_rotation_action.triggered.connect(main_win.left_panel.set_view_mode_rotation)
 
         # Image Menu
         self.rotate_clockwise_action.triggered.connect(
