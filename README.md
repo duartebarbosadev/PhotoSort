@@ -163,16 +163,15 @@ Logs will be saved to `~/.photosort_logs/photosort_app.log`.
 
 **File Management**
 
-* **Open Folder:** `Cmd+O`
-* **Open Recent Folder:** No shortcut
-* **Exit:** `Cmd+Q`
+* **Open Folder:** `Ctrl/Cmd+O`
+* **Exit:** `Ctrl+F4/Cmd+Q`
 
 **Image Viewing and Navigation**
 
 * **Show/Hide Image Details Sidebar:** `I`
 * **Find Image:** `Cmd+F`
 * **Focus on a specific image in the grid (1-9):** `1` through `9`
-* **Zoom In:** `+` or `=`
+* **Zoom In:** `+`
 * **Zoom Out:** `-`
 * **Fit to View:** `0`
 * **Actual Size (100%):** `A`

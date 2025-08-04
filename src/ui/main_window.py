@@ -752,9 +752,7 @@ class MainWindow(QMainWindow):
                 3000,
             )
         else:  # Not grouping by similarity
-            self._populate_model_standard(
-                root_item, self.app_state.image_files_data
-            )
+            self._populate_model_standard(root_item, self.app_state.image_files_data)
             self.statusBar().showMessage(
                 f"View populated with {len(self.app_state.image_files_data)} images.",
                 3000,

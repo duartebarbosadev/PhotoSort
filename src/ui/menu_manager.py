@@ -174,7 +174,9 @@ class MenuManager:
 
         self.view_icons_action = QAction("Icons View", main_win)
         self.view_icons_action.setShortcut(QKeySequence("Alt+2"))
-        self.view_icons_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.view_icons_action.setShortcutContext(
+            Qt.ShortcutContext.ApplicationShortcut
+        )
         main_win.addAction(self.view_icons_action)
 
         self.view_grid_action = QAction("Grid View", main_win)
@@ -184,7 +186,9 @@ class MenuManager:
 
         self.view_rotation_action = QAction("Rotation View", main_win)
         self.view_rotation_action.setShortcut(QKeySequence("Alt+4"))
-        self.view_rotation_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.view_rotation_action.setShortcutContext(
+            Qt.ShortcutContext.ApplicationShortcut
+        )
         main_win.addAction(self.view_rotation_action)
 
         # Deletion marking actions
@@ -407,9 +411,28 @@ class MenuManager:
 
         # View switching shortcuts
         self.view_list_action.triggered.connect(main_win.left_panel.set_view_mode_list)
-        self.view_icons_action.triggered.connect(main_win.left_panel.set_view_mode_icons)
+        self.view_icons_action.triggered.connect(
+            main_win.left_panel.set_view_mode_icons
+        )
         self.view_grid_action.triggered.connect(main_win.left_panel.set_view_mode_grid)
-        self.view_rotation_action.triggered.connect(main_win.left_panel.set_view_mode_rotation)
+
+        # Guard Rotation View (Alt+4): only allow when there are rotation suggestions
+        def _guarded_show_rotation_view():
+            try:
+                suggestions = getattr(main_win, "rotation_suggestions", None)
+                if not suggestions or len(suggestions) == 0:
+                    # No-op if there are no rotation suggestions
+                    main_win.statusBar().showMessage(
+                        "No rotation suggestions to display.", 3000
+                    )
+                    return
+                # Proceed to show rotation view
+                main_win.left_panel.set_view_mode_rotation()
+            except Exception:
+                # Hard guard: never raise on shortcut
+                logger.error("Failed to switch to Rotation View.", exc_info=True)
+
+        self.view_rotation_action.triggered.connect(_guarded_show_rotation_view)
 
         # Image Menu
         self.rotate_clockwise_action.triggered.connect(

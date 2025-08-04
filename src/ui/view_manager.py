@@ -105,7 +105,6 @@ class ViewManager:
             self.update_grid_view_layout()  # Then adjust layout
             self.left_panel.grid_display_view.setFocus()
 
-
     def update_view_button_states(self):
         """Update the visual state of view mode icon buttons"""
         # Reset all icon buttons

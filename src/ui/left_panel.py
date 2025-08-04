@@ -97,7 +97,6 @@ class LeftPanel(QWidget):
         self.view_grid_icon.setCheckable(True)
         self.view_grid_icon.setMaximumSize(24, 24)
 
-
         self.view_rotation_icon = QPushButton()
         self.view_rotation_icon.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
