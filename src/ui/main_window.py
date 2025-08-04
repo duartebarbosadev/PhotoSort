@@ -2810,7 +2810,6 @@ class MainWindow(QMainWindow):
 
     def _toggle_folder_visibility(self, checked: bool):
         self.show_folders_mode = checked
-        self._rebuild_model_view()
 
         if self.left_panel.current_view_mode == "list":
             self.left_panel.set_view_mode_list()
@@ -2818,6 +2817,24 @@ class MainWindow(QMainWindow):
             self.left_panel.set_view_mode_icons()
         elif self.left_panel.current_view_mode == "date":
             self.left_panel.set_view_mode_date()
+        else:
+            # Fallback to ensure model is rebuilt at least once
+            self._rebuild_model_view()
+
+        # After the view mode setter has applied TreeView properties and rebuilt model,
+        # expand all groups if folder mode is active.
+        if self.show_folders_mode and not self.group_by_similarity_mode:
+            def _expand_after_layout():
+                try:
+                    active_view = self._get_active_file_view()
+                    if isinstance(active_view, QTreeView):
+                        # Ensure expand/collapse toggles are enabled for groups
+                        active_view.setItemsExpandable(True)
+                        active_view.setRootIsDecorated(True)
+                        active_view.expandAll()
+                except Exception as e:
+                    logger.warning(f"Failed to auto-expand folders after layout: {e}")
+            QTimer.singleShot(0, _expand_after_layout)
 
     def _toggle_group_by_similarity(self, checked: bool):
         # Always update the mode first, as it's needed by handle_clustering_complete
