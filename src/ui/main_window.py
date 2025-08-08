@@ -3654,6 +3654,10 @@ class MainWindow(QMainWindow):
                             modifiers & Qt.KeyboardModifier.ControlModifier
                         )
 
+                    # Back-compat alias: some older branches used this name in conditionals
+                    # Ensure it is always defined to avoid UnboundLocalError
+                    is_control_or_meta_exact = is_special_exact
+
                     # Rating shortcuts (Ctrl on Win/Linux, Cmd on macOS) + 0-5
                     # MUST be an exact modifier match.
                     if is_special_exact and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
