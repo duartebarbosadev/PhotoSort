@@ -18,7 +18,11 @@ from src.core.app_settings import (
     GRID_SPACING,
 )
 
-from src.ui.ui_components import DroppableTreeView, FocusHighlightDelegate
+from src.ui.ui_components import (
+    DroppableTreeView,
+    FocusHighlightDelegate,
+    NoCtrlListView,
+)
 
 
 class LeftPanel(QWidget):
@@ -131,7 +135,7 @@ class LeftPanel(QWidget):
         self.tree_display_view.setAcceptDrops(False)
         self.tree_display_view.setDropIndicatorShown(False)
 
-        self.grid_display_view = QListView()
+        self.grid_display_view = NoCtrlListView()
         self.grid_display_view.setModel(self.proxy_model)
         self.grid_display_view.setViewMode(QListView.ViewMode.IconMode)
         self.grid_display_view.setFlow(QListView.Flow.LeftToRight)
@@ -153,7 +157,9 @@ class LeftPanel(QWidget):
         self.grid_display_view.setUniformItemSizes(True)
         self.grid_display_view.setWordWrap(True)
 
-        self.rotation_suggestions_view = QTreeView()
+        self.rotation_suggestions_view = DroppableTreeView(
+            self.proxy_model, self.main_window
+        )
         self.rotation_suggestions_view.setModel(self.proxy_model)
         self.rotation_suggestions_view.setHeaderHidden(True)
         self.rotation_suggestions_view.setIndentation(15)

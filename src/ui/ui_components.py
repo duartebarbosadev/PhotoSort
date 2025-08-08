@@ -5,8 +5,9 @@ from PyQt6.QtWidgets import (
     QTreeView,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QListView,
 )
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex, QItemSelectionModel
 from PyQt6.QtGui import (
     QPainter,
     QPalette,
@@ -23,6 +24,7 @@ from src.core.image_features.blur_detector import (
 )  # For BlurDetectionWorker
 from src.core.caching.exif_cache import ExifCache  # Added for RotationDetectionWorker
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,33 @@ class DroppableTreeView(QTreeView):
     def dropEvent(self, event: Optional[QDropEvent]):
         if event:
             event.ignore()  # Disable drag and drop
+
+    # Disable Ctrl-based toggle selection on Windows; treat Ctrl+click like a normal click
+    def selectionCommand(self, index, event=None):  # type: ignore[override]
+        try:
+            if sys.platform.startswith("win") and event is not None:
+                # If Ctrl is held, ignore it and behave like ClearAndSelect
+                if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    return (
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect
+                    )
+        except Exception:
+            # Fall back to default behavior on any error
+            pass
+        return super().selectionCommand(index, event)
+
+
+class NoCtrlListView(QListView):
+    """QListView that ignores Ctrl-based toggle selection on Windows."""
+
+    def selectionCommand(self, index, event=None):  # type: ignore[override]
+        try:
+            if sys.platform.startswith("win") and event is not None:
+                if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    return QItemSelectionModel.SelectionFlag.ClearAndSelect
+        except Exception:
+            pass
+        return super().selectionCommand(index, event)
 
 
 # --- Custom Delegate for Highlighting Focused Image ---

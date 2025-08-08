@@ -47,6 +47,7 @@ from PyQt6.QtGui import (
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_similarity  # Add cosine_similarity import
+import sys
 
 from src.core.image_pipeline import ImagePipeline
 from src.core.image_file_ops import ImageFileOperations
@@ -1103,7 +1104,7 @@ class MainWindow(QMainWindow):
                 self.left_panel.search_input.clearFocus()
                 active_view = self._get_active_file_view()
                 if active_view:
-                    active_view.setFocus()  # Return focus to the view
+                    active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)  # Return focus to the view
                 event.accept()
                 return
 
@@ -1683,8 +1684,18 @@ class MainWindow(QMainWindow):
                 f"Navigate {direction} (bypass deleted): Moving to: {os.path.basename(path) if path else 'Unknown'}"
             )
 
-        active_view.setCurrentIndex(candidate_idx)
+        # Always maintain single-selection on keyboard navigation.
+        # Use setCurrentIndex with ClearAndSelect atomically to avoid transient paint/focus issues.
+        sel_model = active_view.selectionModel()
+        if sel_model is not None:
+            sel_model.setCurrentIndex(
+                candidate_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect
+            )
         active_view.scrollTo(candidate_idx, QAbstractItemView.ScrollHint.EnsureVisible)
+        # Ensure the view retains focus so selection remains active (blue) instead of inactive (gray)
+        active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        # Proactively repaint to reflect the new active selection immediately
+        active_view.viewport().update()
         if item:
             logger.debug(f"Navigated {direction} to: {item.text()}")
 
@@ -1700,7 +1711,13 @@ class MainWindow(QMainWindow):
         ):
             first_item = self._find_first_visible_item()
             if first_item.isValid():
+                sel_model = active_view.selectionModel()
+                if sel_model is not None:
+                    sel_model.select(
+                        first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                    )
                 active_view.setCurrentIndex(first_item)
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
         _parent_group_idx, group_images, local_idx = (
@@ -1734,7 +1751,13 @@ class MainWindow(QMainWindow):
         ):
             first_item = self._find_first_visible_item()
             if first_item.isValid():
+                sel_model = active_view.selectionModel()
+                if sel_model is not None:
+                    sel_model.select(
+                        first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                    )
                 active_view.setCurrentIndex(first_item)
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
         _parent_group_idx, group_images, local_idx = (
@@ -1771,10 +1794,17 @@ class MainWindow(QMainWindow):
         if not current_proxy_idx.isValid():
             last_item_index = self._find_last_visible_item()
             if last_item_index.isValid():
+                sel_model = active_view.selectionModel()
+                if sel_model is not None:
+                    sel_model.select(
+                        last_item_index,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    )
                 active_view.setCurrentIndex(last_item_index)
                 active_view.scrollTo(
                     last_item_index, QAbstractItemView.ScrollHint.EnsureVisible
                 )
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
         iter_idx = current_proxy_idx
@@ -1792,7 +1822,7 @@ class MainWindow(QMainWindow):
             max_iterations = DEFAULT_MAX_ITERATIONS
 
         for iteration_count in range(max_iterations):
-            prev_visual_idx = active_view.indexAbove(iter_idx)
+            prev_visual_idx = self._index_above(active_view, iter_idx)
 
             if not prev_visual_idx.isValid():
                 break
@@ -1834,10 +1864,17 @@ class MainWindow(QMainWindow):
         if not current_index.isValid():
             first_item_index = self._find_first_visible_item()
             if first_item_index.isValid():
+                sel_model = active_view.selectionModel()
+                if sel_model is not None:
+                    sel_model.select(
+                        first_item_index,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    )
                 active_view.setCurrentIndex(first_item_index)
                 active_view.scrollTo(
                     first_item_index, QAbstractItemView.ScrollHint.EnsureVisible
                 )
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
         temp_index = current_index
@@ -1860,7 +1897,7 @@ class MainWindow(QMainWindow):
         while temp_index.isValid() and iteration_count < safety_iteration_limit:
             iteration_count += 1
             # 1. Get the item visually below the current one
-            temp_index = active_view.indexBelow(temp_index)
+            temp_index = self._index_below(active_view, temp_index)
 
             if not temp_index.isValid():
                 break
@@ -1874,6 +1911,38 @@ class MainWindow(QMainWindow):
             logger.warning("Navigate down: Max iterations reached, aborting.")
 
         logger.debug("Navigate down: No next image found.")
+
+    def _index_below(self, view: QAbstractItemView, index: QModelIndex) -> QModelIndex:
+        """Return the index visually below the given one for both tree and list/grid views."""
+        from PyQt6.QtWidgets import QTreeView, QListView
+
+        if isinstance(view, QTreeView):
+            return view.indexBelow(index)
+        # QListView/grid: advance row by 1 within the same parent
+        model = view.model()
+        if not model:
+            return QModelIndex()
+        parent = index.parent()
+        next_row = index.row() + 1
+        if 0 <= next_row < model.rowCount(parent):
+            return model.index(next_row, index.column(), parent)
+        return QModelIndex()
+
+    def _index_above(self, view: QAbstractItemView, index: QModelIndex) -> QModelIndex:
+        """Return the index visually above the given one for both tree and list/grid views."""
+        from PyQt6.QtWidgets import QTreeView, QListView
+
+        if isinstance(view, QTreeView):
+            return view.indexAbove(index)
+        # QListView/grid: move row by -1 within the same parent
+        model = view.model()
+        if not model:
+            return QModelIndex()
+        parent = index.parent()
+        prev_row = index.row() - 1
+        if 0 <= prev_row < model.rowCount(parent):
+            return model.index(prev_row, index.column(), parent)
+        return QModelIndex()
 
     def _find_first_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
@@ -3472,6 +3541,7 @@ class MainWindow(QMainWindow):
                     proxy_idx_to_select,
                     QAbstractItemView.ScrollHint.EnsureVisible,
                 )
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
                 return True
 
         return False
@@ -3561,24 +3631,40 @@ class MainWindow(QMainWindow):
                         Qt.KeyboardModifier.NoModifier,
                         Qt.KeyboardModifier.KeypadModifier,
                     )
-                    is_control_or_meta_exact = modifiers in (
-                        Qt.KeyboardModifier.ControlModifier,
-                        Qt.KeyboardModifier.MetaModifier,
-                    )
-                    has_control_or_meta = modifiers & (
-                        Qt.KeyboardModifier.ControlModifier
-                        | Qt.KeyboardModifier.MetaModifier
-                    )
 
-                    # Rating shortcuts (Ctrl/Cmd + 0-5) - MUST be an exact modifier match.
-                    if is_control_or_meta_exact and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
+                    # Platform-aware modifier mapping:
+                    # - macOS: Cmd (Meta) is the special modifier
+                    # - Windows/Linux: Ctrl is the special modifier
+                    is_macos = sys.platform == "darwin"
+                    is_windows = sys.platform.startswith("win")
+
+                    if is_macos:
+                        is_special_exact = (
+                            modifiers == Qt.KeyboardModifier.MetaModifier
+                        )
+                        has_special = bool(
+                            modifiers & Qt.KeyboardModifier.MetaModifier
+                        )
+                    else:
+                        # Explicitly avoid treating Alt as special on Windows/Linux
+                        is_special_exact = (
+                            modifiers == Qt.KeyboardModifier.ControlModifier
+                        )
+                        has_special = bool(
+                            modifiers & Qt.KeyboardModifier.ControlModifier
+                        )
+
+                    # Rating shortcuts (Ctrl on Win/Linux, Cmd on macOS) + 0-5
+                    # MUST be an exact modifier match.
+                    if is_special_exact and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
                         return True
 
                     # --- Arrow Key Navigation ---
-                    # For navigation, Ctrl/Cmd has precedence for "modified" navigation, even with Shift.
-                    if has_control_or_meta:
+                    # For navigation, the platform's special modifier has precedence for
+                    # "modified" navigation (include deleted), even with Shift.
+                    if has_special:
                         if self._dispatch_navigation(key, is_modified=True):
                             return True
                     elif is_unmodified_or_keypad:
@@ -4726,7 +4812,7 @@ class MainWindow(QMainWindow):
             active_view.scrollTo(
                 proxy_index, QAbstractItemView.ScrollHint.PositionAtCenter
             )
-            active_view.setFocus()
+            active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
             # Reset the flag after the event queue is cleared to prevent loops
             QTimer.singleShot(0, lambda: setattr(self, "_is_syncing_selection", False))
