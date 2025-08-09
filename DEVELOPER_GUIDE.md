@@ -154,6 +154,7 @@ Guidelines for new tests:
 3. Skip GUI-heavy tests gracefully when prerequisites (sample assets, GPU libs) are missing instead of failing.
 4. When asserting selection advancement, test the helper function directly with synthetic path lists—only one integration test should cover the end-to-end GUI path.
 
+
 ## 7. Adding New Image Feature Pipelines
 
 For a new feature (e.g., "sharpness heatmap"):
