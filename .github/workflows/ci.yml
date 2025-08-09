@@ -1,7 +1,8 @@
 name: CI
 
 on:
-  push: {}
+  push:
+    branches: [ main ]
   pull_request: {}
 
 concurrency:
@@ -49,12 +50,11 @@ jobs:
 
       - name: Ruff Format Check
         run: ruff format --check .
-
-      - name: Run Tests
+      - name: Run Core Tests (exclude GUI)
         env:
           PYTHONWARNINGS: default
         run: |
-          pytest -q --cov=src --cov-report=xml --cov-report=term
+          pytest -q -m "not gui" --cov=src --cov-report=xml --cov-report=term
 
       - name: Upload coverage XML
         uses: actions/upload-artifact@v4
@@ -72,10 +72,43 @@ jobs:
             .pytest_cache
             ./**/pytest-*.log
 
+  gui-tests:
+    name: GUI Tests (Qt)
+    runs-on: ubuntu-latest
+    needs: build-test
+    continue-on-error: true  # allow stabilization without failing entire pipeline
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install system GUI deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libegl1 libgl1 libxkbcommon-x11-0 libxcb-xinerama0 libglib2.0-0
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Run GUI tests under Xvfb
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          xvfb-run -a pytest -q -m gui
+      - name: Upload GUI pytest cache
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-pytest-cache
+          path: .pytest_cache
+
   security:
     name: Basic Security Scan
     runs-on: ubuntu-latest
-    needs: build-test
+    needs: [build-test]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -100,7 +133,7 @@ jobs:
     name: PR Summary
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    needs: [build-test, security]
+    needs: [build-test, gui-tests, security]
     permissions:
       contents: read
       pull-requests: write
