@@ -25,7 +25,9 @@ def test_accept_single_rotation_moves_to_next(qapp, tmp_path):
 
     all_visible = window._get_all_visible_image_paths()
     if len(all_visible) < 4:
-        pytest.skip("Rotation view did not populate enough visible items in test harness")
+        pytest.skip(
+            "Rotation view did not populate enough visible items in test harness"
+        )
     target = all_visible[1]
     window._select_items_in_current_view([target])
 
@@ -42,7 +44,9 @@ def test_accept_multi_non_contiguous_next_selection(qapp, tmp_path):
     window.show()
     all_visible = window._get_all_visible_image_paths()
     if len(all_visible) < 6:
-        pytest.skip("Rotation view did not populate enough visible items in test harness")
+        pytest.skip(
+            "Rotation view did not populate enough visible items in test harness"
+        )
 
     targets = [all_visible[0], all_visible[2], all_visible[5]]
     window._select_items_in_current_view(targets)
@@ -75,7 +79,13 @@ def test_lazy_detector_does_not_initialize_until_predict(monkeypatch):
             class _T:
                 def unsqueeze(self_inner, n):
                     import numpy as np
-                    return types.SimpleNamespace(cpu=lambda: types.SimpleNamespace(numpy=lambda: np.zeros((1, 3, 2, 2))))
+
+                    return types.SimpleNamespace(
+                        cpu=lambda: types.SimpleNamespace(
+                            numpy=lambda: np.zeros((1, 3, 2, 2))
+                        )
+                    )
+
             return _T()
 
     state.session = DummySession()
@@ -97,6 +107,7 @@ def test_disabled_mode_returns_zero(monkeypatch):
     st.session = None
     assert det.predict_rotation_angle("whatever.jpg") == 0
 
+
 @pytest.mark.skip(reason="Flaky at end of full test run; passes in isolation")
 def test_about_dialog_provider_string(qapp):
     window = MainWindow()
@@ -114,6 +125,7 @@ def test_about_dialog_provider_string(qapp):
     else:
         pytest.skip("About dialog not created in headless test environment")
     from PyQt6.QtWidgets import QLabel
+
     label_texts = [lbl.text() for lbl in dialogs[0].findChildren(QLabel)]
     assert any("Rotation Model" in t for t in label_texts)
     dialogs[0].close()

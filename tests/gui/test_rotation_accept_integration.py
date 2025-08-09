@@ -8,7 +8,9 @@ def _collect_visible_paths(window: MainWindow):
     return window._get_all_visible_image_paths()
 
 
-@pytest.mark.skipif(not os.path.isdir("sample"), reason="sample folder missing for integration test")
+@pytest.mark.skipif(
+    not os.path.isdir("sample"), reason="sample folder missing for integration test"
+)
 def test_accept_single_rotation_advances_selection(qapp):
     folder = os.path.abspath("sample")
     window = MainWindow(initial_folder=folder)
@@ -35,7 +37,9 @@ def test_accept_single_rotation_advances_selection(qapp):
     window.close()
 
 
-@pytest.mark.skipif(not os.path.isdir("sample"), reason="sample folder missing for integration test")
+@pytest.mark.skipif(
+    not os.path.isdir("sample"), reason="sample folder missing for integration test"
+)
 def test_accept_multi_rotation_advances_selection(qapp):
     folder = os.path.abspath("sample")
     window = MainWindow(initial_folder=folder)
