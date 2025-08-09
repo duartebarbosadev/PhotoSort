@@ -154,6 +154,21 @@ Guidelines for new tests:
 3. Skip GUI-heavy tests gracefully when prerequisites (sample assets, GPU libs) are missing instead of failing.
 4. When asserting selection advancement, test the helper function directly with synthetic path lists—only one integration test should cover the end-to-end GUI path.
 
+### 6.1 GUI vs Core Test Separation
+
+GUI tests now live under `tests/gui/` and are collected/executed in a dedicated CI job that provisions an offscreen Qt environment (Xvfb + `QT_QPA_PLATFORM=offscreen`). Core tests exclude this directory via `pytest --ignore=tests/gui` in the main (faster) job. This eliminates the previous temporary `SKIP_GUI_IMPORTS` environment flag hack.
+
+Key points:
+- Put only tests that truly require `PyQt6` event loop or widget behavior in `tests/gui/`.
+- Prefer extracting pure logic into functions under `src/core` or `src/ui/selection_utils.py` and testing them in the core suite.
+- Use the shared `tests/gui/conftest.py` for the `qapp` fixture—don't recreate `QApplication` instances in individual tests.
+- Keep flaky or timing-sensitive GUI tests small; leverage `processEvents()` loops with bounded timers instead of arbitrary `sleep()` calls.
+- If a GUI test becomes stable, remove `continue-on-error` for the GUI job (tracked TODO).
+
+Coverage:
+- Both jobs produce separate coverage data files (`.coverage.core`, `.coverage.gui`) which are combined in the `summary` job to yield a unified coverage report.
+- When adding new GUI tests, ensure they meaningfully exercise code paths not already covered by core pure logic tests; otherwise, port logic out of the GUI layer.
+
 ## 7. Adding New Image Feature Pipelines
 
 For a new feature (e.g., "sharpness heatmap"):

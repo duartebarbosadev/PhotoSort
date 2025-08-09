@@ -50,18 +50,26 @@ jobs:
 
       - name: Ruff Format Check
         run: ruff format --check .
-      - name: Run Core Tests (exclude GUI)
+      - name: Run Core Tests (exclude GUI directory)
         env:
           PYTHONWARNINGS: default
         run: |
-          pytest -q -m "not gui" --cov=src --cov-report=xml --cov-report=term
+          pytest -q --ignore=tests/gui --cov=src --cov-report=xml:coverage-core.xml --cov-report=term
+          cp .coverage .coverage.core || true
 
-      - name: Upload coverage XML
+      - name: Upload core coverage XML
         uses: actions/upload-artifact@v4
         if: success() || failure()
         with:
-          name: coverage-xml
-          path: coverage.xml
+          name: coverage-core-xml
+          path: coverage-core.xml
+
+      - name: Upload core coverage data
+        uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: coverage-core-data
+          path: .coverage.core
 
       - name: Upload pytest cache & reports
         uses: actions/upload-artifact@v4
@@ -76,7 +84,7 @@ jobs:
     name: GUI Tests (Qt)
     runs-on: ubuntu-latest
     needs: build-test
-    continue-on-error: true  # allow stabilization without failing entire pipeline
+    continue-on-error: true  # temporary while stabilizing GUI tests
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -93,11 +101,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
-      - name: Run GUI tests under Xvfb
+      - name: Run GUI tests under Xvfb (coverage)
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          xvfb-run -a pytest -q -m gui
+          xvfb-run -a pytest -q tests/gui --cov=src --cov-report=xml:coverage-gui.xml --cov-append
+          cp .coverage .coverage.gui || true
+      - name: Upload GUI coverage XML
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-gui-xml
+          path: coverage-gui.xml
+      - name: Upload GUI coverage data
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-gui-data
+          path: .coverage.gui
       - name: Upload GUI pytest cache
         if: success() || failure()
         uses: actions/upload-artifact@v4
@@ -138,6 +159,28 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: coverage-artifacts
+      - name: Combine coverage (if both present)
+        run: |
+          pip install coverage
+          ls -R coverage-artifacts || true
+          # Prepare coverage data files
+          if [ -f coverage-artifacts/coverage-core-data/.coverage.core ]; then cp coverage-artifacts/coverage-core-data/.coverage.core .; fi
+          if [ -f coverage-artifacts/coverage-gui-data/.coverage.gui ]; then cp coverage-artifacts/coverage-gui-data/.coverage.gui .; fi
+          # Combine if at least one present
+          if ls .coverage.* 1>/dev/null 2>&1; then coverage combine .coverage.core .coverage.gui || true; fi
+          if [ -f .coverage ]; then coverage xml -o coverage-combined.xml || true; fi
+          if [ -f coverage-combined.xml ]; then echo "Combined coverage generated"; fi
+          echo '### Coverage Summary' >> $GITHUB_STEP_SUMMARY
+          if [ -f coverage-combined.xml ]; then
+            TOTAL=$(grep -o 'line-rate="[0-9.]*"' coverage-combined.xml | head -1 | cut -d '"' -f2)
+            echo "* Combined line-rate: ${TOTAL}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "* Combined coverage not available" >> $GITHUB_STEP_SUMMARY
+          fi
       - name: Generate Summary
         run: |
           echo '### CI Results' >> $GITHUB_STEP_SUMMARY
