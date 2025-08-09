@@ -116,7 +116,10 @@ class DialogManager:
         try:
             model_detector = ModelRotationDetector()
             # Lazy detector exposes provider via internal state after load attempt
-            onnx_provider = getattr(model_detector._state, "provider_name", None) or "N/A (model not loaded)"
+            onnx_provider = (
+                getattr(model_detector._state, "provider_name", None)
+                or "N/A (model not loaded)"
+            )
         except ModelNotFoundError:
             onnx_provider = "N/A (model not found)"
         except Exception:

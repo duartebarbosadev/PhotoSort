@@ -4,6 +4,7 @@ Safe to import without pulling heavy ML deps. Heavy libraries (onnxruntime,
 torchvision, Pillow) and the ONNX session are loaded only when first needed.
 If anything is missing, detector stays disabled and returns 0.
 """
+
 from __future__ import annotations
 
 import glob
@@ -39,7 +40,10 @@ class ModelNotFoundError(Exception):
 @runtime_checkable
 class RotationDetectorProtocol(Protocol):  # pragma: no cover - structural typing
     def predict_rotation_angle(
-    self, image_path: str, image: Optional[object] = None, apply_auto_edits: bool = False
+        self,
+        image_path: str,
+        image: Optional[object] = None,
+        apply_auto_edits: bool = False,
     ) -> int: ...
 
 
@@ -74,7 +78,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
     def predict_rotation_angle(
         self,
         image_path: str,
-    image: Optional[object] = None,
+        image: Optional[object] = None,
         apply_auto_edits: bool = False,
     ) -> int:
         if not self._ensure_session_loaded():
@@ -89,12 +93,16 @@ class ModelRotationDetector(RotationDetectorProtocol):
         try:
             input_tensor = self._state.transforms(image).unsqueeze(0)
             input_np = input_tensor.cpu().numpy()
-            result = self._state.session.run([self._state.output_name], {self._state.input_name: input_np})
+            result = self._state.session.run(
+                [self._state.output_name], {self._state.input_name: input_np}
+            )
             predicted_idx = int(np.argmax(result[0], axis=1)[0])
             return CLASS_TO_ANGLE_MAP.get(predicted_idx, 0)
         except Exception:  # noqa: BLE001
             if not self._state.failure_logged:
-                logger.error("Rotation inference failed; disabling detector.", exc_info=True)
+                logger.error(
+                    "Rotation inference failed; disabling detector.", exc_info=True
+                )
                 self._state.failure_logged = True
             return 0
 
@@ -114,7 +122,8 @@ class ModelRotationDetector(RotationDetectorProtocol):
             s.load_failed = True
             if not s.failure_logged:
                 logger.warning(
-                    "Rotation model dependencies missing (onnxruntime/torchvision); detector disabled: %s", e
+                    "Rotation model dependencies missing (onnxruntime/torchvision); detector disabled: %s",
+                    e,
                 )
                 s.failure_logged = True
             return False
@@ -130,7 +139,9 @@ class ModelRotationDetector(RotationDetectorProtocol):
                     transforms.Resize((IMAGE_SIZE + 32, IMAGE_SIZE + 32)),
                     transforms.CenterCrop(IMAGE_SIZE),
                     transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                    ),
                 ]
             )
             providers_pref = [
@@ -156,7 +167,10 @@ class ModelRotationDetector(RotationDetectorProtocol):
         except Exception:  # noqa: BLE001
             s.load_failed = True
             if not s.failure_logged:
-                logger.error("Failed to initialize rotation model; detector disabled", exc_info=True)
+                logger.error(
+                    "Failed to initialize rotation model; detector disabled",
+                    exc_info=True,
+                )
                 s.failure_logged = True
             return False
 
@@ -176,10 +190,14 @@ class ModelRotationDetector(RotationDetectorProtocol):
             if models:
                 model_path = max(models, key=os.path.basename)
                 set_orientation_model_name(os.path.basename(model_path))
-                logger.info("Auto-selected rotation model %s", os.path.basename(model_path))
+                logger.info(
+                    "Auto-selected rotation model %s", os.path.basename(model_path)
+                )
             else:
                 if not self._state.failure_logged:
-                    logger.error("No orientation model found; rotation detection disabled.")
+                    logger.error(
+                        "No orientation model found; rotation detection disabled."
+                    )
                     self._state.failure_logged = True
                 return None
         return model_path
@@ -189,8 +207,11 @@ class ModelRotationDetector(RotationDetectorProtocol):
             norm = os.path.normpath(path)
             _, ext = os.path.splitext(norm)
             if is_raw_extension(ext):
-                return RawImageProcessor.load_raw_as_pil(norm, half_size=True, apply_auto_edits=apply_auto_edits)
+                return RawImageProcessor.load_raw_as_pil(
+                    norm, half_size=True, apply_auto_edits=apply_auto_edits
+                )
             from PIL import Image, ImageOps  # type: ignore
+
             img = Image.open(norm)
             img = ImageOps.exif_transpose(img)
             if img.mode in ("RGB", "L"):
@@ -203,7 +224,11 @@ class ModelRotationDetector(RotationDetectorProtocol):
             logger.error("Rotation detector: file not found %s", os.path.basename(path))
             return None
         except Exception as e:  # noqa: BLE001
-            logger.error("Failed loading image for rotation detection %s: %s", os.path.basename(path), e)
+            logger.error(
+                "Failed loading image for rotation detection %s: %s",
+                os.path.basename(path),
+                e,
+            )
             return None
 
 

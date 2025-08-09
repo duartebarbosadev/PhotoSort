@@ -70,7 +70,6 @@ from src.ui.app_state import AppState
 from src.ui.ui_components import LoadingOverlay
 from src.ui.worker_manager import WorkerManager
 from src.ui.metadata_sidebar import MetadataSidebar
-import os as _os_env  # (legacy import left; env gating removed)
 from src.ui.dialog_manager import DialogManager
 from src.ui.left_panel import LeftPanel
 from src.ui.app_controller import AppController
