@@ -2,7 +2,10 @@ import os
 import sys
 import types
 import pytest
-from PyQt6.QtWidgets import QApplication
+
+# Ensure PyQt6 available; in core (non-GUI) CI job module import will skip cleanly.
+pytest.importorskip("PyQt6.QtWidgets", reason="PyQt6 not available for GUI tests")
+from PyQt6.QtWidgets import QApplication  # type: ignore
 
 # Ensure project root importable
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,9 +41,7 @@ def build_window_with_rotation_suggestions(tmp_path, count=5):
     return window
 
 
-@pytest.mark.skip(
-    reason="GUI rotation view population unstable in headless test env; covered by integration test when enabled"
-)
+@pytest.mark.gui
 def test_accept_single_rotation_moves_to_next(qapp, tmp_path):
     window = build_window_with_rotation_suggestions(tmp_path, count=4)
     window.show()
@@ -65,9 +66,7 @@ def test_accept_single_rotation_moves_to_next(qapp, tmp_path):
     window.close()
 
 
-@pytest.mark.skip(
-    reason="GUI rotation multi-accept tested in integration suite; skipping in unit env"
-)
+@pytest.mark.gui
 def test_accept_multi_non_contiguous_next_selection(qapp, tmp_path):
     window = build_window_with_rotation_suggestions(tmp_path, count=6)
     window.show()
