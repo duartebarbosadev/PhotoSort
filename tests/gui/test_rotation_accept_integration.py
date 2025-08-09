@@ -39,7 +39,8 @@ def test_accept_single_rotation_advances_selection(qapp):
 def test_accept_multi_rotation_advances_selection(qapp):
     folder = os.path.abspath("sample")
     window = MainWindow(initial_folder=folder)
-    window.show(); window.left_panel.current_view_mode = "rotation"
+    window.show()
+    window.left_panel.current_view_mode = "rotation"
 
     visible_paths = _collect_visible_paths(window)
     if len(visible_paths) < 3:

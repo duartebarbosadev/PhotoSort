@@ -104,7 +104,8 @@ def test_about_dialog_provider_string(qapp):
     dm.show_about_dialog(block=False)
     from PyQt6.QtCore import QElapsedTimer
 
-    timer = QElapsedTimer(); timer.start()
+    timer = QElapsedTimer()
+    timer.start()
     while timer.elapsed() < 3000:
         qapp.processEvents()
         dialogs = [w for w in qapp.topLevelWidgets() if w.objectName() == "aboutDialog"]
@@ -115,4 +116,5 @@ def test_about_dialog_provider_string(qapp):
     from PyQt6.QtWidgets import QLabel
     label_texts = [lbl.text() for lbl in dialogs[0].findChildren(QLabel)]
     assert any("Rotation Model" in t for t in label_texts)
-    dialogs[0].close(); window.close()
+    dialogs[0].close()
+    window.close()
