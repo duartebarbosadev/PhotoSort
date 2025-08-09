@@ -1,12 +1,4 @@
-import os
-import sys
 import time
-
-# Ensure project root on path if run standalone (mirrors other tests) BEFORE importing src
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:  # pragma: no cover
-    sys.path.insert(0, project_root)
-
 from src.ui.selection_utils import select_next_surviving_path
 
 

@@ -1,14 +1,6 @@
 import os
-import sys
 import pytest
-
-# Insert project root before importing src modules
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PROJECT_ROOT not in sys.path:  # pragma: no cover
-    sys.path.insert(0, PROJECT_ROOT)
-
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
 
 # Attempt heavy UI import; skip module if dependencies (onnxruntime, torch, etc.) fail.
 try:  # pragma: no cover - environment dependent
@@ -21,7 +13,7 @@ except Exception as e:  # Broad except to catch DLL load issues
         allow_module_level=True,
     )
 
-from src.ui.selection_utils import select_next_surviving_path  # sanity reference
+# (selection_utils import not needed directly; exercised indirectly via MainWindow methods)
 
 
 @pytest.fixture(scope="module")
@@ -38,7 +30,9 @@ def _collect_visible_paths(window: MainWindow):
     return window._get_all_visible_image_paths()
 
 
-@pytest.mark.skipif(not os.path.isdir("sample"), reason="sample folder missing for integration test")
+@pytest.mark.skipif(
+    not os.path.isdir("sample"), reason="sample folder missing for integration test"
+)
 def test_accept_single_rotation_advances_selection(qapp):
     # Launch window pointing at sample folder if present
     folder = os.path.abspath("sample")
@@ -75,7 +69,9 @@ def test_accept_single_rotation_advances_selection(qapp):
     window.close()
 
 
-@pytest.mark.skipif(not os.path.isdir("sample"), reason="sample folder missing for integration test")
+@pytest.mark.skipif(
+    not os.path.isdir("sample"), reason="sample folder missing for integration test"
+)
 def test_accept_multi_rotation_advances_selection(qapp):
     folder = os.path.abspath("sample")
     window = MainWindow(initial_folder=folder)

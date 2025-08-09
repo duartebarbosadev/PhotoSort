@@ -1,12 +1,4 @@
-import os
-import sys
 import pytest
-
-# Ensure project root on path (defensive when running in isolation) BEFORE importing src
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:  # pragma: no cover
-    sys.path.insert(0, project_root)
-
 from src.ui.selection_utils import select_next_surviving_path
 
 
