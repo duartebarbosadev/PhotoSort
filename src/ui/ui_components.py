@@ -71,31 +71,15 @@ class DroppableTreeView(QTreeView):
         if event:
             event.ignore()  # Disable drag and drop
 
-    # Disable Ctrl-based toggle selection on Windows; treat Ctrl+click like a normal click
+    # Use default selection semantics (allow Ctrl+click multi-select on Windows again)
     def selectionCommand(self, index, event=None):  # type: ignore[override]
-        try:
-            if sys.platform.startswith("win") and event is not None:
-                # If Ctrl is held, ignore it and behave like ClearAndSelect
-                if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                    return (
-                        QItemSelectionModel.SelectionFlag.ClearAndSelect
-                    )
-        except Exception:
-            # Fall back to default behavior on any error
-            pass
         return super().selectionCommand(index, event)
 
 
 class NoCtrlListView(QListView):
-    """QListView that ignores Ctrl-based toggle selection on Windows."""
+    """QListView with default Ctrl+click multi-select behavior restored."""
 
     def selectionCommand(self, index, event=None):  # type: ignore[override]
-        try:
-            if sys.platform.startswith("win") and event is not None:
-                if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                    return QItemSelectionModel.SelectionFlag.ClearAndSelect
-        except Exception:
-            pass
         return super().selectionCommand(index, event)
 
 
