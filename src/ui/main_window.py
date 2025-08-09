@@ -70,6 +70,7 @@ from src.ui.app_state import AppState
 from src.ui.ui_components import LoadingOverlay
 from src.ui.worker_manager import WorkerManager
 from src.ui.metadata_sidebar import MetadataSidebar
+import os as _os_env  # (legacy import left; env gating removed)
 from src.ui.dialog_manager import DialogManager
 from src.ui.left_panel import LeftPanel
 from src.ui.app_controller import AppController
@@ -1104,7 +1105,9 @@ class MainWindow(QMainWindow):
                 self.left_panel.search_input.clearFocus()
                 active_view = self._get_active_file_view()
                 if active_view:
-                    active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)  # Return focus to the view
+                    active_view.setFocus(
+                        Qt.FocusReason.ShortcutFocusReason
+                    )  # Return focus to the view
                 event.accept()
                 return
 
@@ -1914,7 +1917,7 @@ class MainWindow(QMainWindow):
 
     def _index_below(self, view: QAbstractItemView, index: QModelIndex) -> QModelIndex:
         """Return the index visually below the given one for both tree and list/grid views."""
-        from PyQt6.QtWidgets import QTreeView, QListView
+        from PyQt6.QtWidgets import QTreeView
 
         if isinstance(view, QTreeView):
             return view.indexBelow(index)
@@ -1930,7 +1933,7 @@ class MainWindow(QMainWindow):
 
     def _index_above(self, view: QAbstractItemView, index: QModelIndex) -> QModelIndex:
         """Return the index visually above the given one for both tree and list/grid views."""
-        from PyQt6.QtWidgets import QTreeView, QListView
+        from PyQt6.QtWidgets import QTreeView
 
         if isinstance(view, QTreeView):
             return view.indexAbove(index)
@@ -2893,6 +2896,7 @@ class MainWindow(QMainWindow):
         # After the view mode setter has applied TreeView properties and rebuilt model,
         # expand all groups if folder mode is active.
         if self.show_folders_mode and not self.group_by_similarity_mode:
+
             def _expand_after_layout():
                 try:
                     active_view = self._get_active_file_view()
@@ -2903,6 +2907,7 @@ class MainWindow(QMainWindow):
                         active_view.expandAll()
                 except Exception as e:
                     logger.warning(f"Failed to auto-expand folders after layout: {e}")
+
             QTimer.singleShot(0, _expand_after_layout)
 
     def _toggle_group_by_similarity(self, checked: bool):
@@ -3641,15 +3646,10 @@ class MainWindow(QMainWindow):
                     # - macOS: Cmd (Meta) is the special modifier
                     # - Windows/Linux: Ctrl is the special modifier
                     is_macos = sys.platform == "darwin"
-                    is_windows = sys.platform.startswith("win")
 
                     if is_macos:
-                        is_special_exact = (
-                            modifiers == Qt.KeyboardModifier.MetaModifier
-                        )
-                        has_special = bool(
-                            modifiers & Qt.KeyboardModifier.MetaModifier
-                        )
+                        is_special_exact = modifiers == Qt.KeyboardModifier.MetaModifier
+                        has_special = bool(modifiers & Qt.KeyboardModifier.MetaModifier)
                     else:
                         # Explicitly avoid treating Alt as special on Windows/Linux
                         is_special_exact = (
@@ -3659,9 +3659,7 @@ class MainWindow(QMainWindow):
                             modifiers & Qt.KeyboardModifier.ControlModifier
                         )
 
-                    # Back-compat alias: some older branches used this name in conditionals
-                    # Ensure it is always defined to avoid UnboundLocalError
-                    is_control_or_meta_exact = is_special_exact
+                    # (Removed deprecated is_control_or_meta_exact alias)
 
                     # Rating shortcuts (Ctrl on Win/Linux, Cmd on macOS) + 0-5
                     # MUST be an exact modifier match.
@@ -5029,7 +5027,9 @@ class MainWindow(QMainWindow):
 
         # Determine the next path to select using helper (prefers forward progress)
         try:
-            from src.ui.selection_utils import select_next_surviving_path as _next_after_delete
+            from src.ui.selection_utils import (
+                select_next_surviving_path as _next_after_delete,
+            )
         except Exception:
             _next_after_delete = None
 

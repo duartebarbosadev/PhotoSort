@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QStyleOptionViewItem,
     QListView,
 )
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex, QItemSelectionModel
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex
 from PyQt6.QtGui import (
     QPainter,
     QPalette,
@@ -24,7 +24,6 @@ from src.core.image_features.blur_detector import (
 )  # For BlurDetectionWorker
 from src.core.caching.exif_cache import ExifCache  # Added for RotationDetectionWorker
 import logging
-import sys
 
 logger = logging.getLogger(__name__)
 
