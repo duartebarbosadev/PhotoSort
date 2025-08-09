@@ -13,5 +13,3 @@ pyexiv2
 piexif
 onnxruntime
 torchvision
-pytest
-pytest-cov
