@@ -3,6 +3,7 @@ import time
 import logging
 from typing import Optional, List, Dict, Tuple, Callable
 from PIL import Image
+
 try:  # Optional; some minimal Pillow builds may omit ImageQt
     from PIL.ImageQt import ImageQt  # type: ignore
 except Exception:  # noqa: BLE001
