@@ -1,27 +1,26 @@
 from typing import List, Optional
 
 
-def find_next_visible_path_after_deletions(
+def select_next_surviving_path(
     visible_paths_before: List[str],
-    deleted_paths: List[str],
+    removed_paths: List[str],
     anchor_path_before: Optional[str],
     visible_paths_after: List[str],
 ) -> Optional[str]:
-    """
-    From the pre-deletion ordering and the set of deleted paths, find the next
-    valid (non-deleted) path to select after deletions occur.
+    """Determine the most appropriate next path to select after one or more items
+    have been removed (rotation accepted, files deleted, filtered out, etc.).
+
+    Generalized from deletion-specific logic; works for any removal scenario.
 
     Strategy:
-    - Prefer keeping the current selection if it still exists.
-    - Choose an anchor index from the pre-deletion ordering:
-        * If the anchor_path_before exists in visible_paths_before, use its index.
-        * Else, use the first deleted path that appears in visible_paths_before.
-        * Else, use the position where the anchor_path_before would have been inserted
-          in visible_paths_before (nearest-neighbor fallback) to keep locality.
-    - Search outward from the anchor index, choosing the nearest surviving neighbor:
-        * Check forward (+1, +2, ...) first to advance naturally.
-        * If none forward, search backward (-1, -2, ...).
-    - As a final fallback, return the closest end item (last item).
+    1. Keep current selection if it still exists.
+    2. Establish an anchor index in the original ordering:
+       - If anchor_path_before exists, use that index.
+       - Else first actually removed path that existed.
+       - Else heuristically approximate a locality position (name LCP heuristic) or midpoint.
+    3. Scan forward from anchor for first surviving candidate.
+    4. If none forward, scan backward.
+    5. Fallback: last visible item.
     """
     if not visible_paths_after:
         return None
@@ -43,8 +42,8 @@ def find_next_visible_path_after_deletions(
     else:
         # Try to anchor at the first deleted item that was present before
         anchor_index = -1
-        if deleted_paths:
-            for p in deleted_paths:
+        if removed_paths:
+            for p in removed_paths:
                 if p in visible_paths_before:
                     anchor_index = visible_paths_before.index(p)
                     break

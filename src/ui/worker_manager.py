@@ -377,6 +377,12 @@ class WorkerManager(QObject):
         logger.info("Rating loader thread started.")
 
     def stop_rating_load(self):
+        if self.rating_loader_worker:
+            # Prevent further signal emissions during teardown
+            try:
+                self.rating_loader_worker.disable_emits()
+            except Exception:
+                logger.debug("disable_emits not available or failed", exc_info=True)
         worker_stop = (
             self.rating_loader_worker.stop if self.rating_loader_worker else None
         )

@@ -45,6 +45,16 @@ class RatingLoaderWorker(QObject):
         self._is_running = False
         logger.info("Stop requested.")
 
+    # Emission control flag: when False, all emits are skipped (orderly shutdown)
+    _allow_emits: bool = True
+
+    def disable_emits(self):
+        self._allow_emits = False
+
+    def _emit(self, signal, *args):  # type: ignore[no-untyped-def]
+        if self._allow_emits:
+            signal.emit(*args)
+
     def run_load(self):
         self._is_running = True
         image_paths_to_process = [
@@ -60,16 +70,18 @@ class RatingLoaderWorker(QObject):
 
         if not image_paths_to_process:
             logger.warning("No valid image paths to process.")
-            self.finished.emit()
+            self._emit(self.finished)
             return
 
         if not self._rating_disk_cache:
-            self.error.emit("Rating disk cache is not available.")
-            self.finished.emit()
+            self._emit(self.error, "Rating disk cache is not available.")
+            self._emit(self.finished)
             return
         if not self._app_state or not self._app_state.exif_disk_cache:
-            self.error.emit("Application state or EXIF disk cache is not available.")
-            self.finished.emit()
+            self._emit(
+                self.error, "Application state or EXIF disk cache is not available."
+            )
+            self._emit(self.finished)
             return
 
         total_load_start_time = time.perf_counter()
@@ -131,8 +143,8 @@ class RatingLoaderWorker(QObject):
                         logger.debug(
                             f"Emitting metadata batch with {len(metadata_batch_to_emit)} items."
                         )
-                        self.metadata_batch_loaded.emit(
-                            list(metadata_batch_to_emit)
+                        self._emit(
+                            self.metadata_batch_loaded, list(metadata_batch_to_emit)
                         )  # Emit a copy
                         metadata_batch_to_emit.clear()
 
@@ -141,7 +153,9 @@ class RatingLoaderWorker(QObject):
                     or processed_count == total_files
                     or processed_count == 1
                 ):
-                    self.progress_update.emit(processed_count, total_files, basename)
+                    self._emit(
+                        self.progress_update, processed_count, total_files, basename
+                    )
 
                 logger.debug(f"Processed {processed_count}/{total_files}: {basename}")
 
@@ -150,13 +164,13 @@ class RatingLoaderWorker(QObject):
                 logger.debug(
                     f"Emitting final metadata batch with {len(metadata_batch_to_emit)} items."
                 )
-                self.metadata_batch_loaded.emit(list(metadata_batch_to_emit))
+                self._emit(self.metadata_batch_loaded, list(metadata_batch_to_emit))
                 metadata_batch_to_emit.clear()
 
         except Exception as e:
             error_msg = f"An error occurred during metadata loading: {e}"
             logger.error(error_msg, exc_info=True)
-            self.error.emit(error_msg)
+            self._emit(self.error, error_msg)
 
         total_load_duration = time.perf_counter() - total_load_start_time
         logger.info(
@@ -165,13 +179,13 @@ class RatingLoaderWorker(QObject):
 
         try:
             logger.debug("Emitting finished signal.")
-            self.finished.emit()
+            self._emit(self.finished)
             logger.debug("Finished signal emitted.")
         except Exception as e_finish:
             logger.error(
                 f"Exception during finish sequence: {e_finish}",
                 exc_info=True,
             )
-            self.error.emit(f"Exception in finish sequence: {e_finish}")
+            self._emit(self.error, f"Exception in finish sequence: {e_finish}")
         finally:
             logger.debug("Exiting run_load method.")

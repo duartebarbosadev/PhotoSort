@@ -47,6 +47,7 @@ from PyQt6.QtGui import (
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_similarity  # Add cosine_similarity import
+import sys
 
 from src.core.image_pipeline import ImagePipeline
 from src.core.image_file_ops import ImageFileOperations
@@ -73,7 +74,7 @@ from src.ui.dialog_manager import DialogManager
 from src.ui.left_panel import LeftPanel
 from src.ui.app_controller import AppController
 from src.ui.menu_manager import MenuManager
-from src.ui.selection_utils import find_next_visible_path_after_deletions
+from src.ui.selection_utils import select_next_surviving_path
 
 logger = logging.getLogger(__name__)
 
@@ -1103,7 +1104,9 @@ class MainWindow(QMainWindow):
                 self.left_panel.search_input.clearFocus()
                 active_view = self._get_active_file_view()
                 if active_view:
-                    active_view.setFocus()  # Return focus to the view
+                    active_view.setFocus(
+                        Qt.FocusReason.ShortcutFocusReason
+                    )  # Return focus to the view
                 event.accept()
                 return
 
@@ -1683,8 +1686,18 @@ class MainWindow(QMainWindow):
                 f"Navigate {direction} (bypass deleted): Moving to: {os.path.basename(path) if path else 'Unknown'}"
             )
 
-        active_view.setCurrentIndex(candidate_idx)
+        # Always maintain single-selection on keyboard navigation.
+        # Use setCurrentIndex with ClearAndSelect atomically to avoid transient paint/focus issues.
+        sel_model = active_view.selectionModel()
+        if sel_model is not None:
+            sel_model.setCurrentIndex(
+                candidate_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect
+            )
         active_view.scrollTo(candidate_idx, QAbstractItemView.ScrollHint.EnsureVisible)
+        # Ensure the view retains focus so selection remains active (blue) instead of inactive (gray)
+        active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        # Proactively repaint to reflect the new active selection immediately
+        active_view.viewport().update()
         if item:
             logger.debug(f"Navigated {direction} to: {item.text()}")
 
@@ -1700,7 +1713,13 @@ class MainWindow(QMainWindow):
         ):
             first_item = self._find_first_visible_item()
             if first_item.isValid():
+                sel_model = active_view.selectionModel()
+                if sel_model is not None:
+                    sel_model.select(
+                        first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                    )
                 active_view.setCurrentIndex(first_item)
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
         _parent_group_idx, group_images, local_idx = (
@@ -1734,7 +1753,13 @@ class MainWindow(QMainWindow):
         ):
             first_item = self._find_first_visible_item()
             if first_item.isValid():
+                sel_model = active_view.selectionModel()
+                if sel_model is not None:
+                    sel_model.select(
+                        first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                    )
                 active_view.setCurrentIndex(first_item)
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
         _parent_group_idx, group_images, local_idx = (
@@ -1771,10 +1796,17 @@ class MainWindow(QMainWindow):
         if not current_proxy_idx.isValid():
             last_item_index = self._find_last_visible_item()
             if last_item_index.isValid():
+                sel_model = active_view.selectionModel()
+                if sel_model is not None:
+                    sel_model.select(
+                        last_item_index,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    )
                 active_view.setCurrentIndex(last_item_index)
                 active_view.scrollTo(
                     last_item_index, QAbstractItemView.ScrollHint.EnsureVisible
                 )
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
         iter_idx = current_proxy_idx
@@ -1792,7 +1824,7 @@ class MainWindow(QMainWindow):
             max_iterations = DEFAULT_MAX_ITERATIONS
 
         for iteration_count in range(max_iterations):
-            prev_visual_idx = active_view.indexAbove(iter_idx)
+            prev_visual_idx = self._index_above(active_view, iter_idx)
 
             if not prev_visual_idx.isValid():
                 break
@@ -1834,10 +1866,17 @@ class MainWindow(QMainWindow):
         if not current_index.isValid():
             first_item_index = self._find_first_visible_item()
             if first_item_index.isValid():
+                sel_model = active_view.selectionModel()
+                if sel_model is not None:
+                    sel_model.select(
+                        first_item_index,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    )
                 active_view.setCurrentIndex(first_item_index)
                 active_view.scrollTo(
                     first_item_index, QAbstractItemView.ScrollHint.EnsureVisible
                 )
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
         temp_index = current_index
@@ -1860,7 +1899,7 @@ class MainWindow(QMainWindow):
         while temp_index.isValid() and iteration_count < safety_iteration_limit:
             iteration_count += 1
             # 1. Get the item visually below the current one
-            temp_index = active_view.indexBelow(temp_index)
+            temp_index = self._index_below(active_view, temp_index)
 
             if not temp_index.isValid():
                 break
@@ -1874,6 +1913,38 @@ class MainWindow(QMainWindow):
             logger.warning("Navigate down: Max iterations reached, aborting.")
 
         logger.debug("Navigate down: No next image found.")
+
+    def _index_below(self, view: QAbstractItemView, index: QModelIndex) -> QModelIndex:
+        """Return the index visually below the given one for both tree and list/grid views."""
+        from PyQt6.QtWidgets import QTreeView
+
+        if isinstance(view, QTreeView):
+            return view.indexBelow(index)
+        # QListView/grid: advance row by 1 within the same parent
+        model = view.model()
+        if not model:
+            return QModelIndex()
+        parent = index.parent()
+        next_row = index.row() + 1
+        if 0 <= next_row < model.rowCount(parent):
+            return model.index(next_row, index.column(), parent)
+        return QModelIndex()
+
+    def _index_above(self, view: QAbstractItemView, index: QModelIndex) -> QModelIndex:
+        """Return the index visually above the given one for both tree and list/grid views."""
+        from PyQt6.QtWidgets import QTreeView
+
+        if isinstance(view, QTreeView):
+            return view.indexAbove(index)
+        # QListView/grid: move row by -1 within the same parent
+        model = view.model()
+        if not model:
+            return QModelIndex()
+        parent = index.parent()
+        prev_row = index.row() - 1
+        if 0 <= prev_row < model.rowCount(parent):
+            return model.index(prev_row, index.column(), parent)
+        return QModelIndex()
 
     def _find_first_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
@@ -2824,6 +2895,7 @@ class MainWindow(QMainWindow):
         # After the view mode setter has applied TreeView properties and rebuilt model,
         # expand all groups if folder mode is active.
         if self.show_folders_mode and not self.group_by_similarity_mode:
+
             def _expand_after_layout():
                 try:
                     active_view = self._get_active_file_view()
@@ -2834,6 +2906,7 @@ class MainWindow(QMainWindow):
                         active_view.expandAll()
                 except Exception as e:
                     logger.warning(f"Failed to auto-expand folders after layout: {e}")
+
             QTimer.singleShot(0, _expand_after_layout)
 
     def _toggle_group_by_similarity(self, checked: bool):
@@ -3472,6 +3545,7 @@ class MainWindow(QMainWindow):
                     proxy_idx_to_select,
                     QAbstractItemView.ScrollHint.EnsureVisible,
                 )
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
                 return True
 
         return False
@@ -3545,7 +3619,12 @@ class MainWindow(QMainWindow):
                                 self._accept_all_rotations()
                                 return True
                             elif modifiers == Qt.KeyboardModifier.NoModifier:
-                                self._accept_current_rotation()
+                                # Prefer the single-item flow that advances selection; if multi-selected, fall back
+                                sel = self._get_selected_file_paths_from_view()
+                                if sel and len(sel) == 1:
+                                    self._accept_single_rotation_and_move_to_next()
+                                else:
+                                    self._accept_current_rotation()
                                 return True
                         elif key == Qt.Key.Key_N:
                             if modifiers == Qt.KeyboardModifier.ShiftModifier:
@@ -3561,24 +3640,37 @@ class MainWindow(QMainWindow):
                         Qt.KeyboardModifier.NoModifier,
                         Qt.KeyboardModifier.KeypadModifier,
                     )
-                    is_control_or_meta_exact = modifiers in (
-                        Qt.KeyboardModifier.ControlModifier,
-                        Qt.KeyboardModifier.MetaModifier,
-                    )
-                    has_control_or_meta = modifiers & (
-                        Qt.KeyboardModifier.ControlModifier
-                        | Qt.KeyboardModifier.MetaModifier
-                    )
 
-                    # Rating shortcuts (Ctrl/Cmd + 0-5) - MUST be an exact modifier match.
-                    if is_control_or_meta_exact and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
+                    # Platform-aware modifier mapping:
+                    # - macOS: Cmd (Meta) is the special modifier
+                    # - Windows/Linux: Ctrl is the special modifier
+                    is_macos = sys.platform == "darwin"
+
+                    if is_macos:
+                        is_special_exact = modifiers == Qt.KeyboardModifier.MetaModifier
+                        has_special = bool(modifiers & Qt.KeyboardModifier.MetaModifier)
+                    else:
+                        # Explicitly avoid treating Alt as special on Windows/Linux
+                        is_special_exact = (
+                            modifiers == Qt.KeyboardModifier.ControlModifier
+                        )
+                        has_special = bool(
+                            modifiers & Qt.KeyboardModifier.ControlModifier
+                        )
+
+                    # (Removed deprecated is_control_or_meta_exact alias)
+
+                    # Rating shortcuts (Ctrl on Win/Linux, Cmd on macOS) + 0-5
+                    # MUST be an exact modifier match.
+                    if is_special_exact and Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
                         rating = key - Qt.Key.Key_0
                         self._apply_rating_to_selection(rating)
                         return True
 
                     # --- Arrow Key Navigation ---
-                    # For navigation, Ctrl/Cmd has precedence for "modified" navigation, even with Shift.
-                    if has_control_or_meta:
+                    # For navigation, the platform's special modifier has precedence for
+                    # "modified" navigation (include deleted), even with Shift.
+                    if has_special:
                         if self._dispatch_navigation(key, is_modified=True):
                             return True
                     elif is_unmodified_or_keypad:
@@ -4246,7 +4338,7 @@ class MainWindow(QMainWindow):
                 # Always find the best next selection. The function is smart enough
                 # to keep the current selection if it's still valid.
                 logger.debug("Finding next selection after deletion.")
-                next_path = find_next_visible_path_after_deletions(
+                next_path = select_next_surviving_path(
                     visible_paths_before,
                     marked_files,
                     anchor_path,
@@ -4726,7 +4818,7 @@ class MainWindow(QMainWindow):
             active_view.scrollTo(
                 proxy_index, QAbstractItemView.ScrollHint.PositionAtCenter
             )
-            active_view.setFocus()
+            active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
             # Reset the flag after the event queue is cleared to prevent loops
             QTimer.singleShot(0, lambda: setattr(self, "_is_syncing_selection", False))
@@ -4892,14 +4984,14 @@ class MainWindow(QMainWindow):
         logger.info(f"SBS_COMP: End. Total time: {sbs_end_time - sbs_start_time:.4f}s")
 
     def _accept_all_rotations(self):
-        """Applies all suggested rotations and returns to the list view."""
+        """Apply all suggested rotations and exit rotation view."""
         if not self.rotation_suggestions:
             self.statusBar().showMessage("No rotation suggestions to accept.", 3000)
             return
-
-        self.app_controller._apply_approved_rotations(self.rotation_suggestions)
+        # Use a shallow copy to avoid mutation during iteration inside controller.
+        rotations_copy = dict(self.rotation_suggestions)
+        self.app_controller._apply_approved_rotations(rotations_copy)
         self.rotation_suggestions.clear()
-        # hide_rotation_view will switch to list view and rebuild the model
         self._hide_rotation_view()
 
     def _accept_current_rotation(self):
@@ -4917,6 +5009,9 @@ class MainWindow(QMainWindow):
         if not rotations_to_apply:
             return
 
+        # Capture ordering before applying rotations so we can compute next selection
+        visible_paths_before = list(self.rotation_suggestions.keys())
+
         self.app_controller._apply_approved_rotations(rotations_to_apply)
 
         # Remove the accepted rotations from the main suggestion list
@@ -4929,17 +5024,51 @@ class MainWindow(QMainWindow):
             self._hide_rotation_view()
             return
 
-        # Rebuild the rotation view to show the remaining items
+        # Determine the next path to select using helper (prefers forward progress)
+        try:
+            from src.ui.selection_utils import (
+                select_next_surviving_path as _next_after_delete,
+            )
+        except Exception:
+            _next_after_delete = None
+
+        path_to_select = None
+        if _next_after_delete:
+            # Use the first of the deleted paths as anchor (stable)
+            deleted_list = list(rotations_to_apply.keys())
+            path_to_select = _next_after_delete(
+                visible_paths_before=visible_paths_before,
+                deleted_paths=deleted_list,
+                anchor_path_before=deleted_list[0] if deleted_list else None,
+                visible_paths_after=list(self.rotation_suggestions.keys()),
+            )
+
+        # Rebuild the rotation view to show the remaining items (must happen before mapping index)
         self._rebuild_rotation_view()
 
-        # After batch-accepting, clear the selection and image preview to provide
-        # a clean state for the user to make their next selection.
+        # Attempt selection of next candidate
+        if path_to_select:
+            proxy_idx_to_select = self._find_proxy_index_for_path(path_to_select)
+            if proxy_idx_to_select.isValid():
+                active_view = self._get_active_file_view()
+                if active_view:
+                    active_view.setCurrentIndex(proxy_idx_to_select)
+                    active_view.selectionModel().select(
+                        proxy_idx_to_select,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    )
+                    active_view.scrollTo(
+                        proxy_idx_to_select,
+                        QAbstractItemView.ScrollHint.EnsureVisible,
+                    )
+                    return
+
+        # Fallback: clear selection & viewer if we couldn't determine a next item
         active_view = self._get_active_file_view()
         if active_view:
             active_view.selectionModel().clear()
-            self.advanced_image_viewer.clear()
-            # Hide the button until a new selection is made
-            self.accept_button.setVisible(False)
+        self.advanced_image_viewer.clear()
+        self.accept_button.setVisible(False)
 
         def _accept_rotation(self, file_path: str):
             """Applies a single rotation suggestion and selects the next/previous item."""
@@ -5007,48 +5136,61 @@ class MainWindow(QMainWindow):
         if file_path not in self.rotation_suggestions:
             return
 
+        # Capture current visible order to compute the best next candidate
+        try:
+            visible_paths_before = self._get_all_visible_image_paths()
+        except Exception:
+            visible_paths_before = list(self.rotation_suggestions.keys())
+
         # Apply the rotation for the current item
         rotation = self.rotation_suggestions.pop(file_path)
         self.app_controller._apply_approved_rotations({file_path: rotation})
 
-        # Check if there are any remaining suggestions
+        # If nothing remains, exit rotation view
         if not self.rotation_suggestions:
             self._hide_rotation_view()
             return
 
-        # Get the list of remaining items
-        remaining_items = list(self.rotation_suggestions.keys())
-
-        # Find the current item's index in the original list to determine the next item
-        # We'll select the next item in the list
-        path_to_select = remaining_items[0] if remaining_items else None
-
-        # Rebuild the rotation view to show the remaining items
+        # Rebuild the view, then compute the next selection
         self._rebuild_rotation_view()
 
-        # Select the next item
-        if path_to_select:
+        try:
+            visible_paths_after = self._get_all_visible_image_paths()
+        except Exception:
+            visible_paths_after = list(self.rotation_suggestions.keys())
+
+        from src.ui.selection_utils import (
+            select_next_surviving_path as _next_after_delete,
+        )
+
+        path_to_select = _next_after_delete(
+            visible_paths_before=visible_paths_before,
+            deleted_paths=[file_path],
+            anchor_path_before=file_path,
+            visible_paths_after=visible_paths_after,
+        )
+
+        active_view = self._get_active_file_view()
+        if path_to_select and active_view:
             proxy_idx_to_select = self._find_proxy_index_for_path(path_to_select)
             if proxy_idx_to_select.isValid():
-                active_view = self._get_active_file_view()
-                if active_view:
-                    active_view.setCurrentIndex(proxy_idx_to_select)
-                    active_view.selectionModel().select(
-                        proxy_idx_to_select,
-                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
-                    )
-                    active_view.scrollTo(
-                        proxy_idx_to_select,
-                        QAbstractItemView.ScrollHint.EnsureVisible,
-                    )
-        else:
-            # If no item to select, clear the selection and image preview
-            active_view = self._get_active_file_view()
-            if active_view:
-                active_view.selectionModel().clear()
-            self.advanced_image_viewer.clear()
-            self.accept_button.setVisible(False)
-            self.refuse_button.setVisible(False)
+                active_view.setCurrentIndex(proxy_idx_to_select)
+                active_view.selectionModel().select(
+                    proxy_idx_to_select,
+                    QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                )
+                active_view.scrollTo(
+                    proxy_idx_to_select,
+                    QAbstractItemView.ScrollHint.EnsureVisible,
+                )
+                return
+
+        # Fallback: clear selection and preview if we couldn't determine the next
+        if active_view:
+            active_view.selectionModel().clear()
+        self.advanced_image_viewer.clear()
+        self.accept_button.setVisible(False)
+        self.refuse_button.setVisible(False)
 
     def _refuse_all_rotations(self):
         """Refuses all remaining rotation suggestions."""

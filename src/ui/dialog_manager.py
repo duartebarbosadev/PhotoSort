@@ -51,8 +51,13 @@ class DialogManager:
         """
         self.parent = parent
 
-    def show_about_dialog(self):
-        """Show the 'About' dialog with application and technology information."""
+    def show_about_dialog(self, block: bool = True):
+        """Show the 'About' dialog.
+
+        Args:
+            block: If True (default) runs dialog.exec() modally. If False, uses
+                   dialog.show() and returns immediately (useful for tests).
+        """
         logger.info("Showing about dialog")
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("About PhotoSort")
@@ -110,10 +115,11 @@ class DialogManager:
         # Get ONNX provider information
         try:
             model_detector = ModelRotationDetector()
-            if model_detector.initialized:
-                onnx_provider = model_detector.provider_name
-            else:
-                onnx_provider = "N/A (model not loaded)"
+            # Lazy detector exposes provider via internal state after load attempt
+            onnx_provider = (
+                getattr(model_detector._state, "provider_name", None)
+                or "N/A (model not loaded)"
+            )
         except ModelNotFoundError:
             onnx_provider = "N/A (model not found)"
         except Exception:
@@ -172,8 +178,14 @@ class DialogManager:
 
         # Styling is handled by dark_theme.qss
 
-        dialog.exec()
-        logger.info("Closed about dialog")
+        if block:
+            dialog.exec()
+            logger.info("Closed about dialog")
+        else:  # non-blocking path for automated tests
+            # Keep a reference to prevent garbage collection in tests
+            self._about_dialog_ref = dialog  # type: ignore[attr-defined]
+            dialog.show()
+            logger.info("Showing about dialog (non-blocking mode)")
 
     def show_lossy_rotation_confirmation_dialog(
         self, filename: str, rotation_type: str

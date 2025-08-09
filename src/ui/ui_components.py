@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
     QTreeView,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QListView,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex
 from PyQt6.QtGui import (
@@ -68,6 +69,17 @@ class DroppableTreeView(QTreeView):
     def dropEvent(self, event: Optional[QDropEvent]):
         if event:
             event.ignore()  # Disable drag and drop
+
+    # Use default selection semantics (allow Ctrl+click multi-select on Windows again)
+    def selectionCommand(self, index, event=None):  # type: ignore[override]
+        return super().selectionCommand(index, event)
+
+
+class NoCtrlListView(QListView):
+    """QListView with default Ctrl+click multi-select behavior restored."""
+
+    def selectionCommand(self, index, event=None):  # type: ignore[override]
+        return super().selectionCommand(index, event)
 
 
 # --- Custom Delegate for Highlighting Focused Image ---
