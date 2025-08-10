@@ -2,7 +2,6 @@ PyQt6
 rawpy
 Pillow
 Pillow-heif
-pyqtdarktheme
 sentence-transformers
 scikit-learn
 torch
