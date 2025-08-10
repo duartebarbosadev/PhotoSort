@@ -36,7 +36,7 @@ def test_predict_uses_stubbed_session(monkeypatch):
                 def unsqueeze(self_inner, _n):
                     return types.SimpleNamespace(
                         cpu=lambda: types.SimpleNamespace(
-                            numpy=lambda: __import__("numpy").zeros((1, 3, 2, 2))
+                            numpy=lambda: numpy.zeros((1, 3, 2, 2))
                         )
                     )
 
