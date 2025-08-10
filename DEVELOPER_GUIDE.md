@@ -27,6 +27,30 @@ The application is structured into two main packages: `core` and `ui`.
     - **`app_controller.py`**: The controller that mediates between the UI and the `core` logic. It handles user actions, calls the appropriate `core` services, and updates the UI.
     - **`app_state.py`**: Holds the application's runtime state, including caches and loaded data. This object is shared across the application.
     - **`worker_manager.py`**: Manages all background threads and workers, decoupling the UI from long-running tasks.
+    - **Controller Layer (Encapsulation Refactor)**: Non-trivial UI behaviors previously embedded in `MainWindow` have been extracted into focused controllers under `src/ui/controllers/`:
+        - `navigation_controller.py`: Linear & group-aware navigation (honors skip-deleted logic, smart up/down traversal). Consumes a minimal protocol for selection & model interrogation.
+        - `hotkey_controller.py`: Central mapping of key events to actions (allows headless tests to exercise hotkey dispatch logic).
+        - `similarity_controller.py`: Orchestrates similarity analysis workflow (start, embeddings, clustering) AND (post-refactor) prepares cluster structures via `prepare_clusters()` returning pure data used by the view. Sorting strategies (Default / Time / Similarity then Time) live here; PCA fallback rationale documented inline. Uses only a protocol subset of `AppState` (see `AppStateSimilarityView`) for loose coupling.
+        - `preview_controller.py`: Handles preview image loading / refresh separation from navigation triggers.
+        - `metadata_controller.py`: Updates metadata sidebar without polluting MainWindow event handlers.
+        - `filter_controller.py`: Applies user-entered filter text / rating filters to proxy model.
+        - `selection_controller.py`: Shared selection operations & multi-select semantics.
+        - `deletion_mark_controller.py`: Non-destructive mark/unmark & presentation (text color/blur). Distinguished from actual deletion for clarity & test isolation.
+        - `file_deletion_controller.py`: Destructive operations (move to trash), reverse-order removal, prunes empty headers, restores deterministic selection.
+
+      Extension Pattern:
+        1. Identify a cohesive behavior cluster in `MainWindow` (heuristics, branching logic, side-effect orchestration).
+        2. Define a minimal Protocol capturing only what the controller needs (attributes + methods). Avoid passing full MainWindow if possible.
+        3. Implement controller with pure helpers; return data structures instead of mutating widgets directly where feasible.
+        4. Add targeted tests for new controller focusing on logic not easily covered via GUI.
+        5. Replace in-place logic with controller delegation. Remove obsolete helpers after tests pass.
+        6. Document rationale (fallbacks, sentinels like `date_obj.max`) inline for future maintainers.
+
+      Benefits:
+        - Smaller `main_window.py` surface area.
+        - Faster unit tests (controllers testable without QApplication event loop).
+        - Clear separation of destructive vs non-destructive operations (mark vs delete).
+        - Easier future feature toggles or re-use in alternate front-ends.
   - **`dialog_manager.py`**: Manages the creation and display of all dialog boxes. `show_about_dialog(block: bool = True)` supports a non-blocking mode (`block=False`) used by tests; prefer blocking mode in production UI code.
     - **`menu_manager.py`**: Manages the main menu bar and its actions.
     - **`left_panel.py`**, **`metadata_sidebar.py`**, **`advanced_image_viewer.py`**: Reusable UI components.
@@ -173,6 +197,17 @@ When you:
 - Add core selection/navigation heuristics.
 
 Update the relevant sections instead of appending ad hoc notes at the bottom.
+
+### 8.1 Recent Refactor Summary (Encapsulation Phase)
+
+Refactors completed:
+  - Extracted navigation & hotkey handling (legacy behaviors restored: Ctrl includes deleted, cyclic horizontal navigation, smart vertical grouping).
+  - Split deletion responsibilities: presentation/marking vs filesystem deletion.
+  - Moved clustering grouping & sorting to `SimilarityController.prepare_clusters()`; `MainWindow` now only renders structure.
+  - Introduced protocol-driven design (e.g., `AppStateSimilarityView`) for type clarity and decoupling.
+  - Added deterministic cluster sorting strategies with PCA + timestamp fallback (see docstring in `ClusterUtils.sort_clusters_by_similarity_time`).
+
+When adding new controllers, follow the listed Extension Pattern to maintain consistency.
 
 ## 9. Common Pitfalls
 

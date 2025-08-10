@@ -51,7 +51,7 @@ class IdentityProxy(QSortFilterProxyModel):
         return src.index(row, column, parent)
 
 
-class TestableMainWindow(MainWindow):
+class ProxyIndexTestWindow(MainWindow):  # Renamed to avoid pytest collection warning
     def __init__(self):
         self.app_state = AppState()
         self.file_system_model = QStandardItemModel()
@@ -79,7 +79,7 @@ def make_item(path):
 
 
 def test_find_proxy_index_simple(tmp_path):
-    mw = TestableMainWindow()
+    mw = ProxyIndexTestWindow()
     # Build simple tree: root items with image data
     p1 = tmp_path / "a.jpg"
     p1.write_text("x")
@@ -95,7 +95,7 @@ def test_find_proxy_index_simple(tmp_path):
 
 
 def test_find_proxy_index_not_found(tmp_path):
-    mw = TestableMainWindow()
+    mw = ProxyIndexTestWindow()
     p1 = tmp_path / "c.jpg"
     p1.write_text("x")
     mw.file_system_model.appendRow(make_item(str(p1)))

@@ -99,9 +99,23 @@ class ClusterUtils:
         embeddings_cache: Dict[str, List[float]],
         date_cache: Dict[str, Optional[date_obj]],
     ) -> List[int]:
-        """Sort clusters using PCA of centroids first, then earliest timestamp.
+        """Sort clusters using PCA of centroids, falling back to time.
 
-        If PCA is not feasible (e.g., <2 valid centroids) falls back to timestamp ordering.
+        Strategy:
+            1. Compute centroid per cluster (mean embedding).
+            2. If at least 2 valid centroids exist, run 1D PCA and order by the
+                 projected component then earliest timestamp as tie-breaker.
+            3. If PCA not feasible (<2 centroids or errors) fallback to purely
+                 earliest timestamp ordering.
+
+        Rationale:
+            Using PCA normalizes embedding variance and yields a stable scalar
+            ordering without computing a full distance matrix (O(n^2)). The
+            earliest timestamp is used as deterministic secondary ordering.
+
+            date_obj.max is used as a sentinel for missing timestamps so that
+            clusters lacking dates naturally sink to the end of time-based
+            sorts without additional conditionals.
         """
         cluster_ids = list(images_by_cluster.keys())
         if not cluster_ids:
