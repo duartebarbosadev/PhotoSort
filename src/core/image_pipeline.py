@@ -6,7 +6,7 @@ from PIL import Image
 
 try:  # Optional; some minimal Pillow builds may omit ImageQt
     from PIL.ImageQt import ImageQt  # type: ignore
-except Exception:  # noqa: BLE001
+except (ImportError, ModuleNotFoundError):
     ImageQt = None  # type: ignore
 from PyQt6.QtGui import QPixmap
 import concurrent.futures
