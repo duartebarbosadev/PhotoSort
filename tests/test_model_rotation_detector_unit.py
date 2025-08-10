@@ -1,5 +1,5 @@
 import types
-
+import numpy
 from src.core.image_features import model_rotation_detector as mrd
 
 
