@@ -3,7 +3,11 @@ import time
 import logging
 from typing import Optional, List, Dict, Tuple, Callable
 from PIL import Image
-from PIL.ImageQt import ImageQt
+
+try:  # Optional; some minimal Pillow builds may omit ImageQt
+    from PIL.ImageQt import ImageQt  # type: ignore
+except (ImportError, ModuleNotFoundError):
+    ImageQt = None  # type: ignore
 from PyQt6.QtGui import QPixmap
 import concurrent.futures
 
