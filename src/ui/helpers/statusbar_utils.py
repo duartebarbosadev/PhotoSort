@@ -18,14 +18,19 @@ class StatusBarInfo:
 
     def to_message(self) -> str:
         cluster_part = f" | C: {self.cluster_id}" if self.cluster_id is not None else ""
-        size_part = f" | Size: {self.size_kb} KB" if self.size_kb is not None else " | Size: N/A"
+        size_part = (
+            f" | Size: {self.size_kb} KB"
+            if self.size_kb is not None
+            else " | Size: N/A"
+        )
         blur_part = (
             " | Blurred: Yes"
             if self.is_blurred is True
             else (" | Blurred: No" if self.is_blurred is False else "")
         )
         return (
-            f"{self.filename} | R: {self.rating} | {self.date_text}" f"{cluster_part}{size_part} | {self.width}x{self.height}{blur_part}"
+            f"{self.filename} | R: {self.rating} | {self.date_text}"
+            f"{cluster_part}{size_part} | {self.width}x{self.height}{blur_part}"
         )
 
 
@@ -48,7 +53,9 @@ def build_status_bar_info(
         size_kb = os.path.getsize(file_path) // 1024
     except OSError:
         size_kb = None
-    is_blurred = file_data_from_model.get("is_blurred") if file_data_from_model else None
+    is_blurred = (
+        file_data_from_model.get("is_blurred") if file_data_from_model else None
+    )
     return StatusBarInfo(
         filename=filename,
         rating=rating,

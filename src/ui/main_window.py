@@ -45,7 +45,6 @@ from PyQt6.QtGui import (
     QResizeEvent,
 )
 import numpy as np
-from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_similarity  # Add cosine_similarity import
 import sys
 
@@ -60,8 +59,6 @@ from src.core.app_settings import (
     get_auto_edit_photos,
     set_auto_edit_photos,
     DEFAULT_BLUR_DETECTION_THRESHOLD,
-    DEFAULT_MAX_ITERATIONS,
-    DEFAULT_SAFETY_ITERATION_MULTIPLIER,
     LEFT_PANEL_STRETCH,
     CENTER_PANEL_STRETCH,
     RIGHT_PANEL_STRETCH,
@@ -77,7 +74,10 @@ from src.ui.menu_manager import MenuManager
 from src.ui.selection_utils import select_next_surviving_path
 from src.ui.helpers.cluster_utils import ClusterUtils
 from src.ui.helpers.rotation_utils import compute_next_after_rotation
-from src.ui.helpers.navigation_utils import navigate_group_cyclic, navigate_linear  # Planned refactor usage
+from src.ui.helpers.navigation_utils import (
+    navigate_group_cyclic,
+    navigate_linear,
+)  # Planned refactor usage
 from src.ui.helpers.statusbar_utils import build_status_bar_info
 from src.ui.helpers.index_lookup_utils import find_proxy_index_for_path
 
@@ -1718,7 +1718,9 @@ class MainWindow(QMainWindow):
         # Build group sibling path list
         group_paths: List[str] = []
         if current_proxy_idx.isValid():
-            _parent_group_idx, group_image_indices, _ = self._get_current_group_sibling_images(current_proxy_idx)
+            _parent_group_idx, group_image_indices, _ = (
+                self._get_current_group_sibling_images(current_proxy_idx)
+            )
             for idx in group_image_indices:
                 src_idx = self.proxy_model.mapToSource(idx)
                 item = self.file_system_model.itemFromIndex(src_idx)
@@ -1733,12 +1735,16 @@ class MainWindow(QMainWindow):
             if first_item.isValid():
                 sel_model = active_view.selectionModel()
                 if sel_model:
-                    sel_model.setCurrentIndex(first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                    sel_model.setCurrentIndex(
+                        first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                    )
                 active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
         deleted_set = set(self.app_state.get_marked_files()) if skip_deleted else set()
-        target_path = navigate_group_cyclic(group_paths, current_path, "left", skip_deleted, deleted_set)
+        target_path = navigate_group_cyclic(
+            group_paths, current_path, "left", skip_deleted, deleted_set
+        )
         if target_path:
             proxy_idx = self._find_proxy_index_for_path(target_path)
             if proxy_idx.isValid():
@@ -1760,7 +1766,9 @@ class MainWindow(QMainWindow):
 
         group_paths: List[str] = []
         if current_proxy_idx.isValid():
-            _parent_group_idx, group_image_indices, _ = self._get_current_group_sibling_images(current_proxy_idx)
+            _parent_group_idx, group_image_indices, _ = (
+                self._get_current_group_sibling_images(current_proxy_idx)
+            )
             for idx in group_image_indices:
                 src_idx = self.proxy_model.mapToSource(idx)
                 item = self.file_system_model.itemFromIndex(src_idx)
@@ -1774,12 +1782,16 @@ class MainWindow(QMainWindow):
             if first_item.isValid():
                 sel_model = active_view.selectionModel()
                 if sel_model:
-                    sel_model.setCurrentIndex(first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                    sel_model.setCurrentIndex(
+                        first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                    )
                 active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
         deleted_set = set(self.app_state.get_marked_files()) if skip_deleted else set()
-        target_path = navigate_group_cyclic(group_paths, current_path, "right", skip_deleted, deleted_set)
+        target_path = navigate_group_cyclic(
+            group_paths, current_path, "right", skip_deleted, deleted_set
+        )
         if target_path:
             proxy_idx = self._find_proxy_index_for_path(target_path)
             if proxy_idx.isValid():
@@ -1800,7 +1812,9 @@ class MainWindow(QMainWindow):
                 if isinstance(d, dict):
                     current_path = d.get("path")
         deleted_set = set(self.app_state.get_marked_files()) if skip_deleted else set()
-        target_path = navigate_linear(all_visible, current_path, "up", skip_deleted, deleted_set)
+        target_path = navigate_linear(
+            all_visible, current_path, "up", skip_deleted, deleted_set
+        )
         if target_path:
             proxy_idx = self._find_proxy_index_for_path(target_path)
             if proxy_idx.isValid():
@@ -1821,7 +1835,9 @@ class MainWindow(QMainWindow):
                 if isinstance(d, dict):
                     current_path = d.get("path")
         deleted_set = set(self.app_state.get_marked_files()) if skip_deleted else set()
-        target_path = navigate_linear(all_visible, current_path, "down", skip_deleted, deleted_set)
+        target_path = navigate_linear(
+            all_visible, current_path, "down", skip_deleted, deleted_set
+        )
         if target_path:
             proxy_idx = self._find_proxy_index_for_path(target_path)
             if proxy_idx.isValid():
@@ -2216,7 +2232,9 @@ class MainWindow(QMainWindow):
         if self.sidebar_visible:
             self._update_sidebar_with_current_selection()
 
-    def _update_status_bar_for_image(self, file_path, metadata, pixmap, file_data_from_model):
+    def _update_status_bar_for_image(
+        self, file_path, metadata, pixmap, file_data_from_model
+    ):
         info = build_status_bar_info(
             file_path=file_path,
             metadata=metadata,

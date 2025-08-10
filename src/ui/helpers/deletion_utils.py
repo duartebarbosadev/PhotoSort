@@ -1,9 +1,10 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 
 # Lightweight UI-agnostic description of how a marked/unmarked item should look.
 # The actual QColor / palette lookup happens in MainWindow; we only decide suffix logic here.
+
 
 @dataclass(frozen=True)
 class DeletionPresentation:
@@ -28,7 +29,9 @@ def build_item_text(basename: str, is_marked: bool, is_blurred: Optional[bool]) 
     return " ".join(parts)
 
 
-def build_presentation(basename: str, is_marked: bool, is_blurred: Optional[bool]) -> DeletionPresentation:
+def build_presentation(
+    basename: str, is_marked: bool, is_blurred: Optional[bool]
+) -> DeletionPresentation:
     return DeletionPresentation(
         text=build_item_text(basename, is_marked, is_blurred),
         is_marked=is_marked,

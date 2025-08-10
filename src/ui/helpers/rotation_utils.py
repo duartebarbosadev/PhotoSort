@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Optional, Sequence, Iterable
+from typing import Optional, Sequence, Iterable
 
 from src.ui.selection_utils import select_next_surviving_path
 

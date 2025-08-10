@@ -1,6 +1,7 @@
 from src.ui.helpers.statusbar_utils import build_status_bar_info
 from datetime import datetime
 
+
 def test_statusbar_basic_no_cluster():
     md = {"rating": 3, "date": datetime(2025, 8, 10)}
     info = build_status_bar_info(
@@ -40,8 +41,10 @@ def test_statusbar_with_cluster_and_blur_yes(tmp_path):
 def test_statusbar_size_unavailable(monkeypatch, tmp_path):
     f = tmp_path / "b.jpg"
     f.write_text("x")
+
     def broken_getsize(path):
         raise OSError
+
     monkeypatch.setattr("os.path.getsize", broken_getsize)
     md = {"rating": 0, "date": None}
     info = build_status_bar_info(

@@ -9,32 +9,41 @@ from src.ui.app_state import AppState
 # Minimal stubs/mocks may be needed; if QApplication already exists reuse.
 app = QApplication.instance() or QApplication([])
 
+
 class DummyImagePipeline:
     def get_preview_qpixmap(self, *a, **k):
         return None
+
     def get_thumbnail_qpixmap(self, *a, **k):
         return None
+
 
 class DummyWorkerManager:
     pass
 
+
 class DummyAdvancedViewer:
     def set_image_data(self, *a, **k):
         pass
+
     def clear(self):
         pass
+
 
 # Because MainWindow expects many attributes, we subclass and override initializer heavy parts.
 class IdentityProxy(QSortFilterProxyModel):
     def mapToSource(self, idx):
         return idx
+
     def mapFromSource(self, source_idx):
         return source_idx
+
     def rowCount(self, parent):
         src = self.sourceModel()
         if src is None:
             return 0
         return src.rowCount(parent)
+
     def index(self, row, column, parent):
         src = self.sourceModel()
         if src is None:
@@ -51,8 +60,10 @@ class TestableMainWindow(MainWindow):
         tv = QTreeView()
         tv.setModel(self.proxy_model)
         self._active_file_view = tv
+
     def _get_active_file_view(self):
         return self._active_file_view
+
     def _is_valid_image_item(self, proxy_idx):
         item = self.file_system_model.itemFromIndex(proxy_idx)
         if not item:
@@ -70,8 +81,10 @@ def make_item(path):
 def test_find_proxy_index_simple(tmp_path):
     mw = TestableMainWindow()
     # Build simple tree: root items with image data
-    p1 = tmp_path / "a.jpg"; p1.write_text("x")
-    p2 = tmp_path / "b.jpg"; p2.write_text("y")
+    p1 = tmp_path / "a.jpg"
+    p1.write_text("x")
+    p2 = tmp_path / "b.jpg"
+    p2.write_text("y")
     mw.file_system_model.appendRow(make_item(str(p1)))
     mw.file_system_model.appendRow(make_item(str(p2)))
     idx = mw._find_proxy_index_for_path(str(p2))
@@ -83,8 +96,9 @@ def test_find_proxy_index_simple(tmp_path):
 
 def test_find_proxy_index_not_found(tmp_path):
     mw = TestableMainWindow()
-    p1 = tmp_path / "c.jpg"; p1.write_text("x")
+    p1 = tmp_path / "c.jpg"
+    p1.write_text("x")
     mw.file_system_model.appendRow(make_item(str(p1)))
-    idx = mw._find_proxy_index_for_path(str(tmp_path / 'missing.jpg'))
+    idx = mw._find_proxy_index_for_path(str(tmp_path / "missing.jpg"))
     assert not idx.isValid()
     assert not idx.isValid()

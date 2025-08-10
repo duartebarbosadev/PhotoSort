@@ -1,4 +1,3 @@
-import os
 import logging
 from datetime import date as date_obj
 from typing import Dict, List, Optional, Any
@@ -25,10 +24,16 @@ class ClusterUtils:
         if not image_files_data or not cluster_results:
             return images_by_cluster
 
-        image_data_map = {img_data.get("path"): img_data for img_data in image_files_data if isinstance(img_data, dict)}
+        image_data_map = {
+            img_data.get("path"): img_data
+            for img_data in image_files_data
+            if isinstance(img_data, dict)
+        }
         for file_path, cluster_id in cluster_results.items():
             if file_path in image_data_map:
-                images_by_cluster.setdefault(cluster_id, []).append(image_data_map[file_path])
+                images_by_cluster.setdefault(cluster_id, []).append(
+                    image_data_map[file_path]
+                )
         return images_by_cluster
 
     @staticmethod
@@ -48,7 +53,9 @@ class ClusterUtils:
                 if img_date and img_date < earliest_date:
                     earliest_date = img_date
                     found_date = True
-            cluster_timestamps[cluster_id] = earliest_date if found_date else date_obj.max
+            cluster_timestamps[cluster_id] = (
+                earliest_date if found_date else date_obj.max
+            )
         return cluster_timestamps
 
     @staticmethod
@@ -77,9 +84,13 @@ class ClusterUtils:
                         pass
             if cluster_embeddings:
                 try:
-                    centroids[cluster_id] = np.mean(np.stack(cluster_embeddings), axis=0)
+                    centroids[cluster_id] = np.mean(
+                        np.stack(cluster_embeddings), axis=0
+                    )
                 except Exception as e:  # pragma: no cover - defensive
-                    logger.error(f"Error calculating centroid for cluster {cluster_id}: {e}")
+                    logger.error(
+                        f"Error calculating centroid for cluster {cluster_id}: {e}"
+                    )
         return centroids
 
     @staticmethod
@@ -95,18 +106,33 @@ class ClusterUtils:
         cluster_ids = list(images_by_cluster.keys())
         if not cluster_ids:
             return []
-        centroids = ClusterUtils.calculate_cluster_centroids(images_by_cluster, embeddings_cache)
+        centroids = ClusterUtils.calculate_cluster_centroids(
+            images_by_cluster, embeddings_cache
+        )
         valid_cluster_ids_for_pca = [
-            cid for cid in cluster_ids if isinstance(centroids.get(cid), np.ndarray) and centroids[cid].size > 0
+            cid
+            for cid in cluster_ids
+            if isinstance(centroids.get(cid), np.ndarray) and centroids[cid].size > 0
         ]
         if len(valid_cluster_ids_for_pca) < 2:
             # Fallback to time sort
-            cluster_timestamps_fb = ClusterUtils.get_cluster_timestamps(images_by_cluster, date_cache)
-            return sorted(cluster_ids, key=lambda cid: cluster_timestamps_fb.get(cid, date_obj.max))
+            cluster_timestamps_fb = ClusterUtils.get_cluster_timestamps(
+                images_by_cluster, date_cache
+            )
+            return sorted(
+                cluster_ids,
+                key=lambda cid: cluster_timestamps_fb.get(cid, date_obj.max),
+            )
 
-        centroid_matrix = np.stack([centroids[cid] for cid in valid_cluster_ids_for_pca])
+        centroid_matrix = np.stack(
+            [centroids[cid] for cid in valid_cluster_ids_for_pca]
+        )
         pca_scores = {}
-        if centroid_matrix.ndim == 2 and centroid_matrix.shape[0] > 1 and centroid_matrix.shape[1] > 0:
+        if (
+            centroid_matrix.ndim == 2
+            and centroid_matrix.shape[0] > 1
+            and centroid_matrix.shape[1] > 0
+        ):
             try:
                 n_components = 1 if centroid_matrix.shape[0] > 1 else 0
                 if n_components > 0:
@@ -118,7 +144,9 @@ class ClusterUtils:
                 logger.error(f"Error during PCA sorting: {e}")
 
         # Build timestamp map
-        cluster_timestamps = ClusterUtils.get_cluster_timestamps(images_by_cluster, date_cache)
+        cluster_timestamps = ClusterUtils.get_cluster_timestamps(
+            images_by_cluster, date_cache
+        )
         sortable = []
         for cid in cluster_ids:
             pca_val = pca_scores.get(cid, float("inf"))

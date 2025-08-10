@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Optional, Sequence, Iterable, Set
+from typing import Optional, Sequence, Iterable, Set
 
 # Navigation helpers extracted from MainWindow. These are UI-agnostic and operate on
 # ordered path lists plus simple state flags. MainWindow is responsible for mapping

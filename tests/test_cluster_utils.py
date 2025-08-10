@@ -31,8 +31,14 @@ def test_sort_clusters_fallback_time():
     data = [build_fd("a.jpg"), build_fd("b.jpg"), build_fd("c.jpg")]
     clusters = {"a.jpg": 2, "b.jpg": 1, "c.jpg": 2}
     grouped = ClusterUtils.group_images_by_cluster(data, clusters)
-    date_cache = {"a.jpg": today, "b.jpg": today - datetime.timedelta(days=2), "c.jpg": today - datetime.timedelta(days=1)}
-    order = ClusterUtils.sort_clusters_by_similarity_time(grouped, embeddings_cache={}, date_cache=date_cache)
+    date_cache = {
+        "a.jpg": today,
+        "b.jpg": today - datetime.timedelta(days=2),
+        "c.jpg": today - datetime.timedelta(days=1),
+    }
+    order = ClusterUtils.sort_clusters_by_similarity_time(
+        grouped, embeddings_cache={}, date_cache=date_cache
+    )
     # Expect cluster 1 (earliest date) then 2
     assert order == [1, 2]
 
@@ -50,6 +56,8 @@ def test_sort_clusters_with_embeddings():
         "c.jpg": [5.0, 5.0],
         "d.jpg": [5.2, 5.0],
     }
-    order = ClusterUtils.sort_clusters_by_similarity_time(grouped, embeddings, date_cache)
+    order = ClusterUtils.sort_clusters_by_similarity_time(
+        grouped, embeddings, date_cache
+    )
     assert set(order) == {1, 2}
     assert len(order) == 2
