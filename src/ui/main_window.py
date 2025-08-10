@@ -75,6 +75,11 @@ from src.ui.left_panel import LeftPanel
 from src.ui.app_controller import AppController
 from src.ui.menu_manager import MenuManager
 from src.ui.selection_utils import select_next_surviving_path
+from src.ui.helpers.cluster_utils import ClusterUtils
+from src.ui.helpers.rotation_utils import compute_next_after_rotation
+from src.ui.helpers.navigation_utils import navigate_group_cyclic, navigate_linear  # Planned refactor usage
+from src.ui.helpers.statusbar_utils import build_status_bar_info
+from src.ui.helpers.index_lookup_utils import find_proxy_index_for_path
 
 logger = logging.getLogger(__name__)
 
@@ -857,17 +862,10 @@ class MainWindow(QMainWindow):
             root_item.appendRow(item)
 
     def _group_images_by_cluster(self) -> Dict[int, List[Dict[str, any]]]:
-        images_by_cluster: Dict[int, List[Dict[str, any]]] = {}
-        image_data_map = {
-            img_data["path"]: img_data for img_data in self.app_state.image_files_data
-        }
-
-        for file_path, cluster_id in self.app_state.cluster_results.items():
-            if file_path in image_data_map:
-                if cluster_id not in images_by_cluster:
-                    images_by_cluster[cluster_id] = []
-                images_by_cluster[cluster_id].append(image_data_map[file_path])
-        return images_by_cluster
+        # Delegated to utility for testability
+        return ClusterUtils.group_images_by_cluster(
+            self.app_state.image_files_data, self.app_state.cluster_results
+        )
 
     def _populate_model_standard(
         self, parent_item: QStandardItem, image_data_list: List[Dict[str, any]]
@@ -1708,243 +1706,128 @@ class MainWindow(QMainWindow):
         if not active_view:
             return
         current_proxy_idx = active_view.currentIndex()
-        if not current_proxy_idx.isValid() or not self._is_valid_image_item(
-            current_proxy_idx
-        ):
+        current_path = None
+        if current_proxy_idx.isValid() and self._is_valid_image_item(current_proxy_idx):
+            src_idx = self.proxy_model.mapToSource(current_proxy_idx)
+            item = self.file_system_model.itemFromIndex(src_idx)
+            if item:
+                data = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(data, dict):
+                    current_path = data.get("path")
+
+        # Build group sibling path list
+        group_paths: List[str] = []
+        if current_proxy_idx.isValid():
+            _parent_group_idx, group_image_indices, _ = self._get_current_group_sibling_images(current_proxy_idx)
+            for idx in group_image_indices:
+                src_idx = self.proxy_model.mapToSource(idx)
+                item = self.file_system_model.itemFromIndex(src_idx)
+                if item:
+                    d = item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(d, dict) and "path" in d:
+                        group_paths.append(d["path"])
+
+        if not group_paths:
+            # fallback select first visible
             first_item = self._find_first_visible_item()
             if first_item.isValid():
                 sel_model = active_view.selectionModel()
-                if sel_model is not None:
-                    sel_model.select(
-                        first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                    )
-                active_view.setCurrentIndex(first_item)
+                if sel_model:
+                    sel_model.setCurrentIndex(first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
                 active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
-        _parent_group_idx, group_images, local_idx = (
-            self._get_current_group_sibling_images(current_proxy_idx)
-        )
-
-        if not group_images or local_idx == -1:
-            logger.debug("Navigate left: No sibling images found in the current group.")
-            return
-
-        num_items = len(group_images)
-        if num_items == 0:
-            return
-
-        # Since _get_current_group_sibling_images already returns a list of non-deleted items,
-        # we can simply calculate the next index. The `skip_deleted` parameter is handled by that function.
-        new_local_idx = (local_idx - 1 + num_items) % num_items
-        candidate_idx = group_images[new_local_idx]
-
-        # We call the validator just to perform the selection action.
-        # Passing skip_deleted=False because we know the item is not deleted.
-        self._validate_and_select_image_candidate(candidate_idx, "left", False)
+        deleted_set = set(self.app_state.get_marked_files()) if skip_deleted else set()
+        target_path = navigate_group_cyclic(group_paths, current_path, "left", skip_deleted, deleted_set)
+        if target_path:
+            proxy_idx = self._find_proxy_index_for_path(target_path)
+            if proxy_idx.isValid():
+                self._validate_and_select_image_candidate(proxy_idx, "left", False)
 
     def _navigate_right_in_group(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
             return
         current_proxy_idx = active_view.currentIndex()
-        if not current_proxy_idx.isValid() or not self._is_valid_image_item(
-            current_proxy_idx
-        ):
+        current_path = None
+        if current_proxy_idx.isValid() and self._is_valid_image_item(current_proxy_idx):
+            src_idx = self.proxy_model.mapToSource(current_proxy_idx)
+            item = self.file_system_model.itemFromIndex(src_idx)
+            if item:
+                data = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(data, dict):
+                    current_path = data.get("path")
+
+        group_paths: List[str] = []
+        if current_proxy_idx.isValid():
+            _parent_group_idx, group_image_indices, _ = self._get_current_group_sibling_images(current_proxy_idx)
+            for idx in group_image_indices:
+                src_idx = self.proxy_model.mapToSource(idx)
+                item = self.file_system_model.itemFromIndex(src_idx)
+                if item:
+                    d = item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(d, dict) and "path" in d:
+                        group_paths.append(d["path"])
+
+        if not group_paths:
             first_item = self._find_first_visible_item()
             if first_item.isValid():
                 sel_model = active_view.selectionModel()
-                if sel_model is not None:
-                    sel_model.select(
-                        first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                    )
-                active_view.setCurrentIndex(first_item)
+                if sel_model:
+                    sel_model.setCurrentIndex(first_item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
                 active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
 
-        _parent_group_idx, group_images, local_idx = (
-            self._get_current_group_sibling_images(current_proxy_idx)
-        )
-
-        if not group_images or local_idx == -1:
-            logger.debug(
-                "Navigate right: No sibling images found in the current group."
-            )
-            return
-
-        num_items = len(group_images)
-        if num_items == 0:
-            return
-
-        # Since _get_current_group_sibling_images already returns a list of non-deleted items,
-        # we can simply calculate the next index. The `skip_deleted` parameter is handled by that function.
-        new_local_idx = (local_idx + 1) % num_items
-        candidate_idx = group_images[new_local_idx]
-
-        # We call the validator just to perform the selection action.
-        # Passing skip_deleted=False because we know the item is not deleted.
-        self._validate_and_select_image_candidate(candidate_idx, "right", False)
+        deleted_set = set(self.app_state.get_marked_files()) if skip_deleted else set()
+        target_path = navigate_group_cyclic(group_paths, current_path, "right", skip_deleted, deleted_set)
+        if target_path:
+            proxy_idx = self._find_proxy_index_for_path(target_path)
+            if proxy_idx.isValid():
+                self._validate_and_select_image_candidate(proxy_idx, "right", False)
 
     def _navigate_up_sequential(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
-            logger.debug("Navigate up: No active view found.")
             return
-
-        current_proxy_idx = active_view.currentIndex()
-
-        if not current_proxy_idx.isValid():
-            last_item_index = self._find_last_visible_item()
-            if last_item_index.isValid():
-                sel_model = active_view.selectionModel()
-                if sel_model is not None:
-                    sel_model.select(
-                        last_item_index,
-                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
-                    )
-                active_view.setCurrentIndex(last_item_index)
-                active_view.scrollTo(
-                    last_item_index, QAbstractItemView.ScrollHint.EnsureVisible
-                )
-                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
-            return
-
-        iter_idx = current_proxy_idx
-
-        max_iterations = (
-            self.proxy_model.rowCount(QModelIndex())
-            + sum(
-                self.proxy_model.rowCount(self.proxy_model.index(r, 0, QModelIndex()))
-                for r in range(self.proxy_model.rowCount(QModelIndex()))
-            )
-        ) * 2
-        if max_iterations == 0 and self.app_state and self.app_state.image_files_data:
-            max_iterations = len(self.app_state.image_files_data) * 5
-        if max_iterations == 0:
-            max_iterations = DEFAULT_MAX_ITERATIONS
-
-        for iteration_count in range(max_iterations):
-            prev_visual_idx = self._index_above(active_view, iter_idx)
-
-            if not prev_visual_idx.isValid():
-                break
-
-            if self._validate_and_select_image_candidate(
-                prev_visual_idx, "up", skip_deleted
-            ):
-                return
-
-            if isinstance(active_view, QTreeView) and self._is_expanded_group_header(
-                active_view, prev_visual_idx
-            ):
-                if iter_idx.parent() != prev_visual_idx:
-                    last_in_group = self._find_last_visible_image_item_in_subtree(
-                        prev_visual_idx, skip_deleted=skip_deleted
-                    )
-                    # Validate the item before selecting it
-                    if (
-                        last_in_group.isValid()
-                        and self._validate_and_select_image_candidate(
-                            last_in_group, "up", skip_deleted
-                        )
-                    ):
-                        return
-
-            iter_idx = prev_visual_idx
-            if iteration_count == max_iterations - 1:  # Safety break
-                logger.warning("Navigate up: Max iterations reached, aborting.")
-
-        logger.debug("Navigate up: No previous image found.")
+        all_visible = self._get_all_visible_image_paths()
+        current_path = None
+        cur_idx = active_view.currentIndex()
+        if cur_idx.isValid() and self._is_valid_image_item(cur_idx):
+            src_idx = self.proxy_model.mapToSource(cur_idx)
+            item = self.file_system_model.itemFromIndex(src_idx)
+            if item:
+                d = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(d, dict):
+                    current_path = d.get("path")
+        deleted_set = set(self.app_state.get_marked_files()) if skip_deleted else set()
+        target_path = navigate_linear(all_visible, current_path, "up", skip_deleted, deleted_set)
+        if target_path:
+            proxy_idx = self._find_proxy_index_for_path(target_path)
+            if proxy_idx.isValid():
+                self._validate_and_select_image_candidate(proxy_idx, "up", False)
 
     def _navigate_down_sequential(self, skip_deleted=True):
         active_view = self._get_active_file_view()
         if not active_view:
-            logger.debug("Navigate down: No active view found.")
             return
+        all_visible = self._get_all_visible_image_paths()
+        current_path = None
+        cur_idx = active_view.currentIndex()
+        if cur_idx.isValid() and self._is_valid_image_item(cur_idx):
+            src_idx = self.proxy_model.mapToSource(cur_idx)
+            item = self.file_system_model.itemFromIndex(src_idx)
+            if item:
+                d = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(d, dict):
+                    current_path = d.get("path")
+        deleted_set = set(self.app_state.get_marked_files()) if skip_deleted else set()
+        target_path = navigate_linear(all_visible, current_path, "down", skip_deleted, deleted_set)
+        if target_path:
+            proxy_idx = self._find_proxy_index_for_path(target_path)
+            if proxy_idx.isValid():
+                self._validate_and_select_image_candidate(proxy_idx, "down", False)
 
-        current_index = active_view.currentIndex()
-        if not current_index.isValid():
-            first_item_index = self._find_first_visible_item()
-            if first_item_index.isValid():
-                sel_model = active_view.selectionModel()
-                if sel_model is not None:
-                    sel_model.select(
-                        first_item_index,
-                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
-                    )
-                active_view.setCurrentIndex(first_item_index)
-                active_view.scrollTo(
-                    first_item_index, QAbstractItemView.ScrollHint.EnsureVisible
-                )
-                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
-            return
-
-        temp_index = current_index
-        iteration_count = 0
-
-        # Determine a safe iteration limit to prevent infinite loops in unexpected scenarios
-        safety_iteration_limit = (
-            self.proxy_model.rowCount(QModelIndex())
-            * DEFAULT_SAFETY_ITERATION_MULTIPLIER
-        )
-        if self.app_state.image_files_data:
-            safety_iteration_limit = max(
-                safety_iteration_limit,
-                len(self.app_state.image_files_data)
-                * DEFAULT_SAFETY_ITERATION_MULTIPLIER,
-            )
-        if safety_iteration_limit == 0:
-            safety_iteration_limit = DEFAULT_MAX_ITERATIONS
-
-        while temp_index.isValid() and iteration_count < safety_iteration_limit:
-            iteration_count += 1
-            # 1. Get the item visually below the current one
-            temp_index = self._index_below(active_view, temp_index)
-
-            if not temp_index.isValid():
-                break
-
-            if self._validate_and_select_image_candidate(
-                temp_index, "down", skip_deleted
-            ):
-                return
-
-        if iteration_count >= safety_iteration_limit:
-            logger.warning("Navigate down: Max iterations reached, aborting.")
-
-        logger.debug("Navigate down: No next image found.")
-
-    def _index_below(self, view: QAbstractItemView, index: QModelIndex) -> QModelIndex:
-        """Return the index visually below the given one for both tree and list/grid views."""
-        from PyQt6.QtWidgets import QTreeView
-
-        if isinstance(view, QTreeView):
-            return view.indexBelow(index)
-        # QListView/grid: advance row by 1 within the same parent
-        model = view.model()
-        if not model:
-            return QModelIndex()
-        parent = index.parent()
-        next_row = index.row() + 1
-        if 0 <= next_row < model.rowCount(parent):
-            return model.index(next_row, index.column(), parent)
-        return QModelIndex()
-
-    def _index_above(self, view: QAbstractItemView, index: QModelIndex) -> QModelIndex:
-        """Return the index visually above the given one for both tree and list/grid views."""
-        from PyQt6.QtWidgets import QTreeView
-
-        if isinstance(view, QTreeView):
-            return view.indexAbove(index)
-        # QListView/grid: move row by -1 within the same parent
-        model = view.model()
-        if not model:
-            return QModelIndex()
-        parent = index.parent()
-        prev_row = index.row() - 1
-        if 0 <= prev_row < model.rowCount(parent):
-            return model.index(prev_row, index.column(), parent)
-        return QModelIndex()
+    # Removed obsolete _index_below and _index_above methods (navigation handled by helpers)
 
     def _find_first_visible_item(self) -> QModelIndex:
         active_view = self._get_active_file_view()
@@ -2144,64 +2027,21 @@ class MainWindow(QMainWindow):
         return paths
 
     def _find_proxy_index_for_path(self, target_path: str) -> QModelIndex:
-        """Finds the QModelIndex in the current proxy model for a given file path."""
         active_view = self._get_active_file_view()
         if not active_view:
             return QModelIndex()
-
         proxy_model = active_view.model()
         if not isinstance(proxy_model, QSortFilterProxyModel):
-            logger.warning(
-                "Cannot find proxy index: Active view's model is not a QSortFilterProxyModel."
-            )
             return QModelIndex()
-
-        # Similar traversal as _get_all_visible_image_paths
-        queue = []
-        root_proxy_parent_idx = QModelIndex()
-        for r in range(proxy_model.rowCount(root_proxy_parent_idx)):
-            queue.append(proxy_model.index(r, 0, root_proxy_parent_idx))
-
-        head = 0
-        while head < len(queue):
-            current_proxy_idx = queue[head]
-            head += 1
-            if not current_proxy_idx.isValid():
-                continue
-
-            if self._is_valid_image_item(current_proxy_idx):
-                source_idx = proxy_model.mapToSource(current_proxy_idx)
-                item = self.file_system_model.itemFromIndex(
-                    source_idx
-                )  # Use source_model
-                if item:
-                    item_data = item.data(Qt.ItemDataRole.UserRole)
-                    if (
-                        isinstance(item_data, dict)
-                        and item_data.get("path") == target_path
-                    ):
-                        return current_proxy_idx  # Found it
-
-            if isinstance(active_view, QTreeView):
-                source_idx_for_children_check = proxy_model.mapToSource(
-                    current_proxy_idx
-                )
-                if source_idx_for_children_check.isValid():
-                    item_for_children_check = self.file_system_model.itemFromIndex(
-                        source_idx_for_children_check
-                    )
-                    if (
-                        item_for_children_check
-                        and item_for_children_check.hasChildren()
-                        and active_view.isExpanded(current_proxy_idx)
-                    ):
-                        for child_row in range(
-                            proxy_model.rowCount(current_proxy_idx)
-                        ):  # Children from proxy model
-                            queue.append(
-                                proxy_model.index(child_row, 0, current_proxy_idx)
-                            )
-        return QModelIndex()  # Not found
+        return find_proxy_index_for_path(
+            target_path=target_path,
+            proxy_model=proxy_model,
+            source_model=self.file_system_model,
+            is_valid_image_item=self._is_valid_image_item,
+            is_expanded=(lambda idx: active_view.isExpanded(idx))
+            if isinstance(active_view, QTreeView)
+            else None,
+        )
 
     def _get_selected_file_paths_from_view(self) -> List[str]:
         """Helper to get valid, unique, existing file paths from the current selection."""
@@ -2376,32 +2216,16 @@ class MainWindow(QMainWindow):
         if self.sidebar_visible:
             self._update_sidebar_with_current_selection()
 
-    def _update_status_bar_for_image(
-        self, file_path, metadata, pixmap, file_data_from_model
-    ):
-        """Helper to compose and set the status bar message for an image."""
-        filename = os.path.basename(file_path)
-        rating_text = f"R: {metadata.get('rating', 0)}"
-        date_obj = metadata.get("date")
-        date_text = f"D: {date_obj.strftime('%Y-%m-%d')}" if date_obj else "D: Unknown"
-        cluster = self.app_state.cluster_results.get(file_path)
-        cluster_text = f" | C: {cluster}" if cluster is not None else ""
-        try:
-            size_text = f" | Size: {os.path.getsize(file_path) // 1024} KB"
-        except OSError:
-            size_text = " | Size: N/A"
-        dimensions_text = f" | {pixmap.width()}x{pixmap.height()}"
-        is_blurred = (
-            file_data_from_model.get("is_blurred") if file_data_from_model else None
+    def _update_status_bar_for_image(self, file_path, metadata, pixmap, file_data_from_model):
+        info = build_status_bar_info(
+            file_path=file_path,
+            metadata=metadata,
+            width=pixmap.width() if pixmap else 0,
+            height=pixmap.height() if pixmap else 0,
+            cluster_lookup=self.app_state.cluster_results,
+            file_data_from_model=file_data_from_model,
         )
-        blur_status_text = (
-            " | Blurred: Yes"
-            if is_blurred is True
-            else (" | Blurred: No" if is_blurred is False else "")
-        )
-
-        status_message = f"{filename} | {rating_text} | {date_text}{cluster_text}{size_text}{dimensions_text}{blur_status_text}"
-        self.statusBar().showMessage(status_message)
+        self.statusBar().showMessage(info.to_message())
 
     def _display_multi_selection_info(self, selected_paths: List[str]):
         """Handles UI updates when multiple images are selected."""
@@ -3153,52 +2977,16 @@ class MainWindow(QMainWindow):
         images_by_cluster: Dict[int, List[Dict[str, any]]],
         date_cache: Dict[str, Optional[date_obj]],
     ) -> Dict[int, date_obj]:
-        cluster_timestamps = {}
-        for cluster_id, file_data_list in images_by_cluster.items():
-            earliest_date = date_obj.max
-            found_date = False
-            for file_data in file_data_list:
-                img_date = date_cache.get(file_data["path"])
-                if img_date and img_date < earliest_date:
-                    earliest_date = img_date
-                    found_date = True
-            cluster_timestamps[cluster_id] = (
-                earliest_date if found_date else date_obj.max
-            )
-        return cluster_timestamps
+        return ClusterUtils.get_cluster_timestamps(images_by_cluster, date_cache)
 
     def _calculate_cluster_centroids(
         self,
         images_by_cluster: Dict[int, List[Dict[str, any]]],
         embeddings_cache: Dict[str, List[float]],
     ) -> Dict[int, np.ndarray]:
-        centroids = {}
-        if not embeddings_cache:
-            return centroids
-        for cluster_id, file_data_list in images_by_cluster.items():
-            cluster_embeddings = []
-            for file_data in file_data_list:
-                embedding = embeddings_cache.get(file_data["path"])
-                if embedding is not None:
-                    if isinstance(embedding, np.ndarray):
-                        cluster_embeddings.append(embedding)
-                    elif isinstance(embedding, list):
-                        cluster_embeddings.append(np.array(embedding))
-            if cluster_embeddings:
-                try:
-                    # Ensure all embeddings are numpy arrays before stacking for mean calculation
-                    if all(isinstance(emb, np.ndarray) for emb in cluster_embeddings):
-                        if cluster_embeddings:  # Ensure list is not empty
-                            # Explicitly cast to float32 if not already, for consistency
-                            centroids[cluster_id] = np.mean(
-                                np.array(cluster_embeddings, dtype=np.float32), axis=0
-                            )
-                except Exception as e:  # Catch potential errors in np.mean, like empty list or dtype issues
-                    logger.error(
-                        f"Error calculating centroid for cluster {cluster_id}: {e}"
-                    )
-                    pass
-        return centroids
+        return ClusterUtils.calculate_cluster_centroids(
+            images_by_cluster, embeddings_cache
+        )
 
     def _sort_clusters_by_similarity_time(
         self,
@@ -3206,84 +2994,9 @@ class MainWindow(QMainWindow):
         embeddings_cache: Dict[str, List[float]],
         date_cache: Dict[str, Optional[date_obj]],
     ) -> List[int]:
-        cluster_ids = list(images_by_cluster.keys())
-        if not cluster_ids:
-            return []
-
-        centroids = self._calculate_cluster_centroids(
-            images_by_cluster, embeddings_cache
+        return ClusterUtils.sort_clusters_by_similarity_time(
+            images_by_cluster, embeddings_cache, date_cache
         )
-        valid_cluster_ids_for_pca = [
-            cid
-            for cid in cluster_ids
-            if cid in centroids
-            and centroids[cid] is not None
-            and centroids[cid].size > 0
-        ]
-
-        if not valid_cluster_ids_for_pca or len(valid_cluster_ids_for_pca) < 2:
-            cluster_timestamps_for_fallback = self._get_cluster_timestamps(
-                images_by_cluster, date_cache
-            )
-            return sorted(
-                list(images_by_cluster.keys()),
-                key=lambda cid_orig: cluster_timestamps_for_fallback.get(
-                    cid_orig, date_obj.max
-                ),
-            )
-
-        valid_centroid_list = [centroids[cid] for cid in valid_cluster_ids_for_pca]
-        if not valid_centroid_list:
-            cluster_timestamps_for_fallback = self._get_cluster_timestamps(
-                images_by_cluster, date_cache
-            )
-            return sorted(
-                list(images_by_cluster.keys()),
-                key=lambda cid_orig: cluster_timestamps_for_fallback.get(
-                    cid_orig, date_obj.max
-                ),
-            )
-
-        centroid_matrix = np.array(valid_centroid_list)
-
-        pca_scores = {}
-        # Ensure matrix is 2D and has enough samples/features for PCA
-        if (
-            centroid_matrix.ndim == 2
-            and centroid_matrix.shape[0] > 1
-            and centroid_matrix.shape[1] > 0
-        ):
-            try:
-                # n_components for PCA must be less than min(n_samples, n_features)
-                n_components_pca = min(
-                    1,
-                    centroid_matrix.shape[0] - 1 if centroid_matrix.shape[0] > 1 else 1,
-                    centroid_matrix.shape[1],
-                )
-                if n_components_pca > 0:  # Ensure n_components is at least 1
-                    pca = PCA(n_components=n_components_pca)
-                    transformed_centroids = pca.fit_transform(centroid_matrix)
-                    for i, cid in enumerate(valid_cluster_ids_for_pca):
-                        pca_scores[cid] = (
-                            transformed_centroids[i, 0]
-                            if transformed_centroids.ndim > 1
-                            else transformed_centroids[i]
-                        )
-            except Exception as e:
-                logger.error(f"Error during PCA for cluster sorting: {e}")
-
-        cluster_timestamps = self._get_cluster_timestamps(images_by_cluster, date_cache)
-        sortable_clusters = []
-        for cid in cluster_ids:
-            pca_val = pca_scores.get(
-                cid, float("inf")
-            )  # Default to inf if PCA score not found
-            ts_val = cluster_timestamps.get(cid, date_obj.max)
-            sortable_clusters.append((cid, pca_val, ts_val))
-        sortable_clusters.sort(
-            key=lambda x: (x[1], x[2])
-        )  # Sort by PCA score, then timestamp
-        return [item[0] for item in sortable_clusters]
 
     def _handle_toggle_auto_edits(self, checked: bool):
         self.apply_auto_edits_enabled = checked
@@ -5024,24 +4737,14 @@ class MainWindow(QMainWindow):
             self._hide_rotation_view()
             return
 
-        # Determine the next path to select using helper (prefers forward progress)
-        try:
-            from src.ui.selection_utils import (
-                select_next_surviving_path as _next_after_delete,
-            )
-        except Exception:
-            _next_after_delete = None
-
-        path_to_select = None
-        if _next_after_delete:
-            # Use the first of the deleted paths as anchor (stable)
-            deleted_list = list(rotations_to_apply.keys())
-            path_to_select = _next_after_delete(
-                visible_paths_before=visible_paths_before,
-                deleted_paths=deleted_list,
-                anchor_path_before=deleted_list[0] if deleted_list else None,
-                visible_paths_after=list(self.rotation_suggestions.keys()),
-            )
+        # Determine the next path to select using rotation utility
+        deleted_list = list(rotations_to_apply.keys())
+        path_to_select = compute_next_after_rotation(
+            visible_paths_before=visible_paths_before,
+            accepted_paths=deleted_list,
+            remaining_paths_after=list(self.rotation_suggestions.keys()),
+            anchor_path=deleted_list[0] if deleted_list else None,
+        )
 
         # Rebuild the rotation view to show the remaining items (must happen before mapping index)
         self._rebuild_rotation_view()
@@ -5159,15 +4862,11 @@ class MainWindow(QMainWindow):
         except Exception:
             visible_paths_after = list(self.rotation_suggestions.keys())
 
-        from src.ui.selection_utils import (
-            select_next_surviving_path as _next_after_delete,
-        )
-
-        path_to_select = _next_after_delete(
+        path_to_select = compute_next_after_rotation(
             visible_paths_before=visible_paths_before,
-            deleted_paths=[file_path],
-            anchor_path_before=file_path,
-            visible_paths_after=visible_paths_after,
+            accepted_paths=[file_path],
+            remaining_paths_after=visible_paths_after,
+            anchor_path=file_path,
         )
 
         active_view = self._get_active_file_view()
