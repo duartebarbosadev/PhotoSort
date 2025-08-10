@@ -80,8 +80,9 @@ jobs:
         with:
           name: pytest-artifacts
           path: |
-            .pytest_cache
+            .pytest_cache/
             ./**/pytest-*.log
+          if-no-files-found: ignore
           retention-days: 5
 
 
