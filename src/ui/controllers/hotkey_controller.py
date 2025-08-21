@@ -22,26 +22,11 @@ class HotkeyController:
             Qt.Key.Key_H: ("LEFT/H", self.ctx.navigate_left_in_group),
             Qt.Key.Key_Right: ("RIGHT/L", self.ctx.navigate_right_in_group),
             Qt.Key.Key_L: ("RIGHT/L", self.ctx.navigate_right_in_group),
-            Qt.Key.Key_Up: (
-                "UP/K",
-                getattr(self.ctx, "navigate_up_smart", self.ctx.navigate_up_sequential),
-            ),
-            Qt.Key.Key_K: (
-                "UP/K",
-                getattr(self.ctx, "navigate_up_smart", self.ctx.navigate_up_sequential),
-            ),
-            Qt.Key.Key_Down: (
-                "DOWN/J",
-                getattr(
-                    self.ctx, "navigate_down_smart", self.ctx.navigate_down_sequential
-                ),
-            ),
-            Qt.Key.Key_J: (
-                "DOWN/J",
-                getattr(
-                    self.ctx, "navigate_down_smart", self.ctx.navigate_down_sequential
-                ),
-            ),
+            # Up/Down arrows are sequential only (no group-cycling)
+            Qt.Key.Key_Up: ("UP/K", self.ctx.navigate_up_sequential),
+            Qt.Key.Key_K: ("UP/K", self.ctx.navigate_up_sequential),
+            Qt.Key.Key_Down: ("DOWN/J", self.ctx.navigate_down_sequential),
+            Qt.Key.Key_J: ("DOWN/J", self.ctx.navigate_down_sequential),
         }
 
     def handle_key(self, key: int, skip_deleted: bool = True) -> bool:

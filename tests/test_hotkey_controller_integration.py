@@ -19,6 +19,7 @@ class DummyCtx:
     def navigate_down_sequential(self, skip_deleted=True):
         self.calls.append(("down", skip_deleted))
 
+    # smart variants no longer used for arrow keys
     def navigate_down_smart(self, skip_deleted=True):
         self.calls.append(("down_smart", skip_deleted))
 
@@ -29,9 +30,9 @@ class DummyCtx:
 def test_hotkey_controller_skip_deleted_flag_propagates():
     ctx = DummyCtx()
     hk = HotkeyController(ctx)
-    # Simulate pressing Down with skip_deleted False (Ctrl modifier logic is handled in MainWindow; here we just call handle_key)
+    # Simulate pressing Down with skip_deleted False -> sequential mapping
     hk.handle_key(Qt.Key.Key_Down, skip_deleted=False)
-    assert ctx.calls[-1] == ("down_smart", False)
+    assert ctx.calls[-1] == ("down", False)
     # Up key propagation
     hk.handle_key(Qt.Key.Key_Up, skip_deleted=False)
-    assert ctx.calls[-1] == ("up_smart", False)
+    assert ctx.calls[-1] == ("up", False)

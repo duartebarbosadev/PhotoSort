@@ -2,6 +2,9 @@ from __future__ import annotations
 from typing import List, Optional, Iterable, Protocol, Set
 from PyQt6.QtCore import QModelIndex, Qt
 from PyQt6.QtWidgets import QAbstractItemView
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class NavigationContext(Protocol):
@@ -83,7 +86,7 @@ class NavigationController:
                     current_path = data.get("path")
         group_paths: List[str] = []
         if current_proxy_idx.isValid():
-            _parent_group_idx, group_image_indices, _ = (
+            _parent_group_idx, group_image_indices, cur_local_idx = (
                 self.ctx.get_group_sibling_images(current_proxy_idx)
             )
             for idx in group_image_indices:
@@ -93,6 +96,13 @@ class NavigationController:
                     d = item.data(Qt.ItemDataRole.UserRole)
                     if isinstance(d, dict) and "path" in d:
                         group_paths.append(d["path"])
+            logger.debug(
+                "Group navigation: dir=%s, group_size=%d, cur_local_idx=%s, current=%s",
+                direction,
+                len(group_paths),
+                cur_local_idx,
+                current_path,
+            )
         if not group_paths:
             first_item = self.ctx.find_first_visible_item()
             if first_item.isValid():
@@ -110,11 +120,17 @@ class NavigationController:
         target_path = navigate_group_cyclic(
             group_paths, current_path, direction, skip_deleted, deleted_set
         )
+        logger.debug(
+            "Group navigation: target_path=%s (skip_deleted=%s)",
+            target_path,
+            skip_deleted,
+        )
         if target_path:
             proxy_idx = self.ctx.find_proxy_index_for_path(target_path)
             if proxy_idx.isValid():
+                # Pass skip_deleted through for accurate logging and any downstream filtering
                 self.ctx.validate_and_select_image_candidate(
-                    proxy_idx, direction, False
+                    proxy_idx, direction, skip_deleted
                 )
 
     def navigate_linear(self, direction: str, skip_deleted: bool = True):
@@ -139,5 +155,5 @@ class NavigationController:
             proxy_idx = self.ctx.find_proxy_index_for_path(target_path)
             if proxy_idx.isValid():
                 self.ctx.validate_and_select_image_candidate(
-                    proxy_idx, direction, False
+                    proxy_idx, direction, skip_deleted
                 )

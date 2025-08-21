@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QTreeView,
     QPushButton,
-    QListView,
     QComboBox,
     QStyle,  # For standard icons
     QAbstractItemView,
@@ -202,8 +201,7 @@ class MainWindow(QMainWindow):
         self.apply_auto_edits_enabled = get_auto_edit_photos()
         self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
         self.rotation_suggestions = {}
-        # Controllers
-        # DeletionMarkController handles mark/blurring presentation (non-destructive)
+        # Controllers (always created – treat as invariants for simpler code paths)
         self.deletion_controller = DeletionMarkController(
             app_state=self.app_state,
             is_marked_func=lambda p: self.app_state.is_marked_for_deletion(p),
@@ -256,13 +254,12 @@ class MainWindow(QMainWindow):
 
         # At this point _create_widgets() built file_system_model + proxy_model and wired it;
         # it's now safe to apply any deferred FilterController initialization.
-        if hasattr(self, "filter_controller"):
-            try:
-                self.filter_controller.ensure_initialized(
-                    self.show_folders_mode, self._determine_current_view_mode()
-                )
-            except Exception as e:
-                logger.debug(f"FilterController ensure_initialized skipped: {e}")
+        try:
+            self.filter_controller.ensure_initialized(
+                self.show_folders_mode, self._determine_current_view_mode()
+            )
+        except Exception as e:
+            logger.debug(f"FilterController ensure_initialized skipped: {e}")
 
         self._create_layout()
         self._create_loading_overlay()
@@ -512,13 +509,14 @@ class MainWindow(QMainWindow):
         """Create the UI widgets."""
         start_time = time.perf_counter()
         logger.debug("Creating widgets...")
-        self.file_system_model = QStandardItemModel()
+        # Models
+        self.file_system_model = QStandardItemModel()  # Model for file system
         self.proxy_model = CustomFilterProxyModel(self)
         self.proxy_model.setSourceModel(self.file_system_model)
         self.proxy_model.app_state_ref = self.app_state  # Link AppState to proxy model
 
+        # Left panel (views list/tree/rotation)
         self.left_panel = LeftPanel(self.proxy_model, self.app_state, self)
-
         self._left_panel_views = {
             self.left_panel.tree_display_view,
             self.left_panel.grid_display_view,
@@ -543,6 +541,9 @@ class MainWindow(QMainWindow):
         self._image_viewer_views = {
             v.image_view for v in self.advanced_image_viewer.image_viewers
         }
+        # Model setup (moved earlier logically but kept here after fixing indentation)
+        # Already created in _create_widgets start; ensure not re-created.
+        # (Removed duplicate accidental reinitialization.)
 
         # The rating and color controls are now part of the IndividualViewer
         # widgets inside SynchronizedImageViewer, so they are no longer created here.
@@ -843,7 +844,8 @@ class MainWindow(QMainWindow):
                     )
             else:
                 # If no selection to restore, fall back to selecting the first visible item
-                first_index = self._find_first_visible_item()
+                # selection_controller is always initialized in __init__; simplify fallback logic
+                first_index = self.selection_controller.find_first_visible_item()
                 if first_index.isValid():
                     active_view.setCurrentIndex(first_index)
                     active_view.scrollTo(
@@ -895,12 +897,11 @@ class MainWindow(QMainWindow):
         self.cluster_filter_combo.setEnabled(bool(cluster_ids))
 
     def get_selected_file_paths(self) -> List[str]:  # For MetadataController
+        # Prefer SelectionController; fall back only if something unexpected occurs
         try:
-            if hasattr(self, "selection_controller"):
-                return self.selection_controller.get_selected_file_paths()
+            return self.selection_controller.get_selected_file_paths()
         except Exception:
-            pass
-        return self._get_selected_file_paths_from_view()
+            return self._get_selected_file_paths_from_view()
 
     def ensure_metadata_sidebar(self) -> None:
         if not self.metadata_sidebar:
@@ -952,15 +953,8 @@ class MainWindow(QMainWindow):
         return None, [current_proxy_index], []
 
     def find_first_visible_item(self):  # Expected by NavigationController
-        try:
-            internal = getattr(self, "_find_first_visible_item", None)
-            if callable(internal):
-                return internal()
-        except Exception:
-            pass
-        from PyQt6.QtCore import QModelIndex
-
-        return QModelIndex()
+        # Delegate to SelectionController (let exceptions surface during development)
+        return self.selection_controller.find_first_visible_item()
 
     def find_proxy_index_for_path(self, path: str):  # Expected public name
         try:
@@ -1177,9 +1171,6 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Failed to delete any images", 5000)
 
     def _log_qmodelindex(self, index: QModelIndex, prefix: str = "") -> str:
-        if not hasattr(self, "proxy_model") or not hasattr(self, "file_system_model"):
-            return f"{prefix} Invalid QModelIndex (models not initialized)"
-
         if not index.isValid():
             return f"{prefix} Invalid QModelIndex"
 
@@ -1234,21 +1225,20 @@ class MainWindow(QMainWindow):
         )
 
     def refresh_filter(self):
+        # Invalidate proxy model to re-run filtering and sorting.
         try:
-            if hasattr(self, "proxy_model"):
-                self.proxy_model.invalidate()
+            self.proxy_model.invalidate()
         except Exception:
-            pass
+            logger.exception("refresh_filter: failed to invalidate proxy model")
 
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
         if (
-            hasattr(self, "left_panel")
+            self.left_panel
             and self.left_panel.current_view_mode == "grid"
             and not self.group_by_similarity_mode
         ):
-            if hasattr(self, "left_panel"):
-                self.left_panel.update_grid_view_layout()
+            self.left_panel.update_grid_view_layout()
 
         if self.loading_overlay:
             self.loading_overlay.update_position()
@@ -1269,9 +1259,7 @@ class MainWindow(QMainWindow):
         else:
             has_special = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
         skip_deleted = not has_special  # Holding Ctrl/Cmd includes deleted
-        if hasattr(self, "hotkey_controller") and self.hotkey_controller.handle_key(
-            key, skip_deleted=skip_deleted
-        ):
+        if self.hotkey_controller.handle_key(key, skip_deleted=skip_deleted):
             event.accept()
             return
 
@@ -1498,7 +1486,20 @@ class MainWindow(QMainWindow):
                 if sibling_idx == current_image_proxy_idx:
                     current_item_local_idx = len(sibling_image_items) - 1
 
+        try:
+            # Debug information to help verify runtime grouping
+            logger.debug(
+                "_get_current_group_sibling_images: group_size=%d, cur_local_idx=%s",
+                len(sibling_image_items),
+                current_item_local_idx,
+            )
+        except Exception:
+            pass
         return parent_proxy_idx, sibling_image_items, current_item_local_idx
+
+    # Backwards-compatible alias used by get_group_sibling_images adapter
+    def _get_group_sibling_images(self, current_proxy_index: QModelIndex):
+        return self._get_current_group_sibling_images(current_proxy_index)
 
     def _validate_and_select_image_candidate(
         self, candidate_idx: QModelIndex, direction: str, skip_deleted: bool
@@ -1661,137 +1662,7 @@ class MainWindow(QMainWindow):
                 else self._navigate_down_sequential
             )(skip_deleted)
 
-    # Removed obsolete _index_below and _index_above methods (navigation handled by helpers)
-
-    def _find_first_visible_item(self) -> QModelIndex:
-        active_view = self._get_active_file_view()
-        if not active_view:
-            return QModelIndex()
-
-        proxy_model = active_view.model()
-        if not isinstance(proxy_model, QSortFilterProxyModel):
-            return QModelIndex()
-
-        root_proxy_index = QModelIndex()
-        proxy_row_count = proxy_model.rowCount(root_proxy_index)
-        if isinstance(active_view, QTreeView):
-            q = [
-                proxy_model.index(r, 0, root_proxy_index)
-                for r in range(proxy_row_count)
-            ]
-
-            head = 0
-            while head < len(q):
-                current_proxy_idx = q[head]
-                head += 1
-                if not current_proxy_idx.isValid():
-                    continue
-
-                if not active_view.isRowHidden(
-                    current_proxy_idx.row(), current_proxy_idx.parent()
-                ):
-                    if self._is_valid_image_item(current_proxy_idx):
-                        return current_proxy_idx
-                    source_idx_for_children_check = proxy_model.mapToSource(
-                        current_proxy_idx
-                    )
-                    item_for_children_check = None
-                    if source_idx_for_children_check.isValid():
-                        item_for_children_check = (
-                            proxy_model.sourceModel().itemFromIndex(
-                                source_idx_for_children_check
-                            )
-                        )
-                    if (
-                        item_for_children_check
-                        and proxy_model.hasChildren(current_proxy_idx)
-                        and active_view.isExpanded(current_proxy_idx)
-                    ):
-                        for child_row in range(proxy_model.rowCount(current_proxy_idx)):
-                            q.append(proxy_model.index(child_row, 0, current_proxy_idx))
-            return QModelIndex()
-        elif isinstance(active_view, QListView):
-            for r in range(proxy_row_count):
-                proxy_idx = proxy_model.index(r, 0, root_proxy_index)
-                if self._is_valid_image_item(proxy_idx):
-                    return proxy_idx
-            return QModelIndex()
-        return QModelIndex()
-
-    def _find_last_visible_item(self) -> QModelIndex:
-        active_view = self._get_active_file_view()
-        if not active_view:
-            return QModelIndex()
-        proxy_model = active_view.model()
-        if not isinstance(proxy_model, QSortFilterProxyModel):
-            return QModelIndex()
-
-        root_proxy_index = QModelIndex()
-
-        if isinstance(active_view, QTreeView):
-            # DFS-like approach, exploring last children first
-            # Stack stores (index_to_visit, has_been_expanded_and_children_queued)
-            # This is a bit complex to do purely iteratively backwards for DFS.
-            # Let's try a simpler reversed BFS-like approach on expanded items.
-
-            # Iterate all items in display order and pick the last valid one.
-            # This is less efficient but simpler to implement correctly than reverse DFS.
-            # We can optimize if needed, but correctness first.
-
-            last_found_valid_image = QModelIndex()
-
-            # Queue for BFS-like traversal
-            q = [
-                proxy_model.index(r, 0, root_proxy_index)
-                for r in range(proxy_model.rowCount(root_proxy_index))
-            ]
-            head = 0
-            while head < len(q):
-                current_proxy_idx = q[head]
-                head += 1
-                if not current_proxy_idx.isValid():
-                    continue
-
-                if not active_view.isRowHidden(
-                    current_proxy_idx.row(), current_proxy_idx.parent()
-                ):
-                    if self._is_valid_image_item(current_proxy_idx):
-                        last_found_valid_image = (
-                            current_proxy_idx  # Update if this one is valid
-                        )
-
-                    source_idx_for_children_check = proxy_model.mapToSource(
-                        current_proxy_idx
-                    )
-                    item_for_children_check = None
-                    if source_idx_for_children_check.isValid():
-                        item_for_children_check = (
-                            proxy_model.sourceModel().itemFromIndex(
-                                source_idx_for_children_check
-                            )
-                        )
-
-                    if (
-                        item_for_children_check
-                        and proxy_model.hasChildren(current_proxy_idx)
-                        and active_view.isExpanded(current_proxy_idx)
-                    ):
-                        for child_row in range(proxy_model.rowCount(current_proxy_idx)):
-                            q.append(proxy_model.index(child_row, 0, current_proxy_idx))
-            return last_found_valid_image
-
-        elif isinstance(active_view, QListView):
-            for r in range(
-                proxy_model.rowCount(root_proxy_index) - 1, -1, -1
-            ):  # Iterate backwards
-                proxy_idx = proxy_model.index(r, 0, root_proxy_index)
-                if self._is_valid_image_item(proxy_idx):
-                    return proxy_idx
-            logger.debug("Find last item (List): No visible image item found.")
-            return QModelIndex()
-
-        logger.debug("Find last item: Unknown view type or scenario.")
-        return QModelIndex()
+    # Removed obsolete _index_below/_index_above and last-visible item logic (moved to SelectionController or no longer needed)
 
     def _get_all_visible_image_paths(self) -> List[str]:
         """Gets an ordered list of file paths for all currently visible image items."""
@@ -2276,11 +2147,10 @@ class MainWindow(QMainWindow):
             if self.sidebar_visible and self.metadata_sidebar:
                 self.metadata_sidebar.show_placeholder()
         # Always allow MetadataController to update (it internally caches selection)
-        if hasattr(self, "metadata_controller"):
-            try:
-                self.metadata_controller.refresh_for_selection()
-            except Exception:
-                pass
+        try:
+            self.metadata_controller.refresh_for_selection()
+        except Exception:
+            pass
 
     def _apply_filter(self):
         # Guard: Don't apply filters if no images are loaded yet
@@ -2724,7 +2594,7 @@ class MainWindow(QMainWindow):
                 except TypeError:
                     pass
             else:
-                first_visible_item = self._find_first_visible_item()
+                first_visible_item = self.selection_controller.find_first_visible_item()
                 if first_visible_item.isValid():
                     active_view.setCurrentIndex(first_visible_item)
 
@@ -3114,7 +2984,7 @@ class MainWindow(QMainWindow):
 
     def _set_sidebar_visibility(self, show: bool):
         """Show or hide the sidebar instantly"""
-        if not hasattr(self, "main_splitter") or not self.metadata_sidebar:
+        if not self.main_splitter or not self.metadata_sidebar:
             return
 
         current_sizes = self.main_splitter.sizes()
@@ -3284,7 +3154,7 @@ class MainWindow(QMainWindow):
         """Handle successful rotation - update caches and UI."""
         handle_start_time = time.perf_counter()
         filename = os.path.basename(file_path)
-        logger.debug(
+        logger.info(
             f"Handling successful rotation for '{filename}' (Lossy: {is_lossy})"
         )
 
