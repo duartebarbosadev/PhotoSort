@@ -154,3 +154,26 @@ def test_navigation_include_deleted_group():
     ctx.find_proxy_index_for_path("a")
     nav.navigate_group("right", skip_deleted=False)  # should land on deleted 'b'
     assert ctx.last_selected == "b"
+
+
+def test_navigation_skip_deleted_correct_behavior():
+    """Test correct navigation behavior when skipping deleted items.
+    Scenario: 5 images [a, b, c, d, e] where b and d are deleted, user selects c.
+    - Down navigation should skip d and go to e
+    - Up navigation should skip b and go to a
+    """
+    ctx = Ctx(["a", "b", "c", "d", "e"], deleted=["b", "d"])
+    nav = NavigationController(ctx)
+
+    # Select image c (middle item, surrounded by deleted items)
+    ctx.find_proxy_index_for_path("c")
+    assert ctx.last_selected == "c"
+
+    # Navigate right - should skip d (deleted) and go to e
+    nav.navigate_linear("down", skip_deleted=True)
+    assert ctx.last_selected == "e", "Should go to e when skipping deleted d"
+
+    # Reset to c and navigate left - should skip b (deleted) and go to a
+    ctx.find_proxy_index_for_path("c")
+    nav.navigate_linear("up", skip_deleted=True)
+    assert ctx.last_selected == "a", "Should go to a when skipping deleted b"

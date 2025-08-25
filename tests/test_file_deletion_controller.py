@@ -51,12 +51,28 @@ class DummyAppController:
 class DummyAppState:
     def __init__(self):
         self._data_by_path = {}
+        self._marked_for_deletion = set()
 
     def add_path(self, path):
         self._data_by_path[path] = {}
 
     def remove_data_for_path(self, path):
         self._data_by_path.pop(path, None)
+
+    def mark_for_deletion(self, path):
+        self._marked_for_deletion.add(path)
+
+    def unmark_for_deletion(self, path):
+        self._marked_for_deletion.discard(path)
+
+    def is_marked_for_deletion(self, path):
+        return path in self._marked_for_deletion
+
+    def get_marked_files(self):
+        return list(self._marked_for_deletion)
+
+    def clear_all_deletion_marks(self):
+        self._marked_for_deletion.clear()
 
 
 class DummyDialogManager:
@@ -240,3 +256,78 @@ def test_empty_header_pruned(tmp_path):
 
     # Header should be pruned (rowCount == 0)
     assert ctx.file_system_model.invisibleRootItem().rowCount() == 0
+
+
+def test_mark_for_deletion_then_commit_preserves_selection(tmp_path):
+    """Test that marking images for deletion then committing them preserves selection on non-deleted item.
+    Scenario: 5 images [a, b, c, d, e] where b and d are marked for deletion, user is selected on c.
+    After committing deletions, selection should remain on c since it wasn't deleted.
+    """
+    from src.ui.controllers.deletion_mark_controller import DeletionMarkController
+
+    ctx = DeletionTestContext()
+    deletion_controller = FileDeletionController(ctx)
+    mark_controller = DeletionMarkController(ctx.app_state, ctx.app_state.is_marked_for_deletion)
+
+    # Create 5 test images
+    images = []
+    for name in ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"]:
+        p = tmp_path / name
+        p.write_text("x")
+        images.append(str(p))
+        ctx.app_state.add_path(str(p))
+        ctx.file_system_model.appendRow(make_image_item(str(p)))
+
+    visible_before = ctx._get_all_visible_image_paths()
+    assert set(visible_before) == set(images)
+
+    # Step 1: Mark b and d for deletion (non-destructive)
+    mark_controller.mark(images[1])  # b.jpg
+    mark_controller.mark(images[3])  # d.jpg
+
+    # Verify they are marked but not deleted
+    assert ctx.app_state.is_marked_for_deletion(images[1]) == True
+    assert ctx.app_state.is_marked_for_deletion(images[3]) == True
+    assert ctx.app_state.is_marked_for_deletion(images[2]) == False  # c.jpg not marked
+
+    # Step 2: Set current selection to c.jpg
+    ctx.advanced_image_viewer.focused = images[2]  # c.jpg is focused
+    ctx._handle_file_selection_changed([images[2]])  # Set current selection to c.jpg
+
+    # Step 3: Simulate committing marked deletions by deleting the marked files directly
+    marked_files = ctx.app_state.get_marked_files()
+    visible_paths_before_delete = ctx._get_all_visible_image_paths()
+
+    # Manually delete the marked files (simulating commit operation)
+    for marked_file in marked_files:
+        ctx.app_controller.move_to_trash(marked_file)
+        ctx.app_state.remove_data_for_path(marked_file)
+        # Remove from model
+        proxy_idx = ctx._find_proxy_index_for_path(marked_file)
+        if proxy_idx.isValid():
+            source_idx = ctx.proxy_model.mapToSource(proxy_idx)
+            if source_idx.isValid():
+                ctx.file_system_model.removeRow(source_idx.row(), source_idx.parent())
+
+    # Step 4: Restore selection after deletion (simulate what happens after commit)
+    visible_after = ctx._get_all_visible_image_paths()
+    view = ctx._get_active_file_view()
+    if view:
+        deletion_controller._restore_selection_after_delete(
+            visible_paths_before_delete, visible_after, marked_files, view
+        )
+
+    # Verify deletion - b and d should be deleted
+    assert set(ctx.app_controller.moved_to_trash) == {images[1], images[3]}
+
+    # Verify remaining images
+    expected_remaining = {images[0], images[2], images[4]}  # a, c, e
+    assert set(visible_after) == expected_remaining
+
+    # Key test: Selection should remain on c since it wasn't deleted
+    # The selection restoration should prioritize keeping current selection if it's still valid
+    current_paths = ctx._get_selected_file_paths_from_view()
+    assert len(current_paths) == 1, "Should have exactly one selected item"
+    assert current_paths[0] == images[2], "Selection should remain on c.jpg"
+
+    print(f"✅ Test passed: Selection preserved on c.jpg after deleting marked items b.jpg and d.jpg")
