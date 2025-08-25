@@ -106,40 +106,61 @@ class Ctx:
             self.last_selected = self.paths[row]
 
 
-def test_navigation_controller_group_cycle_left_right():
+def test_navigation_group_cyclic_with_deleted_items():
+    """Test that group navigation cycles correctly and skips deleted items when skip_deleted=True."""
     ctx = Ctx(["a", "b", "c"], deleted=["b"])
     nav = NavigationController(ctx)
     # simulate current path 'a'
     ctx.find_proxy_index_for_path("a")
-    nav.navigate_group("right")  # should skip b -> c
+
+    # Navigate right: should skip deleted 'b' and go to 'c'
+    nav.navigate_group("right")
     assert ctx.last_selected == "c"
-    nav.navigate_group("right")  # wrap to a (b deleted)
+
+    # Navigate right again: should wrap around to 'a'
+    nav.navigate_group("right")
     assert ctx.last_selected == "a"
-    nav.navigate_group("left")  # wrap inverse -> c
+
+    # Navigate left: should go to 'c'
+    nav.navigate_group("left")
     assert ctx.last_selected == "c"
 
 
-def test_navigation_controller_linear_down_up():
+def test_navigation_linear_sequential_with_boundaries():
+    """Test linear navigation handles start/end boundaries and deleted items correctly."""
     ctx = Ctx(["a", "b", "c", "d"], deleted=["c"])
     nav = NavigationController(ctx)
-    # start with none
+
+    # Start with no selection
     ctx.last_selected = None
-    nav.navigate_linear("down")  # first non-deleted -> a
+
+    # Navigate down: should select first non-deleted item 'a'
+    nav.navigate_linear("down")
     assert ctx.last_selected == "a"
-    nav.navigate_linear("down")  # -> b
+
+    # Navigate down: should go to 'b'
+    nav.navigate_linear("down")
     assert ctx.last_selected == "b"
-    nav.navigate_linear("down")  # skip c (deleted) -> d
+
+    # Navigate down: should skip deleted 'c' and go to 'd'
+    nav.navigate_linear("down")
     assert ctx.last_selected == "d"
-    nav.navigate_linear("down")  # stays None (end)
-    assert ctx.last_selected == "d"  # unchanged
-    nav.navigate_linear("up")  # move up skipping c -> b
+
+    # Navigate down at end: should stay at 'd'
+    nav.navigate_linear("down")
+    assert ctx.last_selected == "d"
+
+    # Navigate up: should skip 'c' and go to 'b'
+    nav.navigate_linear("up")
     assert ctx.last_selected == "b"
-    nav.navigate_linear("up")  # -> a
+
+    # Navigate up: should go to 'a'
+    nav.navigate_linear("up")
     assert ctx.last_selected == "a"
 
 
-def test_navigation_include_deleted_linear():
-    """When skip_deleted is False, deleted images should be navigable in linear mode."""
+def test_navigation_linear_includes_deleted_when_skip_false():
+    """Test that linear navigation includes deleted items when skip_deleted=False."""
     ctx = Ctx(["a", "b", "c"], deleted=["b"])
     nav = NavigationController(ctx)
     ctx.find_proxy_index_for_path("a")
@@ -147,8 +168,8 @@ def test_navigation_include_deleted_linear():
     assert ctx.last_selected == "b"
 
 
-def test_navigation_include_deleted_group():
-    """When skip_deleted is False, group navigation should visit deleted images."""
+def test_navigation_group_includes_deleted_when_skip_false():
+    """Test that group navigation includes deleted items when skip_deleted=False."""
     ctx = Ctx(["a", "b", "c"], deleted=["b"])
     nav = NavigationController(ctx)
     ctx.find_proxy_index_for_path("a")
@@ -156,8 +177,8 @@ def test_navigation_include_deleted_group():
     assert ctx.last_selected == "b"
 
 
-def test_navigation_skip_deleted_correct_behavior():
-    """Test correct navigation behavior when skipping deleted items.
+def test_navigation_skip_deleted_with_multiple_deleted_items():
+    """Test navigation correctly skips multiple deleted items in both directions.
     Scenario: 5 images [a, b, c, d, e] where b and d are deleted, user selects c.
     - Down navigation should skip d and go to e
     - Up navigation should skip b and go to a

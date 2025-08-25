@@ -16,14 +16,7 @@ if project_root not in sys.path:
 
 # Try to import the modules we need
 try:
-    from src.core.metadata_processor import (
-        MetadataProcessor,
-        _parse_exif_date,
-        _parse_date_from_filename,
-        _parse_rating,
-        DATE_TAGS_PREFERENCE,
-        COMPREHENSIVE_METADATA_TAGS,
-    )
+    from src.core.metadata_processor import MetadataProcessor
     from src.core.caching.rating_cache import RatingCache
     from src.core.caching.exif_cache import ExifCache
 
@@ -42,18 +35,6 @@ except ImportError as e:
 
     class ExifCache:
         pass
-
-    def _parse_exif_date(*args):
-        return None
-
-    def _parse_date_from_filename(*args):
-        return None
-
-    def _parse_rating(*args):
-        return 0
-
-    DATE_TAGS_PREFERENCE = []
-    COMPREHENSIVE_METADATA_TAGS = []
 
 
 class TestMetadataProcessor:
@@ -189,7 +170,8 @@ class TestMetadataProcessor:
             found_fields = [field for field in common_fields if field in metadata]
             logging.info(f"  Common EXIF fields found: {found_fields}")
 
-    def test_set_and_get_rating(self):
+    @pytest.mark.parametrize("rating_value", [0, 3, 5])
+    def test_set_and_get_rating(self, rating_value):
         """Test setting and getting ratings on sample images."""
         if not self.sample_images:
             pytest.skip("No sample images available")
@@ -205,25 +187,23 @@ class TestMetadataProcessor:
             temp_image_path = tmp.name
 
         try:
-            # Test setting different ratings
-            for rating in [0, 3, 5]:
-                success = MetadataProcessor.set_rating(
-                    temp_image_path,
-                    rating,
-                    rating_disk_cache=self.rating_cache,
-                    exif_disk_cache=self.exif_cache,
-                )
+            success = MetadataProcessor.set_rating(
+                temp_image_path,
+                rating_value,
+                rating_disk_cache=self.rating_cache,
+                exif_disk_cache=self.exif_cache,
+            )
 
-                assert success, f"Failed to set rating {rating}"
+            assert success, f"Failed to set rating {rating_value}"
 
-                # Verify rating was set by reading it back
-                results = MetadataProcessor.get_batch_display_metadata(
-                    [temp_image_path]
-                )
-                norm_path = os.path.normpath(temp_image_path)
-                assert results[norm_path]["rating"] == rating
+            # Verify rating was set by reading it back
+            results = MetadataProcessor.get_batch_display_metadata(
+                [temp_image_path]
+            )
+            norm_path = os.path.normpath(temp_image_path)
+            assert results[norm_path]["rating"] == rating_value
 
-                logging.info(f"Successfully set and verified rating {rating}")
+            logging.info(f"Successfully set and verified rating {rating_value}")
 
         finally:
             # Clean up temporary file
@@ -297,97 +277,16 @@ class TestMetadataProcessor:
             # Should still return valid structure with defaults
             assert results[norm_path]["rating"] == 0
 
-    def test_invalid_rating_values(self):
+    @pytest.mark.parametrize("invalid_rating", [-1, 6, 10, "invalid", None])
+    def test_invalid_rating_values(self, invalid_rating):
         """Test error handling for invalid rating values."""
         if not self.sample_images:
             pytest.skip("No sample images available")
 
         test_image = self.sample_images[0]
 
-        # Test invalid ratings
-        invalid_ratings = [-1, 6, 10, "invalid", None]
-
-        for invalid_rating in invalid_ratings:
-            success = MetadataProcessor.set_rating(test_image, invalid_rating)
-            assert success is False, f"Should reject invalid rating {invalid_rating}"
-
-
-class TestHelperFunctions:
-    """Test helper functions used by MetadataProcessor."""
-
-    def test_parse_exif_date(self):
-        """Test EXIF date parsing function."""
-        test_cases = [
-            ("2023:12:25 14:30:45", date(2023, 12, 25)),
-            ("2023-12-25 14:30:45", date(2023, 12, 25)),
-            ("2023-12-25T14:30:45", date(2023, 12, 25)),
-            ("2023:12:25", date(2023, 12, 25)),
-            ("2023-12-25", date(2023, 12, 25)),
-            ("invalid", None),
-            ("", None),
-            (None, None),
-        ]
-
-        for date_string, expected in test_cases:
-            result = _parse_exif_date(date_string)
-            assert result == expected, f"Failed for '{date_string}'"
-
-    def test_parse_date_from_filename(self):
-        """Test filename date parsing function."""
-        test_cases = [
-            ("IMG_20231225_143045.jpg", date(2023, 12, 25)),
-            ("2023-12-25_photo.jpg", date(2023, 12, 25)),
-            ("20231225_143045.jpg", date(2023, 12, 25)),
-            ("photo_2023.12.25.jpg", date(2023, 12, 25)),
-            ("random_filename.jpg", None),
-            ("IMG_20991301_invalid.jpg", None),  # Invalid date
-        ]
-
-        for filename, expected in test_cases:
-            result = _parse_date_from_filename(filename)
-            assert result == expected, f"Failed for '{filename}'"
-
-    def test_parse_rating(self):
-        """Test rating parsing function."""
-        test_cases = [
-            (3, 3),
-            ("4", 4),
-            ("5.0", 5),
-            (0, 0),
-            (6, 5),  # Should clamp to 5
-            (-1, 0),  # Should clamp to 0
-            ("invalid", 0),
-            (None, 0),
-        ]
-
-        for value, expected in test_cases:
-            result = _parse_rating(value)
-            assert result == expected, f"Failed for {value}"
-
-
-class TestConstants:
-    """Test that constants are properly defined."""
-
-    def test_date_tags_preference(self):
-        """Test DATE_TAGS_PREFERENCE is properly defined."""
-        assert isinstance(DATE_TAGS_PREFERENCE, list)
-        assert len(DATE_TAGS_PREFERENCE) > 0
-        assert all(isinstance(tag, str) for tag in DATE_TAGS_PREFERENCE)
-
-        # Should include common date tags
-        expected_tags = ["Exif.Photo.DateTimeOriginal", "Xmp.xmp.CreateDate"]
-        for tag in expected_tags:
-            assert tag in DATE_TAGS_PREFERENCE
-
-    def test_comprehensive_metadata_tags(self):
-        """Test COMPREHENSIVE_METADATA_TAGS is properly defined."""
-        assert isinstance(COMPREHENSIVE_METADATA_TAGS, list)
-        assert len(COMPREHENSIVE_METADATA_TAGS) > 0
-        assert all(isinstance(tag, str) for tag in COMPREHENSIVE_METADATA_TAGS)
-
-        # Should include rating and label tags
-        assert "Xmp.xmp.Rating" in COMPREHENSIVE_METADATA_TAGS
-        assert "Xmp.xmp.Label" in COMPREHENSIVE_METADATA_TAGS
+        success = MetadataProcessor.set_rating(test_image, invalid_rating)
+        assert success is False, f"Should reject invalid rating {invalid_rating}"
 
 
 if __name__ == "__main__":

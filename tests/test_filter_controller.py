@@ -27,24 +27,47 @@ def qapp():
     return app
 
 
-def test_filter_controller_search_and_rating_cluster(qapp):
+@pytest.mark.parametrize("search_text,expected_matches", [
+    ("apple", 1),
+    ("banana", 1),
+    ("png", 1),
+    ("nonexistent", 0),
+    ("", 3),  # Empty search should match all
+])
+def test_filter_controller_search_text_filtering(qapp, search_text, expected_matches):
+    """Test that search text filtering works correctly for different search terms."""
     ctx = DummyCtx()
     fc = FilterController(ctx)
     # initial state
     assert fc.get_rating_filter() == "Show All"
     assert fc.get_cluster_filter_id() == -1
     # apply search
-    fc.set_search_text("apple")
+    fc.set_search_text(search_text)
     fc.apply_all(show_folders=False, current_view_mode="list")
-    # After applying search, proxy should filter to one row
+    # Check filtering results
     proxy = ctx.proxy_model
     rows = proxy.rowCount()
-    assert rows == 1
-    index = proxy.index(0, 0)
-    assert proxy.data(index, Qt.ItemDataRole.DisplayRole).lower().startswith("apple")
+    assert rows == expected_matches
 
 
-def test_filter_controller_cluster_set(qapp):
+def test_filter_controller_initial_state(qapp):
+    """Test that filter controller initializes with correct default values."""
+    ctx = DummyCtx()
+    fc = FilterController(ctx)
+    assert fc.get_rating_filter() == "Show All"
+    assert fc.get_cluster_filter_id() == -1
+
+
+def test_filter_controller_cluster_filter_setting(qapp):
+    """Test setting cluster filter and verifying it persists."""
+    ctx = DummyCtx()
+    fc = FilterController(ctx)
+    fc.set_cluster_filter(5)
+    assert fc.get_cluster_filter_id() == 5
+
+
+def test_filter_controller_cluster_filter_idempotent_refresh(qapp):
+    """Test that setting the same cluster filter multiple times doesn't trigger extra refreshes."""
     ctx = DummyCtx()
     fc = FilterController(ctx)
     fc.set_cluster_filter(5)

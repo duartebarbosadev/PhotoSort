@@ -1,4 +1,5 @@
 import os
+import pytest
 from PyQt6.QtCore import Qt, QModelIndex
 from PyQt6.QtGui import QStandardItemModel, QStandardItem
 from PyQt6.QtWidgets import QApplication, QTreeView
@@ -8,6 +9,31 @@ from src.ui.controllers.file_deletion_controller import FileDeletionController
 
 # Ensure a QApplication exists
 app = QApplication.instance() or QApplication([])
+
+
+@pytest.fixture
+def deletion_context():
+    """Fixture that provides a fully configured DeletionTestContext."""
+    return DeletionTestContext()
+
+
+@pytest.fixture
+def deletion_controller(deletion_context):
+    """Fixture that provides a FileDeletionController with deletion_context."""
+    return FileDeletionController(deletion_context)
+
+
+@pytest.fixture
+def temp_image_files(tmp_path):
+    """Fixture that creates temporary image files and returns their paths."""
+    def create_images(*names):
+        paths = []
+        for name in names:
+            p = tmp_path / name
+            p.write_text("x")  # Create file with some content
+            paths.append(str(p))
+        return paths
+    return create_images
 
 
 class IdentityProxy(QSortFilterProxyModel):
@@ -188,66 +214,64 @@ def make_image_item(path: str):
     return it
 
 
-def test_focused_single_image_delete_restores_selection(tmp_path):
-    ctx = DeletionTestContext()
-    controller = FileDeletionController(ctx)
+def test_focused_single_image_delete_restores_selection(deletion_controller, deletion_context, temp_image_files):
+    """Test that deleting a focused image restores selection to remaining image."""
+    ctx = deletion_context
+    controller = deletion_controller
 
-    p1 = tmp_path / "a.jpg"
-    p1.write_text("x")
-    p2 = tmp_path / "b.jpg"
-    p2.write_text("y")
-    for p in (p1, p2):
-        ctx.app_state.add_path(str(p))
-        ctx.file_system_model.appendRow(make_image_item(str(p)))
-    ctx._selected_paths = [str(p1), str(p2)]
-    ctx.advanced_image_viewer.focused = str(p1)  # Focused delete scenario
+    # Create temporary image files and add them to the context
+    paths = temp_image_files("a.jpg", "b.jpg")
+    for path in paths:
+        ctx.app_state.add_path(path)
+        ctx.file_system_model.appendRow(make_image_item(path))
+
+    ctx._selected_paths = paths
+    ctx.advanced_image_viewer.focused = paths[0]  # Focused delete scenario
 
     controller.move_current_image_to_trash()
 
-    # p1 should be removed; p2 remains and becomes selected/focused candidate
+    # paths[0] should be removed; paths[1] remains and becomes selected/focused candidate
     remaining_paths = ctx._get_all_visible_image_paths()
-    assert str(p1) not in remaining_paths and str(p2) in remaining_paths
+    assert paths[0] not in remaining_paths and paths[1] in remaining_paths
     assert controller.was_focused_delete is True
-    assert ctx.app_controller.moved_to_trash == [str(p1)]
+    assert ctx.app_controller.moved_to_trash == [paths[0]]
 
 
-def test_multi_selection_delete(tmp_path):
-    ctx = DeletionTestContext()
-    controller = FileDeletionController(ctx)
+def test_multi_selection_delete(deletion_controller, deletion_context, temp_image_files):
+    """Test that multi-selection deletion removes all selected images."""
+    ctx = deletion_context
+    controller = deletion_controller
 
-    p1 = tmp_path / "a.jpg"
-    p1.write_text("x")
-    p2 = tmp_path / "b.jpg"
-    p2.write_text("y")
-    p3 = tmp_path / "c.jpg"
-    p3.write_text("z")
-    for p in (p1, p2, p3):
-        ctx.app_state.add_path(str(p))
-        ctx.file_system_model.appendRow(make_image_item(str(p)))
-    ctx._selected_paths = [str(p1), str(p2)]  # multi-select; no focused image
+    # Create temporary image files and add them to the context
+    paths = temp_image_files("a.jpg", "b.jpg", "c.jpg")
+    for path in paths:
+        ctx.app_state.add_path(path)
+        ctx.file_system_model.appendRow(make_image_item(path))
+
+    ctx._selected_paths = paths[:2]  # multi-select first two images; no focused image
 
     controller.move_current_image_to_trash()
 
     remaining = ctx._get_all_visible_image_paths()
-    # p1 & p2 removed, p3 should remain
-    assert set(remaining) == {str(p3)}
-    assert set(ctx.app_controller.moved_to_trash) == {str(p1), str(p2)}
+    # paths[0] & paths[1] removed, paths[2] should remain
+    assert set(remaining) == {paths[2]}
+    assert set(ctx.app_controller.moved_to_trash) == set(paths[:2])
     assert len(ctx.app_controller.moved_to_trash) == 2
 
 
-def test_empty_header_pruned(tmp_path):
-    ctx = DeletionTestContext()
-    controller = FileDeletionController(ctx)
+def test_empty_header_pruned(deletion_controller, deletion_context, temp_image_files):
+    """Test that empty cluster headers are pruned after deleting all images in the cluster."""
+    ctx = deletion_context
+    controller = deletion_controller
 
-    # Create header
+    # Create header with one image
     header = QStandardItem("Cluster 1")
     header.setData("cluster_header_1", Qt.ItemDataRole.UserRole)
-    p1 = tmp_path / "a.jpg"
-    p1.write_text("x")
-    ctx.app_state.add_path(str(p1))
-    header.appendRow(make_image_item(str(p1)))
+    paths = temp_image_files("a.jpg")
+    ctx.app_state.add_path(paths[0])
+    header.appendRow(make_image_item(paths[0]))
     ctx.file_system_model.appendRow(header)
-    ctx._selected_paths = [str(p1)]
+    ctx._selected_paths = paths
 
     # Sanity: header present
     assert ctx.file_system_model.invisibleRootItem().rowCount() == 1
@@ -258,25 +282,24 @@ def test_empty_header_pruned(tmp_path):
     assert ctx.file_system_model.invisibleRootItem().rowCount() == 0
 
 
-def test_mark_for_deletion_then_commit_preserves_selection(tmp_path):
+def test_mark_for_deletion_then_commit_preserves_selection(deletion_controller, deletion_context, temp_image_files):
     """Test that marking images for deletion then committing them preserves selection on non-deleted item.
     Scenario: 5 images [a, b, c, d, e] where b and d are marked for deletion, user is selected on c.
     After committing deletions, selection should remain on c since it wasn't deleted.
     """
     from src.ui.controllers.deletion_mark_controller import DeletionMarkController
 
-    ctx = DeletionTestContext()
-    deletion_controller = FileDeletionController(ctx)
+    ctx = deletion_context
+    deletion_controller = deletion_controller
     mark_controller = DeletionMarkController(ctx.app_state, ctx.app_state.is_marked_for_deletion)
 
     # Create 5 test images
-    images = []
-    for name in ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"]:
-        p = tmp_path / name
-        p.write_text("x")
-        images.append(str(p))
-        ctx.app_state.add_path(str(p))
-        ctx.file_system_model.appendRow(make_image_item(str(p)))
+    image_names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"]
+    images = temp_image_files(*image_names)
+
+    for path in images:
+        ctx.app_state.add_path(path)
+        ctx.file_system_model.appendRow(make_image_item(path))
 
     visible_before = ctx._get_all_visible_image_paths()
     assert set(visible_before) == set(images)
