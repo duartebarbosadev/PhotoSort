@@ -1,7 +1,7 @@
 import diskcache
 import os
 import logging
-import time  # Added for startup timing
+import time
 from typing import Optional
 from src.core.app_settings import DEFAULT_RATING_CACHE_SIZE_LIMIT_MB
 

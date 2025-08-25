@@ -312,7 +312,6 @@ class AppController(QObject):
         self.main_window.show_loading_overlay("Starting rotation analysis...")
         self.main_window.menu_manager.auto_rotate_action.setEnabled(False)
 
-        # Initialize the rotation suggestions storage
         self.main_window.rotation_suggestions.clear()
 
         image_paths = [fd["path"] for fd in self.app_state.image_files_data]

@@ -43,7 +43,7 @@ from PyQt6.QtGui import (
     QStandardItem,
     QResizeEvent,
 )
-from sklearn.metrics.pairwise import cosine_similarity  # Add cosine_similarity import
+from sklearn.metrics.pairwise import cosine_similarity
 import sys
 
 from src.core.image_pipeline import ImagePipeline
@@ -292,7 +292,7 @@ class MainWindow(QMainWindow):
         folder_name_display = "N/A"
         # Default text if no folder is loaded yet
         status_text = "No folder loaded. Open a folder to begin."
-        scan_logically_active = False  # Initialize to avoid UnboundLocalError
+        scan_logically_active = False
 
         if self.app_state.current_folder_path:
             folder_name_display = os.path.basename(self.app_state.current_folder_path)
@@ -465,7 +465,7 @@ class MainWindow(QMainWindow):
             self._update_cache_dialog_labels()
             # No direct visual refresh needed for EXIF data itself in list/grid,
             # but metadata display for current image might need update
-            self._refresh_current_selection_preview()  # This will re-fetch metadata
+            self._refresh_current_selection_preview()
 
     def _apply_exif_cache_limit_action(self):
         selected_index = self.exif_cache_size_combo.currentIndex()
@@ -541,13 +541,6 @@ class MainWindow(QMainWindow):
         self._image_viewer_views = {
             v.image_view for v in self.advanced_image_viewer.image_viewers
         }
-        # Model setup (moved earlier logically but kept here after fixing indentation)
-        # Already created in _create_widgets start; ensure not re-created.
-        # (Removed duplicate accidental reinitialization.)
-
-        # The rating and color controls are now part of the IndividualViewer
-        # widgets inside SynchronizedImageViewer, so they are no longer created here.
-
         self.accept_all_button = QPushButton("Accept All")
         self.accept_all_button.setObjectName("acceptAllButton")
         self.accept_all_button.setVisible(False)
@@ -1304,8 +1297,6 @@ class MainWindow(QMainWindow):
             num_images = sum(
                 1 for v in self.advanced_image_viewer.image_viewers if v.has_image()
             )
-            # It is considered multi-image if more than one image is loaded into the viewer,
-            # even if only one is currently visible (focused mode).
             if num_images > 1 and index < num_images:
                 self.advanced_image_viewer.set_focused_viewer(index)
                 return  # Handled
@@ -2133,12 +2124,10 @@ class MainWindow(QMainWindow):
 
             file_data_from_model = self._get_cached_metadata_for_selection(file_path)
             logger.debug(f"Displaying single image preview for: {file_path}")
-            # This will force the viewer into single-view mode.
             self._display_single_image_preview(file_path, file_data_from_model)
 
         elif len(selected_file_paths) >= 2:
             logger.debug(f"Handling multi-selection (count={len(selected_file_paths)})")
-            # This will force the viewer into side-by-side mode.
             self._display_multi_selection_info(selected_file_paths)
 
         else:  # No selection

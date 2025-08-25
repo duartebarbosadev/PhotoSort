@@ -5,7 +5,7 @@ import os
 import logging
 import time
 from typing import Optional, Set
-from PIL import ImageEnhance  # Added for brightness adjustment on PIL images
+from PIL import ImageEnhance
 from src.core.app_settings import (
     RAW_AUTO_EDIT_BRIGHTNESS_STANDARD,
     RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED,

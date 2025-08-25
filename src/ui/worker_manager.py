@@ -5,20 +5,19 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 # Import worker classes
 from src.core.file_scanner import FileScanner
 
-# from src.core.similarity_engine import SimilarityEngine # Commented out for lazy loading
 from src.ui.ui_components import (
     PreviewPreloaderWorker,
     BlurDetectionWorker,
     RotationDetectionWorker,
     SimilarityWorker,
 )
-from src.core.image_pipeline import ImagePipeline  # Needed for PreviewPreloaderWorker
+from src.core.image_pipeline import ImagePipeline
 from src.core.rating_loader_worker import (
     RatingLoaderWorker,
-)  # Import RatingLoaderWorker
-from src.core.caching.rating_cache import RatingCache  # For type hinting
-from src.core.caching.exif_cache import ExifCache  # Added for RotationDetectionWorker
-from src.ui.app_state import AppState  # For type hinting
+)
+from src.core.caching.rating_cache import RatingCache
+from src.core.caching.exif_cache import ExifCache
+from src.ui.app_state import AppState
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,8 @@
 import pyexiv2  # noqa: F401  # This must be the first import or else it will cause a silent crash on windows
 import sys
 import os
-import logging  # Added for startup logging
-import time  # Added for startup timing
+import logging
+import time
 import argparse
 import traceback  # For global exception handler
 from PyQt6.QtWidgets import (

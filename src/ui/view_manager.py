@@ -25,7 +25,7 @@ class ViewManager:
         self.app_state = app_state
         self.left_panel = left_panel
         self.current_view_mode = "list"  # Default view mode
-        self.thumbnail_delegate = None  # This will be set from main_window
+        self.thumbnail_delegate = None
 
     def connect_signals(self):
         """Connects signals for the view manager."""

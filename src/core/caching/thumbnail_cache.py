@@ -1,7 +1,7 @@
 import diskcache
 import os
 import logging
-import time  # Added for startup timing
+import time
 from PIL import Image
 from typing import Optional, Tuple
 from src.core.app_settings import (
