@@ -26,6 +26,7 @@ def deletion_controller(deletion_context):
 @pytest.fixture
 def temp_image_files(tmp_path):
     """Fixture that creates temporary image files and returns their paths."""
+
     def create_images(*names):
         paths = []
         for name in names:
@@ -33,6 +34,7 @@ def temp_image_files(tmp_path):
             p.write_text("x")  # Create file with some content
             paths.append(str(p))
         return paths
+
     return create_images
 
 
@@ -214,7 +216,9 @@ def make_image_item(path: str):
     return it
 
 
-def test_focused_single_image_delete_restores_selection(deletion_controller, deletion_context, temp_image_files):
+def test_focused_single_image_delete_restores_selection(
+    deletion_controller, deletion_context, temp_image_files
+):
     """Test that deleting a focused image restores selection to remaining image."""
     ctx = deletion_context
     controller = deletion_controller
@@ -237,7 +241,9 @@ def test_focused_single_image_delete_restores_selection(deletion_controller, del
     assert ctx.app_controller.moved_to_trash == [paths[0]]
 
 
-def test_multi_selection_delete(deletion_controller, deletion_context, temp_image_files):
+def test_multi_selection_delete(
+    deletion_controller, deletion_context, temp_image_files
+):
     """Test that multi-selection deletion removes all selected images."""
     ctx = deletion_context
     controller = deletion_controller
@@ -282,7 +288,9 @@ def test_empty_header_pruned(deletion_controller, deletion_context, temp_image_f
     assert ctx.file_system_model.invisibleRootItem().rowCount() == 0
 
 
-def test_mark_for_deletion_then_commit_preserves_selection(deletion_controller, deletion_context, temp_image_files):
+def test_mark_for_deletion_then_commit_preserves_selection(
+    deletion_controller, deletion_context, temp_image_files
+):
     """Test that marking images for deletion then committing them preserves selection on non-deleted item.
     Scenario: 5 images [a, b, c, d, e] where b and d are marked for deletion, user is selected on c.
     After committing deletions, selection should remain on c since it wasn't deleted.
@@ -291,7 +299,9 @@ def test_mark_for_deletion_then_commit_preserves_selection(deletion_controller, 
 
     ctx = deletion_context
     deletion_controller = deletion_controller
-    mark_controller = DeletionMarkController(ctx.app_state, ctx.app_state.is_marked_for_deletion)
+    mark_controller = DeletionMarkController(
+        ctx.app_state, ctx.app_state.is_marked_for_deletion
+    )
 
     # Create 5 test images
     image_names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"]
@@ -309,9 +319,9 @@ def test_mark_for_deletion_then_commit_preserves_selection(deletion_controller, 
     mark_controller.mark(images[3])  # d.jpg
 
     # Verify they are marked but not deleted
-    assert ctx.app_state.is_marked_for_deletion(images[1]) == True
-    assert ctx.app_state.is_marked_for_deletion(images[3]) == True
-    assert ctx.app_state.is_marked_for_deletion(images[2]) == False  # c.jpg not marked
+    assert ctx.app_state.is_marked_for_deletion(images[1])
+    assert ctx.app_state.is_marked_for_deletion(images[3])
+    assert not ctx.app_state.is_marked_for_deletion(images[2])  # c.jpg not marked
 
     # Step 2: Set current selection to c.jpg
     ctx.advanced_image_viewer.focused = images[2]  # c.jpg is focused
@@ -353,4 +363,6 @@ def test_mark_for_deletion_then_commit_preserves_selection(deletion_controller, 
     assert len(current_paths) == 1, "Should have exactly one selected item"
     assert current_paths[0] == images[2], "Selection should remain on c.jpg"
 
-    print(f"✅ Test passed: Selection preserved on c.jpg after deleting marked items b.jpg and d.jpg")
+    print(
+        "✅ Test passed: Selection preserved on c.jpg after deleting marked items b.jpg and d.jpg"
+    )

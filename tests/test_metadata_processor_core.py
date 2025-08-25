@@ -197,9 +197,7 @@ class TestMetadataProcessor:
             assert success, f"Failed to set rating {rating_value}"
 
             # Verify rating was set by reading it back
-            results = MetadataProcessor.get_batch_display_metadata(
-                [temp_image_path]
-            )
+            results = MetadataProcessor.get_batch_display_metadata([temp_image_path])
             norm_path = os.path.normpath(temp_image_path)
             assert results[norm_path]["rating"] == rating_value
 

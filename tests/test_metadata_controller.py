@@ -23,13 +23,22 @@ class DummyCtx:
         pass
 
 
-@pytest.mark.parametrize("initial_paths,new_paths,expected_final_length", [
-    (["a.jpg", "b.jpg"], ["a.jpg", "b.jpg"], 1),  # Same selection, no extra update
-    (["a.jpg", "b.jpg"], ["b.jpg"], 2),  # Changed selection, should update
-    (["a.jpg"], ["a.jpg", "b.jpg", "c.jpg"], 2),  # Multiple files
-    ([], ["new.jpg"], 1),  # From empty to single - only updates when changing TO non-empty
-])
-def test_metadata_refresh_updates_on_selection_change(initial_paths, new_paths, expected_final_length):
+@pytest.mark.parametrize(
+    "initial_paths,new_paths,expected_final_length",
+    [
+        (["a.jpg", "b.jpg"], ["a.jpg", "b.jpg"], 1),  # Same selection, no extra update
+        (["a.jpg", "b.jpg"], ["b.jpg"], 2),  # Changed selection, should update
+        (["a.jpg"], ["a.jpg", "b.jpg", "c.jpg"], 2),  # Multiple files
+        (
+            [],
+            ["new.jpg"],
+            1,
+        ),  # From empty to single - only updates when changing TO non-empty
+    ],
+)
+def test_metadata_refresh_updates_on_selection_change(
+    initial_paths, new_paths, expected_final_length
+):
     """Test that metadata sidebar updates when selection changes but not when it stays the same."""
     ctx = DummyCtx()
     mc = MetadataController(ctx)

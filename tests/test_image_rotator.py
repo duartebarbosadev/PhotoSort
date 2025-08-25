@@ -86,18 +86,21 @@ class TestImageRotator:
         assert ".png" in formats
         assert ".tiff" in formats or ".tif" in formats
 
-    @pytest.mark.parametrize("filename,expected", [
-        ("test.jpg", True),
-        ("test.jpeg", True),
-        ("test.png", True),
-        ("test.tiff", True),
-        ("test.arw", True),
-        ("test.cr2", True),
-        ("test.nef", True),
-        ("test.dng", True),
-        ("test.txt", False),
-        ("test.mp4", False),
-    ])
+    @pytest.mark.parametrize(
+        "filename,expected",
+        [
+            ("test.jpg", True),
+            ("test.jpeg", True),
+            ("test.png", True),
+            ("test.tiff", True),
+            ("test.arw", True),
+            ("test.cr2", True),
+            ("test.nef", True),
+            ("test.dng", True),
+            ("test.txt", False),
+            ("test.mp4", False),
+        ],
+    )
     def test_is_rotation_supported(self, filename, expected):
         """Test rotation support checking for different formats."""
         assert self.rotator.is_rotation_supported(filename) == expected
@@ -112,14 +115,17 @@ class TestImageRotator:
             assert isinstance(orientation, int)
             assert 1 <= orientation <= 8  # Valid EXIF orientation range
 
-    @pytest.mark.parametrize("initial,direction,expected", [
-        (1, "clockwise", 6),
-        (1, "counterclockwise", 8),
-        (1, "180", 3),
-        (3, "clockwise", 8),
-        (6, "clockwise", 3),
-        (8, "clockwise", 1),
-    ])
+    @pytest.mark.parametrize(
+        "initial,direction,expected",
+        [
+            (1, "clockwise", 6),
+            (1, "counterclockwise", 8),
+            (1, "180", 3),
+            (3, "clockwise", 8),
+            (6, "clockwise", 3),
+            (8, "clockwise", 1),
+        ],
+    )
     def test_calculate_new_orientation(self, initial, direction, expected):
         """Test orientation calculation for different rotations."""
         assert self.rotator._calculate_new_orientation(initial, direction) == expected

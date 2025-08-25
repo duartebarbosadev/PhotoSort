@@ -1,4 +1,4 @@
-from PyQt6.QtCore import QSortFilterProxyModel, Qt
+from PyQt6.QtCore import QSortFilterProxyModel
 from PyQt6.QtGui import QStandardItemModel, QStandardItem
 from PyQt6.QtWidgets import QApplication
 import pytest
@@ -27,13 +27,16 @@ def qapp():
     return app
 
 
-@pytest.mark.parametrize("search_text,expected_matches", [
-    ("apple", 1),
-    ("banana", 1),
-    ("png", 1),
-    ("nonexistent", 0),
-    ("", 3),  # Empty search should match all
-])
+@pytest.mark.parametrize(
+    "search_text,expected_matches",
+    [
+        ("apple", 1),
+        ("banana", 1),
+        ("png", 1),
+        ("nonexistent", 0),
+        ("", 3),  # Empty search should match all
+    ],
+)
 def test_filter_controller_search_text_filtering(qapp, search_text, expected_matches):
     """Test that search text filtering works correctly for different search terms."""
     ctx = DummyCtx()

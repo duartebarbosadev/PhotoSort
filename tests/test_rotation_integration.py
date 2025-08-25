@@ -76,10 +76,6 @@ class TestRotationIntegration:
         source_image = self.sample_images[0]
         temp_image = self._create_temp_copy(source_image)
 
-        # Get original metadata
-        original_metadata = MetadataProcessor.get_batch_display_metadata([temp_image])
-        original_detailed = MetadataProcessor.get_detailed_metadata(temp_image)
-
         # Perform 4 clockwise rotations
         for i in range(4):
             success = MetadataProcessor.rotate_clockwise(temp_image)
@@ -98,11 +94,14 @@ class TestRotationIntegration:
             f"Full rotation cycle completed for {os.path.basename(source_image)}"
         )
 
-    @pytest.mark.parametrize("rotation_sequence", [
-        ["clockwise", "180", "counterclockwise", "180"],
-        ["clockwise", "clockwise", "180"],
-        ["counterclockwise", "clockwise", "180"],
-    ])
+    @pytest.mark.parametrize(
+        "rotation_sequence",
+        [
+            ["clockwise", "180", "counterclockwise", "180"],
+            ["clockwise", "clockwise", "180"],
+            ["counterclockwise", "clockwise", "180"],
+        ],
+    )
     def test_mixed_rotations_sequence(self, rotation_sequence):
         """Test different rotation combinations using parametrized sequences."""
         if not self.sample_images:
