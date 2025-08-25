@@ -1,7 +1,7 @@
 import diskcache
 import os
 import logging
-import time  # Added for startup timing
+import time
 from typing import Optional, Dict, Any
 
 # Import the settings functions to get the cache size limit

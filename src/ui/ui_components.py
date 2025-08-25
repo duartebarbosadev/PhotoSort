@@ -18,11 +18,11 @@ from PyQt6.QtGui import (
 )
 from typing import List, Optional
 
-from src.core.image_pipeline import ImagePipeline  # For PreviewPreloaderWorker
+from src.core.image_pipeline import ImagePipeline
 from src.core.image_features.blur_detector import (
     BlurDetector,
-)  # For BlurDetectionWorker
-from src.core.caching.exif_cache import ExifCache  # Added for RotationDetectionWorker
+)
+from src.core.caching.exif_cache import ExifCache
 import logging
 
 logger = logging.getLogger(__name__)

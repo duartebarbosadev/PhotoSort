@@ -38,7 +38,7 @@ class LeftPanel(QWidget):
         self.app_state = app_state
         self.main_window = main_window
         self.current_view_mode = "list"
-        self.thumbnail_delegate = None  # This will be set from main_window
+        self.thumbnail_delegate = None
 
         self._create_widgets()
         self._create_layout()

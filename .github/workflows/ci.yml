@@ -35,7 +35,8 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1 libglib2.0-0
+          # Base GL/GLib plus EGL for headless PyQt6 usage
+          sudo apt-get install -y libgl1 libglib2.0-0 libegl1
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -59,6 +60,8 @@ jobs:
       - name: Run Tests
         env:
           PYTHONWARNINGS: default
+          # Ensure Qt runs without an X server
+          QT_QPA_PLATFORM: offscreen
         run: |
           pytest -q --cov=src --cov-report=xml:coverage.xml --cov-report=term
           # Single coverage dataset only; no secondary copying.
@@ -77,8 +80,9 @@ jobs:
         with:
           name: pytest-artifacts
           path: |
-            .pytest_cache
+            .pytest_cache/
             ./**/pytest-*.log
+          if-no-files-found: ignore
           retention-days: 5
 
 

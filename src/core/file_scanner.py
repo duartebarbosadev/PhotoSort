@@ -141,7 +141,7 @@ class FileScanner(QObject):
                             )
                             continue
 
-                        is_blurred = None  # Initialize as None
+                        is_blurred = None
                         if perform_blur_detection:
                             # Perform blur detection
                             # Pass the apply_auto_edits flag to control RAW preview generation for blur detection
