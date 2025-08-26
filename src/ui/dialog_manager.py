@@ -571,7 +571,9 @@ class DialogManager:
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
                 deleted_file_paths,
-                apply_auto_edits=self._has_raw_images(deleted_file_paths),  # Enable RAW processing only if RAW files present
+                apply_auto_edits=self._has_raw_images(
+                    deleted_file_paths
+                ),  # Enable RAW processing only if RAW files present
                 progress_callback=progress_callback,
             )
 
@@ -652,7 +654,9 @@ class DialogManager:
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
                 marked_files,
-                apply_auto_edits=self._has_raw_images(marked_files),  # Enable RAW processing only if RAW files present
+                apply_auto_edits=self._has_raw_images(
+                    marked_files
+                ),  # Enable RAW processing only if RAW files present
                 progress_callback=progress_callback,
             )
 
@@ -711,7 +715,9 @@ class DialogManager:
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
                 marked_files,
-                apply_auto_edits=self._has_raw_images(marked_files),  # Enable RAW processing only if RAW files present
+                apply_auto_edits=self._has_raw_images(
+                    marked_files
+                ),  # Enable RAW processing only if RAW files present
                 progress_callback=progress_callback,
             )
 

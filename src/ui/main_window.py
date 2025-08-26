@@ -2301,9 +2301,7 @@ class MainWindow(QMainWindow):
         logger.debug(
             "<<< ENTRY >>> _handle_preview_finished: Received PreviewPreloaderWorker.finished signal."
         )
-        self.statusBar().showMessage(
-            "Previews regenerated.", 5000
-        )
+        self.statusBar().showMessage("Previews regenerated.", 5000)
         self.hide_loading_overlay()
         logger.debug("_handle_preview_finished: Loading overlay hidden.")
 
@@ -2495,7 +2493,9 @@ class MainWindow(QMainWindow):
             for fd in (self.app_state.image_files_data or [])
             if fd.get("path")
         ]
-        self.similarity_controller.start(paths)  # Automatic RAW processing based on file detection
+        self.similarity_controller.start(
+            paths
+        )
 
     # Slot for WorkerManager's similarity_progress signal
     def _handle_similarity_progress(self, percentage, message):
@@ -3115,7 +3115,8 @@ class MainWindow(QMainWindow):
             if item:
                 t5 = time.perf_counter()
                 new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(
-                    file_path, apply_auto_edits=self._should_apply_raw_processing(file_path)
+                    file_path,
+                    apply_auto_edits=self._should_apply_raw_processing(file_path),
                 )
                 t6 = time.perf_counter()
                 logger.info(
@@ -3913,7 +3914,9 @@ class MainWindow(QMainWindow):
         # Load ONE base pixmap, respecting the user's current auto-edit setting.
         # This represents the "current" view of the image.
         current_pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path, (8000, 8000), apply_auto_edits=self._should_apply_raw_processing(file_path)
+            file_path,
+            (8000, 8000),
+            apply_auto_edits=self._should_apply_raw_processing(file_path),
         )
         t2 = time.perf_counter()
         logger.info(f"SBS_COMP: get_preview_qpixmap (base) took: {t2 - t1:.4f}s")

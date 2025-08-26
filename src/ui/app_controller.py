@@ -393,7 +393,8 @@ class AppController(QObject):
             f"Preloading previews ({len(paths_for_preloader)} images)..."
         )
         self.worker_manager.start_preview_preload(
-            paths_for_preloader, True  # Always enable processing for RAW files
+            paths_for_preloader,
+            True,  # Always enable processing for RAW files
         )
 
     # --- Slots for WorkerManager Signals ---
@@ -509,9 +510,7 @@ class AppController(QObject):
         self.main_window.update_loading_text(message)
 
     def handle_preview_finished(self):
-        self.main_window.statusBar().showMessage(
-            "Previews regenerated.", 5000
-        )
+        self.main_window.statusBar().showMessage("Previews regenerated.", 5000)
         self.main_window.hide_loading_overlay()
 
         if self.app_state.current_folder_path:
