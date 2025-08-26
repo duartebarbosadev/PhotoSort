@@ -17,12 +17,14 @@ from PyQt6.QtGui import (
     QStandardItem,
 )
 from typing import List, Optional
+import os
 
 from src.core.image_pipeline import ImagePipeline
 from src.core.image_features.blur_detector import (
     BlurDetector,
 )
 from src.core.caching.exif_cache import ExifCache
+from src.core.image_processing.raw_image_processor import is_raw_extension
 import logging
 
 logger = logging.getLogger(__name__)
@@ -372,12 +374,21 @@ class SimilarityWorker(QObject):
     error = pyqtSignal(str)
     finished = pyqtSignal()
 
-    def __init__(self, file_paths: List[str], apply_auto_edits: bool, parent=None):
+    def __init__(self, file_paths: List[str], parent=None):
         super().__init__(parent)
         self.file_paths = file_paths
-        self.apply_auto_edits = apply_auto_edits
         self._is_running = True
         self.similarity_engine = None
+
+    def _has_raw_images(self) -> bool:
+        """Check if any of the file paths are RAW image files."""
+        for path in self.file_paths:
+            if not path:
+                continue
+            ext = os.path.splitext(path)[1].lower()
+            if is_raw_extension(ext):
+                return True
+        return False
 
     def stop(self):
         self._is_running = False
@@ -406,8 +417,9 @@ class SimilarityWorker(QObject):
             self.similarity_engine.error.connect(self.finished)
 
             # 4. Start the process
+            apply_raw_processing = self._has_raw_images()
             self.similarity_engine.generate_embeddings_for_files(
-                self.file_paths, self.apply_auto_edits
+                self.file_paths, apply_raw_processing
             )
 
         except Exception as e:

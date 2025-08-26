@@ -1,10 +1,8 @@
 from __future__ import annotations
 from typing import Protocol, Dict, List, Any, Optional
 from datetime import date as date_obj
-import os
 
 from src.ui.helpers.cluster_utils import ClusterUtils
-from src.core.image_processing.raw_image_processor import is_raw_extension
 
 
 class SimilarityContext(Protocol):
@@ -40,24 +38,12 @@ class SimilarityController:
     def __init__(self, ctx: SimilarityContext):
         self.ctx = ctx
 
-    def _has_raw_images(self, paths: List[str]) -> bool:
-        """Check if any of the provided paths are RAW image files."""
-        for path in paths:
-            if not path:
-                continue
-            ext = os.path.splitext(path)[1].lower()
-            if is_raw_extension(ext):
-                return True
-        return False
-
     def start(self, paths: List[str]):
         if not paths:
             self.ctx.status_message("No valid image paths for similarity analysis.")
             return
         self.ctx.show_loading_overlay("Starting similarity analysis...")
-        # Enable RAW processing if any of the paths are RAW files
-        apply_raw_processing = self._has_raw_images(paths)
-        self.ctx.worker_manager.start_similarity_analysis(paths, apply_raw_processing)
+        self.ctx.worker_manager.start_similarity_analysis(paths)
 
     def embeddings_generated(self, embeddings_dict):
         self.ctx.app_state.embeddings_cache = embeddings_dict

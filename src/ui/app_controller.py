@@ -267,9 +267,7 @@ class AppController(QObject):
 
         self.main_window.show_loading_overlay("Starting similarity analysis...")
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
-        self.worker_manager.start_similarity_analysis(
-            paths_for_similarity, True  # Always enable processing for RAW files
-        )
+        self.worker_manager.start_similarity_analysis(paths_for_similarity)
 
     def start_blur_detection_analysis(self):
         logger.info("Starting blur detection analysis.")

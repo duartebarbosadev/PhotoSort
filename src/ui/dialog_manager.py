@@ -59,6 +59,13 @@ class DialogManager:
         ext = os.path.splitext(file_path)[1].lower()
         return is_raw_extension(ext)
 
+    def _has_raw_images(self, file_paths: List[str]) -> bool:
+        """Check if any of the provided file paths are RAW image files."""
+        for path in file_paths:
+            if self._should_apply_raw_processing(path):
+                return True
+        return False
+
     def show_about_dialog(self, block: bool = True):
         """Show the 'About' dialog.
 
@@ -564,7 +571,7 @@ class DialogManager:
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
                 deleted_file_paths,
-                apply_auto_edits=True,  # Always enable processing for RAW files
+                apply_auto_edits=self._has_raw_images(deleted_file_paths),  # Enable RAW processing only if RAW files present
                 progress_callback=progress_callback,
             )
 
@@ -645,7 +652,7 @@ class DialogManager:
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
                 marked_files,
-                apply_auto_edits=True,  # Always enable processing for RAW files
+                apply_auto_edits=self._has_raw_images(marked_files),  # Enable RAW processing only if RAW files present
                 progress_callback=progress_callback,
             )
 
@@ -704,7 +711,7 @@ class DialogManager:
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
                 marked_files,
-                apply_auto_edits=True,  # Always enable processing for RAW files
+                apply_auto_edits=self._has_raw_images(marked_files),  # Enable RAW processing only if RAW files present
                 progress_callback=progress_callback,
             )
 

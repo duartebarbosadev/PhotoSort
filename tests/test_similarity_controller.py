@@ -35,10 +35,9 @@ class DummyCtx:
         self.cluster_combo_enabled = False
         self.cluster_ids = []
 
-    def _start(self, paths, auto_edits):
+    def _start(self, paths):
         self.worker_manager.started = True
         self.worker_manager.paths = paths
-        # Note: auto_edits is still accepted by worker for backward compatibility
 
     def show_loading_overlay(self, text):
         self.loading.append(("show", text))
