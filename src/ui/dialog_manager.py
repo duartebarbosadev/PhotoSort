@@ -501,7 +501,6 @@ class DialogManager:
             # Get thumbnail with orientation correction
             thumbnail_pixmap = self.parent.image_pipeline.get_thumbnail_qpixmap(
                 file_path,
-                apply_auto_edits=self._should_apply_raw_processing(file_path),
                 apply_orientation=True,  # Ensure orientation is applied
             )
             if thumbnail_pixmap:
@@ -570,11 +569,7 @@ class DialogManager:
 
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
-                deleted_file_paths,
-                apply_auto_edits=self._has_raw_images(
-                    deleted_file_paths
-                ),  # Enable RAW processing only if RAW files present
-                progress_callback=progress_callback,
+                deleted_file_paths, progress_callback=progress_callback
             )
 
             self.parent.hide_loading_overlay()
@@ -653,11 +648,7 @@ class DialogManager:
 
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
-                marked_files,
-                apply_auto_edits=self._has_raw_images(
-                    marked_files
-                ),  # Enable RAW processing only if RAW files present
-                progress_callback=progress_callback,
+                marked_files, progress_callback=progress_callback
             )
 
             self.parent.hide_loading_overlay()
@@ -714,11 +705,7 @@ class DialogManager:
 
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
-                marked_files,
-                apply_auto_edits=self._has_raw_images(
-                    marked_files
-                ),  # Enable RAW processing only if RAW files present
-                progress_callback=progress_callback,
+                marked_files, progress_callback=progress_callback
             )
 
             self.parent.hide_loading_overlay()
@@ -770,7 +757,6 @@ class DialogManager:
             # Get thumbnail with orientation correction
             thumbnail_pixmap = self.parent.image_pipeline.get_thumbnail_qpixmap(
                 file_path,
-                apply_auto_edits=self._should_apply_raw_processing(file_path),
                 apply_orientation=True,  # Ensure orientation is applied
             )
             if thumbnail_pixmap:

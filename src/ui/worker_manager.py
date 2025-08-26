@@ -133,7 +133,6 @@ class WorkerManager(QObject):
     def start_file_scan(
         self,
         folder_path: str,
-        apply_auto_edits: bool,
         perform_blur_detection: bool,
         blur_threshold: float,
     ):
@@ -155,7 +154,6 @@ class WorkerManager(QObject):
         self.scanner_thread.started.connect(
             lambda: self.file_scanner.scan_directory(
                 folder_path,
-                apply_auto_edits=apply_auto_edits,
                 perform_blur_detection=perform_blur_detection,  # This is passed to scanner
                 blur_threshold=blur_threshold,
             )

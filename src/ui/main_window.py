@@ -1794,18 +1794,14 @@ class MainWindow(QMainWindow):
 
         logger.debug(f"Getting preview pixmap for {file_path}")
         pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path,
-            display_max_size=(8000, 8000),
-            apply_auto_edits=self._should_apply_raw_processing(file_path),
+            file_path, display_max_size=(8000, 8000)
         )
 
         if not pixmap or pixmap.isNull():
             logger.debug(
                 f"Preview pixmap unavailable, trying thumbnail for {file_path}"
             )
-            pixmap = self.image_pipeline.get_thumbnail_qpixmap(
-                file_path, apply_auto_edits=self._should_apply_raw_processing(file_path)
-            )
+            pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path)
 
         if pixmap and not pixmap.isNull():
             logger.debug(f"Setting image data for {file_path}")
@@ -1867,15 +1863,11 @@ class MainWindow(QMainWindow):
             return
 
         pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path,
-            display_max_size=(8000, 8000),
-            apply_auto_edits=self._should_apply_raw_processing(file_path),
+            file_path, display_max_size=(8000, 8000)
         )
 
         if not pixmap or pixmap.isNull():
-            pixmap = self.image_pipeline.get_thumbnail_qpixmap(
-                file_path, apply_auto_edits=self._should_apply_raw_processing(file_path)
-            )
+            pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path)
 
         if pixmap and not pixmap.isNull():
             image_data = {
@@ -1925,14 +1917,10 @@ class MainWindow(QMainWindow):
 
         for path in selected_paths:
             pixmap = self.image_pipeline.get_preview_qpixmap(
-                path,
-                display_max_size=(8000, 8000),
-                apply_auto_edits=self._should_apply_raw_processing(path),
+                path, display_max_size=(8000, 8000)
             )
             if not pixmap or pixmap.isNull():
-                pixmap = self.image_pipeline.get_thumbnail_qpixmap(
-                    path, apply_auto_edits=self._should_apply_raw_processing(path)
-                )
+                pixmap = self.image_pipeline.get_thumbnail_qpixmap(path)
 
             if pixmap:
                 basic_metadata = self._get_cached_metadata_for_selection(path)
@@ -2473,9 +2461,7 @@ class MainWindow(QMainWindow):
 
         # Icon logic depends on toggle_thumbnails_action and view mode
         if self.menu_manager.toggle_thumbnails_action.isChecked():
-            thumbnail_pixmap = self.image_pipeline.get_thumbnail_qpixmap(
-                file_path, apply_auto_edits=self._should_apply_raw_processing(file_path)
-            )
+            thumbnail_pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path)
             if thumbnail_pixmap:
                 item.setIcon(QIcon(thumbnail_pixmap))
 
@@ -2493,9 +2479,7 @@ class MainWindow(QMainWindow):
             for fd in (self.app_state.image_files_data or [])
             if fd.get("path")
         ]
-        self.similarity_controller.start(
-            paths
-        )
+        self.similarity_controller.start(paths)
 
     # Slot for WorkerManager's similarity_progress signal
     def _handle_similarity_progress(self, percentage, message):
@@ -2977,7 +2961,6 @@ class MainWindow(QMainWindow):
             pixmap = self.image_pipeline.get_preview_qpixmap(
                 selected_paths[0],
                 display_max_size=(8000, 8000),  # High resolution for zoom
-                apply_auto_edits=self._should_apply_raw_processing(selected_paths[0]),
             )
             if pixmap:
                 self.sync_viewer.set_image(pixmap, 0)
@@ -2986,9 +2969,7 @@ class MainWindow(QMainWindow):
             pixmaps = []
             for path in selected_paths[:2]:  # Max 2 images
                 pixmap = self.image_pipeline.get_preview_qpixmap(
-                    path,
-                    display_max_size=(8000, 8000),
-                    apply_auto_edits=self._should_apply_raw_processing(path),
+                    path, display_max_size=(8000, 8000)
                 )
                 if pixmap:
                     pixmaps.append(pixmap)
@@ -3114,10 +3095,7 @@ class MainWindow(QMainWindow):
             item = self.file_system_model.itemFromIndex(source_idx)
             if item:
                 t5 = time.perf_counter()
-                new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(
-                    file_path,
-                    apply_auto_edits=self._should_apply_raw_processing(file_path),
-                )
+                new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(file_path)
                 t6 = time.perf_counter()
                 logger.info(
                     f"HSR: get_thumbnail_qpixmap for {filename} took {t6 - t5:.4f}s."
@@ -3139,7 +3117,6 @@ class MainWindow(QMainWindow):
             self.image_pipeline.get_preview_qpixmap(
                 file_path,
                 display_max_size=(8000, 8000),
-                apply_auto_edits=self._should_apply_raw_processing(file_path),
                 force_regenerate=True,
                 force_default_brightness=True,  # This is the key change
             )
@@ -3914,9 +3891,7 @@ class MainWindow(QMainWindow):
         # Load ONE base pixmap, respecting the user's current auto-edit setting.
         # This represents the "current" view of the image.
         current_pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path,
-            (8000, 8000),
-            apply_auto_edits=self._should_apply_raw_processing(file_path),
+            file_path, (8000, 8000)
         )
         t2 = time.perf_counter()
         logger.info(f"SBS_COMP: get_preview_qpixmap (base) took: {t2 - t1:.4f}s")

@@ -41,6 +41,7 @@ def is_raw_extension(ext: str) -> bool:
                 ".cr2",
                 ".cr3",
                 ".nef",
+                ".nrw",  # Nikon RAW
                 ".dng",
                 ".orf",
                 ".raf",

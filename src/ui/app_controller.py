@@ -237,7 +237,6 @@ class AppController(QObject):
         )
         self.worker_manager.start_file_scan(
             folder_path,
-            apply_auto_edits=True,  # Always enable processing for RAW files
             perform_blur_detection=False,
             blur_threshold=self.main_window.blur_detection_threshold,
         )
