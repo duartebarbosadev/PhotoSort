@@ -15,6 +15,7 @@ The application is structured into two main packages: `core` and `ui`.
   - **`model_rotation_detector.py`**: Lazy-loading ONNX orientation detector. Heavy dependencies (onnxruntime / torchvision / Pillow) are imported only on first prediction request. Never gate imports with environment variables—extend the lazy loader if further deferral is needed.
   - **`rotation_detector.py`**: Orchestrates batch rotation detection using the model rotation detector (instantiated lazily on demand).
     - **`image_processing/`**: Low-level image manipulation, such as RAW processing and rotation.
+      - **RAW Processing**: RAW images (.arw, .cr2, .cr3, .nef, etc.) automatically receive brightness and contrast adjustments during preview and thumbnail generation. This behavior is built into the image pipeline and applies to all RAW files.
       - **`image_orientation_handler.py`**: Handles EXIF-based image orientation correction and composite rotation calculations.
     - **`file_scanner.py`**: Scans directories for image files.
     - **`image_file_ops.py`**: Handles all file system operations, such as moving, renaming, and deleting files. This is the single source of truth for file manipulations.

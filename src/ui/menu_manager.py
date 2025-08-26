@@ -50,7 +50,6 @@ class MenuManager:
 
         # Settings Menu
         self.manage_cache_action: QAction
-        self.toggle_auto_edits_action: QAction
 
         # Image Menu
         self.rotate_clockwise_action: QAction
@@ -359,15 +358,6 @@ class MenuManager:
 
         settings_menu.addSeparator()
 
-        self.toggle_auto_edits_action = QAction("Enable Auto RAW Edits", main_win)
-        self.toggle_auto_edits_action.setCheckable(True)
-        self.toggle_auto_edits_action.setChecked(main_win.apply_auto_edits_enabled)
-        self.toggle_auto_edits_action.setToolTip(
-            "Apply automatic brightness, contrast, and color adjustments to RAW previews and thumbnails."
-        )
-        self.toggle_auto_edits_action.setShortcut(QKeySequence("F10"))
-        settings_menu.addAction(self.toggle_auto_edits_action)
-
     def _create_help_menu(self, menu_bar):
         help_menu = menu_bar.addMenu("&Help")
         help_menu.addAction(self.about_action)
@@ -404,9 +394,6 @@ class MenuManager:
         # Settings Menu
         self.manage_cache_action.triggered.connect(
             self.dialog_manager.show_cache_management_dialog
-        )
-        self.toggle_auto_edits_action.toggled.connect(
-            main_win._handle_toggle_auto_edits
         )
 
         # View switching shortcuts
