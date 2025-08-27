@@ -86,9 +86,7 @@ class RotationDetector:
             max_workers=effective_num_workers
         ) as executor:
             futures_map: Dict[concurrent.futures.Future, str] = {
-                executor.submit(
-                    self._detect_rotation_task, path, result_callback
-                ): path
+                executor.submit(self._detect_rotation_task, path, result_callback): path
                 for path in image_paths
                 if not (should_continue_callback and not should_continue_callback())
             }

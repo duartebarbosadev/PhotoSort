@@ -154,13 +154,9 @@ class SimilarityEngine(QObject):
             )
             self.error.emit(f"Could not save embeddings cache: {e}")
 
-    def generate_embeddings_for_files(
-        self, file_paths: List[str], apply_auto_edits: bool = False
-    ):
+    def generate_embeddings_for_files(self, file_paths: List[str]):
         self._is_running = True
-        logger.info(
-            f"Starting embedding generation for {len(file_paths)} files. Apply auto edits: {apply_auto_edits}"
-        )
+        logger.info(f"Starting embedding generation for {len(file_paths)} files.")
 
         if not self._load_model():
             # self.finished.emit() # QObject has no 'finished' signal by default, use appropriate signal if defined
@@ -197,11 +193,10 @@ class SimilarityEngine(QObject):
             for path in batch_paths:
                 # Use ImagePipeline to get a suitable PIL image for processing
                 logger.debug(
-                    f"Getting PIL image for '{os.path.basename(path)}' (preloaded: True, auto-edits: {apply_auto_edits})"
+                    f"Getting PIL image for '{os.path.basename(path)}' (preloaded: True)"
                 )
                 img = self.image_pipeline.get_pil_image_for_processing(
                     path,
-                    apply_auto_edits=apply_auto_edits,
                     target_mode="RGB",
                     use_preloaded_preview_if_available=True,  # Prioritize cached previews
                 )
@@ -212,8 +207,8 @@ class SimilarityEngine(QObject):
                     batch_images.append(img)
                     valid_paths_in_batch.append(path)
                 else:
-                    logger.warning(
-                        f"Skipping '{os.path.basename(path)}': Could not load preview (auto-edits: {apply_auto_edits})."
+                    logger.debug(
+                        f"Skipping '{os.path.basename(path)}': Could not load preview."
                     )
                     # Ensure skipped files are still counted towards progress if they were in files_to_process
                     # This is handled later by `processed_count += len(valid_paths_in_batch)` and how total_to_process is calculated.

@@ -400,9 +400,7 @@ class WorkerManager(QObject):
         logger.info("Rotation detection thread and worker cleaned up.")
 
     # --- Rotation Detection Management ---
-    def start_rotation_detection(
-        self, image_paths: List[str], exif_cache: "ExifCache"
-    ):
+    def start_rotation_detection(self, image_paths: List[str], exif_cache: "ExifCache"):
         self.stop_rotation_detection()
         self.rotation_detection_thread = QThread()
         self.rotation_detection_worker = RotationDetectionWorker(

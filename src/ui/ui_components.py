@@ -411,10 +411,7 @@ class SimilarityWorker(QObject):
             self.similarity_engine.error.connect(self.finished)
 
             # 4. Start the process
-            apply_raw_processing = self._has_raw_images()
-            self.similarity_engine.generate_embeddings_for_files(
-                self.file_paths, apply_raw_processing
-            )
+            self.similarity_engine.generate_embeddings_for_files(self.file_paths)
 
         except Exception as e:
             logger.error(
