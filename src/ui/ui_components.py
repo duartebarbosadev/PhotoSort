@@ -192,14 +192,12 @@ class PreviewPreloaderWorker(QObject):
         self,
         image_paths,
         max_size,
-        apply_auto_edits: bool,
         image_pipeline_instance: ImagePipeline,
         parent=None,
     ):
         super().__init__(parent)
         self._image_paths = image_paths
         self._max_size = max_size
-        self._apply_auto_edits = apply_auto_edits
         self.image_pipeline = image_pipeline_instance
         self._is_running = True
 
@@ -223,7 +221,6 @@ class PreviewPreloaderWorker(QObject):
         try:
             self.image_pipeline.preload_previews(
                 self._image_paths,
-                apply_auto_edits=self._apply_auto_edits,
                 progress_callback=self._report_progress,
                 should_continue_callback=self._should_continue,
             )
@@ -308,14 +305,12 @@ class RotationDetectionWorker(QObject):
         image_paths: List[str],
         image_pipeline: ImagePipeline,
         exif_cache: "ExifCache",
-        apply_auto_edits: bool = False,
         parent=None,
     ):
         super().__init__(parent)
         self.image_paths = image_paths
         self.image_pipeline = image_pipeline
         self.exif_cache = exif_cache
-        self.apply_auto_edits = apply_auto_edits
         self._should_stop = False
 
     def stop(self):
@@ -348,7 +343,6 @@ class RotationDetectionWorker(QObject):
                 result_callback=result_callback,
                 progress_callback=progress_callback,
                 should_continue_callback=should_continue_callback,
-                apply_auto_edits=self.apply_auto_edits,
             )
 
             if not self._should_stop:

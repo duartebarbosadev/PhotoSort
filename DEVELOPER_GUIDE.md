@@ -15,7 +15,7 @@ The application is structured into two main packages: `core` and `ui`.
   - **`model_rotation_detector.py`**: Lazy-loading ONNX orientation detector. Heavy dependencies (onnxruntime / torchvision / Pillow) are imported only on first prediction request. Never gate imports with environment variables—extend the lazy loader if further deferral is needed.
   - **`rotation_detector.py`**: Orchestrates batch rotation detection using the model rotation detector (instantiated lazily on demand).
     - **`image_processing/`**: Low-level image manipulation, such as RAW processing and rotation.
-      - **RAW Processing**: RAW images (.arw, .cr2, .cr3, .nef, etc.) automatically receive brightness and contrast adjustments during preview and thumbnail generation. This behavior is built into the image pipeline and applies to all RAW files.
+      - **RAW Processing**: RAW images (.arw, .cr2, .cr3, .nef, .dng, etc.) are automatically detected by file extension and receive brightness and contrast adjustments during preview and thumbnail generation. This behavior is built into the image pipeline using internal `is_raw_extension()` detection and applies to all RAW files without requiring external parameters. The system uses `RAW_AUTO_EDIT_BRIGHTNESS_STANDARD = 1.15` for automatic brightness adjustment.
       - **`image_orientation_handler.py`**: Handles EXIF-based image orientation correction and composite rotation calculations.
     - **`file_scanner.py`**: Scans directories for image files.
     - **`image_file_ops.py`**: Handles all file system operations, such as moving, renaming, and deleting files. This is the single source of truth for file manipulations.
@@ -94,7 +94,7 @@ The application is structured into two main packages: `core` and `ui`.
 
 ## 3. Coding Conventions
 
-- **Configuration Constants**: All hardcoded values, thresholds, and configurable parameters must be centralized in `src/core/app_settings.py`. This includes UI dimensions, processing thresholds, cache sizes, AI/ML parameters, and other constants. Never use hardcoded values directly in the code - always import from `app_settings.py`.
+- **Configuration Constants**: All hardcoded values, thresholds, and configurable parameters must be centralized in `src/core/app_settings.py`. This includes UI dimensions, processing thresholds, cache sizes, AI/ML parameters, RAW processing constants (like `RAW_AUTO_EDIT_BRIGHTNESS_STANDARD`), and other constants. Never use hardcoded values directly in the code - always import from `app_settings.py`.
 
 - **Logging**: Use Python's `logging` module for all logging. **Do not use `print()`**.
 
@@ -172,12 +172,14 @@ Current layers:
 - Integration tests for rotation acceptance (skipped automatically if `sample/` assets absent or GUI constraints unmet).
 - Lazy loader tests ensure model instantiation is deferred and disabled mode returns 0.
 - About dialog test runs with `block=False` to avoid modal blocking.
+- Automatic RAW processing tests validate that file extension detection works correctly and that RAW files receive appropriate processing without external parameters.
 
 Guidelines for new tests:
 1. Favor pure function extraction for logic heavy UI code to enable headless unit tests.
 2. Use non-blocking dialog patterns (`block=False`) where modal exec would hang CI.
 3. Skip GUI-heavy tests gracefully when prerequisites (sample assets, GPU libs) are missing instead of failing.
 4. When asserting selection advancement, test the helper function directly with synthetic path lists—only one integration test should cover the end-to-end GUI path.
+5. **Critical Windows Testing Requirement**: All test files must start with `import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2` to prevent access violations in the native library. This import must be the very first import in every test file.
 
 
 ## 7. Adding New Image Feature Pipelines
@@ -218,6 +220,8 @@ When adding new controllers, follow the listed Extension Pattern to maintain con
 | Rotation view crashes due to empty model | Guard with early returns; tests should skip rather than fail |
 | Adding file operations outside `ImageFileOperations` | Refactor into `ImageFileOperations` to centralize side effects |
 | Blocking modal dialogs in CI | Use `block=False` in tests, keep blocking in production UI |
+| Test suite fails with Windows access violations | Ensure every test file starts with `import pyexiv2` as the first import |
+| RAW processing not working | Check that `is_raw_extension()` detection is used instead of external `apply_auto_edits` parameters |
 
 ---
-This guide reflects the state after introducing auto-advance rotation acceptance, selection heuristic refactor, lazy model loading, and updated testing patterns.
+This guide reflects the state after introducing auto-advance rotation acceptance, selection heuristic refactor, lazy model loading, automatic RAW processing refactor, and updated testing patterns.
