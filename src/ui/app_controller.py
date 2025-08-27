@@ -315,7 +315,6 @@ class AppController(QObject):
         self.worker_manager.start_rotation_detection(
             image_paths,
             self.app_state.exif_disk_cache,
-            True,  # Always enable processing for RAW files
         )
 
     def reload_current_folder(self):
@@ -393,7 +392,6 @@ class AppController(QObject):
         )
         self.worker_manager.start_preview_preload(
             paths_for_preloader,
-            True,  # Always enable processing for RAW files
         )
 
     # --- Slots for WorkerManager Signals ---
