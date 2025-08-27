@@ -33,7 +33,7 @@ logger.debug("Initializing SimilarityEngine module...")
 # Define constants for model and cache
 # DEFAULT_CLIP_MODEL = 'clip-ViT-B-32' # Moved to app_settings
 EMBEDDING_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "phototagger_embeddings"
+    os.path.expanduser("~"), ".cache", "photosort_embeddings"
 )
 os.makedirs(EMBEDDING_CACHE_DIR, exist_ok=True)
 

@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Default path for the rating cache
 DEFAULT_RATING_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "phototagger_ratings"
+    os.path.expanduser("~"), ".cache", "photosort_ratings"
 )
 
 

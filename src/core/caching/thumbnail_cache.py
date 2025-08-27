@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Default path for the thumbnail cache
 DEFAULT_THUMBNAIL_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "phototagger_thumbnails"
+    os.path.expanduser("~"), ".cache", "photosort_thumbnails"
 )
 
 

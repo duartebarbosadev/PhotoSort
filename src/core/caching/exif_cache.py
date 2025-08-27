@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Default path for the EXIF metadata cache
 DEFAULT_EXIF_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "phototagger_exif_data"
+    os.path.expanduser("~"), ".cache", "photosort_exif_data"
 )
 # DEFAULT_EXIF_CACHE_SIZE_LIMIT_MB is now managed by app_settings
 

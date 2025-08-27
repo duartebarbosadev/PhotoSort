@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Default path for the preview PIL image cache
 DEFAULT_PREVIEW_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "phototagger_preview_pil_images"
+    os.path.expanduser("~"), ".cache", "photosort_preview_pil_images"
 )
 
 
