@@ -128,7 +128,7 @@ class RawImageProcessor:
                         )  # Correct orientation
                         if apply_auto_edits:
                             logger.debug(
-                                f"Applying auto-edits to embedded JPEG for: {os.path.basename(normalized_path)}"
+                                f"Applying auto-edits to embedded JPEG thumbnail from RAW: {os.path.basename(normalized_path)}"
                             )
                             temp_pil_img = ImageOps.autocontrast(temp_pil_img)
                             enhancer = ImageEnhance.Brightness(temp_pil_img)
@@ -236,7 +236,7 @@ class RawImageProcessor:
                             )
                             if apply_auto_edits:
                                 logger.debug(
-                                    f"Applying auto-edits to embedded JPEG for: {os.path.basename(normalized_path)}"
+                                    f"Applying auto-edits to embedded JPEG preview from RAW: {os.path.basename(normalized_path)}"
                                 )
                                 temp_img = ImageOps.autocontrast(temp_img)
                                 enhancer = ImageEnhance.Brightness(temp_img)
@@ -485,7 +485,7 @@ class RawImageProcessor:
                         and raw.extract_thumb().format == rawpy.ThumbFormat.JPEG
                     ):  # A bit of a simplification
                         logger.debug(
-                            f"Applying auto-edits to embedded JPEG for blur detection: {os.path.basename(normalized_path)}"
+                            f"Applying auto-edits to embedded JPEG thumbnail from RAW for blur detection: {os.path.basename(normalized_path)}"
                         )
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
                         enhancer = ImageEnhance.Brightness(temp_pil_img)
