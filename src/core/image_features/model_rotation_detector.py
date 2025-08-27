@@ -43,7 +43,6 @@ class RotationDetectorProtocol(Protocol):  # pragma: no cover - structural typin
         self,
         image_path: str,
         image: Optional[object] = None,
-        apply_auto_edits: bool = False,
     ) -> int: ...
 
 
@@ -79,13 +78,12 @@ class ModelRotationDetector(RotationDetectorProtocol):
         self,
         image_path: str,
         image: Optional[object] = None,
-        apply_auto_edits: bool = False,
     ) -> int:
         if not self._ensure_session_loaded():
             return 0
 
         if image is None:
-            image = self._load_image(image_path, apply_auto_edits=apply_auto_edits)
+            image = self._load_image(image_path)
 
         if image is None:
             return 0
@@ -202,13 +200,14 @@ class ModelRotationDetector(RotationDetectorProtocol):
                 return None
         return model_path
 
-    def _load_image(self, path: str, apply_auto_edits: bool):
+    def _load_image(self, path: str):
         try:
             norm = os.path.normpath(path)
             _, ext = os.path.splitext(norm)
             if is_raw_extension(ext):
+                # Always apply auto-edits for RAW files in rotation detection
                 return RawImageProcessor.load_raw_as_pil(
-                    norm, half_size=True, apply_auto_edits=apply_auto_edits
+                    norm, half_size=True, apply_auto_edits=True
                 )
             from PIL import Image, ImageOps  # type: ignore
 

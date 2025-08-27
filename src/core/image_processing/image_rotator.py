@@ -467,6 +467,9 @@ class ImageRotator:
             logger.info(message)
             return True, message
         else:
+            message = (
+                f"Failed to rotate {filename} {direction} using {method_used} method"
+            )
             logger.error("Rotation failed for %s: %s", filename, message)
             return False, message
 

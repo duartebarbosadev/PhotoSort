@@ -231,7 +231,6 @@ Logs will be saved to `~/.photosort_logs/photosort_app.log`.
 **Application Settings**
 
 * **Manage Cache:** `F9`
-* **Enable Auto RAW Edits:** `F10`
 
 **Help**
 

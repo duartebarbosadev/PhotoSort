@@ -48,14 +48,13 @@ import sys
 
 from src.core.image_pipeline import ImagePipeline
 from src.core.image_file_ops import ImageFileOperations
+from src.core.image_processing.raw_image_processor import is_raw_extension
 
 from src.core.metadata_processor import MetadataProcessor  # New metadata processor
 from src.core.app_settings import (
     get_preview_cache_size_gb,
     set_preview_cache_size_gb,
     set_exif_cache_size_mb,
-    get_auto_edit_photos,
-    set_auto_edit_photos,
     DEFAULT_BLUR_DETECTION_THRESHOLD,
     LEFT_PANEL_STRETCH,
     CENTER_PANEL_STRETCH,
@@ -198,7 +197,6 @@ class MainWindow(QMainWindow):
         self.thumbnail_delegate = None
         self.show_folders_mode = False
         self.group_by_similarity_mode = False
-        self.apply_auto_edits_enabled = get_auto_edit_photos()
         self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
         self.rotation_suggestions = {}
         # Controllers (always created – treat as invariants for simpler code paths)
@@ -280,6 +278,13 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(
                 0, lambda: self.app_controller.load_folder(self.initial_folder)
             )
+
+    def _should_apply_raw_processing(self, file_path: str) -> bool:
+        """Determine if RAW processing should be applied to the given file."""
+        if not file_path:
+            return False
+        ext = os.path.splitext(file_path)[1].lower()
+        return is_raw_extension(ext)
 
     # Helper method to update the image information in status bar
     def _update_image_info_label(self, status_message_override: Optional[str] = None):
@@ -1789,18 +1794,14 @@ class MainWindow(QMainWindow):
 
         logger.debug(f"Getting preview pixmap for {file_path}")
         pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path,
-            display_max_size=(8000, 8000),
-            apply_auto_edits=self.apply_auto_edits_enabled,
+            file_path, display_max_size=(8000, 8000)
         )
 
         if not pixmap or pixmap.isNull():
             logger.debug(
                 f"Preview pixmap unavailable, trying thumbnail for {file_path}"
             )
-            pixmap = self.image_pipeline.get_thumbnail_qpixmap(
-                file_path, apply_auto_edits=self.apply_auto_edits_enabled
-            )
+            pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path)
 
         if pixmap and not pixmap.isNull():
             logger.debug(f"Setting image data for {file_path}")
@@ -1862,15 +1863,11 @@ class MainWindow(QMainWindow):
             return
 
         pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path,
-            display_max_size=(8000, 8000),
-            apply_auto_edits=self.apply_auto_edits_enabled,
+            file_path, display_max_size=(8000, 8000)
         )
 
         if not pixmap or pixmap.isNull():
-            pixmap = self.image_pipeline.get_thumbnail_qpixmap(
-                file_path, apply_auto_edits=self.apply_auto_edits_enabled
-            )
+            pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path)
 
         if pixmap and not pixmap.isNull():
             image_data = {
@@ -1920,14 +1917,10 @@ class MainWindow(QMainWindow):
 
         for path in selected_paths:
             pixmap = self.image_pipeline.get_preview_qpixmap(
-                path,
-                display_max_size=(8000, 8000),
-                apply_auto_edits=self.apply_auto_edits_enabled,
+                path, display_max_size=(8000, 8000)
             )
             if not pixmap or pixmap.isNull():
-                pixmap = self.image_pipeline.get_thumbnail_qpixmap(
-                    path, apply_auto_edits=self.apply_auto_edits_enabled
-                )
+                pixmap = self.image_pipeline.get_thumbnail_qpixmap(path)
 
             if pixmap:
                 basic_metadata = self._get_cached_metadata_for_selection(path)
@@ -2296,10 +2289,7 @@ class MainWindow(QMainWindow):
         logger.debug(
             "<<< ENTRY >>> _handle_preview_finished: Received PreviewPreloaderWorker.finished signal."
         )
-        auto_edits_status = "enabled" if self.apply_auto_edits_enabled else "disabled"
-        self.statusBar().showMessage(
-            f"Previews regenerated with Auto RAW edits {auto_edits_status}.", 5000
-        )
+        self.statusBar().showMessage("Previews regenerated.", 5000)
         self.hide_loading_overlay()
         logger.debug("_handle_preview_finished: Loading overlay hidden.")
 
@@ -2471,9 +2461,7 @@ class MainWindow(QMainWindow):
 
         # Icon logic depends on toggle_thumbnails_action and view mode
         if self.menu_manager.toggle_thumbnails_action.isChecked():
-            thumbnail_pixmap = self.image_pipeline.get_thumbnail_qpixmap(
-                file_path, apply_auto_edits=self.apply_auto_edits_enabled
-            )
+            thumbnail_pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path)
             if thumbnail_pixmap:
                 item.setIcon(QIcon(thumbnail_pixmap))
 
@@ -2491,7 +2479,7 @@ class MainWindow(QMainWindow):
             for fd in (self.app_state.image_files_data or [])
             if fd.get("path")
         ]
-        self.similarity_controller.start(paths, self.apply_auto_edits_enabled)
+        self.similarity_controller.start(paths)
 
     # Slot for WorkerManager's similarity_progress signal
     def _handle_similarity_progress(self, percentage, message):
@@ -2539,61 +2527,6 @@ class MainWindow(QMainWindow):
         if self.group_by_similarity_mode and self.app_state.cluster_results:
             self._rebuild_model_view()
 
-    def _handle_toggle_auto_edits(self, checked: bool):
-        self.apply_auto_edits_enabled = checked
-        set_auto_edit_photos(checked)  # Save to persistent settings
-
-        # If no images are loaded, just set the preference and exit.
-        if not self.app_state.image_files_data:
-            self.statusBar().showMessage(
-                f"Auto RAW edits has been {'enabled' if checked else 'disabled'}.", 4000
-            )
-            return
-
-        self.show_loading_overlay("Applying new edit settings...")
-        QApplication.processEvents()  # Ensure overlay appears immediately
-
-        self.image_pipeline.clear_all_image_caches()
-        self._rebuild_model_view()
-
-        if self.app_state.image_files_data:
-            # The loading overlay text will be updated by the preview worker's progress signals
-            self.worker_manager.start_preview_preload(
-                [fd["path"] for fd in self.app_state.image_files_data],
-                self.apply_auto_edits_enabled,
-            )
-
-        active_view = self._get_active_file_view()
-        if active_view:
-            current_proxy_idx = active_view.currentIndex()
-            if current_proxy_idx.isValid():
-                try:
-                    active_view.selectionModel().selectionChanged.disconnect(
-                        self._handle_file_selection_changed
-                    )
-                except TypeError:
-                    pass
-
-                self._handle_file_selection_changed()
-
-                try:
-                    active_view.selectionModel().selectionChanged.connect(
-                        self._handle_file_selection_changed
-                    )
-                except TypeError:
-                    pass
-            else:
-                first_visible_item = self.selection_controller.find_first_visible_item()
-                if first_visible_item.isValid():
-                    active_view.setCurrentIndex(first_visible_item)
-
-        # The final status bar message is now handled by _handle_preview_finished
-        # We can update the status bar here to show that the process has started.
-        self.statusBar().showMessage(
-            f"Regenerating previews with Auto RAW edits {'enabled' if checked else 'disabled'}...",
-            0,
-        )
-
     def _start_blur_detection_analysis(self):
         logger.info("_start_blur_detection_analysis called.")
         if not self.app_state.image_files_data:
@@ -2612,7 +2545,7 @@ class MainWindow(QMainWindow):
         self.worker_manager.start_blur_detection(
             self.app_state.image_files_data.copy(),
             self.blur_detection_threshold,
-            self.apply_auto_edits_enabled,
+            True,  # Always enable processing for RAW files
         )
 
     # Slot for WorkerManager's blur_detection_progress signal
@@ -3028,7 +2961,6 @@ class MainWindow(QMainWindow):
             pixmap = self.image_pipeline.get_preview_qpixmap(
                 selected_paths[0],
                 display_max_size=(8000, 8000),  # High resolution for zoom
-                apply_auto_edits=self.apply_auto_edits_enabled,
             )
             if pixmap:
                 self.sync_viewer.set_image(pixmap, 0)
@@ -3037,9 +2969,7 @@ class MainWindow(QMainWindow):
             pixmaps = []
             for path in selected_paths[:2]:  # Max 2 images
                 pixmap = self.image_pipeline.get_preview_qpixmap(
-                    path,
-                    display_max_size=(8000, 8000),
-                    apply_auto_edits=self.apply_auto_edits_enabled,
+                    path, display_max_size=(8000, 8000)
                 )
                 if pixmap:
                     pixmaps.append(pixmap)
@@ -3165,9 +3095,7 @@ class MainWindow(QMainWindow):
             item = self.file_system_model.itemFromIndex(source_idx)
             if item:
                 t5 = time.perf_counter()
-                new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(
-                    file_path, apply_auto_edits=self.apply_auto_edits_enabled
-                )
+                new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(file_path)
                 t6 = time.perf_counter()
                 logger.info(
                     f"HSR: get_thumbnail_qpixmap for {filename} took {t6 - t5:.4f}s."
@@ -3189,7 +3117,6 @@ class MainWindow(QMainWindow):
             self.image_pipeline.get_preview_qpixmap(
                 file_path,
                 display_max_size=(8000, 8000),
-                apply_auto_edits=self.apply_auto_edits_enabled,
                 force_regenerate=True,
                 force_default_brightness=True,  # This is the key change
             )
@@ -3964,7 +3891,7 @@ class MainWindow(QMainWindow):
         # Load ONE base pixmap, respecting the user's current auto-edit setting.
         # This represents the "current" view of the image.
         current_pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path, (8000, 8000), apply_auto_edits=self.apply_auto_edits_enabled
+            file_path, (8000, 8000)
         )
         t2 = time.perf_counter()
         logger.info(f"SBS_COMP: get_preview_qpixmap (base) took: {t2 - t1:.4f}s")

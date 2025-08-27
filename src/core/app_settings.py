@@ -16,7 +16,6 @@ SETTINGS_APPLICATION = "PhotoSort"
 PREVIEW_CACHE_SIZE_GB_KEY = "Cache/PreviewCacheSizeGB"
 EXIF_CACHE_SIZE_MB_KEY = "Cache/ExifCacheSizeMB"  # For EXIF metadata cache
 ROTATION_CONFIRM_LOSSY_KEY = "UI/RotationConfirmLossy"  # Ask before lossy rotation
-AUTO_EDIT_PHOTOS_KEY = "UI/AutoEditPhotos"  # Key for auto edit photos setting
 RECENT_FOLDERS_KEY = "UI/RecentFolders"  # Key for recent folders list
 ORIENTATION_MODEL_NAME_KEY = (
     "Models/OrientationModelName"  # Key for the orientation model file name
@@ -26,7 +25,6 @@ ORIENTATION_MODEL_NAME_KEY = (
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
 DEFAULT_EXIF_CACHE_SIZE_MB = 256  # Default to 256 MB for EXIF cache
 DEFAULT_ROTATION_CONFIRM_LOSSY = True  # Default to asking before lossy rotation
-DEFAULT_AUTO_EDIT_PHOTOS = False  # Default auto edit photos setting
 MAX_RECENT_FOLDERS = 10  # Max number of recent folders to store
 DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
 
@@ -165,19 +163,6 @@ def set_rotation_confirm_lossy(confirm: bool):
     """Set whether to confirm lossy rotations."""
     settings = _get_settings()
     settings.setValue(ROTATION_CONFIRM_LOSSY_KEY, confirm)
-
-
-# --- Auto Edit Photos Setting ---
-def get_auto_edit_photos() -> bool:
-    """Get whether auto edit photos is enabled."""
-    settings = _get_settings()
-    return settings.value(AUTO_EDIT_PHOTOS_KEY, DEFAULT_AUTO_EDIT_PHOTOS, type=bool)
-
-
-def set_auto_edit_photos(enabled: bool):
-    """Set whether auto edit photos is enabled."""
-    settings = _get_settings()
-    settings.setValue(AUTO_EDIT_PHOTOS_KEY, enabled)
 
 
 # --- Recent Folders ---

@@ -76,14 +76,19 @@ class ImagePipeline:
     def _get_pil_thumbnail(
         self,
         image_path: str,
-        apply_auto_edits: bool = False,
         apply_orientation: bool = False,
     ) -> Optional[Image.Image]:
         """
         Internal method to get/generate a PIL thumbnail.
         Checks cache first, then generates and caches.
+        Automatically applies auto-edits for RAW files.
         """
         normalized_path = os.path.normpath(image_path)
+        ext = os.path.splitext(normalized_path)[1].lower()
+
+        # Automatically determine if auto-edits should be applied based on file type
+        apply_auto_edits = is_raw_extension(ext)
+
         # Add apply_orientation to the cache key to store oriented/unoriented versions separately
         cache_key = (normalized_path, apply_auto_edits, apply_orientation)
 
@@ -95,7 +100,6 @@ class ImagePipeline:
             return cached_img
 
         pil_img: Optional[Image.Image] = None
-        ext = os.path.splitext(normalized_path)[1].lower()
 
         if is_raw_extension(ext):
             pil_img = RawImageProcessor.process_raw_for_thumbnail(
@@ -129,24 +133,21 @@ class ImagePipeline:
     def get_thumbnail_qpixmap(
         self,
         image_path: str,
-        apply_auto_edits: bool = False,
         apply_orientation: bool = False,
     ) -> Optional[QPixmap]:
         """
         Gets a QPixmap thumbnail for the given image path.
+        Automatically applies auto-edits for RAW files.
 
         Args:
             image_path: The path to the image.
-            apply_auto_edits: Whether to apply auto-edits (for RAW files).
             apply_orientation: Whether to apply EXIF orientation to the thumbnail.
         """
         if not os.path.isfile(image_path):
             logger.error(f"File does not exist: {image_path}")
             return None
 
-        pil_img = self._get_pil_thumbnail(
-            image_path, apply_auto_edits, apply_orientation
-        )
+        pil_img = self._get_pil_thumbnail(image_path, apply_orientation)
         if pil_img:
             try:
                 return QPixmap.fromImage(ImageQt(pil_img))
@@ -161,16 +162,19 @@ class ImagePipeline:
         self,
         image_path: str,
         display_max_size: Optional[Tuple[int, int]],
-        apply_auto_edits: bool = False,
         force_default_brightness: bool = False,
     ) -> Optional[Image.Image]:
         """
         Generates a PIL image sized for display, without using preload cache.
         This is the fallback if no suitable cached version (display or preloaded) is found.
+        Automatically applies auto-edits for RAW files.
         """
         normalized_path = os.path.normpath(image_path)
         pil_img: Optional[Image.Image] = None
         ext = os.path.splitext(normalized_path)[1].lower()
+
+        # Automatically determine if auto-edits should be applied based on file type
+        apply_auto_edits = is_raw_extension(ext)
 
         # Determine resolution for on-demand generation
         # If display_max_size is None, it means full available resolution (up to a reasonable limit)
@@ -221,12 +225,12 @@ class ImagePipeline:
         display_max_size: Optional[
             Tuple[int, int]
         ],  # Max size for the QPixmap to be displayed
-        apply_auto_edits: bool = False,
         force_regenerate: bool = False,
         force_default_brightness: bool = False,
     ) -> Optional[QPixmap]:
         """
         Gets a QPixmap preview for the image path, scaled to display_max_size.
+        Automatically applies auto-edits for RAW files.
         1. Checks cache for display-sized PIL image.
         2. Checks cache for high-resolution preloaded PIL image, then resizes.
         3. Generates fresh PIL image for display size, caches it, then converts.
@@ -236,6 +240,10 @@ class ImagePipeline:
         if not os.path.isfile(normalized_path):
             logger.error(f"File does not exist: {normalized_path}")
             return None
+
+        # Automatically determine if auto-edits should be applied based on file type
+        ext = os.path.splitext(normalized_path)[1].lower()
+        apply_auto_edits = is_raw_extension(ext)
 
         # Cache key for the final display-sized PIL image
         # Ensure display_max_size is a tuple for the cache key, even if None was passed
@@ -282,7 +290,6 @@ class ImagePipeline:
         generated_display_pil = self._generate_pil_preview_for_display(
             normalized_path,
             display_max_size,
-            apply_auto_edits,
             force_default_brightness,
         )
         if generated_display_pil:
@@ -295,22 +302,20 @@ class ImagePipeline:
         )
         return None
 
-    def _ensure_thumbnail_generated_and_cached(
-        self, image_path: str, apply_auto_edits: bool
-    ) -> None:
+    def _ensure_thumbnail_generated_and_cached(self, image_path: str) -> None:
         """Worker function for preload_thumbnails."""
         self._get_pil_thumbnail(
-            image_path, apply_auto_edits
-        )  # This handles generation and caching
+            image_path
+        )  # This handles generation and caching with automatic RAW detection
 
     def preload_thumbnails(
         self,
         image_paths: List[str],
-        apply_auto_edits: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         should_continue_callback: Optional[Callable[[], bool]] = None,
     ) -> None:
-        """Preloads thumbnails for a list of image paths in parallel."""
+        """Preloads thumbnails for a list of image paths in parallel.
+        Automatically applies auto-edits for RAW files."""
         total_files = len(image_paths)
         processed_count = 0
 
@@ -331,7 +336,6 @@ class ImagePipeline:
                 future = executor.submit(
                     self._ensure_thumbnail_generated_and_cached,
                     image_path,
-                    apply_auto_edits,
                 )
                 futures_map[future] = image_path
 
@@ -358,14 +362,18 @@ class ImagePipeline:
             f"Thumbnail preloading finished. Processed {processed_count}/{total_files}."
         )
 
-    def _ensure_preview_generated_and_cached(
-        self, image_path: str, apply_auto_edits: bool
-    ) -> bool:
+    def _ensure_preview_generated_and_cached(self, image_path: str) -> bool:
         """
         Worker function for preload_previews. Generates and caches one preview at PRELOAD_MAX_RESOLUTION.
+        Automatically applies auto-edits for RAW files.
         Returns True if successful or already cached, False on error.
         """
         normalized_path = os.path.normpath(image_path)
+
+        # Automatically determine if auto-edits should be applied based on file type
+        ext = os.path.splitext(normalized_path)[1].lower()
+        apply_auto_edits = is_raw_extension(ext)
+
         # Cache key for preloaded high-res version
         preload_cache_key = (normalized_path, PRELOAD_MAX_RESOLUTION, apply_auto_edits)
 
@@ -408,11 +416,11 @@ class ImagePipeline:
     def preload_previews(
         self,
         image_paths: List[str],
-        apply_auto_edits: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         should_continue_callback: Optional[Callable[[], bool]] = None,
     ) -> None:
-        """Preloads preview PIL images (at PRELOAD_MAX_RESOLUTION) in parallel."""
+        """Preloads preview PIL images (at PRELOAD_MAX_RESOLUTION) in parallel.
+        Automatically applies auto-edits for RAW files."""
         total_files = len(image_paths)
         processed_count = 0
 
@@ -433,7 +441,6 @@ class ImagePipeline:
                 future = executor.submit(
                     self._ensure_preview_generated_and_cached,
                     image_path,
-                    apply_auto_edits,
                 )
                 futures_map[future] = image_path
 
@@ -461,7 +468,6 @@ class ImagePipeline:
         self,
         image_path: str,
         target_mode: str = "RGB",
-        apply_auto_edits: bool = False,
         use_preloaded_preview_if_available: bool = True,
         apply_exif_transpose: bool = True,
     ) -> Optional[Image.Image]:
@@ -469,8 +475,13 @@ class ImagePipeline:
         Gets a PIL image for general processing (e.g., similarity engine, blur detection).
         Tries to use a cached high-resolution preview if available and `use_preloaded_preview_if_available` is True.
         Otherwise, loads the image directly (potentially slower for RAWs).
+        Automatically applies auto-edits for RAW files.
         """
         normalized_path = os.path.normpath(image_path)
+
+        # Automatically determine if auto-edits should be applied based on file type
+        ext = os.path.splitext(normalized_path)[1].lower()
+        apply_auto_edits = is_raw_extension(ext)
 
         if use_preloaded_preview_if_available:
             # Check for preloaded high-res version

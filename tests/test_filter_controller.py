@@ -1,3 +1,4 @@
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 from PyQt6.QtCore import QSortFilterProxyModel
 from PyQt6.QtGui import QStandardItemModel, QStandardItem
 from PyQt6.QtWidgets import QApplication

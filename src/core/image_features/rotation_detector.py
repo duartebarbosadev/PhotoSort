@@ -29,7 +29,6 @@ class RotationDetector:
         self,
         image_path: str,
         result_callback: Optional[Callable[[str, int], None]],
-        apply_auto_edits: bool,
     ) -> None:
         """
         Worker task for detecting rotation for a single image.
@@ -38,15 +37,15 @@ class RotationDetector:
         """
         try:
             # Get the image with EXIF orientation already applied by the pipeline.
+            # Auto-edits are automatically applied for RAW files by the pipeline.
             pil_image = self.image_pipeline.get_pil_image_for_processing(
                 image_path,
-                apply_auto_edits=apply_auto_edits,
                 use_preloaded_preview_if_available=False,
                 apply_exif_transpose=True,  # This is the key change.
             )
 
             final_suggested_rotation = self.model_detector.predict_rotation_angle(
-                image_path, image=pil_image, apply_auto_edits=apply_auto_edits
+                image_path, image=pil_image
             )
 
             if result_callback:
@@ -71,10 +70,10 @@ class RotationDetector:
     ) -> None:
         """
         Detects rotation suggestions for a batch of images in parallel.
+        Auto-edits are automatically applied for RAW files.
         """
         total_files = len(image_paths)
         processed_count = 0
-        apply_auto_edits = kwargs.get("apply_auto_edits", False)
 
         effective_num_workers = (
             num_workers if num_workers is not None else DEFAULT_NUM_WORKERS
@@ -87,9 +86,7 @@ class RotationDetector:
             max_workers=effective_num_workers
         ) as executor:
             futures_map: Dict[concurrent.futures.Future, str] = {
-                executor.submit(
-                    self._detect_rotation_task, path, result_callback, apply_auto_edits
-                ): path
+                executor.submit(self._detect_rotation_task, path, result_callback): path
                 for path in image_paths
                 if not (should_continue_callback and not should_continue_callback())
             }

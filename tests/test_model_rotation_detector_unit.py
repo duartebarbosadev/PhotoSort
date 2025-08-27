@@ -1,3 +1,4 @@
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 import types
 import numpy
 from src.core.image_features import model_rotation_detector as mrd

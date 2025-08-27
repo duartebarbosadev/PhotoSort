@@ -237,7 +237,6 @@ class AppController(QObject):
         )
         self.worker_manager.start_file_scan(
             folder_path,
-            apply_auto_edits=self.main_window.apply_auto_edits_enabled,
             perform_blur_detection=False,
             blur_threshold=self.main_window.blur_detection_threshold,
         )
@@ -267,9 +266,7 @@ class AppController(QObject):
 
         self.main_window.show_loading_overlay("Starting similarity analysis...")
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
-        self.worker_manager.start_similarity_analysis(
-            paths_for_similarity, self.main_window.apply_auto_edits_enabled
-        )
+        self.worker_manager.start_similarity_analysis(paths_for_similarity)
 
     def start_blur_detection_analysis(self):
         logger.info("Starting blur detection analysis.")
@@ -291,7 +288,7 @@ class AppController(QObject):
         self.worker_manager.start_blur_detection(
             self.app_state.image_files_data.copy(),
             self.main_window.blur_detection_threshold,
-            self.main_window.apply_auto_edits_enabled,
+            True,  # Always enable processing for RAW files
         )
 
     def start_auto_rotation_analysis(self):
@@ -318,7 +315,6 @@ class AppController(QObject):
         self.worker_manager.start_rotation_detection(
             image_paths,
             self.app_state.exif_disk_cache,
-            self.main_window.apply_auto_edits_enabled,
         )
 
     def reload_current_folder(self):
@@ -395,7 +391,7 @@ class AppController(QObject):
             f"Preloading previews ({len(paths_for_preloader)} images)..."
         )
         self.worker_manager.start_preview_preload(
-            paths_for_preloader, self.main_window.apply_auto_edits_enabled
+            paths_for_preloader,
         )
 
     # --- Slots for WorkerManager Signals ---
@@ -511,12 +507,7 @@ class AppController(QObject):
         self.main_window.update_loading_text(message)
 
     def handle_preview_finished(self):
-        auto_edits_status = (
-            "enabled" if self.main_window.apply_auto_edits_enabled else "disabled"
-        )
-        self.main_window.statusBar().showMessage(
-            f"Previews regenerated with Auto RAW edits {auto_edits_status}.", 5000
-        )
+        self.main_window.statusBar().showMessage("Previews regenerated.", 5000)
         self.main_window.hide_loading_overlay()
 
         if self.app_state.current_folder_path:

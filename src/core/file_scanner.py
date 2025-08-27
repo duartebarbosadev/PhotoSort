@@ -85,13 +85,8 @@ class FileScanner(QObject):
                 if ext in SUPPORTED_EXTENSIONS:
                     full_path = os.path.normpath(os.path.join(root, filename))
                     # Blur detection would be added here if this method were active
-                    # Assuming self.apply_auto_edits_for_raw_preview is available if this method is used
                     is_blurred = BlurDetector.is_image_blurred(
-                        full_path,
-                        threshold=self.blur_detection_threshold,
-                        apply_auto_edits_for_raw_preview=getattr(
-                            self, "apply_auto_edits_for_raw_preview", False
-                        ),  # Fallback
+                        full_path, threshold=self.blur_detection_threshold
                     )
                     self.files_found.emit(
                         [{"path": full_path, "is_blurred": is_blurred}]
@@ -101,21 +96,16 @@ class FileScanner(QObject):
     def scan_directory(
         self,
         directory_path: str,
-        apply_auto_edits: bool = False,
         perform_blur_detection: bool = False,
         blur_threshold: float = 100.0,
     ):
         """
         Starts the directory scanning process.
         Optionally detects blur for each image.
-        apply_auto_edits: bool - Flag for thumbnail preloading AND for RAW preview used in blur detection.
         perform_blur_detection: bool - If True, performs blur detection.
         blur_threshold: float - Threshold for blur detection if performed.
         """
         self._is_running = True
-        # self.blur_detection_threshold = blur_threshold # Threshold is passed directly to is_image_blurred if needed
-        # Store apply_auto_edits for use in async or other methods if needed
-        self.apply_auto_edits_for_raw_preview = apply_auto_edits
         all_file_data = []  # Collect all file data (path and blur status)
         thumbnail_paths_only = []  # For ImageHandler.preload_thumbnails
 
@@ -150,9 +140,7 @@ class FileScanner(QObject):
                             )
                             try:
                                 is_blurred = BlurDetector.is_image_blurred(
-                                    full_path,
-                                    threshold=blur_threshold,
-                                    apply_auto_edits_for_raw_preview=apply_auto_edits,
+                                    full_path, threshold=blur_threshold
                                 )
                             except Exception as e:
                                 # Do not break scanning on blur detection failure; mark unknown
@@ -181,14 +169,10 @@ class FileScanner(QObject):
                     p for p in thumbnail_paths_only if os.path.isfile(p)
                 ]
                 if existing_for_thumbs:
-                    logger.info(
-                        f"Preloading {len(existing_for_thumbs)} thumbnails (Auto-Edits: {apply_auto_edits})."
-                    )
+                    logger.info(f"Preloading {len(existing_for_thumbs)} thumbnails.")
 
                     try:
-                        self.image_pipeline.preload_thumbnails(
-                            existing_for_thumbs, apply_auto_edits=apply_auto_edits
-                        )
+                        self.image_pipeline.preload_thumbnails(existing_for_thumbs)
                     except Exception as e:
                         logger.error(f"Thumbnail preloading failed: {e}", exc_info=True)
                 else:

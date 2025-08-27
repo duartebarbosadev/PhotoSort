@@ -1,3 +1,4 @@
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 import os
 from typing import List
 from PyQt6.QtCore import QModelIndex, Qt

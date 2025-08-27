@@ -31,6 +31,7 @@ from src.core.app_settings import (
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
 )
+from src.core.image_processing.raw_image_processor import is_raw_extension
 from src.core.image_features.model_rotation_detector import (
     ModelRotationDetector,
     ModelNotFoundError,
@@ -50,6 +51,20 @@ class DialogManager:
             parent: The parent widget, typically the MainWindow.
         """
         self.parent = parent
+
+    def _should_apply_raw_processing(self, file_path: str) -> bool:
+        """Determine if RAW processing should be applied to the given file."""
+        if not file_path:
+            return False
+        ext = os.path.splitext(file_path)[1].lower()
+        return is_raw_extension(ext)
+
+    def _has_raw_images(self, file_paths: List[str]) -> bool:
+        """Check if any of the provided file paths are RAW image files."""
+        for path in file_paths:
+            if self._should_apply_raw_processing(path):
+                return True
+        return False
 
     def show_about_dialog(self, block: bool = True):
         """Show the 'About' dialog.
@@ -486,7 +501,6 @@ class DialogManager:
             # Get thumbnail with orientation correction
             thumbnail_pixmap = self.parent.image_pipeline.get_thumbnail_qpixmap(
                 file_path,
-                apply_auto_edits=self.parent.apply_auto_edits_enabled,
                 apply_orientation=True,  # Ensure orientation is applied
             )
             if thumbnail_pixmap:
@@ -555,9 +569,7 @@ class DialogManager:
 
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
-                deleted_file_paths,
-                apply_auto_edits=self.parent.apply_auto_edits_enabled,
-                progress_callback=progress_callback,
+                deleted_file_paths, progress_callback=progress_callback
             )
 
             self.parent.hide_loading_overlay()
@@ -636,9 +648,7 @@ class DialogManager:
 
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
-                marked_files,
-                apply_auto_edits=self.parent.apply_auto_edits_enabled,
-                progress_callback=progress_callback,
+                marked_files, progress_callback=progress_callback
             )
 
             self.parent.hide_loading_overlay()
@@ -695,9 +705,7 @@ class DialogManager:
 
             # Preload thumbnails for the files to be deleted
             self.parent.image_pipeline.preload_thumbnails(
-                marked_files,
-                apply_auto_edits=self.parent.apply_auto_edits_enabled,
-                progress_callback=progress_callback,
+                marked_files, progress_callback=progress_callback
             )
 
             self.parent.hide_loading_overlay()
@@ -749,7 +757,6 @@ class DialogManager:
             # Get thumbnail with orientation correction
             thumbnail_pixmap = self.parent.image_pipeline.get_thumbnail_qpixmap(
                 file_path,
-                apply_auto_edits=self.parent.apply_auto_edits_enabled,
                 apply_orientation=True,  # Ensure orientation is applied
             )
             if thumbnail_pixmap:

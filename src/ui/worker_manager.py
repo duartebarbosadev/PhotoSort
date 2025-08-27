@@ -133,7 +133,6 @@ class WorkerManager(QObject):
     def start_file_scan(
         self,
         folder_path: str,
-        apply_auto_edits: bool,
         perform_blur_detection: bool,
         blur_threshold: float,
     ):
@@ -155,7 +154,6 @@ class WorkerManager(QObject):
         self.scanner_thread.started.connect(
             lambda: self.file_scanner.scan_directory(
                 folder_path,
-                apply_auto_edits=apply_auto_edits,
                 perform_blur_detection=perform_blur_detection,  # This is passed to scanner
                 blur_threshold=blur_threshold,
             )
@@ -192,10 +190,10 @@ class WorkerManager(QObject):
         logger.info("Similarity engine thread and worker cleaned up.")
 
     # --- Similarity Engine Management ---
-    def start_similarity_analysis(self, file_paths: List[str], apply_auto_edits: bool):
+    def start_similarity_analysis(self, file_paths: List[str]):
         self.stop_similarity_analysis()
         self.similarity_thread = QThread()
-        self.similarity_worker = SimilarityWorker(file_paths, apply_auto_edits)
+        self.similarity_worker = SimilarityWorker(file_paths)
         self.similarity_worker.moveToThread(self.similarity_thread)
 
         # Connect signals from the new worker to the manager's signals
@@ -234,11 +232,11 @@ class WorkerManager(QObject):
         logger.info("Preview preloader thread and worker cleaned up.")
 
     # --- Preview Preloader Management ---
-    def start_preview_preload(self, image_paths: List[str], apply_auto_edits: bool):
+    def start_preview_preload(self, image_paths: List[str]):
         self.stop_preview_preload()
         self.preview_preloader_thread = QThread()
         self.preview_preloader_worker = PreviewPreloaderWorker(
-            image_paths, None, apply_auto_edits, self.image_pipeline
+            image_paths, None, self.image_pipeline
         )
         self.preview_preloader_worker.moveToThread(self.preview_preloader_thread)
 
@@ -402,16 +400,13 @@ class WorkerManager(QObject):
         logger.info("Rotation detection thread and worker cleaned up.")
 
     # --- Rotation Detection Management ---
-    def start_rotation_detection(
-        self, image_paths: List[str], exif_cache: "ExifCache", apply_auto_edits: bool
-    ):
+    def start_rotation_detection(self, image_paths: List[str], exif_cache: "ExifCache"):
         self.stop_rotation_detection()
         self.rotation_detection_thread = QThread()
         self.rotation_detection_worker = RotationDetectionWorker(
             image_paths=image_paths,
             image_pipeline=self.image_pipeline,
             exif_cache=exif_cache,
-            apply_auto_edits=apply_auto_edits,
         )
         self.rotation_detection_worker.moveToThread(self.rotation_detection_thread)
 

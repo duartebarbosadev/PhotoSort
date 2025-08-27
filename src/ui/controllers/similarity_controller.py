@@ -38,12 +38,12 @@ class SimilarityController:
     def __init__(self, ctx: SimilarityContext):
         self.ctx = ctx
 
-    def start(self, paths: List[str], auto_edits: bool):
+    def start(self, paths: List[str]):
         if not paths:
             self.ctx.status_message("No valid image paths for similarity analysis.")
             return
         self.ctx.show_loading_overlay("Starting similarity analysis...")
-        self.ctx.worker_manager.start_similarity_analysis(paths, auto_edits)
+        self.ctx.worker_manager.start_similarity_analysis(paths)
 
     def embeddings_generated(self, embeddings_dict):
         self.ctx.app_state.embeddings_cache = embeddings_dict
