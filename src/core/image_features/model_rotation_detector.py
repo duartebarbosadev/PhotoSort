@@ -174,31 +174,53 @@ class ModelRotationDetector(RotationDetectorProtocol):
 
     # --------------------------- Helper Functions ------------------------- #
     def _resolve_model_path(self) -> Optional[str]:
+        """Resolve the ONNX model path across source and frozen bundles.
+
+        Search order:
+          1) PyInstaller extraction dir (sys._MEIPASS)/models
+          2) Project root (two levels up from this file)/models
+          3) Current working directory ./models
+        """
+        # Build candidate base dirs
+        base_dirs = []
+        try:
+            import sys as _sys
+
+            if getattr(_sys, "_MEIPASS", None):  # type: ignore[attr-defined]
+                base_dirs.append(os.path.join(_sys._MEIPASS, MODEL_SAVE_DIR))  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        base_dirs.append(os.path.join(project_root, MODEL_SAVE_DIR))
+        base_dirs.append(os.path.join(os.getcwd(), MODEL_SAVE_DIR))
+
         model_name = get_orientation_model_name()
-        model_path = None
+        # 1) If a specific model is configured, try to find it in candidates
         if model_name:
-            candidate = os.path.join(MODEL_SAVE_DIR, model_name)
-            if os.path.exists(candidate):
-                model_path = candidate
-            else:
-                logger.warning("Configured rotation model '%s' not found.", model_name)
-        if not model_path:
-            pattern = os.path.join(MODEL_SAVE_DIR, "orientation_model*.onnx")
-            models = glob.glob(pattern)
-            if models:
-                model_path = max(models, key=os.path.basename)
-                set_orientation_model_name(os.path.basename(model_path))
-                logger.info(
-                    "Auto-selected rotation model %s", os.path.basename(model_path)
-                )
-            else:
-                if not self._state.failure_logged:
-                    logger.error(
-                        "No orientation model found; rotation detection disabled."
-                    )
-                    self._state.failure_logged = True
-                return None
-        return model_path
+            for base in base_dirs:
+                candidate = os.path.join(base, model_name)
+                if os.path.exists(candidate):
+                    return candidate
+            logger.warning("Configured rotation model '%s' not found in known locations.", model_name)
+
+        # 2) Otherwise, glob for any orientation_model*.onnx in candidates
+        found_models = []
+        for base in base_dirs:
+            pattern = os.path.join(base, "orientation_model*.onnx")
+            found_models.extend(glob.glob(pattern))
+
+        if found_models:
+            # Pick the lexicographically last filename (often the newest version)
+            model_path = max(found_models, key=os.path.basename)
+            set_orientation_model_name(os.path.basename(model_path))
+            logger.info("Auto-selected rotation model %s", os.path.basename(model_path))
+            return model_path
+
+        if not self._state.failure_logged:
+            logger.error("No orientation model found; rotation detection disabled.")
+            self._state.failure_logged = True
+        return None
 
     def _load_image(self, path: str):
         try:

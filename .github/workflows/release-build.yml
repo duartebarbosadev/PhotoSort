@@ -1,0 +1,181 @@
+name: Build Desktop Binaries
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }} PyInstaller build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python: '3.12'
+          - os: macos-13  # Intel
+            python: '3.12'
+          - os: macos-14  # Apple Silicon
+            python: '3.12'
+
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      PIP_NO_PYTHON_VERSION_WARNING: '1'
+      PIP_PROGRESS_BAR: 'off'
+      QT_QPA_PLATFORM: offscreen
+      # Enable file logging in packaged app for troubleshooting
+      PHOTOSORT_ENABLE_FILE_LOGGING: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install system deps (Linux/macOS only)
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0 libegl1; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then echo "No extra system deps required"; fi
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Build tools
+          pip install pyinstaller
+
+      - name: Generate app icons (platform-specific)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from PIL import Image, ImageDraw
+
+          os.makedirs('build/icons', exist_ok=True)
+          # Create a simple base PNG icon (1024x1024)
+          size = 1024
+          img = Image.new('RGBA', (size, size), (28, 31, 38, 255))
+          d = ImageDraw.Draw(img)
+          pad = size//10
+          d.rounded_rectangle([pad, pad, size-pad, size-pad], radius=size//8, outline=(0, 204, 255, 220), width=size//40)
+          d.ellipse([size*0.35, size*0.35, size*0.65, size*0.65], fill=(0, 204, 255, 220))
+          img.save('build/icons/photosort.png')
+
+          # Windows .ico (multiple sizes)
+          ico_sizes = [16, 24, 32, 48, 64, 128, 256]
+          img.save('build/icons/photosort.ico', sizes=[(s, s) for s in ico_sizes])
+          PY
+
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            mkdir -p build/icons/PhotoSort.iconset
+            python - <<'PY'
+          import os
+          from PIL import Image
+          base = Image.open('build/icons/photosort.png')
+          sizes = {
+            'icon_16x16.png': 16,
+            'icon_16x16@2x.png': 32,
+            'icon_32x32.png': 32,
+            'icon_32x32@2x.png': 64,
+            'icon_128x128.png': 128,
+            'icon_128x128@2x.png': 256,
+            'icon_256x256.png': 256,
+            'icon_256x256@2x.png': 512,
+            'icon_512x512.png': 512,
+            'icon_512x512@2x.png': 1024,
+          }
+          os.makedirs('build/icons/PhotoSort.iconset', exist_ok=True)
+          for name, sz in sizes.items():
+            base.resize((sz, sz), Image.LANCZOS).save(os.path.join('build/icons/PhotoSort.iconset', name))
+          PY
+            iconutil -c icns build/icons/PhotoSort.iconset -o build/icons/photosort.icns
+          fi
+
+      - name: Build with PyInstaller (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller -w -n PhotoSort `
+            --icon build/icons/photosort.ico `
+            --hidden-import PyQt6.QtCore `
+            --hidden-import PyQt6.QtGui `
+            --hidden-import PyQt6.QtWidgets `
+            --hidden-import rawpy `
+            --hidden-import pyexiv2 `
+            --hidden-import cv2 `
+            --hidden-import onnxruntime `
+            --hidden-import torchvision `
+            --hidden-import torch `
+            --hidden-import sklearn `
+            --hidden-import sentence_transformers `
+            --add-data "models;models" `
+            --add-data "src/ui/dark_theme.qss;src/ui/dark_theme.qss" `
+            src/main.py
+
+      - name: Build with PyInstaller (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller -w --name PhotoSort \
+            --icon build/icons/photosort.icns \
+            --hidden-import PyQt6.QtCore \
+            --hidden-import PyQt6.QtGui \
+            --hidden-import PyQt6.QtWidgets \
+            --hidden-import rawpy \
+            --hidden-import pyexiv2 \
+            --hidden-import cv2 \
+            --hidden-import onnxruntime \
+            --hidden-import torchvision \
+            --hidden-import torch \
+            --hidden-import sklearn \
+            --hidden-import sentence_transformers \
+            --add-data models:models \
+            --add-data src/ui/dark_theme.qss:src/ui/dark_theme.qss \
+            src/main.py
+
+      - name: Archive artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoSort-${{ runner.os }}
+          path: dist/**
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

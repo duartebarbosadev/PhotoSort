@@ -14,29 +14,38 @@ from src.ui.app_controller import AppController
 from pillow_heif import register_heif_opener
 
 
-def load_stylesheet(filename="src/ui/dark_theme.qss"):
-    """Loads an external QSS stylesheet."""
+def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
+    """Load an external QSS stylesheet.
+
+    Works in both source runs and frozen bundles (e.g., PyInstaller) by
+    checking for the temporary extraction directory at runtime.
+    """
     try:
-        # Construct path relative to this script's directory or project root
-        # This assumes main.py is run from the project root directory
-        style_path = os.path.join(
-            os.path.dirname(__file__), "..", filename
-        )  # Go up one level from src
-        style_path = os.path.abspath(style_path)  # Get absolute path
+        # Prefer PyInstaller's temp dir if present
+        base_dir = None
+        if getattr(sys, "_MEIPASS", None):  # type: ignore[attr-defined]
+            base_dir = sys._MEIPASS  # type: ignore[attr-defined]
+        else:
+            # When running from source, compute from this file
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+        style_path = os.path.abspath(os.path.join(base_dir, filename))
 
         if not os.path.exists(style_path):
-            # Fallback if running from src directory itself? Less likely.
-            style_path = filename
-            if not os.path.exists(style_path):
+            # Try the given filename as-is (useful when running from project root)
+            alt_path = os.path.abspath(filename)
+            if os.path.exists(alt_path):
+                style_path = alt_path
+            else:
                 logging.warning(f"Stylesheet not found: {filename}")
-                return ""  # Return empty string if not found
+                return ""
 
         logging.info(f"Loading stylesheet: {style_path}")
-        with open(style_path, "r") as f:
+        with open(style_path, "r", encoding="utf-8") as f:
             return f.read()
     except Exception as e:
         logging.error(f"Failed to load stylesheet '{filename}': {e}")
-        return ""  # Return empty on error
+        return ""
 
 
 # --- Global Exception Handler ---
