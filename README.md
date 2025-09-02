@@ -6,47 +6,15 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
 ## Key Features
 
-* **Advanced Sorting & Viewing**:
-  * Flexible view modes: List, Icons, Grid, and Chronological by Date.
-  * **Real-time Search**: Instantly filter images by filename with live search results.
 * **Intelligent Culling Tools**:
-  * **Ratings & Labels**: Assign star ratings and color labels for quick categorization.
+  * **Ratings & Labels**: Assign star ratings for quick categorization.
   * **Blur Detection**: Automatically identify and flag blurry photos.
+  * **AI Orientation Detection**: Auto-detects the correct image orientation using a lightweight ONNX model and proposes rotations.
   * **Similarity Analysis**: Group visually similar images to easily spot duplicates or near-duplicates.
-* **Efficient Workflow**:
-  * **Advanced Filtering System**:
-    * Filter images by ratings (Show All, 1+ Stars, 2+ Stars, etc.)
-    * Filter by similarity clusters when grouping is active
-    * Combine text search with rating and cluster filters
-    * Real-time filtering with immediate visual feedback
   * **Fast Processing**: Intensive operations (scanning, thumbnailing, analysis) run once in batch to ensure fast image scrolling.
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
-* **File Management**:
-  * Move unwanted photos to the system trash.
-  * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed. Supports all major formats with format-specific optimization.
-
-### Sidebar Features
-
-The sidebar provides quick access to image metadata and organizational tools:
-
-- **Metadata Display**: Shows detailed EXIF information (camera model, exposure settings, etc.) and user-assigned ratings/labels for the currently selected image.
-
-## Technology Stack
-
-* **Core Language**: Python
-* **GUI Framework**: PyQt6
-* **Image Processing**:
-  * Pillow (PIL Fork)
-  * rawpy (for RAW image processing)
-  * OpenCV (cv2 - for blur detection via Laplacian variance)
-  * pyexiv2 (for metadata reading/writing and image rotation)
-* **Machine Learning / AI**:
-  * SentenceTransformers (with CLIP models like `clip-ViT-B-32` for image embeddings)
-  * scikit-learn (for DBSCAN clustering)
-  * NumPy (for numerical operations)
-  * ONNX Runtime (for AI model inference)
-* **Packaging/Misc**:
-  * `send2trash` (for moving files to trash)
+  * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed.
+- **Metadata Display**: Shows EXIF information (camera model, exposure settings, etc.).
 
 ## Getting Started
 
@@ -107,7 +75,7 @@ The application will automatically detect and load the model when you use the ro
 1. **Clone the repository (if applicable):**
 
    ```bash
-   git clone <your-repository-url>
+   git clone https://github.com/duartebarbosadev/photosort
    cd PhotoSort
    ```
 2. **Create a virtual environment (recommended):**
@@ -133,7 +101,7 @@ The application will automatically detect and load the model when you use the ro
    #       python -m src.main --folder "C:/Users/MyUser/Pictures"
    #   Clear all caches before starting:
    #       python -m src.main --clear-cache
-   #   Open folder and clear caches:
+   #   Open folder and clear caches (useful for development):
    #       python -m src.main --folder "C:/Users/MyUser/Pictures" --clear-cache
    ```
 
