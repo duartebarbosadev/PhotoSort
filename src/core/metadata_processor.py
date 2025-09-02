@@ -327,34 +327,6 @@ class MetadataProcessor:
                     )
                     continue
                 try:
-                    # Under pytest on Windows, skip RAW files to avoid native crashes in pyexiv2
-                    if os.name == "nt" and os.environ.get("PYTEST_CURRENT_TEST"):
-                        ext = os.path.splitext(op_path)[1].lower()
-                        if (
-                            ext
-                            in {
-                                ".arw",
-                                ".cr2",
-                                ".nef",
-                                ".dng",
-                                ".raf",
-                                ".rw2",
-                                ".orf",
-                                ".sr2",
-                                ".pef",
-                            }
-                            and not single_file_mode
-                        ):
-                            chunk_results.append(
-                                {
-                                    "file_path": op_path,
-                                    "file_size": os.path.getsize(op_path)
-                                    if os.path.isfile(op_path)
-                                    else "Unknown",
-                                    "error": "RAW extraction skipped under pytest on Windows",
-                                }
-                            )
-                            continue
                     # Guard ALL pyexiv2 operations with a lock for stability in threaded runs
                     with _PYEXIV2_LOCK:
                         with pyexiv2.Image(
@@ -647,30 +619,7 @@ class MetadataProcessor:
             return minimal_result
 
         try:
-            # Under pytest on Windows, skip RAW files to avoid native crashes in pyexiv2
-            if os.name == "nt" and os.environ.get("PYTEST_CURRENT_TEST"):
-                ext = os.path.splitext(operational_path)[1].lower()
-                if ext in {
-                    ".arw",
-                    ".cr2",
-                    ".nef",
-                    ".dng",
-                    ".raf",
-                    ".rw2",
-                    ".orf",
-                    ".sr2",
-                    ".pef",
-                }:
-                    minimal_result = {
-                        "file_path": operational_path,
-                        "file_size": os.path.getsize(operational_path)
-                        if os.path.isfile(operational_path)
-                        else "Unknown",
-                        "error": "RAW detailed extraction skipped under pytest on Windows",
-                    }
-                    if exif_disk_cache:
-                        exif_disk_cache.set(cache_key_path, minimal_result)
-                    return minimal_result
+            # RAW files are processed normally; no special skip under pytest on Windows
             # Guard pyexiv2 operations with global lock
             with _PYEXIV2_LOCK:
                 with pyexiv2.Image(operational_path, encoding="utf-8") as img:
