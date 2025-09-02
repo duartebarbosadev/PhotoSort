@@ -43,9 +43,6 @@ logger = logging.getLogger(__name__)
 class DialogManager:
     """A manager class for handling the creation of dialogs."""
 
-    # Class-level reference placeholder to avoid accidental 'self' usage at class scope
-    _about_dialog_ref = None
-
     def __init__(self, parent):
         """
         Initialize the DialogManager.

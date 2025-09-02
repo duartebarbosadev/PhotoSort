@@ -419,14 +419,13 @@ class MetadataProcessor:
             parallel_override = os.environ.get(
                 "PHOTOSORT_METADATA_PARALLEL", "false"
             ).lower() in {"1", "true", "yes"}
+            # Only force sequential on frozen builds unless explicitly overridden
             should_run_sequential = (
-                getattr(sys, "frozen", False) or os.name == "nt"
-            ) and not parallel_override
+                getattr(sys, "frozen", False) and not parallel_override
+            )
 
             if should_run_sequential:
-                context_reason = (
-                    "frozen build" if getattr(sys, "frozen", False) else "Windows"
-                )
+                context_reason = "frozen build"
                 logger.info(
                     f"Extracting metadata for {len(paths_for_pyexiv2_extraction)} files sequentially ({context_reason})."
                 )
