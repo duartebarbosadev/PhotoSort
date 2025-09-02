@@ -311,7 +311,6 @@ class MetadataProcessor:
 
         def process_chunk(chunk_paths: List[str]) -> List[Dict[str, Any]]:
             chunk_results = []
-            single_file_mode = len(chunk_paths) == 1
             for op_path in chunk_paths:  # op_path is the operational_path
                 # Quick existence guard to avoid noisy errors for removed/missing files
                 if not os.path.isfile(op_path):
