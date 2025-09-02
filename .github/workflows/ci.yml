@@ -37,6 +37,8 @@ jobs:
           sudo apt-get update
           # Base GL/GLib plus EGL for headless PyQt6 usage
           sudo apt-get install -y libgl1 libglib2.0-0 libegl1
+          # JPEG tools for lossless JPEG rotation
+          sudo apt-get install -y libjpeg-turbo-progs
 
       - name: Cache pip
         uses: actions/cache@v4
