@@ -444,9 +444,8 @@ class ImageRotator:
                 # Use metadata-only rotation for HEIF/HEIC (lossless)
                 success = self._update_xmp_orientation(image_path, new_orientation)
                 method_used = "lossless HEIF/HEIC (metadata-only)"
-            elif file_ext in self._STANDARD_PIXEL_ROTATION_FORMATS or file_ext in self._LOSSLESS_JPEG_FORMATS:
+            elif file_ext in self._STANDARD_PIXEL_ROTATION_FORMATS:
                 # Use standard rotation for PNG, TIFF, BMP (lossy re-encoding)
-                # Also fallback for JPEG when jpegtran is not available
                 success = self._rotate_image_standard(image_path, direction)
                 method_used = "standard (pixel rotation)"
             else:
