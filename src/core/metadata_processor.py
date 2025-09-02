@@ -330,7 +330,21 @@ class MetadataProcessor:
                     # Under pytest on Windows, skip RAW files to avoid native crashes in pyexiv2
                     if os.name == "nt" and os.environ.get("PYTEST_CURRENT_TEST"):
                         ext = os.path.splitext(op_path)[1].lower()
-                        if ext in {".arw", ".cr2", ".nef", ".dng", ".raf", ".rw2", ".orf", ".sr2", ".pef"} and not single_file_mode:
+                        if (
+                            ext
+                            in {
+                                ".arw",
+                                ".cr2",
+                                ".nef",
+                                ".dng",
+                                ".raf",
+                                ".rw2",
+                                ".orf",
+                                ".sr2",
+                                ".pef",
+                            }
+                            and not single_file_mode
+                        ):
                             chunk_results.append(
                                 {
                                     "file_path": op_path,
@@ -343,7 +357,9 @@ class MetadataProcessor:
                             continue
                     # Guard ALL pyexiv2 operations with a lock for stability in threaded runs
                     with _PYEXIV2_LOCK:
-                        with pyexiv2.Image(op_path, encoding="utf-8") as img:  # Use operational_path
+                        with pyexiv2.Image(
+                            op_path, encoding="utf-8"
+                        ) as img:  # Use operational_path
                             combined_metadata = {
                                 "file_path": op_path,  # Store operational_path used for extraction
                                 "pixel_width": img.get_pixel_width(),
@@ -400,11 +416,17 @@ class MetadataProcessor:
         if paths_for_pyexiv2_extraction:
             # Decide whether to run in parallel. On Windows and frozen builds, default to sequential
             # unless explicitly overridden via PHOTOSORT_METADATA_PARALLEL=true.
-            parallel_override = os.environ.get("PHOTOSORT_METADATA_PARALLEL", "false").lower() in {"1", "true", "yes"}
-            should_run_sequential = (getattr(sys, "frozen", False) or os.name == "nt") and not parallel_override
+            parallel_override = os.environ.get(
+                "PHOTOSORT_METADATA_PARALLEL", "false"
+            ).lower() in {"1", "true", "yes"}
+            should_run_sequential = (
+                getattr(sys, "frozen", False) or os.name == "nt"
+            ) and not parallel_override
 
             if should_run_sequential:
-                context_reason = "frozen build" if getattr(sys, "frozen", False) else "Windows"
+                context_reason = (
+                    "frozen build" if getattr(sys, "frozen", False) else "Windows"
+                )
                 logger.info(
                     f"Extracting metadata for {len(paths_for_pyexiv2_extraction)} files sequentially ({context_reason})."
                 )
@@ -440,27 +462,27 @@ class MetadataProcessor:
                             )
 
         if all_metadata_results:
-                for metadata_dict in all_metadata_results:
-                    op_path_processed = metadata_dict.get("file_path")
-                    if op_path_processed:
-                        # Get the cache_key_path associated with this operational_path
-                        current_cache_key = operational_to_cache_key_map.get(
-                            op_path_processed
-                        )
-                        if current_cache_key:
-                            results[current_cache_key]["raw_metadata"] = metadata_dict
-                            if exif_disk_cache:
-                                exif_disk_cache.set(current_cache_key, metadata_dict)
-                        else:
-                            logger.error(
-                                f"Could not find cache key for operational path: {op_path_processed}",
-                                exc_info=True,
-                            )
-                    else:  # Should not happen if process_chunk always includes file_path
-                        logger.warning(
-                            "Metadata result is missing the 'file_path' key.",
+            for metadata_dict in all_metadata_results:
+                op_path_processed = metadata_dict.get("file_path")
+                if op_path_processed:
+                    # Get the cache_key_path associated with this operational_path
+                    current_cache_key = operational_to_cache_key_map.get(
+                        op_path_processed
+                    )
+                    if current_cache_key:
+                        results[current_cache_key]["raw_metadata"] = metadata_dict
+                        if exif_disk_cache:
+                            exif_disk_cache.set(current_cache_key, metadata_dict)
+                    else:
+                        logger.error(
+                            f"Could not find cache key for operational path: {op_path_processed}",
                             exc_info=True,
                         )
+                else:  # Should not happen if process_chunk always includes file_path
+                    logger.warning(
+                        "Metadata result is missing the 'file_path' key.",
+                        exc_info=True,
+                    )
 
         final_results_for_caller: Dict[str, Dict[str, Any]] = {}
         for cache_key, data_dict in results.items():  # cache_key is NFC normalized
@@ -629,7 +651,17 @@ class MetadataProcessor:
             # Under pytest on Windows, skip RAW files to avoid native crashes in pyexiv2
             if os.name == "nt" and os.environ.get("PYTEST_CURRENT_TEST"):
                 ext = os.path.splitext(operational_path)[1].lower()
-                if ext in {".arw", ".cr2", ".nef", ".dng", ".raf", ".rw2", ".orf", ".sr2", ".pef"}:
+                if ext in {
+                    ".arw",
+                    ".cr2",
+                    ".nef",
+                    ".dng",
+                    ".raf",
+                    ".rw2",
+                    ".orf",
+                    ".sr2",
+                    ".pef",
+                }:
                     minimal_result = {
                         "file_path": operational_path,
                         "file_size": os.path.getsize(operational_path)
@@ -644,23 +676,27 @@ class MetadataProcessor:
             with _PYEXIV2_LOCK:
                 with pyexiv2.Image(operational_path, encoding="utf-8") as img:
                     metadata = {
-                    "file_path": operational_path,  # Store operational path used
-                    "pixel_width": img.get_pixel_width(),
-                    "pixel_height": img.get_pixel_height(),
-                    "mime_type": img.get_mime_type(),
-                    "file_size": os.path.getsize(operational_path)
-                    if os.path.isfile(operational_path)
-                    else "Unknown",
+                        "file_path": operational_path,  # Store operational path used
+                        "pixel_width": img.get_pixel_width(),
+                        "pixel_height": img.get_pixel_height(),
+                        "mime_type": img.get_mime_type(),
+                        "file_size": os.path.getsize(operational_path)
+                        if os.path.isfile(operational_path)
+                        else "Unknown",
                     }
                     # ... (rest of metadata fetching as before: exif, iptc, xmp) ...
                     try:
                         metadata.update(img.read_exif() or {})
                     except Exception:
-                        logger.debug(f"No EXIF for {os.path.basename(operational_path)}")
+                        logger.debug(
+                            f"No EXIF for {os.path.basename(operational_path)}"
+                        )
                     try:
                         metadata.update(img.read_iptc() or {})
                     except Exception:
-                        logger.debug(f"No IPTC for {os.path.basename(operational_path)}")
+                        logger.debug(
+                            f"No IPTC for {os.path.basename(operational_path)}"
+                        )
                     try:
                         metadata.update(img.read_xmp() or {})
                     except Exception:

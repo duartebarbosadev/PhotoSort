@@ -3,7 +3,10 @@ import concurrent.futures
 import logging
 from typing import Optional, List, Callable, Dict
 
-from core.image_features.model_rotation_detector import ModelRotationDetector, ModelNotFoundError
+from core.image_features.model_rotation_detector import (
+    ModelRotationDetector,
+    ModelNotFoundError,
+)
 from core.image_pipeline import ImagePipeline
 from core.caching.exif_cache import ExifCache
 
@@ -103,7 +106,9 @@ class RotationDetector:
                     for f_cancel in futures_map:
                         if not f_cancel.done():
                             f_cancel.cancel()
-                    logger.warning("Rotation model not found during batch processing; aborting remaining tasks.")
+                    logger.warning(
+                        "Rotation model not found during batch processing; aborting remaining tasks."
+                    )
                     raise
                 except Exception as e:
                     logger.error(

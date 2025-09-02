@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 class DialogManager:
     """A manager class for handling the creation of dialogs."""
+
     # Class-level reference placeholder to avoid accidental 'self' usage at class scope
     _about_dialog_ref = None
 
@@ -85,9 +86,7 @@ class DialogManager:
         dialog.setFixedSize(480, 420)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         # Make window frameless for a cleaner UI
-        dialog.setWindowFlags(
-            dialog.windowFlags() | Qt.WindowType.FramelessWindowHint
-        )
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
         # Main layout
         main_layout = QVBoxLayout(dialog)
@@ -112,7 +111,9 @@ class DialogManager:
                 e.accept()
 
         def _header_mouse_move(e):
-            if (e.buttons() & Qt.MouseButton.LeftButton) and _drag_state["offset"] is not None:
+            if (e.buttons() & Qt.MouseButton.LeftButton) and _drag_state[
+                "offset"
+            ] is not None:
                 dialog.move(e.globalPosition().toPoint() - _drag_state["offset"])
                 e.accept()
 
@@ -189,7 +190,9 @@ class DialogManager:
         # Open Models Folder button
         models_button = QPushButton("📦 Open Models Folder")
         models_button.setObjectName("aboutModelsButton")
-        models_button.setToolTip("Open the folder where ONNX rotation models are stored")
+        models_button.setToolTip(
+            "Open the folder where ONNX rotation models are stored"
+        )
         models_button.clicked.connect(self._open_models_folder)
         actions_layout.addWidget(models_button)
 
@@ -251,7 +254,9 @@ class DialogManager:
             url = QUrl.fromLocalFile(logs_dir)
             opened = QDesktopServices.openUrl(url)
             if not opened:
-                logger.warning("QDesktopServices failed to open logs folder: %s", logs_dir)
+                logger.warning(
+                    "QDesktopServices failed to open logs folder: %s", logs_dir
+                )
         except Exception:
             logger.error("Failed to open logs folder", exc_info=True)
 
@@ -264,16 +269,24 @@ class DialogManager:
         """
         try:
             cwd_models = os.path.join(os.getcwd(), "models")
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            project_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..")
+            )
             dev_models = os.path.join(project_root, "models")
 
             # Choose the best target: existing CWD/models, else existing dev models, else create CWD/models
-            target = cwd_models if os.path.isdir(cwd_models) else (dev_models if os.path.isdir(dev_models) else cwd_models)
+            target = (
+                cwd_models
+                if os.path.isdir(cwd_models)
+                else (dev_models if os.path.isdir(dev_models) else cwd_models)
+            )
             os.makedirs(target, exist_ok=True)
             url = QUrl.fromLocalFile(os.path.abspath(target))
             opened = QDesktopServices.openUrl(url)
             if not opened:
-                logger.warning("QDesktopServices failed to open models folder: %s", target)
+                logger.warning(
+                    "QDesktopServices failed to open models folder: %s", target
+                )
         except Exception:
             logger.error("Failed to open models folder", exc_info=True)
 

@@ -1,4 +1,5 @@
 import pyexiv2  # noqa: F401  # Must be imported first to avoid Windows crashes
+
 # Ensure root path (containing src/) is on sys.path for test imports
 import sys
 import os

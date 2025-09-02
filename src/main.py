@@ -9,14 +9,15 @@ from PyQt6.QtWidgets import (
     QApplication,
     QMessageBox,
 )  # QMessageBox for global exception handler
+
 # Ensure the 'src' directory is on sys.path when executing as a script
 SRC_DIR = os.path.dirname(__file__)
 if SRC_DIR and SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from ui.main_window import MainWindow
-from ui.app_controller import AppController
-from pillow_heif import register_heif_opener
+from ui.main_window import MainWindow  # noqa: E402
+from ui.app_controller import AppController  # noqa: E402
+from pillow_heif import register_heif_opener  # noqa: E402
 
 
 def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
@@ -39,9 +40,15 @@ def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
 
         # Candidate locations, in order of preference
         candidates = [
-            os.path.join(base_dir, "dark_theme.qss"),  # we bundle at top-level in frozen builds
-            os.path.join(base_dir, filename),  # e.g., src/ui/dark_theme.qss inside frozen or source
-            os.path.abspath(filename),  # direct path from CWD when running from repo root
+            os.path.join(
+                base_dir, "dark_theme.qss"
+            ),  # we bundle at top-level in frozen builds
+            os.path.join(
+                base_dir, filename
+            ),  # e.g., src/ui/dark_theme.qss inside frozen or source
+            os.path.abspath(
+                filename
+            ),  # direct path from CWD when running from repo root
         ]
 
         for path in candidates:
@@ -131,6 +138,7 @@ def main():
 
     # --- Enable Faulthandler for crash analysis ---
     import faulthandler
+
     # In GUI builds (PyInstaller -w), sys.stderr can be None; enable to a file in that case
     try:
         if sys.stderr is not None:
@@ -142,7 +150,9 @@ def main():
                 crash_log_path = os.path.join(crash_dir, "photosort_crash.log")
                 # Keep a global reference to avoid GC closing the file
                 global _FAULTHANDLER_FH  # type: ignore[var-annotated]
-                _FAULTHANDLER_FH = open(crash_log_path, "a", buffering=1, encoding="utf-8")
+                _FAULTHANDLER_FH = open(
+                    crash_log_path, "a", buffering=1, encoding="utf-8"
+                )
                 faulthandler.enable(file=_FAULTHANDLER_FH)
                 logging.info(f"Faulthandler crash log: {crash_log_path}")
             except Exception as fe:
