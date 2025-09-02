@@ -113,12 +113,20 @@ class ModelRotationDetector(RotationDetectorProtocol):
         # Always re-check for the model path and raise if missing so the UI can show the dialog every run
         model_path = self._resolve_model_path()
         if not model_path:
-            model_name = get_orientation_model_name()
-            raise ModelNotFoundError(
-                f"Configured rotation model '{model_name}' not found"
-                if model_name
-                else "No rotation model found in any known location"
-            )
+            # In headless/CI or when model isn't present, disable detector gracefully.
+            # Mark as tried and failed so callers get angle 0 without exceptions.
+            s.tried_load = True
+            s.load_failed = True
+            if not s.failure_logged:
+                model_name = get_orientation_model_name()
+                msg = (
+                    f"Configured rotation model '{model_name}' not found"
+                    if model_name
+                    else "No rotation model found in any known location"
+                )
+                logger.warning("Rotation detector disabled: %s", msg)
+                s.failure_logged = True
+            return False
 
         # If we previously tried and failed due to dependency or init errors (not model-missing), don't retry repeatedly
         if s.tried_load and s.load_failed:
