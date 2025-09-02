@@ -15,11 +15,11 @@ from typing import Optional, Protocol, runtime_checkable, Any
 
 import numpy as np
 
-from src.core.image_processing.raw_image_processor import (
+from core.image_processing.raw_image_processor import (
     is_raw_extension,
     RawImageProcessor,
 )
-from src.core.app_settings import (
+from core.app_settings import (
     get_orientation_model_name,
     set_orientation_model_name,
     ROTATION_MODEL_IMAGE_SIZE,
@@ -109,6 +109,18 @@ class ModelRotationDetector(RotationDetectorProtocol):
         s = self._state
         if s.session is not None:
             return True
+
+        # Always re-check for the model path and raise if missing so the UI can show the dialog every run
+        model_path = self._resolve_model_path()
+        if not model_path:
+            model_name = get_orientation_model_name()
+            raise ModelNotFoundError(
+                f"Configured rotation model '{model_name}' not found"
+                if model_name
+                else "No rotation model found in any known location"
+            )
+
+        # If we previously tried and failed due to dependency or init errors (not model-missing), don't retry repeatedly
         if s.tried_load and s.load_failed:
             return False
         s.tried_load = True
@@ -124,11 +136,6 @@ class ModelRotationDetector(RotationDetectorProtocol):
                     e,
                 )
                 s.failure_logged = True
-            return False
-
-        model_path = self._resolve_model_path()
-        if not model_path:
-            s.load_failed = True
             return False
 
         try:
@@ -191,7 +198,9 @@ class ModelRotationDetector(RotationDetectorProtocol):
         except Exception:
             pass
 
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        project_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..")
+        )
         base_dirs.append(os.path.join(project_root, MODEL_SAVE_DIR))
         base_dirs.append(os.path.join(os.getcwd(), MODEL_SAVE_DIR))
 
@@ -202,7 +211,10 @@ class ModelRotationDetector(RotationDetectorProtocol):
                 candidate = os.path.join(base, model_name)
                 if os.path.exists(candidate):
                     return candidate
-            logger.warning("Configured rotation model '%s' not found in known locations.", model_name)
+            logger.warning(
+                "Configured rotation model '%s' not found in known locations.",
+                model_name,
+            )
 
         # 2) Otherwise, glob for any orientation_model*.onnx in candidates
         found_models = []

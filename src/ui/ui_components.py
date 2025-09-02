@@ -19,12 +19,12 @@ from PyQt6.QtGui import (
 from typing import List, Optional
 import os
 
-from src.core.image_pipeline import ImagePipeline
-from src.core.image_features.blur_detector import (
+from core.image_pipeline import ImagePipeline
+from core.image_features.blur_detector import (
     BlurDetector,
 )
-from src.core.caching.exif_cache import ExifCache
-from src.core.image_processing.raw_image_processor import is_raw_extension
+from core.caching.exif_cache import ExifCache
+from core.image_processing.raw_image_processor import is_raw_extension
 import logging
 
 logger = logging.getLogger(__name__)
@@ -320,8 +320,8 @@ class RotationDetectionWorker(QObject):
     def run(self):
         """Run the rotation detection process."""
         try:
-            from src.core.image_features.rotation_detector import RotationDetector
-            from src.core.image_features.model_rotation_detector import (
+            from core.image_features.rotation_detector import RotationDetector
+            from core.image_features.model_rotation_detector import (
                 ModelNotFoundError,
             )
 
@@ -393,7 +393,7 @@ class SimilarityWorker(QObject):
         """The main method that will be executed in the new thread."""
         self._is_running = True
         try:
-            from src.core.similarity_engine import SimilarityEngine
+            from core.similarity_engine import SimilarityEngine
 
             # 1. Instantiate the engine inside the worker thread
             self.similarity_engine = SimilarityEngine()

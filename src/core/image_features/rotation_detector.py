@@ -3,9 +3,9 @@ import concurrent.futures
 import logging
 from typing import Optional, List, Callable, Dict
 
-from src.core.image_features.model_rotation_detector import ModelRotationDetector
-from src.core.image_pipeline import ImagePipeline
-from src.core.caching.exif_cache import ExifCache
+from core.image_features.model_rotation_detector import ModelRotationDetector, ModelNotFoundError
+from core.image_pipeline import ImagePipeline
+from core.caching.exif_cache import ExifCache
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,9 @@ class RotationDetector:
             if result_callback:
                 result_callback(image_path, final_suggested_rotation)
 
+        except ModelNotFoundError:
+            # Let this propagate so the worker can notify the UI and show the dialog
+            raise
         except Exception as e:
             logger.error(
                 f"Error processing rotation for '{os.path.basename(image_path)}': {e}",
@@ -95,6 +98,13 @@ class RotationDetector:
                 path_for_future = futures_map[future]
                 try:
                     future.result()
+                except ModelNotFoundError:
+                    # Cancel all remaining tasks and propagate to caller (worker)
+                    for f_cancel in futures_map:
+                        if not f_cancel.done():
+                            f_cancel.cancel()
+                    logger.warning("Rotation model not found during batch processing; aborting remaining tasks.")
+                    raise
                 except Exception as e:
                     logger.error(
                         f"Error in rotation detection future for '{os.path.basename(path_for_future)}': {e}",

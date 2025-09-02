@@ -2,8 +2,8 @@ from typing import Dict, Any, List, Optional
 from datetime import date as date_obj
 import logging
 import os
-from src.core.caching.rating_cache import RatingCache
-from src.core.caching.exif_cache import ExifCache  # Import ExifCache
+from core.caching.rating_cache import RatingCache
+from core.caching.exif_cache import ExifCache
 
 logger = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 import time
 import logging
-from src.ui.advanced_image_viewer import SynchronizedImageViewer
+from ui.advanced_image_viewer import SynchronizedImageViewer
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -46,12 +46,12 @@ from PyQt6.QtGui import (
 from sklearn.metrics.pairwise import cosine_similarity
 import sys
 
-from src.core.image_pipeline import ImagePipeline
-from src.core.image_file_ops import ImageFileOperations
-from src.core.image_processing.raw_image_processor import is_raw_extension
+from core.image_pipeline import ImagePipeline
+from core.image_file_ops import ImageFileOperations
+from core.image_processing.raw_image_processor import is_raw_extension
 
-from src.core.metadata_processor import MetadataProcessor  # New metadata processor
-from src.core.app_settings import (
+from core.metadata_processor import MetadataProcessor  # New metadata processor
+from core.app_settings import (
     get_preview_cache_size_gb,
     set_preview_cache_size_gb,
     set_exif_cache_size_mb,
@@ -60,29 +60,29 @@ from src.core.app_settings import (
     CENTER_PANEL_STRETCH,
     RIGHT_PANEL_STRETCH,
 )
-from src.ui.app_state import AppState
-from src.ui.ui_components import LoadingOverlay
-from src.ui.worker_manager import WorkerManager
-from src.ui.metadata_sidebar import MetadataSidebar
-from src.ui.dialog_manager import DialogManager
-from src.ui.left_panel import LeftPanel
-from src.ui.app_controller import AppController
-from src.ui.menu_manager import MenuManager
-from src.ui.selection_utils import select_next_surviving_path
-from src.ui.helpers.statusbar_utils import build_status_bar_info
-from src.ui.helpers.index_lookup_utils import find_proxy_index_for_path
+from ui.app_state import AppState
+from ui.ui_components import LoadingOverlay
+from ui.worker_manager import WorkerManager
+from ui.metadata_sidebar import MetadataSidebar
+from ui.dialog_manager import DialogManager
+from ui.left_panel import LeftPanel
+from ui.app_controller import AppController
+from ui.menu_manager import MenuManager
+from ui.selection_utils import select_next_surviving_path
+from ui.helpers.statusbar_utils import build_status_bar_info
+from ui.helpers.index_lookup_utils import find_proxy_index_for_path
 
 # build_presentation now used only inside DeletionMarkController
-from src.ui.controllers.deletion_mark_controller import DeletionMarkController
-from src.ui.controllers.file_deletion_controller import FileDeletionController
-from src.ui.controllers.rotation_controller import RotationController
-from src.ui.controllers.filter_controller import FilterController
-from src.ui.controllers.hotkey_controller import HotkeyController
-from src.ui.controllers.navigation_controller import NavigationController
-from src.ui.controllers.selection_controller import SelectionController
-from src.ui.controllers.similarity_controller import SimilarityController
-from src.ui.controllers.preview_controller import PreviewController
-from src.ui.controllers.metadata_controller import MetadataController
+from ui.controllers.deletion_mark_controller import DeletionMarkController
+from ui.controllers.file_deletion_controller import FileDeletionController
+from ui.controllers.rotation_controller import RotationController
+from ui.controllers.filter_controller import FilterController
+from ui.controllers.hotkey_controller import HotkeyController
+from ui.controllers.navigation_controller import NavigationController
+from ui.controllers.selection_controller import SelectionController
+from ui.controllers.similarity_controller import SimilarityController
+from ui.controllers.preview_controller import PreviewController
+from ui.controllers.metadata_controller import MetadataController
 
 logger = logging.getLogger(__name__)
 
@@ -3230,7 +3230,7 @@ class MainWindow(QMainWindow):
 
                 # Metadata rotation failed but lossy rotation is available
                 # For batch operations, we'll apply the user's preference without asking each time
-                from src.core.app_settings import get_rotation_confirm_lossy
+                from core.app_settings import get_rotation_confirm_lossy
 
                 if get_rotation_confirm_lossy() and len(rotation_supported_paths) > 1:
                     # For multiple images, ask once for the batch
@@ -3247,7 +3247,7 @@ class MainWindow(QMainWindow):
                     )
 
                     if never_ask_again:
-                        from src.core.app_settings import set_rotation_confirm_lossy
+                        from core.app_settings import set_rotation_confirm_lossy
 
                         set_rotation_confirm_lossy(False)
 
@@ -3258,7 +3258,7 @@ class MainWindow(QMainWindow):
                         return
 
                     # Update the preference so we don't ask again for remaining images
-                    from src.core.app_settings import set_rotation_confirm_lossy
+                    from core.app_settings import set_rotation_confirm_lossy
 
                     set_rotation_confirm_lossy(False)
                 elif (
@@ -3278,7 +3278,7 @@ class MainWindow(QMainWindow):
                     )
 
                     if never_ask_again:
-                        from src.core.app_settings import set_rotation_confirm_lossy
+                        from core.app_settings import set_rotation_confirm_lossy
 
                         set_rotation_confirm_lossy(False)
 

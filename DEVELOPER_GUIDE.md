@@ -225,3 +225,51 @@ When adding new controllers, follow the listed Extension Pattern to maintain con
 
 ---
 This guide reflects the state after introducing auto-advance rotation acceptance, selection heuristic refactor, lazy model loading, automatic RAW processing refactor, and updated testing patterns.
+
+## 10. Packaging & Distribution Gotchas
+
+This project ships native desktop binaries via PyInstaller and GitHub Actions. Keep these notes in mind when changing imports, resources, or the workflow:
+
+### 10.1 Import strategy (works in source and frozen bundles)
+- Prefer package-relative imports without the `src.` prefix (e.g., `from ui.main_window import MainWindow`, `from core.image_pipeline import ImagePipeline`).
+- `src/main.py` inserts the `src/` folder into `sys.path` at startup so `python src/main.py` works the same as the frozen app.
+- The CI’s PyInstaller commands include `--paths src` to resolve package-relative imports during analysis.
+- Critical: `import pyexiv2` must come first in `main.py` (and in every test file) to avoid Windows crashes in the native library.
+
+### 10.2 Resource bundling (QSS and models)
+- The stylesheet loader tries multiple locations in this order:
+  1) top-level `dark_theme.qss` next to the EXE/.app,
+  2) `src/ui/dark_theme.qss` under the runtime base,
+  3) the provided relative path from CWD.
+- CI bundles `src/ui/dark_theme.qss` to the top-level to avoid rare permission errors when reading from deep `_MEIPASS` paths.
+- Orientation model files are NOT bundled. At runtime the app searches in:
+  - PyInstaller `_MEIPASS/models`,
+  - `<project_root>/models`,
+  - `./models` (CWD).
+  End users should download the ONNX model into `models/`. The app degrades gracefully if no model is found (rotation detector disabled / prompts the user).
+
+### 10.3 Logging and faulthandler in GUI builds
+- Windowed PyInstaller builds (`-w`) can have `sys.stderr` set to `None`. We:
+  - Guard `faulthandler.enable()` behind a `stderr` check.
+  - Only create the console `StreamHandler` if `stderr` exists.
+  - Default to file logging when `stderr` is `None` (EXE mode). Logs go to:
+    - Windows: `%USERPROFILE%\.photosort_logs\photosort_app.log`.
+  - You can still force file logging in dev with `PHOTOSORT_ENABLE_FILE_LOGGING=true`.
+
+### 10.4 PyInstaller flags and hidden imports
+- Windows (EXE): `--onefile -w -n PhotoSort` with `--paths src`.
+- macOS (.app): `-w --name PhotoSort` with `--paths src`.
+- Resources: add-data includes `models` dir and `dark_theme.qss` to the top-level.
+- Hidden imports cover: `PyQt6.QtCore/Gui/Widgets`, `rawpy`, `pyexiv2`, `cv2`, `onnxruntime`, `torchvision`, `torch`, `sklearn`, `sentence_transformers`.
+
+### 10.5 CI builds, artifacts, and checksums
+- Matrix builds target:
+  - `windows-latest` → PhotoSort-Windows-x64.exe
+  - `macos-13` (Intel/x86_64) → PhotoSort-macOS-Intel.dmg
+  - `macos-14` (Apple Silicon/arm64) → PhotoSort-macOS-AppleSilicon.dmg
+- We generate SHA256 checksums alongside each artifact (`.sha256`).
+- Release assets upload the single `.exe` and `.dmg` files plus their `.sha256`.
+- Icons are generated in CI: `.ico` for Windows, `.icns` for macOS.
+
+### 10.7 macOS notes (codesigning/notarization)
+- Current CI produces unsigned `.app` inside a `.dmg`. For public distribution, add codesigning and notarization steps (Apple Developer ID required). Without signing, Gatekeeper will warn or block on some systems; users can right-click → Open as a workaround.

@@ -24,10 +24,13 @@ jobs:
         include:
           - os: windows-latest
             python: '3.12'
+            artifact_name: PhotoSort-Windows-x64
           - os: macos-13  # Intel
             python: '3.12'
+            artifact_name: PhotoSort-macOS-Intel
           - os: macos-14  # Apple Silicon
             python: '3.12'
+            artifact_name: PhotoSort-macOS-AppleSilicon
 
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: '1'
@@ -46,11 +49,6 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Install system deps (Linux/macOS only)
-        if: runner.os != 'Windows'
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0 libegl1; fi
-          if [ "$RUNNER_OS" = "macOS" ]; then echo "No extra system deps required"; fi
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -114,11 +112,18 @@ jobs:
             iconutil -c icns build/icons/PhotoSort.iconset -o build/icons/photosort.icns
           fi
 
+      - name: Ensure models dir exists
+        shell: bash
+        run: |
+          mkdir -p models
+
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
         run: |
-          pyinstaller -w -n PhotoSort `
+          pyinstaller -w --onefile -n PhotoSort `
             --icon build/icons/photosort.ico `
+            --paths src `
+            --add-data "src/ui/dark_theme.qss;." `
             --hidden-import PyQt6.QtCore `
             --hidden-import PyQt6.QtGui `
             --hidden-import PyQt6.QtWidgets `
@@ -131,14 +136,30 @@ jobs:
             --hidden-import sklearn `
             --hidden-import sentence_transformers `
             --add-data "models;models" `
-            --add-data "src/ui/dark_theme.qss;src/ui/dark_theme.qss" `
             src/main.py
+
+      - name: Collect artifact (Windows .exe)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "${{ matrix.artifact_name }}.exe"
+          Copy-Item "dist\PhotoSort.exe" $exe -Force
+
+      - name: Generate SHA256 checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "${{ matrix.artifact_name }}.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
+          "$hash  $exe" | Out-File -Encoding ascii "$exe.sha256"
 
       - name: Build with PyInstaller (macOS)
         if: runner.os == 'macOS'
         run: |
           pyinstaller -w --name PhotoSort \
             --icon build/icons/photosort.icns \
+            --paths src \
+            --add-data src/ui/dark_theme.qss:. \
             --hidden-import PyQt6.QtCore \
             --hidden-import PyQt6.QtGui \
             --hidden-import PyQt6.QtWidgets \
@@ -151,14 +172,33 @@ jobs:
             --hidden-import sklearn \
             --hidden-import sentence_transformers \
             --add-data models:models \
-            --add-data src/ui/dark_theme.qss:src/ui/dark_theme.qss \
             src/main.py
+
+      - name: Package artifact (macOS .dmg)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          DMG="${{ matrix.artifact_name }}.dmg"
+          APP_PATH="dist/PhotoSort.app"
+          if [ -d "$APP_PATH" ]; then
+            hdiutil create -volname "PhotoSort" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG"
+          else
+            echo "PhotoSort.app not found in dist" >&2
+            exit 1
+          fi
+
+      - name: Generate SHA256 checksum (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          DMG="${{ matrix.artifact_name }}.dmg"
+          shasum -a 256 "$DMG" > "$DMG.sha256"
 
       - name: Archive artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: PhotoSort-${{ runner.os }}
-          path: dist/**
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.*
           retention-days: 14
 
   release:

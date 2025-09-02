@@ -4,7 +4,7 @@ import logging
 import time
 from PIL import Image
 from typing import Optional, Tuple
-from src.core.app_settings import (
+from core.app_settings import (
     DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES,
     THUMBNAIL_MIN_FILE_SIZE,
 )

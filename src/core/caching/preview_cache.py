@@ -6,7 +6,7 @@ from PIL import Image
 from typing import Optional, Tuple
 
 # Import the settings function to get the cache size limit
-from src.core.app_settings import (
+from core.app_settings import (
     get_preview_cache_size_bytes,
     PREVIEW_CACHE_MIN_FILE_SIZE,
 )

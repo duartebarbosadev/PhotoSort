@@ -10,7 +10,7 @@ from sklearn.metrics.pairwise import (
     cosine_similarity,
 )  # Import for similarity calculation
 
-from src.core.image_pipeline import ImagePipeline
+from core.image_pipeline import ImagePipeline
 from .app_settings import (
     DEFAULT_CLIP_MODEL,
     is_pytorch_cuda_available,
