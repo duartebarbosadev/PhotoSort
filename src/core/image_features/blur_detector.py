@@ -7,15 +7,15 @@ import concurrent.futures
 import logging
 
 # Assuming these processors are in the new structure
-from src.core.image_processing.raw_image_processor import (
+from core.image_processing.raw_image_processor import (
     RawImageProcessor,
     is_raw_extension,
 )
-from src.core.image_processing.standard_image_processor import (
+from core.image_processing.standard_image_processor import (
     StandardImageProcessor,
     SUPPORTED_STANDARD_EXTENSIONS,
 )
-from src.core.image_processing.image_orientation_handler import (
+from core.image_processing.image_orientation_handler import (
     ImageOrientationHandler,
 )  # Local import
 

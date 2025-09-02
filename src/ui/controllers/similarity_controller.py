@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Protocol, Dict, List, Any, Optional
 from datetime import date as date_obj
 
-from src.ui.helpers.cluster_utils import ClusterUtils
+from ui.helpers.cluster_utils import ClusterUtils
 
 
 class SimilarityContext(Protocol):

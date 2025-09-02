@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from PyQt6.QtCore import QSize
 from PyQt6.QtWidgets import QListView
-from src.core.app_settings import (
+from core.app_settings import (
     FIXED_ICON_SIZE,
     FIXED_GRID_WIDTH,
     FIXED_GRID_HEIGHT,
@@ -10,9 +10,9 @@ from src.core.app_settings import (
 )
 
 if TYPE_CHECKING:
-    from src.ui.main_window import MainWindow
-    from src.ui.left_panel import LeftPanel
-    from src.ui.app_state import AppState
+    from ui.main_window import MainWindow
+    from ui.left_panel import LeftPanel
+    from ui.app_state import AppState
 
 
 class ViewManager:

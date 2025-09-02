@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional, Sequence, Iterable
 
-from src.ui.selection_utils import select_next_surviving_path
+from ui.selection_utils import select_next_surviving_path
 
 
 def compute_next_after_rotation(

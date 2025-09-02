@@ -10,14 +10,14 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QSize
-from src.core.app_settings import (
+from core.app_settings import (
     FIXED_ICON_SIZE,
     FIXED_GRID_WIDTH,
     FIXED_GRID_HEIGHT,
     GRID_SPACING,
 )
 
-from src.ui.ui_components import (
+from ui.ui_components import (
     DroppableTreeView,
     FocusHighlightDelegate,
     NoCtrlListView,

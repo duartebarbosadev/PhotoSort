@@ -3,14 +3,14 @@ import time
 import logging
 from typing import List, Dict, Any, Tuple
 from PyQt6.QtCore import QObject
-from src.core.app_settings import (
+from core.app_settings import (
     add_recent_folder,
     get_preview_cache_size_bytes,
     PREVIEW_ESTIMATED_SIZE_FACTOR,
 )
-from src.core.file_scanner import SUPPORTED_EXTENSIONS
-from src.core.image_file_ops import ImageFileOperations
-from src.core.image_pipeline import ImagePipeline
+from core.file_scanner import SUPPORTED_EXTENSIONS
+from core.image_file_ops import ImageFileOperations
+from core.image_pipeline import ImagePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +42,14 @@ class AppController(QObject):
             logger.error("Error clearing image pipeline caches.", exc_info=True)
 
         try:
-            from src.core.similarity_engine import SimilarityEngine
+            from core.similarity_engine import SimilarityEngine
 
             SimilarityEngine.clear_embedding_cache()
         except Exception:
             logger.error("Error clearing similarity cache.", exc_info=True)
 
         try:
-            from src.core.caching.exif_cache import ExifCache
+            from core.caching.exif_cache import ExifCache
 
             exif_cache = ExifCache()
             exif_cache.clear()
@@ -57,7 +57,7 @@ class AppController(QObject):
             logger.error("Error clearing EXIF metadata cache.", exc_info=True)
 
         try:
-            from src.core.caching.rating_cache import RatingCache
+            from core.caching.rating_cache import RatingCache
 
             rating_cache = RatingCache()
             rating_cache.clear()
@@ -702,7 +702,7 @@ class AppController(QObject):
         """Apply the approved rotations to the images."""
         apply_start_time = time.perf_counter()
         logger.info(f"Applying {len(approved_rotations)} approved rotations.")
-        from src.core.metadata_processor import MetadataProcessor
+        from core.metadata_processor import MetadataProcessor
 
         total_rotations = len(approved_rotations)
         successful_rotations = 0

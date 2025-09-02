@@ -6,8 +6,8 @@ from typing import Literal, Tuple
 from PIL import Image, ImageOps
 import pyexiv2
 from pathlib import Path
-from src.core.image_file_ops import ImageFileOperations
-from src.core.app_settings import JPEGTRAN_TIMEOUT_SECONDS
+from core.image_file_ops import ImageFileOperations
+from core.app_settings import JPEGTRAN_TIMEOUT_SECONDS
 import piexif  # For EXIF manipulation with Pillow
 from pillow_heif import HeifImageFile  # For HEIF/HEIC support
 

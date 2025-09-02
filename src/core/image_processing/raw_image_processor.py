@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Optional, Set
 from PIL import ImageEnhance
-from src.core.app_settings import (
+from core.app_settings import (
     RAW_AUTO_EDIT_BRIGHTNESS_STANDARD,
     RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED,
     THUMBNAIL_MAX_SIZE,

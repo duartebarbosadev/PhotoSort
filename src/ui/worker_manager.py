@@ -3,21 +3,21 @@ from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 # Import worker classes
-from src.core.file_scanner import FileScanner
+from core.file_scanner import FileScanner
 
-from src.ui.ui_components import (
+from ui.ui_components import (
     PreviewPreloaderWorker,
     BlurDetectionWorker,
     RotationDetectionWorker,
     SimilarityWorker,
 )
-from src.core.image_pipeline import ImagePipeline
-from src.core.rating_loader_worker import (
+from core.image_pipeline import ImagePipeline
+from core.rating_loader_worker import (
     RatingLoaderWorker,
 )
-from src.core.caching.rating_cache import RatingCache
-from src.core.caching.exif_cache import ExifCache
-from src.ui.app_state import AppState
+from core.caching.rating_cache import RatingCache
+from core.caching.exif_cache import ExifCache
+from ui.app_state import AppState
 
 logger = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Dict, List, Optional, Callable
-from src.ui.helpers.rotation_utils import compute_next_after_rotation
+from ui.helpers.rotation_utils import compute_next_after_rotation
 
 
 class RotationController:

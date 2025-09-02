@@ -21,18 +21,18 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QStyle,
 )
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import Qt, QSize, QUrl
+from PyQt6.QtGui import QIcon, QDesktopServices
 from PyQt6.QtWidgets import QApplication
 
-from src.core.app_settings import (
+from core.app_settings import (
     get_rotation_confirm_lossy,
     is_pytorch_cuda_available,
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
 )
-from src.core.image_processing.raw_image_processor import is_raw_extension
-from src.core.image_features.model_rotation_detector import (
+from core.image_processing.raw_image_processor import is_raw_extension
+from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
     ModelNotFoundError,
 )
@@ -51,6 +51,8 @@ class DialogManager:
             parent: The parent widget, typically the MainWindow.
         """
         self.parent = parent
+        # Instance-level placeholder for non-blocking About dialog reference
+        self._about_dialog_ref = None
 
     def _should_apply_raw_processing(self, file_path: str) -> bool:
         """Determine if RAW processing should be applied to the given file."""
@@ -80,6 +82,8 @@ class DialogManager:
         dialog.setModal(True)
         dialog.setFixedSize(480, 420)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        # Make window frameless for a cleaner UI
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
         # Main layout
         main_layout = QVBoxLayout(dialog)
@@ -92,6 +96,27 @@ class DialogManager:
         header_layout = QHBoxLayout(header_frame)
         header_layout.setSpacing(15)
         header_layout.setContentsMargins(20, 15, 20, 15)
+
+        # Enable dragging the frameless window by the header
+        _drag_state = {"offset": None}
+
+        def _header_mouse_press(e):
+            if e.button() == Qt.MouseButton.LeftButton:
+                _drag_state["offset"] = (
+                    e.globalPosition().toPoint() - dialog.frameGeometry().topLeft()
+                )
+                e.accept()
+
+        def _header_mouse_move(e):
+            if (e.buttons() & Qt.MouseButton.LeftButton) and _drag_state[
+                "offset"
+            ] is not None:
+                dialog.move(e.globalPosition().toPoint() - _drag_state["offset"])
+                e.accept()
+
+        # Assign simple drag handlers to the header frame
+        header_frame.mousePressEvent = _header_mouse_press  # type: ignore[assignment]
+        header_frame.mouseMoveEvent = _header_mouse_move  # type: ignore[assignment]
 
         # App info (left side)
         app_info_layout = QVBoxLayout()
@@ -155,9 +180,25 @@ class DialogManager:
 
         content_layout.addWidget(tech_frame)
 
-        # GitHub section - just the button
-        github_layout = QHBoxLayout()
-        github_layout.addStretch()
+        # Actions row: Open Models + Logs + GitHub
+        actions_layout = QHBoxLayout()
+        actions_layout.addStretch()
+
+        # Open Models Folder button
+        models_button = QPushButton("📦 Open Models Folder")
+        models_button.setObjectName("aboutModelsButton")
+        models_button.setToolTip(
+            "Open the folder where ONNX rotation models are stored"
+        )
+        models_button.clicked.connect(self._open_models_folder)
+        actions_layout.addWidget(models_button)
+
+        # Open Logs Folder button
+        logs_button = QPushButton("🗂️ Open Logs Folder")
+        logs_button.setObjectName("aboutLogsButton")
+        logs_button.setToolTip("Open the folder where PhotoSort writes its log file")
+        logs_button.clicked.connect(self._open_logs_folder)
+        actions_layout.addWidget(logs_button)
 
         # GitHub button
         github_button = QPushButton("🔗 View on GitHub")
@@ -165,9 +206,9 @@ class DialogManager:
         github_button.clicked.connect(
             lambda: webbrowser.open("https://github.com/duartebarbosadev/PhotoSort")
         )
-        github_layout.addWidget(github_button)
+        actions_layout.addWidget(github_button)
 
-        content_layout.addLayout(github_layout)
+        content_layout.addLayout(actions_layout)
 
         # Add content to main layout
         main_layout.addLayout(content_layout)
@@ -201,6 +242,50 @@ class DialogManager:
             self._about_dialog_ref = dialog  # type: ignore[attr-defined]
             dialog.show()
             logger.info("Showing about dialog (non-blocking mode)")
+
+    def _open_logs_folder(self):
+        """Open the application's logs directory in the system file browser."""
+        try:
+            logs_dir = os.path.join(os.path.expanduser("~"), ".photosort_logs")
+            os.makedirs(logs_dir, exist_ok=True)
+            url = QUrl.fromLocalFile(logs_dir)
+            opened = QDesktopServices.openUrl(url)
+            if not opened:
+                logger.warning(
+                    "QDesktopServices failed to open logs folder: %s", logs_dir
+                )
+        except Exception:
+            logger.error("Failed to open logs folder", exc_info=True)
+
+    def _open_models_folder(self):
+        """Open the models directory (where ONNX model files live) in the system file browser.
+
+        Strategy:
+        - Prefer ./models next to the running app (CWD/models), creating it if missing.
+        - Fallback to project-root/models (useful in dev), creating if needed.
+        """
+        try:
+            cwd_models = os.path.join(os.getcwd(), "models")
+            project_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..")
+            )
+            dev_models = os.path.join(project_root, "models")
+
+            # Choose the best target: existing CWD/models, else existing dev models, else create CWD/models
+            target = (
+                cwd_models
+                if os.path.isdir(cwd_models)
+                else (dev_models if os.path.isdir(dev_models) else cwd_models)
+            )
+            os.makedirs(target, exist_ok=True)
+            url = QUrl.fromLocalFile(os.path.abspath(target))
+            opened = QDesktopServices.openUrl(url)
+            if not opened:
+                logger.warning(
+                    "QDesktopServices failed to open models folder: %s", target
+                )
+        except Exception:
+            logger.error("Failed to open models folder", exc_info=True)
 
     def show_lossy_rotation_confirmation_dialog(
         self, filename: str, rotation_type: str
@@ -859,6 +944,9 @@ class DialogManager:
         download_button = dialog.addButton(
             "Download Model", QMessageBox.ButtonRole.ActionRole
         )
+        open_models_button = dialog.addButton(
+            "Open Models Folder", QMessageBox.ButtonRole.ActionRole
+        )
         ok_button = dialog.addButton(QMessageBox.StandardButton.Ok)
 
         dialog.setDefaultButton(ok_button)
@@ -869,6 +957,8 @@ class DialogManager:
                     "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"
                 )
             )
+        if open_models_button:
+            open_models_button.clicked.connect(self._open_models_folder)
 
         dialog.exec()
         logger.info("Closed model not found dialog")

@@ -9,34 +9,68 @@ from PyQt6.QtWidgets import (
     QApplication,
     QMessageBox,
 )  # QMessageBox for global exception handler
-from src.ui.main_window import MainWindow
-from src.ui.app_controller import AppController
-from pillow_heif import register_heif_opener
+
+# Ensure the 'src' directory is on sys.path when executing as a script
+SRC_DIR = os.path.dirname(__file__)
+if SRC_DIR and SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from ui.main_window import MainWindow  # noqa: E402
+from ui.app_controller import AppController  # noqa: E402
+from pillow_heif import register_heif_opener  # noqa: E402
 
 
-def load_stylesheet(filename="src/ui/dark_theme.qss"):
-    """Loads an external QSS stylesheet."""
+def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
+    """Load an external QSS stylesheet.
+
+    Works in both source runs and frozen bundles (e.g., PyInstaller) by
+    checking for the temporary extraction directory at runtime.
+    """
     try:
-        # Construct path relative to this script's directory or project root
-        # This assumes main.py is run from the project root directory
-        style_path = os.path.join(
-            os.path.dirname(__file__), "..", filename
-        )  # Go up one level from src
-        style_path = os.path.abspath(style_path)  # Get absolute path
+        # Determine base directory depending on runtime context
+        base_dir: str
+        meipass = getattr(sys, "_MEIPASS", None)  # type: ignore[attr-defined]
+        if meipass:
+            base_dir = meipass  # PyInstaller onefile extraction dir
+        elif getattr(sys, "frozen", False):  # PyInstaller onedir
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # Running from source
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-        if not os.path.exists(style_path):
-            # Fallback if running from src directory itself? Less likely.
-            style_path = filename
-            if not os.path.exists(style_path):
-                logging.warning(f"Stylesheet not found: {filename}")
-                return ""  # Return empty string if not found
+        # Candidate locations, in order of preference
+        candidates = [
+            os.path.join(
+                base_dir, "dark_theme.qss"
+            ),  # we bundle at top-level in frozen builds
+            os.path.join(
+                base_dir, filename
+            ),  # e.g., src/ui/dark_theme.qss inside frozen or source
+            os.path.abspath(
+                filename
+            ),  # direct path from CWD when running from repo root
+        ]
 
-        logging.info(f"Loading stylesheet: {style_path}")
-        with open(style_path, "r") as f:
-            return f.read()
+        for path in candidates:
+            try:
+                if os.path.exists(path) and os.path.isfile(path):
+                    logging.info(f"Loading stylesheet: {path}")
+                    with open(path, "r", encoding="utf-8") as f:
+                        return f.read()
+            except PermissionError as pe:
+                logging.error(
+                    f"Permission denied when reading stylesheet '{path}': {pe}"
+                )
+                continue
+            except Exception as e_inner:
+                logging.error(f"Failed to read stylesheet '{path}': {e_inner}")
+                continue
+
+        logging.warning(f"Stylesheet not found: searched {candidates}")
+        return ""
     except Exception as e:
         logging.error(f"Failed to load stylesheet '{filename}': {e}")
-        return ""  # Return empty on error
+        return ""
 
 
 # --- Global Exception Handler ---
@@ -105,7 +139,26 @@ def main():
     # --- Enable Faulthandler for crash analysis ---
     import faulthandler
 
-    faulthandler.enable()
+    # In GUI builds (PyInstaller -w), sys.stderr can be None; enable to a file in that case
+    try:
+        if sys.stderr is not None:
+            faulthandler.enable()
+        else:
+            try:
+                crash_dir = os.path.join(os.path.expanduser("~"), ".photosort_logs")
+                os.makedirs(crash_dir, exist_ok=True)
+                crash_log_path = os.path.join(crash_dir, "photosort_crash.log")
+                # Keep a global reference to avoid GC closing the file
+                global _FAULTHANDLER_FH  # type: ignore[var-annotated]
+                _FAULTHANDLER_FH = open(
+                    crash_log_path, "a", buffering=1, encoding="utf-8"
+                )
+                faulthandler.enable(file=_FAULTHANDLER_FH)
+                logging.info(f"Faulthandler crash log: {crash_log_path}")
+            except Exception as fe:
+                logging.error(f"Failed to set up faulthandler crash log: {fe}")
+    except Exception:
+        pass
 
     register_heif_opener()
 
@@ -132,15 +185,18 @@ def main():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Create a new stream handler (outputs to console)
-    console_handler = logging.StreamHandler(sys.stderr)  # or sys.stdout
-    console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.DEBUG)  # Set level for console
-    root_logger.addHandler(console_handler)
+    # Create a new stream handler (outputs to console) only if stderr exists
+    if sys.stderr is not None:
+        console_handler = logging.StreamHandler(sys.stderr)  # or sys.stdout
+        console_handler.setFormatter(formatter)
+        console_handler.setLevel(logging.DEBUG)  # Set level for console
+        root_logger.addHandler(console_handler)
 
     # Conditionally create and add a file handler
     enable_file_logging_env = os.environ.get("PHOTOSORT_ENABLE_FILE_LOGGING", "false")
-    if enable_file_logging_env.lower() == "true":
+    # In GUI builds without a console, default to file logging on
+    want_file_logging = enable_file_logging_env.lower() == "true" or sys.stderr is None
+    if want_file_logging:
         try:
             log_file_path = os.path.join(
                 os.path.expanduser("~"), ".photosort_logs", "photosort_app.log"

@@ -5,7 +5,7 @@ from PyQt6.QtGui import QStandardItem, QColor
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 
-from src.ui.helpers.deletion_utils import build_presentation
+from ui.helpers.deletion_utils import build_presentation
 
 
 class DeletionMarkController:

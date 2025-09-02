@@ -7,13 +7,13 @@ from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from PyQt6.QtWidgets import QMenu, QStyle, QWidget, QWidgetAction, QHBoxLayout, QLabel
 
-from src.core.metadata_processor import MetadataProcessor
-from src.core.app_settings import get_recent_folders
+from core.metadata_processor import MetadataProcessor
+from core.app_settings import get_recent_folders
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from src.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
 
 class MenuManager:

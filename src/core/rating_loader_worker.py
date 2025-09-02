@@ -4,10 +4,10 @@ import logging
 from PyQt6.QtCore import QObject, pyqtSignal
 from typing import List, Dict, Any, Optional
 
-from src.core.metadata_processor import MetadataProcessor
-from src.core.caching.rating_cache import RatingCache
-from src.core.app_settings import METADATA_EMIT_BATCH_SIZE
-from src.ui.app_state import AppState
+from core.metadata_processor import MetadataProcessor
+from core.caching.rating_cache import RatingCache
+from core.app_settings import METADATA_EMIT_BATCH_SIZE
+from ui.app_state import AppState
 
 logger = logging.getLogger(__name__)
 
