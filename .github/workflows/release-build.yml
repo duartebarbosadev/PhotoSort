@@ -68,31 +68,16 @@ jobs:
       - name: Generate app icons (platform-specific)
         shell: bash
         run: |
-          python - <<'PY'
-          import os
-          from PIL import Image, ImageDraw
-
-          os.makedirs('build/icons', exist_ok=True)
-          # Create a simple base PNG icon (1024x1024)
-          size = 1024
-          img = Image.new('RGBA', (size, size), (28, 31, 38, 255))
-          d = ImageDraw.Draw(img)
-          pad = size//10
-          d.rounded_rectangle([pad, pad, size-pad, size-pad], radius=size//8, outline=(0, 204, 255, 220), width=size//40)
-          d.ellipse([size*0.35, size*0.35, size*0.65, size*0.65], fill=(0, 204, 255, 220))
-          img.save('build/icons/photosort.png')
-
-          # Windows .ico (multiple sizes)
-          ico_sizes = [16, 24, 32, 48, 64, 128, 256]
-          img.save('build/icons/photosort.ico', sizes=[(s, s) for s in ico_sizes])
-          PY
+          # Use committed assets/app_icon.png
+          mkdir -p assets
 
           if [ "$RUNNER_OS" = "macOS" ]; then
-            mkdir -p build/icons/PhotoSort.iconset
-            python - <<'PY'
+            if [ ! -f assets/photosort.icns ] || [ assets/app_icon.png -nt assets/photosort.icns ]; then
+              mkdir -p build/icons/PhotoSort.iconset
+              python - <<'PY'
           import os
           from PIL import Image
-          base = Image.open('build/icons/photosort.png')
+          base = Image.open('assets/app_icon.png')
           sizes = {
             'icon_16x16.png': 16,
             'icon_16x16@2x.png': 32,
@@ -109,7 +94,8 @@ jobs:
           for name, sz in sizes.items():
             base.resize((sz, sz), Image.LANCZOS).save(os.path.join('build/icons/PhotoSort.iconset', name))
           PY
-            iconutil -c icns build/icons/PhotoSort.iconset -o build/icons/photosort.icns
+              iconutil -c icns build/icons/PhotoSort.iconset -o assets/photosort.icns
+            fi
           fi
 
       - name: Ensure models dir exists
@@ -121,9 +107,10 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           pyinstaller -w --onefile -n PhotoSort `
-            --icon build/icons/photosort.ico `
+            --icon assets/app_icon.ico `
             --paths src `
             --add-data "src/ui/dark_theme.qss;." `
+            --add-data "assets/app_icon.ico;." `
             --hidden-import PyQt6.QtCore `
             --hidden-import PyQt6.QtGui `
             --hidden-import PyQt6.QtWidgets `
@@ -157,9 +144,10 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           pyinstaller -w --name PhotoSort \
-            --icon build/icons/photosort.icns \
+            --icon assets/photosort.icns \
             --paths src \
             --add-data src/ui/dark_theme.qss:. \
+            --add-data assets/app_icon.ico:. \
             --hidden-import PyQt6.QtCore \
             --hidden-import PyQt6.QtGui \
             --hidden-import PyQt6.QtWidgets \
