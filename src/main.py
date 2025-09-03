@@ -128,23 +128,22 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
             f"Unhandled exception caught (QApplication not available):\n{error_message_details}"
         )
 
-    # Python will typically terminate after an unhandled exception and its excepthook.
-
-
-# --- End Global Exception Handler ---
-
 
 # --- App identity helpers (icon + Windows taskbar identity) ---
 def _set_windows_app_id(app_id: str = "DuarteBarbosa.PhotoSort") -> None:
-    """Set explicit AppUserModelID so Windows taskbar/pinned icon uses our app icon."""
+    """Set explicit AppUserModelID so Windows taskbar/pinned icon uses the app icon."""
     if sys.platform.startswith("win"):
         try:
             import ctypes
 
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(  # type: ignore[attr-defined]
-                app_id
-            )
-            logging.debug(f"Windows AppUserModelID set: {app_id}")
+            func = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+            func.argtypes = [ctypes.c_wchar_p]
+            func.restype = ctypes.c_long  # HRESULT
+            hr = func(app_id)
+            if hr != 0:  # S_OK == 0
+                logging.warning(
+                    f"SetCurrentProcessExplicitAppUserModelID failed, HRESULT=0x{hr & 0xFFFFFFFF:08X}"
+                )
         except Exception as e_appid:
             logging.warning(f"Failed to set Windows AppUserModelID: {e_appid}")
 
@@ -152,7 +151,7 @@ def _set_windows_app_id(app_id: str = "DuarteBarbosa.PhotoSort") -> None:
 def _resolve_app_icon_path() -> str:
     """Resolve the best path to the app icon across source and PyInstaller runs."""
     try:
-        meipass = getattr(sys, "_MEIPASS", None)  # type: ignore[attr-defined]
+        meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
             return os.path.join(meipass, "app_icon.ico")
         if getattr(sys, "frozen", False):
@@ -327,14 +326,6 @@ def main():
     logging.debug(
         f"MainWindow shown in {time.perf_counter() - window_show_start_time:.4f}s"
     )
-
-    # Clear caches on exit
-    # app.aboutToQuit.connect(clear_application_caches) # Prevent clearing caches on exit for persistence
-    # logging.info("Application main - aboutToQuit connection to clear_application_caches SKIPPED for persistence")
-
-    # --- Stop ExifTool Process on Exit ---
-    # Ensure clean shutdown (if using persistent handler)
-    # app.aboutToQuit.connect(RatingHandler.stop_exiftool) # Uncomment if using persistent handler
 
     logging.info(
         f"Application setup complete in {time.perf_counter() - main_start_time:.4f}s. Entering event loop."
