@@ -130,7 +130,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 
 
 # --- App identity helpers (icon + Windows taskbar identity) ---
-def _set_windows_app_id(app_id: str = "DuarteBarbosa.PhotoSort") -> None:
+def _set_windows_app_id(app_id: str = "PhotoSort") -> None:
     """Set explicit AppUserModelID so Windows taskbar/pinned icon uses the app icon."""
     if sys.platform.startswith("win"):
         try:
