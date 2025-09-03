@@ -30,7 +30,7 @@ class ReleaseNotesGenerator:
         # The OpenAI client reads org/project from env if present
         self.client = OpenAI(api_key=api_key)
         # Allow override via env OPENAI_MODEL; default to a cost-effective model
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")
 
     @staticmethod
     def _sanitize_notes(text: str, repo_url: Optional[str]) -> str:
