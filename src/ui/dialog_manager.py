@@ -313,6 +313,8 @@ class DialogManager:
         dialog.setObjectName("lossyRotationDialog")
         dialog.setModal(True)
         dialog.setFixedSize(480, 200)
+        # Frameless window for fancy UI
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
         layout = QVBoxLayout(dialog)
         layout.setSpacing(20)
@@ -373,6 +375,8 @@ class DialogManager:
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Cache Management")
         dialog.setObjectName("cacheManagementDialog")
+        # Frameless window for fancy UI
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
         main_layout = QVBoxLayout(dialog)
         main_layout.setSpacing(15)
 
@@ -553,6 +557,8 @@ class DialogManager:
         dialog.setObjectName("deleteConfirmationDialog")
         dialog.setModal(True)
         dialog.setMinimumSize(600, 450)
+        # Frameless window for fancy UI
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(15, 15, 15, 15)
@@ -703,7 +709,19 @@ class DialogManager:
             "Consider increasing the 'Preview Image Cache' size in "
             "Settings > Manage Cache for a smoother experience, or select a smaller folder."
         )
-        QMessageBox.warning(self.parent, "Potential Cache Overflow", warning_msg)
+
+        # Replace static call with an instance to apply frameless styling
+        warn_box = QMessageBox(self.parent)
+        warn_box.setIcon(QMessageBox.Icon.Warning)
+        warn_box.setWindowTitle("Potential Cache Overflow")
+        warn_box.setText(warning_msg)
+        warn_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        warn_box.setDefaultButton(QMessageBox.StandardButton.Ok)
+        # Frameless window for fancy UI
+        warn_box.setWindowFlags(
+            warn_box.windowFlags() | Qt.WindowType.FramelessWindowHint
+        )
+        warn_box.exec()
         logger.info("Closed potential cache overflow warning dialog")
 
     def show_commit_deletions_dialog(self, marked_files: List[str]) -> bool:
@@ -801,6 +819,8 @@ class DialogManager:
         dialog.setObjectName("closeConfirmationDialog")
         dialog.setModal(True)
         dialog.setMinimumSize(500, 300)
+        # Frameless window for fancy UI
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -924,6 +944,8 @@ class DialogManager:
         dialog = QMessageBox(self.parent)
         dialog.setWindowTitle("Rotation Model Not Found")
         dialog.setIcon(QMessageBox.Icon.Warning)
+        # Frameless window for fancy UI
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
         text = (
             f"The automatic rotation feature requires a model file that was not found at:\n"

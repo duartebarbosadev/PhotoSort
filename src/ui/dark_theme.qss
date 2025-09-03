@@ -9,6 +9,14 @@ QWidget {
     border: none; /* Remove default borders globally */
 }
 
+/* Generic Dialog Fallback (frameless windows need a soft border) */
+QDialog {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #272727);
+    border: 1px solid #444A50; /* Subtle neutral border for all dialogs */
+    border-radius: 10px;
+}
+
 QMainWindow {
     background-color: #202020; /* Darkest background for the window frame */
 }
@@ -1232,6 +1240,82 @@ QDialog#lossyRotationDialog {
     border-radius: 8px;
 }
 
+/* --- Delete Confirmation Dialog (custom QDialog) --- */
+QDialog#deleteConfirmationDialog {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #272727);
+    border: 2px solid #DC3545; /* Danger accent */
+    border-radius: 12px;
+}
+
+QDialog#deleteConfirmationDialog QLabel#deleteDialogTitle {
+    color: #FF7A86;
+    font-weight: bold;
+}
+
+QDialog#deleteConfirmationDialog QLabel#deleteDialogInfo {
+    color: #C8C8C8;
+}
+
+QDialog#deleteConfirmationDialog QPushButton#deleteDialogCancelButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #383838, stop: 1 #303030);
+    color: #E0E0E0;
+    border: 1px solid #484848;
+    border-radius: 6px;
+}
+
+QDialog#deleteConfirmationDialog QPushButton#deleteDialogCancelButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #454545, stop: 1 #3C3C3C);
+    color: #FFFFFF;
+}
+
+QDialog#deleteConfirmationDialog QPushButton#deleteDialogConfirmButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #DC3545, stop: 1 #B02A37);
+    color: #FFFFFF;
+    border: 1px solid #B02A37;
+    font-weight: bold;
+    border-radius: 6px;
+}
+
+QDialog#deleteConfirmationDialog QPushButton#deleteDialogConfirmButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #E85362, stop: 1 #C73E4A);
+}
+
+/* --- Close Confirmation Dialog (custom QDialog) --- */
+QDialog#closeConfirmationDialog {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #272727);
+    border: 2px solid #0084FF; /* Primary accent */
+    border-radius: 12px;
+}
+
+QDialog#closeConfirmationDialog QLabel#closeDialogTitle {
+    color: #0084FF;
+    font-weight: bold;
+}
+
+QDialog#closeConfirmationDialog QPushButton#closeDialogCancelButton,
+QDialog#closeConfirmationDialog QPushButton#closeDialogIgnoreButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #383838, stop: 1 #303030);
+    color: #E0E0E0;
+    border: 1px solid #484848;
+    border-radius: 6px;
+}
+
+QDialog#closeConfirmationDialog QPushButton#closeDialogCommitButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0084FF, stop: 1 #0066CC);
+    color: #FFFFFF;
+    border: 1px solid #005A9E;
+    border-radius: 6px;
+    font-weight: bold;
+}
+
 QLabel#lossyRotationMessageLabel {
     color: #E5E5E5;
     font-size: 11pt;
@@ -1308,14 +1392,14 @@ QPushButton#lossyRotationProceedButton:pressed {
     background-color: #E67A35;
 }
 
-/* --- Confirm Delete Dialog (QMessageBox) --- */
+/* --- Default Message Boxes --- */
 QMessageBox {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
         stop: 0 #2D2D2D, stop: 1 #272727);
     color: #E0E0E0;
     font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     font-size: 9pt;
-    border: 2px solid #DC3545;
+    border: 2px solid #666C72; /* Neutral border for all QMessageBoxes */
     border-radius: 12px;
 }
 
