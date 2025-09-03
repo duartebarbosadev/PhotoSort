@@ -24,19 +24,19 @@ class TestReleaseNotesGenerator(unittest.TestCase):
         # Test with some commit data
         commits = [
             {
-                'hash': 'abc123456789',
-                'subject': 'Add new feature',
-                'body': '',
-                'pr_number': '123',
-                'pr_title': 'Add new feature'
+                "hash": "abc123456789",
+                "subject": "Add new feature",
+                "body": "",
+                "pr_number": "123",
+                "pr_title": "Add new feature",
             },
             {
-                'hash': 'def456789012',
-                'subject': 'Fix bug in image processing',
-                'body': '',
-                'pr_number': None,
-                'pr_title': None
-            }
+                "hash": "def456789012",
+                "subject": "Fix bug in image processing",
+                "body": "",
+                "pr_number": None,
+                "pr_title": None,
+            },
         ]
         result = generator._create_fallback_notes_from_commits(commits, "v1.0.0")
 
@@ -92,22 +92,22 @@ class TestReleaseNotesGenerator(unittest.TestCase):
         subject = "Merge pull request #123 from feature/new-ui"
         body = "Add new user interface components\n\nImprove user experience"
         pr_info = generator._extract_pr_info(subject, body)
-        self.assertEqual(pr_info['number'], '123')
-        self.assertEqual(pr_info['title'], 'Add new user interface components')
+        self.assertEqual(pr_info["number"], "123")
+        self.assertEqual(pr_info["title"], "Add new user interface components")
 
         # Test PR number in parentheses
         subject = "Add new feature (#456)"
         body = ""
         pr_info = generator._extract_pr_info(subject, body)
-        self.assertEqual(pr_info['number'], '456')
-        self.assertEqual(pr_info['title'], 'Add new feature')
+        self.assertEqual(pr_info["number"], "456")
+        self.assertEqual(pr_info["title"], "Add new feature")
 
         # Test no PR information
         subject = "Fix typo in documentation"
         body = ""
         pr_info = generator._extract_pr_info(subject, body)
-        self.assertIsNone(pr_info['number'])
-        self.assertIsNone(pr_info['title'])
+        self.assertIsNone(pr_info["number"])
+        self.assertIsNone(pr_info["title"])
 
     @patch("subprocess.run")
     def test_get_commits_with_pr_info(self, mock_run):
@@ -125,22 +125,22 @@ Fixed memory leak that occurred during batch processing===COMMIT_SEPARATOR==="""
         commits = generator.get_commits_with_pr_info("v1.0.0", "v1.0.1")
 
         self.assertEqual(len(commits), 3)
-        
+
         # Check first commit
-        self.assertEqual(commits[0]['hash'], 'abc123456789')
-        self.assertEqual(commits[0]['subject'], 'Add new feature (#123)')
-        self.assertEqual(commits[0]['pr_number'], '123')
-        self.assertEqual(commits[0]['pr_title'], 'Add new feature')
-        
+        self.assertEqual(commits[0]["hash"], "abc123456789")
+        self.assertEqual(commits[0]["subject"], "Add new feature (#123)")
+        self.assertEqual(commits[0]["pr_number"], "123")
+        self.assertEqual(commits[0]["pr_title"], "Add new feature")
+
         # Check second commit (no PR)
-        self.assertEqual(commits[1]['hash'], 'def456789012')
-        self.assertEqual(commits[1]['subject'], 'Fix bug in processing')
-        self.assertIsNone(commits[1]['pr_number'])
-        
+        self.assertEqual(commits[1]["hash"], "def456789012")
+        self.assertEqual(commits[1]["subject"], "Fix bug in processing")
+        self.assertIsNone(commits[1]["pr_number"])
+
         # Check third commit (merge PR)
-        self.assertEqual(commits[2]['hash'], 'ghi789012345')
-        self.assertEqual(commits[2]['pr_number'], '456')
-        self.assertEqual(commits[2]['pr_title'], 'Fix memory leak in image loader')
+        self.assertEqual(commits[2]["hash"], "ghi789012345")
+        self.assertEqual(commits[2]["pr_number"], "456")
+        self.assertEqual(commits[2]["pr_title"], "Fix memory leak in image loader")
 
 
 if __name__ == "__main__":
