@@ -102,16 +102,11 @@ class TestReleaseNotesGenerator(unittest.TestCase):
     @patch("subprocess.run")
     def test_get_commits_with_pr_info(self, mock_run):
         """Test getting commits with PR information."""
-        mock_output = (
-            "abc123456789|Add new feature (#123)|Implement new UI components"
-            "===COMMIT_SEPARATOR==="
-            "def456789012|Fix bug in processing|Fix issue with image processing"
-            "===COMMIT_SEPARATOR==="
-            "ghi789012345|Merge pull request #456 from fix/memory-leak|Fix memory leak in image loader\n\n"
-            "Fixed memory leak that occurred during batch processing"
-            "===COMMIT_SEPARATOR==="
-        )
+        mock_output = """abc123456789|Add new feature (#123)|Implement new UI components===COMMIT_SEPARATOR===
+def456789012|Fix bug in processing|Fix issue with image processing===COMMIT_SEPARATOR===
+ghi789012345|Merge pull request #456 from fix/memory-leak|Fix memory leak in image loader
 
+Fixed memory leak that occurred during batch processing===COMMIT_SEPARATOR==="""
         mock_run.return_value.stdout = mock_output
         mock_run.return_value.returncode = 0
 
