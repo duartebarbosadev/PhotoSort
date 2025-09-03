@@ -44,7 +44,7 @@ jobs:
           echo "Generating release notes for tag: $TAG_NAME"
           
           # Generate release notes and save to file
-          python scripts/generate_release_notes.py "$TAG_NAME" --output /tmp/release_notes.md
+          python .github/scripts/generate_release_notes.py "$TAG_NAME" --output /tmp/release_notes.md
           
           # Read the generated notes for GitHub API
           RELEASE_NOTES=$(cat /tmp/release_notes.md)
