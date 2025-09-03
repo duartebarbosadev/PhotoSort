@@ -121,9 +121,10 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           pyinstaller -w --onefile -n PhotoSort `
-            --icon build/icons/photosort.ico `
+            --icon assets/app_icon.ico `
             --paths src `
             --add-data "src/ui/dark_theme.qss;." `
+            --add-data "assets/app_icon.ico;." `
             --hidden-import PyQt6.QtCore `
             --hidden-import PyQt6.QtGui `
             --hidden-import PyQt6.QtWidgets `
@@ -160,6 +161,7 @@ jobs:
             --icon build/icons/photosort.icns \
             --paths src \
             --add-data src/ui/dark_theme.qss:. \
+            --add-data assets/app_icon.ico:. \
             --hidden-import PyQt6.QtCore \
             --hidden-import PyQt6.QtGui \
             --hidden-import PyQt6.QtWidgets \

@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QMessageBox,
 )  # QMessageBox for global exception handler
+from PyQt6.QtGui import QIcon
 
 # Ensure the 'src' directory is on sys.path when executing as a script
 SRC_DIR = os.path.dirname(__file__)
@@ -131,6 +132,56 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 
 
 # --- End Global Exception Handler ---
+
+
+# --- App identity helpers (icon + Windows taskbar identity) ---
+def _set_windows_app_id(app_id: str = "DuarteBarbosa.PhotoSort") -> None:
+    """Set explicit AppUserModelID so Windows taskbar/pinned icon uses our app icon."""
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(  # type: ignore[attr-defined]
+                app_id
+            )
+            logging.debug(f"Windows AppUserModelID set: {app_id}")
+        except Exception as e_appid:
+            logging.warning(f"Failed to set Windows AppUserModelID: {e_appid}")
+
+
+def _resolve_app_icon_path() -> str:
+    """Resolve the best path to the app icon across source and PyInstaller runs."""
+    try:
+        meipass = getattr(sys, "_MEIPASS", None)  # type: ignore[attr-defined]
+        if meipass:
+            return os.path.join(meipass, "app_icon.ico")
+        if getattr(sys, "frozen", False):
+            return os.path.join(os.path.dirname(sys.executable), "app_icon.ico")
+        return os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.ico"
+        )
+    except Exception:
+        return ""
+
+
+def apply_app_identity(app: QApplication, main_window=None) -> None:
+    """Apply Windows AppID and set icons on app and optionally the main window."""
+    _set_windows_app_id()
+    try:
+        icon_path = _resolve_app_icon_path()
+        if icon_path and os.path.exists(icon_path):
+            icon = QIcon(icon_path)
+            app.setWindowIcon(icon)
+            if main_window is not None:
+                try:
+                    main_window.setWindowIcon(icon)
+                except Exception:
+                    pass
+            logging.debug(f"Application icon set from: {icon_path}")
+        else:
+            logging.warning(f"Application icon not found at: {icon_path}")
+    except Exception as e:
+        logging.error(f"Failed to apply application icon: {e}")
 
 
 def main():
@@ -266,6 +317,7 @@ def main():
 
     mainwindow_instantiation_start_time = time.perf_counter()
     window = MainWindow(initial_folder=args.folder)
+    apply_app_identity(app, window)
     logging.debug(
         f"MainWindow instantiated in {time.perf_counter() - mainwindow_instantiation_start_time:.4f}s"
     )
