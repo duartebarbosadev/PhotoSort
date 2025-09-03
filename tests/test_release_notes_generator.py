@@ -137,9 +137,9 @@ Fixed memory leak that occurred during batch processing===COMMIT_SEPARATOR==="""
         """Ensure '#<sha>' becomes '<sha>' (no change to '#123')."""
         txt = "Fixes in commit #f525c01 and references #29 for the PR."
         sanitized = self.generator._sanitize_notes(txt, repo_url=None)
-        self.assertIn("f525c01", sanitized)         # sha without '#'
-        self.assertNotIn("#f525c01", sanitized)     # removed '#'
-        self.assertIn("#29", sanitized)             # PR reference remains
+        self.assertIn("f525c01", sanitized)  # sha without '#'
+        self.assertNotIn("#f525c01", sanitized)  # removed '#'
+        self.assertIn("#29", sanitized)  # PR reference remains
 
     def test_sanitize_notes_links_shas_when_repo_known(self):
         """Bare SHAs are auto-linked to /commit/<sha> when repo_url is provided."""
