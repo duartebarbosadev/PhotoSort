@@ -3,6 +3,7 @@ name: Generate Release Notes
 "on":
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -39,8 +40,19 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          # Extract tag name from GitHub ref
-          TAG_NAME="${{ github.event.release.tag_name }}"
+          # Determine tag name based on trigger type
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # Triggered by release event
+            TAG_NAME="${{ github.event.release.tag_name }}"
+          else
+            # Manually triggered - get the latest release tag
+            TAG_NAME=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -z "$TAG_NAME" ]; then
+              echo "Error: No tags found in repository. Please create a release first."
+              exit 1
+            fi
+          fi
+          
           echo "Generating release notes for tag: $TAG_NAME"
           
           # Generate release notes and save to file
@@ -56,6 +68,9 @@ jobs:
           echo "notes<<EOF" >> $GITHUB_OUTPUT
           echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          
+          # Store tag name for next step
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
       
       - name: Update release with generated notes
         uses: actions/github-script@v7
@@ -63,12 +78,34 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const releaseNotes = `${{ steps.generate_notes.outputs.notes }}`;
+            const tagName = `${{ steps.generate_notes.outputs.tag_name }}`;
             
             try {
+              let releaseId;
+              
+              if (context.eventName === 'release') {
+                // Triggered by release event
+                releaseId = context.payload.release.id;
+              } else {
+                // Manually triggered - find the release by tag
+                const releases = await github.rest.repos.listReleases({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  per_page: 100
+                });
+                
+                const release = releases.data.find(r => r.tag_name === tagName);
+                if (!release) {
+                  console.error(`Release not found for tag: ${tagName}`);
+                  return;
+                }
+                releaseId = release.id;
+              }
+              
               await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                release_id: context.payload.release.id,
+                release_id: releaseId,
                 body: releaseNotes
               });
               
@@ -82,6 +119,6 @@ jobs:
       - name: Upload release notes as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-notes-${{ github.event.release.tag_name }}
+          name: release-notes-${{ steps.generate_notes.outputs.tag_name }}
           path: /tmp/release_notes.md
           retention-days: 30
