@@ -72,7 +72,7 @@ jobs:
           mkdir -p assets
 
           if [ "$RUNNER_OS" = "macOS" ]; then
-            if [ ! -f assets/photosort.icns ]; then
+            if [ ! -f assets/photosort.icns ] || [ assets/app_icon.png -nt assets/photosort.icns ]; then
               mkdir -p build/icons/PhotoSort.iconset
               python - <<'PY'
           import os
