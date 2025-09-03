@@ -4,3 +4,6 @@
 pytest
 pytest-cov
 ruff
+
+# CI-specific dependencies
+openai
