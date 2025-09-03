@@ -229,18 +229,19 @@ class ReleaseNotesGenerator:
         prompt = f"""
 You are a technical writer creating release notes for a desktop photo management application called PhotoSort.
 
-Based on the following git changes for release {tag_name}, write comprehensive release notes in markdown.
+Based on the following git changes for release {tag_name}, write comprehensive release notes in markdown format.
 
 Commits in this release:
+```
 {commits_text}
+```
 {pr_section}
 
-Formatting rules (very important):
+Formatting rules:
 - Use '#123' only for issues/PRs.
 - Never prefix commit SHAs with '#'. Write them as short SHAs (e.g., f525c01).
-- Do not wrap the entire response in a code block.
 
-Please:
+Please create release notes that:
 1) Start with a brief summary of the release
 2) Group changes into categories like:
    - 🚀 New Features
@@ -249,7 +250,11 @@ Please:
    - ⚠️ Breaking Changes (if any)
    - 📚 Documentation
    - 🏗️ Technical Changes
-3) Use clear, user-friendly language and include PR references where available.
+3. Use clear, user-friendly language
+4. Focus on user-visible changes
+5. Include PR references where available (e.g., "Enhanced UI (#123)")
+6. Keep technical details concise but informative
+Format the response as clean markdown without code blocks around the entire response.
 """
 
         try:
@@ -263,7 +268,7 @@ Please:
                     {"role": "user", "content": prompt},
                 ],
                 max_tokens=2000,
-                temperature=0.3,
+                #temperature=0.3,
             )
             return response.choices[0].message.content.strip()
 
