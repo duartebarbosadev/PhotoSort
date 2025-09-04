@@ -1,4 +1,3 @@
-import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 from src.ui.controllers.preview_controller import PreviewController
 
 

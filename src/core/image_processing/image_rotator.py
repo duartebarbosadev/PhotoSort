@@ -4,12 +4,12 @@ import subprocess
 import tempfile
 from typing import Literal, Tuple
 from PIL import Image, ImageOps
-import pyexiv2
 from pathlib import Path
 from core.image_file_ops import ImageFileOperations
 from core.app_settings import JPEGTRAN_TIMEOUT_SECONDS
 import piexif  # For EXIF manipulation with Pillow
 from pillow_heif import HeifImageFile  # For HEIF/HEIC support
+from xml.etree import ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class ImageRotator:
             return False
 
     def _get_current_orientation(self, image_path: str) -> int:
-        """Get current EXIF orientation value (1-8, default 1)."""
+        """Get current orientation (prefers EXIF; falls back to sidecar XMP)."""
         file_ext = os.path.splitext(image_path)[1].lower()
 
         if file_ext in self._LOSSLESS_HEIF_FORMATS:
@@ -97,19 +97,80 @@ class ImageRotator:
                 logger.warning(
                     f"Could not read HEIF/HEIC orientation from '{os.path.basename(image_path)}': {e}"
                 )
-            return 1  # Default if pillow-heif fails or no EXIF
-
+        # Fall back after HEIF path
+        # Try EXIF via piexif direct file load
         try:
-            with pyexiv2.Image(image_path, encoding="utf-8") as img:
-                exif_data = img.read_exif()
-                orientation = exif_data.get("Exif.Image.Orientation")
-                if orientation:
-                    return int(orientation)
+            exif_dict = piexif.load(image_path)
+            val = exif_dict["0th"].get(piexif.ImageIFD.Orientation)
+            if val:
+                return int(val)
+        except Exception:
+            pass
+        # Fallback: Pillow getexif
+        try:
+            with Image.open(image_path) as im:
+                exif = im.getexif()
+                if exif:
+                    val = exif.get(274)
+                    if val:
+                        return int(val)
         except Exception as e:
-            logger.warning(
-                f"Could not read EXIF orientation from '{os.path.basename(image_path)}': {e}"
+            logger.debug(
+                f"Pillow EXIF orientation read failed for '{os.path.basename(image_path)}': {e}"
             )
-        return 1  # Default orientation (no rotation)
+        # Final fallback: sidecar XMP
+        sidecar_ori = self._read_sidecar_orientation(image_path)
+        if sidecar_ori is not None:
+            return sidecar_ori
+        return 1
+
+    def _sidecar_xmp_path(self, image_path: str) -> str:
+        return f"{image_path}.xmp"
+
+    def _read_sidecar_orientation(self, image_path: str) -> int | None:
+        """Read tiff:Orientation from XMP sidecar if present."""
+        xmp_path = self._sidecar_xmp_path(image_path)
+        if not os.path.isfile(xmp_path):
+            return None
+        try:
+            tree = ET.parse(xmp_path)
+            root = tree.getroot()
+            ns = {
+                "x": "adobe:ns:meta/",
+                "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+                "tiff": "http://ns.adobe.com/tiff/1.0/",
+            }
+            for elem in root.findall(".//tiff:Orientation", ns):
+                try:
+                    return int(elem.text) if elem.text else None
+                except Exception:
+                    return None
+        except Exception:
+            return None
+
+    def _write_sidecar_orientation(self, image_path: str, orientation: int) -> bool:
+        """Write minimal XMP sidecar with tiff:Orientation."""
+        xmp_path = self._sidecar_xmp_path(image_path)
+        content = (
+            '<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
+            '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+            '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+            '    <rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/">\n'
+            f"      <tiff:Orientation>{int(orientation)}</tiff:Orientation>\n"
+            "    </rdf:Description>\n"
+            "  </rdf:RDF>\n"
+            "</x:xmpmeta>\n"
+            '<?xpacket end="w"?>\n'
+        )
+        try:
+            with open(xmp_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to write XMP sidecar orientation for '{os.path.basename(image_path)}': {e}"
+            )
+            return False
 
     def _calculate_new_orientation(
         self, current_orientation: int, direction: RotationDirection
@@ -270,66 +331,53 @@ class ImageRotator:
 
     def _update_xmp_orientation(self, image_path: str, new_orientation: int) -> bool:
         """
-        Update XMP orientation metadata in the image file.
-        This ensures proper orientation handling by applications that support XMP.
-        Prioritizes pyexiv2, but uses pillow-heif for HEIF/HEIC.
+        Update orientation metadata.
+        - For HEIF/HEIC: update EXIF orientation losslessly via pillow-heif + piexif.
+        - For JPEG/TIFF: set EXIF orientation via piexif.
+        - For other formats (RAW/PNG/BMP): write XMP sidecar with tiff:Orientation.
         """
         file_ext = os.path.splitext(image_path)[1].lower()
 
         if file_ext in self._LOSSLESS_HEIF_FORMATS:
             # Use pillow-heif for HEIF/HEIC metadata update
             return self._update_heif_orientation_lossless(image_path, new_orientation)
-
-        pyexiv2_success = False
-        try:
-            with pyexiv2.Image(image_path, encoding="utf-8") as img:
-                # Update EXIF orientation
+        # JPEG/TIFF via piexif
+        if file_ext in self._LOSSLESS_JPEG_FORMATS or file_ext in {".tif", ".tiff"}:
+            try:
+                exif_dict = piexif.load(image_path)
+                exif_dict["0th"][piexif.ImageIFD.Orientation] = int(new_orientation)
+                piexif.insert(piexif.dump(exif_dict), image_path)
+                logger.info(
+                    "Orientation metadata for '%s' updated to %d.",
+                    os.path.basename(image_path),
+                    new_orientation,
+                )
+                return True
+            except Exception:
+                # Fallback using Pillow save with exif bytes if available
                 try:
-                    img.modify_exif({"Exif.Image.Orientation": str(new_orientation)})
-                    logger.debug(
-                        f"Updated EXIF orientation for {os.path.basename(image_path)} using pyexiv2."
-                    )
-                    pyexiv2_success = True
+                    with Image.open(image_path) as im:
+                        info = im.info.copy()
+                        exif_bytes = info.get("exif")
+                        if exif_bytes:
+                            exif_dict = piexif.load(exif_bytes)
+                            exif_dict["0th"][piexif.ImageIFD.Orientation] = int(
+                                new_orientation
+                            )
+                            new_exif = piexif.dump(exif_dict)
+                            im.save(image_path, exif=new_exif)
+                            logger.info(
+                                "Orientation metadata for '%s' updated to %d (via Pillow save).",
+                                os.path.basename(image_path),
+                                new_orientation,
+                            )
+                            return True
                 except Exception as e:
                     logger.warning(
-                        f"pyexiv2 could not update EXIF orientation for '{os.path.basename(image_path)}': {e}"
+                        f"Pillow EXIF orientation update failed for '{os.path.basename(image_path)}': {e}"
                     )
-
-                # Try to set XMP orientation if the format typically supports it via pyexiv2
-                if file_ext in self._XMP_UPDATE_SUPPORTED_EXTENSIONS:
-                    try:
-                        # Check if image already has XMP data or if it's a JPEG (which can always get XMP)
-                        xmp_data = img.read_xmp()
-                        if xmp_data or file_ext in [".jpg", ".jpeg"]:
-                            img.modify_xmp(
-                                {"Xmp.tiff.Orientation": str(new_orientation)}
-                            )
-                            logger.debug(
-                                f"Updated XMP orientation for {os.path.basename(image_path)} using pyexiv2."
-                            )
-                            pyexiv2_success = True
-                    except Exception as e:
-                        logger.debug(
-                            f"pyexiv2 XMP orientation not updated for '{os.path.basename(image_path)}': {e}"
-                        )
-
-        except Exception as e:
-            logger.warning(
-                f"pyexiv2 could not process '{os.path.basename(image_path)}' for metadata update: {e}"
-            )
-
-        if pyexiv2_success:
-            logger.info(
-                "Orientation metadata for '%s' updated to %d.",
-                os.path.basename(image_path),
-                new_orientation,
-            )
-            return True
-        else:
-            logger.warning(
-                f"Failed to update orientation metadata for '{os.path.basename(image_path)}' using pyexiv2."
-            )
-            return False
+        # Other formats -> sidecar XMP
+        return self._write_sidecar_orientation(image_path, new_orientation)
 
     def _update_heif_orientation_lossless(
         self, image_path: str, new_orientation: int

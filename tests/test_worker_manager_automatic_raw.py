@@ -5,7 +5,6 @@ This module tests that the WorkerManager correctly handles the updated
 file scanning interface without apply_auto_edits parameters.
 """
 
-import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 import inspect
 from unittest.mock import Mock, patch
 from src.ui.worker_manager import WorkerManager

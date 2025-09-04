@@ -1,4 +1,3 @@
-import pyexiv2  # noqa: F401  # This must be the first import or else it will cause a silent crash on windows
 import sys
 import os
 import logging

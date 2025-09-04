@@ -152,7 +152,6 @@ class DialogManager:
         tech_layout.setContentsMargins(15, 10, 15, 10)
 
         clustering_info = "Clustering Algorithm: DBSCAN (scikit-learn)"
-        # Get ONNX provider information
         try:
             model_detector = ModelRotationDetector()
             # Lazy detector exposes provider via internal state after load attempt
@@ -169,7 +168,7 @@ class DialogManager:
             f"🧠 Embeddings: SentenceTransformer (CLIP) on {'GPU (CUDA)' if is_pytorch_cuda_available() else 'CPU'}",
             f"🤖 Rotation Model: ONNX Runtime on {onnx_provider}",
             f"🔍 {clustering_info}",
-            "📋 Metadata: pyexiv2 • 🎨 Interface: PyQt6 • 🐍 Runtime: Python",
+            "📋 Metadata: Pillow/piexif • 🎨 Interface: PyQt6 • 🐍 Runtime: Python",
         ]
 
         for item in tech_items:

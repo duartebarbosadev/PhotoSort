@@ -425,7 +425,7 @@ class MetadataSidebar(QWidget):
             if fmt == "aperture":
                 # logger.debug(f"Formatting aperture. Value: '{value}', Type: {type(value)}")
                 try:
-                    # Handle objects with numerator/denominator (like pyexiv2.Rational)
+                    # Handle objects with numerator/denominator (e.g., rational values)
                     if hasattr(value, "numerator") and hasattr(value, "denominator"):
                         # logger.debug("Aperture is a Rational-like object.")
                         if value.denominator == 0:
@@ -890,7 +890,7 @@ class MetadataSidebar(QWidget):
 
         card = MetadataCard("Camera & Settings", "📷")
 
-        # Check if we have any camera-related metadata using pyexiv2 format
+        # Check if we have any camera-related metadata using legacy-style keys
         make = (
             self.raw_metadata.get("Exif.Image.Make")
             or self.raw_metadata.get("Xmp.tiff.Make")
@@ -934,7 +934,7 @@ class MetadataSidebar(QWidget):
 
         # Only show lens and camera settings if we have camera data
         if make or model:
-            # Lens information - check pyexiv2 format first
+            # Lens information - check legacy-style keys first
             lens = (
                 self.raw_metadata.get("Exif.Photo.LensModel")
                 or self.raw_metadata.get("Exif.Photo.LensSpecification")
@@ -947,7 +947,7 @@ class MetadataSidebar(QWidget):
             if lens:
                 card.add_info_row("Lens", lens)
 
-            # Capture settings - check pyexiv2 format first
+            # Capture settings - check legacy-style keys first
             focal_length = (
                 self.raw_metadata.get("Exif.Photo.FocalLength")
                 or self.raw_metadata.get("FocalLength")
@@ -1128,7 +1128,7 @@ class MetadataSidebar(QWidget):
         """Add image properties card"""
         card = MetadataCard("Image Properties", "🖼️")
 
-        # Dimensions - try multiple possible tag names, pyexiv2 format first
+        # Dimensions - try multiple possible tag names, legacy-style keys first
         width = (
             self.raw_metadata.get("pixel_width")  # From basic metadata
             or self.raw_metadata.get("Exif.Photo.PixelXDimension")

@@ -115,7 +115,8 @@ jobs:
             --hidden-import PyQt6.QtGui `
             --hidden-import PyQt6.QtWidgets `
             --hidden-import rawpy `
-            --hidden-import pyexiv2 `
+            --hidden-import pillow_heif `
+            --hidden-import piexif `
             --hidden-import cv2 `
             --hidden-import onnxruntime `
             --hidden-import torchvision `
@@ -152,7 +153,8 @@ jobs:
             --hidden-import PyQt6.QtGui \
             --hidden-import PyQt6.QtWidgets \
             --hidden-import rawpy \
-            --hidden-import pyexiv2 \
+            --hidden-import pillow_heif \
+            --hidden-import piexif \
             --hidden-import cv2 \
             --hidden-import onnxruntime \
             --hidden-import torchvision \

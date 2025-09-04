@@ -8,7 +8,6 @@ torch
 diskcache
 send2trash
 opencv-python
-pyexiv2
 piexif
 onnxruntime
 torchvision

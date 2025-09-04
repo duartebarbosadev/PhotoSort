@@ -179,8 +179,6 @@ Guidelines for new tests:
 2. Use non-blocking dialog patterns (`block=False`) where modal exec would hang CI.
 3. Skip GUI-heavy tests gracefully when prerequisites (sample assets, GPU libs) are missing instead of failing.
 4. When asserting selection advancement, test the helper function directly with synthetic path lists—only one integration test should cover the end-to-end GUI path.
-5. **Critical Windows Testing Requirement**: All test files must start with `import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2` to prevent access violations in the native library. This import must be the very first import in every test file.
-
 
 ## 7. Adding New Image Feature Pipelines
 
@@ -220,7 +218,6 @@ When adding new controllers, follow the listed Extension Pattern to maintain con
 | Rotation view crashes due to empty model | Guard with early returns; tests should skip rather than fail |
 | Adding file operations outside `ImageFileOperations` | Refactor into `ImageFileOperations` to centralize side effects |
 | Blocking modal dialogs in CI | Use `block=False` in tests, keep blocking in production UI |
-| Test suite fails with Windows access violations | Ensure every test file starts with `import pyexiv2` as the first import |
 | RAW processing not working | Check that `is_raw_extension()` detection is used instead of external `apply_auto_edits` parameters |
 
 ---
@@ -234,7 +231,6 @@ This project ships native desktop binaries via PyInstaller and GitHub Actions. K
 - Prefer package-relative imports without the `src.` prefix (e.g., `from ui.main_window import MainWindow`, `from core.image_pipeline import ImagePipeline`).
 - `src/main.py` inserts the `src/` folder into `sys.path` at startup so `python src/main.py` works the same as the frozen app.
 - The CI’s PyInstaller commands include `--paths src` to resolve package-relative imports during analysis.
-- Critical: `import pyexiv2` must come first in `main.py` (and in every test file) to avoid Windows crashes in the native library.
 
 ### 10.2 Resource bundling (QSS and models)
 - The stylesheet loader tries multiple locations in this order:
@@ -260,7 +256,7 @@ This project ships native desktop binaries via PyInstaller and GitHub Actions. K
 - Windows (EXE): `--onefile -w -n PhotoSort` with `--paths src`.
 - macOS (.app): `-w --name PhotoSort` with `--paths src`.
 - Resources: add-data includes `models` dir and `dark_theme.qss` to the top-level.
-- Hidden imports cover: `PyQt6.QtCore/Gui/Widgets`, `rawpy`, `pyexiv2`, `cv2`, `onnxruntime`, `torchvision`, `torch`, `sklearn`, `sentence_transformers`.
+- Hidden imports cover: `PyQt6.QtCore/Gui/Widgets`, `rawpy`, `cv2`, `onnxruntime`, `torchvision`, `torch`, `sklearn`, `sentence_transformers`.
 
 ### 10.5 CI builds, artifacts, and checksums
 - Matrix builds target:

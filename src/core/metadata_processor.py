@@ -1,4 +1,3 @@
-import pyexiv2
 import os
 import re
 import time
@@ -9,6 +8,10 @@ from typing import Dict, Any, Optional, List, Tuple
 import concurrent.futures
 import threading
 import sys
+from xml.etree import ElementTree as ET
+
+from PIL import Image, ExifTags
+import piexif
 
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
@@ -17,8 +20,8 @@ from core.app_settings import METADATA_PROCESSING_CHUNK_SIZE
 
 logger = logging.getLogger(__name__)
 
-# Global lock to guard pyexiv2 access, which can be sensitive in some frozen/multi-threaded contexts
-_PYEXIV2_LOCK = threading.Lock()
+# Global lock to guard image metadata IO in threaded contexts
+_METADATA_IO_LOCK = threading.Lock()
 
 # Preferred EXIF/XMP date tags in order of preference
 DATE_TAGS_PREFERENCE: List[str] = [
@@ -29,7 +32,7 @@ DATE_TAGS_PREFERENCE: List[str] = [
     "Xmp.photoshop.DateCreated",
 ]
 
-# Comprehensive metadata tags for extraction (pyexiv2 format)
+# Comprehensive metadata tags for extraction (legacy pyexiv2-style keys retained for UI compatibility)
 COMPREHENSIVE_METADATA_TAGS: List[str] = [
     # Basic file info
     "Exif.Image.Make",
@@ -62,6 +65,137 @@ COMPREHENSIVE_METADATA_TAGS: List[str] = [
     "Xmp.dc.subject",
     "Xmp.lr.hierarchicalSubject",
 ] + DATE_TAGS_PREFERENCE
+
+# Map common EXIF tag IDs to legacy-style keys we use across the app
+_EXIF_ID_TO_KEY: Dict[int, str] = {
+    271: "Exif.Image.Make",  # Make
+    272: "Exif.Image.Model",  # Model
+    274: "Exif.Image.Orientation",  # Orientation
+    282: "Exif.Image.XResolution",
+    283: "Exif.Image.YResolution",
+    296: "Exif.Image.ResolutionUnit",
+    306: "Exif.Image.DateTime",  # DateTime
+    33434: "Exif.Photo.ExposureTime",  # ExposureTime
+    33437: "Exif.Photo.FNumber",  # FNumber
+    34855: "Exif.Photo.ISOSpeedRatings",  # ISOSpeedRatings
+    36867: "Exif.Photo.DateTimeOriginal",  # DateTimeOriginal
+    36868: "Exif.Photo.DateTimeDigitized",  # DateTimeDigitized
+    37377: "Exif.Photo.ShutterSpeedValue",  # ShutterSpeedValue
+    37378: "Exif.Photo.ApertureValue",  # ApertureValue
+    37385: "Exif.Photo.Flash",  # Flash
+    37386: "Exif.Photo.FocalLength",  # FocalLength
+}
+
+
+def _mime_from_pil_format(fmt: Optional[str]) -> str:
+    if not fmt:
+        return "application/octet-stream"
+    fmt = fmt.upper()
+    return {
+        "JPEG": "image/jpeg",
+        "JPG": "image/jpeg",
+        "PNG": "image/png",
+        "TIFF": "image/tiff",
+        "TIF": "image/tiff",
+        "BMP": "image/bmp",
+        "WEBP": "image/webp",
+        "HEIF": "image/heif",
+        "HEIC": "image/heic",
+    }.get(fmt, f"image/{fmt.lower()}")
+
+
+def _read_exif_with_pillow(image_path: str) -> Dict[str, Any]:
+    """Read EXIF using Pillow and map to legacy pyexiv2-style keys for UI compatibility."""
+    mapped: Dict[str, Any] = {}
+    try:
+        with Image.open(image_path) as im:
+            exif = im.getexif()
+            if exif:
+                for tag_id, value in exif.items():
+                    key = _EXIF_ID_TO_KEY.get(tag_id)
+                    if not key:
+                        # Try to resolve name for potential future mapping
+                        try:
+                            name = ExifTags.TAGS.get(tag_id)
+                            if name == "DateTime":
+                                key = "Exif.Image.DateTime"
+                            elif name == "Orientation":
+                                key = "Exif.Image.Orientation"
+                        except Exception:
+                            key = None
+                    if key:
+                        mapped[key] = value
+    except Exception as e:
+        logger.debug(
+            f"Pillow EXIF read failed for '{os.path.basename(image_path)}': {e}"
+        )
+    return mapped
+
+
+def _sidecar_xmp_path(image_path: str) -> str:
+    return f"{image_path}.xmp"
+
+
+def _read_sidecar_xmp(image_path: str) -> Dict[str, Any]:
+    """Parse a minimal XMP sidecar for rating/label if present."""
+    result: Dict[str, Any] = {}
+    xmp_path = _sidecar_xmp_path(image_path)
+    if not os.path.isfile(xmp_path):
+        return result
+    try:
+        tree = ET.parse(xmp_path)
+        root = tree.getroot()
+        # Namespaces commonly used
+        ns = {
+            "x": "adobe:ns:meta/",
+            "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+            "xmp": "http://ns.adobe.com/xap/1.0/",
+        }
+        # Find xmp:Rating
+        for elem in root.findall(".//xmp:Rating", ns):
+            try:
+                result["Xmp.xmp.Rating"] = int(elem.text) if elem.text else 0
+            except Exception:
+                pass
+        # Find xmp:Label
+        for elem in root.findall(".//xmp:Label", ns):
+            if elem.text and elem.text.strip():
+                result["Xmp.xmp.Label"] = elem.text.strip()
+        return result
+    except Exception as e:
+        logger.debug(
+            f"Failed to parse XMP sidecar for '{os.path.basename(image_path)}': {e}"
+        )
+        return {}
+
+
+def _write_sidecar_xmp(
+    image_path: str, rating: Optional[int] = None, label: Optional[str] = None
+) -> bool:
+    """Write or update a minimal XMP sidecar with rating/label."""
+    xmp_path = _sidecar_xmp_path(image_path)
+    # Build minimal XMP packet
+    rating_str = f"<xmp:Rating>{int(rating)}</xmp:Rating>" if rating is not None else ""
+    label_str = f"<xmp:Label>{label}</xmp:Label>" if label else ""
+    content = (
+        '<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+        '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+        '    <rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/">\n'
+        f"      {rating_str}\n"
+        f"      {label_str}\n"
+        "    </rdf:Description>\n"
+        "  </rdf:RDF>\n"
+        "</x:xmpmeta>\n"
+        '<?xpacket end="w"?>\n'
+    )
+    try:
+        with open(xmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to write XMP sidecar '{os.path.basename(xmp_path)}': {e}")
+        return False
 
 
 def _parse_exif_date(date_string: str) -> Optional[date_obj]:
@@ -170,7 +304,7 @@ def _parse_rating(value: Any) -> int:
     try:
         rating_val = int(
             float(str(value))
-        )  # str(value) handles pyexiv2 Fraction or other types
+        )  # str(value) handles Fraction or other types
         return max(0, min(5, rating_val))
     except (ValueError, TypeError):
         return 0
@@ -233,7 +367,7 @@ class MetadataProcessor:
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetches and parses essential metadata for a batch of images.
-        Uses ExifCache first, then pyexiv2 in parallel for remaining files.
+        Uses ExifCache first, then Pillow-based readers in parallel for remaining files.
         Populates caches and applies date fallbacks.
 
         Returns per canonical NFC path a dict with keys at least:
@@ -244,7 +378,7 @@ class MetadataProcessor:
         results: Dict[str, Dict[str, Any]] = {}
         # Stores operational_path -> cache_key_path mapping for files needing extraction
         operational_to_cache_key_map: Dict[str, str] = {}
-        paths_for_pyexiv2_extraction: List[str] = []  # Stores operational paths
+        paths_for_extraction: List[str] = []  # Stores operational paths
 
         start_time = time.perf_counter()
         logger.info(f"Starting batch metadata fetch for {len(image_paths)} files.")
@@ -294,7 +428,7 @@ class MetadataProcessor:
                 logger.debug(
                     f"ExifCache MISS for: {os.path.basename(operational_path)}"
                 )
-                paths_for_pyexiv2_extraction.append(operational_path)
+                paths_for_extraction.append(operational_path)
                 operational_to_cache_key_map[operational_path] = cache_key_path
 
         CHUNK_SIZE = METADATA_PROCESSING_CHUNK_SIZE
@@ -325,66 +459,52 @@ class MetadataProcessor:
                         }
                     )
                     continue
+
+                # Defaults in case we cannot open the file with Pillow (e.g., RAW formats)
+                width: Optional[int] = None
+                height: Optional[int] = None
+                mime: str = "unknown"
+                exif_mapped: Dict[str, Any] = {}
+                file_size_val: Any = (
+                    os.path.getsize(op_path) if os.path.isfile(op_path) else "Unknown"
+                )
+
+                # Try to open with Pillow for dimensions and EXIF (may fail for RAW)
                 try:
-                    # Guard ALL pyexiv2 operations with a lock for stability in threaded runs
-                    with _PYEXIV2_LOCK:
-                        with pyexiv2.Image(
-                            op_path, encoding="utf-8"
-                        ) as img:  # Use operational_path
-                            combined_metadata = {
-                                "file_path": op_path,  # Store operational_path used for extraction
-                                "pixel_width": img.get_pixel_width(),
-                                "pixel_height": img.get_pixel_height(),
-                                "mime_type": img.get_mime_type(),
-                                "file_size": os.path.getsize(op_path)
-                                if os.path.isfile(op_path)
-                                else "Unknown",
-                                **(img.read_exif() or {}),  # Ensure dicts even if empty
-                                **(img.read_iptc() or {}),
-                                **(img.read_xmp() or {}),
-                            }
-                            chunk_results.append(combined_metadata)
-                            logger.debug(
-                                f"Successfully extracted metadata for {os.path.basename(op_path)}"
-                            )
-                except Exception as e:
-                    # pyexiv2 raises RuntimeError for many IO issues; downshift errno=2 to warning without traceback
-                    msg = str(e)
-                    is_missing = (
-                        ("No such file or directory" in msg)
-                        or ("errno = 2" in msg)
-                        or (not os.path.isfile(op_path))
+                    with _METADATA_IO_LOCK:
+                        with Image.open(op_path) as im:
+                            width, height = im.size
+                            mime = _mime_from_pil_format(im.format)
+                    # Read EXIF outside of open() to avoid holding decoding resources
+                    exif_mapped = _read_exif_with_pillow(op_path)
+                    logger.debug(
+                        f"Successfully extracted image info for {os.path.basename(op_path)}"
                     )
-                    if is_missing:
-                        logger.warning(
-                            f"Skipping missing file during metadata extraction: {op_path} ({msg})"
-                        )
-                        chunk_results.append(
-                            {
-                                "file_path": op_path,
-                                "file_size": "Unknown",
-                                "error": f"Extraction skipped (missing): {msg}",
-                            }
-                        )
-                    else:
-                        logger.error(
-                            f"Error extracting metadata for {os.path.basename(op_path)}: {e}",
-                            exc_info=True,
-                        )
-                        chunk_results.append(
-                            {
-                                "file_path": op_path,
-                                "file_size": os.path.getsize(op_path)
-                                if os.path.isfile(op_path)
-                                else "Unknown",
-                                "error": f"Extraction failed: {e}",
-                            }
-                        )
+                except Exception as e:
+                    # Non-fatal: we'll still return sidecar info (e.g., ratings) even if Pillow can't open
+                    logger.error(
+                        f"Error extracting image info for {os.path.basename(op_path)}: {e}",
+                        exc_info=True,
+                    )
+
+                # Merge XMP sidecar if present (ratings/labels) regardless of Pillow support
+                xmp_sidecar = _read_sidecar_xmp(op_path)
+                combined_metadata = {
+                    "file_path": op_path,
+                    "pixel_width": width,
+                    "pixel_height": height,
+                    "mime_type": mime,
+                    "file_size": file_size_val,
+                    **exif_mapped,
+                    **xmp_sidecar,
+                }
+                chunk_results.append(combined_metadata)
+
             return chunk_results
 
         all_metadata_results: List[Dict[str, Any]] = []
 
-        if paths_for_pyexiv2_extraction:
+        if paths_for_extraction:
             # Decide whether to run in parallel. On Windows and frozen builds, default to sequential
             # unless explicitly overridden via PHOTOSORT_METADATA_PARALLEL=true.
             parallel_override = os.environ.get(
@@ -398,10 +518,10 @@ class MetadataProcessor:
             if should_run_sequential:
                 context_reason = "frozen build"
                 logger.info(
-                    f"Extracting metadata for {len(paths_for_pyexiv2_extraction)} files sequentially ({context_reason})."
+                    f"Extracting metadata for {len(paths_for_extraction)} files sequentially ({context_reason})."
                 )
                 try:
-                    all_metadata_results = process_chunk(paths_for_pyexiv2_extraction)
+                    all_metadata_results = process_chunk(paths_for_extraction)
                 except Exception as exc:
                     logger.error(
                         f"Sequential metadata extraction failed with error: {exc}",
@@ -410,7 +530,7 @@ class MetadataProcessor:
                     all_metadata_results = []
             else:
                 logger.info(
-                    f"Extracting metadata for {len(paths_for_pyexiv2_extraction)} files in parallel..."
+                    f"Extracting metadata for {len(paths_for_extraction)} files in parallel..."
                 )
                 # Parallel execution logic (non-frozen or explicitly enabled)
                 with concurrent.futures.ThreadPoolExecutor(
@@ -419,9 +539,9 @@ class MetadataProcessor:
                     future_to_chunk = {
                         executor.submit(
                             process_chunk,
-                            paths_for_pyexiv2_extraction[i : i + CHUNK_SIZE],
-                        ): paths_for_pyexiv2_extraction[i : i + CHUNK_SIZE]
-                        for i in range(0, len(paths_for_pyexiv2_extraction), CHUNK_SIZE)
+                            paths_for_extraction[i : i + CHUNK_SIZE],
+                        ): paths_for_extraction[i : i + CHUNK_SIZE]
+                        for i in range(0, len(paths_for_extraction), CHUNK_SIZE)
                     }
                     for future in concurrent.futures.as_completed(future_to_chunk):
                         try:
@@ -532,9 +652,9 @@ class MetadataProcessor:
         exif_disk_cache: Optional[ExifCache] = None,
     ) -> bool:
         """
-        Sets the rating (0-5) using pyexiv2.
-        Updates rating_disk_cache and invalidates exif_disk_cache if provided.
-        Returns True on apparent success, False on failure.
+        Sets the rating (0-5) using a sidecar XMP file (no in-place metadata writes).
+        Updates rating_disk_cache (if provided) and invalidates exif_disk_cache if provided.
+            Returns True on apparent success, False on failure.
         """
         try:
             rating_int = int(rating)
@@ -554,16 +674,11 @@ class MetadataProcessor:
         logger.info(
             f"Setting rating for {os.path.basename(operational_path)} to {rating_int}."
         )
-        try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    img.modify_xmp({"Xmp.xmp.Rating": str(rating_int)})
-                    success = True
-        except Exception as e:
+        # Write to XMP sidecar
+        success = _write_sidecar_xmp(operational_path, rating=rating_int)
+        if not success:
             logger.error(
-                f"Error setting rating for {os.path.basename(operational_path)}: {e}",
-                exc_info=True,
+                f"Failed to write rating sidecar for {os.path.basename(operational_path)}"
             )
 
         if success:
@@ -618,40 +733,24 @@ class MetadataProcessor:
             return minimal_result
 
         try:
-            # RAW files are processed normally; no special skip under pytest on Windows
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    metadata = {
-                        "file_path": operational_path,  # Store operational path used
-                        "pixel_width": img.get_pixel_width(),
-                        "pixel_height": img.get_pixel_height(),
-                        "mime_type": img.get_mime_type(),
-                        "file_size": os.path.getsize(operational_path)
-                        if os.path.isfile(operational_path)
-                        else "Unknown",
-                    }
-                    # ... (rest of metadata fetching as before: exif, iptc, xmp) ...
-                    try:
-                        metadata.update(img.read_exif() or {})
-                    except Exception:
-                        logger.debug(
-                            f"No EXIF for {os.path.basename(operational_path)}"
-                        )
-                    try:
-                        metadata.update(img.read_iptc() or {})
-                    except Exception:
-                        logger.debug(
-                            f"No IPTC for {os.path.basename(operational_path)}"
-                        )
-                    try:
-                        metadata.update(img.read_xmp() or {})
-                    except Exception:
-                        logger.debug(f"No XMP for {os.path.basename(operational_path)}")
-
-                    if exif_disk_cache:
-                        exif_disk_cache.set(cache_key_path, metadata)
-                    return metadata
+            with _METADATA_IO_LOCK:
+                with Image.open(operational_path) as im:
+                    width, height = im.size
+                    mime = _mime_from_pil_format(im.format)
+            metadata = {
+                "file_path": operational_path,
+                "pixel_width": width,
+                "pixel_height": height,
+                "mime_type": mime,
+                "file_size": os.path.getsize(operational_path)
+                if os.path.isfile(operational_path)
+                else "Unknown",
+            }
+            metadata.update(_read_exif_with_pillow(operational_path))
+            metadata.update(_read_sidecar_xmp(operational_path))
+            if exif_disk_cache:
+                exif_disk_cache.set(cache_key_path, metadata)
+            return metadata
         except Exception as e:
             msg = str(e)
             is_missing = (
@@ -705,7 +804,7 @@ class MetadataProcessor:
         try:
             rotator = ImageRotator()
             # ImageRotator must also be able to handle the operational_path correctly.
-            # If it internally uses pyexiv2, it should also use encoding='utf-8'.
+            # Ensure any downstream writer uses UTF-8 encoding where applicable.
             success, message = rotator.rotate_image(
                 operational_path, direction, update_metadata_only
             )
@@ -824,15 +923,15 @@ class MetadataProcessor:
         image_path: str, orientation: int, exif_disk_cache: Optional[ExifCache] = None
     ) -> bool:
         """
-        Sets the EXIF orientation tag directly.
+        Sets the EXIF orientation tag directly where supported (JPEG/TIFF/HEIF).
 
-        Args:
-            image_path: Path to the image file
-            orientation: The EXIF orientation value (1-8)
-            exif_disk_cache: Optional cache to invalidate
+            Args:
+                image_path: Path to the image file
+                orientation: The EXIF orientation value (1-8)
+                exif_disk_cache: Optional cache to invalidate
 
-        Returns:
-            True if successful, False otherwise
+            Returns:
+                True if successful, False otherwise
         """
         if not (1 <= orientation <= 8):
             logger.error(
@@ -852,33 +951,37 @@ class MetadataProcessor:
             )
             return False
         try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    img.modify_exif({"Exif.Image.Orientation": orientation})
-                    logger.info(
-                        f"Set EXIF orientation for {os.path.basename(operational_path)} to {orientation}"
-                    )
-
-            if exif_disk_cache:
-                exif_disk_cache.delete(cache_key_path)
-            return True
+            # piexif supports JPEG/TIFF; for others we try via EXIF bytes if present
+            success = False
+            try:
+                exif_dict = piexif.load(operational_path)
+                exif_dict["0th"][piexif.ImageIFD.Orientation] = int(orientation)
+                piexif.insert(piexif.dump(exif_dict), operational_path)
+                success = True
+            except Exception:
+                # Fallback: attempt via Pillow to preserve other data if possible
+                with Image.open(operational_path) as im:
+                    info = im.info.copy()
+                    exif_bytes = info.get("exif")
+                    if exif_bytes:
+                        exif_dict = piexif.load(exif_bytes)
+                        exif_dict["0th"][piexif.ImageIFD.Orientation] = int(orientation)
+                        new_exif = piexif.dump(exif_dict)
+                        im.save(operational_path, exif=new_exif)
+                        success = True
+            if success:
+                logger.info(
+                    f"Set EXIF orientation for {os.path.basename(operational_path)} to {orientation}"
+                )
+                if exif_disk_cache:
+                    exif_disk_cache.delete(cache_key_path)
+                return True
         except Exception as e:
-            msg = str(e)
-            if (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            ):
-                logger.warning(
-                    f"File missing while setting EXIF orientation: {operational_path} ({msg})"
-                )
-            else:
-                logger.error(
-                    f"Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}",
-                    exc_info=True,
-                )
-            return False
+            logger.error(
+                f"Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}",
+                exc_info=True,
+            )
+        return False
 
     @staticmethod
     def get_orientation(
@@ -916,14 +1019,20 @@ class MetadataProcessor:
             )
             return None
         try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    exif_data = img.read_exif()
-                    orientation = exif_data.get("Exif.Image.Orientation")
-                    if orientation:
-                        return int(orientation)
-                    return None
+            # Try piexif direct file load first
+            try:
+                exif_dict = piexif.load(operational_path)
+                val = exif_dict["0th"].get(piexif.ImageIFD.Orientation)
+                if val:
+                    return int(val)
+            except Exception:
+                pass
+            # Fallback: Pillow EXIF bytes
+            with Image.open(operational_path) as im:
+                exif = im.getexif()
+                if exif:
+                    val = exif.get(274)
+                    return int(val) if val else None
         except Exception as e:
             msg = str(e)
             if (
@@ -997,14 +1106,23 @@ class MetadataProcessor:
             )
             return None, None, None
         try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    orientation = img.read_exif().get("Exif.Image.Orientation")
-                    orientation = int(orientation) if orientation else None
-                    width = img.get_pixel_width()
-                    height = img.get_pixel_height()
-                    return orientation, width, height
+            # Try piexif for orientation
+            orientation: Optional[int] = None
+            try:
+                exif_dict = piexif.load(operational_path)
+                val = exif_dict["0th"].get(piexif.ImageIFD.Orientation)
+                if val:
+                    orientation = int(val)
+            except Exception:
+                pass
+            with Image.open(operational_path) as im:
+                width, height = im.size
+                if orientation is None:
+                    exif = im.getexif()
+                    if exif:
+                        val = exif.get(274)
+                        orientation = int(val) if val else None
+            return orientation, width, height
         except Exception as e:
             msg = str(e)
             if (
