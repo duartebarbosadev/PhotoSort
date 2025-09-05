@@ -1,4 +1,4 @@
-import pyexiv2
+from core.metadata_io import MetadataIO
 import os
 import re
 import time
@@ -7,7 +7,6 @@ import unicodedata
 from datetime import datetime as dt_parser, date as date_obj
 from typing import Dict, Any, Optional, List, Tuple
 import concurrent.futures
-import threading
 import sys
 
 from core.caching.rating_cache import RatingCache
@@ -16,9 +15,6 @@ from core.image_processing.image_rotator import ImageRotator, RotationDirection
 from core.app_settings import METADATA_PROCESSING_CHUNK_SIZE
 
 logger = logging.getLogger(__name__)
-
-# Global lock to guard pyexiv2 access, which can be sensitive in some frozen/multi-threaded contexts
-_PYEXIV2_LOCK = threading.Lock()
 
 # Preferred EXIF/XMP date tags in order of preference
 DATE_TAGS_PREFERENCE: List[str] = [
@@ -325,61 +321,23 @@ class MetadataProcessor:
                         }
                     )
                     continue
-                try:
-                    # Guard ALL pyexiv2 operations with a lock for stability in threaded runs
-                    with _PYEXIV2_LOCK:
-                        with pyexiv2.Image(
-                            op_path, encoding="utf-8"
-                        ) as img:  # Use operational_path
-                            combined_metadata = {
-                                "file_path": op_path,  # Store operational_path used for extraction
-                                "pixel_width": img.get_pixel_width(),
-                                "pixel_height": img.get_pixel_height(),
-                                "mime_type": img.get_mime_type(),
-                                "file_size": os.path.getsize(op_path)
-                                if os.path.isfile(op_path)
-                                else "Unknown",
-                                **(img.read_exif() or {}),  # Ensure dicts even if empty
-                                **(img.read_iptc() or {}),
-                                **(img.read_xmp() or {}),
-                            }
-                            chunk_results.append(combined_metadata)
-                            logger.debug(
-                                f"Successfully extracted metadata for {os.path.basename(op_path)}"
-                            )
-                except Exception as e:
-                    # pyexiv2 raises RuntimeError for many IO issues; downshift errno=2 to warning without traceback
-                    msg = str(e)
-                    is_missing = (
-                        ("No such file or directory" in msg)
-                        or ("errno = 2" in msg)
-                        or (not os.path.isfile(op_path))
+                md = MetadataIO.read_raw_metadata(op_path)
+                if "error" in md:
+                    # Normalize missing-file error message for consistency with previous behavior
+                    if (
+                        not os.path.isfile(op_path)
+                        and "missing" not in str(md.get("error", "")).lower()
+                    ):
+                        md = {
+                            "file_path": op_path,
+                            "file_size": "Unknown",
+                            "error": "Extraction skipped (missing)",
+                        }
+                else:
+                    logger.debug(
+                        f"Successfully extracted metadata for {os.path.basename(op_path)}"
                     )
-                    if is_missing:
-                        logger.warning(
-                            f"Skipping missing file during metadata extraction: {op_path} ({msg})"
-                        )
-                        chunk_results.append(
-                            {
-                                "file_path": op_path,
-                                "file_size": "Unknown",
-                                "error": f"Extraction skipped (missing): {msg}",
-                            }
-                        )
-                    else:
-                        logger.error(
-                            f"Error extracting metadata for {os.path.basename(op_path)}: {e}",
-                            exc_info=True,
-                        )
-                        chunk_results.append(
-                            {
-                                "file_path": op_path,
-                                "file_size": os.path.getsize(op_path)
-                                if os.path.isfile(op_path)
-                                else "Unknown",
-                                "error": f"Extraction failed: {e}",
-                            }
-                        )
+                chunk_results.append(md)
             return chunk_results
 
         all_metadata_results: List[Dict[str, Any]] = []
@@ -554,17 +512,7 @@ class MetadataProcessor:
         logger.info(
             f"Setting rating for {os.path.basename(operational_path)} to {rating_int}."
         )
-        try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    img.modify_xmp({"Xmp.xmp.Rating": str(rating_int)})
-                    success = True
-        except Exception as e:
-            logger.error(
-                f"Error setting rating for {os.path.basename(operational_path)}: {e}",
-                exc_info=True,
-            )
+        success = MetadataIO.set_xmp_rating(operational_path, rating_int)
 
         if success:
             if rating_disk_cache:
@@ -617,65 +565,10 @@ class MetadataProcessor:
                 exif_disk_cache.set(cache_key_path, minimal_result)
             return minimal_result
 
-        try:
-            # RAW files are processed normally; no special skip under pytest on Windows
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    metadata = {
-                        "file_path": operational_path,  # Store operational path used
-                        "pixel_width": img.get_pixel_width(),
-                        "pixel_height": img.get_pixel_height(),
-                        "mime_type": img.get_mime_type(),
-                        "file_size": os.path.getsize(operational_path)
-                        if os.path.isfile(operational_path)
-                        else "Unknown",
-                    }
-                    # ... (rest of metadata fetching as before: exif, iptc, xmp) ...
-                    try:
-                        metadata.update(img.read_exif() or {})
-                    except Exception:
-                        logger.debug(
-                            f"No EXIF for {os.path.basename(operational_path)}"
-                        )
-                    try:
-                        metadata.update(img.read_iptc() or {})
-                    except Exception:
-                        logger.debug(
-                            f"No IPTC for {os.path.basename(operational_path)}"
-                        )
-                    try:
-                        metadata.update(img.read_xmp() or {})
-                    except Exception:
-                        logger.debug(f"No XMP for {os.path.basename(operational_path)}")
-
-                    if exif_disk_cache:
-                        exif_disk_cache.set(cache_key_path, metadata)
-                    return metadata
-        except Exception as e:
-            msg = str(e)
-            is_missing = (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            )
-            if is_missing:
-                logger.warning(
-                    f"Skipping missing file during detailed metadata read: {operational_path} ({msg})"
-                )
-            else:
-                logger.error(
-                    f"Error fetching detailed metadata for {os.path.basename(operational_path)}: {e}",
-                    exc_info=True,
-                )
-            minimal_result = {
-                "file_path": operational_path,
-                "file_size": "Unknown",
-                "error": str(e),
-            }
-            if exif_disk_cache:
-                exif_disk_cache.set(cache_key_path, minimal_result)  # Cache error state
-            return minimal_result
+        metadata = MetadataIO.read_raw_metadata(operational_path)
+        if exif_disk_cache:
+            exif_disk_cache.set(cache_key_path, metadata)
+        return metadata
 
     @staticmethod
     def rotate_image(
@@ -851,34 +744,10 @@ class MetadataProcessor:
                 f"Cannot set EXIF orientation; file missing: {operational_path}"
             )
             return False
-        try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    img.modify_exif({"Exif.Image.Orientation": orientation})
-                    logger.info(
-                        f"Set EXIF orientation for {os.path.basename(operational_path)} to {orientation}"
-                    )
-
-            if exif_disk_cache:
-                exif_disk_cache.delete(cache_key_path)
-            return True
-        except Exception as e:
-            msg = str(e)
-            if (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            ):
-                logger.warning(
-                    f"File missing while setting EXIF orientation: {operational_path} ({msg})"
-                )
-            else:
-                logger.error(
-                    f"Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}",
-                    exc_info=True,
-                )
-            return False
+        ok = MetadataIO.set_exif_orientation(operational_path, orientation)
+        if ok and exif_disk_cache:
+            exif_disk_cache.delete(cache_key_path)
+        return ok
 
     @staticmethod
     def get_orientation(
@@ -908,38 +777,7 @@ class MetadataProcessor:
                 except (ValueError, TypeError):
                     pass  # Fall through to direct read if cached value is invalid
 
-        # If not in cache or cache is not provided, read from file
-        # Existence guard
-        if not os.path.isfile(operational_path):
-            logger.info(
-                f"File missing when querying EXIF orientation: {operational_path}"
-            )
-            return None
-        try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    exif_data = img.read_exif()
-                    orientation = exif_data.get("Exif.Image.Orientation")
-                    if orientation:
-                        return int(orientation)
-                    return None
-        except Exception as e:
-            msg = str(e)
-            if (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            ):
-                logger.warning(
-                    f"File missing while reading EXIF orientation: {operational_path} ({msg})"
-                )
-            else:
-                logger.error(
-                    f"Error getting EXIF orientation for {os.path.basename(operational_path)}: {e}",
-                    exc_info=True,
-                )
-            return None
+        return MetadataIO.read_exif_orientation(operational_path)
 
     @staticmethod
     def get_orientation_and_dimensions(
@@ -989,35 +827,4 @@ class MetadataProcessor:
                 except (ValueError, TypeError):
                     pass  # Fall through to direct read
 
-        # If not in cache or cache is not provided, read from file
-        # Existence guard
-        if not os.path.isfile(operational_path):
-            logger.info(
-                f"File missing when reading orientation/dimensions: {operational_path}"
-            )
-            return None, None, None
-        try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    orientation = img.read_exif().get("Exif.Image.Orientation")
-                    orientation = int(orientation) if orientation else None
-                    width = img.get_pixel_width()
-                    height = img.get_pixel_height()
-                    return orientation, width, height
-        except Exception as e:
-            msg = str(e)
-            if (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            ):
-                logger.warning(
-                    f"File missing while reading orientation/dimensions: {operational_path} ({msg})"
-                )
-            else:
-                logger.error(
-                    f"Error getting orientation/dimensions for {os.path.basename(operational_path)}: {e}",
-                    exc_info=True,
-                )
-            return None, None, None
+        return MetadataIO.read_orientation_and_dimensions(operational_path)
