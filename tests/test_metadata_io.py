@@ -1,20 +1,9 @@
 import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
-import pytest
 from PIL import Image
 
-try:
-    from src.core.metadata_io import MetadataIO
-
-    IMPORTS_AVAILABLE = True
-    IMPORT_ERROR = None
-except ImportError as e:
-    IMPORTS_AVAILABLE = False
-    IMPORT_ERROR = str(e)
+from src.core.metadata_io import MetadataIO
 
 
-@pytest.mark.skipif(
-    not IMPORTS_AVAILABLE, reason=lambda: f"Cannot import MetadataIO: {IMPORT_ERROR}"
-)
 def test_read_raw_metadata_basic(tmp_path):
     # Create a minimal JPEG
     p = tmp_path / "metaio_basic.jpg"
@@ -31,9 +20,6 @@ def test_read_raw_metadata_basic(tmp_path):
     assert "error" not in md
 
 
-@pytest.mark.skipif(
-    not IMPORTS_AVAILABLE, reason=lambda: f"Cannot import MetadataIO: {IMPORT_ERROR}"
-)
 def test_rating_roundtrip(tmp_path):
     p = tmp_path / "metaio_rating.jpg"
     Image.new("RGB", (6, 6), color=(0, 0, 0)).save(p, format="JPEG", quality=80)
@@ -48,9 +34,6 @@ def test_rating_roundtrip(tmp_path):
     assert str(rating) == "4"
 
 
-@pytest.mark.skipif(
-    not IMPORTS_AVAILABLE, reason=lambda: f"Cannot import MetadataIO: {IMPORT_ERROR}"
-)
 def test_orientation_roundtrip(tmp_path):
     p = tmp_path / "metaio_orient.jpg"
     Image.new("RGB", (7, 9), color=(1, 2, 3)).save(p, format="JPEG", quality=80)
@@ -68,9 +51,6 @@ def test_orientation_roundtrip(tmp_path):
     assert w == 7 and h == 9
 
 
-@pytest.mark.skipif(
-    not IMPORTS_AVAILABLE, reason=lambda: f"Cannot import MetadataIO: {IMPORT_ERROR}"
-)
 def test_missing_file_handling(tmp_path):
     missing = tmp_path / "nope.jpg"
     md = MetadataIO.read_raw_metadata(str(missing))
