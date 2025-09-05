@@ -18,6 +18,7 @@ if SRC_DIR and SRC_DIR not in sys.path:
 
 from ui.main_window import MainWindow  # noqa: E402
 from ui.app_controller import AppController  # noqa: E402
+from core.metadata_io import MetadataIO  # noqa: E402  # After pyexiv2 but before threads
 from pillow_heif import register_heif_opener  # noqa: E402
 
 
@@ -211,6 +212,14 @@ def main():
         pass
 
     register_heif_opener()
+
+    # Perform early metadata backend warmup BEFORE creating QApplication or starting
+    # any background workers that might touch pyexiv2 on Windows. This mitigates
+    # rare access violations when the first Exiv2 interaction happens off the main thread.
+    try:
+        MetadataIO.warmup()
+    except Exception as e:
+        logging.warning(f"MetadataIO warmup failed (continuing): {e}")
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="PhotoSort")

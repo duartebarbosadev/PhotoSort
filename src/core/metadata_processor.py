@@ -237,6 +237,14 @@ class MetadataProcessor:
         - label: Optional[str]
         - date: Optional[date]
         """
+        # Ensure backend warmed up BEFORE spawning any worker threads.
+        try:
+            MetadataIO.warmup()
+        except Exception as e_w:
+            logger.warning(
+                f"MetadataIO warmup inside batch call failed (continuing): {e_w}"
+            )
+
         results: Dict[str, Dict[str, Any]] = {}
         # Stores operational_path -> cache_key_path mapping for files needing extraction
         operational_to_cache_key_map: Dict[str, str] = {}
@@ -352,6 +360,9 @@ class MetadataProcessor:
             should_run_sequential = (
                 getattr(sys, "frozen", False) and not parallel_override
             )
+            # Force the very first metadata batch (before warmup) to run sequentially for safety
+            if not MetadataIO._WARMED_UP:
+                should_run_sequential = True
 
             if should_run_sequential:
                 context_reason = "frozen build"

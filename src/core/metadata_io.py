@@ -24,6 +24,45 @@ class MetadataIO:
     """
 
     _LOCK = threading.Lock()
+    _WARMED_UP = False
+    _FIRST_REAL_ACCESS_LOGGED = False
+
+    @classmethod
+    def warmup(cls) -> None:
+        """Perform a one-time, main-thread friendly initialization of pyexiv2.
+
+        Rationale: On some Windows systems / frozen builds, the very first call
+        into pyexiv2.Exiv2 (especially from a background thread that starts
+        after Qt has been initialized) can trigger an access violation. Doing a
+        trivial, locked interaction with pyexiv2 early in the main thread makes
+        subsequent background usage stable.
+
+        This function is idempotent and very fast (creates a tiny temp JPEG and
+        opens it). Failures are logged but never raised.
+        """
+        if cls._WARMED_UP:
+            return
+        try:
+            import tempfile
+            from PIL import Image
+
+            with cls._LOCK:
+                if cls._WARMED_UP:  # Double-checked inside lock
+                    return
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as tmp:
+                    # Create a minimal valid JPEG
+                    img = Image.new("RGB", (2, 2), color=(0, 0, 0))
+                    img.save(tmp.name, format="JPEG")
+                    # Open via pyexiv2 to force library init
+                    try:
+                        with pyexiv2.Image(tmp.name, encoding="utf-8"):
+                            pass
+                    except Exception as e_open:
+                        logger.debug(f"Warmup open failed (continuing): {e_open}")
+                cls._WARMED_UP = True
+                logger.info("MetadataIO warmup completed.")
+        except Exception as e:
+            logger.warning(f"MetadataIO warmup encountered an issue (non-fatal): {e}")
 
     @classmethod
     def read_raw_metadata(cls, operational_path: str) -> Dict:
@@ -42,6 +81,15 @@ class MetadataIO:
             }
         try:
             with cls._LOCK:
+                if not cls._FIRST_REAL_ACCESS_LOGGED:
+                    import threading
+
+                    logger.info(
+                        "MetadataIO first real pyexiv2 access (warmed_up=%s, thread=%s)",
+                        cls._WARMED_UP,
+                        threading.current_thread().name,
+                    )
+                    cls._FIRST_REAL_ACCESS_LOGGED = True
                 with pyexiv2.Image(operational_path, encoding="utf-8") as img:
                     md = {
                         "file_path": operational_path,
