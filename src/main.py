@@ -282,6 +282,16 @@ def main():
             "File logging disabled. To enable, set PHOTOSORT_ENABLE_FILE_LOGGING=true."
         )
 
+    # Log current MetadataIO state now that logging is configured
+    try:
+        logging.debug(
+            "MetadataIO state pre-Qt: warmed_up=%s, first_access_done=%s",
+            getattr(MetadataIO, "_WARMED_UP", None),
+            getattr(MetadataIO, "_FIRST_ACCESS_DONE", None),
+        )
+    except Exception:
+        pass
+
         # --- Suppress verbose third-party loggers ---
     logging.getLogger("PIL").setLevel(logging.INFO)
     logging.getLogger("PIL.PngImagePlugin").setLevel(logging.INFO)
@@ -311,6 +321,14 @@ def main():
     logging.debug(
         f"QApplication instantiated in {time.perf_counter() - app_instantiation_start_time:.4f}s"
     )
+
+    # After the event loop exists and on the GUI thread, enforce that the very
+    # first real pyexiv2.Image open occurred here. This complements warmup and
+    # avoids the first open happening inside a worker thread.
+    try:
+        MetadataIO.ensure_first_access_main_thread()
+    except Exception as e:
+        logging.warning(f"MetadataIO ensure_first_access_main_thread failed (continuing): {e}")
 
     # Load and apply the stylesheet
     stylesheet_load_start_time = time.perf_counter()

@@ -1,11 +1,12 @@
-import os
-import threading
-import logging
-from typing import Dict, Optional, Tuple
-
 # Centralized pyexiv2 usage. Tests and main app ensure early import of pyexiv2
 # where necessary to avoid Windows issues; importing here is acceptable.
 import pyexiv2
+
+import os
+import sys
+import threading
+import logging
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ class MetadataIO:
     _LOCK = threading.Lock()
     _WARMED_UP = False
     _FIRST_REAL_ACCESS_LOGGED = False
+    _FIRST_ACCESS_DONE = False  # Ensures the very first real open happened once
+    _FIRST_ACCESS_EVENT = threading.Event()
 
     @classmethod
     def warmup(cls) -> None:
@@ -65,6 +68,47 @@ class MetadataIO:
             logger.warning(f"MetadataIO warmup encountered an issue (non-fatal): {e}")
 
     @classmethod
+    def ensure_first_access_main_thread(cls) -> None:
+        """Ensure the first real pyexiv2.Image open happens on the main thread.
+
+        In some Windows frozen environments, even after a lightweight warmup,
+        the first actual Image() construction can be fragile if it occurs on a
+        background thread. Calling this early from the GUI thread provides a
+        stronger guarantee of stability.
+
+        Idempotent and safe to call multiple times.
+        """
+        if cls._FIRST_ACCESS_DONE:
+            return
+        try:
+            import tempfile
+            from PIL import Image
+
+            with cls._LOCK:
+                if cls._FIRST_ACCESS_DONE:
+                    return
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as tmp:
+                    img = Image.new("RGB", (2, 2), color=(0, 0, 0))
+                    img.save(tmp.name, format="JPEG")
+                    try:
+                        with pyexiv2.Image(tmp.name, encoding="utf-8"):
+                            pass
+                    except Exception as e_open:
+                        logger.debug(f"Main-thread first access open failed (continuing): {e_open}")
+                cls._FIRST_ACCESS_DONE = True
+                if not cls._WARMED_UP:
+                    cls._WARMED_UP = True
+                logger.info("MetadataIO main-thread first access completed.")
+                try:
+                    cls._FIRST_ACCESS_EVENT.set()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(
+                f"MetadataIO main-thread first access encountered an issue (non-fatal): {e}"
+            )
+
+    @classmethod
     def read_raw_metadata(cls, operational_path: str) -> Dict:
         """Return a merged metadata dict for the given image path.
 
@@ -80,6 +124,14 @@ class MetadataIO:
                 "error": "File missing at extraction time",
             }
         try:
+            # In frozen builds on Windows, wait briefly for main-thread first access
+            if getattr(sys, "frozen", False) and sys.platform.startswith("win"):
+                if not cls._FIRST_ACCESS_DONE:
+                    try:
+                        # Wait up to 1.5s for the GUI thread to perform first access
+                        cls._FIRST_ACCESS_EVENT.wait(timeout=1.5)
+                    except Exception:
+                        pass
             with cls._LOCK:
                 if not cls._FIRST_REAL_ACCESS_LOGGED:
                     import threading
