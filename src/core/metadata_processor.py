@@ -18,6 +18,26 @@ from core.app_settings import METADATA_PROCESSING_CHUNK_SIZE
 
 logger = logging.getLogger(__name__)
 
+
+def _is_file_missing_error(exception: Exception, file_path: str) -> bool:
+    """
+    Check if an exception indicates a missing/inaccessible file.
+
+    Args:
+        exception: The exception to check
+        file_path: Path to the file that was being accessed
+
+    Returns:
+        True if the error indicates the file is missing or inaccessible
+    """
+    msg = str(exception)
+    return (
+        ("No such file or directory" in msg)
+        or ("errno = 2" in msg)
+        or (not os.path.isfile(file_path))
+    )
+
+
 # Preferred EXIF/XMP date tags in order of preference
 DATE_TAGS_PREFERENCE: List[str] = [
     "Exif.Photo.DateTimeOriginal",
@@ -334,21 +354,15 @@ class MetadataProcessor:
                     )
                 except Exception as e:
                     # pyexiv2 raises RuntimeError for many IO issues; downshift errno=2 to warning without traceback
-                    msg = str(e)
-                    is_missing = (
-                        ("No such file or directory" in msg)
-                        or ("errno = 2" in msg)
-                        or (not os.path.isfile(op_path))
-                    )
-                    if is_missing:
+                    if _is_file_missing_error(e, op_path):
                         logger.warning(
-                            f"Skipping missing file during metadata extraction: {op_path} ({msg})"
+                            f"Skipping missing file during metadata extraction: {op_path} ({str(e)})"
                         )
                         chunk_results.append(
                             {
                                 "file_path": op_path,
                                 "file_size": "Unknown",
-                                "error": f"Extraction skipped (missing): {msg}",
+                                "error": f"Extraction skipped (missing): {str(e)}",
                             }
                         )
                     else:
@@ -607,15 +621,9 @@ class MetadataProcessor:
                 exif_disk_cache.set(cache_key_path, metadata)
             return metadata
         except Exception as e:
-            msg = str(e)
-            is_missing = (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            )
-            if is_missing:
+            if _is_file_missing_error(e, operational_path):
                 logger.warning(
-                    f"Skipping missing file during detailed metadata read: {operational_path} ({msg})"
+                    f"Skipping missing file during detailed metadata read: {operational_path} ({str(e)})"
                 )
             else:
                 logger.error(
@@ -818,14 +826,9 @@ class MetadataProcessor:
             else:
                 return False
         except Exception as e:
-            msg = str(e)
-            if (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            ):
+            if _is_file_missing_error(e, operational_path):
                 logger.warning(
-                    f"File missing while setting EXIF orientation: {operational_path} ({msg})"
+                    f"File missing while setting EXIF orientation: {operational_path} ({str(e)})"
                 )
             else:
                 logger.error(
@@ -876,14 +879,9 @@ class MetadataProcessor:
                 orientation if orientation != 1 else None
             )  # Return None for default orientation
         except Exception as e:
-            msg = str(e)
-            if (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            ):
+            if _is_file_missing_error(e, operational_path):
                 logger.warning(
-                    f"File missing while reading EXIF orientation: {operational_path} ({msg})"
+                    f"File missing while reading EXIF orientation: {operational_path} ({str(e)})"
                 )
             else:
                 logger.error(
@@ -891,83 +889,3 @@ class MetadataProcessor:
                     exc_info=True,
                 )
             return None
-
-    @staticmethod
-    def get_orientation_and_dimensions(
-        image_path: str, exif_disk_cache: Optional[ExifCache] = None
-    ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        """
-        Retrieves orientation, pixel width, and pixel height efficiently.
-
-        Args:
-            image_path: Path to the image file
-            exif_disk_cache: Optional cache to check first
-
-        Returns:
-            A tuple (orientation, width, height). Values can be None on error.
-        """
-        resolved = MetadataProcessor._resolve_path_forms(image_path)
-        if not resolved:
-            return None, None, None
-        operational_path, cache_key_path = resolved
-
-        # Check cache first
-        if exif_disk_cache:
-            cached_data = exif_disk_cache.get(cache_key_path)
-            if cached_data:
-                try:
-                    orientation = (
-                        int(cached_data["Exif.Image.Orientation"])
-                        if cached_data.get("Exif.Image.Orientation") is not None
-                        else None
-                    )
-                    width = (
-                        int(cached_data["pixel_width"])
-                        if cached_data.get("pixel_width") is not None
-                        else None
-                    )
-                    height = (
-                        int(cached_data["pixel_height"])
-                        if cached_data.get("pixel_height") is not None
-                        else None
-                    )
-                    if (
-                        orientation is not None
-                        and width is not None
-                        and height is not None
-                    ):
-                        return orientation, width, height
-                except (ValueError, TypeError):
-                    pass  # Fall through to direct read
-
-        # If not in cache or cache is not provided, read from file
-        # Existence guard
-        if not os.path.isfile(operational_path):
-            logger.info(
-                f"File missing when reading orientation/dimensions: {operational_path}"
-            )
-            return None, None, None
-        try:
-            # Use the new pyexiv2 wrapper for safe operations
-            basic_info = PyExiv2Operations.get_basic_info(operational_path)
-            orientation = PyExiv2Operations.get_orientation(operational_path)
-            orientation = (
-                orientation if orientation != 1 else None
-            )  # Return None for default
-            return orientation, basic_info["pixel_width"], basic_info["pixel_height"]
-        except Exception as e:
-            msg = str(e)
-            if (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            ):
-                logger.warning(
-                    f"File missing while reading orientation/dimensions: {operational_path} ({msg})"
-                )
-            else:
-                logger.error(
-                    f"Error getting orientation/dimensions for {os.path.basename(operational_path)}: {e}",
-                    exc_info=True,
-                )
-            return None, None, None

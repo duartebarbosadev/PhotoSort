@@ -7,9 +7,28 @@ import sys
 import threading
 import logging
 import queue
-from typing import Dict, Optional, Tuple, Callable, Any
+from typing import Dict, Optional, Callable, Any
 
 logger = logging.getLogger(__name__)
+
+
+def _is_file_missing_error(exception: Exception, file_path: str) -> bool:
+    """
+    Check if an exception indicates a missing/inaccessible file.
+
+    Args:
+        exception: The exception to check
+        file_path: Path to the file that was being accessed
+
+    Returns:
+        True if the error indicates the file is missing or inaccessible
+    """
+    msg = str(exception)
+    return (
+        ("No such file or directory" in msg)
+        or ("errno = 2" in msg)
+        or (not os.path.isfile(file_path))
+    )
 
 
 class MetadataIO:
@@ -158,12 +177,7 @@ class MetadataIO:
             md = PyExiv2Operations.get_comprehensive_metadata(operational_path)
             return md
         except Exception as e:
-            msg = str(e)
-            is_missing = (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            )
+            is_missing = _is_file_missing_error(e, operational_path)
             level = logger.warning if is_missing else logger.error
             level(
                 f"Error extracting metadata for {os.path.basename(operational_path)}: {e}",
@@ -217,14 +231,9 @@ class MetadataIO:
                 val = exif.get("Exif.Image.Orientation")
                 return int(val) if val is not None else None
         except Exception as e:
-            msg = str(e)
-            if (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            ):
+            if _is_file_missing_error(e, operational_path):
                 logger.warning(
-                    f"File missing while reading EXIF orientation: {operational_path} ({msg})"
+                    f"File missing while reading EXIF orientation: {operational_path} ({str(e)})"
                 )
             else:
                 logger.error(
@@ -288,47 +297,4 @@ class MetadataIO:
     def set_xmp_orientation(cls, operational_path: str, orientation: int) -> bool:
         return cls._call_in_worker(
             cls._set_xmp_orientation_inner, operational_path, orientation
-        )
-
-    @classmethod
-    def _read_orientation_and_dimensions_inner(
-        cls, operational_path: str
-    ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        """Efficiently read orientation, pixel width, and pixel height."""
-        if not os.path.isfile(operational_path):
-            logger.info(
-                f"File missing when reading orientation/dimensions: {operational_path}"
-            )
-            return None, None, None
-        try:
-            with safe_pyexiv2_image(operational_path) as img:
-                exif = img.read_exif() or {}
-                orientation = exif.get("Exif.Image.Orientation")
-                orientation_val = int(orientation) if orientation else None
-                width = img.get_pixel_width()
-                height = img.get_pixel_height()
-                return orientation_val, width, height
-        except Exception as e:
-            msg = str(e)
-            if (
-                ("No such file or directory" in msg)
-                or ("errno = 2" in msg)
-                or (not os.path.isfile(operational_path))
-            ):
-                logger.warning(
-                    f"File missing while reading orientation/dimensions: {operational_path} ({msg})"
-                )
-            else:
-                logger.error(
-                    f"Error getting orientation/dimensions for {os.path.basename(operational_path)}: {e}",
-                    exc_info=True,
-                )
-            return None, None, None
-
-    @classmethod
-    def read_orientation_and_dimensions(
-        cls, operational_path: str
-    ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        return cls._call_in_worker(
-            cls._read_orientation_and_dimensions_inner, operational_path
         )
