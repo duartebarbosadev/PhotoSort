@@ -307,11 +307,6 @@ class MetadataProcessor:
         else:
             MAX_WORKERS = default_workers
 
-        # Worker function for ThreadPoolExecutor - no longer needed since wrapper handles initialization
-        def worker_initializer():
-            """Initialize each worker thread - handled by wrapper now."""
-            pass
-
         def process_chunk(chunk_paths: List[str]) -> List[Dict[str, Any]]:
             chunk_results = []
             for op_path in chunk_paths:  # op_path is the operational_path
@@ -404,7 +399,7 @@ class MetadataProcessor:
                 )
                 # Parallel execution logic (non-frozen or explicitly enabled)
                 with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=MAX_WORKERS, initializer=worker_initializer
+                    max_workers=MAX_WORKERS
                 ) as executor:
                     future_to_chunk = {
                         executor.submit(

@@ -26,11 +26,7 @@ class MetadataIO:
     """
 
     _LOCK = threading.Lock()
-    _WARMED_UP = False
     _FIRST_REAL_ACCESS_LOGGED = False
-    # Legacy flags kept for compatibility; real access is now bound to a dedicated worker thread
-    _FIRST_ACCESS_DONE = False
-    _FIRST_ACCESS_EVENT = threading.Event()
 
     # Single-thread dispatcher to avoid cross-thread usage of pyexiv2 (not thread-safe)
     _TASK_QUEUE: Optional["queue.Queue[tuple]"] = None
@@ -67,30 +63,11 @@ class MetadataIO:
 
             def _worker_loop():
                 logger.info("MetadataIO worker thread starting...")
-                # Perform thread-local initialization and a benign first Image open within this thread
+                # Signal that the worker is ready to accept tasks
                 try:
-                    temp_path = None
-                    try:
-                        temp_path = cls._make_temp_jpeg_path()
-                        try:
-                            with safe_pyexiv2_image(temp_path) as _:
-                                pass
-                        except Exception as e_open:
-                            logger.debug(
-                                f"Worker warmup open failed (continuing): {e_open}"
-                            )
-                    finally:
-                        if temp_path and os.path.exists(temp_path):
-                            try:
-                                os.remove(temp_path)
-                            except Exception:
-                                pass
-                finally:
-                    # Signal that the worker is ready to accept tasks
-                    try:
-                        cls._WORKER_READY_EVENT.set()
-                    except Exception:
-                        pass
+                    cls._WORKER_READY_EVENT.set()
+                except Exception:
+                    pass
 
                 # Main task processing loop
                 try:
@@ -152,79 +129,6 @@ class MetadataIO:
             return payload
         raise payload
 
-    @staticmethod
-    def _make_temp_jpeg_path() -> str:
-        """Create a writable temp JPEG path with a closed handle (Windows-safe).
-
-        Returns a path to a tiny valid JPEG. Caller must delete the file.
-        """
-        import tempfile
-        from PIL import Image
-
-        def _try_in_dir(base_dir: Optional[str]) -> Optional[str]:
-            try:
-                if base_dir:
-                    os.makedirs(base_dir, exist_ok=True)
-                fd, path = tempfile.mkstemp(suffix=".jpg", dir=base_dir)
-                try:
-                    os.close(fd)  # close handle to allow other opens on Windows
-                except Exception:
-                    pass
-                # Write a tiny JPEG
-                img = Image.new("RGB", (2, 2), color=(0, 0, 0))
-                img.save(path, format="JPEG")
-                return path
-            except Exception:
-                return None
-
-        # Try default temp dir
-        p = _try_in_dir(None)
-        if p:
-            return p
-        # Fallback to user cache dir
-        fallback_dir = os.path.join(os.path.expanduser("~"), ".photosort_cache")
-        p = _try_in_dir(fallback_dir)
-        if p:
-            return p
-        # Last resort: current working directory
-        p = _try_in_dir(os.getcwd())
-        if p:
-            return p
-        raise PermissionError("Failed to create a temporary JPEG file for warmup")
-
-    @classmethod
-    def warmup(cls) -> None:
-        """Perform a one-time light initialization (import/logging).
-
-        Do NOT open any real Image() here; all real access will be executed on
-        the dedicated worker thread to avoid cross-thread issues.
-        """
-        if cls._WARMED_UP:
-            return
-        with cls._LOCK:
-            if cls._WARMED_UP:
-                return
-            # Nothing heavy to do here; keep for symmetry and future-proofing
-            cls._WARMED_UP = True
-            logger.info("MetadataIO warmup flag set (no Image open).")
-
-    @classmethod
-    def ensure_first_access_main_thread(cls) -> None:
-        """Deprecated: real access now happens on a dedicated worker thread.
-
-        Kept as a no-op to avoid call-site crashes in older code paths.
-        """
-        with cls._LOCK:
-            if not cls._FIRST_ACCESS_DONE:
-                cls._FIRST_ACCESS_DONE = True
-                try:
-                    cls._FIRST_ACCESS_EVENT.set()
-                except Exception:
-                    pass
-                logger.info(
-                    "MetadataIO main-thread first access skipped (using worker thread)."
-                )
-
     @classmethod
     def _read_raw_metadata_inner(cls, operational_path: str) -> Dict:
         """Return a merged metadata dict for the given image path.
@@ -245,8 +149,7 @@ class MetadataIO:
                 import threading as _th
 
                 logger.info(
-                    "MetadataIO first real pyexiv2 access (warmed_up=%s, thread=%s)",
-                    cls._WARMED_UP,
+                    "MetadataIO first real pyexiv2 access (thread=%s)",
                     _th.current_thread().name,
                 )
                 cls._FIRST_REAL_ACCESS_LOGGED = True
