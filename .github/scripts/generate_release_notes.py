@@ -268,7 +268,7 @@ Format the response as clean markdown without code blocks around the entire resp
                     {"role": "user", "content": prompt},
                 ],
                 max_tokens=2000,
-                # temperature=0.3,
+                temperature=0.3,
             )
             return response.choices[0].message.content.strip()
 
