@@ -6,7 +6,8 @@ import os
 import sys
 import threading
 import logging
-from typing import Dict, Optional, Tuple
+import queue
+from typing import Dict, Optional, Tuple, Callable, Any
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,129 @@ class MetadataIO:
     _LOCK = threading.Lock()
     _WARMED_UP = False
     _FIRST_REAL_ACCESS_LOGGED = False
-    _FIRST_ACCESS_DONE = False  # Ensures the very first real open happened once
+    # Legacy flags kept for compatibility; real access is now bound to a dedicated worker thread
+    _FIRST_ACCESS_DONE = False
     _FIRST_ACCESS_EVENT = threading.Event()
+
+    # Single-thread dispatcher to avoid cross-thread usage of pyexiv2 (not thread-safe)
+    _TASK_QUEUE: Optional["queue.Queue[tuple]"] = None
+    _WORKER_THREAD: Optional[threading.Thread] = None
+    _WORKER_READY_EVENT = threading.Event()
+    _STOP_EVENT = threading.Event()
+    _THREAD_NAME = "pyexiv2-io"
+
+    @classmethod
+    def _should_use_worker_thread(cls) -> bool:
+        """Use the dedicated single thread on Windows or in frozen builds (safest).
+
+        Can be forced via PHOTOSORT_FORCE_PYEXIV2_THREAD=true.
+        """
+        try:
+            force = os.environ.get(
+                "PHOTOSORT_FORCE_PYEXIV2_THREAD", "false"
+            ).lower() in {"1", "true", "yes"}
+        except Exception:
+            force = False
+        return force or sys.platform.startswith("win") or getattr(sys, "frozen", False)
+
+    @classmethod
+    def start_worker_thread(cls) -> None:
+        """Start the dedicated pyexiv2 IO thread (idempotent)."""
+        if not cls._should_use_worker_thread():
+            return
+        with cls._LOCK:
+            if cls._WORKER_THREAD and cls._WORKER_THREAD.is_alive():
+                return
+            cls._TASK_QUEUE = queue.Queue()
+            cls._STOP_EVENT.clear()
+            cls._WORKER_READY_EVENT.clear()
+
+            def _worker_loop():
+                logger.info("MetadataIO worker thread starting...")
+                # Perform thread-local initialization and a benign first Image open within this thread
+                try:
+                    temp_path = None
+                    try:
+                        temp_path = cls._make_temp_jpeg_path()
+                        try:
+                            with pyexiv2.Image(temp_path, encoding="utf-8"):
+                                pass
+                        except Exception as e_open:
+                            logger.debug(
+                                f"Worker warmup open failed (continuing): {e_open}"
+                            )
+                    finally:
+                        if temp_path and os.path.exists(temp_path):
+                            try:
+                                os.remove(temp_path)
+                            except Exception:
+                                pass
+                finally:
+                    # Signal that the worker is ready to accept tasks
+                    try:
+                        cls._WORKER_READY_EVENT.set()
+                    except Exception:
+                        pass
+
+                # Main task processing loop
+                try:
+                    while not cls._STOP_EVENT.is_set():
+                        try:
+                            item = cls._TASK_QUEUE.get(timeout=0.2)  # type: ignore[arg-type]
+                        except queue.Empty:
+                            continue
+                        if item is None:
+                            break
+                        fn, args, kwargs, reply_q = item
+                        try:
+                            result = fn(*args, **kwargs)
+                            reply_q.put((True, result))
+                        except Exception as e:
+                            reply_q.put((False, e))
+                        finally:
+                            try:
+                                cls._TASK_QUEUE.task_done()  # type: ignore[union-attr]
+                            except Exception:
+                                pass
+                except Exception as loop_err:
+                    logger.error(
+                        f"MetadataIO worker loop error: {loop_err}", exc_info=True
+                    )
+                finally:
+                    logger.info("MetadataIO worker thread exiting.")
+
+            t = threading.Thread(
+                target=_worker_loop, name=cls._THREAD_NAME, daemon=True
+            )
+            t.start()
+            cls._WORKER_THREAD = t
+        # Wait briefly for readiness
+        try:
+            cls._WORKER_READY_EVENT.wait(timeout=3.0)
+        except Exception:
+            pass
+
+    @classmethod
+    def _call_in_worker(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Dispatch a callable to the dedicated worker and wait for result."""
+        if not cls._should_use_worker_thread():
+            # Fallback to direct call (non-Windows, non-frozen dev runs)
+            return fn(*args, **kwargs)
+        # If we're already on the worker thread, execute directly to avoid deadlock
+        try:
+            if threading.current_thread().name == cls._THREAD_NAME:
+                return fn(*args, **kwargs)
+        except Exception:
+            pass
+        cls.start_worker_thread()
+        if not cls._TASK_QUEUE:
+            raise RuntimeError("MetadataIO worker queue not initialized")
+        reply_q: "queue.Queue[tuple]" = queue.Queue(maxsize=1)
+        cls._TASK_QUEUE.put((fn, args, kwargs, reply_q))
+        ok, payload = reply_q.get()
+        if ok:
+            return payload
+        raise payload
 
     @staticmethod
     def _make_temp_jpeg_path() -> str:
@@ -72,91 +194,39 @@ class MetadataIO:
 
     @classmethod
     def warmup(cls) -> None:
-        """Perform a one-time, main-thread friendly initialization of pyexiv2.
+        """Perform a one-time light initialization (import/logging).
 
-        Rationale: On some Windows systems / frozen builds, the very first call
-        into pyexiv2.Exiv2 (especially from a background thread that starts
-        after Qt has been initialized) can trigger an access violation. Doing a
-        trivial, locked interaction with pyexiv2 early in the main thread makes
-        subsequent background usage stable.
-
-        This function is idempotent and very fast (creates a tiny temp JPEG and
-        opens it). Failures are logged but never raised.
+        Do NOT open any real Image() here; all real access will be executed on
+        the dedicated worker thread to avoid cross-thread issues.
         """
         if cls._WARMED_UP:
             return
-        try:
-            with cls._LOCK:
-                if cls._WARMED_UP:  # Double-checked inside lock
-                    return
-                temp_path = None
-                try:
-                    temp_path = cls._make_temp_jpeg_path()
-                    # Open via pyexiv2 to force library init
-                    try:
-                        with pyexiv2.Image(temp_path, encoding="utf-8"):
-                            pass
-                    except Exception as e_open:
-                        logger.debug(f"Warmup open failed (continuing): {e_open}")
-                finally:
-                    if temp_path and os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                        except Exception:
-                            pass
-                cls._WARMED_UP = True
-                logger.info("MetadataIO warmup completed.")
-        except Exception as e:
-            logger.warning(f"MetadataIO warmup encountered an issue (non-fatal): {e}")
+        with cls._LOCK:
+            if cls._WARMED_UP:
+                return
+            # Nothing heavy to do here; keep for symmetry and future-proofing
+            cls._WARMED_UP = True
+            logger.info("MetadataIO warmup flag set (no Image open).")
 
     @classmethod
     def ensure_first_access_main_thread(cls) -> None:
-        """Ensure the first real pyexiv2.Image open happens on the main thread.
+        """Deprecated: real access now happens on a dedicated worker thread.
 
-        In some Windows frozen environments, even after a lightweight warmup,
-        the first actual Image() construction can be fragile if it occurs on a
-        background thread. Calling this early from the GUI thread provides a
-        stronger guarantee of stability.
-
-        Idempotent and safe to call multiple times.
+        Kept as a no-op to avoid call-site crashes in older code paths.
         """
-        if cls._FIRST_ACCESS_DONE:
-            return
-        try:
-            with cls._LOCK:
-                if cls._FIRST_ACCESS_DONE:
-                    return
-                temp_path = None
-                try:
-                    temp_path = cls._make_temp_jpeg_path()
-                    try:
-                        with pyexiv2.Image(temp_path, encoding="utf-8"):
-                            pass
-                    except Exception as e_open:
-                        logger.debug(
-                            f"Main-thread first access open failed (continuing): {e_open}"
-                        )
-                finally:
-                    if temp_path and os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                        except Exception:
-                            pass
+        with cls._LOCK:
+            if not cls._FIRST_ACCESS_DONE:
                 cls._FIRST_ACCESS_DONE = True
-                if not cls._WARMED_UP:
-                    cls._WARMED_UP = True
-                logger.info("MetadataIO main-thread first access completed.")
                 try:
                     cls._FIRST_ACCESS_EVENT.set()
                 except Exception:
                     pass
-        except Exception as e:
-            logger.warning(
-                f"MetadataIO main-thread first access encountered an issue (non-fatal): {e}"
-            )
+                logger.info(
+                    "MetadataIO main-thread first access skipped (using worker thread)."
+                )
 
     @classmethod
-    def read_raw_metadata(cls, operational_path: str) -> Dict:
+    def _read_raw_metadata_inner(cls, operational_path: str) -> Dict:
         """Return a merged metadata dict for the given image path.
 
         The dict includes at least:
@@ -171,57 +241,44 @@ class MetadataIO:
                 "error": "File missing at extraction time",
             }
         try:
-            # In frozen builds on Windows, wait briefly for main-thread first access
-            if getattr(sys, "frozen", False) and sys.platform.startswith("win"):
-                if not cls._FIRST_ACCESS_DONE:
-                    try:
-                        # Wait up to 3.0s for the GUI thread to perform first access
-                        cls._FIRST_ACCESS_EVENT.wait(timeout=3.0)
-                    except Exception:
-                        pass
-            with cls._LOCK:
-                if not cls._FIRST_REAL_ACCESS_LOGGED:
-                    import threading
+            if not cls._FIRST_REAL_ACCESS_LOGGED:
+                import threading as _th
 
-                    logger.info(
-                        "MetadataIO first real pyexiv2 access (warmed_up=%s, thread=%s)",
-                        cls._WARMED_UP,
-                        threading.current_thread().name,
-                    )
-                    cls._FIRST_REAL_ACCESS_LOGGED = True
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    md = {
-                        "file_path": operational_path,
-                        "pixel_width": img.get_pixel_width(),
-                        "pixel_height": img.get_pixel_height(),
-                        "mime_type": img.get_mime_type(),
-                        "file_size": os.path.getsize(operational_path)
-                        if os.path.isfile(operational_path)
-                        else "Unknown",
-                    }
-                    try:
-                        exif = img.read_exif() or {}
-                        if exif:
-                            md.update(exif)
-                    except Exception:
-                        logger.debug(
-                            f"No EXIF for {os.path.basename(operational_path)}"
-                        )
-                    try:
-                        iptc = img.read_iptc() or {}
-                        if iptc:
-                            md.update(iptc)
-                    except Exception:
-                        logger.debug(
-                            f"No IPTC for {os.path.basename(operational_path)}"
-                        )
-                    try:
-                        xmp = img.read_xmp() or {}
-                        if xmp:
-                            md.update(xmp)
-                    except Exception:
-                        logger.debug(f"No XMP for {os.path.basename(operational_path)}")
-                    return md
+                logger.info(
+                    "MetadataIO first real pyexiv2 access (warmed_up=%s, thread=%s)",
+                    cls._WARMED_UP,
+                    _th.current_thread().name,
+                )
+                cls._FIRST_REAL_ACCESS_LOGGED = True
+            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+                md = {
+                    "file_path": operational_path,
+                    "pixel_width": img.get_pixel_width(),
+                    "pixel_height": img.get_pixel_height(),
+                    "mime_type": img.get_mime_type(),
+                    "file_size": os.path.getsize(operational_path)
+                    if os.path.isfile(operational_path)
+                    else "Unknown",
+                }
+                try:
+                    exif = img.read_exif() or {}
+                    if exif:
+                        md.update(exif)
+                except Exception:
+                    logger.debug(f"No EXIF for {os.path.basename(operational_path)}")
+                try:
+                    iptc = img.read_iptc() or {}
+                    if iptc:
+                        md.update(iptc)
+                except Exception:
+                    logger.debug(f"No IPTC for {os.path.basename(operational_path)}")
+                try:
+                    xmp = img.read_xmp() or {}
+                    if xmp:
+                        md.update(xmp)
+                except Exception:
+                    logger.debug(f"No XMP for {os.path.basename(operational_path)}")
+                return md
         except Exception as e:
             msg = str(e)
             is_missing = (
@@ -243,16 +300,20 @@ class MetadataIO:
             }
 
     @classmethod
-    def set_xmp_rating(cls, operational_path: str, rating: int) -> bool:
+    def read_raw_metadata(cls, operational_path: str) -> Dict:
+        """Public API: dispatch to the dedicated worker thread when enabled."""
+        return cls._call_in_worker(cls._read_raw_metadata_inner, operational_path)
+
+    @classmethod
+    def _set_xmp_rating_inner(cls, operational_path: str, rating: int) -> bool:
         """Set XMP rating (0-5). Returns True if succeeded."""
         if not os.path.isfile(operational_path):
             logger.warning(f"Cannot set rating; file missing: {operational_path}")
             return False
         try:
-            with cls._LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    img.modify_xmp({"Xmp.xmp.Rating": str(int(rating))})
-                    return True
+            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+                img.modify_xmp({"Xmp.xmp.Rating": str(int(rating))})
+                return True
         except Exception as e:
             logger.error(
                 f"Error setting rating for {os.path.basename(operational_path)}: {e}",
@@ -261,7 +322,11 @@ class MetadataIO:
             return False
 
     @classmethod
-    def read_exif_orientation(cls, operational_path: str) -> Optional[int]:
+    def set_xmp_rating(cls, operational_path: str, rating: int) -> bool:
+        return cls._call_in_worker(cls._set_xmp_rating_inner, operational_path, rating)
+
+    @classmethod
+    def _read_exif_orientation_inner(cls, operational_path: str) -> Optional[int]:
         """Read EXIF orientation value if present (1-8)."""
         if not os.path.isfile(operational_path):
             logger.info(
@@ -269,11 +334,10 @@ class MetadataIO:
             )
             return None
         try:
-            with cls._LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    exif = img.read_exif() or {}
-                    val = exif.get("Exif.Image.Orientation")
-                    return int(val) if val is not None else None
+            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+                exif = img.read_exif() or {}
+                val = exif.get("Exif.Image.Orientation")
+                return int(val) if val is not None else None
         except Exception as e:
             msg = str(e)
             if (
@@ -292,7 +356,13 @@ class MetadataIO:
             return None
 
     @classmethod
-    def set_exif_orientation(cls, operational_path: str, orientation: int) -> bool:
+    def read_exif_orientation(cls, operational_path: str) -> Optional[int]:
+        return cls._call_in_worker(cls._read_exif_orientation_inner, operational_path)
+
+    @classmethod
+    def _set_exif_orientation_inner(
+        cls, operational_path: str, orientation: int
+    ) -> bool:
         """Write EXIF orientation (1-8). Returns True if succeeded."""
         if not os.path.isfile(operational_path):
             logger.warning(
@@ -300,10 +370,9 @@ class MetadataIO:
             )
             return False
         try:
-            with cls._LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    img.modify_exif({"Exif.Image.Orientation": int(orientation)})
-                    return True
+            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+                img.modify_exif({"Exif.Image.Orientation": int(orientation)})
+                return True
         except Exception as e:
             logger.error(
                 f"Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}",
@@ -312,7 +381,15 @@ class MetadataIO:
             return False
 
     @classmethod
-    def set_xmp_orientation(cls, operational_path: str, orientation: int) -> bool:
+    def set_exif_orientation(cls, operational_path: str, orientation: int) -> bool:
+        return cls._call_in_worker(
+            cls._set_exif_orientation_inner, operational_path, orientation
+        )
+
+    @classmethod
+    def _set_xmp_orientation_inner(
+        cls, operational_path: str, orientation: int
+    ) -> bool:
         """Attempt to set XMP tiff Orientation. Returns True if succeeded."""
         if not os.path.isfile(operational_path):
             logger.warning(
@@ -320,10 +397,9 @@ class MetadataIO:
             )
             return False
         try:
-            with cls._LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    img.modify_xmp({"Xmp.tiff.Orientation": str(int(orientation))})
-                    return True
+            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+                img.modify_xmp({"Xmp.tiff.Orientation": str(int(orientation))})
+                return True
         except Exception as e:
             logger.debug(
                 f"Could not set XMP orientation for {os.path.basename(operational_path)}: {e}"
@@ -331,7 +407,13 @@ class MetadataIO:
             return False
 
     @classmethod
-    def read_orientation_and_dimensions(
+    def set_xmp_orientation(cls, operational_path: str, orientation: int) -> bool:
+        return cls._call_in_worker(
+            cls._set_xmp_orientation_inner, operational_path, orientation
+        )
+
+    @classmethod
+    def _read_orientation_and_dimensions_inner(
         cls, operational_path: str
     ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
         """Efficiently read orientation, pixel width, and pixel height."""
@@ -341,14 +423,13 @@ class MetadataIO:
             )
             return None, None, None
         try:
-            with cls._LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    exif = img.read_exif() or {}
-                    orientation = exif.get("Exif.Image.Orientation")
-                    orientation_val = int(orientation) if orientation else None
-                    width = img.get_pixel_width()
-                    height = img.get_pixel_height()
-                    return orientation_val, width, height
+            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+                exif = img.read_exif() or {}
+                orientation = exif.get("Exif.Image.Orientation")
+                orientation_val = int(orientation) if orientation else None
+                width = img.get_pixel_width()
+                height = img.get_pixel_height()
+                return orientation_val, width, height
         except Exception as e:
             msg = str(e)
             if (
@@ -365,3 +446,11 @@ class MetadataIO:
                     exc_info=True,
                 )
             return None, None, None
+
+    @classmethod
+    def read_orientation_and_dimensions(
+        cls, operational_path: str
+    ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+        return cls._call_in_worker(
+            cls._read_orientation_and_dimensions_inner, operational_path
+        )

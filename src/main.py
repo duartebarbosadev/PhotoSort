@@ -310,6 +310,15 @@ def main():
     logging.getLogger("PIL.Image").setLevel(logging.INFO)
     # --- End Suppress verbose third-party loggers ---
 
+    # Start the dedicated single-thread worker for all pyexiv2 calls on
+    # Windows/frozen builds to avoid cross-thread access to C++ globals.
+    try:
+        MetadataIO.start_worker_thread()
+    except Exception as e:
+        logging.warning(
+            f"MetadataIO worker thread start encountered an issue (continuing): {e}"
+        )
+
     # --- Setup Global Exception Hook ---
     sys.excepthook = global_exception_handler  # Assign the function
     logging.debug("Global exception hook set.")
@@ -332,9 +341,7 @@ def main():
         f"QApplication instantiated in {time.perf_counter() - app_instantiation_start_time:.4f}s"
     )
 
-    # After the event loop exists and on the GUI thread, enforce that the very
-    # first real pyexiv2.Image open occurred here. This complements warmup and
-    # avoids the first open happening inside a worker thread.
+    # This call is now a no-op (real access happens on dedicated worker thread)
     try:
         MetadataIO.ensure_first_access_main_thread()
     except Exception as e:

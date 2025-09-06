@@ -17,6 +17,7 @@ from core.rating_loader_worker import (
 )
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
+from core.metadata_io import MetadataIO
 from ui.app_state import AppState
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,15 @@ class WorkerManager(QObject):
     ):
         super().__init__(parent)
         self.image_pipeline = image_pipeline_instance
+
+        # Ensure the dedicated single-thread pyexiv2 worker is running before any
+        # background QThreads start using metadata APIs. Idempotent and safe.
+        try:
+            MetadataIO.start_worker_thread()
+        except Exception as e:
+            logger.warning(
+                f"MetadataIO worker thread start from WorkerManager encountered an issue (continuing): {e}"
+            )
 
         self.scanner_thread: Optional[QThread] = None
         self.file_scanner: Optional[FileScanner] = None
