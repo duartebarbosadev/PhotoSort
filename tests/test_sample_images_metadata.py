@@ -6,7 +6,6 @@ from known sample images. If pyexiv2 or our abstraction layer changes, these
 tests will catch any regressions in metadata extraction.
 """
 
-import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash
 import pytest
 import os
 import sys

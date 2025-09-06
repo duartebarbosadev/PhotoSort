@@ -5,8 +5,6 @@ This module tests that the FileScanner correctly handles automatic
 RAW detection without requiring apply_auto_edits parameters.
 """
 
-import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
-
 import inspect
 from unittest.mock import patch
 from src.core.file_scanner import FileScanner
