@@ -133,7 +133,7 @@ class DialogManager:
             from core.build_info import VERSION  # type: ignore
 
             version_text = str(VERSION).strip() or None
-        except Exception:
+        except (ImportError, AttributeError):
             version_text = None
 
         version_label = QLabel()
