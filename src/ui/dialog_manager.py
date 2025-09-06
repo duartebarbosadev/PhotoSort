@@ -129,10 +129,10 @@ class DialogManager:
         # Version label (populated only in packaged builds)
         version_text = None
         try:
-            # Created by CI during packaged builds
-            from app_version import APP_VERSION  # type: ignore
+            # Populated by CI during packaged builds in core/build_info.py
+            from core.build_info import VERSION  # type: ignore
 
-            version_text = str(APP_VERSION).strip() or None
+            version_text = str(VERSION).strip() or None
         except Exception:
             version_text = None
 
