@@ -25,12 +25,12 @@ jobs:
           - os: windows-latest
             python: '3.12'
             artifact_name: PhotoSort-Windows-x64
-          - os: macos-13  # Intel
-            python: '3.12'
-            artifact_name: PhotoSort-macOS-Intel
-          - os: macos-14  # Apple Silicon
-            python: '3.12'
-            artifact_name: PhotoSort-macOS-AppleSilicon
+          #- os: macos-13  # Intel
+            #python: '3.12'
+            #artifact_name: PhotoSort-macOS-Intel
+          #- os: macos-14  # Apple Silicon
+            #python: '3.12'
+            #artifact_name: PhotoSort-macOS-AppleSilicon
 
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: '1'
