@@ -4,7 +4,12 @@ import subprocess
 import tempfile
 from typing import Literal, Tuple
 from PIL import Image, ImageOps
+
+# Ensure pyexiv2 is properly initialized before use
+from core.pyexiv2_init import ensure_pyexiv2_initialized
+ensure_pyexiv2_initialized()
 import pyexiv2
+
 from pathlib import Path
 from core.image_file_ops import ImageFileOperations
 from core.app_settings import JPEGTRAN_TIMEOUT_SECONDS

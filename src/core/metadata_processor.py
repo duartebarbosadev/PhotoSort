@@ -1,4 +1,8 @@
+# Ensure pyexiv2 is properly initialized before use
+from core.pyexiv2_init import ensure_pyexiv2_initialized
+ensure_pyexiv2_initialized()
 import pyexiv2
+
 import os
 import re
 import time
@@ -309,6 +313,14 @@ class MetadataProcessor:
         else:
             MAX_WORKERS = default_workers
 
+        # Worker function for ThreadPoolExecutor to ensure each thread initializes pyexiv2
+        def worker_initializer():
+            """Initialize each worker thread with pyexiv2."""
+            try:
+                ensure_pyexiv2_initialized()
+            except Exception as e:
+                logger.error(f"Failed to initialize pyexiv2 in worker thread: {e}")
+
         def process_chunk(chunk_paths: List[str]) -> List[Dict[str, Any]]:
             chunk_results = []
             for op_path in chunk_paths:  # op_path is the operational_path
@@ -326,6 +338,9 @@ class MetadataProcessor:
                     )
                     continue
                 try:
+                    # Ensure pyexiv2 is properly initialized in this thread/process
+                    ensure_pyexiv2_initialized()
+                    
                     # Guard ALL pyexiv2 operations with a lock for stability in threaded runs
                     with _PYEXIV2_LOCK:
                         with pyexiv2.Image(
@@ -414,7 +429,7 @@ class MetadataProcessor:
                 )
                 # Parallel execution logic (non-frozen or explicitly enabled)
                 with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=MAX_WORKERS
+                    max_workers=MAX_WORKERS, initializer=worker_initializer
                 ) as executor:
                     future_to_chunk = {
                         executor.submit(
