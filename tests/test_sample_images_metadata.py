@@ -27,7 +27,7 @@ class TestSampleImagesMetadata:
     def setup_class(cls):
         """Setup paths to sample images."""
         cls.test_folder = "tests/samples"
-        cls.arw_sample = os.path.join(cls.test_folder, "arw_sample.arw")
+        cls.arw_sample = os.path.join(cls.test_folder, "arw_sample.ARW")
         cls.jpg_sample = os.path.join(cls.test_folder, "jpg_sample.jpg")
 
         # Check if sample files exist
