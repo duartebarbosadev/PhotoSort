@@ -255,6 +255,7 @@ class DialogManager:
         # Start CUDA detection worker
         worker_manager = self.parent.app_controller.worker_manager
         if embeddings_label_ref:
+
             def update_embeddings_label(available):
                 try:
                     if embeddings_label_ref:
@@ -263,7 +264,7 @@ class DialogManager:
                         )
                 except RuntimeError:
                     pass  # Label has been deleted
-            
+
             worker_manager.cuda_detection_finished.connect(update_embeddings_label)
             worker_manager.start_cuda_detection()
 

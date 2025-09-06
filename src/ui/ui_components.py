@@ -427,6 +427,7 @@ class CudaDetectionWorker(QObject):
 
     def run(self):
         from core.app_settings import is_pytorch_cuda_available
+
         try:
             available = is_pytorch_cuda_available()
             self.finished.emit(available)
