@@ -5,14 +5,7 @@ import tempfile
 import os
 from PIL import Image
 
-# Add the src directory to the path
-import sys
-
-src_path = os.path.join(os.path.dirname(__file__), "..", "src")
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
-
-from core.pyexiv2_wrapper import PyExiv2Operations, safe_pyexiv2_image  # noqa: E402
+from core.pyexiv2_wrapper import PyExiv2Operations, safe_pyexiv2_image
 
 
 class TestPyExiv2Integration:

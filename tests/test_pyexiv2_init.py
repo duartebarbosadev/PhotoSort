@@ -1,16 +1,7 @@
 import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 
-import os
 from unittest.mock import patch
-
-# Add the src directory to the path
-import sys
-
-src_path = os.path.join(os.path.dirname(__file__), "..", "src")
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
-
-from core.pyexiv2_init import ensure_pyexiv2_initialized, _PYEXIV2_INITIALIZED  # noqa: E402
+from core.pyexiv2_init import ensure_pyexiv2_initialized, _PYEXIV2_INITIALIZED
 
 
 class TestPyExiv2Init:

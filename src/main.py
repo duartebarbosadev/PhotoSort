@@ -1,12 +1,5 @@
-# CRITICAL: Import pyexiv2 initialization BEFORE any other imports
-# This prevents DLL conflicts with Qt libraries on Windows
 import sys
 import os
-
-# Ensure the 'src' directory is on sys.path before any other imports
-SRC_DIR = os.path.dirname(__file__)
-if SRC_DIR and SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
 
 # Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
 try:
@@ -26,11 +19,6 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QMessageBox,
 )  # QMessageBox for global exception handler
 from PyQt6.QtGui import QIcon  # noqa: E402
-
-# Ensure the 'src' directory is on sys.path when executing as a script
-SRC_DIR = os.path.dirname(__file__)
-if SRC_DIR and SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
 
 from ui.main_window import MainWindow  # noqa: E402
 from ui.app_controller import AppController  # noqa: E402

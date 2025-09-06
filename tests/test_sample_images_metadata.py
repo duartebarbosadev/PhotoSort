@@ -43,8 +43,6 @@ class TestSampleImagesMetadata:
 
     def test_arw_sample_metadata(self):
         """Test metadata extraction from arw_sample.ARW with expected values."""
-        if not self.arw_exists:
-            pytest.skip("arw_sample.arw not found")
 
         # Extract detailed metadata using MetadataIO
         from core.metadata_io import MetadataIO
@@ -226,8 +224,6 @@ class TestSampleImagesMetadata:
 
     def test_calculated_values(self):
         """Test calculated/derived values like megapixels."""
-        if not self.arw_exists:
-            pytest.skip("arw_sample.arw not found")
 
         from core.metadata_io import MetadataIO
 
@@ -281,8 +277,6 @@ class TestSampleImagesMetadata:
 
     def test_specific_tag_formats(self):
         """Test that specific metadata tags are in the expected format."""
-        if not self.arw_exists:
-            pytest.skip("arw_sample.arw not found")
 
         metadata = MetadataProcessor.get_batch_display_metadata([self.arw_sample])
         norm_path = os.path.normpath(self.arw_sample)
