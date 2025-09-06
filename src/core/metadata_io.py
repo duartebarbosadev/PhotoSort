@@ -94,7 +94,9 @@ class MetadataIO:
                         with pyexiv2.Image(tmp.name, encoding="utf-8"):
                             pass
                     except Exception as e_open:
-                        logger.debug(f"Main-thread first access open failed (continuing): {e_open}")
+                        logger.debug(
+                            f"Main-thread first access open failed (continuing): {e_open}"
+                        )
                 cls._FIRST_ACCESS_DONE = True
                 if not cls._WARMED_UP:
                     cls._WARMED_UP = True

@@ -328,7 +328,9 @@ def main():
     try:
         MetadataIO.ensure_first_access_main_thread()
     except Exception as e:
-        logging.warning(f"MetadataIO ensure_first_access_main_thread failed (continuing): {e}")
+        logging.warning(
+            f"MetadataIO ensure_first_access_main_thread failed (continuing): {e}"
+        )
 
     # Load and apply the stylesheet
     stylesheet_load_start_time = time.perf_counter()
