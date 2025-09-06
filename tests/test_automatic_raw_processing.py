@@ -6,8 +6,6 @@ and applies appropriate processing automatically without requiring
 external apply_auto_edits parameters.
 """
 
-import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
-
 import inspect
 from unittest.mock import Mock, patch
 from src.core.image_pipeline import ImagePipeline
