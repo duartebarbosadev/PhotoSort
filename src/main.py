@@ -1,6 +1,12 @@
 import sys
 import os
 
+# Ensure the 'src' directory is on sys.path when executing as a script
+SRC_DIR = os.path.dirname(__file__)
+
+if SRC_DIR and SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
 # Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
 try:
     from core.pyexiv2_init import ensure_pyexiv2_initialized  # noqa: E402
