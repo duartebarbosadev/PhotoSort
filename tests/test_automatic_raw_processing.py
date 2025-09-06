@@ -160,9 +160,18 @@ class TestAutomaticRawProcessing:
             # Verify that _get_pil_thumbnail was called for each file
             assert mock_get_pil.call_count == len(test_files)
 
-            # Verify each call had the correct file path
-            called_paths = [call[0][0] for call in mock_get_pil.call_args_list]
-            assert called_paths == test_files
+            # Verify each file was processed exactly once (order is nondeterministic due to ThreadPoolExecutor)
+            called_paths = [c[0][0] for c in mock_get_pil.call_args_list]
+            assert len(called_paths) == len(test_files), (
+                f"Expected {len(test_files)} calls, got {len(called_paths)}"
+            )
+            assert set(called_paths) == set(test_files), (
+                f"Mismatch in processed files. Expected set {set(test_files)}, got {set(called_paths)}."
+            )
+            # Extra guard against duplicates
+            assert len(set(called_paths)) == len(called_paths), (
+                f"Duplicate paths detected in calls: {called_paths}"
+            )
 
     def test_get_thumbnail_qpixmap_handles_file_types_correctly(self):
         """Test that get_thumbnail_qpixmap processes different file types."""

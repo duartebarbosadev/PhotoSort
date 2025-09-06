@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 from typing import Literal, Tuple
 from PIL import Image, ImageOps
-import pyexiv2
+from core.metadata_io import MetadataIO
 from pathlib import Path
 from core.image_file_ops import ImageFileOperations
 from core.app_settings import JPEGTRAN_TIMEOUT_SECONDS
@@ -99,15 +99,12 @@ class ImageRotator:
                 )
             return 1  # Default if pillow-heif fails or no EXIF
 
-        try:
-            with pyexiv2.Image(image_path, encoding="utf-8") as img:
-                exif_data = img.read_exif()
-                orientation = exif_data.get("Exif.Image.Orientation")
-                if orientation:
-                    return int(orientation)
-        except Exception as e:
+        orientation = MetadataIO.read_exif_orientation(image_path)
+        if orientation is not None:
+            return orientation
+        else:
             logger.warning(
-                f"Could not read EXIF orientation from '{os.path.basename(image_path)}': {e}"
+                f"Could not read EXIF orientation from '{os.path.basename(image_path)}' (defaulting to 1)"
             )
         return 1  # Default orientation (no rotation)
 
@@ -280,45 +277,12 @@ class ImageRotator:
             # Use pillow-heif for HEIF/HEIC metadata update
             return self._update_heif_orientation_lossless(image_path, new_orientation)
 
-        pyexiv2_success = False
-        try:
-            with pyexiv2.Image(image_path, encoding="utf-8") as img:
-                # Update EXIF orientation
-                try:
-                    img.modify_exif({"Exif.Image.Orientation": str(new_orientation)})
-                    logger.debug(
-                        f"Updated EXIF orientation for {os.path.basename(image_path)} using pyexiv2."
-                    )
-                    pyexiv2_success = True
-                except Exception as e:
-                    logger.warning(
-                        f"pyexiv2 could not update EXIF orientation for '{os.path.basename(image_path)}': {e}"
-                    )
+        exif_ok = MetadataIO.set_exif_orientation(image_path, new_orientation)
+        xmp_ok = False
+        if file_ext in self._XMP_UPDATE_SUPPORTED_EXTENSIONS:
+            xmp_ok = MetadataIO.set_xmp_orientation(image_path, new_orientation)
 
-                # Try to set XMP orientation if the format typically supports it via pyexiv2
-                if file_ext in self._XMP_UPDATE_SUPPORTED_EXTENSIONS:
-                    try:
-                        # Check if image already has XMP data or if it's a JPEG (which can always get XMP)
-                        xmp_data = img.read_xmp()
-                        if xmp_data or file_ext in [".jpg", ".jpeg"]:
-                            img.modify_xmp(
-                                {"Xmp.tiff.Orientation": str(new_orientation)}
-                            )
-                            logger.debug(
-                                f"Updated XMP orientation for {os.path.basename(image_path)} using pyexiv2."
-                            )
-                            pyexiv2_success = True
-                    except Exception as e:
-                        logger.debug(
-                            f"pyexiv2 XMP orientation not updated for '{os.path.basename(image_path)}': {e}"
-                        )
-
-        except Exception as e:
-            logger.warning(
-                f"pyexiv2 could not process '{os.path.basename(image_path)}' for metadata update: {e}"
-            )
-
-        if pyexiv2_success:
+        if exif_ok or xmp_ok:
             logger.info(
                 "Orientation metadata for '%s' updated to %d.",
                 os.path.basename(image_path),
@@ -327,7 +291,7 @@ class ImageRotator:
             return True
         else:
             logger.warning(
-                f"Failed to update orientation metadata for '{os.path.basename(image_path)}' using pyexiv2."
+                f"Failed to update orientation metadata for '{os.path.basename(image_path)}'."
             )
             return False
 

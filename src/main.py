@@ -18,6 +18,7 @@ if SRC_DIR and SRC_DIR not in sys.path:
 
 from ui.main_window import MainWindow  # noqa: E402
 from ui.app_controller import AppController  # noqa: E402
+from core.metadata_io import MetadataIO  # noqa: E402  # After pyexiv2 but before threads
 from pillow_heif import register_heif_opener  # noqa: E402
 
 
@@ -212,6 +213,14 @@ def main():
 
     register_heif_opener()
 
+    # Perform early metadata backend warmup BEFORE creating QApplication or starting
+    # any background workers that might touch pyexiv2 on Windows. This mitigates
+    # rare access violations when the first Exiv2 interaction happens off the main thread.
+    try:
+        MetadataIO.warmup()
+    except Exception as e:
+        logging.warning(f"MetadataIO warmup failed (continuing): {e}")
+
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="PhotoSort")
     parser.add_argument("--folder", type=str, help="Open specified folder at startup")
@@ -273,6 +282,26 @@ def main():
             "File logging disabled. To enable, set PHOTOSORT_ENABLE_FILE_LOGGING=true."
         )
 
+    # Confirm pyexiv2 import (path and version) after logging is configured
+    try:
+        logging.info(
+            "pyexiv2 loaded: path=%s, version=%s",
+            getattr(pyexiv2, "__file__", "unknown"),
+            getattr(pyexiv2, "__version__", "unknown"),
+        )
+    except Exception as _e_pe2:
+        logging.warning(f"Failed to introspect pyexiv2 import details: {_e_pe2}")
+
+    # Log current MetadataIO state now that logging is configured
+    try:
+        logging.debug(
+            "MetadataIO state pre-Qt: warmed_up=%s, first_access_done=%s",
+            getattr(MetadataIO, "_WARMED_UP", None),
+            getattr(MetadataIO, "_FIRST_ACCESS_DONE", None),
+        )
+    except Exception:
+        pass
+
         # --- Suppress verbose third-party loggers ---
     logging.getLogger("PIL").setLevel(logging.INFO)
     logging.getLogger("PIL.PngImagePlugin").setLevel(logging.INFO)
@@ -280,6 +309,15 @@ def main():
     # You might also want to set it for the more general Image module if logs still appear
     logging.getLogger("PIL.Image").setLevel(logging.INFO)
     # --- End Suppress verbose third-party loggers ---
+
+    # Start the dedicated single-thread worker for all pyexiv2 calls on
+    # Windows/frozen builds to avoid cross-thread access to C++ globals.
+    try:
+        MetadataIO.start_worker_thread()
+    except Exception as e:
+        logging.warning(
+            f"MetadataIO worker thread start encountered an issue (continuing): {e}"
+        )
 
     # --- Setup Global Exception Hook ---
     sys.excepthook = global_exception_handler  # Assign the function
@@ -302,6 +340,14 @@ def main():
     logging.debug(
         f"QApplication instantiated in {time.perf_counter() - app_instantiation_start_time:.4f}s"
     )
+
+    # This call is now a no-op (real access happens on dedicated worker thread)
+    try:
+        MetadataIO.ensure_first_access_main_thread()
+    except Exception as e:
+        logging.warning(
+            f"MetadataIO ensure_first_access_main_thread failed (continuing): {e}"
+        )
 
     # Load and apply the stylesheet
     stylesheet_load_start_time = time.perf_counter()
