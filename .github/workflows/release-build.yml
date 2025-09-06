@@ -111,11 +111,11 @@ jobs:
             --paths src `
             --add-data "src/ui/dark_theme.qss;." `
             --add-data "assets/app_icon.ico;." `
+            --hidden-import pyexiv2 `
             --hidden-import PyQt6.QtCore `
             --hidden-import PyQt6.QtGui `
             --hidden-import PyQt6.QtWidgets `
             --hidden-import rawpy `
-            --hidden-import pyexiv2 `
             --hidden-import cv2 `
             --hidden-import onnxruntime `
             --hidden-import torchvision `
