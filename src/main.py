@@ -1,20 +1,24 @@
-import pyexiv2  # noqa: F401  # This must be the first import or else it will cause a silent crash on windows
 import sys
 import os
-import logging
-import time
-import argparse
-import traceback  # For global exception handler
-from PyQt6.QtWidgets import (
+
+# Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
+try:
+    from core.pyexiv2_init import ensure_pyexiv2_initialized  # noqa: E402
+
+    ensure_pyexiv2_initialized()
+except Exception as e:
+    # If we can't initialize pyexiv2, log the error but don't prevent app startup
+    print(f"Warning: Failed to initialize pyexiv2: {e}")
+
+import logging  # noqa: E402  # Must be after pyexiv2 initialization
+import time  # noqa: E402
+import argparse  # noqa: E402
+import traceback  # noqa: E402  # For global exception handler
+from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QMessageBox,
 )  # QMessageBox for global exception handler
-from PyQt6.QtGui import QIcon
-
-# Ensure the 'src' directory is on sys.path when executing as a script
-SRC_DIR = os.path.dirname(__file__)
-if SRC_DIR and SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
+from PyQt6.QtGui import QIcon  # noqa: E402
 
 from ui.main_window import MainWindow  # noqa: E402
 from ui.app_controller import AppController  # noqa: E402

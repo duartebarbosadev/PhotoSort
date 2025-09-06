@@ -20,7 +20,9 @@ The application is structured into two main packages: `core` and `ui`.
     - **`file_scanner.py`**: Scans directories for image files.
     - **`image_file_ops.py`**: Handles all file system operations, such as moving, renaming, and deleting files. This is the single source of truth for file manipulations.
     - **`image_pipeline.py`**: Orchestrates image processing, caching, and retrieval.
-    - **`metadata_processor.py`**: Handles reading and writing image metadata.
+    - **`metadata_processor.py`**: Handles reading and writing image metadata using the PyExiv2 abstraction layer.
+    - **`pyexiv2_wrapper.py`**: **PyExiv2 Abstraction Layer** - Provides a safe, centralized interface for all PyExiv2 operations. This module ensures proper initialization, thread safety, and prevents DLL conflicts on Windows. **All PyExiv2 usage must go through this wrapper** - never import pyexiv2 directly in application code.
+    - **`pyexiv2_init.py`**: Handles safe PyExiv2 initialization ensuring it loads before Qt libraries to prevent access violations.
     - **`rating_loader_worker.py`**: A worker dedicated to loading image ratings and metadata.
     - **`similarity_engine.py`**: Handles image feature extraction and clustering.
   - **`ui/`**: Contains all UI-related components, following the Model-View-Controller (MVC) pattern.
@@ -111,6 +113,23 @@ The application is structured into two main packages: `core` and `ui`.
 - **Separation of Concerns**: Keep UI logic separate from business logic. The `core` package should not depend on the `ui` package. The `ui` package, specifically `MainWindow`, should be as "dumb" as possible, delegating all logic to the `AppController`.
 - **File Operations**: All file system operations (move, rename, delete) MUST be handled by the `ImageFileOperations` class in `src/core/image_file_ops.py`. This ensures that file manipulations are centralized and handled consistently.
 - **Threading**: All long-running tasks MUST be executed in a background thread using the `WorkerManager`. This ensures the UI remains responsive. Workers should communicate with the main thread via Qt signals.
+- **PyExiv2 Usage**: **ALL PyExiv2 operations must use the abstraction layer in `src/core/pyexiv2_wrapper.py`**. Never import or use pyexiv2 directly in application code. This prevents DLL conflicts and ensures proper initialization:
+  
+  ```python
+  # ✅ CORRECT - Use the abstraction layer
+  from core.pyexiv2_wrapper import PyExiv2Operations, safe_pyexiv2_image
+  
+  # High-level operations (preferred)
+  metadata = PyExiv2Operations.get_comprehensive_metadata(image_path)
+  success = PyExiv2Operations.set_rating(image_path, 5)
+  
+  # Low-level operations when needed
+  with safe_pyexiv2_image(image_path) as img:
+      exif_data = img.read_exif()
+  
+  # ❌ INCORRECT - Never import pyexiv2 directly
+  import pyexiv2  # This can cause Windows DLL conflicts
+  ```
 - **State Management**: The application's state (e.g., list of loaded images, cache data) is managed by the `AppState` class. Avoid storing state directly in the `MainWindow` or other UI components.
 - **Styling**: All UI components should be styled using stylesheets. The application uses a dark theme defined in `src/ui/dark_theme.qss`. When creating new UI components or modifying existing ones, ensure that the styling is consistent with this theme.
 

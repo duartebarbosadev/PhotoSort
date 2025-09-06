@@ -1,4 +1,3 @@
-import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 from src.ui.controllers.navigation_controller import NavigationController
 from PyQt6.QtCore import Qt, QModelIndex
 

@@ -1,4 +1,3 @@
-import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 import pytest
 from src.ui.controllers.metadata_controller import MetadataController
 
