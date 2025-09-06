@@ -15,7 +15,7 @@ if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
 # Use the centralized initialization function
-from core.pyexiv2_init import ensure_pyexiv2_initialized
+from core.pyexiv2_init import ensure_pyexiv2_initialized # noqa: E402
 
 ensure_pyexiv2_initialized()
 print("Runtime hook: pyexiv2 initialized successfully")
