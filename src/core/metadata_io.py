@@ -30,6 +30,46 @@ class MetadataIO:
     _FIRST_ACCESS_DONE = False  # Ensures the very first real open happened once
     _FIRST_ACCESS_EVENT = threading.Event()
 
+    @staticmethod
+    def _make_temp_jpeg_path() -> str:
+        """Create a writable temp JPEG path with a closed handle (Windows-safe).
+
+        Returns a path to a tiny valid JPEG. Caller must delete the file.
+        """
+        import tempfile
+        from PIL import Image
+
+        def _try_in_dir(base_dir: Optional[str]) -> Optional[str]:
+            try:
+                if base_dir:
+                    os.makedirs(base_dir, exist_ok=True)
+                fd, path = tempfile.mkstemp(suffix=".jpg", dir=base_dir)
+                try:
+                    os.close(fd)  # close handle to allow other opens on Windows
+                except Exception:
+                    pass
+                # Write a tiny JPEG
+                img = Image.new("RGB", (2, 2), color=(0, 0, 0))
+                img.save(path, format="JPEG")
+                return path
+            except Exception:
+                return None
+
+        # Try default temp dir
+        p = _try_in_dir(None)
+        if p:
+            return p
+        # Fallback to user cache dir
+        fallback_dir = os.path.join(os.path.expanduser("~"), ".photosort_cache")
+        p = _try_in_dir(fallback_dir)
+        if p:
+            return p
+        # Last resort: current working directory
+        p = _try_in_dir(os.getcwd())
+        if p:
+            return p
+        raise PermissionError("Failed to create a temporary JPEG file for warmup")
+
     @classmethod
     def warmup(cls) -> None:
         """Perform a one-time, main-thread friendly initialization of pyexiv2.
@@ -46,22 +86,24 @@ class MetadataIO:
         if cls._WARMED_UP:
             return
         try:
-            import tempfile
-            from PIL import Image
-
             with cls._LOCK:
                 if cls._WARMED_UP:  # Double-checked inside lock
                     return
-                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as tmp:
-                    # Create a minimal valid JPEG
-                    img = Image.new("RGB", (2, 2), color=(0, 0, 0))
-                    img.save(tmp.name, format="JPEG")
+                temp_path = None
+                try:
+                    temp_path = cls._make_temp_jpeg_path()
                     # Open via pyexiv2 to force library init
                     try:
-                        with pyexiv2.Image(tmp.name, encoding="utf-8"):
+                        with pyexiv2.Image(temp_path, encoding="utf-8"):
                             pass
                     except Exception as e_open:
                         logger.debug(f"Warmup open failed (continuing): {e_open}")
+                finally:
+                    if temp_path and os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except Exception:
+                            pass
                 cls._WARMED_UP = True
                 logger.info("MetadataIO warmup completed.")
         except Exception as e:
@@ -81,22 +123,25 @@ class MetadataIO:
         if cls._FIRST_ACCESS_DONE:
             return
         try:
-            import tempfile
-            from PIL import Image
-
             with cls._LOCK:
                 if cls._FIRST_ACCESS_DONE:
                     return
-                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as tmp:
-                    img = Image.new("RGB", (2, 2), color=(0, 0, 0))
-                    img.save(tmp.name, format="JPEG")
+                temp_path = None
+                try:
+                    temp_path = cls._make_temp_jpeg_path()
                     try:
-                        with pyexiv2.Image(tmp.name, encoding="utf-8"):
+                        with pyexiv2.Image(temp_path, encoding="utf-8"):
                             pass
                     except Exception as e_open:
                         logger.debug(
                             f"Main-thread first access open failed (continuing): {e_open}"
                         )
+                finally:
+                    if temp_path and os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except Exception:
+                            pass
                 cls._FIRST_ACCESS_DONE = True
                 if not cls._WARMED_UP:
                     cls._WARMED_UP = True
@@ -130,8 +175,8 @@ class MetadataIO:
             if getattr(sys, "frozen", False) and sys.platform.startswith("win"):
                 if not cls._FIRST_ACCESS_DONE:
                     try:
-                        # Wait up to 1.5s for the GUI thread to perform first access
-                        cls._FIRST_ACCESS_EVENT.wait(timeout=1.5)
+                        # Wait up to 3.0s for the GUI thread to perform first access
+                        cls._FIRST_ACCESS_EVENT.wait(timeout=3.0)
                     except Exception:
                         pass
             with cls._LOCK:

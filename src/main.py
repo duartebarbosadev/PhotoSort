@@ -282,6 +282,16 @@ def main():
             "File logging disabled. To enable, set PHOTOSORT_ENABLE_FILE_LOGGING=true."
         )
 
+    # Confirm pyexiv2 import (path and version) after logging is configured
+    try:
+        logging.info(
+            "pyexiv2 loaded: path=%s, version=%s",
+            getattr(pyexiv2, "__file__", "unknown"),
+            getattr(pyexiv2, "__version__", "unknown"),
+        )
+    except Exception as _e_pe2:
+        logging.warning(f"Failed to introspect pyexiv2 import details: {_e_pe2}")
+
     # Log current MetadataIO state now that logging is configured
     try:
         logging.debug(
