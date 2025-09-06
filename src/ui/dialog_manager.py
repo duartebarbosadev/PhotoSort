@@ -126,8 +126,24 @@ class DialogManager:
         title_label.setObjectName("aboutTitle")
         app_info_layout.addWidget(title_label)
 
-        version_label = QLabel("Version 1.0b")
+        # Version label (populated only in packaged builds)
+        version_text = None
+        try:
+            # Populated by CI during packaged builds in core/build_info.py
+            from core.build_info import VERSION  # type: ignore
+
+            version_text = str(VERSION).strip() or None
+        except (ImportError, AttributeError):
+            version_text = None
+
+        version_label = QLabel()
         version_label.setObjectName("aboutVersion")
+        if version_text:
+            version_label.setText(f"Version {version_text}")
+            version_label.setVisible(True)
+        else:
+            # In local dev runs (python src/main.py), no version is shown
+            version_label.setVisible(False)
         app_info_layout.addWidget(version_label)
 
         header_layout.addLayout(app_info_layout)
