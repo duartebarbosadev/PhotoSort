@@ -4,10 +4,6 @@ import logging
 from PyQt6.QtCore import QObject, pyqtSignal
 from typing import List, Dict, Any, Optional
 
-# Ensure pyexiv2 is properly initialized before any metadata operations
-from core.pyexiv2_init import ensure_pyexiv2_initialized
-ensure_pyexiv2_initialized()
-
 from core.metadata_processor import MetadataProcessor
 from core.caching.rating_cache import RatingCache
 from core.app_settings import METADATA_EMIT_BATCH_SIZE

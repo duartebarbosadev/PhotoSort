@@ -5,10 +5,8 @@ import tempfile
 from typing import Literal, Tuple
 from PIL import Image, ImageOps
 
-# Ensure pyexiv2 is properly initialized before use
-from core.pyexiv2_init import ensure_pyexiv2_initialized
-ensure_pyexiv2_initialized()
-import pyexiv2
+# Use the new pyexiv2 abstraction layer
+from core.pyexiv2_wrapper import PyExiv2Operations, safe_pyexiv2_image
 
 from pathlib import Path
 from core.image_file_ops import ImageFileOperations
@@ -105,11 +103,9 @@ class ImageRotator:
             return 1  # Default if pillow-heif fails or no EXIF
 
         try:
-            with pyexiv2.Image(image_path, encoding="utf-8") as img:
-                exif_data = img.read_exif()
-                orientation = exif_data.get("Exif.Image.Orientation")
-                if orientation:
-                    return int(orientation)
+            # Use the new pyexiv2 wrapper for safe operations
+            orientation = PyExiv2Operations.get_orientation(image_path)
+            return orientation if orientation else 1
         except Exception as e:
             logger.warning(
                 f"Could not read EXIF orientation from '{os.path.basename(image_path)}': {e}"
@@ -287,31 +283,28 @@ class ImageRotator:
 
         pyexiv2_success = False
         try:
-            with pyexiv2.Image(image_path, encoding="utf-8") as img:
-                # Update EXIF orientation
-                try:
-                    img.modify_exif({"Exif.Image.Orientation": str(new_orientation)})
-                    logger.debug(
-                        f"Updated EXIF orientation for {os.path.basename(image_path)} using pyexiv2."
-                    )
-                    pyexiv2_success = True
-                except Exception as e:
-                    logger.warning(
-                        f"pyexiv2 could not update EXIF orientation for '{os.path.basename(image_path)}': {e}"
-                    )
+            # Use the new pyexiv2 wrapper for safe operations
+            pyexiv2_success = PyExiv2Operations.set_orientation(
+                image_path, new_orientation
+            )
+            if pyexiv2_success:
+                logger.debug(
+                    f"Updated EXIF orientation for {os.path.basename(image_path)} using pyexiv2."
+                )
 
-                # Try to set XMP orientation if the format typically supports it via pyexiv2
+                # Try to set XMP orientation if the format typically supports it
                 if file_ext in self._XMP_UPDATE_SUPPORTED_EXTENSIONS:
                     try:
-                        # Check if image already has XMP data or if it's a JPEG (which can always get XMP)
-                        xmp_data = img.read_xmp()
-                        if xmp_data or file_ext in [".jpg", ".jpeg"]:
-                            img.modify_xmp(
-                                {"Xmp.tiff.Orientation": str(new_orientation)}
-                            )
-                            logger.debug(
-                                f"Updated XMP orientation for {os.path.basename(image_path)} using pyexiv2."
-                            )
+                        with safe_pyexiv2_image(image_path) as img:
+                            # Check if image already has XMP data or if it's a JPEG (which can always get XMP)
+                            xmp_data = img.read_xmp()
+                            if xmp_data or file_ext in [".jpg", ".jpeg"]:
+                                img.modify_xmp(
+                                    {"Xmp.tiff.Orientation": str(new_orientation)}
+                                )
+                                logger.debug(
+                                    f"Updated XMP orientation for {os.path.basename(image_path)} using pyexiv2."
+                                )
                             pyexiv2_success = True
                     except Exception as e:
                         logger.debug(

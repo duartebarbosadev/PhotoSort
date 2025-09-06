@@ -10,7 +10,7 @@ import sys
 # Import pyexiv2 first to prevent Qt conflicts
 try:
     import pyexiv2  # noqa: F401
-    
+
     # Force initialization of pyexiv2 library to load all DLLs
     try:
         # Try to create a dummy image to fully initialize the library
@@ -24,13 +24,15 @@ try:
     except Exception:
         # Initialization may fail, but that's okay as long as pyexiv2 is imported
         pass
-        
+
 except ImportError:
     # If pyexiv2 is not available, log but don't fail
     print("Warning: pyexiv2 not available in runtime hook")
 
 # Check if any Qt modules are already loaded
-qt_modules = [name for name in sys.modules.keys() if name.startswith(('PyQt', 'PySide', 'Qt'))]
+qt_modules = [
+    name for name in sys.modules.keys() if name.startswith(("PyQt", "PySide", "Qt"))
+]
 if qt_modules:
     print(f"Warning: Qt modules detected before pyexiv2 initialization: {qt_modules}")
 else:

@@ -1,8 +1,6 @@
 # Centralized pyexiv2 usage. Tests and main app ensure early import of pyexiv2
 # where necessary to avoid Windows issues; importing here is acceptable.
-from core.pyexiv2_init import ensure_pyexiv2_initialized
-ensure_pyexiv2_initialized()
-import pyexiv2
+from core.pyexiv2_wrapper import PyExiv2Operations, safe_pyexiv2_image
 
 import os
 import sys
@@ -75,7 +73,7 @@ class MetadataIO:
                     try:
                         temp_path = cls._make_temp_jpeg_path()
                         try:
-                            with pyexiv2.Image(temp_path, encoding="utf-8"):
+                            with safe_pyexiv2_image(temp_path) as _:
                                 pass
                         except Exception as e_open:
                             logger.debug(
@@ -252,35 +250,10 @@ class MetadataIO:
                     _th.current_thread().name,
                 )
                 cls._FIRST_REAL_ACCESS_LOGGED = True
-            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                md = {
-                    "file_path": operational_path,
-                    "pixel_width": img.get_pixel_width(),
-                    "pixel_height": img.get_pixel_height(),
-                    "mime_type": img.get_mime_type(),
-                    "file_size": os.path.getsize(operational_path)
-                    if os.path.isfile(operational_path)
-                    else "Unknown",
-                }
-                try:
-                    exif = img.read_exif() or {}
-                    if exif:
-                        md.update(exif)
-                except Exception:
-                    logger.debug(f"No EXIF for {os.path.basename(operational_path)}")
-                try:
-                    iptc = img.read_iptc() or {}
-                    if iptc:
-                        md.update(iptc)
-                except Exception:
-                    logger.debug(f"No IPTC for {os.path.basename(operational_path)}")
-                try:
-                    xmp = img.read_xmp() or {}
-                    if xmp:
-                        md.update(xmp)
-                except Exception:
-                    logger.debug(f"No XMP for {os.path.basename(operational_path)}")
-                return md
+
+            # Use the new pyexiv2 wrapper for safe operations
+            md = PyExiv2Operations.get_comprehensive_metadata(operational_path)
+            return md
         except Exception as e:
             msg = str(e)
             is_missing = (
@@ -313,7 +286,7 @@ class MetadataIO:
             logger.warning(f"Cannot set rating; file missing: {operational_path}")
             return False
         try:
-            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+            with safe_pyexiv2_image(operational_path) as img:
                 img.modify_xmp({"Xmp.xmp.Rating": str(int(rating))})
                 return True
         except Exception as e:
@@ -336,7 +309,7 @@ class MetadataIO:
             )
             return None
         try:
-            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+            with safe_pyexiv2_image(operational_path) as img:
                 exif = img.read_exif() or {}
                 val = exif.get("Exif.Image.Orientation")
                 return int(val) if val is not None else None
@@ -372,7 +345,7 @@ class MetadataIO:
             )
             return False
         try:
-            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+            with safe_pyexiv2_image(operational_path) as img:
                 img.modify_exif({"Exif.Image.Orientation": int(orientation)})
                 return True
         except Exception as e:
@@ -399,7 +372,7 @@ class MetadataIO:
             )
             return False
         try:
-            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+            with safe_pyexiv2_image(operational_path) as img:
                 img.modify_xmp({"Xmp.tiff.Orientation": str(int(orientation))})
                 return True
         except Exception as e:
@@ -425,7 +398,7 @@ class MetadataIO:
             )
             return None, None, None
         try:
-            with pyexiv2.Image(operational_path, encoding="utf-8") as img:
+            with safe_pyexiv2_image(operational_path) as img:
                 exif = img.read_exif() or {}
                 orientation = exif.get("Exif.Image.Orientation")
                 orientation_val = int(orientation) if orientation else None

@@ -11,20 +11,21 @@ if SRC_DIR and SRC_DIR not in sys.path:
 # Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
 try:
     from core.pyexiv2_init import ensure_pyexiv2_initialized  # noqa: E402
+
     ensure_pyexiv2_initialized()
 except Exception as e:
     # If we can't initialize pyexiv2, log the error but don't prevent app startup
     print(f"Warning: Failed to initialize pyexiv2: {e}")
-    
-import logging
-import time
-import argparse
-import traceback  # For global exception handler
-from PyQt6.QtWidgets import (
+
+import logging  # noqa: E402  # Must be after pyexiv2 initialization
+import time  # noqa: E402
+import argparse  # noqa: E402
+import traceback  # noqa: E402  # For global exception handler
+from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QMessageBox,
 )  # QMessageBox for global exception handler
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon  # noqa: E402
 
 # Ensure the 'src' directory is on sys.path when executing as a script
 SRC_DIR = os.path.dirname(__file__)

@@ -1,7 +1,5 @@
-# Ensure pyexiv2 is properly initialized before use
-from core.pyexiv2_init import ensure_pyexiv2_initialized
-ensure_pyexiv2_initialized()
-import pyexiv2
+# Use the new pyexiv2 abstraction layer
+from core.pyexiv2_wrapper import PyExiv2Operations
 
 import os
 import re
@@ -11,7 +9,6 @@ import unicodedata
 from datetime import datetime as dt_parser, date as date_obj
 from typing import Dict, Any, Optional, List, Tuple
 import concurrent.futures
-import threading
 import sys
 
 from core.caching.rating_cache import RatingCache
@@ -20,9 +17,6 @@ from core.image_processing.image_rotator import ImageRotator, RotationDirection
 from core.app_settings import METADATA_PROCESSING_CHUNK_SIZE
 
 logger = logging.getLogger(__name__)
-
-# Global lock to guard pyexiv2 access, which can be sensitive in some frozen/multi-threaded contexts
-_PYEXIV2_LOCK = threading.Lock()
 
 # Preferred EXIF/XMP date tags in order of preference
 DATE_TAGS_PREFERENCE: List[str] = [
@@ -313,13 +307,10 @@ class MetadataProcessor:
         else:
             MAX_WORKERS = default_workers
 
-        # Worker function for ThreadPoolExecutor to ensure each thread initializes pyexiv2
+        # Worker function for ThreadPoolExecutor - no longer needed since wrapper handles initialization
         def worker_initializer():
-            """Initialize each worker thread with pyexiv2."""
-            try:
-                ensure_pyexiv2_initialized()
-            except Exception as e:
-                logger.error(f"Failed to initialize pyexiv2 in worker thread: {e}")
+            """Initialize each worker thread - handled by wrapper now."""
+            pass
 
         def process_chunk(chunk_paths: List[str]) -> List[Dict[str, Any]]:
             chunk_results = []
@@ -338,30 +329,14 @@ class MetadataProcessor:
                     )
                     continue
                 try:
-                    # Ensure pyexiv2 is properly initialized in this thread/process
-                    ensure_pyexiv2_initialized()
-                    
-                    # Guard ALL pyexiv2 operations with a lock for stability in threaded runs
-                    with _PYEXIV2_LOCK:
-                        with pyexiv2.Image(
-                            op_path, encoding="utf-8"
-                        ) as img:  # Use operational_path
-                            combined_metadata = {
-                                "file_path": op_path,  # Store operational_path used for extraction
-                                "pixel_width": img.get_pixel_width(),
-                                "pixel_height": img.get_pixel_height(),
-                                "mime_type": img.get_mime_type(),
-                                "file_size": os.path.getsize(op_path)
-                                if os.path.isfile(op_path)
-                                else "Unknown",
-                                **(img.read_exif() or {}),  # Ensure dicts even if empty
-                                **(img.read_iptc() or {}),
-                                **(img.read_xmp() or {}),
-                            }
-                            chunk_results.append(combined_metadata)
-                            logger.debug(
-                                f"Successfully extracted metadata for {os.path.basename(op_path)}"
-                            )
+                    # Use the new pyexiv2 wrapper for safe operations
+                    combined_metadata = PyExiv2Operations.get_comprehensive_metadata(
+                        op_path
+                    )
+                    chunk_results.append(combined_metadata)
+                    logger.debug(
+                        f"Successfully extracted metadata for {os.path.basename(op_path)}"
+                    )
                 except Exception as e:
                     # pyexiv2 raises RuntimeError for many IO issues; downshift errno=2 to warning without traceback
                     msg = str(e)
@@ -570,11 +545,8 @@ class MetadataProcessor:
             f"Setting rating for {os.path.basename(operational_path)} to {rating_int}."
         )
         try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    img.modify_xmp({"Xmp.xmp.Rating": str(rating_int)})
-                    success = True
+            # Use the new pyexiv2 wrapper for safe operations
+            success = PyExiv2Operations.set_rating(operational_path, rating_int)
         except Exception as e:
             logger.error(
                 f"Error setting rating for {os.path.basename(operational_path)}: {e}",
@@ -634,39 +606,11 @@ class MetadataProcessor:
 
         try:
             # RAW files are processed normally; no special skip under pytest on Windows
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    metadata = {
-                        "file_path": operational_path,  # Store operational path used
-                        "pixel_width": img.get_pixel_width(),
-                        "pixel_height": img.get_pixel_height(),
-                        "mime_type": img.get_mime_type(),
-                        "file_size": os.path.getsize(operational_path)
-                        if os.path.isfile(operational_path)
-                        else "Unknown",
-                    }
-                    # ... (rest of metadata fetching as before: exif, iptc, xmp) ...
-                    try:
-                        metadata.update(img.read_exif() or {})
-                    except Exception:
-                        logger.debug(
-                            f"No EXIF for {os.path.basename(operational_path)}"
-                        )
-                    try:
-                        metadata.update(img.read_iptc() or {})
-                    except Exception:
-                        logger.debug(
-                            f"No IPTC for {os.path.basename(operational_path)}"
-                        )
-                    try:
-                        metadata.update(img.read_xmp() or {})
-                    except Exception:
-                        logger.debug(f"No XMP for {os.path.basename(operational_path)}")
-
-                    if exif_disk_cache:
-                        exif_disk_cache.set(cache_key_path, metadata)
-                    return metadata
+            # Use the new pyexiv2 wrapper for safe operations
+            metadata = PyExiv2Operations.get_comprehensive_metadata(operational_path)
+            if exif_disk_cache:
+                exif_disk_cache.set(cache_key_path, metadata)
+            return metadata
         except Exception as e:
             msg = str(e)
             is_missing = (
@@ -867,17 +811,17 @@ class MetadataProcessor:
             )
             return False
         try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    img.modify_exif({"Exif.Image.Orientation": orientation})
-                    logger.info(
-                        f"Set EXIF orientation for {os.path.basename(operational_path)} to {orientation}"
-                    )
-
-            if exif_disk_cache:
-                exif_disk_cache.delete(cache_key_path)
-            return True
+            # Use the new pyexiv2 wrapper for safe operations
+            success = PyExiv2Operations.set_orientation(operational_path, orientation)
+            if success:
+                logger.info(
+                    f"Set EXIF orientation for {os.path.basename(operational_path)} to {orientation}"
+                )
+                if exif_disk_cache:
+                    exif_disk_cache.delete(cache_key_path)
+                return True
+            else:
+                return False
         except Exception as e:
             msg = str(e)
             if (
@@ -931,14 +875,11 @@ class MetadataProcessor:
             )
             return None
         try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    exif_data = img.read_exif()
-                    orientation = exif_data.get("Exif.Image.Orientation")
-                    if orientation:
-                        return int(orientation)
-                    return None
+            # Use the new pyexiv2 wrapper for safe operations
+            orientation = PyExiv2Operations.get_orientation(operational_path)
+            return (
+                orientation if orientation != 1 else None
+            )  # Return None for default orientation
         except Exception as e:
             msg = str(e)
             if (
@@ -1012,14 +953,13 @@ class MetadataProcessor:
             )
             return None, None, None
         try:
-            # Guard pyexiv2 operations with global lock
-            with _PYEXIV2_LOCK:
-                with pyexiv2.Image(operational_path, encoding="utf-8") as img:
-                    orientation = img.read_exif().get("Exif.Image.Orientation")
-                    orientation = int(orientation) if orientation else None
-                    width = img.get_pixel_width()
-                    height = img.get_pixel_height()
-                    return orientation, width, height
+            # Use the new pyexiv2 wrapper for safe operations
+            basic_info = PyExiv2Operations.get_basic_info(operational_path)
+            orientation = PyExiv2Operations.get_orientation(operational_path)
+            orientation = (
+                orientation if orientation != 1 else None
+            )  # Return None for default
+            return orientation, basic_info["pixel_width"], basic_info["pixel_height"]
         except Exception as e:
             msg = str(e)
             if (
