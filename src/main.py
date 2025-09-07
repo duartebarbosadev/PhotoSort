@@ -24,30 +24,6 @@ from PyQt6.QtCore import Qt, QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen  # noqa: E402
 from PyQt6.QtGui import QIcon, QPixmap  # noqa: E402
 
-# Create QApplication early for splash screen
-app = QApplication(sys.argv)
-
-# --- Splash: show immediately (no text), then set message after it’s visible ---
-splash_total_start = time.perf_counter()
-
-splash_load_start = time.perf_counter()
-splash_path = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.png"
-)
-splash_pix = QPixmap(splash_path).scaled(
-    400,
-    300,
-    Qt.AspectRatioMode.KeepAspectRatio,
-    Qt.TransformationMode.FastTransformation,
-)
-splash = QSplashScreen(splash_pix)
-
-# Show the splash immediately (no text yet)
-splash.show()
-app.processEvents()  # should be fast; no text/layout yet
-
-from pillow_heif import register_heif_opener  # noqa: E402
-
 
 def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
     """Load an external QSS stylesheet.
@@ -208,6 +184,31 @@ def apply_app_identity(app: QApplication, main_window=None) -> None:
 def main():
     """Main application entry point."""
 
+    # Create QApplication early for splash screen
+    app = QApplication(sys.argv)
+
+    # --- Splash: show immediately (no text), then set message after it’s visible ---
+    splash_total_start = time.perf_counter()
+
+    splash_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.png"
+    )
+    splash_pix = QPixmap(splash_path).scaled(
+        400,
+        300,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.FastTransformation,
+    )
+    splash = QSplashScreen(splash_pix)
+
+    # Show the splash immediately (no text yet)
+    splash.show()
+    app.processEvents()  # should be fast; no text/layout yet
+
+    from pillow_heif import register_heif_opener  # noqa: E402
+
+    register_heif_opener()
+
     # --- Enable Faulthandler for crash analysis ---
     import faulthandler
 
@@ -231,8 +232,6 @@ def main():
                 logging.error(f"Failed to set up faulthandler crash log: {fe}")
     except Exception:
         pass
-
-    register_heif_opener()
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="PhotoSort")
