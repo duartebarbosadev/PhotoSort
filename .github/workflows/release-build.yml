@@ -132,6 +132,7 @@ jobs:
             --hidden-import core.build_info `
             --add-data "src/ui/dark_theme.qss;." `
             --add-data "assets/app_icon.ico;." `
+            --add-data "assets/app_icon.png;." `
             --hidden-import pyexiv2 `
             --hidden-import PyQt6.QtCore `
             --hidden-import PyQt6.QtGui `
@@ -171,6 +172,7 @@ jobs:
             --hidden-import core.build_info \
             --add-data src/ui/dark_theme.qss:. \
             --add-data assets/app_icon.ico:. \
+            --add-data assets/app_icon.png:. \
             --hidden-import PyQt6.QtCore \
             --hidden-import PyQt6.QtGui \
             --hidden-import PyQt6.QtWidgets \
