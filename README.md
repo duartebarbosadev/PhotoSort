@@ -34,36 +34,15 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
 ### Hardware Acceleration (Optional, Recommended)
 
-For significantly faster AI-powered features like **Rotation Detection** and **Similarity Analysis**, it is highly recommended to install the appropriate ONNX Runtime package for your hardware. The application will automatically use the best available hardware (GPU > CPU).
-
-First, uninstall the basic CPU package to avoid conflicts:
-
-```bash
-pip uninstall onnxruntime
-```
-
-Then, install the package corresponding to your hardware:
+For significantly faster AI-powered features like **Rotation Detection** and **Similarity Analysis**, use the appropriate requirements file for your hardware.
 
 #### For NVIDIA GPUs (CUDA)
+Use [`requirements-cuda.txt`](requirements-cuda.txt) which includes `onnxruntime-gpu`. Requires NVIDIA CUDA Toolkit & cuDNN.
 
-```bash
-# Requires NVIDIA CUDA Toolkit & cuDNN
-pip install onnxruntime-gpu
-```
+#### For CPU (Default)
+Use [`requirements.txt`](requirements.txt) which includes the standard `onnxruntime` package.
 
-#### For Apple Silicon (M1/M2/M3)
-
-```bash
-# Uses Apple's Metal Performance Shaders (MPS)
-pip install onnxruntime-silicon
-```
-
-#### For AMD GPUs (ROCm) - Untested
-
-```bash
-# Requires AMD ROCm driver/libraries
-pip install onnxruntime-rocm
-```
+> **Note**: These packages are mutually exclusive. If switching between CPU and CUDA versions, create separate virtual environments or uninstall the current onnx package before installing the other.
 
 ### AI Model Setup (Required for Rotation Detection)
 
@@ -91,11 +70,19 @@ The application will automatically detect and load the model when you use the ro
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 3. **Install dependencies:**
-   Ensure your [`requirements.txt`](requirements.txt) is up-to-date with all necessary packages (PyQt6, Pillow, rawpy, opencv-python, sentence-transformers, scikit-learn, numpy, send2trash, pyexiv2, onnxruntime).
+   Choose the appropriate requirements file based on your hardware:
 
+   #### For CPU (Default)
    ```bash
    pip install -r requirements.txt
    ```
+
+   #### For NVIDIA CUDA GPU Acceleration
+   ```bash
+   pip install -r requirements-cuda.txt
+   ```
+
+   > **Note**: The CUDA version requires NVIDIA CUDA Toolkit and cuDNN to be installed on your system.
 4. **Run the application:**
    The main entry point is [`src/main.py`](src/main.py).
 
