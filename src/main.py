@@ -1,9 +1,9 @@
 import sys
 import os
+import time
 
 # Ensure the 'src' directory is on sys.path when executing as a script
 SRC_DIR = os.path.dirname(__file__)
-
 if SRC_DIR and SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
@@ -16,19 +16,13 @@ except Exception as e:
     # If we can't initialize pyexiv2, log the error but don't prevent app startup
     print(f"Warning: Failed to initialize pyexiv2: {e}")
 
-import logging  # noqa: E402  # Must be after pyexiv2 initialization
-import time  # noqa: E402
+import logging  # noqa: E402
 import argparse  # noqa: E402
 import traceback  # noqa: E402  # For global exception handler
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
-    QMessageBox,
-)  # QMessageBox for global exception handler
-from PyQt6.QtGui import QIcon  # noqa: E402
 
-from ui.main_window import MainWindow  # noqa: E402
-from ui.app_controller import AppController  # noqa: E402
-from pillow_heif import register_heif_opener  # noqa: E402
+from PyQt6.QtCore import Qt, QTimer  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen  # noqa: E402
+from PyQt6.QtGui import QIcon, QPixmap  # noqa: E402
 
 
 def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
@@ -53,13 +47,9 @@ def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
         candidates = [
             os.path.join(
                 base_dir, "dark_theme.qss"
-            ),  # we bundle at top-level in frozen builds
-            os.path.join(
-                base_dir, filename
-            ),  # e.g., src/ui/dark_theme.qss inside frozen or source
-            os.path.abspath(
-                filename
-            ),  # direct path from CWD when running from repo root
+            ),  # bundled at top-level in frozen builds
+            os.path.join(base_dir, filename),  # e.g., src/ui/dark_theme.qss
+            os.path.abspath(filename),  # direct path from CWD
         ]
 
         for path in candidates:
@@ -119,9 +109,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
             error_box.setIcon(QMessageBox.Icon.Critical)
             error_box.setWindowTitle("Application Error")
             error_box.setText(main_error_text)
-            error_box.setDetailedText(
-                error_message_details
-            )  # Full traceback for expert users/reporting
+            error_box.setDetailedText(error_message_details)  # Full traceback
             error_box.setStandardButtons(QMessageBox.StandardButton.Ok)
             error_box.exec()
         except Exception as e_msgbox:
@@ -196,6 +184,31 @@ def apply_app_identity(app: QApplication, main_window=None) -> None:
 def main():
     """Main application entry point."""
 
+    # Create QApplication early for splash screen
+    app = QApplication(sys.argv)
+
+    # --- Splash: show immediately (no text), then set message after it’s visible ---
+    splash_total_start = time.perf_counter()
+
+    splash_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.png"
+    )
+    splash_pix = QPixmap(splash_path).scaled(
+        400,
+        300,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.FastTransformation,
+    )
+    splash = QSplashScreen(splash_pix)
+
+    # Show the splash immediately (no text yet)
+    splash.show()
+    app.processEvents()  # should be fast; no text/layout yet
+
+    from pillow_heif import register_heif_opener  # noqa: E402
+
+    register_heif_opener()
+
     # --- Enable Faulthandler for crash analysis ---
     import faulthandler
 
@@ -219,8 +232,6 @@ def main():
                 logging.error(f"Failed to set up faulthandler crash log: {fe}")
     except Exception:
         pass
-
-    register_heif_opener()
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="PhotoSort")
@@ -283,11 +294,10 @@ def main():
             "File logging disabled. To enable, set PHOTOSORT_ENABLE_FILE_LOGGING=true."
         )
 
-        # --- Suppress verbose third-party loggers ---
+    # --- Suppress verbose third-party loggers ---
     logging.getLogger("PIL").setLevel(logging.INFO)
     logging.getLogger("PIL.PngImagePlugin").setLevel(logging.INFO)
     logging.getLogger("PIL.TiffImagePlugin").setLevel(logging.INFO)
-    # You might also want to set it for the more general Image module if logs still appear
     logging.getLogger("PIL.Image").setLevel(logging.INFO)
     # --- End Suppress verbose third-party loggers ---
 
@@ -299,6 +309,9 @@ def main():
     main_start_time = time.perf_counter()
     logging.info("Application starting...")
 
+    from ui.main_window import MainWindow
+    from ui.app_controller import AppController
+
     # Handle clear-cache argument
     if args.clear_cache:
         clear_application_caches_start_time = time.perf_counter()
@@ -306,23 +319,6 @@ def main():
         logging.info(
             f"Caches cleared via command line in {time.perf_counter() - clear_application_caches_start_time:.4f}s"
         )
-
-    app_instantiation_start_time = time.perf_counter()
-    app = QApplication(sys.argv)
-    logging.debug(
-        f"QApplication instantiated in {time.perf_counter() - app_instantiation_start_time:.4f}s"
-    )
-
-    # Load and apply the stylesheet
-    stylesheet_load_start_time = time.perf_counter()
-    stylesheet = load_stylesheet()
-    if stylesheet:
-        app.setStyleSheet(stylesheet)
-        logging.debug(
-            f"Stylesheet loaded and applied in {time.perf_counter() - stylesheet_load_start_time:.4f}s"
-        )
-    else:
-        logging.warning("Stylesheet not found. Using default style.")
 
     mainwindow_instantiation_start_time = time.perf_counter()
     window = MainWindow(initial_folder=args.folder)
@@ -335,6 +331,26 @@ def main():
     window.show()
     logging.debug(
         f"MainWindow shown in {time.perf_counter() - window_show_start_time:.4f}s"
+    )
+    splash.finish(window)
+    logging.debug(
+        f"Splashscreen finished in {time.perf_counter() - splash_total_start:.4f}s"
+    )
+
+    # Defer stylesheet loading to after splash finish to avoid blocking startup
+    stylesheet_load_start = time.perf_counter()
+
+    def apply_stylesheet():
+        stylesheet = load_stylesheet()
+        if stylesheet:
+            app.setStyleSheet(stylesheet)
+        logging.debug(
+            f"Stylesheet applied in {time.perf_counter() - stylesheet_load_start:.4f}s"
+        )
+
+    QTimer.singleShot(
+        0,
+        apply_stylesheet,
     )
 
     logging.info(

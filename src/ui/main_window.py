@@ -72,7 +72,6 @@ from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
 from ui.helpers.index_lookup_utils import find_proxy_index_for_path
 
-# build_presentation now used only inside DeletionMarkController
 from ui.controllers.deletion_mark_controller import DeletionMarkController
 from ui.controllers.file_deletion_controller import FileDeletionController
 from ui.controllers.rotation_controller import RotationController

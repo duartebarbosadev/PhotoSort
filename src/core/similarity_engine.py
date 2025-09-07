@@ -6,9 +6,6 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 from PyQt6.QtCore import QObject, pyqtSignal
 import numpy as np  # Import numpy for array manipulation
 from sklearn.cluster import DBSCAN
-from sklearn.metrics.pairwise import (
-    cosine_similarity,
-)  # Import for similarity calculation
 
 from core.image_pipeline import ImagePipeline
 from .app_settings import (
@@ -385,8 +382,17 @@ class SimilarityEngine(QObject):
                     [embeddings[path] for path in paths_in_group], dtype=np.float32
                 )
 
-                # Calculate pairwise cosine similarities
-                pairwise_similarities = cosine_similarity(group_embeds)
+                # Lazy import for cosine_similarity to defer sklearn.metrics loading
+                try:
+                    from sklearn.metrics.pairwise import cosine_similarity
+                except ImportError as e:
+                    logger.error(f"Failed to import cosine_similarity: {e}")
+                    pairwise_similarities = np.array(
+                        [[1.0]]
+                    )  # Fallback for single item or error
+                else:
+                    # Calculate pairwise cosine similarities
+                    pairwise_similarities = cosine_similarity(group_embeds)
 
                 # We want the average of the upper triangle (excluding diagonal which is 1.0)
                 upper_triangle_indices = np.triu_indices(
