@@ -20,7 +20,7 @@ import logging  # noqa: E402
 import argparse  # noqa: E402
 import traceback  # noqa: E402  # For global exception handler
 
-from PyQt6.QtCore import Qt, QTimer, QElapsedTimer  # noqa: E402
+from PyQt6.QtCore import Qt, QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen  # noqa: E402
 from PyQt6.QtGui import QIcon, QPixmap  # noqa: E402
 
@@ -45,22 +45,6 @@ splash = QSplashScreen(splash_pix)
 # Show the splash immediately (no text yet)
 splash.show()
 app.processEvents()  # should be fast; no text/layout yet
-splash_show_end = time.perf_counter()
-
-
-# Defer the message until after the window is visible
-def _set_splash_message():
-    t = QElapsedTimer()
-    t.start()
-    splash.showMessage(
-        "Loading PhotoSort...",
-        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
-        Qt.GlobalColor.white,
-    )
-    print(f"showMessage() took {t.elapsed()} ms")
-
-
-QTimer.singleShot(0, _set_splash_message)
 
 from pillow_heif import register_heif_opener  # noqa: E402
 
@@ -247,7 +231,6 @@ def main():
                 logging.error(f"Failed to set up faulthandler crash log: {fe}")
     except Exception:
         pass
-
 
     register_heif_opener()
 
