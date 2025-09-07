@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 
 # Ensure the 'src' directory is on sys.path when executing as a script
 SRC_DIR = os.path.dirname(__file__)
@@ -17,17 +18,41 @@ except Exception as e:
     print(f"Warning: Failed to initialize pyexiv2: {e}")
 
 import logging  # noqa: E402  # Must be after pyexiv2 initialization
-import time  # noqa: E402
 import argparse  # noqa: E402
 import traceback  # noqa: E402  # For global exception handler
+from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QMessageBox,
+    QSplashScreen,
 )  # QMessageBox for global exception handler
-from PyQt6.QtGui import QIcon  # noqa: E402
+from PyQt6.QtGui import QIcon, QPixmap  # noqa: E402
 
-from ui.main_window import MainWindow  # noqa: E402
-from ui.app_controller import AppController  # noqa: E402
+# Create QApplication early for splash screen
+app = QApplication(sys.argv)
+
+# Show splash screen immediately for instant feedback
+splash_show_start_time = time.perf_counter()
+
+splash_path = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.png"
+)
+splash_pix = QPixmap(splash_path).scaled(
+    400,
+    300,
+    Qt.AspectRatioMode.KeepAspectRatio,
+    Qt.TransformationMode.SmoothTransformation,
+)
+splash = QSplashScreen(splash_pix)
+splash.show()
+splash.showMessage(
+    "Loading PhotoSort...",
+    Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+    Qt.GlobalColor.white,
+)
+app.processEvents()  # Force splash to display
+
+from pillow_heif import register_heif_opener  # noqa: E402
 
 
 def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
@@ -219,7 +244,7 @@ def main():
     except Exception:
         pass
 
-    # Defer pillow_heif import and registration to after basic UI is setup
+    register_heif_opener()
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="PhotoSort")
@@ -298,6 +323,9 @@ def main():
     main_start_time = time.perf_counter()
     logging.info("Application starting...")
 
+    from ui.main_window import MainWindow
+    from ui.app_controller import AppController
+
     # Handle clear-cache argument
     if args.clear_cache:
         clear_application_caches_start_time = time.perf_counter()
@@ -306,22 +334,10 @@ def main():
             f"Caches cleared via command line in {time.perf_counter() - clear_application_caches_start_time:.4f}s"
         )
 
-    app_instantiation_start_time = time.perf_counter()
-    app = QApplication(sys.argv)
-    logging.debug(
-        f"QApplication instantiated in {time.perf_counter() - app_instantiation_start_time:.4f}s"
-    )
-
     # Load and apply the stylesheet
-    stylesheet_load_start_time = time.perf_counter()
     stylesheet = load_stylesheet()
     if stylesheet:
         app.setStyleSheet(stylesheet)
-        logging.debug(
-            f"Stylesheet loaded and applied in {time.perf_counter() - stylesheet_load_start_time:.4f}s"
-        )
-    else:
-        logging.warning("Stylesheet not found. Using default style.")
 
     mainwindow_instantiation_start_time = time.perf_counter()
     window = MainWindow(initial_folder=args.folder)
@@ -335,15 +351,10 @@ def main():
     logging.debug(
         f"MainWindow shown in {time.perf_counter() - window_show_start_time:.4f}s"
     )
-
-    # Initialize HEIF support after window is shown to improve startup speed
-    try:
-        from pillow_heif import register_heif_opener
-
-        register_heif_opener()
-        logging.debug("HEIF support registered")
-    except ImportError as e:
-        logging.warning(f"Failed to register HEIF support: {e}")
+    splash.finish(window)
+    logging.debug(
+        f"Splashscreen finished in {time.perf_counter() - splash_show_start_time:.4f}s"
+    )
 
     logging.info(
         f"Application setup complete in {time.perf_counter() - main_start_time:.4f}s. Entering event loop."

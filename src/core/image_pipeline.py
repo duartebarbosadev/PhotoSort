@@ -16,6 +16,7 @@ from .image_processing.standard_image_processor import (
     StandardImageProcessor,
     SUPPORTED_STANDARD_EXTENSIONS,
 )
+from .image_processing.image_orientation_handler import ImageOrientationHandler
 from .caching.thumbnail_cache import ThumbnailCache
 from .caching.preview_cache import PreviewCache
 
@@ -40,15 +41,6 @@ class ImagePipeline:
     ):
         init_start_time = time.perf_counter()
         logger.info("Initializing ImagePipeline...")
-
-        # Lazy import heavy dependencies
-        try:
-            from .image_processing.image_orientation_handler import (
-                ImageOrientationHandler,
-            )
-        except ImportError as e:
-            logger.error(f"Failed to import dependencies for ImagePipeline: {e}")
-            raise
 
         tc_start_time = time.perf_counter()
         self.thumbnail_cache = (
