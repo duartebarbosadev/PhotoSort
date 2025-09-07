@@ -27,7 +27,6 @@ from PyQt6.QtWidgets import QApplication
 
 from core.app_settings import (
     get_rotation_confirm_lossy,
-    is_pytorch_cuda_available,
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
 )
@@ -126,8 +125,24 @@ class DialogManager:
         title_label.setObjectName("aboutTitle")
         app_info_layout.addWidget(title_label)
 
-        version_label = QLabel("Version 1.0b")
+        # Version label (populated only in packaged builds)
+        version_text = None
+        try:
+            # Populated by CI during packaged builds in core/build_info.py
+            from core.build_info import VERSION  # type: ignore
+
+            version_text = str(VERSION).strip() or None
+        except (ImportError, AttributeError):
+            version_text = None
+
+        version_label = QLabel()
         version_label.setObjectName("aboutVersion")
+        if version_text:
+            version_label.setText(f"Version {version_text}")
+            version_label.setVisible(True)
+        else:
+            # In local dev runs (python src/main.py), no version is shown
+            version_label.setVisible(False)
         app_info_layout.addWidget(version_label)
 
         header_layout.addLayout(app_info_layout)
@@ -165,18 +180,21 @@ class DialogManager:
         except Exception:
             onnx_provider = "N/A (error)"
 
+        embeddings_label_ref = None
         tech_items = [
-            f"🧠 Embeddings: SentenceTransformer (CLIP) on {'GPU (CUDA)' if is_pytorch_cuda_available() else 'CPU'}",
+            "🧠 Embeddings: SentenceTransformer (CLIP)",
             f"🤖 Rotation Model: ONNX Runtime on {onnx_provider}",
             f"🔍 {clustering_info}",
             "📋 Metadata: pyexiv2 • 🎨 Interface: PyQt6 • 🐍 Runtime: Python",
         ]
 
-        for item in tech_items:
+        for i, item in enumerate(tech_items):
             item_label = QLabel(item)
             item_label.setObjectName("aboutTechItem")
             item_label.setWordWrap(True)
             tech_layout.addWidget(item_label)
+            if i == 0:  # Embeddings item
+                embeddings_label_ref = item_label
 
         content_layout.addWidget(tech_frame)
 
@@ -233,6 +251,22 @@ class DialogManager:
         main_layout.addLayout(footer_layout)
 
         # Styling is handled by dark_theme.qss
+
+        # Start CUDA detection worker
+        worker_manager = self.parent.app_controller.worker_manager
+        if embeddings_label_ref:
+
+            def update_embeddings_label(available):
+                try:
+                    if embeddings_label_ref:
+                        embeddings_label_ref.setText(
+                            f"🧠 Embeddings: SentenceTransformer (CLIP) on {'GPU (CUDA)' if available else 'CPU'}"
+                        )
+                except RuntimeError:
+                    pass  # Label has been deleted
+
+            worker_manager.cuda_detection_finished.connect(update_embeddings_label)
+            worker_manager.start_cuda_detection()
 
         if block:
             dialog.exec()

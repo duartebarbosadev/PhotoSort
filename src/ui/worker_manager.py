@@ -10,6 +10,7 @@ from ui.ui_components import (
     BlurDetectionWorker,
     RotationDetectionWorker,
     SimilarityWorker,
+    CudaDetectionWorker,
 )
 from core.image_pipeline import ImagePipeline
 from core.rating_loader_worker import (
@@ -72,6 +73,9 @@ class WorkerManager(QObject):
     rotation_detection_error = pyqtSignal(str)
     rotation_model_not_found = pyqtSignal(str)  # model_path
 
+    # CUDA Detection Signals
+    cuda_detection_finished = pyqtSignal(bool)
+
     def __init__(
         self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None
     ):
@@ -95,6 +99,9 @@ class WorkerManager(QObject):
 
         self.rotation_detection_thread: Optional[QThread] = None
         self.rotation_detection_worker: Optional[RotationDetectionWorker] = None
+
+        self.cuda_detection_thread: Optional[QThread] = None
+        self.cuda_detection_worker: Optional[CudaDetectionWorker] = None
 
     def _terminate_thread(
         self, thread: Optional[QThread], worker_stop_method: Optional[callable] = None
@@ -451,6 +458,38 @@ class WorkerManager(QObject):
         else:
             self.rotation_detection_thread = temp_thread
 
+    def _cleanup_cuda_detection_refs(self):
+        if self.cuda_detection_worker:
+            self.cuda_detection_worker.deleteLater()
+            self.cuda_detection_worker = None
+        if self.cuda_detection_thread:
+            self.cuda_detection_thread.deleteLater()
+            self.cuda_detection_thread = None
+        logger.info("CUDA detection thread and worker cleaned up.")
+
+    # --- CUDA Detection Management ---
+    def start_cuda_detection(self):
+        self.stop_cuda_detection()
+        self.cuda_detection_thread = QThread()
+        self.cuda_detection_worker = CudaDetectionWorker()
+        self.cuda_detection_worker.moveToThread(self.cuda_detection_thread)
+
+        self.cuda_detection_worker.finished.connect(self.cuda_detection_finished)
+        self.cuda_detection_worker.finished.connect(self.cuda_detection_thread.quit)
+        self.cuda_detection_thread.started.connect(self.cuda_detection_worker.run)
+        self.cuda_detection_thread.finished.connect(self._cleanup_cuda_detection_refs)
+
+        self.cuda_detection_thread.start()
+        logger.info("CUDA detection thread and worker started.")
+
+    def stop_cuda_detection(self):
+        temp_thread, _ = self._terminate_thread(self.cuda_detection_thread, None)
+        if temp_thread is None:
+            self.cuda_detection_thread = None
+            self.cuda_detection_worker = None
+        else:
+            self.cuda_detection_thread = temp_thread
+
     def stop_all_workers(self):
         logger.info("Stopping all workers...")
         self.stop_file_scan()
@@ -459,6 +498,7 @@ class WorkerManager(QObject):
         self.stop_blur_detection()
         self.stop_rating_load()
         self.stop_rotation_detection()
+        self.stop_cuda_detection()
         logger.info("All workers stop requested.")
 
     def is_file_scanner_running(self) -> bool:
@@ -491,6 +531,12 @@ class WorkerManager(QObject):
             and self.rotation_detection_thread.isRunning()
         )
 
+    def is_cuda_detection_running(self) -> bool:
+        return (
+            self.cuda_detection_thread is not None
+            and self.cuda_detection_thread.isRunning()
+        )
+
     def is_any_worker_running(self) -> bool:
         return (
             self.is_file_scanner_running()
@@ -499,4 +545,5 @@ class WorkerManager(QObject):
             or self.is_blur_detection_running()
             or self.is_rating_loader_running()
             or self.is_rotation_detection_running()
+            or self.is_cuda_detection_running()
         )
