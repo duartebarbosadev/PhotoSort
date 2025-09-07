@@ -88,7 +88,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           # Override ONNX Runtime with matrix-specified package
-          pip install --force-reinstall ${{ matrix.onnx_runtime }}
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pip install --force-reinstall ${{ matrix.onnx_runtime }}
+          fi
           # Build tools
           pip install pyinstaller
 
