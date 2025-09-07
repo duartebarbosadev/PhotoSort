@@ -339,6 +339,7 @@ def main():
 
     # Defer stylesheet loading to after splash finish to avoid blocking startup
     stylesheet_load_start = time.perf_counter()
+
     def apply_stylesheet():
         stylesheet = load_stylesheet()
         if stylesheet:
