@@ -17,7 +17,7 @@ except Exception as e:
     # If we can't initialize pyexiv2, log the error but don't prevent app startup
     print(f"Warning: Failed to initialize pyexiv2: {e}")
 
-import logging  # noqa: E402  # Must be after pyexiv2 initialization
+import logging  # noqa: E402
 import argparse  # noqa: E402
 import traceback  # noqa: E402  # For global exception handler
 from PyQt6.QtCore import Qt  # noqa: E402
@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QMessageBox,
     QSplashScreen,
-)  # QMessageBox for global exception handler
+)
 from PyQt6.QtGui import QIcon, QPixmap  # noqa: E402
 
 # Create QApplication early for splash screen
