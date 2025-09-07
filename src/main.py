@@ -339,15 +339,17 @@ def main():
 
     # Defer stylesheet loading to after splash finish to avoid blocking startup
     stylesheet_load_start = time.perf_counter()
+    def apply_stylesheet():
+        stylesheet = load_stylesheet()
+        if stylesheet:
+            app.setStyleSheet(stylesheet)
+        logging.debug(
+            f"Stylesheet applied in {time.perf_counter() - stylesheet_load_start:.4f}s"
+        )
+
     QTimer.singleShot(
         0,
-        lambda: (
-            (stylesheet := load_stylesheet()),
-            app.setStyleSheet(stylesheet) if stylesheet else None,
-            logging.debug(
-                f"Stylesheet applied in {time.perf_counter() - stylesheet_load_start:.4f}s"
-            ),
-        ),
+        apply_stylesheet,
     )
 
     logging.info(
