@@ -280,7 +280,7 @@ class MenuManager:
             "Analyze images for blurriness (can be slow for many images)"
         )
         self.detect_blur_action.setEnabled(False)
-        self.detect_blur_action.setShortcut(QKeySequence("Ctrl+B"))
+        self.detect_blur_action.setShortcut(QKeySequence("B"))
         view_menu.addAction(self.detect_blur_action)
 
         self.auto_rotate_action = QAction("Auto Rotate Images", main_win)
