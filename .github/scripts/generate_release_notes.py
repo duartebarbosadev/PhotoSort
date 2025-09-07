@@ -254,6 +254,7 @@ Please create release notes that:
 4. Focus on user-visible changes
 5. Include PR references where available (e.g., "Enhanced UI (#123)")
 6. Keep technical details concise but informative
+7. Keep this formal and about the changes, do not talk to the user directly.
 Format the response as clean markdown without code blocks around the entire response.
 """
 
