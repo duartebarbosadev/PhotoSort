@@ -1,0 +1,14 @@
+PyQt6
+rawpy
+Pillow
+Pillow-heif
+sentence-transformers
+scikit-learn
+torch
+diskcache
+send2trash
+opencv-python
+pyexiv2
+piexif
+onnxruntime-gpu
+torchvision
