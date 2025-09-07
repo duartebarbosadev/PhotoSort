@@ -28,7 +28,6 @@ from PyQt6.QtGui import QIcon  # noqa: E402
 
 from ui.main_window import MainWindow  # noqa: E402
 from ui.app_controller import AppController  # noqa: E402
-from pillow_heif import register_heif_opener  # noqa: E402
 
 
 def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
@@ -220,7 +219,7 @@ def main():
     except Exception:
         pass
 
-    register_heif_opener()
+    # Defer pillow_heif import and registration to after basic UI is setup
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="PhotoSort")
@@ -336,6 +335,15 @@ def main():
     logging.debug(
         f"MainWindow shown in {time.perf_counter() - window_show_start_time:.4f}s"
     )
+
+    # Initialize HEIF support after window is shown to improve startup speed
+    try:
+        from pillow_heif import register_heif_opener
+
+        register_heif_opener()
+        logging.debug("HEIF support registered")
+    except ImportError as e:
+        logging.warning(f"Failed to register HEIF support: {e}")
 
     logging.info(
         f"Application setup complete in {time.perf_counter() - main_start_time:.4f}s. Entering event loop."

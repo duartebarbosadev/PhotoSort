@@ -1,6 +1,6 @@
 import time
 import logging
-from ui.advanced_image_viewer import SynchronizedImageViewer
+
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,  # For selection and edit triggersor dialogs
 )
+
 import os
 from datetime import date as date_obj
 from typing import (
@@ -24,6 +25,7 @@ from typing import (
     Any,
     Tuple,
 )  # Import List and Dict for type hinting, Optional, Any, Tuple
+
 from PyQt6.QtCore import (
     Qt,
     QModelIndex,
@@ -34,6 +36,7 @@ from PyQt6.QtCore import (
     QEvent,
     QItemSelection,
 )
+
 from PyQt6.QtGui import (
     QColor,
     QAction,
@@ -43,10 +46,8 @@ from PyQt6.QtGui import (
     QStandardItem,
     QResizeEvent,
 )
-from sklearn.metrics.pairwise import cosine_similarity
 import sys
 
-from core.image_pipeline import ImagePipeline
 from core.image_file_ops import ImageFileOperations
 from core.image_processing.raw_image_processor import is_raw_extension
 
@@ -174,11 +175,10 @@ class MainWindow(QMainWindow):
         self._left_panel_views = set()
         self._image_viewer_views = set()
 
-        self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
         self.worker_manager = WorkerManager(
-            image_pipeline_instance=self.image_pipeline, parent=self
-        )
+            image_pipeline_instance=None, parent=self
+        )  # Will set later
         self.dialog_manager = DialogManager(self)
         self.app_controller = AppController(
             main_window=self,
@@ -186,6 +186,7 @@ class MainWindow(QMainWindow):
             worker_manager=self.worker_manager,
             parent=self,
         )
+        self._image_pipeline = None  # Lazy
         logger.debug("Core components initialized.")
 
         self.setWindowTitle("PhotoSort")
@@ -199,28 +200,9 @@ class MainWindow(QMainWindow):
         self.group_by_similarity_mode = False
         self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
         self.rotation_suggestions = {}
-        # Controllers (always created – treat as invariants for simpler code paths)
-        self.deletion_controller = DeletionMarkController(
-            app_state=self.app_state,
-            is_marked_func=lambda p: self.app_state.is_marked_for_deletion(p),
-        )
-        self.file_deletion_controller = FileDeletionController(self)
-        self.rotation_controller = RotationController(
-            rotation_suggestions=self.rotation_suggestions,
-            apply_rotations=lambda mapping: self.app_controller._apply_approved_rotations(
-                mapping
-            ),
-        )
-        # Navigation & selection controllers use this MainWindow as context
-        self.navigation_controller = NavigationController(self)
-        self.selection_controller = SelectionController(self)
-        self.filter_controller = FilterController(self)
-        self.similarity_controller = SimilarityController(self)
-        self.preview_controller = PreviewController(self)
-        self.metadata_controller = MetadataController(self)
-
-        # Hotkey controller wraps navigation key handling
-        self.hotkey_controller = HotkeyController(self)
+        # Controllers will be lazy initialized when first needed
+        self._controllers_initialized = False
+        logger.debug("Controllers lazy initialization setup.")
 
         self.filter_combo = QComboBox()
         self.filter_combo.addItems(
@@ -249,6 +231,9 @@ class MainWindow(QMainWindow):
         self.menu_manager = MenuManager(self)
         self.menu_manager.create_menus(self.menuBar())
         self._create_widgets()
+
+        # Lazy init controllers before connecting signals that use them
+        self._lazy_init_controllers()
 
         # At this point _create_widgets() built file_system_model + proxy_model and wired it;
         # it's now safe to apply any deferred FilterController initialization.
@@ -331,7 +316,9 @@ class MainWindow(QMainWindow):
                 total_size_mb = current_files_size_bytes / (1024 * 1024)
 
                 # Add cache size information to the status text
-                preview_cache_size_bytes = self.image_pipeline.preview_cache.volume()
+                preview_cache_size_bytes = (
+                    self._get_image_pipeline().preview_cache.volume()
+                )
                 preview_cache_size_mb = preview_cache_size_bytes / (1024 * 1024)
 
                 status_text = (
@@ -394,7 +381,8 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
 
     def _update_cache_dialog_labels(self):
-        thumb_usage_bytes = self.image_pipeline.thumbnail_cache.volume()
+        pipeline = self._get_image_pipeline()
+        thumb_usage_bytes = pipeline.thumbnail_cache.volume()
         self.thumb_cache_usage_label.setText(
             f"{thumb_usage_bytes / (1024 * 1024):.2f} MB"
         )
@@ -402,7 +390,7 @@ class MainWindow(QMainWindow):
         configured_gb = get_preview_cache_size_gb()
         self.preview_cache_configured_limit_label.setText(f"{configured_gb:.2f} GB")
 
-        preview_usage_bytes = self.image_pipeline.preview_cache.volume()
+        preview_usage_bytes = pipeline.preview_cache.volume()
         self.preview_cache_usage_label.setText(
             f"{preview_usage_bytes / (1024 * 1024):.2f} MB"
         )
@@ -422,13 +410,15 @@ class MainWindow(QMainWindow):
             self.exif_cache_usage_label.setText("N/A")
 
     def _clear_thumbnail_cache_action(self):
-        self.image_pipeline.thumbnail_cache.clear()
+        pipeline = self._get_image_pipeline()
+        pipeline.thumbnail_cache.clear()
         self.statusBar().showMessage("Thumbnail cache cleared.", 5000)
         self._update_cache_dialog_labels()
         self._refresh_visible_items_icons()
 
     def _clear_preview_cache_action(self):
-        self.image_pipeline.preview_cache.clear()
+        pipeline = self._get_image_pipeline()
+        pipeline.preview_cache.clear()
         self.statusBar().showMessage(
             "Preview cache cleared. Previews will regenerate.", 5000
         )
@@ -451,7 +441,8 @@ class MainWindow(QMainWindow):
         current_size_gb = get_preview_cache_size_gb()
         if new_size_gb != current_size_gb:
             set_preview_cache_size_gb(new_size_gb)
-            self.image_pipeline.reinitialize_preview_cache_from_settings()
+            pipeline = self._get_image_pipeline()
+            pipeline.reinitialize_preview_cache_from_settings()
             self.statusBar().showMessage(
                 f"Preview cache limit set to {new_size_gb:.2f} GB. Cache reinitialized.",
                 5000,
@@ -535,6 +526,8 @@ class MainWindow(QMainWindow):
         center_pane_layout.setSpacing(0)
 
         # Advanced image viewer instead of simple QLabel
+        from ui.advanced_image_viewer import SynchronizedImageViewer
+
         self.advanced_image_viewer = SynchronizedImageViewer()
         self.advanced_image_viewer.setObjectName("advanced_image_viewer")
         self.advanced_image_viewer.setMinimumSize(400, 300)
@@ -1970,6 +1963,8 @@ class MainWindow(QMainWindow):
                 )
                 if emb1 is not None and emb2 is not None:
                     try:
+                        from sklearn.metrics.pairwise import cosine_similarity
+
                         similarity = cosine_similarity([emb1], [emb2])[0][0]
                         self.statusBar().showMessage(
                             f"Comparing {len(images_data_for_viewer)} images. Similarity (first 2): {similarity:.4f}"
@@ -2952,6 +2947,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(self.advanced_viewer_window)
 
         # Create the synchronized viewer
+        from ui.advanced_image_viewer import SynchronizedImageViewer
+
         self.sync_viewer = SynchronizedImageViewer()
         layout.addWidget(self.sync_viewer)
 
@@ -4113,3 +4110,34 @@ class MainWindow(QMainWindow):
     def _on_side_by_side_availability_changed(self, is_available: bool):
         """Enable/disable the side-by-side view action based on availability."""
         self.menu_manager.side_by_side_view_action.setEnabled(is_available)
+
+    def _lazy_init_controllers(self):
+        """Lazy initialize controllers when first needed."""
+        if self._controllers_initialized:
+            return
+        controllers_start = time.perf_counter()
+
+        self.deletion_controller = DeletionMarkController(
+            app_state=self.app_state,
+            is_marked_func=lambda p: self.app_state.is_marked_for_deletion(p),
+        )
+        self.file_deletion_controller = FileDeletionController(self)
+        self.rotation_controller = RotationController(
+            rotation_suggestions=self.rotation_suggestions,
+            apply_rotations=lambda mapping: self.app_controller._apply_approved_rotations(
+                mapping
+            ),
+        )
+        # Navigation & selection controllers use this MainWindow as context
+        self.navigation_controller = NavigationController(self)
+        self.selection_controller = SelectionController(self)
+        self.filter_controller = FilterController(self)
+        self.similarity_controller = SimilarityController(self)
+        self.preview_controller = PreviewController(self)
+        self.metadata_controller = MetadataController(self)
+
+        # Hotkey controller wraps navigation key handling
+        self.hotkey_controller = HotkeyController(self)
+        controllers_duration = time.perf_counter() - controllers_start
+        logging.info(f"Lazy Controllers instantiation took {controllers_duration:.4f}s")
+        self._controllers_initialized = True

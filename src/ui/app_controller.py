@@ -10,7 +10,6 @@ from core.app_settings import (
 )
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
-from core.image_pipeline import ImagePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +35,9 @@ class AppController(QObject):
         logger.info("Clearing all application caches.")
 
         try:
+            # Lazy import ImagePipeline
+            from core.image_pipeline import ImagePipeline
+
             pipeline = ImagePipeline()
             pipeline.clear_all_image_caches()
         except Exception:
