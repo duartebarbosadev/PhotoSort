@@ -4,7 +4,6 @@ import time
 
 # Ensure the 'src' directory is on sys.path when executing as a script
 SRC_DIR = os.path.dirname(__file__)
-
 if SRC_DIR and SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
@@ -20,20 +19,18 @@ except Exception as e:
 import logging  # noqa: E402
 import argparse  # noqa: E402
 import traceback  # noqa: E402  # For global exception handler
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import (  # noqa: E402
-    QApplication,
-    QMessageBox,
-    QSplashScreen,
-)
+
+from PyQt6.QtCore import Qt, QTimer, QElapsedTimer  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen  # noqa: E402
 from PyQt6.QtGui import QIcon, QPixmap  # noqa: E402
 
 # Create QApplication early for splash screen
 app = QApplication(sys.argv)
 
-# Show splash screen immediately for instant feedback
-splash_show_start_time = time.perf_counter()
+# --- Splash: show immediately (no text), then set message after it’s visible ---
+splash_total_start = time.perf_counter()
 
+splash_load_start = time.perf_counter()
 splash_path = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.png"
 )
@@ -41,16 +38,29 @@ splash_pix = QPixmap(splash_path).scaled(
     400,
     300,
     Qt.AspectRatioMode.KeepAspectRatio,
-    Qt.TransformationMode.SmoothTransformation,
+    Qt.TransformationMode.FastTransformation,
 )
 splash = QSplashScreen(splash_pix)
+
+# Show the splash immediately (no text yet)
 splash.show()
-splash.showMessage(
-    "Loading PhotoSort...",
-    Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
-    Qt.GlobalColor.white,
-)
-app.processEvents()  # Force splash to display
+app.processEvents()  # should be fast; no text/layout yet
+splash_show_end = time.perf_counter()
+
+
+# Defer the message until after the window is visible
+def _set_splash_message():
+    t = QElapsedTimer()
+    t.start()
+    splash.showMessage(
+        "Loading PhotoSort...",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+        Qt.GlobalColor.white,
+    )
+    print(f"showMessage() took {t.elapsed()} ms")
+
+
+QTimer.singleShot(0, _set_splash_message)
 
 from pillow_heif import register_heif_opener  # noqa: E402
 
@@ -77,13 +87,9 @@ def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
         candidates = [
             os.path.join(
                 base_dir, "dark_theme.qss"
-            ),  # we bundle at top-level in frozen builds
-            os.path.join(
-                base_dir, filename
-            ),  # e.g., src/ui/dark_theme.qss inside frozen or source
-            os.path.abspath(
-                filename
-            ),  # direct path from CWD when running from repo root
+            ),  # bundled at top-level in frozen builds
+            os.path.join(base_dir, filename),  # e.g., src/ui/dark_theme.qss
+            os.path.abspath(filename),  # direct path from CWD
         ]
 
         for path in candidates:
@@ -143,9 +149,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
             error_box.setIcon(QMessageBox.Icon.Critical)
             error_box.setWindowTitle("Application Error")
             error_box.setText(main_error_text)
-            error_box.setDetailedText(
-                error_message_details
-            )  # Full traceback for expert users/reporting
+            error_box.setDetailedText(error_message_details)  # Full traceback
             error_box.setStandardButtons(QMessageBox.StandardButton.Ok)
             error_box.exec()
         except Exception as e_msgbox:
@@ -244,6 +248,7 @@ def main():
     except Exception:
         pass
 
+
     register_heif_opener()
 
     # Parse command-line arguments
@@ -307,11 +312,10 @@ def main():
             "File logging disabled. To enable, set PHOTOSORT_ENABLE_FILE_LOGGING=true."
         )
 
-        # --- Suppress verbose third-party loggers ---
+    # --- Suppress verbose third-party loggers ---
     logging.getLogger("PIL").setLevel(logging.INFO)
     logging.getLogger("PIL.PngImagePlugin").setLevel(logging.INFO)
     logging.getLogger("PIL.TiffImagePlugin").setLevel(logging.INFO)
-    # You might also want to set it for the more general Image module if logs still appear
     logging.getLogger("PIL.Image").setLevel(logging.INFO)
     # --- End Suppress verbose third-party loggers ---
 
@@ -334,11 +338,6 @@ def main():
             f"Caches cleared via command line in {time.perf_counter() - clear_application_caches_start_time:.4f}s"
         )
 
-    # Load and apply the stylesheet
-    stylesheet = load_stylesheet()
-    if stylesheet:
-        app.setStyleSheet(stylesheet)
-
     mainwindow_instantiation_start_time = time.perf_counter()
     window = MainWindow(initial_folder=args.folder)
     apply_app_identity(app, window)
@@ -353,7 +352,20 @@ def main():
     )
     splash.finish(window)
     logging.debug(
-        f"Splashscreen finished in {time.perf_counter() - splash_show_start_time:.4f}s"
+        f"Splashscreen finished in {time.perf_counter() - splash_total_start:.4f}s"
+    )
+
+    # Defer stylesheet loading to after splash finish to avoid blocking startup
+    stylesheet_load_start = time.perf_counter()
+    QTimer.singleShot(
+        0,
+        lambda: (
+            (stylesheet := load_stylesheet()),
+            app.setStyleSheet(stylesheet) if stylesheet else None,
+            logging.debug(
+                f"Stylesheet applied in {time.perf_counter() - stylesheet_load_start:.4f}s"
+            ),
+        ),
     )
 
     logging.info(
