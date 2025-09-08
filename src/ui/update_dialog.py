@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QTextEdit,
     QCheckBox,
+    QFrame,
 )
 
 from core.update_checker import UpdateInfo
@@ -33,56 +34,97 @@ class UpdateNotificationDialog(QDialog):
         self.current_version = current_version
 
         self.setWindowTitle("Update Available")
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
-        # Frameless window for fancy UI
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setModal(True)
-        self.resize(500, 400)
+        self.resize(550, 500)  # More space for release notes
+        self.setObjectName("updateNotificationDialog")
+
+        # Enable dragging for the entire dialog
+        self._drag_pos = None
 
         self._setup_ui()
 
     def _setup_ui(self):
         """Set up the dialog UI."""
-        layout = QVBoxLayout()
-        layout.setSpacing(15)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(18)
+        layout.setContentsMargins(25, 25, 25, 25)
 
-        # Header with icon and title
-        header_layout = QHBoxLayout()
+        # Title with icon
+        title_layout = QHBoxLayout()
+        title_layout.setSpacing(12)
 
-        # Title label
-        title_label = QLabel(f"PhotoSort {self.update_info.version} is available!")
+        icon_label = QLabel("🔄")
+        icon_label.setObjectName("updateIcon")
+        icon_label.setStyleSheet("font-size: 20px; color: #0084FF;")
+        title_layout.addWidget(icon_label)
+
+        title_label = QLabel(f"PhotoSort {self.update_info.version} Available")
+        title_label.setObjectName("updateTitle")
         title_font = QFont()
-        title_font.setPointSize(14)
+        title_font.setPointSize(16)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        header_layout.addWidget(title_label)
+        title_layout.addWidget(title_label)
 
-        header_layout.addStretch()
-        layout.addLayout(header_layout)
+        title_layout.addStretch()
+        layout.addLayout(title_layout)
 
-        # Version info
-        version_info = QLabel(f"Current version: {self.current_version}")
-        version_info.setStyleSheet("color: #666; font-size: 11px;")
-        layout.addWidget(version_info)
+        # Version comparison section
+        version_frame = QFrame()
+        version_frame.setObjectName("versionFrame")
+        version_layout = QHBoxLayout(version_frame)
+        version_layout.setContentsMargins(15, 12, 15, 12)
+
+        current_version_label = QLabel(f"Current: {self.current_version}")
+        current_version_label.setObjectName("currentVersionLabel")
+        version_layout.addWidget(current_version_label)
+
+        arrow_label = QLabel("→")
+        arrow_label.setObjectName("versionArrow")
+        arrow_label.setStyleSheet("font-size: 16px; color: #0084FF; font-weight: bold;")
+        version_layout.addWidget(arrow_label)
+
+        new_version_label = QLabel(f"New: {self.update_info.version}")
+        new_version_label.setObjectName("newVersionLabel")
+        version_layout.addWidget(new_version_label)
+
+        version_layout.addStretch()
+        layout.addWidget(version_frame)
+
+        # Release notes section
+        notes_label = QLabel("What's New:")
+        notes_label.setObjectName("notesLabel")
+        notes_font = QFont()
+        notes_font.setPointSize(12)
+        notes_font.setBold(True)
+        notes_label.setFont(notes_font)
+        layout.addWidget(notes_label)
 
         # Scrollable text area for release notes
         notes_area = QTextEdit()
+        notes_area.setObjectName("releaseNotesArea")
         notes_area.setReadOnly(True)
-        notes_area.setMaximumHeight(150)
+        notes_area.setMinimumHeight(200)
 
         # Convert markdown to HTML for better rendering
         release_notes = self.update_info.release_notes or "No release notes available."
-        # Basic markdown to HTML conversion
         html_notes = self._convert_markdown_to_html(release_notes)
         notes_area.setHtml(html_notes)
 
         layout.addWidget(notes_area)
 
+        # Settings section
+        settings_frame = QFrame()
+        settings_frame.setObjectName("settingsFrame")
+        settings_layout = QVBoxLayout(settings_frame)
+        settings_layout.setContentsMargins(15, 12, 15, 12)
+
         # Checkbox for disabling update checks
         self.disable_checks_checkbox = QCheckBox(
             "Don't check for updates automatically"
         )
+        self.disable_checks_checkbox.setObjectName("updateCheckbox")
         self.disable_checks_checkbox.setToolTip(
             "You can re-enable update checks in the Help menu"
         )
@@ -98,27 +140,43 @@ class UpdateNotificationDialog(QDialog):
             self.disable_checks_checkbox.setChecked(True)
             logger.info("Checkbox auto-checked because updates are currently disabled")
 
-        layout.addWidget(self.disable_checks_checkbox)
+        settings_layout.addWidget(self.disable_checks_checkbox)
+        layout.addWidget(settings_frame)
 
-        # Button layout
+        # Button layout with smaller buttons
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
 
-        # Close button
-        close_button = QPushButton("Close")
-        close_button.clicked.connect(self._on_close_clicked)
-        button_layout.addWidget(close_button)
+        # Later/Close button
+        later_button = QPushButton("Later")
+        later_button.setObjectName("laterButton")
+        later_button.clicked.connect(self._on_close_clicked)
+        button_layout.addWidget(later_button)
 
         button_layout.addStretch()
 
-        # Download Update button (renamed from View Release)
-        download_update_button = QPushButton("Download Update")
-        download_update_button.setDefault(True)
-        download_update_button.clicked.connect(self._on_download_update_clicked)
-        button_layout.addWidget(download_update_button)
+        # Download Update button
+        download_button = QPushButton("Download Update")
+        download_button.setObjectName("downloadButton")
+        download_button.setDefault(True)
+        download_button.clicked.connect(self._on_download_update_clicked)
+        button_layout.addWidget(download_button)
 
         layout.addLayout(button_layout)
 
-        self.setLayout(layout)
+    def mousePressEvent(self, event):
+        """Handle mouse press for dialog dragging."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = (
+                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            )
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        """Handle mouse move for dialog dragging."""
+        if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
 
     def _on_close_clicked(self):
         """Handle 'Close' button click."""
@@ -227,37 +285,86 @@ class UpdateCheckDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Check for Updates")
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
-        # Frameless window for fancy UI
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setModal(True)
-        self.resize(300, 150)
+        self.resize(380, 140)
+        self.setObjectName("updateCheckDialog")
+
+        # Enable dragging for the entire dialog
+        self._drag_pos = None
 
         self._setup_ui()
 
     def _setup_ui(self):
         """Set up the dialog UI."""
-        layout = QVBoxLayout()
-        layout.setSpacing(15)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(18)
+        layout.setContentsMargins(25, 25, 25, 25)
 
-        # Status label
+        # Title with icon
+        title_layout = QHBoxLayout()
+        title_layout.setSpacing(12)
+
+        icon_label = QLabel("🔍")
+        icon_label.setObjectName("checkIcon")
+        icon_label.setStyleSheet("font-size: 18px; color: #0084FF;")
+        title_layout.addWidget(icon_label)
+
+        title_label = QLabel("Check for Updates")
+        title_label.setObjectName("checkTitle")
+        title_font = QFont()
+        title_font.setPointSize(14)
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_layout.addWidget(title_label)
+
+        title_layout.addStretch()
+        layout.addLayout(title_layout)
+
+        # Status section
+        status_layout = QHBoxLayout()
+        status_icon = QLabel("⏳")
+        status_icon.setObjectName("statusIcon")
+        status_icon.setStyleSheet("font-size: 14px;")
+        status_layout.addWidget(status_icon)
+
         self.status_label = QLabel("Checking for updates...")
-        layout.addWidget(self.status_label)
+        self.status_label.setObjectName("statusLabel")
+        status_layout.addWidget(self.status_label)
+        status_layout.addStretch()
+
+        layout.addLayout(status_layout)
+
+        # Add stretch to center content vertically
+        layout.addStretch()
 
         # Button layout
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
-        self.close_button = QPushButton("Close")
-        self.close_button.clicked.connect(self.reject)
-        self.close_button.setEnabled(False)
-        button_layout.addWidget(self.close_button)
+        self.bottom_close_button = QPushButton("Close")
+        self.bottom_close_button.setObjectName("checkCloseButton")
+        self.bottom_close_button.clicked.connect(self.reject)
+        self.bottom_close_button.setEnabled(False)
+        button_layout.addWidget(self.bottom_close_button)
 
         layout.addLayout(button_layout)
-        self.setLayout(layout)
+
+    def mousePressEvent(self, event):
+        """Handle mouse press for dialog dragging."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = (
+                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            )
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        """Handle mouse move for dialog dragging."""
+        if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
 
     def set_status(self, message: str, enable_close: bool = False):
         """Update the status message."""
         self.status_label.setText(message)
-        self.close_button.setEnabled(enable_close)
+        self.bottom_close_button.setEnabled(enable_close)

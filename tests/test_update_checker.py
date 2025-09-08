@@ -79,7 +79,7 @@ class TestUpdateChecker:
             patch(
                 "src.core.update_checker.get_update_check_enabled", return_value=True
             ),
-            patch("src.core.build_info.VERSION", "dev"),
+            patch("core.build_info.VERSION", "dev"),
         ):
             assert checker.should_check_for_updates() is False
 
@@ -87,7 +87,7 @@ class TestUpdateChecker:
             patch(
                 "src.core.update_checker.get_update_check_enabled", return_value=True
             ),
-            patch("src.core.build_info.VERSION", "dev-abc123"),
+            patch("core.build_info.VERSION", "dev-abc123"),
         ):
             assert checker.should_check_for_updates() is False
 
