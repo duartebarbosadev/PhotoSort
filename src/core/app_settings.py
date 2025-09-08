@@ -20,6 +20,8 @@ RECENT_FOLDERS_KEY = "UI/RecentFolders"  # Key for recent folders list
 ORIENTATION_MODEL_NAME_KEY = (
     "Models/OrientationModelName"  # Key for the orientation model file name
 )
+UPDATE_CHECK_ENABLED_KEY = "Updates/CheckEnabled"  # Enable automatic update checks
+UPDATE_LAST_CHECK_KEY = "Updates/LastCheckTime"  # Last time updates were checked
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
@@ -27,6 +29,7 @@ DEFAULT_EXIF_CACHE_SIZE_MB = 256  # Default to 256 MB for EXIF cache
 DEFAULT_ROTATION_CONFIRM_LOSSY = True  # Default to asking before lossy rotation
 MAX_RECENT_FOLDERS = 10  # Max number of recent folders to store
 DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
+DEFAULT_UPDATE_CHECK_ENABLED = True  # Default to enable automatic update checks
 
 # --- UI Constants ---
 # Grid view settings
@@ -104,6 +107,12 @@ BLUR_DETECTION_PREVIEW_SIZE = (640, 480)  # Size for image used in blur detectio
 DEFAULT_CLIP_MODEL = (
     "sentence-transformers/clip-ViT-B-32"  # Common default, adjust if different
 )
+
+# --- Update Check Constants ---
+UPDATE_CHECK_INTERVAL_HOURS = 24  # Check for updates every 24 hours
+UPDATE_CHECK_TIMEOUT_SECONDS = 10  # Timeout for update check requests
+GITHUB_REPO_OWNER = "duartebarbosadev"  # GitHub repository owner
+GITHUB_REPO_NAME = "PhotoSort"  # GitHub repository name
 
 
 def _get_settings() -> QSettings:
@@ -227,3 +236,30 @@ def set_orientation_model_name(model_name: str):
     """Sets the orientation model name in settings."""
     settings = _get_settings()
     settings.setValue(ORIENTATION_MODEL_NAME_KEY, model_name)
+
+
+# --- Update Check Settings ---
+def get_update_check_enabled() -> bool:
+    """Gets whether automatic update checks are enabled."""
+    settings = _get_settings()
+    return settings.value(
+        UPDATE_CHECK_ENABLED_KEY, DEFAULT_UPDATE_CHECK_ENABLED, type=bool
+    )
+
+
+def set_update_check_enabled(enabled: bool):
+    """Sets whether automatic update checks are enabled."""
+    settings = _get_settings()
+    settings.setValue(UPDATE_CHECK_ENABLED_KEY, enabled)
+
+
+def get_last_update_check_time() -> int:
+    """Gets the timestamp of the last update check (seconds since epoch)."""
+    settings = _get_settings()
+    return settings.value(UPDATE_LAST_CHECK_KEY, 0, type=int)
+
+
+def set_last_update_check_time(timestamp: int):
+    """Sets the timestamp of the last update check."""
+    settings = _get_settings()
+    settings.setValue(UPDATE_LAST_CHECK_KEY, timestamp)

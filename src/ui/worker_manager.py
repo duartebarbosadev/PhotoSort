@@ -12,8 +12,9 @@ from ui.ui_components import (
     SimilarityWorker,
     CudaDetectionWorker,
 )
+from workers.update_worker import UpdateCheckWorker
 from core.image_pipeline import ImagePipeline
-from core.rating_loader_worker import (
+from workers.rating_loader_worker import (
     RatingLoaderWorker,
 )
 from core.caching.rating_cache import RatingCache
@@ -76,6 +77,11 @@ class WorkerManager(QObject):
     # CUDA Detection Signals
     cuda_detection_finished = pyqtSignal(bool)
 
+    # Update Check Signals
+    update_check_finished = pyqtSignal(
+        bool, object, str
+    )  # (update_available, update_info, error_message)
+
     def __init__(
         self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None
     ):
@@ -102,6 +108,9 @@ class WorkerManager(QObject):
 
         self.cuda_detection_thread: Optional[QThread] = None
         self.cuda_detection_worker: Optional[CudaDetectionWorker] = None
+
+        self.update_check_thread: Optional[QThread] = None
+        self.update_check_worker: Optional[UpdateCheckWorker] = None
 
     def _terminate_thread(
         self, thread: Optional[QThread], worker_stop_method: Optional[callable] = None
@@ -537,6 +546,48 @@ class WorkerManager(QObject):
             and self.cuda_detection_thread.isRunning()
         )
 
+    def start_update_check(self, current_version: str):
+        """Start checking for updates in a background thread."""
+        if self.is_update_check_running():
+            logger.warning("Update check is already running")
+            return
+
+        logger.info("Starting update check...")
+
+        self.update_check_thread = QThread()
+        self.update_check_worker = UpdateCheckWorker(current_version)
+        self.update_check_worker.moveToThread(self.update_check_thread)
+
+        # Connect signals
+        self.update_check_worker.update_check_finished.connect(
+            self.update_check_finished.emit
+        )
+        self.update_check_worker.update_check_finished.connect(
+            self._cleanup_update_check_worker
+        )
+
+        # Connect start signal
+        self.update_check_thread.started.connect(
+            self.update_check_worker.check_for_updates
+        )
+
+        # Start the thread
+        self.update_check_thread.start()
+
+    def _cleanup_update_check_worker(self):
+        """Clean up the update check worker and thread."""
+        if self.update_check_thread is not None:
+            self.update_check_thread.quit()
+            self.update_check_thread.wait()
+            self.update_check_thread = None
+        self.update_check_worker = None
+
+    def is_update_check_running(self) -> bool:
+        return (
+            self.update_check_thread is not None
+            and self.update_check_thread.isRunning()
+        )
+
     def is_any_worker_running(self) -> bool:
         return (
             self.is_file_scanner_running()
@@ -546,4 +597,5 @@ class WorkerManager(QObject):
             or self.is_rating_loader_running()
             or self.is_rotation_detection_running()
             or self.is_cuda_detection_running()
+            or self.is_update_check_running()
         )

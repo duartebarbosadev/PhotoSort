@@ -1392,6 +1392,188 @@ QPushButton#lossyRotationProceedButton:pressed {
     background-color: #E67A35;
 }
 
+/* --- Update Notification Dialogs --- */
+QDialog#updateNotificationDialog,
+QDialog#updateCheckDialog {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2D2D2D, stop: 1 #252525);
+    border: 2px solid #0084FF;
+    border-radius: 12px;
+}
+
+/* Update Dialog Titles */
+QLabel#updateTitle,
+QLabel#checkTitle {
+    color: #FFFFFF;
+    background-color: transparent;
+    font-weight: bold;
+}
+
+/* Version Frame */
+QFrame#versionFrame {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #252525, stop: 1 #202020);
+    border: 1px solid #404040;
+    border-radius: 8px;
+}
+
+QLabel#currentVersionLabel {
+    color: #C8C8C8;
+    font-size: 11pt;
+    background-color: transparent;
+}
+
+QLabel#newVersionLabel {
+    color: #0084FF;
+    font-size: 11pt;
+    font-weight: bold;
+    background-color: transparent;
+}
+
+/* Settings Frame */
+QFrame#settingsFrame {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #252525, stop: 1 #202020);
+    border: 1px solid #404040;
+    border-radius: 8px;
+}
+
+/* Release Notes Area */
+QTextEdit#releaseNotesArea {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #2A2A2A, stop: 1 #252525);
+    border: 1px solid #404040;
+    border-radius: 6px;
+    color: #E0E0E0;
+    font-size: 10pt;
+    padding: 10px;
+}
+
+QTextEdit#releaseNotesArea:focus {
+    border-color: #0084FF;
+}
+
+/* Notes Label */
+QLabel#notesLabel {
+    color: #0084FF;
+    font-weight: bold;
+    background-color: transparent;
+}
+
+/* Update Checkbox */
+QCheckBox#updateCheckbox {
+    color: #C8C8C8;
+    background-color: transparent;
+    spacing: 10px;
+    font-size: 10pt;
+}
+
+QCheckBox#updateCheckbox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #404040;
+    border-radius: 4px;
+    background-color: #2D2D2D;
+}
+
+QCheckBox#updateCheckbox::indicator:hover {
+    border-color: #505050;
+    background-color: #353535;
+}
+
+QCheckBox#updateCheckbox::indicator:checked {
+    background-color: #0084FF;
+    border-color: #005A9E;
+    image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTQiIGhlaWdodD0iMTQiIHZpZXdCb3g9IjAgMCAxNCAxNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTExIDQuNUw1Ljc1IDkuNzVMMy41IDcuNSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPC9zdmc+);
+}
+
+/* Dialog Buttons - Smaller sizing */
+QPushButton#laterButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #383838, stop: 1 #303030);
+    color: #E0E0E0;
+    border: 1px solid #484848;
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-size: 9pt;
+    font-weight: 500;
+    min-width: 70px;
+    min-height: 28px;
+}
+
+QPushButton#laterButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #454545, stop: 1 #3C3C3C);
+    border-color: #555555;
+    color: #FFFFFF;
+}
+
+QPushButton#laterButton:pressed {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #282828, stop: 1 #202020);
+}
+
+QPushButton#downloadButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0084FF, stop: 1 #0066CC);
+    color: #FFFFFF;
+    border: 1px solid #005A9E;
+    border-radius: 6px;
+    padding: 6px 20px;
+    font-size: 9pt;
+    font-weight: bold;
+    min-width: 120px;
+    min-height: 28px;
+}
+
+QPushButton#downloadButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0094FF, stop: 1 #0074DD);
+    border-color: #0084FF;
+}
+
+QPushButton#downloadButton:pressed {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0066CC, stop: 1 #0052AA);
+}
+
+QPushButton#checkCloseButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0084FF, stop: 1 #0066CC);
+    color: #FFFFFF;
+    border: 1px solid #005A9E;
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-size: 9pt;
+    font-weight: 500;
+    min-width: 60px;
+    min-height: 28px;
+}
+
+QPushButton#checkCloseButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0094FF, stop: 1 #0074DD);
+}
+
+QPushButton#checkCloseButton:pressed {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0066CC, stop: 1 #0052AA);
+}
+
+QPushButton#checkCloseButton:disabled {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #383838, stop: 1 #303030);
+    color: #666666;
+    border-color: #484848;
+}
+
+/* Status Label */
+QLabel#statusLabel {
+    color: #C8C8C8;
+    font-size: 11pt;
+    background-color: transparent;
+}
+
 /* --- Default Message Boxes --- */
 QMessageBox {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,

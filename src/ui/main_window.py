@@ -278,6 +278,9 @@ class MainWindow(QMainWindow):
                 0, lambda: self.app_controller.load_folder(self.initial_folder)
             )
 
+        # Start automatic update check after a short delay
+        QTimer.singleShot(2000, self.app_controller.automatic_check_for_updates)
+
     def _should_apply_raw_processing(self, file_path: str) -> bool:
         """Determine if RAW processing should be applied to the given file."""
         if not file_path:
