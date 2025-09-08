@@ -157,6 +157,11 @@ class AppController(QObject):
             self.handle_rotation_model_not_found
         )
 
+        # Update Check Worker
+        self.worker_manager.update_check_finished.connect(
+            self.handle_update_check_finished
+        )
+
     # --- Public Methods (called from MainWindow) ---
 
     def load_folder(self, folder_path: str):
@@ -812,6 +817,67 @@ class AppController(QObject):
         logger.info(
             f"Rotation application finished in {apply_end_time - apply_start_time:.2f}s."
         )
+
+    # --- Update Check Handlers ---
+
+    def manual_check_for_updates(self):
+        """Manually check for updates (called from menu)."""
+        from core.build_info import VERSION
+        from ui.update_dialog import UpdateCheckDialog
+
+        # Show the update check dialog
+        self.update_check_dialog = UpdateCheckDialog(self.main_window)
+        self.update_check_dialog.show()
+
+        # Start the update check
+        current_version = VERSION or "dev"
+        self.worker_manager.start_update_check(current_version)
+
+    def automatic_check_for_updates(self):
+        """Automatically check for updates on startup if enabled."""
+        from core.update_checker import UpdateChecker
+        from core.build_info import VERSION
+
+        update_checker = UpdateChecker()
+        if update_checker.should_check_for_updates():
+            logger.info("Starting automatic update check...")
+            current_version = VERSION or "dev"
+            self.worker_manager.start_update_check(current_version)
+
+    def handle_update_check_finished(
+        self, update_available: bool, update_info, error_message: str
+    ):
+        """Handle the completion of an update check."""
+        from ui.update_dialog import UpdateNotificationDialog
+        from core.build_info import VERSION
+
+        # Handle manual check dialog if it exists
+        is_manual_check = (
+            hasattr(self, "update_check_dialog")
+            and self.update_check_dialog is not None
+        )
+
+        if is_manual_check:
+            if update_available:
+                # Close the manual check dialog since we'll show the update notification
+                self.update_check_dialog.reject()
+                self.update_check_dialog = None
+            elif error_message:
+                self.update_check_dialog.set_status(f"Error: {error_message}", True)
+            else:
+                self.update_check_dialog.set_status("No updates available.", True)
+
+        # Show update notification dialog only if an update is available
+        if update_available and update_info:
+            current_version = VERSION or "dev"
+            dialog = UpdateNotificationDialog(
+                update_info, current_version, self.main_window
+            )
+            dialog.exec()
+        elif error_message:
+            logger.warning(f"Update check failed: {error_message}")
+        else:
+            logger.info("No updates available")
 
         # If no more rotation suggestions, hide the rotation view
         if not self.main_window.rotation_suggestions:

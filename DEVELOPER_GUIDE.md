@@ -25,11 +25,13 @@ The application is structured into two main packages: `core` and `ui`.
     - **`pyexiv2_init.py`**: Handles safe PyExiv2 initialization ensuring it loads before Qt libraries to prevent access violations.
     - **`rating_loader_worker.py`**: A worker dedicated to loading image ratings and metadata.
     - **`similarity_engine.py`**: Handles image feature extraction and clustering.
+    - **`update_checker.py`**: Handles checking for application updates from GitHub releases. Includes version comparison logic, automatic update scheduling, and update information parsing.
   - **`ui/`**: Contains all UI-related components, following the Model-View-Controller (MVC) pattern.
     - **`main_window.py`**: The main application window (the "View"). It should contain minimal business logic and delegate user actions to the `AppController`.
     - **`app_controller.py`**: The controller that mediates between the UI and the `core` logic. It handles user actions, calls the appropriate `core` services, and updates the UI.
     - **`app_state.py`**: Holds the application's runtime state, including caches and loaded data. This object is shared across the application.
     - **`worker_manager.py`**: Manages all background threads and workers, decoupling the UI from long-running tasks.
+    - **`update_dialog.py`**: UI dialogs for displaying update notifications and manual update check results.
     - **Controller Layer (Encapsulation Refactor)**: Non-trivial UI behaviors previously embedded in `MainWindow` have been extracted into focused controllers under `src/ui/controllers/`:
         - `navigation_controller.py`: Linear & group-aware navigation (honors skip-deleted logic, smart up/down traversal). Consumes a minimal protocol for selection & model interrogation.
         - `hotkey_controller.py`: Central mapping of key events to actions (allows headless tests to exercise hotkey dispatch logic).
@@ -67,12 +69,22 @@ The application is structured into two main packages: `core` and `ui`.
 
    - If the feature is a core logic change (e.g., a new image analysis technique), it should be implemented in the `src/core` directory.
    - If it's a new UI component, it should be in `src/ui`.
-   - If it's a new background task, a new worker should be added and managed by `src/ui/worker_manager.py`.
-2. **Create new files when necessary:**
+   - If it's a new background task, a new worker should be added to `src/workers` and managed by `src/ui/worker_manager.py`.
+
+2. **Workers Directory (`src/workers`):**
+   - Contains background worker classes for core business logic and application-level operations
+   - **`update_worker.py`**: Background worker for checking application updates without blocking the UI
+   - **`rating_loader_worker.py`**: Background worker for loading metadata and ratings for images
+   - Workers should inherit from QObject and use Qt signals for communication
+   - Managed by the `WorkerManager` in the UI layer
+   - UI-specific workers (like preview preloading, blur detection) remain in `src/ui/ui_components.py` due to tight coupling with UI operations
+
+3. **Create new files when necessary:**
 
    - Create a new file for a new class or a distinct set of functionalities. For example, a new image analysis feature like "sharpness detection" would warrant a new file `src/core/image_features/sharpness_detector.py`.
    - For smaller, related functions, you can add them to an existing relevant file.
-3. **Integrating the feature:**
+
+4. **Integrating the feature:**
 
    - The `AppController` is the primary point of integration. User actions from the UI (e.g., a button click in `MainWindow`) should call a method in the `AppController`.
    - The `AppController` then calls the relevant service in the `core` package. For any file system operations, the `AppController` must call the appropriate method in `ImageFileOperations`.
@@ -132,6 +144,7 @@ The application is structured into two main packages: `core` and `ui`.
   ```
 - **State Management**: The application's state (e.g., list of loaded images, cache data) is managed by the `AppState` class. Avoid storing state directly in the `MainWindow` or other UI components.
 - **Styling**: All UI components should be styled using stylesheets. The application uses a dark theme defined in `src/ui/dark_theme.qss`. When creating new UI components or modifying existing ones, ensure that the styling is consistent with this theme.
+- **Update Notifications**: The application includes an automatic update notification system that checks GitHub releases. Update checks run automatically on startup (with configurable intervals) and can be triggered manually from the Help menu. The system respects user preferences and can be disabled. All update-related constants are centralized in `app_settings.py`.
 
 ## 4. Rotation Suggestion Acceptance & Auto-Advance
 

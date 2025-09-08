@@ -72,6 +72,7 @@ class MenuManager:
         # Other global actions
         self.find_action: QAction
         self.about_action: QAction
+        self.check_updates_action: QAction
         self.rating_actions: dict[int, QAction] = {}
         self.image_focus_actions: dict[int, QAction] = {}
 
@@ -212,6 +213,10 @@ class MenuManager:
         self.about_action = QAction("&About", main_win)
         self.about_action.setShortcut(QKeySequence("F12"))
         main_win.addAction(self.about_action)
+
+        # Check for updates action
+        self.check_updates_action = QAction("Check for &Updates...", main_win)
+        main_win.addAction(self.check_updates_action)
 
         logger.debug("Actions created.")
 
@@ -360,6 +365,8 @@ class MenuManager:
 
     def _create_help_menu(self, menu_bar):
         help_menu = menu_bar.addMenu("&Help")
+        help_menu.addAction(self.check_updates_action)
+        help_menu.addSeparator()
         help_menu.addAction(self.about_action)
 
     def connect_signals(self):
@@ -472,6 +479,9 @@ class MenuManager:
         for action in self.image_focus_actions.values():
             action.triggered.connect(main_win._handle_image_focus_shortcut)
         self.about_action.triggered.connect(self.dialog_manager.show_about_dialog)
+        self.check_updates_action.triggered.connect(
+            main_win.app_controller.manual_check_for_updates
+        )
 
     def update_recent_folders_menu(self):
         """Update the 'Open Recent' menu with the latest list of folders."""

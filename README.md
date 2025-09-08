@@ -20,6 +20,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
   * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed.
 
+- **Update Notifications**: Automatically checks for new releases and notifies users when updates are available, with direct download links.
 - **Metadata Display**: Shows EXIF information (camera model, exposure settings, etc.).
 
 ## Getting Started
