@@ -181,6 +181,24 @@ def apply_app_identity(app: QApplication, main_window=None) -> None:
         logging.error(f"Failed to apply application icon: {e}")
 
 
+def resolve_splash_logo_path() -> str:
+    """Resolve the best path to the splashscreen logo across source and PyInstaller runs."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidate = os.path.join(meipass, "app_icon.png")
+        if os.path.exists(candidate):
+            return candidate
+    candidate = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.png"
+    )
+    if os.path.exists(candidate):
+        return candidate
+    candidate = os.path.abspath("app_icon.png")
+    if os.path.exists(candidate):
+        return candidate
+    return ""
+
+
 def main():
     """Main application entry point."""
 
@@ -190,15 +208,17 @@ def main():
     # --- Splash: show immediately (no text), then set message after it’s visible ---
     splash_total_start = time.perf_counter()
 
-    splash_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.png"
-    )
-    splash_pix = QPixmap(splash_path).scaled(
-        400,
-        300,
-        Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.FastTransformation,
-    )
+    splash_path = resolve_splash_logo_path()
+    if not splash_path:
+        logging.warning("Splashscreen logo not found. Splash will be blank.")
+        splash_pix = QPixmap()
+    else:
+        splash_pix = QPixmap(splash_path).scaled(
+            400,
+            300,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
     splash = QSplashScreen(splash_pix)
 
     # Show the splash immediately (no text yet)
