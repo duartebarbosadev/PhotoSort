@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+from typing import Optional
 
 # Ensure the 'src' directory is on sys.path when executing as a script
 SRC_DIR = os.path.dirname(__file__)
@@ -149,16 +150,47 @@ def _set_windows_app_id(app_id: str = "PhotoSort") -> None:
 def _resolve_app_icon_path() -> str:
     """Resolve the best path to the app icon across source and PyInstaller runs."""
     try:
-        meipass = getattr(sys, "_MEIPASS", None)
-        if meipass:
-            return os.path.join(meipass, "app_icon.ico")
-        if getattr(sys, "frozen", False):
-            return os.path.join(os.path.dirname(sys.executable), "app_icon.ico")
-        return os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.ico"
-        )
+        # Delegate to shared finder to keep resolution logic consistent
+        candidate = _find_resource_path("app_icon.ico", include_exe_dir=True)
+        return candidate or ""
     except Exception:
         return ""
+
+
+def _find_resource_path(filename: str, include_exe_dir: bool = False) -> Optional[str]:
+    """Find the first existing path for a given resource filename.
+
+    Search order:
+      1. PyInstaller _MEIPASS (if present)
+      2. Executable directory (when frozen and include_exe_dir=True)
+      3. Project `assets/` directory next to the package
+      4. Current working directory (absolute)
+
+    Returns the first existing file path, or None if not found.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+
+    candidates = []
+    if meipass:
+        candidates.append(os.path.join(meipass, filename))
+
+    if include_exe_dir and getattr(sys, "frozen", False):
+        candidates.append(os.path.join(os.path.dirname(sys.executable), filename))
+
+    candidates.append(
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", filename)
+    )
+    candidates.append(os.path.abspath(filename))
+
+    for candidate in candidates:
+        try:
+            if os.path.exists(candidate) and os.path.isfile(candidate):
+                return candidate
+        except Exception:
+            # Ignore individual candidate errors; continue to next
+            continue
+
+    return None
 
 
 def apply_app_identity(app: QApplication, main_window=None) -> None:
@@ -181,6 +213,14 @@ def apply_app_identity(app: QApplication, main_window=None) -> None:
         logging.error(f"Failed to apply application icon: {e}")
 
 
+def resolve_splash_logo_path() -> Optional[str]:
+    """Resolve the best path to the splashscreen logo across source and PyInstaller runs.
+
+    Returns the first existing candidate path, or None if no logo is found.
+    """
+    return _find_resource_path("app_icon.png", include_exe_dir=False)
+
+
 def main():
     """Main application entry point."""
 
@@ -190,15 +230,17 @@ def main():
     # --- Splash: show immediately (no text), then set message after it’s visible ---
     splash_total_start = time.perf_counter()
 
-    splash_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.png"
-    )
-    splash_pix = QPixmap(splash_path).scaled(
-        400,
-        300,
-        Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.FastTransformation,
-    )
+    splash_path = resolve_splash_logo_path()
+    if not splash_path:
+        logging.warning("Splashscreen logo not found. Splash will be blank.")
+        splash_pix = QPixmap()
+    else:
+        splash_pix = QPixmap(splash_path).scaled(
+            400,
+            300,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
     splash = QSplashScreen(splash_pix)
 
     # Show the splash immediately (no text yet)
