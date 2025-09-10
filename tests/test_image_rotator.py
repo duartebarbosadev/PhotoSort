@@ -74,7 +74,7 @@ class TestImageRotator:
     def test_rotator_initialization(self):
         """Test that ImageRotator initializes correctly."""
         assert isinstance(self.rotator, ImageRotator)
-        # ImageRotator should initialize without issues
+        # Verify that ImageRotator initializes successfully without requiring external dependencies or configuration
 
     def test_get_supported_formats(self):
         """Test that supported formats are returned correctly."""

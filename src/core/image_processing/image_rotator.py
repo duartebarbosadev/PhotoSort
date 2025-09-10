@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 # Rotation directions
 RotationDirection = Literal["clockwise", "counterclockwise", "180"]
 
+"""
+Handles image rotation with support for:
+1. Standard rotation for JPEG, PNG and other formats  
+2. Metadata-only rotation for RAW formats (ARW, CR2, NEF, etc.)
+3. Metadata-only rotation for HEIF/HEIC formats
+4. XMP orientation metadata updates for all supported formats
+"""
+
 
 class ImageRotator:
     # Define supported image formats for different rotation types
@@ -48,16 +56,6 @@ class ImageRotator:
         ".heif",
         ".heic",
     }
-    """
-    Handles image rotation with support for:
-    1. Standard rotation for JPEG, PNG and other formats  
-    2. Metadata-only rotation for RAW formats (ARW, CR2, NEF, etc.)
-    3. Metadata-only rotation for HEIF/HEIC formats
-    4. XMP orientation metadata updates for all supported formats
-    """
-
-    def __init__(self):
-        pass
 
     def _get_current_orientation(self, image_path: str) -> int:
         """Get current EXIF orientation value (1-8, default 1)."""
