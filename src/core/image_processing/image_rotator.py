@@ -1,7 +1,5 @@
 import os
 import logging
-import subprocess
-import tempfile
 from typing import Literal, Tuple
 from PIL import Image, ImageOps
 
@@ -9,8 +7,6 @@ from PIL import Image, ImageOps
 from core.pyexiv2_wrapper import PyExiv2Operations, safe_pyexiv2_image
 
 from pathlib import Path
-from core.image_file_ops import ImageFileOperations
-from core.app_settings import JPEGTRAN_TIMEOUT_SECONDS
 import piexif  # For EXIF manipulation with Pillow
 from pillow_heif import HeifImageFile  # For HEIF/HEIC support
 
@@ -54,31 +50,14 @@ class ImageRotator:
     }
     """
     Handles image rotation with support for:
-    1. Lossless rotation for JPEG files (using jpegtran if available)
-    2. Standard rotation for PNG and other formats
-    3. XMP orientation metadata updates for all supported formats
+    1. Standard rotation for JPEG, PNG and other formats  
+    2. Metadata-only rotation for RAW formats (ARW, CR2, NEF, etc.)
+    3. Metadata-only rotation for HEIF/HEIC formats
+    4. XMP orientation metadata updates for all supported formats
     """
 
     def __init__(self):
-        self.jpegtran_available = self._check_jpegtran_availability()
-        logger.info(f"jpegtran availability: {self.jpegtran_available}")
-
-    def _check_jpegtran_availability(self) -> bool:
-        """Check if jpegtran is available in the system PATH."""
-        try:
-            result = subprocess.run(
-                ["jpegtran", "-version"],
-                capture_output=True,
-                text=True,
-                timeout=JPEGTRAN_TIMEOUT_SECONDS,
-            )
-            return result.returncode == 0
-        except (
-            subprocess.SubprocessError,
-            FileNotFoundError,
-            subprocess.TimeoutExpired,
-        ):
-            return False
+        pass
 
     def _get_current_orientation(self, image_path: str) -> int:
         """Get current EXIF orientation value (1-8, default 1)."""
@@ -143,77 +122,6 @@ class ImageRotator:
             return rotation_map[direction][current_orientation]
 
         return current_orientation
-
-    def _rotate_jpeg_lossless(
-        self, image_path: str, direction: RotationDirection
-    ) -> bool:
-        """
-        Perform lossless JPEG rotation using jpegtran.
-        Returns True if successful, False otherwise.
-        """
-        if not self.jpegtran_available:
-            return False
-
-        try:
-            # Map rotation direction to jpegtran parameters
-            if direction == "clockwise":
-                transform = "-rotate 90"
-            elif direction == "counterclockwise":
-                transform = "-rotate 270"
-            elif direction == "180":
-                transform = "-rotate 180"
-            else:
-                return False
-
-            # Create temporary file for output
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
-                temp_path = temp_file.name
-
-            # Execute jpegtran
-            cmd = f'jpegtran -copy all -perfect {transform} "{image_path}"'
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                stdout=open(temp_path, "wb"),
-                timeout=30,
-            )
-
-            if result.returncode == 0 and os.path.getsize(temp_path) > 0:
-                # Replace original with rotated version
-                success, msg = ImageFileOperations.replace_file(temp_path, image_path)
-                if success:
-                    logger.info(
-                        f"Lossless JPEG rotation successful: {os.path.basename(image_path)}."
-                    )
-                else:
-                    logger.error(
-                        f"Lossless JPEG rotation failed during file replacement for '{os.path.basename(image_path)}': {msg}"
-                    )
-                return success
-            else:
-                logger.warning(
-                    "jpegtran command failed for '%s'. Stderr: %s",
-                    os.path.basename(image_path),
-                    result.stderr.decode(),
-                )
-                return False
-
-        except Exception as e:
-            logger.error(
-                "Error during lossless JPEG rotation for '%s': %s",
-                os.path.basename(image_path),
-                e,
-                exc_info=True,
-            )
-            return False
-        finally:
-            # Clean up temp file if it exists
-            if "temp_path" in locals() and os.path.exists(temp_path):
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
 
     def _rotate_image_standard(
         self, image_path: str, direction: RotationDirection
@@ -429,15 +337,21 @@ class ImageRotator:
                 method_used = "metadata-only"
         else:
             # Rotate the actual image pixels
-            if file_ext in self._LOSSLESS_JPEG_FORMATS and self.jpegtran_available:
-                # Try lossless JPEG rotation first
-                success = self._rotate_jpeg_lossless(image_path, direction)
-                method_used = "lossless JPEG"
-
-                if not success:
-                    # Fallback to standard rotation (lossy for JPEG)
+            if file_ext in self._LOSSLESS_JPEG_FORMATS:
+                # For JPEG, try metadata rotation first (lossless), then pixel rotation as fallback
+                metadata_success, pixel_available, msg = (
+                    self.try_metadata_rotation_first(image_path, direction)
+                )
+                if metadata_success:
+                    success = True
+                    method_used = "metadata-only (lossless)"
+                elif pixel_available:
+                    # Fallback to pixel rotation
                     success = self._rotate_image_standard(image_path, direction)
-                    method_used = "standard (lossy fallback)"
+                    method_used = "standard JPEG (quality=95, lossy fallback)"
+                else:
+                    success = False
+                    method_used = "no available rotation method"
             elif file_ext in self._LOSSLESS_HEIF_FORMATS:
                 # Use metadata-only rotation for HEIF/HEIC (lossless)
                 success = self._update_xmp_orientation(image_path, new_orientation)
@@ -496,8 +410,6 @@ class ImageRotator:
             .union(self._STANDARD_PIXEL_ROTATION_FORMATS)
             .union(self._RAW_FORMATS_EXIF_ONLY)
         )
-        if self.jpegtran_available:
-            formats.append(".jpg (lossless via jpegtran)")
         formats.append(
             ".heif (lossless via metadata)"
         )  # Add specific mention for HEIF/HEIC lossless
@@ -551,11 +463,8 @@ class ImageRotator:
             raw_formats = self._RAW_FORMATS_EXIF_ONLY
 
             if file_ext in pixel_rotation_formats:
-                # Pixel rotation is possible but will be lossy (except lossless JPEG)
-                if file_ext in [".jpg", ".jpeg"] and self.jpegtran_available:
-                    message = f"Metadata rotation failed for {filename}. Lossless JPEG rotation available."
-                else:
-                    message = f"Metadata rotation failed for {filename}. Lossy pixel rotation available."
+                # Pixel rotation is possible (will be lossy for JPEG)
+                message = f"Metadata rotation failed for {filename}. Pixel rotation available."
                 return False, True, message
             elif file_ext in raw_formats:
                 # RAW files should only use metadata rotation

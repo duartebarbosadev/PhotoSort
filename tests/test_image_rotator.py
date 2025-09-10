@@ -74,8 +74,7 @@ class TestImageRotator:
     def test_rotator_initialization(self):
         """Test that ImageRotator initializes correctly."""
         assert isinstance(self.rotator, ImageRotator)
-        # jpegtran availability might vary by system
-        assert isinstance(self.rotator.jpegtran_available, bool)
+        # ImageRotator should initialize without issues
 
     def test_get_supported_formats(self):
         """Test that supported formats are returned correctly."""
@@ -195,6 +194,95 @@ class TestImageRotator:
                 temp_image, "invalid_direction"
             )
             assert not success
+
+    def test_jpeg_metadata_first_approach(self):
+        """Test that JPEG files attempt metadata rotation first."""
+        if not any(
+            img.lower().endswith((".jpg", ".jpeg")) for img in self.sample_images
+        ):
+            pytest.skip("No JPEG sample images available")
+
+        # Find a JPEG sample
+        jpeg_sample = next(
+            (
+                img
+                for img in self.sample_images
+                if img.lower().endswith((".jpg", ".jpeg"))
+            ),
+            None,
+        )
+        if not jpeg_sample:
+            pytest.skip("No JPEG sample found")
+
+        temp_image = self._create_temp_copy(jpeg_sample)
+
+        # Test the try_metadata_rotation_first method directly
+        metadata_success, pixel_available, message = (
+            self.rotator.try_metadata_rotation_first(temp_image, "clockwise")
+        )
+
+        # Should either succeed with metadata or indicate pixel rotation is available
+        assert metadata_success or pixel_available
+        assert "metadata" in message.lower() or "pixel" in message.lower()
+        logging.info(f"JPEG metadata-first test: {message}")
+
+    def test_jpeg_rotation_method_reporting(self):
+        """Test that JPEG rotation reports the correct method used."""
+        if not any(
+            img.lower().endswith((".jpg", ".jpeg")) for img in self.sample_images
+        ):
+            pytest.skip("No JPEG sample images available")
+
+        # Find a JPEG sample
+        jpeg_sample = next(
+            (
+                img
+                for img in self.sample_images
+                if img.lower().endswith((".jpg", ".jpeg"))
+            ),
+            None,
+        )
+        if not jpeg_sample:
+            pytest.skip("No JPEG sample found")
+
+        temp_image = self._create_temp_copy(jpeg_sample)
+
+        # Perform rotation and check the method reported
+        success, message = self.rotator.rotate_clockwise(temp_image)
+
+        assert success
+        # Should report either metadata-only (lossless) or quality=95 fallback
+        assert "metadata-only" in message.lower() or "quality=95" in message.lower()
+        logging.info(f"JPEG rotation method: {message}")
+
+    def test_raw_format_metadata_only(self):
+        """Test that RAW formats only use metadata rotation."""
+        raw_extensions = [".arw", ".cr2", ".nef", ".dng"]
+        raw_sample = None
+
+        for img in self.sample_images:
+            if any(img.lower().endswith(ext) for ext in raw_extensions):
+                raw_sample = img
+                break
+
+        if not raw_sample:
+            pytest.skip("No RAW sample images available")
+
+        temp_image = self._create_temp_copy(raw_sample)
+        original_size = os.path.getsize(temp_image)
+
+        # Perform rotation on RAW file
+        success, message = self.rotator.rotate_clockwise(temp_image)
+
+        # Should succeed and use metadata-only
+        assert success
+        assert "metadata-only" in message.lower()
+        assert "raw format" in message.lower()
+
+        # File size should be nearly identical (only metadata changed)
+        new_size = os.path.getsize(temp_image)
+        assert abs(new_size - original_size) < 1024  # Less than 1KB difference
+        logging.info(f"RAW rotation: {message}")
 
 
 if __name__ == "__main__":

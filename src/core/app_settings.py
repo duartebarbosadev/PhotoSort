@@ -94,8 +94,6 @@ EXIF_CACHE_MIN_FILE_SIZE = 4096  # 4 KB minimum file size for disk caching
 DEFAULT_RATING_CACHE_SIZE_LIMIT_MB = 256  # Default 256MB limit for rating cache
 
 # --- File Operation Constants ---
-# Rotation timeout
-JPEGTRAN_TIMEOUT_SECONDS = 5  # Timeout for jpegtran version check
 
 # --- Image Processing Constants ---
 # Image size settings

@@ -7,7 +7,7 @@ from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from PyQt6.QtWidgets import QMenu, QStyle, QWidget, QWidgetAction, QHBoxLayout, QLabel
 
-from core.metadata_processor import MetadataProcessor
+from core.image_processing.image_rotator import ImageRotator
 from core.app_settings import get_recent_folders
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,9 @@ class MenuManager:
         self.main_window = main_window
         self.dialog_manager = main_window.dialog_manager
         self.app_state = main_window.app_state
+
+        # Initialize ImageRotator for fast rotation support checking
+        self.image_rotator = ImageRotator()
 
         # --- Actions ---
         # File Menu
@@ -526,8 +529,8 @@ class MenuManager:
 
         menu = QMenu(main_win)
 
-        # Rotation
-        if MetadataProcessor.is_rotation_supported(file_path):
+        # Rotation - use ImageRotator's fast extension-based check to avoid PyExiv2 operations in windowed builds
+        if self.image_rotator.is_rotation_supported(file_path):
             selected_paths = main_win._get_selected_file_paths_from_view()
             num_selected = len(selected_paths) if len(selected_paths) > 1 else 1
             label_suffix = f" {num_selected} Images" if num_selected > 1 else ""
