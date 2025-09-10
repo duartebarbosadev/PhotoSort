@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+from typing import Optional
 
 # Ensure the 'src' directory is on sys.path when executing as a script
 SRC_DIR = os.path.dirname(__file__)
@@ -181,22 +182,34 @@ def apply_app_identity(app: QApplication, main_window=None) -> None:
         logging.error(f"Failed to apply application icon: {e}")
 
 
-def resolve_splash_logo_path() -> str:
-    """Resolve the best path to the splashscreen logo across source and PyInstaller runs."""
+def resolve_splash_logo_path() -> Optional[str]:
+    """Resolve the best path to the splashscreen logo across source and PyInstaller runs.
+
+    Returns the first existing candidate path, or None if no logo is found.
+    """
     meipass = getattr(sys, "_MEIPASS", None)
+
+    candidates = []
     if meipass:
-        candidate = os.path.join(meipass, "app_icon.png")
-        if os.path.exists(candidate):
-            return candidate
-    candidate = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.png"
+        candidates.append(os.path.join(meipass, "app_icon.png"))
+
+    candidates.append(
+        os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "assets", "app_icon.png"
+        )
     )
-    if os.path.exists(candidate):
-        return candidate
-    candidate = os.path.abspath("app_icon.png")
-    if os.path.exists(candidate):
-        return candidate
-    return ""
+
+    candidates.append(os.path.abspath("app_icon.png"))
+
+    for candidate in candidates:
+        try:
+            if os.path.exists(candidate) and os.path.isfile(candidate):
+                return candidate
+        except Exception:
+            # Ignore errors checking individual candidates to allow fallback to others
+            continue
+
+    return None
 
 
 def main():
