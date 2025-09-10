@@ -2,13 +2,8 @@ name: Generate Release Notes
 
 on:
   release:
-    types: [published, prereleased, released]
+    types: [published, prereleased, released, created]
   workflow_dispatch:
-    inputs:
-      tag_name:
-        description: "Tag to generate notes for (optional). If empty, uses latest tag in repo."
-        required: false
-        default: ""
 
 permissions:
   contents: write
@@ -50,13 +45,8 @@ jobs:
           if [[ "${{ github.event_name }}" == "release" ]]; then
             TAG_NAME="${{ github.event.release.tag_name }}"
           else
-            # workflow_dispatch
-            if [[ -n "${{ github.event.inputs.tag_name }}" ]]; then
-              TAG_NAME="${{ github.event.inputs.tag_name }}"
-            else
-              # Fallback: most recent tag by creation date
-              TAG_NAME="$(git tag --sort=-creatordate | head -n 1 || true)"
-            fi
+            # workflow_dispatch - use most recent tag by creation date
+            TAG_NAME="$(git tag --sort=-creatordate | head -n 1 || true)"
           fi
 
           if [[ -z "${TAG_NAME}" ]]; then
