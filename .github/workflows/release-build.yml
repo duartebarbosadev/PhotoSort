@@ -30,9 +30,6 @@ jobs:
             python: '3.12'
             artifact_name: PhotoSort-Windows-x64-CUDA
             onnx_runtime: onnxruntime-gpu
-          - os: macos-13  # Intel
-            python: '3.12'
-            artifact_name: PhotoSort-macOS-Intel
           - os: macos-14  # Apple Silicon
             python: '3.12'
             artifact_name: PhotoSort-macOS-AppleSilicon
