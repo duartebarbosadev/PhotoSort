@@ -25,14 +25,6 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
 ## Getting Started
 
-### Prerequisites
-
-* **Python 3.x**: Download from [python.org](https://www.python.org/).
-* **jpegtran (Optional, for Lossless JPEG Rotation)**:
-  * **Windows**: Download from [jpegclub.org](http://jpegclub.org/jpegtran/) or install via Chocolatey: `choco install libjpeg-turbo`
-  * **macOS**: `brew install jpeg-turbo`
-  * **Linux**: `sudo apt-get install libjpeg-turbo-progs` (Ubuntu/Debian) or `sudo yum install libjpeg-turbo-utils` (RedHat/CentOS)
-
 ### Hardware Acceleration (Optional, Recommended)
 
 For significantly faster AI-powered features like **Rotation Detection** and **Similarity Analysis**, use the appropriate requirements file for your hardware.
