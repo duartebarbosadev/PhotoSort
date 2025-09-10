@@ -1,5 +1,5 @@
 
-# PhotoSort: Photo Library Culler & Organizer
+# PhotoSort: Photo Library Culler
 
 <div align="center">
   <img src="assets/main-window-screenshot.png" alt="PhotoSort Main Window" />
@@ -25,32 +25,12 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
 ## Getting Started
 
-### Hardware Acceleration (Optional, Recommended)
-
-For significantly faster AI-powered features like **Rotation Detection** and **Similarity Analysis**, use the appropriate requirements file for your hardware.
-
-#### For NVIDIA GPUs (CUDA)
-Use [`requirements-cuda.txt`](requirements-cuda.txt) which includes `onnxruntime-gpu`. Requires NVIDIA CUDA Toolkit & cuDNN.
-
-#### For CPU (Default)
-Use [`requirements.txt`](requirements.txt) which includes the standard `onnxruntime` package.
-
-> **Note**: These packages are mutually exclusive. If switching between CPU and CUDA versions, create separate virtual environments or uninstall the current onnx package before installing the other.
-
-### AI Model Setup (Required for Rotation Detection)
-
-To use the **Auto Rotate Images** feature (`Ctrl+R`), you need to download the pre-trained orientation detection model.
-
-1. **Create a `models` directory** in the root of the project.
-2. **Download the model file**:
-   * **Link**: [Download orientation_model_v2_0.9882.onnx from Hugging Face](https://huggingface.co/DuarteBarbosa/deep-image-orientation-detection/tree/main)
-3. **Place the downloaded model file inside the `models` directory.**
-
-The application will automatically detect and load the model when you use the rotation detection feature.
-
 ### Installation & Running
 
-1. **Clone the repository (if applicable):**
+If you prefer a ready-to-run binary, pre-built executables are published on the project's GitHub Releases page. Download the release, then run the downloaded executable directly — no Python virtual environment required. You can find releases here:
+https://github.com/duartebarbosadev/photosort/releases
+
+1. **Clone the repository:**
 
    ```bash
    git clone https://github.com/duartebarbosadev/photosort
@@ -76,20 +56,33 @@ The application will automatically detect and load the model when you use the ro
    ```
 
    > **Note**: The CUDA version requires NVIDIA CUDA Toolkit and cuDNN to be installed on your system.
+   
+   > **Note**: These packages are mutually exclusive. If switching between CPU and CUDA versions, create separate virtual environments or uninstall the current onnx package before installing the other.
 4. **Run the application:**
    The main entry point is [`src/main.py`](src/main.py).
 
-   ```bash
-   python -m src.main [--folder FOLDER_PATH] [--clear-cache]
+  ```
+  python -m src.main [--folder FOLDER_PATH] [--clear-cache]
 
-   # Examples:
-   #   Open a specific folder at startup:
-   #       python -m src.main --folder "C:/Users/MyUser/Pictures"
-   #   Clear all caches before starting:
-   #       python -m src.main --clear-cache
-   #   Open folder and clear caches (useful for development):
-   #       python -m src.main --folder "C:/Users/MyUser/Pictures" --clear-cache
-   ```
+  # Examples:
+  #   Open a specific folder at startup:
+  #       python -m src.main --folder "C:/Users/MyUser/Pictures"
+  #   Clear all caches before starting:
+  #       python -m src.main --clear-cache
+  #   Open folder and clear caches (useful for development):
+  #       python -m src.main --folder "C:/Users/MyUser/Pictures" --clear-cache
+  ```
+
+### AI Model Setup (Required for Rotation Detection)
+
+To use the **Auto Rotate Images** feature (`Ctrl+R`), you need to download the pre-trained orientation detection model.
+
+1. **Create a `models` directory** in the root of the project.
+2. **Download the model file**:
+   * **Link**: [Download orientation_model_v2_0.9882.onnx from Hugging Face](https://huggingface.co/DuarteBarbosa/deep-image-orientation-detection/tree/main)
+3. **Place the downloaded model file inside the `models` directory.**
+
+The application will automatically detect and load the model when you use the rotation detection feature.
 
 ### Exporting Logs
 
