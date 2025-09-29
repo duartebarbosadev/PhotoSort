@@ -19,94 +19,6 @@ _PYEXIV2_INITIALIZED = False
 _INIT_LOCK = threading.Lock()
 
 
-def _setup_pyexiv2_library_path():
-    """Set up library paths for pyexiv2 in frozen applications."""
-    if not getattr(sys, 'frozen', False):
-        return  # Not frozen, normal import should work
-    
-    # We're in a PyInstaller frozen app
-    import os
-    
-    # Try to find the bundled pyexiv2 directory
-    if hasattr(sys, '_MEIPASS'):
-        # PyInstaller temporary directory
-        base_path = sys._MEIPASS
-        pyexiv2_lib_paths = [
-            os.path.join(base_path, 'pyexiv2', 'lib'),
-            os.path.join(base_path, 'pyexiv2'),
-        ]
-    else:
-        # Fallback for other frozen environments
-        base_path = os.path.dirname(sys.executable)
-        pyexiv2_lib_paths = [
-            os.path.join(base_path, 'pyexiv2', 'lib'),
-            os.path.join(base_path, 'Frameworks', 'pyexiv2', 'lib'),  # macOS app bundle structure
-            os.path.join(base_path, '..', 'Frameworks', 'pyexiv2', 'lib'),  # Alternative macOS path
-        ]
-    
-    # Add any existing pyexiv2 lib directories to the library path
-    for lib_path in pyexiv2_lib_paths:
-        if os.path.isdir(lib_path):
-            logger.debug(f"Adding pyexiv2 lib path: {lib_path}")
-            
-            # Handle versioned library symlinks for pyexiv2
-            try:
-                libexiv2_path = os.path.join(lib_path, 'libexiv2.so')
-                versioned_path = os.path.join(lib_path, 'libexiv2.so.28')
-                
-                if os.path.exists(libexiv2_path) and not os.path.exists(versioned_path):
-                    # Create a symlink for the versioned library name
-                    try:
-                        os.symlink('libexiv2.so', versioned_path)
-                        logger.debug(f"Created symlink {versioned_path} -> libexiv2.so")
-                    except (OSError, NotImplementedError):
-                        # Symlinks might not be supported, try copying instead
-                        try:
-                            import shutil
-                            shutil.copy2(libexiv2_path, versioned_path)
-                            logger.debug(f"Copied {libexiv2_path} to {versioned_path}")
-                        except Exception as copy_error:
-                            logger.debug(f"Could not create versioned library: {copy_error}")
-                
-                # Handle macOS versioned dylibs too
-                if sys.platform.startswith('darwin'):
-                    libexiv2_dylib = os.path.join(lib_path, 'libexiv2.dylib')
-                    versioned_dylib = os.path.join(lib_path, 'libexiv2.28.dylib')
-                    
-                    if os.path.exists(libexiv2_dylib) and not os.path.exists(versioned_dylib):
-                        try:
-                            os.symlink('libexiv2.dylib', versioned_dylib)
-                            logger.debug(f"Created symlink {versioned_dylib} -> libexiv2.dylib")
-                        except (OSError, NotImplementedError):
-                            try:
-                                import shutil
-                                shutil.copy2(libexiv2_dylib, versioned_dylib)
-                                logger.debug(f"Copied {libexiv2_dylib} to {versioned_dylib}")
-                            except Exception as copy_error:
-                                logger.debug(f"Could not create versioned dylib: {copy_error}")
-                                
-            except Exception as version_error:
-                logger.debug(f"Error handling versioned libraries: {version_error}")
-            
-            # Add to system library path
-            if sys.platform.startswith('darwin'):  # macOS
-                dyld_path = os.environ.get('DYLD_LIBRARY_PATH', '')
-                if lib_path not in dyld_path:
-                    os.environ['DYLD_LIBRARY_PATH'] = f"{lib_path}:{dyld_path}" if dyld_path else lib_path
-                    logger.debug(f"Added to DYLD_LIBRARY_PATH: {lib_path}")
-            elif sys.platform.startswith('linux'):  # Linux
-                ld_path = os.environ.get('LD_LIBRARY_PATH', '')
-                if lib_path not in ld_path:
-                    os.environ['LD_LIBRARY_PATH'] = f"{lib_path}:{ld_path}" if ld_path else lib_path
-                    logger.debug(f"Added to LD_LIBRARY_PATH: {lib_path}")
-            elif sys.platform.startswith('win'):  # Windows
-                # Windows uses PATH for DLL loading
-                path = os.environ.get('PATH', '')
-                if lib_path not in path:
-                    os.environ['PATH'] = f"{lib_path};{path}"
-                    logger.debug(f"Added to PATH: {lib_path}")
-
-
 def ensure_pyexiv2_initialized():
     """
     Ensure pyexiv2 is safely initialized before any Qt imports.
@@ -119,9 +31,6 @@ def ensure_pyexiv2_initialized():
             return
 
         try:
-            # Set up library paths for frozen applications
-            _setup_pyexiv2_library_path()
-
             # Check if any Qt modules have already been imported
             qt_modules = [
                 name
@@ -159,9 +68,7 @@ def ensure_pyexiv2_initialized():
 
         except Exception as e:
             logger.error(f"Failed to initialize pyexiv2: {e}")
-            # Instead of raising, log and continue - allow app to start even if pyexiv2 fails
-            logger.warning("Continuing without pyexiv2 functionality")
-            _PYEXIV2_INITIALIZED = True  # Mark as "initialized" to prevent repeated attempts
+            raise
 
 
 # Initialize immediately when this module is imported
