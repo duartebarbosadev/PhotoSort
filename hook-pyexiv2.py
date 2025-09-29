@@ -48,22 +48,15 @@ try:
                     else:  # Linux
                         binaries.append((src_path, 'pyexiv2/lib'))
                     print(f"PyInstaller hook: Added binary {file} -> {dst_path}")
-        
-        # For Linux, try to find and include the system libexiv2 dependencies
-        if not is_win and not is_darwin:
-            try:
-                import subprocess
-                # Try to find libexiv2 system libraries
-                result = subprocess.run(['ldconfig', '-p'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    for line in result.stdout.split('\n'):
-                        if 'libexiv2.so' in line and '=>' in line:
-                            lib_path = line.split('=>')[1].strip()
-                            if os.path.exists(lib_path):
-                                binaries.append((lib_path, 'pyexiv2/lib'))
-                                print(f"PyInstaller hook: Added system library {lib_path}")
-            except Exception as e:
-                print(f"PyInstaller hook: Could not find system libraries: {e}")
+                    
+                    # Special handling for libexiv2.so - create a versioned symlink
+                    if file == 'libexiv2.so':
+                        # Also add it as libexiv2.so.28 which is what exiv2api.so expects
+                        # Format: (source_path, dest_dir)
+                        versioned_dst = os.path.join('pyexiv2', 'lib') if not is_win else '.'
+                        # We'll handle this in the runtime hook instead since PyInstaller binaries format
+                        # doesn't support renaming easily
+                        pass
 
 except ImportError:
     print("PyInstaller hook: pyexiv2 not available during hook execution")
