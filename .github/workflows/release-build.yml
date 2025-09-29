@@ -136,6 +136,7 @@ jobs:
           pyinstaller -w --onefile -n PhotoSort `
             --icon assets/app_icon.ico `
             --paths src `
+            --additional-hooks-dir . `
             --hidden-import core.build_info `
             --add-data "src/ui/dark_theme.qss;." `
             --add-data "assets/app_icon.ico;." `
@@ -173,13 +174,19 @@ jobs:
       - name: Build with PyInstaller (macOS)
         if: runner.os == 'macOS'
         run: |
+          # Find pyexiv2 installation to bundle its libraries
+          PYEXIV2_PATH=$(python -c "import pyexiv2; import os; print(os.path.dirname(pyexiv2.__file__))")
+          echo "Found pyexiv2 at: $PYEXIV2_PATH"
+          
           pyinstaller -w --name PhotoSort \
             --icon assets/photosort.icns \
             --paths src \
+            --additional-hooks-dir . \
             --hidden-import core.build_info \
             --add-data src/ui/dark_theme.qss:. \
             --add-data assets/app_icon.ico:. \
             --add-data assets/app_icon.png:. \
+            --add-data "$PYEXIV2_PATH:pyexiv2" \
             --hidden-import PyQt6.QtCore \
             --hidden-import PyQt6.QtGui \
             --hidden-import PyQt6.QtWidgets \
@@ -192,6 +199,7 @@ jobs:
             --hidden-import sklearn \
             --hidden-import sentence_transformers \
             --add-data models:models \
+            --runtime-hook runtime_hook.py \
             src/main.py
 
       - name: Package artifact (macOS .dmg)
