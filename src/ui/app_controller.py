@@ -742,7 +742,9 @@ class AppController(QObject):
 
     def _apply_approved_rotations(self, approved_rotations: Dict[str, int]):
         """Apply the approved rotations to the images using background worker."""
-        logger.info(f"Starting rotation application for {len(approved_rotations)} images.")
+        logger.info(
+            f"Starting rotation application for {len(approved_rotations)} images."
+        )
 
         # Show loading overlay
         self.main_window.show_loading_overlay("Applying rotations...")
@@ -865,9 +867,7 @@ class AppController(QObject):
         else:
             logger.warning(f"Failed to write rating for {os.path.basename(file_path)}")
 
-    def handle_rating_write_finished(
-        self, successful_count: int, failed_count: int
-    ):
+    def handle_rating_write_finished(self, successful_count: int, failed_count: int):
         """Handle completion of all rating writes."""
         # Refresh the filter to show/hide items based on new ratings
         self.main_window._apply_filter()
@@ -942,9 +942,7 @@ class AppController(QObject):
             f"Error applying rotations: {error_message}", 5000
         )
 
-    def handle_thumbnail_preload_progress(
-        self, current: int, total: int, message: str
-    ):
+    def handle_thumbnail_preload_progress(self, current: int, total: int, message: str):
         """Handle progress updates from thumbnail preload worker."""
         logger.debug(f"Thumbnail preload: {current}/{total} - {message}")
         # Optional: Update status bar or progress indicator

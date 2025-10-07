@@ -108,7 +108,9 @@ class FileScanner(QObject):
             )
             return {"path": file_path, "is_blurred": is_blurred}
         except Exception as e:
-            logger.warning(f"Blur detection failed for {os.path.basename(file_path)}: {e}")
+            logger.warning(
+                f"Blur detection failed for {os.path.basename(file_path)}: {e}"
+            )
             return {"path": file_path, "is_blurred": None}
 
     def scan_directory(
@@ -144,7 +146,9 @@ class FileScanner(QObject):
 
                         # Hard existence check to avoid downstream missing-file errors
                         if not os.path.isfile(full_path):
-                            logger.info(f"Skipping missing file during scan: {full_path}")
+                            logger.info(
+                                f"Skipping missing file during scan: {full_path}"
+                            )
                             continue
 
                         all_file_paths.append(full_path)
@@ -164,10 +168,14 @@ class FileScanner(QObject):
             all_file_data: List[Dict[str, Any]] = []
 
             if perform_blur_detection and all_file_paths:
-                logger.info(f"Starting parallel blur detection for {len(all_file_paths)} images...")
+                logger.info(
+                    f"Starting parallel blur detection for {len(all_file_paths)} images..."
+                )
                 max_workers = min(os.cpu_count() or 4, 8)
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=max_workers
+                ) as executor:
                     # Submit all blur detection tasks
                     future_to_path = {
                         executor.submit(
@@ -199,7 +207,9 @@ class FileScanner(QObject):
                             )
                             all_file_data.append({"path": path, "is_blurred": None})
 
-                logger.info(f"Parallel blur detection complete for {len(all_file_data)} images")
+                logger.info(
+                    f"Parallel blur detection complete for {len(all_file_data)} images"
+                )
             else:
                 # No blur detection - just create file data with None blur status
                 all_file_data = [

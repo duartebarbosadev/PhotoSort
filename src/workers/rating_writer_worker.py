@@ -85,7 +85,9 @@ class RatingWriterWorker(QObject):
 
                 except Exception as e:
                     failed_count += 1
-                    logger.error(f"Error setting rating for {filename}: {e}", exc_info=True)
+                    logger.error(
+                        f"Error setting rating for {filename}: {e}", exc_info=True
+                    )
                     self.rating_written.emit(file_path, rating, False)
 
             if self._is_running:

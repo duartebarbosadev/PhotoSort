@@ -1,10 +1,10 @@
 """Tests for RotationApplicationWorker"""
+
 import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 
 import os
 import tempfile
 from unittest.mock import Mock, patch
-import pytest
 from PyQt6.QtCore import QObject
 
 from workers.rotation_application_worker import RotationApplicationWorker
@@ -27,11 +27,15 @@ class TestRotationApplicationWorker:
         worker.stop()
         assert worker._is_running is False
 
-    @patch('workers.rotation_application_worker.MetadataProcessor')
+    @patch("workers.rotation_application_worker.MetadataProcessor")
     def test_apply_single_rotation_clockwise_success(self, mock_metadata_processor):
         """Test applying a single clockwise rotation"""
         # Mock metadata-first rotation success
-        mock_metadata_processor.try_metadata_rotation_first.return_value = (True, False, "Success")
+        mock_metadata_processor.try_metadata_rotation_first.return_value = (
+            True,
+            False,
+            "Success",
+        )
 
         worker = RotationApplicationWorker()
 
@@ -45,7 +49,7 @@ class TestRotationApplicationWorker:
         worker.finished.connect(finished_mock)
 
         # Create temp file
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
@@ -67,16 +71,20 @@ class TestRotationApplicationWorker:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    @patch('workers.rotation_application_worker.MetadataProcessor')
+    @patch("workers.rotation_application_worker.MetadataProcessor")
     def test_apply_rotation_counterclockwise(self, mock_metadata_processor):
         """Test applying counterclockwise rotation"""
-        mock_metadata_processor.try_metadata_rotation_first.return_value = (True, False, "Success")
+        mock_metadata_processor.try_metadata_rotation_first.return_value = (
+            True,
+            False,
+            "Success",
+        )
 
         worker = RotationApplicationWorker()
         rotation_applied_mock = Mock()
         worker.rotation_applied.connect(rotation_applied_mock)
 
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
@@ -91,16 +99,20 @@ class TestRotationApplicationWorker:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    @patch('workers.rotation_application_worker.MetadataProcessor')
+    @patch("workers.rotation_application_worker.MetadataProcessor")
     def test_apply_rotation_180(self, mock_metadata_processor):
         """Test applying 180 degree rotation"""
-        mock_metadata_processor.try_metadata_rotation_first.return_value = (True, False, "Success")
+        mock_metadata_processor.try_metadata_rotation_first.return_value = (
+            True,
+            False,
+            "Success",
+        )
 
         worker = RotationApplicationWorker()
         rotation_applied_mock = Mock()
         worker.rotation_applied.connect(rotation_applied_mock)
 
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
@@ -115,18 +127,22 @@ class TestRotationApplicationWorker:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    @patch('workers.rotation_application_worker.MetadataProcessor')
+    @patch("workers.rotation_application_worker.MetadataProcessor")
     def test_apply_rotation_lossy_fallback(self, mock_metadata_processor):
         """Test lossy rotation fallback when metadata rotation fails"""
         # Metadata rotation indicates lossy needed
-        mock_metadata_processor.try_metadata_rotation_first.return_value = (False, True, "Needs lossy")
+        mock_metadata_processor.try_metadata_rotation_first.return_value = (
+            False,
+            True,
+            "Needs lossy",
+        )
         mock_metadata_processor.rotate_image.return_value = True
 
         worker = RotationApplicationWorker()
         rotation_applied_mock = Mock()
         worker.rotation_applied.connect(rotation_applied_mock)
 
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
@@ -143,10 +159,14 @@ class TestRotationApplicationWorker:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    @patch('workers.rotation_application_worker.MetadataProcessor')
+    @patch("workers.rotation_application_worker.MetadataProcessor")
     def test_apply_multiple_rotations(self, mock_metadata_processor):
         """Test applying rotations to multiple files"""
-        mock_metadata_processor.try_metadata_rotation_first.return_value = (True, False, "Success")
+        mock_metadata_processor.try_metadata_rotation_first.return_value = (
+            True,
+            False,
+            "Success",
+        )
 
         worker = RotationApplicationWorker()
         finished_mock = Mock()
@@ -154,7 +174,7 @@ class TestRotationApplicationWorker:
 
         temp_files = []
         for i in range(3):
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 temp_files.append(tmp.name)
 
         try:
@@ -168,7 +188,7 @@ class TestRotationApplicationWorker:
                 if os.path.exists(path):
                     os.unlink(path)
 
-    @patch('workers.rotation_application_worker.MetadataProcessor')
+    @patch("workers.rotation_application_worker.MetadataProcessor")
     def test_unsupported_rotation_angle(self, mock_metadata_processor):
         """Test handling unsupported rotation angles"""
         worker = RotationApplicationWorker()
@@ -178,7 +198,7 @@ class TestRotationApplicationWorker:
         worker.rotation_applied.connect(rotation_applied_mock)
         worker.finished.connect(finished_mock)
 
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
@@ -195,18 +215,22 @@ class TestRotationApplicationWorker:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    @patch('workers.rotation_application_worker.MetadataProcessor')
+    @patch("workers.rotation_application_worker.MetadataProcessor")
     def test_rotation_failure(self, mock_metadata_processor):
         """Test handling rotation failures"""
         # Both metadata and lossy fail
-        mock_metadata_processor.try_metadata_rotation_first.return_value = (False, True, "Needs lossy")
+        mock_metadata_processor.try_metadata_rotation_first.return_value = (
+            False,
+            True,
+            "Needs lossy",
+        )
         mock_metadata_processor.rotate_image.return_value = False
 
         worker = RotationApplicationWorker()
         finished_mock = Mock()
         worker.finished.connect(finished_mock)
 
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
@@ -219,16 +243,20 @@ class TestRotationApplicationWorker:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    @patch('workers.rotation_application_worker.MetadataProcessor')
+    @patch("workers.rotation_application_worker.MetadataProcessor")
     def test_stop_during_processing(self, mock_metadata_processor):
         """Test stopping worker during batch rotation"""
-        mock_metadata_processor.try_metadata_rotation_first.return_value = (True, False, "Success")
+        mock_metadata_processor.try_metadata_rotation_first.return_value = (
+            True,
+            False,
+            "Success",
+        )
 
         worker = RotationApplicationWorker()
 
         temp_files = []
         for i in range(10):
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 temp_files.append(tmp.name)
 
         try:
@@ -241,7 +269,9 @@ class TestRotationApplicationWorker:
                     worker.stop()
                 return (True, False, "Success")
 
-            mock_metadata_processor.try_metadata_rotation_first.side_effect = stop_after_first
+            mock_metadata_processor.try_metadata_rotation_first.side_effect = (
+                stop_after_first
+            )
 
             approved_rotations = {path: 90 for path in temp_files}
             worker.apply_rotations(approved_rotations)
@@ -253,7 +283,7 @@ class TestRotationApplicationWorker:
                 if os.path.exists(path):
                     os.unlink(path)
 
-    @patch('workers.rotation_application_worker.MetadataProcessor')
+    @patch("workers.rotation_application_worker.MetadataProcessor")
     def test_mixed_success_and_failure(self, mock_metadata_processor):
         """Test handling mix of successes and failures"""
         # Alternate success/failure
@@ -271,7 +301,7 @@ class TestRotationApplicationWorker:
 
         temp_files = []
         for i in range(4):
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 temp_files.append(tmp.name)
 
         try:

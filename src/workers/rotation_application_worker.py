@@ -61,7 +61,9 @@ class RotationApplicationWorker(QObject):
 
                 try:
                     filename = os.path.basename(file_path)
-                    logger.debug(f"Applying {rotation_degrees}° rotation to {filename}...")
+                    logger.debug(
+                        f"Applying {rotation_degrees}° rotation to {filename}..."
+                    )
                     self.progress.emit(i, total_rotations, filename)
 
                     # Convert degrees to direction
@@ -139,7 +141,9 @@ class RotationApplicationWorker(QObject):
                             )
                     else:
                         failed_rotations += 1
-                        logger.error(f"Rotation not supported for '{filename}': {message}")
+                        logger.error(
+                            f"Rotation not supported for '{filename}': {message}"
+                        )
                         self.rotation_applied.emit(
                             file_path, direction, False, message, False
                         )

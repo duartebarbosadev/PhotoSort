@@ -7,8 +7,7 @@ preloading thumbnails without blocking the UI.
 
 import pyexiv2  # noqa: F401 - Must be first import to prevent Windows DLL issues
 
-import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from PyQt6.QtCore import QObject
 from src.workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 
@@ -61,8 +60,8 @@ class TestThumbnailPreloadWorker:
         assert call_args[0][0] == test_paths
 
         # Check that callbacks were provided
-        assert 'progress_callback' in call_args[1]
-        assert 'should_continue_callback' in call_args[1]
+        assert "progress_callback" in call_args[1]
+        assert "should_continue_callback" in call_args[1]
 
         # Verify finished signal was emitted
         assert len(finished_emitted) == 1
@@ -77,7 +76,7 @@ class TestThumbnailPreloadWorker:
 
         def capture_callback(*args, **kwargs):
             nonlocal progress_callback_ref
-            progress_callback_ref = kwargs.get('progress_callback')
+            progress_callback_ref = kwargs.get("progress_callback")
 
         mock_pipeline.preload_thumbnails.side_effect = capture_callback
 
@@ -109,7 +108,7 @@ class TestThumbnailPreloadWorker:
 
         def capture_callback(*args, **kwargs):
             nonlocal should_continue_callback_ref
-            should_continue_callback_ref = kwargs.get('should_continue_callback')
+            should_continue_callback_ref = kwargs.get("should_continue_callback")
 
         mock_pipeline.preload_thumbnails.side_effect = capture_callback
 

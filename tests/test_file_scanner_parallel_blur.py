@@ -1,12 +1,8 @@
 """Tests for parallel blur detection in FileScanner"""
+
 import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash with pyexiv2
 
-import os
-import tempfile
-import shutil
-from unittest.mock import Mock, patch, MagicMock
-import pytest
-from PyQt6.QtCore import QObject
+from unittest.mock import Mock, patch
 
 from core.file_scanner import FileScanner
 
@@ -32,7 +28,7 @@ class TestFileScannerParallelBlur:
         scanner.finished.connect(finished_mock)
 
         # Mock image pipeline
-        with patch.object(scanner, 'image_pipeline') as mock_pipeline:
+        with patch.object(scanner, "image_pipeline") as mock_pipeline:
             mock_pipeline.preload_thumbnails = Mock()
 
             # Scan without blur detection
@@ -45,11 +41,11 @@ class TestFileScannerParallelBlur:
             for call in files_found_mock.call_args_list:
                 file_info_list = call[0][0]
                 for file_info in file_info_list:
-                    assert file_info['is_blurred'] is None
+                    assert file_info["is_blurred"] is None
 
             finished_mock.assert_called_once()
 
-    @patch('core.file_scanner.BlurDetector')
+    @patch("core.file_scanner.BlurDetector")
     def test_scan_with_blur_detection_parallel(self, mock_blur_detector, tmp_path):
         """Test scanning with parallel blur detection"""
         # Create test image files
@@ -72,11 +68,13 @@ class TestFileScannerParallelBlur:
         scanner.finished.connect(finished_mock)
 
         # Mock image pipeline
-        with patch.object(scanner, 'image_pipeline') as mock_pipeline:
+        with patch.object(scanner, "image_pipeline") as mock_pipeline:
             mock_pipeline.preload_thumbnails = Mock()
 
             # Scan with blur detection
-            scanner.scan_directory(str(tmp_path), perform_blur_detection=True, blur_threshold=100.0)
+            scanner.scan_directory(
+                str(tmp_path), perform_blur_detection=True, blur_threshold=100.0
+            )
 
             finished_mock.assert_called_once()
 
@@ -90,7 +88,7 @@ class TestFileScannerParallelBlur:
             # Verify blur detection was called for each file
             assert mock_blur_detector.is_image_blurred.call_count == 5
 
-    @patch('core.file_scanner.BlurDetector')
+    @patch("core.file_scanner.BlurDetector")
     def test_parallel_blur_detection_performance(self, mock_blur_detector, tmp_path):
         """Test that blur detection actually runs in parallel"""
         # Create many test files
@@ -110,6 +108,7 @@ class TestFileScannerParallelBlur:
             max_concurrent[0] = max(max_concurrent[0], concurrent_calls[0])
             # Simulate work
             import time
+
             time.sleep(0.01)
             concurrent_calls[0] -= 1
             return False
@@ -120,7 +119,7 @@ class TestFileScannerParallelBlur:
         finished_mock = Mock()
         scanner.finished.connect(finished_mock)
 
-        with patch.object(scanner, 'image_pipeline') as mock_pipeline:
+        with patch.object(scanner, "image_pipeline") as mock_pipeline:
             mock_pipeline.preload_thumbnails = Mock()
 
             scanner.scan_directory(str(tmp_path), perform_blur_detection=True)
@@ -129,9 +128,11 @@ class TestFileScannerParallelBlur:
 
             # Should have used multiple threads (max_concurrent > 1)
             # With 20 files and proper parallelization, we should see at least 2 concurrent
-            assert max_concurrent[0] >= 2, f"Expected parallel execution, but max concurrent was {max_concurrent[0]}"
+            assert max_concurrent[0] >= 2, (
+                f"Expected parallel execution, but max concurrent was {max_concurrent[0]}"
+            )
 
-    @patch('core.file_scanner.BlurDetector')
+    @patch("core.file_scanner.BlurDetector")
     def test_blur_detection_error_handling(self, mock_blur_detector, tmp_path):
         """Test that blur detection errors don't stop the scan"""
         # Create test files
@@ -153,7 +154,7 @@ class TestFileScannerParallelBlur:
         scanner.finished.connect(finished_mock)
         scanner.thumbnail_preload_finished.connect(thumbnail_preload_finished_mock)
 
-        with patch.object(scanner, 'image_pipeline') as mock_pipeline:
+        with patch.object(scanner, "image_pipeline") as mock_pipeline:
             mock_pipeline.preload_thumbnails = Mock()
 
             scanner.scan_directory(str(tmp_path), perform_blur_detection=True)
@@ -165,9 +166,9 @@ class TestFileScannerParallelBlur:
             assert len(all_file_data) == 3
 
             # Failed file should have None blur status
-            failed_file = [f for f in all_file_data if "test_1" in f['path']]
+            failed_file = [f for f in all_file_data if "test_1" in f["path"]]
             assert len(failed_file) == 1
-            assert failed_file[0]['is_blurred'] is None
+            assert failed_file[0]["is_blurred"] is None
 
     def test_stop_during_blur_detection(self, tmp_path):
         """Test stopping scanner during blur detection"""
@@ -178,7 +179,7 @@ class TestFileScannerParallelBlur:
 
         scanner = FileScanner()
 
-        with patch('core.file_scanner.BlurDetector') as mock_blur_detector:
+        with patch("core.file_scanner.BlurDetector") as mock_blur_detector:
             call_count = [0]
 
             def blur_with_stop(*args, **kwargs):
@@ -189,7 +190,7 @@ class TestFileScannerParallelBlur:
 
             mock_blur_detector.is_image_blurred.side_effect = blur_with_stop
 
-            with patch.object(scanner, 'image_pipeline') as mock_pipeline:
+            with patch.object(scanner, "image_pipeline") as mock_pipeline:
                 mock_pipeline.preload_thumbnails = Mock()
 
                 scanner.scan_directory(str(tmp_path), perform_blur_detection=True)
@@ -197,7 +198,7 @@ class TestFileScannerParallelBlur:
                 # Should stop early
                 assert call_count[0] <= 20
 
-    @patch('core.file_scanner.BlurDetector')
+    @patch("core.file_scanner.BlurDetector")
     def test_files_emitted_before_blur_detection(self, mock_blur_detector, tmp_path):
         """Test that files are emitted immediately, before blur detection completes"""
         # Create test files
@@ -208,6 +209,7 @@ class TestFileScannerParallelBlur:
         # Make blur detection slow
         def slow_blur_check(*args, **kwargs):
             import time
+
             time.sleep(0.1)
             return False
 
@@ -217,7 +219,7 @@ class TestFileScannerParallelBlur:
         files_found_mock = Mock()
         scanner.files_found.connect(files_found_mock)
 
-        with patch.object(scanner, 'image_pipeline') as mock_pipeline:
+        with patch.object(scanner, "image_pipeline") as mock_pipeline:
             mock_pipeline.preload_thumbnails = Mock()
 
             scanner.scan_directory(str(tmp_path), perform_blur_detection=True)
@@ -227,16 +229,16 @@ class TestFileScannerParallelBlur:
 
             # First emissions should have None blur status
             first_call_file_info = files_found_mock.call_args_list[0][0][0][0]
-            assert first_call_file_info['is_blurred'] is None
+            assert first_call_file_info["is_blurred"] is None
 
-    @patch('core.file_scanner.BlurDetector')
+    @patch("core.file_scanner.BlurDetector")
     def test_empty_directory_scan(self, mock_blur_detector, tmp_path):
         """Test scanning an empty directory"""
         scanner = FileScanner()
         finished_mock = Mock()
         scanner.finished.connect(finished_mock)
 
-        with patch.object(scanner, 'image_pipeline') as mock_pipeline:
+        with patch.object(scanner, "image_pipeline") as mock_pipeline:
             mock_pipeline.preload_thumbnails = Mock()
 
             scanner.scan_directory(str(tmp_path), perform_blur_detection=True)

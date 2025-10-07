@@ -92,9 +92,15 @@ class WorkerManager(QObject):
     rating_write_error = pyqtSignal(str)
 
     # Rotation Application Signals
-    rotation_application_progress = pyqtSignal(int, int, str)  # current, total, filename
-    rotation_applied = pyqtSignal(str, str, bool, str, bool)  # path, direction, success, message, is_lossy
-    rotation_application_finished = pyqtSignal(int, int)  # successful_count, failed_count
+    rotation_application_progress = pyqtSignal(
+        int, int, str
+    )  # current, total, filename
+    rotation_applied = pyqtSignal(
+        str, str, bool, str, bool
+    )  # path, direction, success, message, is_lossy
+    rotation_application_finished = pyqtSignal(
+        int, int
+    )  # successful_count, failed_count
     rotation_application_error = pyqtSignal(str)
 
     # Thumbnail Preload Signals (background, not blocking scan)
@@ -647,7 +653,9 @@ class WorkerManager(QObject):
             logger.warning("Rating writer is already running")
             return
 
-        logger.info(f"Starting rating writer for {len(rating_operations)} operations...")
+        logger.info(
+            f"Starting rating writer for {len(rating_operations)} operations..."
+        )
 
         self.rating_writer_thread = QThread()
         self.rating_writer_worker = RatingWriterWorker(
@@ -686,7 +694,9 @@ class WorkerManager(QObject):
 
     def stop_rating_writer(self):
         """Stop the rating writer thread."""
-        worker_stop = self.rating_writer_worker.stop if self.rating_writer_worker else None
+        worker_stop = (
+            self.rating_writer_worker.stop if self.rating_writer_worker else None
+        )
         temp_thread, _ = self._terminate_thread(self.rating_writer_thread, worker_stop)
         if temp_thread is None:
             self.rating_writer_thread = None
@@ -705,7 +715,9 @@ class WorkerManager(QObject):
             logger.warning("Rotation application is already running")
             return
 
-        logger.info(f"Starting rotation application for {len(approved_rotations)} rotations...")
+        logger.info(
+            f"Starting rotation application for {len(approved_rotations)} rotations..."
+        )
 
         self.rotation_application_thread = QThread()
         self.rotation_application_worker = RotationApplicationWorker(
@@ -820,7 +832,9 @@ class WorkerManager(QObject):
     def stop_thumbnail_preload(self):
         """Stop the thumbnail preload thread."""
         worker_stop = (
-            self.thumbnail_preload_worker.stop if self.thumbnail_preload_worker else None
+            self.thumbnail_preload_worker.stop
+            if self.thumbnail_preload_worker
+            else None
         )
         temp_thread, _ = self._terminate_thread(
             self.thumbnail_preload_thread, worker_stop

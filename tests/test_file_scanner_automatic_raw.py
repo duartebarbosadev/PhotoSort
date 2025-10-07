@@ -75,9 +75,7 @@ class TestFileScannerAutomaticRaw:
 
     @patch("src.core.file_scanner.os.walk")
     @patch("src.core.file_scanner.os.path.isfile")
-    def test_preload_thumbnails_not_called_by_scanner(
-        self, mock_isfile, mock_walk
-    ):
+    def test_preload_thumbnails_not_called_by_scanner(self, mock_isfile, mock_walk):
         """Test that FileScanner no longer preloads thumbnails (now done by separate worker)."""
         # Setup mocks
         mock_walk.return_value = [("/test", [], ["test.jpg", "test.arw"])]

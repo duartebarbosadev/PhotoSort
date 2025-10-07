@@ -1047,9 +1047,13 @@ class MainWindow(QMainWindow):
                     if use_chunked_processing:
                         processed_count += 1
                         if processed_count % UI_POPULATION_CHUNK_SIZE == 0:
-                            progress_msg = f"Populating view: {processed_count}/{total_items}..."
+                            progress_msg = (
+                                f"Populating view: {processed_count}/{total_items}..."
+                            )
                             self.update_loading_text(progress_msg)
-                            logger.info(progress_msg)  # Log progress so user can see what's happening
+                            logger.info(
+                                progress_msg
+                            )  # Log progress so user can see what's happening
                             QApplication.processEvents()
         else:  # Not showing folders, or grouping by similarity (which creates its own top-level groups)
 
@@ -1081,9 +1085,13 @@ class MainWindow(QMainWindow):
                 if use_chunked_processing:
                     processed_count += 1
                     if processed_count % UI_POPULATION_CHUNK_SIZE == 0:
-                        progress_msg = f"Populating view: {processed_count}/{total_items}..."
+                        progress_msg = (
+                            f"Populating view: {processed_count}/{total_items}..."
+                        )
                         self.update_loading_text(progress_msg)
-                        logger.info(progress_msg)  # Log progress so user can see what's happening
+                        logger.info(
+                            progress_msg
+                        )  # Log progress so user can see what's happening
                         QApplication.processEvents()
 
     def _apply_rating(self, file_path: str, rating: int):
@@ -2480,12 +2488,18 @@ class MainWindow(QMainWindow):
             # Try to get from cache only (won't generate if missing)
             # Determine cache key: apply_auto_edits is True for RAW files
             from core.image_processing.raw_image_processor import is_raw_extension
+
             ext = os.path.splitext(file_path)[1].lower()
             apply_auto_edits = is_raw_extension(ext)
-            cache_key = (os.path.normpath(file_path), apply_auto_edits, False)  # (path, apply_auto_edits, apply_orientation)
+            cache_key = (
+                os.path.normpath(file_path),
+                apply_auto_edits,
+                False,
+            )  # (path, apply_auto_edits, apply_orientation)
             cached_thumbnail = self.image_pipeline.thumbnail_cache.get(cache_key)
             if cached_thumbnail:
                 from PIL.ImageQt import ImageQt
+
                 pixmap = QPixmap.fromImage(ImageQt(cached_thumbnail))
                 item.setIcon(QIcon(pixmap))
             # If not in cache, background worker will handle it and we'll update later
@@ -2526,21 +2540,29 @@ class MainWindow(QMainWindow):
                     file_path = file_data["path"]
 
                     # Try to get thumbnail from cache (with correct cache key for RAW files)
-                    from core.image_processing.raw_image_processor import is_raw_extension
+                    from core.image_processing.raw_image_processor import (
+                        is_raw_extension,
+                    )
+
                     ext = os.path.splitext(file_path)[1].lower()
                     apply_auto_edits = is_raw_extension(ext)
                     cache_key = (os.path.normpath(file_path), apply_auto_edits, False)
-                    cached_thumbnail = self.image_pipeline.thumbnail_cache.get(cache_key)
+                    cached_thumbnail = self.image_pipeline.thumbnail_cache.get(
+                        cache_key
+                    )
 
                     if cached_thumbnail and child_item.icon().isNull():
                         # Only set icon if not already set and thumbnail is available
                         try:
                             from PIL.ImageQt import ImageQt
+
                             pixmap = QPixmap.fromImage(ImageQt(cached_thumbnail))
                             child_item.setIcon(QIcon(pixmap))
                             updated_count += 1
                         except Exception as e:
-                            logger.warning(f"Failed to set icon for {os.path.basename(file_path)}: {e}")
+                            logger.warning(
+                                f"Failed to set icon for {os.path.basename(file_path)}: {e}"
+                            )
 
                 # Recursively process children
                 if child_item.hasChildren():
@@ -2551,7 +2573,9 @@ class MainWindow(QMainWindow):
         update_item_recursive(root_item)
 
         duration = time.perf_counter() - start_time
-        logger.info(f"Updated {updated_count}/{total_items} thumbnails from cache in {duration:.2f}s")
+        logger.info(
+            f"Updated {updated_count}/{total_items} thumbnails from cache in {duration:.2f}s"
+        )
 
     # _update_item_deletion_blur_presentation removed (inlined via deletion_controller)
 

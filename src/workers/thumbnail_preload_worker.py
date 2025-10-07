@@ -51,7 +51,9 @@ class ThumbnailPreloadWorker(QObject):
             """Called by image_pipeline during preloading"""
             if not self._is_running:
                 return
-            self.progress.emit(current, total_count, f"Preloading thumbnails: {current}/{total_count}")
+            self.progress.emit(
+                current, total_count, f"Preloading thumbnails: {current}/{total_count}"
+            )
 
         def should_continue():
             """Called by image_pipeline to check if preloading should continue"""
@@ -62,7 +64,7 @@ class ThumbnailPreloadWorker(QObject):
             self.image_pipeline.preload_thumbnails(
                 image_paths,
                 progress_callback=progress_callback,
-                should_continue_callback=should_continue
+                should_continue_callback=should_continue,
             )
 
             if self._is_running:

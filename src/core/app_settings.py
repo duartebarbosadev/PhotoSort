@@ -62,7 +62,9 @@ UI_POPULATION_CHUNK_SIZE = 25  # Items to process before calling processEvents()
 # Thumbnail Lazy Loading Settings
 THUMBNAIL_PRELOAD_ENABLED = True  # Enable background thumbnail preloading
 THUMBNAIL_PRELOAD_BATCH_SIZE = 20  # Number of thumbnails to generate per batch
-THUMBNAIL_PRELOAD_VISIBLE_MARGIN = 10  # Number of items above/below visible area to preload
+THUMBNAIL_PRELOAD_VISIBLE_MARGIN = (
+    10  # Number of items above/below visible area to preload
+)
 THUMBNAIL_MAX_WORKERS = 4  # Max concurrent thumbnail generation threads
 
 # Preview size estimation
