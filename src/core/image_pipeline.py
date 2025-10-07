@@ -67,8 +67,8 @@ class ImagePipeline:
         )  # Instantiate if it has non-static methods or state
         logger.debug("ImageOrientationHandler instantiated.")
 
-        # For concurrent operations
-        self._num_workers = min(os.cpu_count() or 4, 8)
+        # For concurrent operations - increased from 8 to 16 for better I/O-bound RAW processing
+        self._num_workers = min(os.cpu_count() or 4, 16)
         logger.info(
             f"ImagePipeline initialized in {time.perf_counter() - init_start_time:.4f}s (workers: {self._num_workers})"
         )

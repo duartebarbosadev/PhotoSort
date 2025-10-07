@@ -171,8 +171,13 @@ class RawImageProcessor:
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
 
                 if temp_pil_img:
+                    # Two-pass resampling: fast initial downsize, then high-quality final pass
+                    if temp_pil_img.width > thumbnail_max_size[0] * 2 or temp_pil_img.height > thumbnail_max_size[1] * 2:
+                        intermediate_size = (thumbnail_max_size[0] * 2, thumbnail_max_size[1] * 2)
+                        temp_pil_img.thumbnail(intermediate_size, Image.Resampling.BILINEAR)
+                    
                     temp_pil_img.thumbnail(thumbnail_max_size, Image.Resampling.LANCZOS)
-                    final_pil_img = temp_pil_img.convert("RGBA")  # Ensure RGBA
+                    final_pil_img = temp_pil_img.convert("RGBA")  # RGBA required for Qt compatibility
             return final_pil_img
         except UnidentifiedImageError:
             logger.error(
@@ -225,8 +230,9 @@ class RawImageProcessor:
                         temp_img: Image.Image = Image.open(io.BytesIO(thumb.data))
                         temp_img = ImageOps.exif_transpose(temp_img)
 
-                        MIN_EMBEDDED_WIDTH: int = preview_max_resolution[0] // 2
-                        MIN_EMBEDDED_HEIGHT: int = preview_max_resolution[1] // 2
+                        # Use //3 to accept smaller embedded previews and avoid expensive RAW processing
+                        MIN_EMBEDDED_WIDTH: int = preview_max_resolution[0] // 3
+                        MIN_EMBEDDED_HEIGHT: int = preview_max_resolution[1] // 3
                         if (
                             temp_img.width >= MIN_EMBEDDED_WIDTH
                             and temp_img.height >= MIN_EMBEDDED_HEIGHT
@@ -243,11 +249,16 @@ class RawImageProcessor:
                                 temp_img = enhancer.enhance(
                                     1.2
                                 )  # Example brightness factor
-                            pil_img = temp_img.convert("RGBA")
+                            pil_img = temp_img.convert("RGBA")  # RGBA required for Qt compatibility
                             if (
                                 pil_img.width > preview_max_resolution[0]
                                 or pil_img.height > preview_max_resolution[1]
                             ):
+                                # Two-pass resampling for faster processing
+                                if pil_img.width > preview_max_resolution[0] * 2 or pil_img.height > preview_max_resolution[1] * 2:
+                                    intermediate_size = (preview_max_resolution[0] * 2, preview_max_resolution[1] * 2)
+                                    pil_img.thumbnail(intermediate_size, Image.Resampling.BILINEAR)
+                                
                                 pil_img.thumbnail(
                                     preview_max_resolution, Image.Resampling.LANCZOS
                                 )
@@ -296,10 +307,15 @@ class RawImageProcessor:
                         )
                         img_from_raw = ImageOps.autocontrast(img_from_raw)
 
+                    # Two-pass resampling: fast initial downsize, then high-quality final pass
+                    if img_from_raw.width > preview_max_resolution[0] * 2 or img_from_raw.height > preview_max_resolution[1] * 2:
+                        intermediate_size = (preview_max_resolution[0] * 2, preview_max_resolution[1] * 2)
+                        img_from_raw.thumbnail(intermediate_size, Image.Resampling.BILINEAR)
+                    
                     img_from_raw.thumbnail(
                         preview_max_resolution, Image.Resampling.LANCZOS
                     )
-                    pil_img = img_from_raw.convert("RGBA")
+                    pil_img = img_from_raw.convert("RGBA")  # RGBA required for Qt compatibility
             return pil_img
         except UnidentifiedImageError:
             logger.error(
