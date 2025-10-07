@@ -55,6 +55,16 @@ DEFAULT_SAFETY_ITERATION_MULTIPLIER = 2  # Multiplier for safety iteration limit
 METADATA_PROCESSING_CHUNK_SIZE = 25  # Chunk size for metadata processing
 METADATA_EMIT_BATCH_SIZE = 50  # Batch size for metadata emission
 
+# UI Population Settings (for large folders)
+LARGE_FOLDER_THRESHOLD = 500  # Items above this use chunked UI population
+UI_POPULATION_CHUNK_SIZE = 25  # Items to process before calling processEvents() - smaller for more frequent updates
+
+# Thumbnail Lazy Loading Settings
+THUMBNAIL_PRELOAD_ENABLED = True  # Enable background thumbnail preloading
+THUMBNAIL_PRELOAD_BATCH_SIZE = 20  # Number of thumbnails to generate per batch
+THUMBNAIL_PRELOAD_VISIBLE_MARGIN = 10  # Number of items above/below visible area to preload
+THUMBNAIL_MAX_WORKERS = 4  # Max concurrent thumbnail generation threads
+
 # Preview size estimation
 PREVIEW_ESTIMATED_SIZE_FACTOR = 1.35  # Factor for estimating preview sizes
 

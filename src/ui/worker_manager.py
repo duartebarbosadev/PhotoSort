@@ -13,6 +13,9 @@ from ui.ui_components import (
     CudaDetectionWorker,
 )
 from workers.update_worker import UpdateCheckWorker
+from workers.rating_writer_worker import RatingWriterWorker
+from workers.rotation_application_worker import RotationApplicationWorker
+from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 from core.image_pipeline import ImagePipeline
 from workers.rating_loader_worker import (
     RatingLoaderWorker,
@@ -82,6 +85,23 @@ class WorkerManager(QObject):
         bool, object, str
     )  # (update_available, update_info, error_message)
 
+    # Rating Writer Signals
+    rating_write_progress = pyqtSignal(int, int, str)  # current, total, filename
+    rating_written = pyqtSignal(str, int, bool)  # path, rating, success
+    rating_write_finished = pyqtSignal(int, int)  # successful_count, failed_count
+    rating_write_error = pyqtSignal(str)
+
+    # Rotation Application Signals
+    rotation_application_progress = pyqtSignal(int, int, str)  # current, total, filename
+    rotation_applied = pyqtSignal(str, str, bool, str, bool)  # path, direction, success, message, is_lossy
+    rotation_application_finished = pyqtSignal(int, int)  # successful_count, failed_count
+    rotation_application_error = pyqtSignal(str)
+
+    # Thumbnail Preload Signals (background, not blocking scan)
+    thumbnail_preload_progress = pyqtSignal(int, int, str)  # current, total, message
+    thumbnail_preload_finished = pyqtSignal()
+    thumbnail_preload_error = pyqtSignal(str)
+
     def __init__(
         self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None
     ):
@@ -103,8 +123,17 @@ class WorkerManager(QObject):
         self.rating_loader_thread: Optional[QThread] = None
         self.rating_loader_worker: Optional[RatingLoaderWorker] = None
 
+        self.rating_writer_thread: Optional[QThread] = None
+        self.rating_writer_worker: Optional[RatingWriterWorker] = None
+
         self.rotation_detection_thread: Optional[QThread] = None
         self.rotation_detection_worker: Optional[RotationDetectionWorker] = None
+
+        self.rotation_application_thread: Optional[QThread] = None
+        self.rotation_application_worker: Optional[RotationApplicationWorker] = None
+
+        self.thumbnail_preload_thread: Optional[QThread] = None
+        self.thumbnail_preload_worker: Optional[ThumbnailPreloadWorker] = None
 
         self.cuda_detection_thread: Optional[QThread] = None
         self.cuda_detection_worker: Optional[CudaDetectionWorker] = None
@@ -507,6 +536,9 @@ class WorkerManager(QObject):
         self.stop_blur_detection()
         self.stop_rating_load()
         self.stop_rotation_detection()
+        self.stop_rating_writer()
+        self.stop_rotation_application()
+        self.stop_thumbnail_preload()
         self.stop_cuda_detection()
         logger.info("All workers stop requested.")
 
@@ -598,4 +630,203 @@ class WorkerManager(QObject):
             or self.is_rotation_detection_running()
             or self.is_cuda_detection_running()
             or self.is_update_check_running()
+            or self.is_rating_writer_running()
+            or self.is_rotation_application_running()
+            or self.is_thumbnail_preload_running()
         )
+
+    # --- Rating Writer Management ---
+    def start_rating_writer(
+        self,
+        rating_operations: List,
+        rating_disk_cache: Optional[RatingCache] = None,
+        exif_disk_cache: Optional[ExifCache] = None,
+    ):
+        """Start writing ratings in a background thread."""
+        if self.is_rating_writer_running():
+            logger.warning("Rating writer is already running")
+            return
+
+        logger.info(f"Starting rating writer for {len(rating_operations)} operations...")
+
+        self.rating_writer_thread = QThread()
+        self.rating_writer_worker = RatingWriterWorker(
+            rating_disk_cache=rating_disk_cache, exif_disk_cache=exif_disk_cache
+        )
+        self.rating_writer_worker.moveToThread(self.rating_writer_thread)
+
+        # Connect signals
+        self.rating_writer_worker.progress.connect(self.rating_write_progress.emit)
+        self.rating_writer_worker.rating_written.connect(self.rating_written.emit)
+        self.rating_writer_worker.finished.connect(self.rating_write_finished.emit)
+        self.rating_writer_worker.error.connect(self.rating_write_error.emit)
+        self.rating_writer_worker.finished.connect(self._cleanup_rating_writer_worker)
+
+        # Connect start signal
+        self.rating_writer_thread.started.connect(
+            lambda: self.rating_writer_worker.write_ratings(rating_operations)
+        )
+
+        # Start the thread
+        self.rating_writer_thread.start()
+
+    def _cleanup_rating_writer_worker(self):
+        """Clean up the rating writer worker and thread."""
+        if self.rating_writer_thread is not None:
+            self.rating_writer_thread.quit()
+            self.rating_writer_thread.wait()
+            self.rating_writer_thread = None
+        self.rating_writer_worker = None
+
+    def is_rating_writer_running(self) -> bool:
+        return (
+            self.rating_writer_thread is not None
+            and self.rating_writer_thread.isRunning()
+        )
+
+    def stop_rating_writer(self):
+        """Stop the rating writer thread."""
+        worker_stop = self.rating_writer_worker.stop if self.rating_writer_worker else None
+        temp_thread, _ = self._terminate_thread(self.rating_writer_thread, worker_stop)
+        if temp_thread is None:
+            self.rating_writer_thread = None
+            self.rating_writer_worker = None
+        else:
+            self.rating_writer_thread = temp_thread
+
+    # --- Rotation Application Management ---
+    def start_rotation_application(
+        self,
+        approved_rotations: Dict[str, int],
+        exif_disk_cache: Optional[ExifCache] = None,
+    ):
+        """Start applying rotations in a background thread."""
+        if self.is_rotation_application_running():
+            logger.warning("Rotation application is already running")
+            return
+
+        logger.info(f"Starting rotation application for {len(approved_rotations)} rotations...")
+
+        self.rotation_application_thread = QThread()
+        self.rotation_application_worker = RotationApplicationWorker(
+            exif_disk_cache=exif_disk_cache
+        )
+        self.rotation_application_worker.moveToThread(self.rotation_application_thread)
+
+        # Connect signals
+        self.rotation_application_worker.progress.connect(
+            self.rotation_application_progress.emit
+        )
+        self.rotation_application_worker.rotation_applied.connect(
+            self.rotation_applied.emit
+        )
+        self.rotation_application_worker.finished.connect(
+            self.rotation_application_finished.emit
+        )
+        self.rotation_application_worker.error.connect(
+            self.rotation_application_error.emit
+        )
+        self.rotation_application_worker.finished.connect(
+            self._cleanup_rotation_application_worker
+        )
+
+        # Connect start signal
+        self.rotation_application_thread.started.connect(
+            lambda: self.rotation_application_worker.apply_rotations(approved_rotations)
+        )
+
+        # Start the thread
+        self.rotation_application_thread.start()
+
+    def _cleanup_rotation_application_worker(self):
+        """Clean up the rotation application worker and thread."""
+        if self.rotation_application_thread is not None:
+            self.rotation_application_thread.quit()
+            self.rotation_application_thread.wait()
+            self.rotation_application_thread = None
+        self.rotation_application_worker = None
+
+    def is_rotation_application_running(self) -> bool:
+        return (
+            self.rotation_application_thread is not None
+            and self.rotation_application_thread.isRunning()
+        )
+
+    def stop_rotation_application(self):
+        """Stop the rotation application thread."""
+        worker_stop = (
+            self.rotation_application_worker.stop
+            if self.rotation_application_worker
+            else None
+        )
+        temp_thread, _ = self._terminate_thread(
+            self.rotation_application_thread, worker_stop
+        )
+        if temp_thread is None:
+            self.rotation_application_thread = None
+            self.rotation_application_worker = None
+        else:
+            self.rotation_application_thread = temp_thread
+
+    # --- Thumbnail Preload Management ---
+    def start_thumbnail_preload(self, image_paths: List[str]):
+        """Start preloading thumbnails in a background thread (non-blocking)."""
+        if self.is_thumbnail_preload_running():
+            logger.warning("Thumbnail preload is already running")
+            return
+
+        logger.info(f"Starting thumbnail preload for {len(image_paths)} images...")
+
+        self.thumbnail_preload_thread = QThread()
+        self.thumbnail_preload_worker = ThumbnailPreloadWorker(
+            image_pipeline=self.image_pipeline
+        )
+        self.thumbnail_preload_worker.moveToThread(self.thumbnail_preload_thread)
+
+        # Connect signals
+        self.thumbnail_preload_worker.progress.connect(
+            self.thumbnail_preload_progress.emit
+        )
+        self.thumbnail_preload_worker.finished.connect(
+            self.thumbnail_preload_finished.emit
+        )
+        self.thumbnail_preload_worker.error.connect(self.thumbnail_preload_error.emit)
+        self.thumbnail_preload_worker.finished.connect(
+            self._cleanup_thumbnail_preload_worker
+        )
+
+        # Connect start signal
+        self.thumbnail_preload_thread.started.connect(
+            lambda: self.thumbnail_preload_worker.preload_thumbnails(image_paths)
+        )
+
+        # Start the thread
+        self.thumbnail_preload_thread.start()
+
+    def _cleanup_thumbnail_preload_worker(self):
+        """Clean up the thumbnail preload worker and thread."""
+        if self.thumbnail_preload_thread is not None:
+            self.thumbnail_preload_thread.quit()
+            self.thumbnail_preload_thread.wait()
+            self.thumbnail_preload_thread = None
+        self.thumbnail_preload_worker = None
+
+    def is_thumbnail_preload_running(self) -> bool:
+        return (
+            self.thumbnail_preload_thread is not None
+            and self.thumbnail_preload_thread.isRunning()
+        )
+
+    def stop_thumbnail_preload(self):
+        """Stop the thumbnail preload thread."""
+        worker_stop = (
+            self.thumbnail_preload_worker.stop if self.thumbnail_preload_worker else None
+        )
+        temp_thread, _ = self._terminate_thread(
+            self.thumbnail_preload_thread, worker_stop
+        )
+        if temp_thread is None:
+            self.thumbnail_preload_thread = None
+            self.thumbnail_preload_worker = None
+        else:
+            self.thumbnail_preload_thread = temp_thread

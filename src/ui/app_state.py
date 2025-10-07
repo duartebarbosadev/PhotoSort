@@ -145,11 +145,8 @@ class AppState:
 
     def is_marked_for_deletion(self, file_path: str) -> bool:
         """Checks if a file is marked for deletion."""
-        is_marked = file_path in self.marked_for_deletion
-        logger.debug(
-            f"Checking if file is marked for deletion: {os.path.basename(file_path)} - {is_marked}"
-        )
-        return is_marked
+
+        return file_path in self.marked_for_deletion
 
     def get_marked_files(self) -> List[str]:
         """Returns a list of all files marked for deletion."""
