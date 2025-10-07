@@ -245,8 +245,8 @@ Please create release notes that:
 1) Start with a brief summary of the release
 2) Group changes into categories like:
    - 🚀 New Features
-   - 🐛 Bug Fixes
    - 🔧 Improvements
+   - 🐛 Bug Fixes
    - ⚠️ Breaking Changes (if any)
    - 📚 Documentation
    - 🏗️ Technical Changes
