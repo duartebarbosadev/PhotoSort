@@ -207,6 +207,8 @@ jobs:
             --hidden-import PyQt6.QtWidgets \
             --hidden-import rawpy \
             --hidden-import pyexiv2 \
+            --collect-binaries pyexiv2 \
+            --copy-metadata pyexiv2 \
             --hidden-import cv2 \
             --hidden-import onnxruntime \
             --hidden-import torchvision \
