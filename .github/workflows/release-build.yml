@@ -132,6 +132,13 @@ jobs:
           # This ensures the directory structure exists in the packaged app
           mkdir -p models
 
+      - name: Install pyexiv2 dependencies (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Install Homebrew dependencies required by pyexiv2
+          brew install inih
+
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -195,6 +202,13 @@ jobs:
       - name: Build with PyInstaller (macOS)
         if: runner.os == 'macOS'
         run: |
+          # Determine Homebrew prefix (different for Intel vs Apple Silicon)
+          if [ -d "/opt/homebrew" ]; then
+            BREW_PREFIX="/opt/homebrew"
+          else
+            BREW_PREFIX="/usr/local"
+          fi
+
           pyinstaller -w --name PhotoSort \
             --icon assets/photosort.icns \
             --paths src \
@@ -209,6 +223,8 @@ jobs:
             --hidden-import pyexiv2 \
             --collect-binaries pyexiv2 \
             --copy-metadata pyexiv2 \
+            --add-binary "${BREW_PREFIX}/opt/inih/lib/libinih.0.dylib:." \
+            --add-binary "${BREW_PREFIX}/opt/inih/lib/libINIReader.0.dylib:." \
             --hidden-import cv2 \
             --hidden-import onnxruntime \
             --hidden-import torchvision \
