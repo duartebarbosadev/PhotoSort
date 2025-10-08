@@ -189,9 +189,7 @@ class WorkerManager(QObject):
     ):
         self.stop_file_scan()  # Ensure any previous scan is stopped
         self.scanner_thread = QThread()
-        self.file_scanner = (
-            FileScanner()
-        )  # ImagePipeline is now part of FileScanner itself
+        self.file_scanner = FileScanner(image_pipeline=self.image_pipeline)
         self.file_scanner.moveToThread(self.scanner_thread)
 
         # Connect signals from FileScanner to WorkerManager's signals

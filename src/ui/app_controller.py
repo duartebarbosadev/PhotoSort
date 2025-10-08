@@ -10,7 +10,6 @@ from core.app_settings import (
 )
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
-from core.image_pipeline import ImagePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +30,30 @@ class WorkerManager:
 class AppController(QObject):
     @staticmethod
     def clear_application_caches():
-        """Clears all application caches."""
+        """Clears all application caches without creating full pipeline instances."""
         start_time = time.perf_counter()
         logger.info("Clearing all application caches.")
 
         try:
-            pipeline = ImagePipeline()
-            pipeline.clear_all_image_caches()
+            # Clear image caches by directly accessing cache classes
+            from core.caching.thumbnail_cache import ThumbnailCache
+            from core.caching.preview_cache import PreviewCache
+
+            logger.info("Clearing thumbnail cache...")
+            thumb_cache = ThumbnailCache()
+            try:
+                thumb_cache.clear()
+            finally:
+                thumb_cache.close()
+
+            logger.info("Clearing preview cache...")
+            preview_cache = PreviewCache()
+            try:
+                preview_cache.clear()
+            finally:
+                preview_cache.close()
         except Exception:
-            logger.error("Error clearing image pipeline caches.", exc_info=True)
+            logger.error("Error clearing image caches.", exc_info=True)
 
         try:
             from core.similarity_engine import SimilarityEngine
@@ -52,7 +66,10 @@ class AppController(QObject):
             from core.caching.exif_cache import ExifCache
 
             exif_cache = ExifCache()
-            exif_cache.clear()
+            try:
+                exif_cache.clear()
+            finally:
+                exif_cache.close()
         except Exception:
             logger.error("Error clearing EXIF metadata cache.", exc_info=True)
 
@@ -60,7 +77,10 @@ class AppController(QObject):
             from core.caching.rating_cache import RatingCache
 
             rating_cache = RatingCache()
-            rating_cache.clear()
+            try:
+                rating_cache.clear()
+            finally:
+                rating_cache.close()
         except Exception:
             logger.error("Error clearing rating cache.", exc_info=True)
 
@@ -926,15 +946,26 @@ class AppController(QObject):
         """Handle completion of all rotation applications.
 
         Performs batch preview regeneration in parallel, then updates UI.
+        Keeps overlay visible during preview regeneration to avoid showing unrotated images.
         """
         logger.info(
             f"Rotation batch finished: {successful_count} successful, {failed_count} failed. "
             f"Processing {len(self._pending_rotated_paths)} rotated images..."
         )
 
+        # Handle failure case - hide overlay and return
+        if successful_count == 0 and failed_count > 0:
+            self.main_window.hide_loading_overlay()
+            self.main_window.statusBar().showMessage(
+                f"Failed to apply {failed_count} rotations.", 5000
+            )
+            self._pending_rotated_paths.clear()
+            return
+
         try:
             if self._pending_rotated_paths:
                 # Update loading overlay for preview regeneration
+                # Keep it visible so user doesn't see unrotated images
                 self.main_window.update_loading_text(
                     f"Regenerating previews for {len(self._pending_rotated_paths)} images..."
                 )

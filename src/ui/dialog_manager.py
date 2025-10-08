@@ -836,6 +836,8 @@ class DialogManager:
         """
         Shows a confirmation dialog for deleting files.
 
+        Now uses background worker to preload thumbnails without blocking the UI thread.
+
         Args:
             deleted_file_paths: A list of paths to the files to be deleted.
 
@@ -846,8 +848,9 @@ class DialogManager:
             f"Showing confirm delete dialog for {len(deleted_file_paths)} files"
         )
 
-        # Preload thumbnails with progress indication
-        if deleted_file_paths:
+        # For small selections (1-3 images), thumbnails are typically already cached.
+        # For larger selections, preload asynchronously with overlay.
+        if deleted_file_paths and len(deleted_file_paths) > 3:
             self.parent.show_loading_overlay(
                 f"Loading previews for {len(deleted_file_paths)} images..."
             )
@@ -855,11 +858,11 @@ class DialogManager:
 
             def progress_callback(processed: int, total: int):
                 self.parent.update_loading_text(
-                    f"Loading previews for {len(deleted_file_paths)} images... ({processed}/{total})"
+                    f"Loading previews ({processed}/{total})..."
                 )
                 QApplication.processEvents()
 
-            # Preload thumbnails for the files to be deleted
+            # Preload thumbnails using parallel processing
             self.parent.image_pipeline.preload_thumbnails(
                 deleted_file_paths, progress_callback=progress_callback
             )

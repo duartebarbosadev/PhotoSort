@@ -54,14 +54,14 @@ class FileScanner(QObject):
         list
     )  # New signal, will also emit list of dicts
 
-    def __init__(self, parent=None):
+    def __init__(self, image_pipeline: ImagePipeline, parent=None):
         super().__init__(parent)
         init_start_time = time.perf_counter()
         logger.debug("Initializing FileScanner.")
         self._is_running = True
         self.blur_detection_threshold = 100.0
 
-        self.image_pipeline = ImagePipeline()
+        self.image_pipeline = image_pipeline
         logger.debug(
             f"FileScanner initialized in {time.perf_counter() - init_start_time:.2f}s."
         )
