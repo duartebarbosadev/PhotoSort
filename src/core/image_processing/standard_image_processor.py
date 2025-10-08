@@ -43,13 +43,25 @@ class StandardImageProcessor:
         Generates a PIL.Image thumbnail from a standard image file.
         """
         normalized_path = os.path.normpath(image_path)
-        final_pil_img = None
         try:
-            with Image.open(normalized_path) as img:
-                if apply_orientation:
-                    img = ImageOps.exif_transpose(img)  # Correct orientation
-                img.thumbnail(thumbnail_max_size, Image.Resampling.LANCZOS)
-                final_pil_img = img.convert("RGBA")  # Ensure RGBA
+            img = Image.open(normalized_path)
+            if apply_orientation:
+                img = ImageOps.exif_transpose(img)  # Correct orientation
+
+            # Two-pass resampling: fast initial downsize, then high-quality final pass
+            # This is faster when images are much larger than the target size
+            if (
+                img.width > thumbnail_max_size[0] * 2
+                or img.height > thumbnail_max_size[1] * 2
+            ):
+                intermediate_size = (
+                    thumbnail_max_size[0] * 2,
+                    thumbnail_max_size[1] * 2,
+                )
+                img.thumbnail(intermediate_size, Image.Resampling.BILINEAR)
+
+            img.thumbnail(thumbnail_max_size, Image.Resampling.LANCZOS)
+            final_pil_img = img.convert("RGBA")  # RGBA required for Qt compatibility
             return final_pil_img
         except UnidentifiedImageError:
             logger.error(
@@ -78,12 +90,24 @@ class StandardImageProcessor:
         Generates a PIL.Image preview from a standard image file for preloading.
         """
         normalized_path = os.path.normpath(image_path)
-        pil_img = None
         try:
-            with Image.open(normalized_path) as img:
-                img = ImageOps.exif_transpose(img)  # Correct orientation
-                img.thumbnail(preview_max_resolution, Image.Resampling.LANCZOS)
-                pil_img = img.convert("RGBA")  # Ensure RGBA
+            img = Image.open(normalized_path)
+            img = ImageOps.exif_transpose(img)  # Correct orientation
+
+            # Two-pass resampling: fast initial downsize, then high-quality final pass
+            # This is faster when images are much larger than the target size
+            if (
+                img.width > preview_max_resolution[0] * 2
+                or img.height > preview_max_resolution[1] * 2
+            ):
+                intermediate_size = (
+                    preview_max_resolution[0] * 2,
+                    preview_max_resolution[1] * 2,
+                )
+                img.thumbnail(intermediate_size, Image.Resampling.BILINEAR)
+
+            img.thumbnail(preview_max_resolution, Image.Resampling.LANCZOS)
+            pil_img = img.convert("RGBA")  # RGBA required for Qt compatibility
             return pil_img
         except UnidentifiedImageError:
             logger.error(
@@ -112,12 +136,11 @@ class StandardImageProcessor:
         Loads a standard image as a PIL Image object.
         """
         normalized_path = os.path.normpath(image_path)
-        pil_img = None
         try:
-            with Image.open(normalized_path) as img:
-                if apply_exif_transpose:
-                    img = ImageOps.exif_transpose(img)  # Correct orientation
-                pil_img = img.convert(target_mode)
+            img = Image.open(normalized_path)
+            if apply_exif_transpose:
+                img = ImageOps.exif_transpose(img)  # Correct orientation
+            pil_img = img.convert(target_mode)
             return pil_img
         except UnidentifiedImageError:
             logger.error(
@@ -146,12 +169,11 @@ class StandardImageProcessor:
         scaled to target_size.
         """
         normalized_path = os.path.normpath(image_path)
-        pil_img = None
         try:
-            with Image.open(normalized_path) as img:
-                img = ImageOps.exif_transpose(img)
-                img.thumbnail(target_size, Image.Resampling.LANCZOS)
-                pil_img = img.convert("RGB")
+            img = Image.open(normalized_path)
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail(target_size, Image.Resampling.LANCZOS)
+            pil_img = img.convert("RGB")
             return pil_img
         except UnidentifiedImageError:
             logger.error(

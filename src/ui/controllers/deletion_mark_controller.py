@@ -27,11 +27,18 @@ class DeletionMarkController:
     def apply_presentation(
         self, item: QStandardItem, file_path: str, is_blurred: Optional[bool]
     ):
+        # Optimization: Skip marked check if nothing is marked (common case on initial load)
+        is_marked = (
+            self._is_marked_func(file_path)
+            if len(self.app_state.marked_for_deletion) > 0
+            else False
+        )
+
         pres = build_presentation(
             basename=item.text().split(" ")[0]
             if item.text()
             else file_path.split("\\")[-1],
-            is_marked=self._is_marked_func(file_path),
+            is_marked=is_marked,
             is_blurred=is_blurred,
         )
         if pres.is_marked:

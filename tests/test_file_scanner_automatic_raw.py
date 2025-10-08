@@ -75,10 +75,8 @@ class TestFileScannerAutomaticRaw:
 
     @patch("src.core.file_scanner.os.walk")
     @patch("src.core.file_scanner.os.path.isfile")
-    def test_preload_thumbnails_called_without_apply_auto_edits(
-        self, mock_isfile, mock_walk
-    ):
-        """Test that preload_thumbnails is called without apply_auto_edits parameter."""
+    def test_preload_thumbnails_not_called_by_scanner(self, mock_isfile, mock_walk):
+        """Test that FileScanner no longer preloads thumbnails (now done by separate worker)."""
         # Setup mocks
         mock_walk.return_value = [("/test", [], ["test.jpg", "test.arw"])]
         mock_isfile.return_value = True
@@ -93,20 +91,8 @@ class TestFileScannerAutomaticRaw:
                 # Call scan_directory
                 scanner.scan_directory("/test")
 
-                # Verify preload_thumbnails was called on the image pipeline
-                mock_preload.assert_called_once()
-
-                # Get the arguments passed to preload_thumbnails
-                args, kwargs = mock_preload.call_args
-
-                # Verify that apply_auto_edits is not passed as keyword argument
-                assert "apply_auto_edits" not in kwargs
-
-                # Verify that the file paths were passed correctly
-                file_paths = args[0]  # First positional argument should be file paths
-                assert len(file_paths) == 2
-                assert any("test.jpg" in path for path in file_paths)
-                assert any("test.arw" in path for path in file_paths)
+                # Verify preload_thumbnails was NOT called - it's now handled by ThumbnailPreloadWorker
+                mock_preload.assert_not_called()
 
     def test_async_scan_directory_blur_detection_signature(self):
         """Test that async blur detection calls don't use apply_auto_edits_for_raw_preview."""
@@ -171,8 +157,8 @@ class TestFileScannerIntegration:
             )
 
             # Verify that the workflow completed successfully
-            # 1. Image pipeline preload_thumbnails should be called
-            mock_preload.assert_called_once()
+            # 1. Thumbnail preloading is now handled by ThumbnailPreloadWorker (not FileScanner)
+            mock_preload.assert_not_called()
 
             # 2. Blur detection should be called for supported files
             assert mock_blur.call_count == 2  # Only .jpg and .arw files
@@ -183,7 +169,3 @@ class TestFileScannerIntegration:
                 assert kwargs["threshold"] == 75.0
                 # Verify no apply_auto_edits_for_raw_preview parameter
                 assert "apply_auto_edits_for_raw_preview" not in kwargs
-
-            # 4. Preload thumbnails should not have apply_auto_edits parameter
-            args, kwargs = mock_preload.call_args
-            assert "apply_auto_edits" not in kwargs

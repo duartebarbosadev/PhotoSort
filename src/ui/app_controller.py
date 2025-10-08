@@ -162,6 +162,39 @@ class AppController(QObject):
             self.handle_update_check_finished
         )
 
+        # Rating Writer Worker
+        self.worker_manager.rating_write_progress.connect(
+            self.handle_rating_write_progress
+        )
+        self.worker_manager.rating_written.connect(self.handle_rating_written)
+        self.worker_manager.rating_write_finished.connect(
+            self.handle_rating_write_finished
+        )
+        self.worker_manager.rating_write_error.connect(self.handle_rating_write_error)
+
+        # Rotation Application Worker
+        self.worker_manager.rotation_application_progress.connect(
+            self.handle_rotation_application_progress
+        )
+        self.worker_manager.rotation_applied.connect(self.handle_rotation_applied)
+        self.worker_manager.rotation_application_finished.connect(
+            self.handle_rotation_application_finished
+        )
+        self.worker_manager.rotation_application_error.connect(
+            self.handle_rotation_application_error
+        )
+
+        # Thumbnail Preload Worker
+        self.worker_manager.thumbnail_preload_progress.connect(
+            self.handle_thumbnail_preload_progress
+        )
+        self.worker_manager.thumbnail_preload_finished.connect(
+            self.handle_thumbnail_preload_complete
+        )
+        self.worker_manager.thumbnail_preload_error.connect(
+            self.handle_thumbnail_preload_error
+        )
+
     # --- Public Methods (called from MainWindow) ---
 
     def load_folder(self, folder_path: str):
@@ -429,6 +462,10 @@ class AppController(QObject):
         self.main_window._rebuild_model_view()
 
         if self.app_state.image_files_data:
+            # Start thumbnail preload in background (non-blocking)
+            image_paths = [item["path"] for item in self.app_state.image_files_data]
+            self.worker_manager.start_thumbnail_preload(image_paths)
+
             self.main_window.update_loading_text("Loading Exiftool data...")
             self.worker_manager.start_rating_load(
                 self.app_state.image_files_data.copy(),
@@ -704,118 +741,18 @@ class AppController(QObject):
         )
 
     def _apply_approved_rotations(self, approved_rotations: Dict[str, int]):
-        """Apply the approved rotations to the images."""
-        apply_start_time = time.perf_counter()
-        logger.info(f"Applying {len(approved_rotations)} approved rotations.")
-        from core.metadata_processor import MetadataProcessor
+        """Apply the approved rotations to the images using background worker."""
+        logger.info(
+            f"Starting rotation application for {len(approved_rotations)} images."
+        )
 
-        total_rotations = len(approved_rotations)
-        successful_rotations = 0
-        failed_rotations = 0
-
+        # Show loading overlay
         self.main_window.show_loading_overlay("Applying rotations...")
 
-        for i, (file_path, rotation_degrees) in enumerate(
-            approved_rotations.items(), 1
-        ):
-            single_file_start_time = time.perf_counter()
-            try:
-                filename = os.path.basename(file_path)
-                logger.debug(f"Applying {rotation_degrees}° rotation to {filename}...")
-                progress_text = f"Rotating {i}/{total_rotations}: {filename}"
-                self.main_window.update_loading_text(progress_text)
-
-                if rotation_degrees == 90:
-                    direction = "clockwise"
-                elif rotation_degrees == -90:
-                    direction = "counterclockwise"
-                elif rotation_degrees == 180:
-                    direction = "180"
-                else:
-                    logger.warning(
-                        f"Unsupported rotation angle {rotation_degrees} for {filename}"
-                    )
-                    continue
-
-                t1 = time.perf_counter()
-                metadata_success, needs_lossy, message = (
-                    MetadataProcessor.try_metadata_rotation_first(
-                        file_path, direction, self.main_window.app_state.exif_disk_cache
-                    )
-                )
-                t2 = time.perf_counter()
-                logger.debug(
-                    f"Metadata rotation for '{filename}' took {t2 - t1:.2f}s. Success: {metadata_success}, Needs Lossy: {needs_lossy}"
-                )
-
-                if metadata_success:
-                    self.main_window._handle_successful_rotation(
-                        file_path,
-                        direction,
-                        f"Rotated {filename} {rotation_degrees}° (lossless)",
-                        is_lossy=False,
-                    )
-                    successful_rotations += 1
-                elif needs_lossy:
-                    logger.info(f"Attempting lossy rotation for '{filename}'.")
-                    t3 = time.perf_counter()
-                    success = MetadataProcessor.rotate_image(
-                        file_path,
-                        direction,
-                        update_metadata_only=False,
-                        exif_disk_cache=self.main_window.app_state.exif_disk_cache,
-                    )
-                    t4 = time.perf_counter()
-                    logger.debug(
-                        f"Lossy rotation for '{filename}' took {t4 - t3:.2f}s."
-                    )
-
-                    if success:
-                        self.main_window._handle_successful_rotation(
-                            file_path,
-                            direction,
-                            f"Rotated {filename} {rotation_degrees}° (lossy)",
-                            is_lossy=True,
-                        )
-                        successful_rotations += 1
-                    else:
-                        logger.error(f"Lossy rotation failed for '{filename}'.")
-                        failed_rotations += 1
-                else:
-                    logger.error(f"Rotation not supported for '{filename}': {message}")
-                    failed_rotations += 1
-
-            except Exception:
-                logger.error(
-                    f"Unhandled error while rotating '{os.path.basename(file_path)}'",
-                    exc_info=True,
-                )
-                failed_rotations += 1
-            finally:
-                single_file_end_time = time.perf_counter()
-                logger.debug(
-                    f"Finished processing '{os.path.basename(file_path)}' in {single_file_end_time - single_file_start_time:.2f}s."
-                )
-
-        self.main_window.hide_loading_overlay()
-
-        if successful_rotations > 0 and failed_rotations == 0:
-            self.main_window.statusBar().showMessage(
-                f"Successfully applied {successful_rotations} rotations.", 5000
-            )
-        elif successful_rotations > 0 and failed_rotations > 0:
-            self.main_window.statusBar().showMessage(
-                f"Applied {successful_rotations} rotations successfully, {failed_rotations} failed.",
-                5000,
-            )
-        elif failed_rotations > 0:
-            self.main_window.statusBar().showMessage(
-                f"Failed to apply {failed_rotations} rotations.", 5000
-            )
-
-        apply_end_time = time.perf_counter()
-        logger.info(
-            f"Rotation application finished in {apply_end_time - apply_start_time:.2f}s."
+        # Start the worker
+        self.worker_manager.start_rotation_application(
+            approved_rotations=approved_rotations,
+            exif_disk_cache=self.app_state.exif_disk_cache,
         )
 
     # --- Update Check Handlers ---
@@ -882,3 +819,142 @@ class AppController(QObject):
         # If no more rotation suggestions, hide the rotation view
         if not self.main_window.rotation_suggestions:
             self.main_window._hide_rotation_view()
+
+    # --- Rating Writer Handlers ---
+
+    def apply_rating_to_selection(self, rating: int, selected_paths: List[str]):
+        """Apply rating to multiple images using background worker."""
+        if not selected_paths:
+            return
+
+        # Create list of (path, rating) tuples for the worker
+        rating_operations = [(path, rating) for path in selected_paths]
+
+        # Start the worker
+        self.worker_manager.start_rating_writer(
+            rating_operations=rating_operations,
+            rating_disk_cache=self.app_state.rating_disk_cache,
+            exif_disk_cache=self.app_state.exif_disk_cache,
+        )
+
+        # Show a status message
+        if len(selected_paths) == 1:
+            self.main_window.statusBar().showMessage(
+                f"Setting rating to {rating}...", 2000
+            )
+        else:
+            self.main_window.statusBar().showMessage(
+                f"Setting rating to {rating} for {len(selected_paths)} images...", 2000
+            )
+
+    def handle_rating_write_progress(self, current: int, total: int, filename: str):
+        """Handle progress updates from rating writer."""
+        # Only show progress for multi-image operations
+        if total > 1:
+            self.main_window.statusBar().showMessage(
+                f"Setting rating {current}/{total}: {filename}", 500
+            )
+
+    def handle_rating_written(self, file_path: str, rating: int, success: bool):
+        """Handle completion of a single rating write."""
+        if success:
+            # Update in-memory cache
+            self.app_state.rating_cache[file_path] = rating
+            # Update the display for any visible viewers
+            for viewer in self.main_window.advanced_image_viewer.image_viewers:
+                if viewer.isVisible() and viewer._file_path == file_path:
+                    viewer.update_rating_display(rating)
+        else:
+            logger.warning(f"Failed to write rating for {os.path.basename(file_path)}")
+
+    def handle_rating_write_finished(self, successful_count: int, failed_count: int):
+        """Handle completion of all rating writes."""
+        # Refresh the filter to show/hide items based on new ratings
+        self.main_window._apply_filter()
+
+        # Show summary message
+        if failed_count == 0:
+            if successful_count > 1:
+                self.main_window.statusBar().showMessage(
+                    f"Successfully updated ratings for {successful_count} images", 3000
+                )
+        else:
+            self.main_window.statusBar().showMessage(
+                f"Updated {successful_count} ratings, {failed_count} failed", 5000
+            )
+
+    def handle_rating_write_error(self, error_message: str):
+        """Handle errors from rating writer."""
+        logger.error(f"Rating writer error: {error_message}")
+        self.main_window.statusBar().showMessage(
+            f"Error writing ratings: {error_message}", 5000
+        )
+
+    # --- Rotation Application Handlers ---
+
+    def handle_rotation_application_progress(
+        self, current: int, total: int, filename: str
+    ):
+        """Handle progress updates from rotation application worker."""
+        progress_text = f"Rotating {current}/{total}: {filename}"
+        self.main_window.update_loading_text(progress_text)
+
+    def handle_rotation_applied(
+        self,
+        file_path: str,
+        direction: str,
+        success: bool,
+        message: str,
+        is_lossy: bool,
+    ):
+        """Handle completion of a single rotation."""
+        if success:
+            self.main_window._handle_successful_rotation(
+                file_path, direction, message, is_lossy=is_lossy
+            )
+
+    def handle_rotation_application_finished(
+        self, successful_count: int, failed_count: int
+    ):
+        """Handle completion of all rotation applications."""
+        self.main_window.hide_loading_overlay()
+
+        # Show summary message
+        if successful_count > 0 and failed_count == 0:
+            self.main_window.statusBar().showMessage(
+                f"Successfully applied {successful_count} rotations.", 5000
+            )
+        elif successful_count > 0 and failed_count > 0:
+            self.main_window.statusBar().showMessage(
+                f"Applied {successful_count} rotations successfully, {failed_count} failed.",
+                5000,
+            )
+        elif failed_count > 0:
+            self.main_window.statusBar().showMessage(
+                f"Failed to apply {failed_count} rotations.", 5000
+            )
+
+    def handle_rotation_application_error(self, error_message: str):
+        """Handle errors from rotation application worker."""
+        logger.error(f"Rotation application error: {error_message}")
+        self.main_window.hide_loading_overlay()
+        self.main_window.statusBar().showMessage(
+            f"Error applying rotations: {error_message}", 5000
+        )
+
+    def handle_thumbnail_preload_progress(self, current: int, total: int, message: str):
+        """Handle progress updates from thumbnail preload worker."""
+        logger.debug(f"Thumbnail preload: {current}/{total} - {message}")
+        # Optional: Update status bar or progress indicator
+        # For now, just log - thumbnails load silently in background
+
+    def handle_thumbnail_preload_complete(self):
+        """Handle completion of thumbnail preload worker."""
+        logger.info("Thumbnail preloading completed - updating tree view icons")
+        # Update all tree view items with the cached thumbnails
+        self.main_window._update_thumbnails_from_cache()
+
+    def handle_thumbnail_preload_error(self, error_message: str):
+        """Handle errors from thumbnail preload worker."""
+        logger.warning(f"Thumbnail preload error: {error_message}")
+        # Non-critical - don't show to user, thumbnails will load on demand

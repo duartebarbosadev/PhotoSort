@@ -10,6 +10,9 @@ from core.image_pipeline import ImagePipeline
 
 logger = logging.getLogger(__name__)
 
+# Emit progress updates every N images to reduce signal/slot overhead
+PROGRESS_UPDATE_INTERVAL = 10
+
 
 class PreviewPreloaderWorker(QObject):
     progress_update = pyqtSignal(int, str)
@@ -37,13 +40,10 @@ class PreviewPreloaderWorker(QObject):
             self.finished.emit()
             return
 
+        total_images = len(self._image_paths)
         for i, image_path in enumerate(self._image_paths):
             if not self._is_running:
                 break
-
-            # Emit progress
-            basename = image_path.split("/")[-1]
-            self.progress_update.emit(i + 1, basename)
 
             try:
                 # Preload the preview using the pipeline
@@ -52,6 +52,12 @@ class PreviewPreloaderWorker(QObject):
                 )
             except Exception as e:
                 logger.error(f"Error preloading {image_path}: {e}")
+                basename = image_path.split("/")[-1]
                 self.error.emit(f"Error preloading {basename}: {str(e)}")
+
+            # Emit progress only every PROGRESS_UPDATE_INTERVAL images or at the end
+            if (i + 1) % PROGRESS_UPDATE_INTERVAL == 0 or (i + 1) == total_images:
+                basename = image_path.split("/")[-1]
+                self.progress_update.emit(i + 1, basename)
 
         self.finished.emit()

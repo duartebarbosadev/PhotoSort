@@ -80,6 +80,14 @@ class ModelRotationDetector(RotationDetectorProtocol):
         image: Optional[object] = None,
     ) -> int:
         if not self._ensure_session_loaded():
+            # If session loading failed and this is the first call to predict,
+            # raise an error so the UI can provide feedback
+            if self._state.load_failed and not self._state.failure_logged:
+                self._state.failure_logged = True
+                raise RuntimeError(
+                    "Rotation detection model failed to initialize. "
+                    "Check that onnxruntime and torchvision are installed correctly."
+                )
             return 0
 
         if image is None:
@@ -165,7 +173,15 @@ class ModelRotationDetector(RotationDetectorProtocol):
                 "CoreMLExecutionProvider",
                 "CPUExecutionProvider",
             ]
-            available = ort.get_available_providers()
+            # Try get_available_providers(), fallback to get_all_providers() for older onnxruntime
+            try:
+                available = ort.get_available_providers()
+            except AttributeError:
+                try:
+                    available = ort.get_all_providers()
+                except AttributeError:
+                    available = ["CPUExecutionProvider"]
+
             chosen = "CPUExecutionProvider"
             for p in providers_pref:
                 if p in available:

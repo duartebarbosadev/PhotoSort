@@ -193,7 +193,7 @@ class UpdateNotificationDialog(QDialog):
         self.reject()
 
     def _on_download_update_clicked(self):
-        """Handle 'Download Update' button click."""
+        """Handle 'Download Update' button click - opens GitHub releases page."""
         logger.info(
             f"Download Update button clicked. Checkbox checked: {self.disable_checks_checkbox.isChecked()}"
         )
@@ -204,14 +204,14 @@ class UpdateNotificationDialog(QDialog):
             set_update_check_enabled(True)
             logger.info("Automatic update checks re-enabled by user")
 
-        # Try to open download URL first, fallback to release page
-        url_to_open = self.update_info.download_url or self.update_info.release_url
+        # Always open the GitHub releases page
+        url_to_open = self.update_info.release_url
 
         try:
             webbrowser.open(url_to_open)
-            logger.info(f"Opened update URL: {url_to_open}")
+            logger.info(f"Opened GitHub release page: {url_to_open}")
         except Exception as e:
-            logger.error(f"Failed to open update URL: {e}")
+            logger.error(f"Failed to open release page: {e}")
 
         self.accept()
 

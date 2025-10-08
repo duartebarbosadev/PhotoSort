@@ -2,6 +2,8 @@ import os
 import asyncio
 import logging
 import time
+import concurrent.futures
+from typing import List, Dict, Any
 from PyQt6.QtCore import QObject, pyqtSignal
 from .image_pipeline import ImagePipeline
 from .image_features.blur_detector import BlurDetector
@@ -93,6 +95,24 @@ class FileScanner(QObject):
                     )
                     await asyncio.sleep(0)
 
+    def _detect_blur_for_file(
+        self, file_path: str, blur_threshold: float
+    ) -> Dict[str, Any]:
+        """
+        Detect blur for a single file (used in parallel processing).
+        Returns dict with 'path' and 'is_blurred' keys.
+        """
+        try:
+            is_blurred = BlurDetector.is_image_blurred(
+                file_path, threshold=blur_threshold
+            )
+            return {"path": file_path, "is_blurred": is_blurred}
+        except Exception as e:
+            logger.warning(
+                f"Blur detection failed for {os.path.basename(file_path)}: {e}"
+            )
+            return {"path": file_path, "is_blurred": None}
+
     def scan_directory(
         self,
         directory_path: str,
@@ -101,15 +121,15 @@ class FileScanner(QObject):
     ):
         """
         Starts the directory scanning process.
-        Optionally detects blur for each image.
-        perform_blur_detection: bool - If True, performs blur detection.
+        Optionally detects blur for each image in parallel.
+        perform_blur_detection: bool - If True, performs blur detection in parallel.
         blur_threshold: float - Threshold for blur detection if performed.
         """
         self._is_running = True
-        all_file_data = []  # Collect all file data (path and blur status)
-        thumbnail_paths_only = []  # For ImageHandler.preload_thumbnails
+        all_file_paths: List[str] = []
 
         try:
+            # Phase 1: Fast file discovery
             logger.info(f"Starting file scan in: {directory_path}")
             for root, _, files in os.walk(directory_path):
                 if not self._is_running:
@@ -131,59 +151,78 @@ class FileScanner(QObject):
                             )
                             continue
 
-                        is_blurred = None
-                        if perform_blur_detection:
-                            # Perform blur detection
-                            # Pass the apply_auto_edits flag to control RAW preview generation for blur detection
-                            logger.debug(
-                                f"Performing blur detection for: {os.path.basename(full_path)} (Threshold: {blur_threshold})"
-                            )
-                            try:
-                                is_blurred = BlurDetector.is_image_blurred(
-                                    full_path, threshold=blur_threshold
-                                )
-                            except Exception as e:
-                                # Do not break scanning on blur detection failure; mark unknown
-                                logger.warning(
-                                    f"Blur detection failed for {full_path}: {e}"
-                                )
-                                is_blurred = None
+                        all_file_paths.append(full_path)
 
-                        file_info = {"path": full_path, "is_blurred": is_blurred}
-                        all_file_data.append(file_info)
-                        thumbnail_paths_only.append(full_path)
-
+                        # Emit found file immediately (with no blur status yet)
+                        file_info = {"path": full_path, "is_blurred": None}
                         self.files_found.emit([file_info])
-                        logger.debug(
-                            f"Found: {os.path.basename(full_path)}, Blurred: {is_blurred}"
-                        )
+                        logger.debug(f"Found: {os.path.basename(full_path)}")
 
             if not self._is_running:
-                self.error.emit("Scan cancelled before thumbnail preloading.")
+                self.error.emit("Scan cancelled after file discovery.")
                 return
 
-            # Preload thumbnails after scanning all files
-            if thumbnail_paths_only:
-                # Filter again to ensure files still exist before preloading
-                existing_for_thumbs = [
-                    p for p in thumbnail_paths_only if os.path.isfile(p)
-                ]
-                if existing_for_thumbs:
-                    logger.info(f"Preloading {len(existing_for_thumbs)} thumbnails.")
+            logger.info(f"File discovery complete. Found {len(all_file_paths)} images.")
 
-                    try:
-                        self.image_pipeline.preload_thumbnails(existing_for_thumbs)
-                    except Exception as e:
-                        logger.error(f"Thumbnail preloading failed: {e}", exc_info=True)
-                else:
-                    logger.warning("No existing files left to preload thumbnails for.")
+            # Phase 2: Parallel blur detection (if enabled)
+            all_file_data: List[Dict[str, Any]] = []
+
+            if perform_blur_detection and all_file_paths:
+                logger.info(
+                    f"Starting parallel blur detection for {len(all_file_paths)} images..."
+                )
+                max_workers = min(os.cpu_count() or 4, 8)
+
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=max_workers
+                ) as executor:
+                    # Submit all blur detection tasks
+                    future_to_path = {
+                        executor.submit(
+                            self._detect_blur_for_file, path, blur_threshold
+                        ): path
+                        for path in all_file_paths
+                    }
+
+                    # Process results as they complete
+                    completed = 0
+                    for future in concurrent.futures.as_completed(future_to_path):
+                        if not self._is_running:
+                            logger.info("Blur detection cancelled by user")
+                            break
+
+                        try:
+                            result = future.result()
+                            all_file_data.append(result)
+                            completed += 1
+
+                            if completed % 10 == 0:  # Log progress every 10 files
+                                logger.debug(
+                                    f"Blur detection progress: {completed}/{len(all_file_paths)}"
+                                )
+                        except Exception as e:
+                            path = future_to_path[future]
+                            logger.error(
+                                f"Error in blur detection for {os.path.basename(path)}: {e}"
+                            )
+                            all_file_data.append({"path": path, "is_blurred": None})
+
+                logger.info(
+                    f"Parallel blur detection complete for {len(all_file_data)} images"
+                )
             else:
-                logger.warning("No supported image files found to preload.")
+                # No blur detection - just create file data with None blur status
+                all_file_data = [
+                    {"path": path, "is_blurred": None} for path in all_file_paths
+                ]
 
             if not self._is_running:
-                self.error.emit("Scan cancelled during thumbnail preloading.")
-            else:
-                logger.debug("Thumbnail preloading complete. Emitting signal.")
+                self.error.emit("Scan cancelled before completion.")
+                return
+
+            # Emit scan results immediately (thumbnail preloading now happens in separate worker)
+            if self._is_running:
+                logger.debug("File scan complete. Emitting results.")
                 # Emit the list of dicts, so the receiver has blur info too
                 self.thumbnail_preload_finished.emit(all_file_data)
 
