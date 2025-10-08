@@ -67,8 +67,10 @@ class ImagePipeline:
         )  # Instantiate if it has non-static methods or state
         logger.debug("ImageOrientationHandler instantiated.")
 
-        # For concurrent operations - increased from 8 to 16 for better I/O-bound RAW processing
-        self._num_workers = min(os.cpu_count() or 4, 16)
+        # For concurrent operations - use performance mode
+        from core.app_settings import calculate_max_workers
+
+        self._num_workers = calculate_max_workers(min_workers=4, max_workers=16)
         logger.info(
             f"ImagePipeline initialized in {time.perf_counter() - init_start_time:.4f}s (workers: {self._num_workers})"
         )
@@ -522,12 +524,13 @@ class ImagePipeline:
             )
         else:
             try:  # Last resort for unknown types
-                img = Image.open(normalized_path)
-                if apply_exif_transpose:
-                    img: Image.Image = self.image_orientation_handler.exif_transpose(
-                        img
-                    )
-                pil_img = img.convert(target_mode)
+                with Image.open(normalized_path) as img:
+                    if apply_exif_transpose:
+                        img: Image.Image = (
+                            self.image_orientation_handler.exif_transpose(img)
+                        )
+                    # Copy to preserve image data after context exit
+                    pil_img = img.convert(target_mode).copy()
             except Exception:
                 logger.warning(
                     f"Unsupported extension for processing: {ext} for '{os.path.basename(normalized_path)}'"

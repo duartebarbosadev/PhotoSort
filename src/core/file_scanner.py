@@ -171,7 +171,9 @@ class FileScanner(QObject):
                 logger.info(
                     f"Starting parallel blur detection for {len(all_file_paths)} images..."
                 )
-                max_workers = min(os.cpu_count() or 4, 8)
+                from core.app_settings import calculate_max_workers
+
+                max_workers = calculate_max_workers(min_workers=4, max_workers=8)
 
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=max_workers

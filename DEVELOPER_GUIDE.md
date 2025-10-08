@@ -89,6 +89,7 @@ The application is structured into two main packages: `core` and `ui`.
    - The `AppController` is the primary point of integration. User actions from the UI (e.g., a button click in `MainWindow`) should call a method in the `AppController`.
    - The `AppController` then calls the relevant service in the `core` package. For any file system operations, the `AppController` must call the appropriate method in `ImageFileOperations`.
    - If the feature involves a long-running task, the `AppController` should use the `WorkerManager` to run it in the background. The `WorkerManager` will then emit signals with the results, which the `AppController` will catch to update the `AppState` and the UI.
+   - For parallel processing within core modules, use `calculate_max_workers()` to respect the user's performance mode preference (see Threading section above).
 4. At the end, update this document if necessary.
 5. **Shortcuts**: All user-facing features must have accessible keyboard shortcuts. When introducing a new feature or command, add a QAction/QShortcut with ApplicationShortcut context, and document it in the Keyboard Shortcuts section of the [README](README.md).
 6. **Lazy Loading Over Env Flags**: If a feature adds a heavyweight dependency, implement lazy initialization (move imports into an `_ensure_loaded()` or similar) instead of adding environment variable conditionals.

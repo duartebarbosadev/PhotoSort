@@ -122,17 +122,17 @@ class RawImageProcessor:
                         logger.debug(
                             f"Using embedded JPEG thumbnail for: {os.path.basename(normalized_path)}"
                         )
-                        temp_pil_img = Image.open(io.BytesIO(thumb.data))
-                        temp_pil_img = ImageOps.exif_transpose(
-                            temp_pil_img
-                        )  # Correct orientation
-                        if apply_auto_edits:
-                            logger.debug(
-                                f"Applying auto-edits to embedded JPEG thumbnail from RAW: {os.path.basename(normalized_path)}"
-                            )
-                            temp_pil_img = ImageOps.autocontrast(temp_pil_img)
-                            enhancer = ImageEnhance.Brightness(temp_pil_img)
-                            temp_pil_img = enhancer.enhance(1.1)
+                        with Image.open(io.BytesIO(thumb.data)) as img:
+                            img = ImageOps.exif_transpose(img)  # Correct orientation
+                            if apply_auto_edits:
+                                logger.debug(
+                                    f"Applying auto-edits to embedded JPEG thumbnail from RAW: {os.path.basename(normalized_path)}"
+                                )
+                                img = ImageOps.autocontrast(img)
+                                enhancer = ImageEnhance.Brightness(img)
+                                img = enhancer.enhance(1.1)
+                            # Copy the image data to preserve it after context exit
+                            temp_pil_img = img.copy()
                     if temp_pil_img is None:
                         raise rawpy.LibRawNoThumbnailError(
                             "No suitable (JPEG) embedded thumbnail found."
@@ -237,31 +237,30 @@ class RawImageProcessor:
                         thumb.format == rawpy.ThumbFormat.JPEG
                         and thumb.data is not None
                     ):
-                        temp_img: Image.Image = Image.open(io.BytesIO(thumb.data))
-                        temp_img = ImageOps.exif_transpose(temp_img)
+                        with Image.open(io.BytesIO(thumb.data)) as temp_img:
+                            temp_img = ImageOps.exif_transpose(temp_img)
 
-                        # Use //3 to accept smaller embedded previews and avoid expensive RAW processing
-                        MIN_EMBEDDED_WIDTH: int = preview_max_resolution[0] // 3
-                        MIN_EMBEDDED_HEIGHT: int = preview_max_resolution[1] // 3
-                        if (
-                            temp_img.width >= MIN_EMBEDDED_WIDTH
-                            and temp_img.height >= MIN_EMBEDDED_HEIGHT
-                        ):
-                            logger.info(
-                                f"Using embedded JPEG preview ({temp_img.width}x{temp_img.height}) for: {os.path.basename(normalized_path)}"
-                            )
-                            if apply_auto_edits:
-                                logger.debug(
-                                    f"Applying auto-edits to embedded JPEG preview from RAW: {os.path.basename(normalized_path)}"
+                            # Use //3 to accept smaller embedded previews and avoid expensive RAW processing
+                            MIN_EMBEDDED_WIDTH: int = preview_max_resolution[0] // 3
+                            MIN_EMBEDDED_HEIGHT: int = preview_max_resolution[1] // 3
+                            if (
+                                temp_img.width >= MIN_EMBEDDED_WIDTH
+                                and temp_img.height >= MIN_EMBEDDED_HEIGHT
+                            ):
+                                logger.info(
+                                    f"Using embedded JPEG preview ({temp_img.width}x{temp_img.height}) for: {os.path.basename(normalized_path)}"
                                 )
-                                temp_img = ImageOps.autocontrast(temp_img)
-                                enhancer = ImageEnhance.Brightness(temp_img)
-                                temp_img = enhancer.enhance(
-                                    1.2
-                                )  # Example brightness factor
-                            pil_img = temp_img.convert(
-                                "RGBA"
-                            )  # RGBA required for Qt compatibility
+                                if apply_auto_edits:
+                                    logger.debug(
+                                        f"Applying auto-edits to embedded JPEG preview from RAW: {os.path.basename(normalized_path)}"
+                                    )
+                                    temp_img = ImageOps.autocontrast(temp_img)
+                                    enhancer = ImageEnhance.Brightness(temp_img)
+                                    temp_img = enhancer.enhance(
+                                        1.2
+                                    )  # Example brightness factor
+                                # Copy to preserve image data after context exit
+                                pil_img = temp_img.convert("RGBA").copy()
                             if (
                                 pil_img.width > preview_max_resolution[0]
                                 or pil_img.height > preview_max_resolution[1]
@@ -490,8 +489,10 @@ class RawImageProcessor:
                         thumb.format == rawpy.ThumbFormat.JPEG
                         and thumb.data is not None
                     ):
-                        temp_pil_img = Image.open(io.BytesIO(thumb.data))
-                        temp_pil_img = ImageOps.exif_transpose(temp_pil_img)
+                        with Image.open(io.BytesIO(thumb.data)) as img:
+                            img = ImageOps.exif_transpose(img)
+                            # Copy to preserve after context exit
+                            temp_pil_img = img.copy()
                 except (
                     rawpy.LibRawNoThumbnailError,
                     rawpy.LibRawUnsupportedThumbnailError,

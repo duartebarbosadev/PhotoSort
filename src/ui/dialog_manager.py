@@ -20,6 +20,8 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QStyle,
+    QRadioButton,
+    QSlider,
 )
 from PyQt6.QtCore import Qt, QSize, QUrl
 from PyQt6.QtGui import QIcon, QDesktopServices
@@ -402,6 +404,171 @@ class DialogManager:
         )
 
         return proceed, never_ask_again
+
+    def show_preferences_dialog(self):
+        """Show the application preferences dialog."""
+        from core.app_settings import (
+            PerformanceMode,
+            get_performance_mode,
+            set_performance_mode,
+            get_custom_thread_count,
+            set_custom_thread_count,
+        )
+
+        logger.info("Showing preferences dialog")
+        dialog = QDialog(self.parent)
+        dialog.setWindowTitle("Preferences")
+        dialog.setObjectName("preferencesDialog")
+        dialog.setModal(True)
+        dialog.setFixedSize(500, 380)
+        # Frameless window for consistent UI
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(25, 25, 25, 25)
+
+        # Title
+        title_label = QLabel("Preferences")
+        title_label.setObjectName("aboutTitle")
+        main_layout.addWidget(title_label)
+
+        # Performance Mode Section
+        perf_section_label = QLabel("Performance Mode")
+        perf_section_label.setObjectName("preferencesSectionLabel")
+        perf_section_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        main_layout.addWidget(perf_section_label)
+
+        # Description
+        desc_label = QLabel(
+            "Control how many CPU threads PhotoSort uses for processing:"
+        )
+        desc_label.setWordWrap(True)
+        main_layout.addWidget(desc_label)
+
+        # Radio buttons for performance mode
+        balanced_radio = QRadioButton("Balanced (Recommended)")
+        balanced_radio.setObjectName("balancedRadio")
+
+        balanced_desc = QLabel("    Uses 85% of CPU cores to keep system responsive")
+        balanced_desc.setObjectName("radioDescription")
+        balanced_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 20px;")
+
+        performance_radio = QRadioButton("Performance")
+        performance_radio.setObjectName("performanceRadio")
+
+        perf_desc = QLabel("    Uses all available CPU cores for maximum speed")
+        perf_desc.setObjectName("radioDescription")
+        perf_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 20px;")
+
+        custom_radio = QRadioButton("Custom")
+        custom_radio.setObjectName("customRadio")
+
+        # Custom thread count slider in a horizontal layout
+        custom_control_layout = QVBoxLayout()
+        custom_control_layout.setContentsMargins(20, 5, 0, 0)
+        custom_control_layout.setSpacing(5)
+
+        # Get system CPU count
+        max_threads = os.cpu_count() or 4
+
+        # Label showing current value and range
+        current_thread_count = min(get_custom_thread_count(), max_threads)
+        thread_count_label = QLabel(
+            f"Thread count: {current_thread_count} (max: {max_threads})"
+        )
+        thread_count_label.setObjectName("threadCountLabel")
+        thread_count_label.setStyleSheet("color: #888; font-size: 11px;")
+        custom_control_layout.addWidget(thread_count_label)
+
+        # Slider
+        thread_count_slider = QSlider(Qt.Orientation.Horizontal)
+        thread_count_slider.setObjectName("threadCountSlider")
+        thread_count_slider.setMinimum(1)
+        thread_count_slider.setMaximum(max_threads)
+        thread_count_slider.setValue(current_thread_count)
+        thread_count_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        # Set tick interval based on max threads (show ~8 ticks)
+        tick_interval = max(1, max_threads // 8)
+        thread_count_slider.setTickInterval(tick_interval)
+        thread_count_slider.setEnabled(False)
+
+        # Update label when slider changes
+        def on_slider_changed(value):
+            thread_count_label.setText(f"Thread count: {value} (max: {max_threads})")
+
+        thread_count_slider.valueChanged.connect(on_slider_changed)
+        custom_control_layout.addWidget(thread_count_slider)
+
+        # Set current mode
+        current_mode = get_performance_mode()
+        if current_mode == PerformanceMode.BALANCED:
+            balanced_radio.setChecked(True)
+        elif current_mode == PerformanceMode.PERFORMANCE:
+            performance_radio.setChecked(True)
+        else:  # CUSTOM
+            custom_radio.setChecked(True)
+            thread_count_slider.setEnabled(True)
+
+        # Enable/disable slider based on custom radio selection
+        def on_custom_toggled(checked):
+            thread_count_slider.setEnabled(checked)
+            thread_count_label.setEnabled(checked)
+
+        custom_radio.toggled.connect(on_custom_toggled)
+
+        # Add all radio options to layout
+        main_layout.addWidget(balanced_radio)
+        main_layout.addWidget(balanced_desc)
+        main_layout.addWidget(performance_radio)
+        main_layout.addWidget(perf_desc)
+        main_layout.addWidget(custom_radio)
+        main_layout.addLayout(custom_control_layout)
+
+        # Note
+        note_label = QLabel("Note: Changes take effect immediately for new operations.")
+        note_label.setWordWrap(True)
+        note_label.setStyleSheet(
+            "color: #888; font-style: italic; font-size: 11px; margin-top: 10px;"
+        )
+        main_layout.addWidget(note_label)
+
+        main_layout.addStretch()
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("preferencesCancelButton")
+        cancel_button.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_button)
+
+        save_button = QPushButton("Save")
+        save_button.setObjectName("preferencesSaveButton")
+        save_button.setDefault(True)
+
+        def save_preferences():
+            if balanced_radio.isChecked():
+                set_performance_mode(PerformanceMode.BALANCED)
+            elif performance_radio.isChecked():
+                set_performance_mode(PerformanceMode.PERFORMANCE)
+            else:  # custom_radio.isChecked()
+                set_performance_mode(PerformanceMode.CUSTOM)
+                set_custom_thread_count(thread_count_slider.value())
+            logger.info(
+                f"Preferences saved: mode={get_performance_mode().value}, custom_threads={get_custom_thread_count()}"
+            )
+            dialog.accept()
+
+        save_button.clicked.connect(save_preferences)
+        button_layout.addWidget(save_button)
+
+        main_layout.addLayout(button_layout)
+
+        dialog.setLayout(main_layout)
+        dialog.exec()
+        logger.info("Closed preferences dialog")
 
     def show_cache_management_dialog(self):
         """Show the cache management dialog."""

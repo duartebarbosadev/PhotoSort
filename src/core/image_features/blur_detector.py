@@ -18,14 +18,17 @@ from core.image_processing.standard_image_processor import (
 from core.image_processing.image_orientation_handler import (
     ImageOrientationHandler,
 )  # Local import
+from core.app_settings import calculate_max_workers
 
 logger = logging.getLogger(__name__)
 
 # Default size for the image used in blur detection
 BLUR_DETECTION_PREVIEW_SIZE: Tuple[int, int] = (640, 480)
-DEFAULT_NUM_WORKERS = min(
-    os.cpu_count() or 4, 8
-)  # Default number of workers for batch processing
+
+
+def get_default_num_workers() -> int:
+    """Get default number of workers for blur detection based on performance mode."""
+    return calculate_max_workers(min_workers=4, max_workers=8)
 
 
 class BlurDetector:
@@ -65,12 +68,12 @@ class BlurDetector:
                     logger.warning(
                         f"Unknown extension '{ext}'. Attempting to load with Pillow for blur detection."
                     )
-                    img = Image.open(normalized_path)
-                    # StandardImageProcessor.load_for_blur_detection already handles exif_transpose
-                    # So, if we directly use Image.open, we should also apply it.
-                    img: Image.Image = ImageOrientationHandler.exif_transpose(img)
-                    img.thumbnail(target_size, Image.Resampling.LANCZOS)
-                    pil_img = img.convert("RGB")
+                    with Image.open(normalized_path) as img:
+                        # StandardImageProcessor.load_for_blur_detection already handles exif_transpose
+                        # So, if we directly use Image.open, we should also apply it.
+                        img: Image.Image = ImageOrientationHandler.exif_transpose(img)
+                        img.thumbnail(target_size, Image.Resampling.LANCZOS)
+                        pil_img = img.convert("RGB")
                 except UnidentifiedImageError:
                     logger.error(
                         f"Pillow could not identify image for blur detection: {os.path.basename(normalized_path)}"
@@ -205,7 +208,7 @@ class BlurDetector:
         processed_count = 0
 
         effective_num_workers = (
-            num_workers if num_workers is not None else DEFAULT_NUM_WORKERS
+            num_workers if num_workers is not None else get_default_num_workers()
         )
         logger.info(
             f"Starting blur detection for {total_files} files (workers: {effective_num_workers})."
