@@ -12,7 +12,7 @@ class PerformanceMode(Enum):
     """
     Performance modes for controlling thread pool sizes and resource usage.
 
-    - BALANCED: Uses 75% of available CPU cores to keep system responsive
+    - BALANCED: Uses 85% of available CPU cores to keep system responsive
     - PERFORMANCE: Uses all available CPU cores for maximum speed
     - CUSTOM: Uses a user-defined number of threads
     """

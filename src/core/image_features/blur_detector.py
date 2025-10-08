@@ -68,12 +68,12 @@ class BlurDetector:
                     logger.warning(
                         f"Unknown extension '{ext}'. Attempting to load with Pillow for blur detection."
                     )
-                    img = Image.open(normalized_path)
-                    # StandardImageProcessor.load_for_blur_detection already handles exif_transpose
-                    # So, if we directly use Image.open, we should also apply it.
-                    img: Image.Image = ImageOrientationHandler.exif_transpose(img)
-                    img.thumbnail(target_size, Image.Resampling.LANCZOS)
-                    pil_img = img.convert("RGB")
+                    with Image.open(normalized_path) as img:
+                        # StandardImageProcessor.load_for_blur_detection already handles exif_transpose
+                        # So, if we directly use Image.open, we should also apply it.
+                        img: Image.Image = ImageOrientationHandler.exif_transpose(img)
+                        img.thumbnail(target_size, Image.Resampling.LANCZOS)
+                        pil_img = img.convert("RGB")
                 except UnidentifiedImageError:
                     logger.error(
                         f"Pillow could not identify image for blur detection: {os.path.basename(normalized_path)}"

@@ -524,12 +524,12 @@ class ImagePipeline:
             )
         else:
             try:  # Last resort for unknown types
-                img = Image.open(normalized_path)
-                if apply_exif_transpose:
-                    img: Image.Image = self.image_orientation_handler.exif_transpose(
-                        img
-                    )
-                pil_img = img.convert(target_mode)
+                with Image.open(normalized_path) as img:
+                    if apply_exif_transpose:
+                        img: Image.Image = (
+                            self.image_orientation_handler.exif_transpose(img)
+                        )
+                    pil_img = img.convert(target_mode)
             except Exception:
                 logger.warning(
                     f"Unsupported extension for processing: {ext} for '{os.path.basename(normalized_path)}'"

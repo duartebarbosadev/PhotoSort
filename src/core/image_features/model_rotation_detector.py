@@ -269,14 +269,14 @@ class ModelRotationDetector(RotationDetectorProtocol):
                 )
             from PIL import Image, ImageOps  # type: ignore
 
-            img = Image.open(norm)
-            img = ImageOps.exif_transpose(img)
-            if img.mode in ("RGB", "L"):
-                return img.convert("RGB")
-            rgba = img.convert("RGBA")
-            bg = Image.new("RGB", rgba.size, (255, 255, 255))
-            bg.paste(rgba, mask=rgba)
-            return bg
+            with Image.open(norm) as img:
+                img = ImageOps.exif_transpose(img)
+                if img.mode in ("RGB", "L"):
+                    return img.convert("RGB")
+                rgba = img.convert("RGBA")
+                bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                bg.paste(rgba, mask=rgba)
+                return bg
         except FileNotFoundError:
             logger.error("Rotation detector: file not found %s", os.path.basename(path))
             return None
