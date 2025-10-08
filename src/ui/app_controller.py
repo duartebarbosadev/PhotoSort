@@ -96,9 +96,6 @@ class AppController(QObject):
         self.worker_manager.file_scan_found_files.connect(self.handle_files_found)
         self.worker_manager.file_scan_finished.connect(self.handle_scan_finished)
         self.worker_manager.file_scan_error.connect(self.handle_scan_error)
-        self.worker_manager.file_scan_thumbnail_preload_finished.connect(
-            self.handle_thumbnail_preload_finished
-        )
 
         # Similarity Worker
         self.worker_manager.similarity_progress.connect(self.handle_similarity_progress)
@@ -657,10 +654,6 @@ class AppController(QObject):
         self.main_window.menu_manager.detect_blur_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
-
-    def handle_thumbnail_preload_finished(self, all_file_data: List[Dict[str, any]]):
-        logger.debug("Thumbnail preload finished signal received (deprecated, no-op).")
-        pass
 
     # --- Rotation Detection Handlers ---
 

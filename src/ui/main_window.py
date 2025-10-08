@@ -2190,17 +2190,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"PreviewController error: {e}")
 
-    # Slot for WorkerManager's file_scan_thumbnail_preload_finished signal
-    # This signal is now deprecated in favor of chaining after rating load.
-    # Keeping the method signature for now in case it's used elsewhere, but logic is changed.
-    def _handle_thumbnail_preload_finished(self, all_file_data: List[Dict[str, any]]):
-        # This was previously used to kick off preview preloading.
-        # Now, preview preloading is kicked off after rating loading finishes.
-        # self.update_loading_text("Thumbnails preloaded. Starting preview preloading...")
-        # self._start_preview_preloader(all_file_data)
-        logger.debug("Thumbnail preload finished (now a deprecated signal).")
-        pass  # Intentionally do nothing here, preview starts after rating load now
-
     # --- Rating Loader Worker Handlers ---
     def _handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0
@@ -2577,8 +2566,6 @@ class MainWindow(QMainWindow):
             f"Updated {updated_count}/{total_items} thumbnails from cache in {duration:.2f}s"
         )
 
-    # _update_item_deletion_blur_presentation removed (inlined via deletion_controller)
-
     def _start_similarity_analysis(self):
         logger.info("_start_similarity_analysis delegated to SimilarityController")
         paths = [
@@ -2925,8 +2912,6 @@ class MainWindow(QMainWindow):
                         has_special = bool(
                             modifiers & Qt.KeyboardModifier.ControlModifier
                         )
-
-                    # (Removed deprecated is_control_or_meta_exact alias)
 
                     # Rating shortcuts (Ctrl on Win/Linux, Cmd on macOS) + 0-5
                     # MUST be an exact modifier match.

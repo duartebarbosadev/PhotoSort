@@ -126,8 +126,6 @@ QTreeView::item {
 
 QListView::item { /* Specifically for Grid View items */
     background-color: transparent;
-    /* color property removed to allow item.setForeground() to take effect,
-       will inherit default text color from QWidget if not set by item. */
     padding: 4px;
     border-radius: 3px;
     margin: 0px;
@@ -313,9 +311,6 @@ QWidget#search_container QPushButton:checked {
     color: #FFFFFF;
     border-color: #005A9E;
 }
-
-/* Bottom bar removed - using status bar only */
-
 
 /* Splitter Handle */
 QSplitter#main_splitter::handle {
