@@ -927,6 +927,26 @@ class SynchronizedImageViewer(QWidget):
         self.viewer_splitter.addWidget(viewer)
         return viewer
 
+    def _resize_viewer_pool(self, target_count: int):
+        """Ensure the viewer pool matches the desired size."""
+        target_count = max(1, target_count)
+        current_count = len(self.image_viewers)
+
+        if current_count != target_count:
+            logger.debug(f"Resizing viewer pool from {current_count} to {target_count}")
+
+        while len(self.image_viewers) < target_count:
+            self._create_viewer()
+
+        while len(self.image_viewers) > target_count:
+            viewer = self.image_viewers.pop()
+            if viewer.parent() is self.viewer_splitter:
+                viewer.setParent(None)
+            viewer.deleteLater()
+
+        if self._focused_index >= len(self.image_viewers):
+            self._focused_index = max(0, len(self.image_viewers) - 1)
+
     def _get_current_view_mode(self):
         return "side_by_side" if self.side_by_side_btn.isChecked() else "single"
 
@@ -1089,10 +1109,9 @@ class SynchronizedImageViewer(QWidget):
             f"set image data {image_data} called with viewer_index={viewer_index}, preserve_view_mode={preserve_view_mode}"
         )
 
-        # Ensure we have at least one viewer
-        if not self.image_viewers:
-            logger.debug("Creating first viewer")
-            self._create_viewer()
+        desired_viewer_count = max(viewer_index + 1, 1)
+        self._resize_viewer_pool(desired_viewer_count)
+        viewer_index = min(viewer_index, len(self.image_viewers) - 1)
 
         # Update all viewers: set data for the target, clear others
         for i, viewer in enumerate(self.image_viewers):
@@ -1138,9 +1157,7 @@ class SynchronizedImageViewer(QWidget):
             self.set_image_data(images_data[0], 0)
             return
 
-        # Ensure we have enough viewer widgets for all images
-        while len(self.image_viewers) < num_images:
-            self._create_viewer()
+        self._resize_viewer_pool(num_images)
 
         # Update all viewers, then hide unused ones
         for i, viewer in enumerate(self.image_viewers):
@@ -1162,6 +1179,7 @@ class SynchronizedImageViewer(QWidget):
 
     def clear(self):
         logger.debug("clear called")
+        self._resize_viewer_pool(1)
         for i, viewer in enumerate(self.image_viewers):
             logger.debug(f"Clearing viewer {i}")
             viewer.clear()
@@ -1172,6 +1190,7 @@ class SynchronizedImageViewer(QWidget):
         """Clears all viewers, resets to single view, and displays the given text centrally."""
         logger.debug(f"setText called with: {text}")
         # Clear all viewers to remove any existing images or text.
+        self._resize_viewer_pool(1)
         for i, viewer in enumerate(self.image_viewers):
             logger.debug(f"Clearing viewer {i}")
             viewer.clear()

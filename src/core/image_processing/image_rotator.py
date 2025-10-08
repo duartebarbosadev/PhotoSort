@@ -47,7 +47,7 @@ class ImageRotator:
         ".tiff",
         ".tif",
         ".bmp",
-    }  # Removed .heif, .heic
+    }
     _XMP_UPDATE_SUPPORTED_EXTENSIONS = {
         ".jpg",
         ".jpeg",
