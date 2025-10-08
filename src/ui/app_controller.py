@@ -87,6 +87,9 @@ class AppController(QObject):
         self.app_state = app_state
         self.worker_manager = worker_manager
 
+        # Track pending rotations for batch preview regeneration
+        self._pending_rotated_paths: List[str] = []
+
     def connect_signals(self):
         """Connects signals from the WorkerManager to the controller's slots."""
         # File Scan Worker
@@ -907,17 +910,77 @@ class AppController(QObject):
         message: str,
         is_lossy: bool,
     ):
-        """Handle completion of a single rotation."""
+        """Handle completion of a single rotation.
+
+        Defers UI-heavy updates (preview regeneration, selection refresh) until batch completion.
+        Only performs lightweight cache invalidation here.
+        """
         if success:
-            self.main_window._handle_successful_rotation(
-                file_path, direction, message, is_lossy=is_lossy
+            # Track for batch processing
+            self._pending_rotated_paths.append(file_path)
+
+            # Perform only lightweight cache invalidation (no preview regeneration yet)
+            filename = os.path.basename(file_path)
+            logger.info(f"Rotation completed for '{filename}' (Lossy: {is_lossy})")
+            self.main_window.image_pipeline.preview_cache.delete_all_for_path(file_path)
+            self.main_window.image_pipeline.thumbnail_cache.delete_all_for_path(
+                file_path
             )
 
     def handle_rotation_application_finished(
         self, successful_count: int, failed_count: int
     ):
-        """Handle completion of all rotation applications."""
-        self.main_window.hide_loading_overlay()
+        """Handle completion of all rotation applications.
+
+        Performs batch preview regeneration in parallel, then updates UI.
+        """
+        logger.info(
+            f"Rotation batch finished: {successful_count} successful, {failed_count} failed. "
+            f"Processing {len(self._pending_rotated_paths)} rotated images..."
+        )
+
+        try:
+            if self._pending_rotated_paths:
+                # Update loading overlay for preview regeneration
+                self.main_window.update_loading_text(
+                    f"Regenerating previews for {len(self._pending_rotated_paths)} images..."
+                )
+
+                # Batch regenerate previews in parallel using existing infrastructure
+                t1 = time.perf_counter()
+                self.main_window.image_pipeline.preload_previews(
+                    self._pending_rotated_paths
+                )
+                t2 = time.perf_counter()
+                logger.info(
+                    f"Batch preview regeneration for {len(self._pending_rotated_paths)} images "
+                    f"completed in {t2 - t1:.2f}s"
+                )
+
+                # Batch update thumbnails in UI
+                t3 = time.perf_counter()
+                self.main_window._batch_update_rotated_thumbnails(
+                    self._pending_rotated_paths
+                )
+                t4 = time.perf_counter()
+                logger.info(f"Batch thumbnail update completed in {t4 - t3:.2f}s")
+
+                # Single selection refresh if any rotated images are in current selection
+                selected_paths = self.main_window._get_selected_file_paths_from_view()
+                if any(path in selected_paths for path in self._pending_rotated_paths):
+                    t5 = time.perf_counter()
+                    self.main_window._handle_file_selection_changed()
+                    t6 = time.perf_counter()
+                    logger.info(f"Selection refresh completed in {t6 - t5:.2f}s")
+
+        except Exception as e:
+            logger.error(
+                f"Error during batch post-rotation processing: {e}", exc_info=True
+            )
+        finally:
+            # Clear pending list
+            self._pending_rotated_paths.clear()
+            self.main_window.hide_loading_overlay()
 
         # Show summary message
         if successful_count > 0 and failed_count == 0:

@@ -75,6 +75,7 @@ The application is structured into two main packages: `core` and `ui`.
    - Contains background worker classes for core business logic and application-level operations
    - **`update_worker.py`**: Background worker for checking application updates without blocking the UI
    - **`rating_loader_worker.py`**: Background worker for loading metadata and ratings for images
+   - **`rotation_application_worker.py`**: Background worker for applying batch image rotations with parallel processing support
    - Workers should inherit from QObject and use Qt signals for communication
    - Managed by the `WorkerManager` in the UI layer
    - UI-specific workers (like preview preloading, blur detection) remain in `src/ui/ui_components.py` due to tight coupling with UI operations
@@ -126,6 +127,8 @@ The application is structured into two main packages: `core` and `ui`.
 - **Separation of Concerns**: Keep UI logic separate from business logic. The `core` package should not depend on the `ui` package. The `ui` package, specifically `MainWindow`, should be as "dumb" as possible, delegating all logic to the `AppController`.
 - **File Operations**: All file system operations (move, rename, delete) MUST be handled by the `ImageFileOperations` class in `src/core/image_file_ops.py`. This ensures that file manipulations are centralized and handled consistently.
 - **Threading**: All long-running tasks MUST be executed in a background thread using the `WorkerManager`. This ensures the UI remains responsive. Workers should communicate with the main thread via Qt signals.
+  - **Parallel Processing**: Workers that process multiple items can use `ThreadPoolExecutor` for parallel execution. The number of workers should be determined by `calculate_max_workers()` from `app_settings.py`, which respects the user's performance mode preference (Balanced/Performance/Custom).
+  - **Example**: `RotationApplicationWorker` uses parallel processing for batch rotation operations when `max_workers > 1` and multiple images are being rotated. Single-image operations always use sequential processing to avoid overhead.
 - **PyExiv2 Usage**: **ALL PyExiv2 operations must use the abstraction layer in `src/core/pyexiv2_wrapper.py`**. Never import or use pyexiv2 directly in application code. This prevents DLL conflicts and ensures proper initialization:
   
   ```python
