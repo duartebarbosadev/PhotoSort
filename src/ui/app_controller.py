@@ -10,7 +10,6 @@ from core.app_settings import (
 )
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
-from core.image_pipeline import ImagePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +30,26 @@ class WorkerManager:
 class AppController(QObject):
     @staticmethod
     def clear_application_caches():
-        """Clears all application caches."""
+        """Clears all application caches without creating full pipeline instances."""
         start_time = time.perf_counter()
         logger.info("Clearing all application caches.")
 
         try:
-            pipeline = ImagePipeline()
-            pipeline.clear_all_image_caches()
+            # Clear image caches by directly accessing cache classes
+            from core.caching.thumbnail_cache import ThumbnailCache
+            from core.caching.preview_cache import PreviewCache
+
+            logger.info("Clearing thumbnail cache...")
+            thumb_cache = ThumbnailCache()
+            thumb_cache.clear()
+            thumb_cache.close()
+
+            logger.info("Clearing preview cache...")
+            preview_cache = PreviewCache()
+            preview_cache.clear()
+            preview_cache.close()
         except Exception:
-            logger.error("Error clearing image pipeline caches.", exc_info=True)
+            logger.error("Error clearing image caches.", exc_info=True)
 
         try:
             from core.similarity_engine import SimilarityEngine
@@ -53,6 +63,7 @@ class AppController(QObject):
 
             exif_cache = ExifCache()
             exif_cache.clear()
+            exif_cache.close()
         except Exception:
             logger.error("Error clearing EXIF metadata cache.", exc_info=True)
 
@@ -61,6 +72,7 @@ class AppController(QObject):
 
             rating_cache = RatingCache()
             rating_cache.clear()
+            rating_cache.close()
         except Exception:
             logger.error("Error clearing rating cache.", exc_info=True)
 

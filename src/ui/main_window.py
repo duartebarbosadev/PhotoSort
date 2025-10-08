@@ -174,6 +174,9 @@ class MainWindow(QMainWindow):
         self._left_panel_views = set()
         self._image_viewer_views = set()
 
+        # Track last displayed image to avoid redundant updates
+        self._last_displayed_image_path = None
+
         self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
         self.worker_manager = WorkerManager(
@@ -1794,9 +1797,23 @@ class MainWindow(QMainWindow):
         self, file_path: str, file_data_from_model: Optional[Dict[str, Any]]
     ):
         """Handles displaying preview and info for a single selected image."""
+
+        # Skip if already displaying this exact image to avoid redundant updates
+        if self._last_displayed_image_path == file_path:
+            logger.debug(
+                f"Skipping redundant display for: {os.path.basename(file_path)}"
+            )
+            # Still update sidebar in case metadata changed
+            if self.sidebar_visible:
+                self._update_sidebar_with_current_selection()
+            return
+
         logger.debug(f"Displaying single image preview: {os.path.basename(file_path)}")
+        self._last_displayed_image_path = file_path
+
         if not os.path.exists(file_path):
             logger.warning(f"File not found: {file_path}")
+            self._last_displayed_image_path = None  # Reset on error
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage(
                 f"Error: File not found - {os.path.basename(file_path)}", 5000
@@ -2025,6 +2042,7 @@ class MainWindow(QMainWindow):
             self._get_active_file_view().viewport().update()
 
         logger.debug("Clearing viewer and setting 'Select an image' text")
+        self._last_displayed_image_path = None  # Reset tracking on clear
         self.advanced_image_viewer.clear()
         self.advanced_image_viewer.setText("Select an image to view details.")
         self.statusBar().showMessage("Ready")
