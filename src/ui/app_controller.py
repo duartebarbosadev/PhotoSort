@@ -41,13 +41,17 @@ class AppController(QObject):
 
             logger.info("Clearing thumbnail cache...")
             thumb_cache = ThumbnailCache()
-            thumb_cache.clear()
-            thumb_cache.close()
+            try:
+                thumb_cache.clear()
+            finally:
+                thumb_cache.close()
 
             logger.info("Clearing preview cache...")
             preview_cache = PreviewCache()
-            preview_cache.clear()
-            preview_cache.close()
+            try:
+                preview_cache.clear()
+            finally:
+                preview_cache.close()
         except Exception:
             logger.error("Error clearing image caches.", exc_info=True)
 
@@ -62,8 +66,10 @@ class AppController(QObject):
             from core.caching.exif_cache import ExifCache
 
             exif_cache = ExifCache()
-            exif_cache.clear()
-            exif_cache.close()
+            try:
+                exif_cache.clear()
+            finally:
+                exif_cache.close()
         except Exception:
             logger.error("Error clearing EXIF metadata cache.", exc_info=True)
 
@@ -71,8 +77,10 @@ class AppController(QObject):
             from core.caching.rating_cache import RatingCache
 
             rating_cache = RatingCache()
-            rating_cache.clear()
-            rating_cache.close()
+            try:
+                rating_cache.clear()
+            finally:
+                rating_cache.close()
         except Exception:
             logger.error("Error clearing rating cache.", exc_info=True)
 
