@@ -67,8 +67,10 @@ class ImagePipeline:
         )  # Instantiate if it has non-static methods or state
         logger.debug("ImageOrientationHandler instantiated.")
 
-        # For concurrent operations - increased from 8 to 16 for better I/O-bound RAW processing
-        self._num_workers = min(os.cpu_count() or 4, 16)
+        # For concurrent operations - use performance mode
+        from core.app_settings import calculate_max_workers
+
+        self._num_workers = calculate_max_workers(min_workers=4, max_workers=16)
         logger.info(
             f"ImagePipeline initialized in {time.perf_counter() - init_start_time:.4f}s (workers: {self._num_workers})"
         )

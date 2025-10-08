@@ -52,6 +52,7 @@ class MenuManager:
         self.cluster_sort_action: QWidgetAction
 
         # Settings Menu
+        self.preferences_action: QAction
         self.manage_cache_action: QAction
 
         # Image Menu
@@ -360,6 +361,12 @@ class MenuManager:
         main_win = self.main_window
         settings_menu = menu_bar.addMenu("&Settings")
 
+        self.preferences_action = QAction("Preferences...", main_win)
+        self.preferences_action.setShortcut(QKeySequence("F10"))
+        settings_menu.addAction(self.preferences_action)
+
+        settings_menu.addSeparator()
+
         self.manage_cache_action = QAction("Manage Cache", main_win)
         self.manage_cache_action.setShortcut(QKeySequence("F9"))
         settings_menu.addAction(self.manage_cache_action)
@@ -402,6 +409,9 @@ class MenuManager:
         )
 
         # Settings Menu
+        self.preferences_action.triggered.connect(
+            self.dialog_manager.show_preferences_dialog
+        )
         self.manage_cache_action.triggered.connect(
             self.dialog_manager.show_cache_management_dialog
         )

@@ -4,7 +4,31 @@ Manages persistent application settings using QSettings.
 """
 
 import os
+from enum import Enum
 from PyQt6.QtCore import QSettings
+
+
+class PerformanceMode(Enum):
+    """
+    Performance modes for controlling thread pool sizes and resource usage.
+
+    - BALANCED: Uses 75% of available CPU cores to keep system responsive
+    - PERFORMANCE: Uses all available CPU cores for maximum speed
+    - CUSTOM: Uses a user-defined number of threads
+    """
+
+    BALANCED = "balanced"
+    PERFORMANCE = "performance"
+    CUSTOM = "custom"
+
+    @classmethod
+    def from_string(cls, value: str) -> "PerformanceMode":
+        """Convert string to PerformanceMode enum, defaulting to BALANCED."""
+        try:
+            return cls(value.lower())
+        except (ValueError, AttributeError):
+            return cls.BALANCED
+
 
 # --- Settings Constants ---
 
@@ -22,6 +46,12 @@ ORIENTATION_MODEL_NAME_KEY = (
 )
 UPDATE_CHECK_ENABLED_KEY = "Updates/CheckEnabled"  # Enable automatic update checks
 UPDATE_LAST_CHECK_KEY = "Updates/LastCheckTime"  # Last time updates were checked
+PERFORMANCE_MODE_KEY = (
+    "Performance/Mode"  # Performance mode (balanced/performance/custom)
+)
+CUSTOM_THREAD_COUNT_KEY = (
+    "Performance/CustomThreadCount"  # User-defined thread count for custom mode
+)
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
@@ -30,6 +60,8 @@ DEFAULT_ROTATION_CONFIRM_LOSSY = True  # Default to asking before lossy rotation
 MAX_RECENT_FOLDERS = 10  # Max number of recent folders to store
 DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
 DEFAULT_UPDATE_CHECK_ENABLED = True  # Default to enable automatic update checks
+DEFAULT_PERFORMANCE_MODE = PerformanceMode.BALANCED  # Default to balanced mode
+DEFAULT_CUSTOM_THREAD_COUNT = 4  # Default custom thread count
 
 # --- UI Constants ---
 # Grid view settings
@@ -273,3 +305,77 @@ def set_last_update_check_time(timestamp: int):
     """Sets the timestamp of the last update check."""
     settings = _get_settings()
     settings.setValue(UPDATE_LAST_CHECK_KEY, timestamp)
+
+
+# --- Performance Mode Settings ---
+def get_performance_mode() -> PerformanceMode:
+    """Gets the configured performance mode."""
+    settings = _get_settings()
+    mode_str = settings.value(
+        PERFORMANCE_MODE_KEY, DEFAULT_PERFORMANCE_MODE.value, type=str
+    )
+    return PerformanceMode.from_string(mode_str)
+
+
+def set_performance_mode(mode: PerformanceMode):
+    """Sets the performance mode."""
+    settings = _get_settings()
+    settings.setValue(PERFORMANCE_MODE_KEY, mode.value)
+
+
+def get_custom_thread_count() -> int:
+    """Gets the user-defined custom thread count."""
+    settings = _get_settings()
+    return settings.value(
+        CUSTOM_THREAD_COUNT_KEY, DEFAULT_CUSTOM_THREAD_COUNT, type=int
+    )
+
+
+def set_custom_thread_count(count: int):
+    """Sets the custom thread count. Must be between 1 and system CPU count."""
+    max_threads = os.cpu_count() or 4
+    if not (1 <= count <= max_threads):
+        raise ValueError(
+            f"Thread count must be between 1 and {max_threads}, got {count}"
+        )
+    settings = _get_settings()
+    settings.setValue(CUSTOM_THREAD_COUNT_KEY, count)
+
+
+def calculate_max_workers(min_workers: int = 1, max_workers: int = None) -> int:
+    """
+    Calculate the optimal number of worker threads based on the current performance mode.
+
+    Args:
+        min_workers: Minimum number of workers to return (default: 1)
+        max_workers: Maximum number of workers to return (default: None/unlimited)
+
+    Returns:
+        Number of worker threads based on performance mode:
+        - Performance: 100% of CPU cores
+        - Balanced: 85% of CPU cores (keeps system responsive)
+        - Custom: User-specified thread count
+
+    Examples:
+        calculate_max_workers()  # Uses performance mode settings
+        calculate_max_workers(min_workers=2, max_workers=8)  # Constrained to 2-8 range
+    """
+    cpu_count = os.cpu_count() or 4
+    mode = get_performance_mode()
+
+    if mode == PerformanceMode.PERFORMANCE:
+        # Performance mode: use all cores
+        workers = cpu_count
+    elif mode == PerformanceMode.CUSTOM:
+        # Custom mode: use user-defined thread count
+        workers = get_custom_thread_count()
+    else:  # BALANCED
+        # Balanced mode: use 85% of cores to keep system responsive
+        workers = max(1, int(cpu_count * 0.85))
+
+    # Apply min/max constraints
+    workers = max(min_workers, workers)
+    if max_workers is not None:
+        workers = min(max_workers, workers)
+
+    return workers

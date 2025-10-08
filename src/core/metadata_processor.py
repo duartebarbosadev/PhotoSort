@@ -316,16 +316,24 @@ class MetadataProcessor:
                 operational_to_cache_key_map[operational_path] = cache_key_path
 
         CHUNK_SIZE = METADATA_PROCESSING_CHUNK_SIZE
-        # Concurrency tuning: reduce to 1 worker in frozen builds by default (can override)
-        default_workers = min(6, (os.cpu_count() or 1) * 2)
+        # Concurrency tuning: use performance mode for I/O-bound metadata operations
+        # In frozen builds, allow env override for testing but still respect performance mode
+        from core.app_settings import calculate_max_workers
+
         if getattr(sys, "frozen", False):
             try:
-                env_workers = int(os.environ.get("PHOTOSORT_METADATA_MAX_WORKERS", "1"))
-                MAX_WORKERS = max(1, env_workers)
+                # Allow override in frozen builds for debugging
+                env_workers = int(os.environ.get("PHOTOSORT_METADATA_MAX_WORKERS", "0"))
+                if env_workers > 0:
+                    MAX_WORKERS = env_workers
+                else:
+                    # Use performance mode calculation
+                    MAX_WORKERS = calculate_max_workers(min_workers=1, max_workers=6)
             except Exception:
-                MAX_WORKERS = 1
+                MAX_WORKERS = calculate_max_workers(min_workers=1, max_workers=6)
         else:
-            MAX_WORKERS = default_workers
+            # Development/source mode: use performance mode calculation
+            MAX_WORKERS = calculate_max_workers(min_workers=1, max_workers=6)
 
         def process_chunk(chunk_paths: List[str]) -> List[Dict[str, Any]]:
             chunk_results = []

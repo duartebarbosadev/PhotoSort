@@ -47,13 +47,19 @@ class StandardImageProcessor:
             img = Image.open(normalized_path)
             if apply_orientation:
                 img = ImageOps.exif_transpose(img)  # Correct orientation
-            
+
             # Two-pass resampling: fast initial downsize, then high-quality final pass
             # This is faster when images are much larger than the target size
-            if img.width > thumbnail_max_size[0] * 2 or img.height > thumbnail_max_size[1] * 2:
-                intermediate_size = (thumbnail_max_size[0] * 2, thumbnail_max_size[1] * 2)
+            if (
+                img.width > thumbnail_max_size[0] * 2
+                or img.height > thumbnail_max_size[1] * 2
+            ):
+                intermediate_size = (
+                    thumbnail_max_size[0] * 2,
+                    thumbnail_max_size[1] * 2,
+                )
                 img.thumbnail(intermediate_size, Image.Resampling.BILINEAR)
-            
+
             img.thumbnail(thumbnail_max_size, Image.Resampling.LANCZOS)
             final_pil_img = img.convert("RGBA")  # RGBA required for Qt compatibility
             return final_pil_img
@@ -87,13 +93,19 @@ class StandardImageProcessor:
         try:
             img = Image.open(normalized_path)
             img = ImageOps.exif_transpose(img)  # Correct orientation
-            
+
             # Two-pass resampling: fast initial downsize, then high-quality final pass
             # This is faster when images are much larger than the target size
-            if img.width > preview_max_resolution[0] * 2 or img.height > preview_max_resolution[1] * 2:
-                intermediate_size = (preview_max_resolution[0] * 2, preview_max_resolution[1] * 2)
+            if (
+                img.width > preview_max_resolution[0] * 2
+                or img.height > preview_max_resolution[1] * 2
+            ):
+                intermediate_size = (
+                    preview_max_resolution[0] * 2,
+                    preview_max_resolution[1] * 2,
+                )
                 img.thumbnail(intermediate_size, Image.Resampling.BILINEAR)
-            
+
             img.thumbnail(preview_max_resolution, Image.Resampling.LANCZOS)
             pil_img = img.convert("RGBA")  # RGBA required for Qt compatibility
             return pil_img

@@ -9,10 +9,14 @@ from core.image_features.model_rotation_detector import (
 )
 from core.image_pipeline import ImagePipeline
 from core.caching.exif_cache import ExifCache
+from core.app_settings import calculate_max_workers
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_NUM_WORKERS = min(os.cpu_count() or 4, 8)
+
+def get_default_num_workers() -> int:
+    """Get default number of workers for rotation detection based on performance mode."""
+    return calculate_max_workers(min_workers=4, max_workers=8)
 
 
 class RotationDetector:
@@ -82,7 +86,7 @@ class RotationDetector:
         processed_count = 0
 
         effective_num_workers = (
-            num_workers if num_workers is not None else DEFAULT_NUM_WORKERS
+            num_workers if num_workers is not None else get_default_num_workers()
         )
         logger.info(
             f"Starting rotation detection for {total_files} files (workers: {effective_num_workers})..."

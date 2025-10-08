@@ -172,12 +172,22 @@ class RawImageProcessor:
 
                 if temp_pil_img:
                     # Two-pass resampling: fast initial downsize, then high-quality final pass
-                    if temp_pil_img.width > thumbnail_max_size[0] * 2 or temp_pil_img.height > thumbnail_max_size[1] * 2:
-                        intermediate_size = (thumbnail_max_size[0] * 2, thumbnail_max_size[1] * 2)
-                        temp_pil_img.thumbnail(intermediate_size, Image.Resampling.BILINEAR)
-                    
+                    if (
+                        temp_pil_img.width > thumbnail_max_size[0] * 2
+                        or temp_pil_img.height > thumbnail_max_size[1] * 2
+                    ):
+                        intermediate_size = (
+                            thumbnail_max_size[0] * 2,
+                            thumbnail_max_size[1] * 2,
+                        )
+                        temp_pil_img.thumbnail(
+                            intermediate_size, Image.Resampling.BILINEAR
+                        )
+
                     temp_pil_img.thumbnail(thumbnail_max_size, Image.Resampling.LANCZOS)
-                    final_pil_img = temp_pil_img.convert("RGBA")  # RGBA required for Qt compatibility
+                    final_pil_img = temp_pil_img.convert(
+                        "RGBA"
+                    )  # RGBA required for Qt compatibility
             return final_pil_img
         except UnidentifiedImageError:
             logger.error(
@@ -249,16 +259,26 @@ class RawImageProcessor:
                                 temp_img = enhancer.enhance(
                                     1.2
                                 )  # Example brightness factor
-                            pil_img = temp_img.convert("RGBA")  # RGBA required for Qt compatibility
+                            pil_img = temp_img.convert(
+                                "RGBA"
+                            )  # RGBA required for Qt compatibility
                             if (
                                 pil_img.width > preview_max_resolution[0]
                                 or pil_img.height > preview_max_resolution[1]
                             ):
                                 # Two-pass resampling for faster processing
-                                if pil_img.width > preview_max_resolution[0] * 2 or pil_img.height > preview_max_resolution[1] * 2:
-                                    intermediate_size = (preview_max_resolution[0] * 2, preview_max_resolution[1] * 2)
-                                    pil_img.thumbnail(intermediate_size, Image.Resampling.BILINEAR)
-                                
+                                if (
+                                    pil_img.width > preview_max_resolution[0] * 2
+                                    or pil_img.height > preview_max_resolution[1] * 2
+                                ):
+                                    intermediate_size = (
+                                        preview_max_resolution[0] * 2,
+                                        preview_max_resolution[1] * 2,
+                                    )
+                                    pil_img.thumbnail(
+                                        intermediate_size, Image.Resampling.BILINEAR
+                                    )
+
                                 pil_img.thumbnail(
                                     preview_max_resolution, Image.Resampling.LANCZOS
                                 )
@@ -308,14 +328,24 @@ class RawImageProcessor:
                         img_from_raw = ImageOps.autocontrast(img_from_raw)
 
                     # Two-pass resampling: fast initial downsize, then high-quality final pass
-                    if img_from_raw.width > preview_max_resolution[0] * 2 or img_from_raw.height > preview_max_resolution[1] * 2:
-                        intermediate_size = (preview_max_resolution[0] * 2, preview_max_resolution[1] * 2)
-                        img_from_raw.thumbnail(intermediate_size, Image.Resampling.BILINEAR)
-                    
+                    if (
+                        img_from_raw.width > preview_max_resolution[0] * 2
+                        or img_from_raw.height > preview_max_resolution[1] * 2
+                    ):
+                        intermediate_size = (
+                            preview_max_resolution[0] * 2,
+                            preview_max_resolution[1] * 2,
+                        )
+                        img_from_raw.thumbnail(
+                            intermediate_size, Image.Resampling.BILINEAR
+                        )
+
                     img_from_raw.thumbnail(
                         preview_max_resolution, Image.Resampling.LANCZOS
                     )
-                    pil_img = img_from_raw.convert("RGBA")  # RGBA required for Qt compatibility
+                    pil_img = img_from_raw.convert(
+                        "RGBA"
+                    )  # RGBA required for Qt compatibility
             return pil_img
         except UnidentifiedImageError:
             logger.error(
