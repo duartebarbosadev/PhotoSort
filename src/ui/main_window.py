@@ -737,7 +737,6 @@ class MainWindow(QMainWindow):
             preserved_focused_path = self.app_state.focused_image_path
 
         self.update_loading_text("Rebuilding view...")
-        QApplication.processEvents()
         self.file_system_model.clear()
         root_item = self.file_system_model.invisibleRootItem()
         active_view = self._get_active_file_view()
@@ -3793,8 +3792,6 @@ class MainWindow(QMainWindow):
                 view = self._get_active_file_view()
                 if view:
                     view.viewport().update()
-                    # Process events to ensure the repaint happens immediately
-                    QApplication.processEvents()
             return
 
         active_view = self._get_active_file_view()

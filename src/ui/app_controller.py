@@ -926,15 +926,26 @@ class AppController(QObject):
         """Handle completion of all rotation applications.
 
         Performs batch preview regeneration in parallel, then updates UI.
+        Keeps overlay visible during preview regeneration to avoid showing unrotated images.
         """
         logger.info(
             f"Rotation batch finished: {successful_count} successful, {failed_count} failed. "
             f"Processing {len(self._pending_rotated_paths)} rotated images..."
         )
 
+        # Handle failure case - hide overlay and return
+        if successful_count == 0 and failed_count > 0:
+            self.main_window.hide_loading_overlay()
+            self.main_window.statusBar().showMessage(
+                f"Failed to apply {failed_count} rotations.", 5000
+            )
+            self._pending_rotated_paths.clear()
+            return
+
         try:
             if self._pending_rotated_paths:
                 # Update loading overlay for preview regeneration
+                # Keep it visible so user doesn't see unrotated images
                 self.main_window.update_loading_text(
                     f"Regenerating previews for {len(self._pending_rotated_paths)} images..."
                 )
