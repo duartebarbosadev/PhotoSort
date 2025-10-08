@@ -529,7 +529,8 @@ class ImagePipeline:
                         img: Image.Image = (
                             self.image_orientation_handler.exif_transpose(img)
                         )
-                    pil_img = img.convert(target_mode)
+                    # Copy to preserve image data after context exit
+                    pil_img = img.convert(target_mode).copy()
             except Exception:
                 logger.warning(
                     f"Unsupported extension for processing: {ext} for '{os.path.basename(normalized_path)}'"

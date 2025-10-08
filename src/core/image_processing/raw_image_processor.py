@@ -259,9 +259,8 @@ class RawImageProcessor:
                                     temp_img = enhancer.enhance(
                                         1.2
                                     )  # Example brightness factor
-                                pil_img = temp_img.convert(
-                                    "RGBA"
-                                )  # RGBA required for Qt compatibility
+                                # Copy to preserve image data after context exit
+                                pil_img = temp_img.convert("RGBA").copy()
                             if (
                                 pil_img.width > preview_max_resolution[0]
                                 or pil_img.height > preview_max_resolution[1]
