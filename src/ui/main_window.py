@@ -3243,6 +3243,26 @@ class MainWindow(QMainWindow):
             f"HSR: End for {filename}. Total time: {handle_end_time - handle_start_time:.4f}s"
         )
 
+    def _batch_update_rotated_thumbnails(self, rotated_paths: List[str]):
+        """Update thumbnails for a batch of rotated images efficiently.
+
+        Args:
+            rotated_paths: List of file paths that were rotated
+        """
+        from PyQt6.QtGui import QIcon
+
+        for file_path in rotated_paths:
+            proxy_idx = self._find_proxy_index_for_path(file_path)
+            if proxy_idx.isValid():
+                source_idx = self.proxy_model.mapToSource(proxy_idx)
+                item = self.file_system_model.itemFromIndex(source_idx)
+                if item:
+                    new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(file_path)
+                    if new_thumbnail:
+                        item.setIcon(QIcon(new_thumbnail))
+
+        logger.info(f"Batch updated {len(rotated_paths)} thumbnails")
+
     def _rotate_current_image_clockwise(self):
         """Rotate the currently selected image(s) 90° clockwise (for keyboard shortcut)."""
         logger.info("Clockwise rotation triggered via shortcut/menu.")
@@ -3259,7 +3279,7 @@ class MainWindow(QMainWindow):
         self._rotate_selected_images("180")
 
     def _rotate_selected_images(self, direction: str):
-        """Rotate all currently selected images in the specified direction."""
+        """Rotate all currently selected images in the specified direction using parallel worker."""
         focused_path = self.advanced_image_viewer.get_focused_image_path_if_any()
 
         if focused_path:
@@ -3299,162 +3319,23 @@ class MainWindow(QMainWindow):
                 3000,
             )
 
-        # Perform rotation on all supported images
-        successful_rotations = 0
-        failed_rotations = 0
-
-        for i, file_path in enumerate(rotation_supported_paths):
-            try:
-                # Show progress for multiple files
-                if len(rotation_supported_paths) > 1:
-                    progress_text = f"Rotating image {i + 1} of {len(rotation_supported_paths)}: {os.path.basename(file_path)}"
-                    self.show_loading_overlay(progress_text)
-                    self.statusBar().showMessage(progress_text, 0)
-                    QApplication.processEvents()
-
-                # Try metadata-only rotation first
-                metadata_success, needs_lossy, message = (
-                    MetadataProcessor.try_metadata_rotation_first(
-                        file_path, direction, self.app_state.exif_disk_cache
-                    )
-                )
-
-                if metadata_success:
-                    # Metadata rotation succeeded
-                    self._handle_successful_rotation(
-                        file_path, direction, message, is_lossy=False
-                    )
-                    successful_rotations += 1
-                    continue
-
-                if not needs_lossy:
-                    # Metadata rotation failed and no lossy option available
-                    logger.warning(
-                        f"Rotation failed for {os.path.basename(file_path)}: {message}"
-                    )
-                    failed_rotations += 1
-                    continue
-
-                # Metadata rotation failed but lossy rotation is available
-                # For batch operations, we'll apply the user's preference without asking each time
-                from core.app_settings import get_rotation_confirm_lossy
-
-                if get_rotation_confirm_lossy() and len(rotation_supported_paths) > 1:
-                    # For multiple images, ask once for the batch
-                    rotation_desc = {
-                        "clockwise": "90° clockwise",
-                        "counterclockwise": "90° counterclockwise",
-                        "180": "180°",
-                    }.get(direction, direction)
-
-                    proceed, never_ask_again = (
-                        self.dialog_manager.show_lossy_rotation_confirmation_dialog(
-                            f"{len(rotation_supported_paths)} images", rotation_desc
-                        )
-                    )
-
-                    if never_ask_again:
-                        from core.app_settings import set_rotation_confirm_lossy
-
-                        set_rotation_confirm_lossy(False)
-
-                    if not proceed:
-                        self.statusBar().showMessage(
-                            "Batch rotation cancelled by user.", 3000
-                        )
-                        return
-
-                    # Update the preference so we don't ask again for remaining images
-                    from core.app_settings import set_rotation_confirm_lossy
-
-                    set_rotation_confirm_lossy(False)
-                elif (
-                    get_rotation_confirm_lossy() and len(rotation_supported_paths) == 1
-                ):
-                    # Single image, ask as usual
-                    rotation_desc = {
-                        "clockwise": "90° clockwise",
-                        "counterclockwise": "90° counterclockwise",
-                        "180": "180°",
-                    }.get(direction, direction)
-
-                    proceed, never_ask_again = (
-                        self.dialog_manager.show_lossy_rotation_confirmation_dialog(
-                            os.path.basename(file_path), rotation_desc
-                        )
-                    )
-
-                    if never_ask_again:
-                        from core.app_settings import set_rotation_confirm_lossy
-
-                        set_rotation_confirm_lossy(False)
-
-                    if not proceed:
-                        self.statusBar().showMessage(
-                            "Rotation cancelled by user.", 3000
-                        )
-                        return
-
-                # Perform lossy rotation
-                success = MetadataProcessor.rotate_image(
-                    file_path,
-                    direction,
-                    update_metadata_only=False,
-                    exif_disk_cache=self.app_state.exif_disk_cache,
-                )
-
-                if success:
-                    rotation_desc = {
-                        "clockwise": "90° clockwise",
-                        "counterclockwise": "90° counterclockwise",
-                        "180": "180°",
-                    }.get(direction, direction)
-                    lossy_message = (
-                        f"Rotated {os.path.basename(file_path)} {rotation_desc} (lossy)"
-                    )
-                    self._handle_successful_rotation(
-                        file_path, direction, lossy_message, is_lossy=True
-                    )
-                    successful_rotations += 1
-                else:
-                    logger.error(
-                        f"Failed to perform lossy rotation for {os.path.basename(file_path)}"
-                    )
-                    failed_rotations += 1
-
-            except Exception as e:
-                logger.error(
-                    f"Error rotating {os.path.basename(file_path)}: {str(e)}",
-                    exc_info=True,
-                )
-                failed_rotations += 1
-
-        # Hide loading overlay and show final status
-        self.hide_loading_overlay()
-
-        # Compose final status message
-        if successful_rotations > 0 and failed_rotations == 0:
-            if successful_rotations == 1:
-                pass  # Individual success message already shown
-            else:
-                direction_desc = {
-                    "clockwise": "90° clockwise",
-                    "counterclockwise": "90° counterclockwise",
-                    "180": "180°",
-                }.get(direction, direction)
-                self.statusBar().showMessage(
-                    f"Successfully rotated {successful_rotations} images {direction_desc}.",
-                    5000,
-                )
-        elif successful_rotations > 0 and failed_rotations > 0:
+        # Convert direction string to degrees for the worker
+        direction_to_degrees = {"clockwise": 90, "counterclockwise": -90, "180": 180}
+        rotation_degrees = direction_to_degrees.get(direction)
+        if rotation_degrees is None:
+            logger.error(f"Invalid rotation direction: {direction}")
             self.statusBar().showMessage(
-                f"Rotated {successful_rotations} images successfully, {failed_rotations} failed.",
-                5000,
+                f"Invalid rotation direction: {direction}", 3000
             )
-        elif failed_rotations > 0:
-            self.statusBar().showMessage(
-                f"Failed to rotate {failed_rotations} images.", 5000
-            )
+            return
+
+        # Build approved_rotations dict: {path: degrees}
+        approved_rotations = {
+            path: rotation_degrees for path in rotation_supported_paths
+        }
+
+        # Use the app_controller to start the worker (same as auto-rotate)
+        self.app_controller._apply_approved_rotations(approved_rotations)
 
     def changeEvent(self, event: QEvent):
         """Handle window state changes to auto-fit images on maximize."""
