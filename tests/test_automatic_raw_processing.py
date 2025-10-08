@@ -159,8 +159,9 @@ class TestAutomaticRawProcessing:
             assert mock_get_pil.call_count == len(test_files)
 
             # Verify each call had the correct file path
+            # Note: preload_thumbnails uses parallel processing, so order is non-deterministic
             called_paths = [call[0][0] for call in mock_get_pil.call_args_list]
-            assert called_paths == test_files
+            assert set(called_paths) == set(test_files)
 
     def test_get_thumbnail_qpixmap_handles_file_types_correctly(self):
         """Test that get_thumbnail_qpixmap processes different file types."""
