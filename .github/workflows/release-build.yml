@@ -99,9 +99,9 @@ jobs:
           mkdir -p assets
 
           if [ "$RUNNER_OS" = "macOS" ]; then
-            if [ ! -f assets/photosort.icns ] || [ assets/app_icon.png -nt assets/photosort.icns ]; then
-              mkdir -p build/icons/PhotoSort.iconset
-              python - <<'PY'
+            # Always regenerate .icns in CI for consistency
+            mkdir -p build/icons/PhotoSort.iconset
+            python - <<'PY'
           import os
           from PIL import Image
           base = Image.open('assets/app_icon.png')
@@ -119,16 +119,25 @@ jobs:
           }
           os.makedirs('build/icons/PhotoSort.iconset', exist_ok=True)
           for name, sz in sizes.items():
-            base.resize((sz, sz), Image.LANCZOS).save(os.path.join('build/icons/PhotoSort.iconset', name))
+            # Use modern Pillow API
+            base.resize((sz, sz), Image.Resampling.LANCZOS).save(os.path.join('build/icons/PhotoSort.iconset', name))
           PY
-              iconutil -c icns build/icons/PhotoSort.iconset -o assets/photosort.icns
-            fi
+            iconutil -c icns build/icons/PhotoSort.iconset -o assets/photosort.icns
           fi
 
       - name: Ensure models dir exists
         shell: bash
         run: |
+          # Create empty models directory - users will download ONNX models separately
+          # This ensures the directory structure exists in the packaged app
           mkdir -p models
+
+      - name: Install pyexiv2 dependencies (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Install Homebrew dependencies required by pyexiv2
+          brew install inih
 
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
@@ -162,6 +171,26 @@ jobs:
           $exe = "${{ matrix.artifact_name }}.exe"
           Copy-Item "dist\PhotoSort.exe" $exe -Force
 
+      - name: Test executable (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "${{ matrix.artifact_name }}.exe"
+          # Basic smoke test - check if executable exists and has valid PE header
+          if (-not (Test-Path $exe)) {
+            Write-Error "Executable not found: $exe"
+            exit 1
+          }
+          $size = (Get-Item $exe).Length
+          Write-Output "Executable size: $([math]::Round($size/1MB, 2)) MB"
+          # Verify PE header
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            Write-Error "Invalid PE header"
+            exit 1
+          }
+          Write-Output "✓ Windows executable validated successfully"
+
       - name: Generate SHA256 checksum (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -173,6 +202,13 @@ jobs:
       - name: Build with PyInstaller (macOS)
         if: runner.os == 'macOS'
         run: |
+          # Determine Homebrew prefix (different for Intel vs Apple Silicon)
+          if [ -d "/opt/homebrew" ]; then
+            BREW_PREFIX="/opt/homebrew"
+          else
+            BREW_PREFIX="/usr/local"
+          fi
+
           pyinstaller -w --name PhotoSort \
             --icon assets/photosort.icns \
             --paths src \
@@ -185,6 +221,10 @@ jobs:
             --hidden-import PyQt6.QtWidgets \
             --hidden-import rawpy \
             --hidden-import pyexiv2 \
+            --collect-binaries pyexiv2 \
+            --copy-metadata pyexiv2 \
+            --add-binary "${BREW_PREFIX}/opt/inih/lib/libinih.0.dylib:." \
+            --add-binary "${BREW_PREFIX}/opt/inih/lib/libINIReader.0.dylib:." \
             --hidden-import cv2 \
             --hidden-import onnxruntime \
             --hidden-import torchvision \
@@ -194,18 +234,96 @@ jobs:
             --add-data models:models \
             src/main.py
 
+      - name: Test app bundle (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          APP_PATH="dist/PhotoSort.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "PhotoSort.app not found in dist" >&2
+            exit 1
+          fi
+
+          # Check app bundle structure
+          if [ ! -f "$APP_PATH/Contents/Info.plist" ]; then
+            echo "Invalid app bundle: Info.plist missing" >&2
+            exit 1
+          fi
+
+          if [ ! -f "$APP_PATH/Contents/MacOS/PhotoSort" ]; then
+            echo "Invalid app bundle: executable missing" >&2
+            exit 1
+          fi
+
+          # Check executable permissions
+          if [ ! -x "$APP_PATH/Contents/MacOS/PhotoSort" ]; then
+            echo "Executable is not executable" >&2
+            exit 1
+          fi
+
+          # Get app size
+          SIZE=$(du -sh "$APP_PATH" | cut -f1)
+          echo "App bundle size: $SIZE"
+          echo "✓ macOS app bundle validated successfully"
+
       - name: Package artifact (macOS .dmg)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           DMG="${{ matrix.artifact_name }}.dmg"
           APP_PATH="dist/PhotoSort.app"
-          if [ -d "$APP_PATH" ]; then
-            hdiutil create -volname "PhotoSort" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG"
-          else
+          STAGING_DIR="dmg_staging"
+
+          if [ ! -d "$APP_PATH" ]; then
             echo "PhotoSort.app not found in dist" >&2
             exit 1
           fi
+
+          # Install create-dmg for professional DMG creation
+          brew install create-dmg
+
+          # Create staging directory with app and Applications symlink
+          mkdir -p "$STAGING_DIR"
+          cp -R "$APP_PATH" "$STAGING_DIR/"
+
+          # Use create-dmg for professional appearance
+          # Note: create-dmg may auto-rename output, so we capture actual filename
+          create-dmg \
+            --volname "PhotoSort" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "PhotoSort.app" 150 190 \
+            --hide-extension "PhotoSort.app" \
+            --app-drop-link 450 190 \
+            "$DMG" \
+            "$STAGING_DIR" \
+            || true  # create-dmg exits with 2 on success sometimes
+
+          # Find the actual DMG file created (create-dmg might rename it)
+          ACTUAL_DMG=$(ls -t *.dmg 2>/dev/null | head -1)
+
+          if [ -z "$ACTUAL_DMG" ]; then
+            echo "No DMG file found after creation" >&2
+            exit 1
+          fi
+
+          # Rename to expected name if different
+          if [ "$ACTUAL_DMG" != "$DMG" ]; then
+            echo "Renaming $ACTUAL_DMG to $DMG"
+            mv "$ACTUAL_DMG" "$DMG"
+          fi
+
+          # Verify final DMG exists
+          if [ ! -f "$DMG" ]; then
+            echo "DMG not found: $DMG" >&2
+            exit 1
+          fi
+
+          echo "Created DMG: $DMG ($(du -h "$DMG" | cut -f1))"
+
+          # Clean up staging directory
+          rm -rf "$STAGING_DIR"
 
       - name: Generate SHA256 checksum (macOS)
         if: runner.os == 'macOS'
@@ -230,11 +348,20 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Flatten artifacts for release
+        shell: bash
+        run: |
+          # Flatten nested artifact structure
+          mkdir -p release_files
+          find artifacts -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.sha256" \) -exec cp {} release_files/ \;
+          echo "Release files:"
+          ls -lh release_files/
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/**
+          files: release_files/*
           draft: false
           prerelease: false
         env:
