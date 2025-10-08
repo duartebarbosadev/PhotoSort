@@ -923,7 +923,9 @@ class AppController(QObject):
             filename = os.path.basename(file_path)
             logger.info(f"Rotation completed for '{filename}' (Lossy: {is_lossy})")
             self.main_window.image_pipeline.preview_cache.delete_all_for_path(file_path)
-            self.main_window.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
+            self.main_window.image_pipeline.thumbnail_cache.delete_all_for_path(
+                file_path
+            )
 
     def handle_rotation_application_finished(
         self, successful_count: int, failed_count: int
@@ -961,9 +963,7 @@ class AppController(QObject):
                     self._pending_rotated_paths
                 )
                 t4 = time.perf_counter()
-                logger.info(
-                    f"Batch thumbnail update completed in {t4 - t3:.2f}s"
-                )
+                logger.info(f"Batch thumbnail update completed in {t4 - t3:.2f}s")
 
                 # Single selection refresh if any rotated images are in current selection
                 selected_paths = self.main_window._get_selected_file_paths_from_view()
@@ -971,12 +971,12 @@ class AppController(QObject):
                     t5 = time.perf_counter()
                     self.main_window._handle_file_selection_changed()
                     t6 = time.perf_counter()
-                    logger.info(
-                        f"Selection refresh completed in {t6 - t5:.2f}s"
-                    )
+                    logger.info(f"Selection refresh completed in {t6 - t5:.2f}s")
 
         except Exception as e:
-            logger.error(f"Error during batch post-rotation processing: {e}", exc_info=True)
+            logger.error(
+                f"Error during batch post-rotation processing: {e}", exc_info=True
+            )
         finally:
             # Clear pending list
             self._pending_rotated_paths.clear()
