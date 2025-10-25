@@ -37,13 +37,25 @@ https://github.com/duartebarbosadev/photosort/releases
    git clone https://github.com/duartebarbosadev/photosort
    cd PhotoSort
    ```
-2. **Create a virtual environment (recommended):**
+
+2. **Install system dependencies (macOS only):**
+
+   On macOS, the `pyexiv2` library requires certain system libraries to be installed via Homebrew:
+
+   ```bash
+   brew install brotli inih gettext
+   ```
+
+   > **Note**: These dependencies are only required on macOS. Windows and Linux users can skip this step.
+
+3. **Create a virtual environment (recommended):**
 
    ```bash
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
-3. **Install dependencies:**
+
+4. **Install dependencies:**
    Choose the appropriate requirements file based on your hardware:
 
    #### For CPU (Default)
@@ -59,7 +71,8 @@ https://github.com/duartebarbosadev/photosort/releases
    > **Note**: The CUDA version requires NVIDIA CUDA Toolkit and cuDNN to be installed on your system.
    
    > **Note**: These packages are mutually exclusive. If switching between CPU and CUDA versions, create separate virtual environments or uninstall the current onnx package before installing the other.
-4. **Run the application:**
+
+5. **Run the application:**
    The main entry point is [`src/main.py`](src/main.py).
 
   ```
