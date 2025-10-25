@@ -137,7 +137,8 @@ jobs:
         shell: bash
         run: |
           # Install Homebrew dependencies required by pyexiv2
-          brew install inih
+          # Use || true to avoid warnings if already installed
+          brew install brotli inih gettext || true
 
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
@@ -223,8 +224,12 @@ jobs:
             --hidden-import pyexiv2 \
             --collect-binaries pyexiv2 \
             --copy-metadata pyexiv2 \
+            --add-binary "${BREW_PREFIX}/opt/brotli/lib/libbrotlicommon.1.dylib:." \
+            --add-binary "${BREW_PREFIX}/opt/brotli/lib/libbrotlidec.1.dylib:." \
+            --add-binary "${BREW_PREFIX}/opt/brotli/lib/libbrotlienc.1.dylib:." \
             --add-binary "${BREW_PREFIX}/opt/inih/lib/libinih.0.dylib:." \
             --add-binary "${BREW_PREFIX}/opt/inih/lib/libINIReader.0.dylib:." \
+            --add-binary "${BREW_PREFIX}/opt/gettext/lib/libintl.8.dylib:." \
             --hidden-import cv2 \
             --hidden-import onnxruntime \
             --hidden-import torchvision \
