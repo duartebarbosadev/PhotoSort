@@ -137,7 +137,8 @@ jobs:
         shell: bash
         run: |
           # Install Homebrew dependencies required by pyexiv2
-          brew install brotli inih gettext
+          # Use || true to avoid warnings if already installed
+          brew install brotli inih gettext || true
 
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
