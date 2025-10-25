@@ -19,16 +19,20 @@ logger = logging.getLogger(__name__)
 try:
     from openai import OpenAI
 except ImportError:
-    logger.error("OpenAI library not installed. Install with: pip install openai")
-    sys.exit(1)
+    OpenAI = None
+    logger.warning(
+        "OpenAI library not installed. Release notes generation will use fallback mode."
+    )
 
 
 class ReleaseNotesGenerator:
     """Generates release notes using OpenAI API based on git differences."""
 
     def __init__(self, api_key: str, model: Optional[str] = None):
-        # The OpenAI client reads org/project from env if present
-        self.client = OpenAI(api_key=api_key)
+        self.client = None
+        if OpenAI is not None:
+            # The OpenAI client reads org/project from env if present
+            self.client = OpenAI(api_key=api_key)
         # Allow override via env OPENAI_MODEL; default to a cost-effective model
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
@@ -258,6 +262,12 @@ Please create release notes that:
 Format the response as clean markdown without code blocks around the entire response.
 """
 
+        if not self.client:
+            logger.warning(
+                "OpenAI client unavailable; falling back to commit-derived release notes."
+            )
+            return self._create_fallback_notes_from_commits(commits, tag_name)
+
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -327,6 +337,12 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if OpenAI is None:
+        logger.error(
+            "OpenAI library not installed. Install with: pip install openai to use this script."
+        )
+        sys.exit(1)
 
     # Get API key from argument or environment
     api_key = args.api_key or os.environ.get("OPENAI_API_KEY")

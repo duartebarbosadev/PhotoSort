@@ -1,5 +1,6 @@
 import types
 import numpy
+import pytest
 from src.core.image_features import model_rotation_detector as mrd
 
 
@@ -11,13 +12,15 @@ def test_lazy_state_initial():
     assert st.load_failed is False
 
 
-def test_predict_returns_zero_when_model_missing(monkeypatch):
+def test_predict_raises_model_not_found_when_model_missing(monkeypatch):
     det = mrd.ModelRotationDetector()
     monkeypatch.setattr(det, "_resolve_model_path", lambda: None)
-    angle = det.predict_rotation_angle("/nonexistent.jpg")
-    assert angle == 0
-    assert det._state.tried_load is True
-    assert det._state.load_failed is True
+    with pytest.raises(mrd.ModelNotFoundError) as excinfo:
+        det.predict_rotation_angle("/nonexistent.jpg")
+    assert "models" in str(excinfo.value)
+    # Missing-model scenarios no longer mark the detector as permanently failed
+    assert det._state.tried_load is False
+    assert det._state.load_failed is False
 
 
 def test_predict_uses_stubbed_session(monkeypatch):

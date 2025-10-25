@@ -11,6 +11,7 @@ import glob
 import logging
 import os
 from dataclasses import dataclass
+import threading
 from typing import Optional, Protocol, runtime_checkable, Any
 
 import numpy as np
@@ -71,6 +72,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._state = _LazyState()
+            cls._instance._session_init_lock = threading.Lock()
         return cls._instance
 
     # ----------------------------- Public API ----------------------------- #
@@ -118,90 +120,95 @@ class ModelRotationDetector(RotationDetectorProtocol):
         if s.session is not None:
             return True
 
-        # Always re-check for the model path and raise if missing so the UI can show the dialog every run
-        model_path = self._resolve_model_path()
-        if not model_path:
-            # In headless/CI or when model isn't present, disable detector gracefully.
-            # Mark as tried and failed so callers get angle 0 without exceptions.
+        with self._session_init_lock:
+            # Double-check after acquiring the lock to avoid duplicate loads.
+            if s.session is not None:
+                return True
+
+            # If we previously tried and failed due to dependency or init errors (not model-missing), don't retry repeatedly
+            if s.tried_load and s.load_failed:
+                return False
+
+            # Always re-check for the model path and raise if missing so the UI can show the dialog every run
+            model_path = self._resolve_model_path()
+            if not model_path:
+                # Notify callers immediately so UI can surface actionable feedback,
+                # but don't mark the detector as permanently failed; users might add
+                # the model and retry without restarting the app.
+                if not s.failure_logged:
+                    model_name = get_orientation_model_name()
+                    msg = (
+                        f"Configured rotation model '{model_name}' not found"
+                        if model_name
+                        else "No rotation model found in any known location"
+                    )
+                    logger.warning("Rotation detector disabled: %s", msg)
+                    s.failure_logged = True
+                raise ModelNotFoundError(self._build_expected_model_path())
+
             s.tried_load = True
-            s.load_failed = True
-            if not s.failure_logged:
-                model_name = get_orientation_model_name()
-                msg = (
-                    f"Configured rotation model '{model_name}' not found"
-                    if model_name
-                    else "No rotation model found in any known location"
-                )
-                logger.warning("Rotation detector disabled: %s", msg)
-                s.failure_logged = True
-            return False
 
-        # If we previously tried and failed due to dependency or init errors (not model-missing), don't retry repeatedly
-        if s.tried_load and s.load_failed:
-            return False
-        s.tried_load = True
+            try:  # pragma: no cover
+                import onnxruntime as ort  # type: ignore
+                import torchvision.transforms as transforms  # type: ignore
+            except Exception as e:  # noqa: BLE001
+                s.load_failed = True
+                if not s.failure_logged:
+                    logger.warning(
+                        "Rotation model dependencies missing (onnxruntime/torchvision); detector disabled: %s",
+                        e,
+                    )
+                    s.failure_logged = True
+                return False
 
-        try:  # pragma: no cover
-            import onnxruntime as ort  # type: ignore
-            import torchvision.transforms as transforms  # type: ignore
-        except Exception as e:  # noqa: BLE001
-            s.load_failed = True
-            if not s.failure_logged:
-                logger.warning(
-                    "Rotation model dependencies missing (onnxruntime/torchvision); detector disabled: %s",
-                    e,
-                )
-                s.failure_logged = True
-            return False
-
-        try:
-            s.transforms = transforms.Compose(
-                [
-                    transforms.Resize((IMAGE_SIZE + 32, IMAGE_SIZE + 32)),
-                    transforms.CenterCrop(IMAGE_SIZE),
-                    transforms.ToTensor(),
-                    transforms.Normalize(
-                        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                    ),
-                ]
-            )
-            providers_pref = [
-                "CUDAExecutionProvider",
-                "DmlExecutionProvider",
-                "MpsExecutionProvider",
-                "ROCmExecutionProvider",
-                "CoreMLExecutionProvider",
-                "CPUExecutionProvider",
-            ]
-            # Try get_available_providers(), fallback to get_all_providers() for older onnxruntime
             try:
-                available = ort.get_available_providers()
-            except AttributeError:
-                try:
-                    available = ort.get_all_providers()
-                except AttributeError:
-                    available = ["CPUExecutionProvider"]
-
-            chosen = "CPUExecutionProvider"
-            for p in providers_pref:
-                if p in available:
-                    chosen = p
-                    break
-            s.session = ort.InferenceSession(model_path, providers=[chosen])
-            s.input_name = s.session.get_inputs()[0].name
-            s.output_name = s.session.get_outputs()[0].name
-            s.provider_name = chosen
-            logger.info("Rotation model loaded with provider %s", chosen)
-            return True
-        except Exception:  # noqa: BLE001
-            s.load_failed = True
-            if not s.failure_logged:
-                logger.error(
-                    "Failed to initialize rotation model; detector disabled",
-                    exc_info=True,
+                s.transforms = transforms.Compose(
+                    [
+                        transforms.Resize((IMAGE_SIZE + 32, IMAGE_SIZE + 32)),
+                        transforms.CenterCrop(IMAGE_SIZE),
+                        transforms.ToTensor(),
+                        transforms.Normalize(
+                            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                        ),
+                    ]
                 )
-                s.failure_logged = True
-            return False
+                providers_pref = [
+                    "CUDAExecutionProvider",
+                    "DmlExecutionProvider",
+                    "MpsExecutionProvider",
+                    "ROCmExecutionProvider",
+                    "CoreMLExecutionProvider",
+                    "CPUExecutionProvider",
+                ]
+                # Try get_available_providers(), fallback to get_all_providers() for older onnxruntime
+                try:
+                    available = ort.get_available_providers()
+                except AttributeError:
+                    try:
+                        available = ort.get_all_providers()
+                    except AttributeError:
+                        available = ["CPUExecutionProvider"]
+
+                chosen = "CPUExecutionProvider"
+                for p in providers_pref:
+                    if p in available:
+                        chosen = p
+                        break
+                s.session = ort.InferenceSession(model_path, providers=[chosen])
+                s.input_name = s.session.get_inputs()[0].name
+                s.output_name = s.session.get_outputs()[0].name
+                s.provider_name = chosen
+                logger.info("Rotation model loaded with provider %s", chosen)
+                return True
+            except Exception:  # noqa: BLE001
+                s.load_failed = True
+                if not s.failure_logged:
+                    logger.error(
+                        "Failed to initialize rotation model; detector disabled",
+                        exc_info=True,
+                    )
+                    s.failure_logged = True
+                return False
 
     # --------------------------- Helper Functions ------------------------- #
     def _resolve_model_path(self) -> Optional[str]:
@@ -257,6 +264,14 @@ class ModelRotationDetector(RotationDetectorProtocol):
             logger.error("No orientation model found; rotation detection disabled.")
             self._state.failure_logged = True
         return None
+
+    def _build_expected_model_path(self) -> str:
+        """Best-effort path hint for the dialog when the model is missing."""
+        project_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..")
+        )
+        model_name = get_orientation_model_name() or "orientation_model.onnx"
+        return os.path.join(project_root, MODEL_SAVE_DIR, model_name)
 
     def _load_image(self, path: str):
         try:
