@@ -125,6 +125,10 @@ class ModelRotationDetector(RotationDetectorProtocol):
             if s.session is not None:
                 return True
 
+            # If we previously tried and failed due to dependency or init errors (not model-missing), don't retry repeatedly
+            if s.tried_load and s.load_failed:
+                return False
+
             # Always re-check for the model path and raise if missing so the UI can show the dialog every run
             model_path = self._resolve_model_path()
             if not model_path:
@@ -142,9 +146,6 @@ class ModelRotationDetector(RotationDetectorProtocol):
                     s.failure_logged = True
                 raise ModelNotFoundError(self._build_expected_model_path())
 
-            # If we previously tried and failed due to dependency or init errors (not model-missing), don't retry repeatedly
-            if s.tried_load and s.load_failed:
-                return False
             s.tried_load = True
 
             try:  # pragma: no cover
