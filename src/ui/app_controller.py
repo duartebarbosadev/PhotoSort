@@ -757,7 +757,9 @@ class AppController(QObject):
         )
 
         if self.worker_manager.is_rotation_application_running():
-            logger.warning("Rotation application already in progress; ignoring new request.")
+            logger.warning(
+                "Rotation application already in progress; ignoring new request."
+            )
             self.main_window.statusBar().showMessage(
                 "Rotation is already being applied...", 4000
             )
@@ -956,9 +958,7 @@ class AppController(QObject):
         try:
             if self._pending_rotated_paths:
                 # Update loading overlay for preview regeneration
-                overlay_text = (
-                    f"Regenerating previews for {len(self._pending_rotated_paths)} images..."
-                )
+                overlay_text = f"Regenerating previews for {len(self._pending_rotated_paths)} images..."
                 self.main_window.show_loading_overlay(overlay_text)
 
                 # Batch regenerate previews in parallel using existing infrastructure

@@ -879,7 +879,8 @@ class DialogManager:
             try:
                 self.parent.image_pipeline.preload_thumbnails(
                     file_paths,
-                    progress_callback=lambda processed, total_count: self.parent.update_loading_text(
+                    progress_callback=lambda processed,
+                    total_count: self.parent.update_loading_text(
                         f"{base_message} ({processed}/{total_count})"
                     ),
                 )
