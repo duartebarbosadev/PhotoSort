@@ -6,7 +6,7 @@ RAW detection without requiring apply_auto_edits parameters.
 """
 
 import inspect
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from src.core.file_scanner import FileScanner
 
 
@@ -15,7 +15,7 @@ class TestFileScannerAutomaticRaw:
 
     def test_scan_directory_method_signature(self):
         """Test that scan_directory no longer has apply_auto_edits parameter."""
-        scanner = FileScanner(None)  # FileScanner expects None or QObject parent
+        scanner = FileScanner(Mock())
 
         # Check method signature
         sig = inspect.signature(scanner.scan_directory)
@@ -49,7 +49,7 @@ class TestFileScannerAutomaticRaw:
         mock_blur.return_value = False
 
         # Create scanner with None parent instead of mock
-        scanner = FileScanner(None)
+        scanner = FileScanner(Mock())
 
         # Mock the _is_running attribute and SUPPORTED_EXTENSIONS
         scanner._is_running = True
@@ -82,7 +82,7 @@ class TestFileScannerAutomaticRaw:
         mock_isfile.return_value = True
 
         # Create scanner with None parent instead of mock
-        scanner = FileScanner(None)
+        scanner = FileScanner(Mock())
         scanner._is_running = True
 
         # Mock the image pipeline's preload_thumbnails method
@@ -97,7 +97,7 @@ class TestFileScannerAutomaticRaw:
     def test_async_scan_directory_blur_detection_signature(self):
         """Test that async blur detection calls don't use apply_auto_edits_for_raw_preview."""
         # This test ensures that if the async method is used, it also doesn't pass the old parameter
-        scanner = FileScanner(None)
+        scanner = FileScanner(Mock())
 
         with (
             patch("src.core.file_scanner.BlurDetector.is_image_blurred") as mock_blur,
@@ -132,7 +132,7 @@ class TestFileScannerIntegration:
 
     def test_complete_scan_workflow_without_raw_params(self):
         """Test complete scanning workflow without any apply_auto_edits parameters."""
-        scanner = FileScanner(None)
+        scanner = FileScanner(Mock())
 
         # Mock all the required methods and attributes
         scanner._is_running = True

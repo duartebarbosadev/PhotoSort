@@ -23,9 +23,8 @@ from PyQt6.QtWidgets import (
     QRadioButton,
     QSlider,
 )
-from PyQt6.QtCore import Qt, QSize, QUrl
+from PyQt6.QtCore import Qt, QSize, QUrl, QEventLoop, QThread
 from PyQt6.QtGui import QIcon, QDesktopServices
-from PyQt6.QtWidgets import QApplication
 
 from core.app_settings import (
     get_rotation_confirm_lossy,
@@ -37,12 +36,15 @@ from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
     ModelNotFoundError,
 )
+from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 
 logger = logging.getLogger(__name__)
 
 
 class DialogManager:
     """A manager class for handling the creation of dialogs."""
+
+    THUMBNAIL_PRELOAD_ASYNC_THRESHOLD = 20
 
     def __init__(self, parent):
         """
@@ -846,26 +848,8 @@ class DialogManager:
             f"Showing confirm delete dialog for {len(deleted_file_paths)} files"
         )
 
-        # Preload thumbnails with progress indication
         if deleted_file_paths:
-            self.parent.show_loading_overlay(
-                f"Loading previews for {len(deleted_file_paths)} images..."
-            )
-            QApplication.processEvents()  # Ensure overlay appears immediately
-
-            def progress_callback(processed: int, total: int):
-                self.parent.update_loading_text(
-                    f"Loading previews for {len(deleted_file_paths)} images... ({processed}/{total})"
-                )
-                QApplication.processEvents()
-
-            # Preload thumbnails for the files to be deleted
-            self.parent.image_pipeline.preload_thumbnails(
-                deleted_file_paths, progress_callback=progress_callback
-            )
-
-            self.parent.hide_loading_overlay()
-            QApplication.processEvents()
+            self._preload_thumbnails_for_dialog(deleted_file_paths)
 
         num_selected = len(deleted_file_paths)
         if num_selected == 1:
@@ -881,6 +865,70 @@ class DialogManager:
             f"User {'confirmed' if result else 'cancelled'} confirm delete dialog"
         )
         return result
+
+    def _preload_thumbnails_for_dialog(self, file_paths: List[str]):
+        """Preload thumbnails with optional background worker to keep the UI responsive."""
+        if not file_paths:
+            return
+
+        total = len(file_paths)
+        base_message = f"Loading previews for {total} images..."
+        self.parent.show_loading_overlay(base_message)
+
+        if total < self.THUMBNAIL_PRELOAD_ASYNC_THRESHOLD:
+            try:
+                self.parent.image_pipeline.preload_thumbnails(
+                    file_paths,
+                    progress_callback=lambda processed, total_count: self.parent.update_loading_text(
+                        f"{base_message} ({processed}/{total_count})"
+                    ),
+                )
+            except Exception:
+                logger.error(
+                    "Error preloading thumbnails for dialog.",
+                    exc_info=True,
+                )
+            finally:
+                self.parent.hide_loading_overlay()
+            return
+
+        loop = QEventLoop()
+        thread = QThread(self.parent)
+        worker = ThumbnailPreloadWorker(self.parent.image_pipeline)
+        worker.moveToThread(thread)
+        result = {"error": None}
+
+        def _update_progress(current: int, total_count: int, message: str):
+            progress_text = message or f"{base_message} ({current}/{total_count})"
+            self.parent.update_loading_text(progress_text)
+
+        def _on_finished():
+            loop.quit()
+
+        def _on_error(message: str):
+            result["error"] = message
+            loop.quit()
+
+        worker.progress.connect(_update_progress)
+        worker.finished.connect(_on_finished)
+        worker.error.connect(_on_error)
+        thread.started.connect(lambda: worker.preload_thumbnails(file_paths))
+
+        try:
+            thread.start()
+            loop.exec()
+        finally:
+            worker.stop()
+            thread.quit()
+            thread.wait()
+            worker.deleteLater()
+            thread.deleteLater()
+            self.parent.hide_loading_overlay()
+
+        if result["error"]:
+            logger.warning(
+                f"Thumbnail preload error during dialog preparation: {result['error']}"
+            )
 
     def show_potential_cache_overflow_warning(
         self,
@@ -937,26 +985,8 @@ class DialogManager:
         """
         logger.info(f"Showing commit deletions dialog for {len(marked_files)} files")
 
-        # Preload thumbnails with progress indication
         if marked_files:
-            self.parent.show_loading_overlay(
-                f"Loading previews for {len(marked_files)} images..."
-            )
-            QApplication.processEvents()  # Ensure overlay appears immediately
-
-            def progress_callback(processed: int, total: int):
-                self.parent.update_loading_text(
-                    f"Loading previews for {len(marked_files)} images... ({processed}/{total})"
-                )
-                QApplication.processEvents()
-
-            # Preload thumbnails for the files to be deleted
-            self.parent.image_pipeline.preload_thumbnails(
-                marked_files, progress_callback=progress_callback
-            )
-
-            self.parent.hide_loading_overlay()
-            QApplication.processEvents()
+            self._preload_thumbnails_for_dialog(marked_files)
 
         count = len(marked_files)
         result = self._show_delete_confirmation_dialog(
@@ -994,26 +1024,8 @@ class DialogManager:
         Returns:
             A string indicating the user's choice: "commit", "ignore", or "cancel".
         """
-        # Preload thumbnails with progress indication
         if marked_files:
-            self.parent.show_loading_overlay(
-                f"Loading previews for {len(marked_files)} images..."
-            )
-            QApplication.processEvents()  # Ensure overlay appears immediately
-
-            def progress_callback(processed: int, total: int):
-                self.parent.update_loading_text(
-                    f"Loading previews for {len(marked_files)} images... ({processed}/{total})"
-                )
-                QApplication.processEvents()
-
-            # Preload thumbnails for the files to be deleted
-            self.parent.image_pipeline.preload_thumbnails(
-                marked_files, progress_callback=progress_callback
-            )
-
-            self.parent.hide_loading_overlay()
-            QApplication.processEvents()
+            self._preload_thumbnails_for_dialog(marked_files)
 
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Confirm Close")

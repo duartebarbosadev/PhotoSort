@@ -139,6 +139,13 @@ class ZoomableImageView(QGraphicsView):
                 self._photo_item.setPixmap(transparent_pixmap)
                 self._empty = True
 
+    def current_pixmap(self) -> Optional[QPixmap]:
+        """Return the currently displayed pixmap if available."""
+        pixmap = self._photo_item.pixmap()
+        if pixmap and not pixmap.isNull():
+            return pixmap
+        return None
+
     def get_zoom_factor(self) -> float:
         """Get current zoom factor"""
         return self._zoom_factor
@@ -457,6 +464,10 @@ class IndividualViewer(QWidget):
         """Get the file path of the currently displayed image."""
         return self._file_path
 
+    def get_current_pixmap(self) -> Optional[QPixmap]:
+        """Expose the currently displayed pixmap for external consumers."""
+        return self.image_view.current_pixmap()
+
     def _is_marked_for_deletion(self) -> bool:
         """Check if the current file is marked for deletion."""
         if self._file_path:
@@ -721,6 +732,7 @@ class SynchronizedImageViewer(QWidget):
     unmarkOthersAsDeletedRequested = pyqtSignal(str)  # file_path of the image to keep
     focused_image_changed = pyqtSignal(int, str)  # index, file_path
     side_by_side_availability_changed = pyqtSignal(bool)
+    cleared = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1098,6 +1110,12 @@ class SynchronizedImageViewer(QWidget):
                         return viewer._file_path
         return None
 
+    def get_primary_viewer(self) -> Optional[IndividualViewer]:
+        """Return the primary (first) viewer instance if available."""
+        if not self.image_viewers:
+            return None
+        return self.image_viewers[0]
+
     def set_image_data(
         self,
         image_data: Dict[str, Any],
@@ -1185,19 +1203,12 @@ class SynchronizedImageViewer(QWidget):
             viewer.clear()
         logger.debug("Setting view mode to single")
         self._set_view_mode("single")
+        self.cleared.emit()
 
     def setText(self, text: str):
         """Clears all viewers, resets to single view, and displays the given text centrally."""
         logger.debug(f"setText called with: {text}")
-        # Clear all viewers to remove any existing images or text.
-        self._resize_viewer_pool(1)
-        for i, viewer in enumerate(self.image_viewers):
-            logger.debug(f"Clearing viewer {i}")
-            viewer.clear()
-
-        # Set to single view mode to ensure the first viewer takes up all available space.
-        logger.debug("Setting view mode to single")
-        self._set_view_mode("single")
+        self.clear()
 
         # Now, set the text on the first viewer, which is now the only one visible.
         if self.image_viewers:

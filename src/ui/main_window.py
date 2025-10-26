@@ -173,6 +173,7 @@ class MainWindow(QMainWindow):
         self._is_syncing_selection = False
         self._left_panel_views = set()
         self._image_viewer_views = set()
+        self._last_displayed_preview_path: Optional[str] = None
 
         self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
@@ -364,6 +365,10 @@ class MainWindow(QMainWindow):
             pass
         return "grid"
 
+    def invalidate_last_displayed_preview(self):
+        """Reset cached preview tracking so the next selection forces a refresh."""
+        self._last_displayed_preview_path = None
+
     def _create_loading_overlay(self):
         start_time = time.perf_counter()
         logger.debug("Creating loading overlay...")
@@ -539,6 +544,9 @@ class MainWindow(QMainWindow):
 
         # Advanced image viewer instead of simple QLabel
         self.advanced_image_viewer = SynchronizedImageViewer()
+        self.advanced_image_viewer.cleared.connect(
+            self.invalidate_last_displayed_preview
+        )
         self.advanced_image_viewer.setObjectName("advanced_image_viewer")
         self.advanced_image_viewer.setMinimumSize(400, 300)
         center_pane_layout.addWidget(self.advanced_image_viewer, 1)
@@ -737,7 +745,6 @@ class MainWindow(QMainWindow):
             preserved_focused_path = self.app_state.focused_image_path
 
         self.update_loading_text("Rebuilding view...")
-        QApplication.processEvents()
         self.file_system_model.clear()
         root_item = self.file_system_model.invisibleRootItem()
         active_view = self._get_active_file_view()
@@ -1054,7 +1061,6 @@ class MainWindow(QMainWindow):
                             logger.info(
                                 progress_msg
                             )  # Log progress so user can see what's happening
-                            QApplication.processEvents()
         else:  # Not showing folders, or grouping by similarity (which creates its own top-level groups)
 
             def image_sort_key_func(fd):
@@ -1092,7 +1098,6 @@ class MainWindow(QMainWindow):
                         logger.info(
                             progress_msg
                         )  # Log progress so user can see what's happening
-                        QApplication.processEvents()
 
     def _apply_rating(self, file_path: str, rating: int):
         """Apply rating to a specific file path (legacy method - now uses background worker)."""
@@ -1802,6 +1807,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"Error: File not found - {os.path.basename(file_path)}", 5000
             )
+            self.invalidate_last_displayed_preview()
             return
 
         metadata = self._get_cached_metadata_for_selection(file_path)
@@ -1810,37 +1816,61 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"Error accessing metadata: {os.path.basename(file_path)}", 5000
             )
+            self.invalidate_last_displayed_preview()
             return
 
-        logger.debug(f"Getting preview pixmap for {file_path}")
-        pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path, display_max_size=(8000, 8000)
+        primary_viewer = self.advanced_image_viewer.get_primary_viewer()
+        reuse_preview = (
+            primary_viewer is not None
+            and primary_viewer.get_file_path() == file_path
+            and primary_viewer.has_image()
+            and self._last_displayed_preview_path == file_path
         )
 
-        if not pixmap or pixmap.isNull():
-            logger.debug(
-                f"Preview pixmap unavailable, trying thumbnail for {file_path}"
-            )
-            pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path)
+        pixmap: Optional[QPixmap] = None
+        if reuse_preview:
+            pixmap = primary_viewer.get_current_pixmap()
+            if pixmap is None or pixmap.isNull():
+                reuse_preview = False
+                logger.debug("Primary viewer pixmap unavailable; regenerating preview.")
+            else:
+                logger.debug("Skipping preview regeneration for repeated selection.")
+                primary_viewer.update_rating_display(metadata.get("rating", 0))
 
-        if pixmap and not pixmap.isNull():
-            logger.debug(f"Setting image data for {file_path}")
-            image_data = {
-                "pixmap": pixmap,
-                "path": file_path,
-                "rating": metadata.get("rating", 0),
-            }
-            self.advanced_image_viewer.set_image_data(image_data)
-            self._update_status_bar_for_image(
-                file_path, metadata, pixmap, file_data_from_model
+        if not reuse_preview:
+            logger.debug(f"Getting preview pixmap for {file_path}")
+            pixmap = self.image_pipeline.get_preview_qpixmap(
+                file_path, display_max_size=(8000, 8000)
             )
-        else:
-            logger.debug(f"Failed to load image data for {file_path}")
-            self.advanced_image_viewer.setText("Failed to load image")
-            self.statusBar().showMessage(
-                f"Error: Could not load image data for {os.path.basename(file_path)}",
-                7000,
-            )
+
+            if not pixmap or pixmap.isNull():
+                logger.debug(
+                    f"Preview pixmap unavailable, trying thumbnail for {file_path}"
+                )
+                pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path)
+
+            if pixmap and not pixmap.isNull():
+                logger.debug(f"Setting image data for {file_path}")
+                image_data = {
+                    "pixmap": pixmap,
+                    "path": file_path,
+                    "rating": metadata.get("rating", 0),
+                }
+                self.advanced_image_viewer.set_image_data(image_data)
+            else:
+                logger.debug(f"Failed to load image data for {file_path}")
+                self.advanced_image_viewer.setText("Failed to load image")
+                self.statusBar().showMessage(
+                    f"Error: Could not load image data for {os.path.basename(file_path)}",
+                    7000,
+                )
+                self.invalidate_last_displayed_preview()
+                return
+
+        self._last_displayed_preview_path = file_path
+        self._update_status_bar_for_image(
+            file_path, metadata, pixmap, file_data_from_model
+        )
 
         if self.sidebar_visible:
             logger.debug("Updating sidebar with current selection")
@@ -1859,6 +1889,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"Error: File not found - {os.path.basename(file_path)}", 5000
             )
+            self.invalidate_last_displayed_preview()
             return
 
         if preserve_side_by_side:
@@ -1880,6 +1911,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"Error accessing metadata: {os.path.basename(file_path)}", 5000
             )
+            self.invalidate_last_displayed_preview()
             return
 
         pixmap = self.image_pipeline.get_preview_qpixmap(
@@ -1901,12 +1933,14 @@ class MainWindow(QMainWindow):
             self._update_status_bar_for_image(
                 file_path, metadata, pixmap, file_data_from_model
             )
+            self._last_displayed_preview_path = file_path
         else:
             self.advanced_image_viewer.setText("Failed to load image")
             self.statusBar().showMessage(
                 f"Error: Could not load image data for {os.path.basename(file_path)}",
                 7000,
             )
+            self.invalidate_last_displayed_preview()
 
         if self.sidebar_visible:
             self._update_sidebar_with_current_selection()
@@ -1927,6 +1961,7 @@ class MainWindow(QMainWindow):
     def _display_multi_selection_info(self, selected_paths: List[str]):
         """Handles UI updates when multiple images are selected."""
         logger.debug(f"Displaying {len(selected_paths)} images side-by-side.")
+        self.invalidate_last_displayed_preview()
         if not selected_paths:
             self.advanced_image_viewer.clear()
             self.statusBar().showMessage("No items selected.")
@@ -2028,6 +2063,7 @@ class MainWindow(QMainWindow):
         logger.debug("Clearing viewer and setting 'Select an image' text")
         self.advanced_image_viewer.clear()
         self.advanced_image_viewer.setText("Select an image to view details.")
+        self.invalidate_last_displayed_preview()
         self.statusBar().showMessage("Ready")
 
     def _handle_file_selection_changed(
@@ -3428,7 +3464,6 @@ class MainWindow(QMainWindow):
 
             self.proxy_model.invalidate()
             self.statusBar().showMessage(f"Committed {deleted_count} deletions.", 5000)
-            QApplication.processEvents()
 
             # --- Select next item using robust advancement to next valid image ---
             visible_paths_after_delete = self._get_all_visible_image_paths()
@@ -3563,7 +3598,6 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(f"Toggled mark for {marked_count} image(s).", 5000)
         self.proxy_model.invalidate()
-        QApplication.processEvents()
 
         # Keep the same selection behavior
         self._handle_file_selection_changed(
@@ -3592,7 +3626,6 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("Marked 1 image for deletion.", 5000)
         self.proxy_model.invalidate()
-        QApplication.processEvents()
 
     def _mark_others_for_deletion(self, file_path_to_keep: str):
         """Marks all other images in the split view for deletion, updating the model in-place."""
@@ -3624,7 +3657,6 @@ class MainWindow(QMainWindow):
             f"Marked {marked_count} other image(s) for deletion.", 5000
         )
         self.proxy_model.invalidate()
-        QApplication.processEvents()
 
     def _unmark_image_for_deletion(self, file_path: str):
         """Unmarks a single image for deletion, updating the model in-place."""
@@ -3648,7 +3680,6 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("Unmarked 1 image for deletion.", 5000)
         self.proxy_model.invalidate()
-        QApplication.processEvents()
 
     def _unmark_others_for_deletion(self, file_path_to_keep: str):
         """Unmarks all other images in the split view for deletion, updating the model in-place."""
@@ -3684,7 +3715,6 @@ class MainWindow(QMainWindow):
             f"Unmarked {unmarked_count} other image(s) for deletion.", 5000
         )
         self.proxy_model.invalidate()
-        QApplication.processEvents()
 
     def _clear_all_deletion_marks(self):
         """Unmarks all marked files, updating the view in-place."""
@@ -3707,7 +3737,6 @@ class MainWindow(QMainWindow):
             f"Cleared deletion marks for {len(marked_files)} image(s).", 5000
         )
         self.proxy_model.invalidate()
-        QApplication.processEvents()
 
         visible_paths = self._get_all_visible_image_paths()
         if not visible_paths:
@@ -3793,8 +3822,6 @@ class MainWindow(QMainWindow):
                 view = self._get_active_file_view()
                 if view:
                     view.viewport().update()
-                    # Process events to ensure the repaint happens immediately
-                    QApplication.processEvents()
             return
 
         active_view = self._get_active_file_view()
@@ -3850,6 +3877,7 @@ class MainWindow(QMainWindow):
         logger.info(
             f"Showing side-by-side comparison for: {os.path.basename(file_path)} (path: {file_path})"
         )
+        self.invalidate_last_displayed_preview()
 
         if file_path not in self.rotation_suggestions:
             logger.warning(
