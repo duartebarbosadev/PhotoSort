@@ -19,7 +19,7 @@ class TestFileScannerParallelBlur:
             test_file.touch()
             test_files.append(str(test_file))
 
-        scanner = FileScanner()
+        scanner = FileScanner(Mock())
 
         # Mock signals
         files_found_mock = Mock()
@@ -59,7 +59,7 @@ class TestFileScannerParallelBlur:
         blur_results = [False, True, False, True, False]
         mock_blur_detector.is_image_blurred.side_effect = blur_results
 
-        scanner = FileScanner()
+        scanner = FileScanner(Mock())
 
         # Mock signals
         thumbnail_preload_finished_mock = Mock()
@@ -115,7 +115,7 @@ class TestFileScannerParallelBlur:
 
         mock_blur_detector.is_image_blurred.side_effect = blur_check_with_tracking
 
-        scanner = FileScanner()
+        scanner = FileScanner(Mock())
         finished_mock = Mock()
         scanner.finished.connect(finished_mock)
 
@@ -148,7 +148,7 @@ class TestFileScannerParallelBlur:
 
         mock_blur_detector.is_image_blurred.side_effect = blur_with_errors
 
-        scanner = FileScanner()
+        scanner = FileScanner(Mock())
         finished_mock = Mock()
         thumbnail_preload_finished_mock = Mock()
         scanner.finished.connect(finished_mock)
@@ -177,7 +177,7 @@ class TestFileScannerParallelBlur:
             test_file = tmp_path / f"test_{i}.jpg"
             test_file.touch()
 
-        scanner = FileScanner()
+        scanner = FileScanner(Mock())
 
         with patch("core.file_scanner.BlurDetector") as mock_blur_detector:
             call_count = [0]
@@ -215,7 +215,7 @@ class TestFileScannerParallelBlur:
 
         mock_blur_detector.is_image_blurred.side_effect = slow_blur_check
 
-        scanner = FileScanner()
+        scanner = FileScanner(Mock())
         files_found_mock = Mock()
         scanner.files_found.connect(files_found_mock)
 
@@ -234,7 +234,7 @@ class TestFileScannerParallelBlur:
     @patch("core.file_scanner.BlurDetector")
     def test_empty_directory_scan(self, mock_blur_detector, tmp_path):
         """Test scanning an empty directory"""
-        scanner = FileScanner()
+        scanner = FileScanner(Mock())
         finished_mock = Mock()
         scanner.finished.connect(finished_mock)
 

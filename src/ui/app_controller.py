@@ -10,7 +10,7 @@ from core.app_settings import (
 )
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
-from core.image_pipeline import ImagePipeline
+
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +31,42 @@ class WorkerManager:
 class AppController(QObject):
     @staticmethod
     def clear_application_caches():
-        """Clears all application caches."""
+        """Clears all disk-backed caches without instantiating heavy pipelines."""
         start_time = time.perf_counter()
         logger.info("Clearing all application caches.")
 
-        try:
-            pipeline = ImagePipeline()
-            pipeline.clear_all_image_caches()
-        except Exception:
-            logger.error("Error clearing image pipeline caches.", exc_info=True)
+        # Import lazily to avoid cost outside of this maintenance task
+        from core.caching.thumbnail_cache import ThumbnailCache
+        from core.caching.preview_cache import PreviewCache
+        from core.caching.exif_cache import ExifCache
+        from core.caching.rating_cache import RatingCache
+
+        cache_classes = (
+            ("thumbnail", ThumbnailCache),
+            ("preview", PreviewCache),
+            ("EXIF", ExifCache),
+            ("rating", RatingCache),
+        )
+
+        for cache_name, cache_cls in cache_classes:
+            cache_instance = None
+            try:
+                cache_instance = cache_cls()
+                cache_instance.clear()
+            except Exception:
+                logger.error(
+                    f"Error clearing {cache_name} cache.",
+                    exc_info=True,
+                )
+            finally:
+                if cache_instance is not None:
+                    try:
+                        cache_instance.close()
+                    except Exception:
+                        logger.error(
+                            f"Error closing {cache_name} cache after clearing.",
+                            exc_info=True,
+                        )
 
         try:
             from core.similarity_engine import SimilarityEngine
@@ -47,22 +74,6 @@ class AppController(QObject):
             SimilarityEngine.clear_embedding_cache()
         except Exception:
             logger.error("Error clearing similarity cache.", exc_info=True)
-
-        try:
-            from core.caching.exif_cache import ExifCache
-
-            exif_cache = ExifCache()
-            exif_cache.clear()
-        except Exception:
-            logger.error("Error clearing EXIF metadata cache.", exc_info=True)
-
-        try:
-            from core.caching.rating_cache import RatingCache
-
-            rating_cache = RatingCache()
-            rating_cache.clear()
-        except Exception:
-            logger.error("Error clearing rating cache.", exc_info=True)
 
         logger.info(
             f"Application caches cleared in {time.perf_counter() - start_time:.2f}s."
@@ -241,6 +252,7 @@ class AppController(QObject):
         self.worker_manager.stop_all_workers()
 
         self.app_state.clear_all_file_specific_data()
+        self.main_window.invalidate_last_displayed_preview()
         self.app_state.current_folder_path = folder_path
         folder_display_name = (
             os.path.basename(folder_path) if folder_path else "Selected Folder"
@@ -695,7 +707,9 @@ class AppController(QObject):
             if rotation != 0
         }
 
-        self.main_window.rotation_suggestions = final_suggestions
+        # Mutate the existing dict so the RotationController keeps the same reference
+        self.main_window.rotation_suggestions.clear()
+        self.main_window.rotation_suggestions.update(final_suggestions)
         self.main_window.hide_loading_overlay()
 
         if not self.main_window.rotation_suggestions:
@@ -741,6 +755,15 @@ class AppController(QObject):
         logger.info(
             f"Starting rotation application for {len(approved_rotations)} images."
         )
+
+        if self.worker_manager.is_rotation_application_running():
+            logger.warning(
+                "Rotation application already in progress; ignoring new request."
+            )
+            self.main_window.statusBar().showMessage(
+                "Rotation is already being applied...", 4000
+            )
+            return
 
         # Show loading overlay
         self.main_window.show_loading_overlay("Applying rotations...")
@@ -935,9 +958,8 @@ class AppController(QObject):
         try:
             if self._pending_rotated_paths:
                 # Update loading overlay for preview regeneration
-                self.main_window.update_loading_text(
-                    f"Regenerating previews for {len(self._pending_rotated_paths)} images..."
-                )
+                overlay_text = f"Regenerating previews for {len(self._pending_rotated_paths)} images..."
+                self.main_window.show_loading_overlay(overlay_text)
 
                 # Batch regenerate previews in parallel using existing infrastructure
                 t1 = time.perf_counter()
@@ -962,6 +984,7 @@ class AppController(QObject):
                 selected_paths = self.main_window._get_selected_file_paths_from_view()
                 if any(path in selected_paths for path in self._pending_rotated_paths):
                     t5 = time.perf_counter()
+                    self.main_window.invalidate_last_displayed_preview()
                     self.main_window._handle_file_selection_changed()
                     t6 = time.perf_counter()
                     logger.info(f"Selection refresh completed in {t6 - t5:.2f}s")
