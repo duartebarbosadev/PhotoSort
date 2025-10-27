@@ -416,6 +416,41 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.worker_manager.start_best_shot_analysis(cluster_map)
 
+    def start_best_shot_analysis_for_selected(self):
+        """Run best-shot analysis on currently selected images only."""
+        logger.info("Starting best shot analysis for selected images.")
+        
+        if self.worker_manager.is_best_shot_worker_running():
+            self.main_window.statusBar().showMessage(
+                "Best shot analysis is already running.", 3000
+            )
+            return
+
+        # Get selected images
+        selected_paths = self.main_window.get_selected_file_paths()
+        if not selected_paths:
+            self.main_window.statusBar().showMessage(
+                "No images selected. Please select images first.", 3000
+            )
+            return
+
+        if len(selected_paths) < 2:
+            self.main_window.statusBar().showMessage(
+                "Please select at least 2 images for comparison.", 3000
+            )
+            return
+
+        # Create a single "cluster" with ID 0 containing the selected paths
+        cluster_map = {0: selected_paths}
+
+        self.main_window.show_loading_overlay(
+            f"Analyzing {len(selected_paths)} selected images..."
+        )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            False
+        )
+        self.worker_manager.start_best_shot_analysis(cluster_map)
+
     def reload_current_folder(self):
         if self.app_state.image_files_data:
             if (
@@ -508,6 +543,9 @@ class AppController(QObject):
         )
         self.main_window.menu_manager.open_folder_action.setEnabled(True)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
         self.main_window.menu_manager.detect_blur_action.setEnabled(
@@ -707,6 +745,9 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
             bool(self.app_state.cluster_results)
         )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            True
+        )
         self.main_window._rebuild_model_view()
 
     def handle_best_shot_error(self, message: str):
@@ -717,6 +758,9 @@ class AppController(QObject):
         )
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
             bool(self.app_state.cluster_results)
+        )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            True
         )
 
     def handle_best_shot_models_missing(self, missing_models: list):
@@ -730,6 +774,9 @@ class AppController(QObject):
         )
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
             bool(self.app_state.cluster_results)
+        )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            True
         )
 
     def handle_blur_detection_progress(

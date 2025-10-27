@@ -2571,6 +2571,35 @@ class MainWindow(QMainWindow):
             if not item.text().startswith(prefix):
                 item.setText(f"{prefix}{item.text()}")
 
+    def _remove_temporary_best_labels(self):
+        """Remove temporary [BEST] labels from all items after analysis completes."""
+        logger.debug("Removing temporary [BEST] labels from items")
+        
+        def remove_label_recursive(parent_item: QStandardItem):
+            """Recursively remove [BEST] prefix from all items."""
+            for row in range(parent_item.rowCount()):
+                child_item = parent_item.child(row)
+                if not child_item:
+                    continue
+                    
+                # Remove [BEST] prefix if present
+                text = child_item.text()
+                if text.startswith("[BEST] "):
+                    new_text = text.replace("[BEST] ", "", 1)
+                    child_item.setText(new_text)
+                
+                # Recurse into children (for grouped/folder views)
+                if child_item.hasChildren():
+                    remove_label_recursive(child_item)
+        
+        # Process root items
+        for row in range(self.file_system_model.rowCount()):
+            item = self.file_system_model.item(row)
+            if item:
+                remove_label_recursive(item)
+        
+        logger.debug("Finished removing temporary [BEST] labels")
+
     def _update_thumbnails_from_cache(self):
         """
         Update all tree view item icons with thumbnails from the cache.

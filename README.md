@@ -151,6 +151,11 @@ In the desktop app, run **View → Analyze Similarity** first, then trigger
 cluster. PhotoSort will label the best image per group (and expose the metrics
 in the item tooltip) so you can cull stacks faster.
 
+**Quick Selection Analysis**: You can also select multiple images manually
+(using Ctrl+Click or Shift+Click) and run **View → Analyze Best Shots (Selected)**
+(`Ctrl+Alt+S`) to rank just those images without needing similarity clustering.
+This is useful for quick comparisons of 2-10 images from different groups.
+
 ### Exporting Logs
 
 To capture detailed logs for debugging, you can enable file logging by setting an environment variable before running the application.

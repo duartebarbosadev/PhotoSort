@@ -292,6 +292,16 @@ class MenuManager:
         self.analyze_best_shots_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
         view_menu.addAction(self.analyze_best_shots_action)
 
+        self.analyze_best_shots_selected_action = QAction(
+            "Analyze Best Shots (Selected)", main_win
+        )
+        self.analyze_best_shots_selected_action.setToolTip(
+            "Run quality ranking on currently selected images only"
+        )
+        self.analyze_best_shots_selected_action.setEnabled(False)
+        self.analyze_best_shots_selected_action.setShortcut(QKeySequence("Ctrl+Alt+S"))
+        view_menu.addAction(self.analyze_best_shots_selected_action)
+
         self.detect_blur_action = QAction("Detect Blurriness", main_win)
         self.detect_blur_action.setToolTip(
             "Analyze images for blurriness (can be slow for many images)"
@@ -408,6 +418,9 @@ class MenuManager:
         )
         self.analyze_best_shots_action.triggered.connect(
             main_win.app_controller.start_best_shot_analysis
+        )
+        self.analyze_best_shots_selected_action.triggered.connect(
+            main_win.app_controller.start_best_shot_analysis_for_selected
         )
         self.detect_blur_action.triggered.connect(
             main_win.app_controller.start_blur_detection_analysis
