@@ -5,6 +5,8 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 # Import worker classes
 from core.file_scanner import FileScanner
 
+from PyQt6 import sip
+
 from ui.ui_components import (
     PreviewPreloaderWorker,
     BlurDetectionWorker,
@@ -16,6 +18,7 @@ from workers.update_worker import UpdateCheckWorker
 from workers.rating_writer_worker import RatingWriterWorker
 from workers.rotation_application_worker import RotationApplicationWorker
 from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
+from workers.best_shot_worker import BestShotWorker
 from core.image_pipeline import ImagePipeline
 from workers.rating_loader_worker import (
     RatingLoaderWorker,
@@ -108,6 +111,12 @@ class WorkerManager(QObject):
     thumbnail_preload_finished = pyqtSignal()
     thumbnail_preload_error = pyqtSignal(str)
 
+    # Best Shot Analysis Signals
+    best_shot_progress = pyqtSignal(int, str)
+    best_shot_complete = pyqtSignal(object)
+    best_shot_error = pyqtSignal(str)
+    best_shot_models_missing = pyqtSignal(object)  # List[MissingModelInfo]
+
     def __init__(
         self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None
     ):
@@ -140,6 +149,8 @@ class WorkerManager(QObject):
 
         self.thumbnail_preload_thread: Optional[QThread] = None
         self.thumbnail_preload_worker: Optional[ThumbnailPreloadWorker] = None
+        self.best_shot_thread: Optional[QThread] = None
+        self.best_shot_worker: Optional[BestShotWorker] = None
 
         self.cuda_detection_thread: Optional[QThread] = None
         self.cuda_detection_worker: Optional[CudaDetectionWorker] = None
@@ -546,6 +557,7 @@ class WorkerManager(QObject):
         self.stop_rotation_application()
         self.stop_thumbnail_preload()
         self.stop_cuda_detection()
+        self.stop_best_shot_analysis()
         logger.info("All workers stop requested.")
 
     def is_file_scanner_running(self) -> bool:
@@ -582,6 +594,12 @@ class WorkerManager(QObject):
         return (
             self.cuda_detection_thread is not None
             and self.cuda_detection_thread.isRunning()
+        )
+
+    def is_best_shot_worker_running(self) -> bool:
+        return (
+            self.best_shot_thread is not None
+            and self.best_shot_thread.isRunning()
         )
 
     def start_update_check(self, current_version: str):
@@ -844,3 +862,52 @@ class WorkerManager(QObject):
             self.thumbnail_preload_worker = None
         else:
             self.thumbnail_preload_thread = temp_thread
+
+    def _cleanup_best_shot_worker(self):
+        if self.best_shot_worker:
+            try:
+                if not sip.isdeleted(self.best_shot_worker):
+                    self.best_shot_worker.deleteLater()
+            except Exception:
+                logger.debug("Best shot worker already deleted.", exc_info=True)
+            self.best_shot_worker = None
+        if self.best_shot_thread:
+            self.best_shot_thread.deleteLater()
+            self.best_shot_thread = None
+        logger.info("Best shot analysis thread and worker cleaned up.")
+
+    def start_best_shot_analysis(
+        self, cluster_map: Dict[int, List[str]], models_root: Optional[str] = None
+    ):
+        """Start the best-shot ranking worker."""
+        self.stop_best_shot_analysis()
+        if not cluster_map:
+            self.best_shot_complete.emit({})
+            return
+
+        self.best_shot_thread = QThread()
+        self.best_shot_worker = BestShotWorker(
+            cluster_map=cluster_map, models_root=models_root
+        )
+        self.best_shot_worker.moveToThread(self.best_shot_thread)
+
+        self.best_shot_worker.progress_update.connect(self.best_shot_progress.emit)
+        self.best_shot_worker.completed.connect(self.best_shot_complete.emit)
+        self.best_shot_worker.error.connect(self.best_shot_error.emit)
+        self.best_shot_worker.models_missing.connect(self.best_shot_models_missing.emit)
+        self.best_shot_worker.finished.connect(self.best_shot_thread.quit)
+        self.best_shot_worker.finished.connect(self.best_shot_worker.deleteLater)
+        self.best_shot_thread.finished.connect(self._cleanup_best_shot_worker)
+        self.best_shot_thread.started.connect(self.best_shot_worker.run)
+
+        self.best_shot_thread.start()
+        logger.info("Best shot analysis thread started.")
+
+    def stop_best_shot_analysis(self):
+        worker_stop = self.best_shot_worker.stop if self.best_shot_worker else None
+        temp_thread, _ = self._terminate_thread(self.best_shot_thread, worker_stop)
+        if temp_thread is None:
+            self.best_shot_thread = None
+            self.best_shot_worker = None
+        else:
+            self.best_shot_thread = temp_thread

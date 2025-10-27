@@ -284,6 +284,14 @@ class MenuManager:
         self.analyze_similarity_action.setShortcut(QKeySequence("Ctrl+S"))
         view_menu.addAction(self.analyze_similarity_action)
 
+        self.analyze_best_shots_action = QAction("Analyze Best Shots", main_win)
+        self.analyze_best_shots_action.setToolTip(
+            "Run the multi-model quality ranking inside each similarity cluster"
+        )
+        self.analyze_best_shots_action.setEnabled(False)
+        self.analyze_best_shots_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        view_menu.addAction(self.analyze_best_shots_action)
+
         self.detect_blur_action = QAction("Detect Blurriness", main_win)
         self.detect_blur_action.setToolTip(
             "Analyze images for blurriness (can be slow for many images)"
@@ -397,6 +405,9 @@ class MenuManager:
         self.toggle_thumbnails_action.toggled.connect(main_win._toggle_thumbnail_view)
         self.analyze_similarity_action.triggered.connect(
             main_win.app_controller.start_similarity_analysis
+        )
+        self.analyze_best_shots_action.triggered.connect(
+            main_win.app_controller.start_best_shot_analysis
         )
         self.detect_blur_action.triggered.connect(
             main_win.app_controller.start_blur_detection_analysis

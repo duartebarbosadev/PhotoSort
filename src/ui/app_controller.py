@@ -1,3 +1,4 @@
+import glob
 import os
 import time
 import logging
@@ -10,6 +11,7 @@ from core.app_settings import (
 )
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
+from core.ai.best_photo_selector import DEFAULT_MODELS_ROOT
 
 
 logger = logging.getLogger(__name__)
@@ -206,6 +208,18 @@ class AppController(QObject):
             self.handle_thumbnail_preload_error
         )
 
+        # Best Shot Worker
+        self.worker_manager.best_shot_progress.connect(
+            self.handle_best_shot_progress
+        )
+        self.worker_manager.best_shot_complete.connect(
+            self.handle_best_shot_complete
+        )
+        self.worker_manager.best_shot_error.connect(self.handle_best_shot_error)
+        self.worker_manager.best_shot_models_missing.connect(
+            self.handle_best_shot_models_missing
+        )
+
     # --- Public Methods (called from MainWindow) ---
 
     def load_folder(self, folder_path: str):
@@ -279,6 +293,7 @@ class AppController(QObject):
         )
         self.main_window.menu_manager.open_folder_action.setEnabled(False)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.main_window.menu_manager.detect_blur_action.setEnabled(False)
         self.main_window.menu_manager.auto_rotate_action.setEnabled(False)
 
@@ -316,6 +331,7 @@ class AppController(QObject):
 
         self.main_window.show_loading_overlay("Starting similarity analysis...")
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.worker_manager.start_similarity_analysis(paths_for_similarity)
 
     def start_blur_detection_analysis(self):
@@ -366,6 +382,39 @@ class AppController(QObject):
             image_paths,
             self.app_state.exif_disk_cache,
         )
+
+    def _build_cluster_path_map(self) -> Dict[int, List[str]]:
+        cluster_map: Dict[int, List[str]] = {}
+        for path, cluster_id in self.app_state.cluster_results.items():
+            if cluster_id is None:
+                continue
+            cluster_map.setdefault(cluster_id, []).append(path)
+        return cluster_map
+
+    def start_best_shot_analysis(self):
+        logger.info("Starting best shot analysis.")
+        if self.worker_manager.is_best_shot_worker_running():
+            self.main_window.statusBar().showMessage(
+                "Best shot analysis is already running.", 3000
+            )
+            return
+
+        if not self.app_state.cluster_results:
+            self.main_window.statusBar().showMessage(
+                "Run Analyze Similarity before best shot analysis.", 4000
+            )
+            return
+
+        cluster_map = self._build_cluster_path_map()
+        if not cluster_map:
+            self.main_window.statusBar().showMessage(
+                "No similarity clusters available for best shot analysis.", 4000
+            )
+            return
+
+        self.main_window.show_loading_overlay("Analyzing best shots...")
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
+        self.worker_manager.start_best_shot_analysis(cluster_map)
 
     def reload_current_folder(self):
         if self.app_state.image_files_data:
@@ -601,6 +650,7 @@ class AppController(QObject):
 
     def handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
         self.app_state.cluster_results = cluster_results_dict
+        self.app_state.clear_best_shot_results()
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
@@ -626,6 +676,7 @@ class AppController(QObject):
         ):
             self.main_window.menu_manager.cluster_sort_action.setVisible(True)
             self.main_window.cluster_sort_combo.setEnabled(True)
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
         if self.main_window.group_by_similarity_mode:
             self.main_window._rebuild_model_view()
         self.main_window.hide_loading_overlay()
@@ -636,7 +687,50 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.main_window.hide_loading_overlay()
+
+    def handle_best_shot_progress(self, percentage: int, message: str):
+        self.main_window.update_loading_text(
+            f"Best shots: {message} ({percentage}%)"
+        )
+
+    def handle_best_shot_complete(
+        self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
+    ):
+        self.app_state.set_best_shot_results(rankings_by_cluster or {})
+        self.main_window.hide_loading_overlay()
+        analyzed = len(rankings_by_cluster or {})
+        self.main_window.statusBar().showMessage(
+            f"Best shot analysis complete for {analyzed} group(s).", 4000
+        )
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
+            bool(self.app_state.cluster_results)
+        )
+        self.main_window._rebuild_model_view()
+
+    def handle_best_shot_error(self, message: str):
+        logger.error(f"Best shot analysis failed: {message}", exc_info=True)
+        self.main_window.hide_loading_overlay()
+        self.main_window.statusBar().showMessage(
+            f"Best shot analysis error: {message}", 8000
+        )
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
+            bool(self.app_state.cluster_results)
+        )
+
+    def handle_best_shot_models_missing(self, missing_models: list):
+        """Handle the case where best-shot models are not found."""
+        self.main_window.hide_loading_overlay()
+        self.main_window.dialog_manager.show_best_shot_models_missing_dialog(
+            missing_models
+        )
+        self.main_window.statusBar().showMessage(
+            "Best shot models not found. Analysis cancelled.", 5000
+        )
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
+            bool(self.app_state.cluster_results)
+        )
 
     def handle_blur_detection_progress(
         self, current: int, total: int, path_basename: str

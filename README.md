@@ -98,6 +98,59 @@ To use the **Auto Rotate Images** feature (`Ctrl+R`), you need to download the p
 
 The application will automatically detect and load the model when you use the rotation detection feature.
 
+### Experimental: AI Best Shot Ranking
+
+PhotoSort includes an experimental multi-model pipeline (see
+`core/ai/best_photo_selector.py`) that chains together Hugging Face models to
+pick the best frame inside a stack of similar photos.
+
+**⚠️ Important: Models are NOT included in the repository**
+
+Due to size (~500MB–600MB) and licensing restrictions, the required models must be
+downloaded separately. The application will automatically detect missing models and
+guide you through the download process via a dialog.
+
+**Required Models** (all must be placed in the `models/` directory):
+
+1. **Face detector** – Download the ONNX package from
+   [`qualcomm/MediaPipe-Face-Detection`](https://huggingface.co/qualcomm/MediaPipe-Face-Detection)
+   and extract `model.onnx` to `models/job_*/model.onnx` (or create a folder like
+   `models/MediaPipe-Face-Detection_FaceDetector_float/model.onnx`).
+
+2. **Eye-state classifier** – Download all files from
+   [`MichalMlodawski/open-closed-eye-classification-mobilev2`](https://huggingface.co/MichalMlodawski/open-closed-eye-classification-mobilev2)
+   and place them under `models/open-closed-eye-classification-mobilev2/`.
+
+3. **Aesthetic predictor** – Download all files from
+   [`shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE`](https://huggingface.co/shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE)
+   and place them under `models/aesthetic_predictor/`. This bundle includes the
+   CLIP vision backbone plus the regression head used to score each frame.
+
+Once the models are in place you can rank a folder (or the members of a
+similarity cluster) from a Python shell:
+
+```python
+from core.ai.best_photo_selector import BestPhotoSelector
+
+selector = BestPhotoSelector()
+results = selector.rank_directory("/path/to/similar/stack")
+
+best = results[0]
+print("Best image:", best.image_path)
+print("Composite:", best.composite_score)
+print("Metrics:", best.metrics)
+```
+
+The selector yields a sorted `BestShotResult` list that includes the composite
+score plus sub-metrics (eyes open probability, technical sharpness, framing
+score, etc.). These scores can be fed back into the UI to highlight the best
+candidate inside a similarity cluster.
+
+In the desktop app, run **View → Analyze Similarity** first, then trigger
+**View → Analyze Best Shots** to execute the same ranking pipeline on every
+cluster. PhotoSort will label the best image per group (and expose the metrics
+in the item tooltip) so you can cull stacks faster.
+
 ### Exporting Logs
 
 To capture detailed logs for debugging, you can enable file logging by setting an environment variable before running the application.

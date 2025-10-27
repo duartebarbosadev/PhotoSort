@@ -1198,3 +1198,66 @@ class DialogManager:
 
         dialog.exec()
         logger.info("Closed model not found dialog")
+
+    def show_best_shot_models_missing_dialog(self, missing_models: list):
+        """Show a dialog informing the user that best-shot models are missing.
+
+        Args:
+            missing_models: List of MissingModelInfo objects describing missing models.
+        """
+        logger.info(
+            f"Showing best-shot models missing dialog for {len(missing_models)} model(s)"
+        )
+        dialog = QMessageBox(self.parent)
+        dialog.setWindowTitle("Best Shot Models Not Found")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+
+        # Build main text
+        model_names = ", ".join(m.name for m in missing_models)
+        text = (
+            f"The best shot analysis feature requires {len(missing_models)} model(s) "
+            f"that were not found:\n\n{model_names}\n\n"
+            "Please download the required models to enable this feature."
+        )
+        dialog.setText(text)
+
+        # Build detailed instructions
+        detailed_lines = [
+            "Download instructions:\n",
+        ]
+        for i, model in enumerate(missing_models, 1):
+            detailed_lines.append(
+                f"{i}. {model.name} ({model.description})\n"
+                f"   Download from: {model.download_url}\n"
+                f"   Expected location: {model.expected_path}\n"
+            )
+        detailed_lines.append(
+            "\nAfter downloading, place the models in the 'models' directory "
+            "and restart the analysis."
+        )
+        dialog.setInformativeText("".join(detailed_lines))
+
+        # Add buttons
+        readme_button = dialog.addButton(
+            "View Documentation", QMessageBox.ButtonRole.ActionRole
+        )
+        open_models_button = dialog.addButton(
+            "Open Models Folder", QMessageBox.ButtonRole.ActionRole
+        )
+        ok_button = dialog.addButton(QMessageBox.StandardButton.Ok)
+
+        dialog.setDefaultButton(ok_button)
+
+        # Connect button actions
+        if readme_button:
+            readme_button.clicked.connect(
+                lambda: webbrowser.open(
+                    "https://github.com/duartebarbosadev/PhotoSort#experimental-ai-best-shot-ranking"
+                )
+            )
+        if open_models_button:
+            open_models_button.clicked.connect(self._open_models_folder)
+
+        dialog.exec()
+        logger.info("Closed best-shot models missing dialog")

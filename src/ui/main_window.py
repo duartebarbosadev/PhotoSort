@@ -2532,7 +2532,44 @@ class MainWindow(QMainWindow):
         # Unified presentation (marked / blurred) delegated to deletion controller
         self.deletion_controller.apply_presentation(item, file_path, is_blurred)
 
+        self._decorate_best_shot_item(item, file_path)
+
         return item
+
+    def _decorate_best_shot_item(self, item: QStandardItem, file_path: str):
+        app_state = getattr(self, "app_state", None)
+        if not app_state or not app_state.best_shot_scores_by_path:
+            return
+        cluster_id = app_state.cluster_results.get(file_path)
+        best_info = app_state.best_shot_scores_by_path.get(file_path)
+        if cluster_id is None or not best_info:
+            return
+
+        metrics = best_info.get("metrics", {}) or {}
+        tooltip_lines = [
+            f"Cluster {cluster_id}",
+            f"Composite: {best_info.get('composite_score', 0):.3f}",
+        ]
+        metric_fields = [
+            ("technical", "Technical"),
+            ("aesthetic", "Aesthetic"),
+            ("eyes_open", "Eyes Open"),
+            ("framing", "Framing"),
+        ]
+        for metric_key, label in metric_fields:
+            if metric_key in metrics:
+                tooltip_lines.append(f"{label}: {metrics[metric_key]:.3f}")
+        tooltip = "\n".join(tooltip_lines)
+        existing_tooltip = item.toolTip()
+        if existing_tooltip:
+            tooltip = f"{tooltip}\n{existing_tooltip}"
+        item.setToolTip(tooltip)
+
+        winner = app_state.best_shot_winners.get(cluster_id)
+        if winner and winner.get("image_path") == file_path:
+            prefix = "[BEST] "
+            if not item.text().startswith(prefix):
+                item.setText(f"{prefix}{item.text()}")
 
     def _update_thumbnails_from_cache(self):
         """

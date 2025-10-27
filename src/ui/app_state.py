@@ -31,6 +31,9 @@ class AppState:
         )  # Instance of the new disk cache for ratings
         self.exif_disk_cache = ExifCache()  # Instance of the new disk cache for EXIF data, now reads size from app_settings
         self.marked_for_deletion: set = set()  # Set of file paths marked for deletion
+        self.best_shot_rankings: Dict[int, List[Dict[str, Any]]] = {}
+        self.best_shot_scores_by_path: Dict[str, Dict[str, Any]] = {}
+        self.best_shot_winners: Dict[int, Dict[str, Any]] = {}
 
         # Could also hold current folder path, filter states, etc. if desired.
         self.current_folder_path: Optional[str] = None
@@ -51,6 +54,7 @@ class AppState:
         if self.exif_disk_cache:
             self.exif_disk_cache.clear()  # Decide if folder clear should wipe the whole disk cache
         self.focused_image_path = None
+        self.clear_best_shot_results()
         # self.current_folder_path = None # Optionally reset current folder path
 
     def remove_data_for_path(self, file_path: str):
@@ -71,6 +75,18 @@ class AppState:
         date_removed = self.date_cache.pop(file_path, None)
         cluster_removed = self.cluster_results.pop(file_path, None)
         embedding_removed = self.embeddings_cache.pop(file_path, None)
+        self.best_shot_scores_by_path.pop(file_path, None)
+        if cluster_removed is not None:
+            rankings = self.best_shot_rankings.get(cluster_removed)
+            if rankings:
+                self.best_shot_rankings[cluster_removed] = [
+                    r for r in rankings if r.get("image_path") != file_path
+                ]
+                if not self.best_shot_rankings[cluster_removed]:
+                    self.best_shot_rankings.pop(cluster_removed, None)
+            winner = self.best_shot_winners.get(cluster_removed)
+            if winner and winner.get("image_path") == file_path:
+                self.best_shot_winners.pop(cluster_removed, None)
 
         logger.debug(
             f"Removed data for {os.path.basename(file_path)}: "
@@ -97,6 +113,17 @@ class AppState:
             self.cluster_results[new_path] = self.cluster_results.pop(old_path)
         if old_path in self.embeddings_cache:
             self.embeddings_cache[new_path] = self.embeddings_cache.pop(old_path)
+        if old_path in self.best_shot_scores_by_path:
+            self.best_shot_scores_by_path[new_path] = self.best_shot_scores_by_path.pop(
+                old_path
+            )
+        for ranking in self.best_shot_rankings.values():
+            for result in ranking:
+                if result.get("image_path") == old_path:
+                    result["image_path"] = new_path
+        for winner in self.best_shot_winners.values():
+            if winner.get("image_path") == old_path:
+                winner["image_path"] = new_path
 
         # Update disk caches
         if self.rating_disk_cache:
@@ -159,3 +186,27 @@ class AppState:
         count = len(self.marked_for_deletion)
         logger.info(f"Clearing all deletion marks ({count} files)")
         self.marked_for_deletion.clear()
+
+    def clear_best_shot_results(self):
+        """Resets cached best-shot data."""
+        self.best_shot_rankings.clear()
+        self.best_shot_scores_by_path.clear()
+        self.best_shot_winners.clear()
+
+    def set_best_shot_results(
+        self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
+    ):
+        """Persist best-shot rankings emitted by the analysis worker."""
+        self.best_shot_rankings = {}
+        self.best_shot_scores_by_path = {}
+        self.best_shot_winners = {}
+        for cluster_id, rankings in rankings_by_cluster.items():
+            if not rankings:
+                continue
+            copied_rankings = [dict(result) for result in rankings]
+            self.best_shot_rankings[cluster_id] = copied_rankings
+            self.best_shot_winners[cluster_id] = copied_rankings[0]
+            for result in copied_rankings:
+                path = result.get("image_path")
+                if path:
+                    self.best_shot_scores_by_path[path] = result
