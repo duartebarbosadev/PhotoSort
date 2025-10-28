@@ -11,9 +11,15 @@ class DeletionPresentation:
     text: str
     is_marked: bool
     is_blurred: Optional[bool]
+    is_best: bool = False
 
 
-def build_item_text(basename: str, is_marked: bool, is_blurred: Optional[bool]) -> str:
+def build_item_text(
+    basename: str,
+    is_marked: bool,
+    is_blurred: Optional[bool],
+    is_best: bool = False,
+) -> str:
     """Return the display text given mark + blur states.
 
     Rules (mirrors legacy inline logic):
@@ -21,7 +27,10 @@ def build_item_text(basename: str, is_marked: bool, is_blurred: Optional[bool]) 
     - Append (Blurred) when blurred.
     - Order: filename (DELETED) (Blurred)
     """
-    parts = [basename]
+    parts = []
+    if is_best:
+        parts.append("[BEST]")
+    parts.append(basename)
     if is_marked:
         parts.append("(DELETED)")
     if is_blurred:
@@ -30,10 +39,14 @@ def build_item_text(basename: str, is_marked: bool, is_blurred: Optional[bool]) 
 
 
 def build_presentation(
-    basename: str, is_marked: bool, is_blurred: Optional[bool]
+    basename: str,
+    is_marked: bool,
+    is_blurred: Optional[bool],
+    is_best: bool = False,
 ) -> DeletionPresentation:
     return DeletionPresentation(
-        text=build_item_text(basename, is_marked, is_blurred),
+        text=build_item_text(basename, is_marked, is_blurred, is_best),
         is_marked=is_marked,
         is_blurred=is_blurred,
+        is_best=is_best,
     )

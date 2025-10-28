@@ -1,6 +1,7 @@
 import logging
+import os
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
-from typing import List, Dict, Any, Optional, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING
 
 # Import worker classes
 from core.file_scanner import FileScanner
@@ -16,7 +17,10 @@ from workers.update_worker import UpdateCheckWorker
 from workers.rating_writer_worker import RatingWriterWorker
 from workers.rotation_application_worker import RotationApplicationWorker
 from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
-from core.image_pipeline import ImagePipeline
+from workers.best_shot_picker_worker import BestShotPickerWorker
+from workers.cluster_best_shot_worker import ClusterBestShotWorker
+from core.image_pipeline import ImagePipeline, PRELOAD_MAX_RESOLUTION
+from core.image_processing.raw_image_processor import is_raw_extension
 from workers.rating_loader_worker import (
     RatingLoaderWorker,
 )
@@ -108,6 +112,18 @@ class WorkerManager(QObject):
     thumbnail_preload_finished = pyqtSignal()
     thumbnail_preload_error = pyqtSignal(str)
 
+    # Best Shot Picker Signals
+    best_shot_progress = pyqtSignal(str)
+    best_shot_result_ready = pyqtSignal(object)
+    best_shot_finished = pyqtSignal(bool)
+    best_shot_error = pyqtSignal(str)
+
+    # Cluster Best Shot Picker Signals
+    best_shot_clusters_progress = pyqtSignal(int, int, str)
+    best_shot_clusters_result = pyqtSignal(object)
+    best_shot_clusters_finished = pyqtSignal(bool, object)
+    best_shot_clusters_error = pyqtSignal(str)
+
     def __init__(
         self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None
     ):
@@ -146,6 +162,11 @@ class WorkerManager(QObject):
 
         self.update_check_thread: Optional[QThread] = None
         self.update_check_worker: Optional[UpdateCheckWorker] = None
+
+        self.best_shot_thread: Optional[QThread] = None
+        self.best_shot_worker: Optional[BestShotPickerWorker] = None
+        self.best_shot_clusters_thread: Optional[QThread] = None
+        self.best_shot_clusters_worker: Optional[ClusterBestShotWorker] = None
 
     def _terminate_thread(
         self, thread: Optional[QThread], worker_stop_method: Optional[callable] = None
@@ -546,6 +567,8 @@ class WorkerManager(QObject):
         self.stop_rotation_application()
         self.stop_thumbnail_preload()
         self.stop_cuda_detection()
+        self.stop_best_shot_clusters()
+        self.stop_best_shot_analysis()
         logger.info("All workers stop requested.")
 
     def is_file_scanner_running(self) -> bool:
@@ -639,6 +662,8 @@ class WorkerManager(QObject):
             or self.is_rating_writer_running()
             or self.is_rotation_application_running()
             or self.is_thumbnail_preload_running()
+            or self.is_best_shot_running()
+            or self.is_best_shot_clusters_running()
         )
 
     # --- Rating Writer Management ---
@@ -844,3 +869,181 @@ class WorkerManager(QObject):
             self.thumbnail_preload_worker = None
         else:
             self.thumbnail_preload_thread = temp_thread
+
+    def _collect_best_shot_preview_payloads(
+        self, image_paths: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return cached preview images suitable for AI overrides."""
+
+        overrides: Dict[str, Dict[str, Any]] = {}
+
+        for image_path in image_paths:
+            try:
+                normalized_path = os.path.normpath(image_path)
+                ext = os.path.splitext(normalized_path)[1].lower()
+                apply_auto_edits = is_raw_extension(ext)
+
+                cache_key = (
+                    normalized_path,
+                    PRELOAD_MAX_RESOLUTION,
+                    apply_auto_edits,
+                )
+
+                pil_image = self.image_pipeline.preview_cache.get(cache_key)
+                if pil_image is None:
+                    continue
+
+                overrides[image_path] = {
+                    "pil_image": pil_image,
+                    "mime_type": "image/jpeg",
+                }
+
+            except Exception:
+                logger.exception(
+                    "Failed to retrieve cached preview for %s", image_path
+                )
+
+        return overrides
+
+    def _cleanup_best_shot_worker(self):
+        """Clean up the best shot picker worker and thread."""
+        if self.best_shot_thread is not None:
+            self.best_shot_thread.quit()
+            self.best_shot_thread.wait()
+            self.best_shot_thread = None
+        if self.best_shot_worker:
+            self.best_shot_worker.deleteLater()
+            self.best_shot_worker = None
+
+    def is_best_shot_running(self) -> bool:
+        return (
+            self.best_shot_thread is not None
+            and self.best_shot_thread.isRunning()
+        )
+
+    def start_best_shot_analysis(self, image_paths: List[str]):
+        """Start the AI best shot analysis worker."""
+        if self.is_best_shot_running():
+            logger.warning("Best shot analysis is already running")
+            return
+
+        if not image_paths:
+            raise ValueError("No images provided for best shot analysis")
+
+        preview_payloads = self._collect_best_shot_preview_payloads(image_paths)
+        if preview_payloads:
+            logger.info(
+                "Using %d cached preview(s) for best shot analysis",
+                len(preview_payloads),
+            )
+        else:
+            logger.info("No cached previews available; AI will load from disk")
+
+        self.best_shot_thread = QThread()
+        self.best_shot_worker = BestShotPickerWorker()
+        self.best_shot_worker.moveToThread(self.best_shot_thread)
+
+        self.best_shot_worker.progress.connect(self.best_shot_progress.emit)
+        self.best_shot_worker.result_ready.connect(self.best_shot_result_ready.emit)
+        self.best_shot_worker.error.connect(self.best_shot_error.emit)
+        self.best_shot_worker.finished.connect(self.best_shot_finished.emit)
+        self.best_shot_worker.finished.connect(self._cleanup_best_shot_worker)
+
+        self.best_shot_thread.started.connect(
+            lambda: self.best_shot_worker.analyze_images(
+                list(image_paths), preview_payloads
+            )
+        )
+
+        self.best_shot_thread.start()
+        logger.info("Best shot picker thread started.")
+
+    def stop_best_shot_analysis(self):
+        """Stop the best shot analysis worker."""
+        worker_stop = self.best_shot_worker.stop if self.best_shot_worker else None
+        temp_thread, _ = self._terminate_thread(self.best_shot_thread, worker_stop)
+        if temp_thread is None:
+            self.best_shot_thread = None
+            if self.best_shot_worker:
+                self.best_shot_worker.deleteLater()
+                self.best_shot_worker = None
+        else:
+            self.best_shot_thread = temp_thread
+
+    def _cleanup_best_shot_clusters_worker(self):
+        if self.best_shot_clusters_thread is not None:
+            self.best_shot_clusters_thread.quit()
+            self.best_shot_clusters_thread.wait()
+            self.best_shot_clusters_thread = None
+        if self.best_shot_clusters_worker:
+            self.best_shot_clusters_worker.deleteLater()
+            self.best_shot_clusters_worker = None
+
+    def is_best_shot_clusters_running(self) -> bool:
+        return (
+            self.best_shot_clusters_thread is not None
+            and self.best_shot_clusters_thread.isRunning()
+        )
+
+    def start_best_shot_clusters(
+        self, cluster_payloads: List[Tuple[int, List[str]]]
+    ):
+        if self.is_best_shot_clusters_running():
+            logger.warning("Cluster best shot analysis is already running")
+            return
+
+        if not cluster_payloads:
+            raise ValueError("No clusters provided for best shot analysis")
+
+        prepared_clusters: List[Dict[str, Any]] = []
+        for cluster_id, image_paths in cluster_payloads:
+            if not image_paths:
+                continue
+            normalized_paths = [path for path in image_paths if path]
+            if not normalized_paths:
+                continue
+            previews = self._collect_best_shot_preview_payloads(normalized_paths)
+            prepared_clusters.append(
+                {
+                    "cluster_id": cluster_id,
+                    "image_paths": normalized_paths,
+                    "preview_payloads": previews if previews else None,
+                }
+            )
+
+        if not prepared_clusters:
+            raise ValueError("No valid images available across clusters for analysis")
+
+        self.best_shot_clusters_thread = QThread()
+        self.best_shot_clusters_worker = ClusterBestShotWorker()
+        self.best_shot_clusters_worker.moveToThread(self.best_shot_clusters_thread)
+
+        worker = self.best_shot_clusters_worker
+        thread = self.best_shot_clusters_thread
+
+        worker.progress.connect(self.best_shot_clusters_progress.emit)
+        worker.cluster_result_ready.connect(self.best_shot_clusters_result.emit)
+        worker.error.connect(self.best_shot_clusters_error.emit)
+        worker.finished.connect(self.best_shot_clusters_finished.emit)
+        worker.finished.connect(lambda *_: self._cleanup_best_shot_clusters_worker())
+
+        thread.started.connect(lambda: worker.analyze_clusters(prepared_clusters))
+        thread.start()
+        logger.info("Cluster best shot picker thread started.")
+
+    def stop_best_shot_clusters(self):
+        worker_stop = (
+            self.best_shot_clusters_worker.stop
+            if self.best_shot_clusters_worker
+            else None
+        )
+        temp_thread, _ = self._terminate_thread(
+            self.best_shot_clusters_thread, worker_stop
+        )
+        if temp_thread is None:
+            self.best_shot_clusters_thread = None
+            if self.best_shot_clusters_worker:
+                self.best_shot_clusters_worker.deleteLater()
+                self.best_shot_clusters_worker = None
+        else:
+            self.best_shot_clusters_thread = temp_thread

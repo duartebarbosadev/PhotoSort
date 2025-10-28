@@ -270,6 +270,9 @@ class AppController(QObject):
         self.main_window.cluster_sort_combo.setCurrentIndex(0)
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(False)
         self.main_window.menu_manager.group_by_similarity_action.setChecked(False)
+        self.main_window.menu_manager.pick_best_shots_for_clusters_action.setEnabled(
+            False
+        )
 
         self.main_window.file_system_model.clear()
         self.main_window.file_system_model.setColumnCount(1)
@@ -610,6 +613,9 @@ class AppController(QObject):
             self.main_window.statusBar().showMessage(
                 "Clustering did not produce results.", 3000
             )
+            self.main_window.menu_manager.pick_best_shots_for_clusters_action.setEnabled(
+                False
+            )
             return
 
         self.main_window.update_loading_text("Clustering complete. Updating view...")
@@ -626,6 +632,9 @@ class AppController(QObject):
         ):
             self.main_window.menu_manager.cluster_sort_action.setVisible(True)
             self.main_window.cluster_sort_combo.setEnabled(True)
+        self.main_window.menu_manager.pick_best_shots_for_clusters_action.setEnabled(
+            bool(cluster_ids)
+        )
         if self.main_window.group_by_similarity_mode:
             self.main_window._rebuild_model_view()
         self.main_window.hide_loading_overlay()
@@ -635,6 +644,9 @@ class AppController(QObject):
         self.main_window.statusBar().showMessage(f"Similarity Error: {message}", 8000)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self.app_state.image_files_data)
+        )
+        self.main_window.menu_manager.pick_best_shots_for_clusters_action.setEnabled(
+            False
         )
         self.main_window.hide_loading_overlay()
 
