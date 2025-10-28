@@ -31,6 +31,7 @@ class AppState:
         )  # Instance of the new disk cache for ratings
         self.exif_disk_cache = ExifCache()  # Instance of the new disk cache for EXIF data, now reads size from app_settings
         self.marked_for_deletion: set = set()  # Set of file paths marked for deletion
+        self.best_shot_paths: set[str] = set()  # Paths flagged as AI-selected best shots
 
         # Could also hold current folder path, filter states, etc. if desired.
         self.current_folder_path: Optional[str] = None
@@ -46,6 +47,7 @@ class AppState:
         self.cluster_results.clear()
         self.embeddings_cache.clear()
         self.marked_for_deletion.clear()  # Clear marked for deletion set
+        self.best_shot_paths.clear()
         if self.rating_disk_cache:
             self.rating_disk_cache.clear()  # Decide if folder clear should wipe the whole disk cache
         if self.exif_disk_cache:
@@ -71,6 +73,7 @@ class AppState:
         date_removed = self.date_cache.pop(file_path, None)
         cluster_removed = self.cluster_results.pop(file_path, None)
         embedding_removed = self.embeddings_cache.pop(file_path, None)
+        self.best_shot_paths.discard(file_path)
 
         logger.debug(
             f"Removed data for {os.path.basename(file_path)}: "
@@ -113,6 +116,10 @@ class AppState:
 
         if self.focused_image_path == old_path:
             self.focused_image_path = new_path
+
+        if old_path in self.best_shot_paths:
+            self.best_shot_paths.discard(old_path)
+            self.best_shot_paths.add(new_path)
 
     # Add more methods as needed, e.g., to get specific data,
     # update blur status, etc.

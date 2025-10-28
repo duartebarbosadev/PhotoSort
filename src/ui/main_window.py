@@ -23,6 +23,7 @@ from typing import (
     Optional,
     Any,
     Tuple,
+    Iterable,
 )  # Import List and Dict for type hinting, Optional, Any, Tuple
 from PyQt6.QtCore import (
     Qt,
@@ -83,6 +84,7 @@ from ui.controllers.selection_controller import SelectionController
 from ui.controllers.similarity_controller import SimilarityController
 from ui.controllers.preview_controller import PreviewController
 from ui.controllers.metadata_controller import MetadataController
+from ui.controllers.cluster_best_shot_controller import ClusterBestShotController
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +221,8 @@ class MainWindow(QMainWindow):
         self.similarity_controller = SimilarityController(self)
         self.preview_controller = PreviewController(self)
         self.metadata_controller = MetadataController(self)
+        self.best_shot_controller = None  # Lazy initialization on first use
+        self.cluster_best_shot_controller = None
 
         # Hotkey controller wraps navigation key handling
         self.hotkey_controller = HotkeyController(self)
@@ -902,7 +906,57 @@ class MainWindow(QMainWindow):
         self.cluster_filter_combo.addItems(
             ["All Clusters"] + [f"Cluster {cid}" for cid in cluster_ids]
         )
-        self.cluster_filter_combo.setEnabled(bool(cluster_ids))
+        has_clusters = bool(cluster_ids)
+        self.cluster_filter_combo.setEnabled(has_clusters)
+        try:
+            action = self.menu_manager.pick_best_shots_for_clusters_action
+            allow_click = has_clusters and not self.worker_manager.is_best_shot_clusters_running()
+            action.setEnabled(allow_click)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("Failed to toggle cluster best shot menu state", exc_info=True)
+
+    def update_best_shot_labels(self, paths: Iterable[str], *, replace: bool) -> None:
+        """Update best-shot labels for the provided image paths."""
+        normalized = {os.path.normpath(p) for p in paths if p}
+        current = set(getattr(self.app_state, "best_shot_paths", set()))
+        target = normalized if replace else current.union(normalized)
+
+        if target == current:
+            return
+
+        removed = current - target
+        added = target - current
+        self.app_state.best_shot_paths = target
+
+        for path in removed:
+            self._apply_best_shot_presentation(path, is_best=False)
+        for path in added:
+            self._apply_best_shot_presentation(path, is_best=True)
+
+    def _apply_best_shot_presentation(self, file_path: str, is_best: bool) -> None:
+        file_data = self.app_state.get_file_data_by_path(file_path)
+        if file_data is not None:
+            file_data["is_best_shot"] = is_best
+
+        proxy_index = self._find_proxy_index_for_path(file_path)
+        if proxy_index and proxy_index.isValid():
+            source_index = self.proxy_model.mapToSource(proxy_index)
+            item = self.file_system_model.itemFromIndex(source_index)
+        else:
+            item = None
+
+        is_blurred = None
+        if item:
+            data = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(data, dict):
+                data["is_best_shot"] = is_best
+                is_blurred = data.get("is_blurred")
+                item.setData(data, Qt.ItemDataRole.UserRole)
+
+            self.deletion_controller.apply_presentation(
+                item, file_path, is_blurred
+            )
+
 
     def get_selected_file_paths(self) -> List[str]:  # For MetadataController
         # Prefer SelectionController; fall back only if something unexpected occurs
@@ -1459,6 +1513,19 @@ class MainWindow(QMainWindow):
                 return
 
         logger.info("Stopping all workers on application close.")
+        if self.best_shot_controller:
+            try:
+                self.best_shot_controller.cleanup()
+            except Exception:
+                logger.debug("Failed to cleanup best shot controller on close", exc_info=True)
+        if self.cluster_best_shot_controller:
+            try:
+                self.cluster_best_shot_controller.cleanup()
+            except Exception:
+                logger.debug(
+                    "Failed to cleanup cluster best shot controller on close",
+                    exc_info=True,
+                )
         self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
         event.accept()
 
@@ -3603,6 +3670,26 @@ class MainWindow(QMainWindow):
         self._handle_file_selection_changed(
             override_selected_paths=original_selection_paths
         )
+
+    def _pick_best_shot_with_ai(self):
+        """Launch the AI best shot picker for the current selection."""
+        # Lazy initialization of controller
+        if self.best_shot_controller is None:
+            from ui.controllers.best_shot_picker_controller import (
+                BestShotPickerController,
+            )
+
+            self.best_shot_controller = BestShotPickerController(self)
+
+        # Start the analysis
+        self.best_shot_controller.start_analysis()
+
+    def _pick_best_shots_for_similarity_clusters(self):
+        """Launch the AI best shot picker across all similarity clusters."""
+        if self.cluster_best_shot_controller is None:
+            self.cluster_best_shot_controller = ClusterBestShotController(self)
+
+        self.cluster_best_shot_controller.start_analysis()
 
     def _mark_image_for_deletion(self, file_path: str):
         """Marks a single image for deletion, updating the model in-place."""

@@ -15,6 +15,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * **Ratings & Labels**: Assign star ratings for quick categorization.
   * **Blur Detection**: Automatically identify and flag blurry photos.
   * **AI Orientation Detection**: Auto-detects the correct image orientation using a lightweight ONNX model and proposes rotations.
+  * **AI Best Shot Picker**: Let a vision-language model evaluate selected images and highlight the best shot without leaving the flow.
   * **Similarity Analysis**: Group visually similar images to easily spot duplicates or near-duplicates.
   * **Fast Processing**: Intensive operations (scanning, thumbnailing, analysis) run once in batch to ensure fast image scrolling.
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
@@ -97,6 +98,17 @@ To use the **Auto Rotate Images** feature (`Ctrl+R`), you need to download the p
 3. **Place the downloaded model file inside the `models` directory.**
 
 The application will automatically detect and load the model when you use the rotation detection feature.
+
+### AI Best Shot Picker
+
+PhotoSort can now analyze a set of similar photos and automatically pick the best shot. Configure the integration inside the app under `Settings → Preferences → AI Best Shot`:
+
+- Set the **API URL** to match your server (for LM Studio the default is `http://localhost:1234/v1`; update the IP/port if you run it elsewhere).
+- Provide an **API Key** if your endpoint requires one.
+- Choose the **Model** you want the picker to use. We recommend loading **Qwen3 VL** in LM Studio.
+- Adjust the **Timeout** to fit your hardware and model size.
+
+Once configured, select two or more images and trigger the analysis via `Image → Pick Best Shot with AI…` or `Ctrl+B` (`Cmd+B` on macOS). The result dialog highlights the chosen image and the reasoning so you can jump straight to the winner.
 
 ### Exporting Logs
 

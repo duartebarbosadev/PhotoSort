@@ -1,6 +1,7 @@
 # Renamed from deletion_controller.py to align with class name DeletionMarkController
 from __future__ import annotations
 from typing import Optional, List, Callable, Iterable, Tuple
+import os
 from PyQt6.QtGui import QStandardItem, QColor
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
@@ -34,13 +35,18 @@ class DeletionMarkController:
             else False
         )
 
+        basename = os.path.basename(file_path)
+        is_best = file_path in getattr(self.app_state, "best_shot_paths", set())
         pres = build_presentation(
-            basename=item.text().split(" ")[0]
-            if item.text()
-            else file_path.split("\\")[-1],
+            basename=basename,
             is_marked=is_marked,
             is_blurred=is_blurred,
+            is_best=is_best,
         )
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict):
+            data["is_best_shot"] = is_best
+            item.setData(data, Qt.ItemDataRole.UserRole)
         if pres.is_marked:
             item.setForeground(self.ORANGE)
         elif pres.is_blurred:

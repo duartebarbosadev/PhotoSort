@@ -52,6 +52,10 @@ PERFORMANCE_MODE_KEY = (
 CUSTOM_THREAD_COUNT_KEY = (
     "Performance/CustomThreadCount"  # User-defined thread count for custom mode
 )
+AI_BEST_SHOT_API_URL_KEY = "AI/BestShotApiUrl"  # API URL for best shot picker
+AI_BEST_SHOT_API_KEY_KEY = "AI/BestShotApiKey"  # API key for best shot picker
+AI_BEST_SHOT_MODEL_KEY = "AI/BestShotModel"  # Model name for best shot picker
+AI_BEST_SHOT_TIMEOUT_KEY = "AI/BestShotTimeout"  # Timeout for best shot picker API calls
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
@@ -62,6 +66,10 @@ DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
 DEFAULT_UPDATE_CHECK_ENABLED = True  # Default to enable automatic update checks
 DEFAULT_PERFORMANCE_MODE = PerformanceMode.BALANCED  # Default to balanced mode
 DEFAULT_CUSTOM_THREAD_COUNT = 4  # Default custom thread count
+DEFAULT_AI_BEST_SHOT_API_URL = "http://localhost:1234/v1"  # Default LM Studio URL
+DEFAULT_AI_BEST_SHOT_API_KEY = "not-needed"  # Default API key for local LM Studio
+DEFAULT_AI_BEST_SHOT_MODEL = "local-model"  # Default model name
+DEFAULT_AI_BEST_SHOT_TIMEOUT = 120  # Default timeout in seconds
 
 # --- UI Constants ---
 # Grid view settings
@@ -379,3 +387,58 @@ def calculate_max_workers(min_workers: int = 1, max_workers: int = None) -> int:
         workers = min(max_workers, workers)
 
     return workers
+
+
+# --- AI Best Shot Picker Settings ---
+def get_ai_best_shot_api_url() -> str:
+    """Gets the API URL for the best shot picker."""
+    settings = _get_settings()
+    return settings.value(
+        AI_BEST_SHOT_API_URL_KEY, DEFAULT_AI_BEST_SHOT_API_URL, type=str
+    )
+
+
+def set_ai_best_shot_api_url(url: str):
+    """Sets the API URL for the best shot picker."""
+    settings = _get_settings()
+    settings.setValue(AI_BEST_SHOT_API_URL_KEY, url)
+
+
+def get_ai_best_shot_api_key() -> str:
+    """Gets the API key for the best shot picker."""
+    settings = _get_settings()
+    return settings.value(
+        AI_BEST_SHOT_API_KEY_KEY, DEFAULT_AI_BEST_SHOT_API_KEY, type=str
+    )
+
+
+def set_ai_best_shot_api_key(api_key: str):
+    """Sets the API key for the best shot picker."""
+    settings = _get_settings()
+    settings.setValue(AI_BEST_SHOT_API_KEY_KEY, api_key)
+
+
+def get_ai_best_shot_model() -> str:
+    """Gets the model name for the best shot picker."""
+    settings = _get_settings()
+    return settings.value(AI_BEST_SHOT_MODEL_KEY, DEFAULT_AI_BEST_SHOT_MODEL, type=str)
+
+
+def set_ai_best_shot_model(model: str):
+    """Sets the model name for the best shot picker."""
+    settings = _get_settings()
+    settings.setValue(AI_BEST_SHOT_MODEL_KEY, model)
+
+
+def get_ai_best_shot_timeout() -> int:
+    """Gets the timeout for best shot picker API calls."""
+    settings = _get_settings()
+    return settings.value(
+        AI_BEST_SHOT_TIMEOUT_KEY, DEFAULT_AI_BEST_SHOT_TIMEOUT, type=int
+    )
+
+
+def set_ai_best_shot_timeout(timeout: int):
+    """Sets the timeout for best shot picker API calls."""
+    settings = _get_settings()
+    settings.setValue(AI_BEST_SHOT_TIMEOUT_KEY, timeout)

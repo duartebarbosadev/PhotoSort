@@ -1,6 +1,7 @@
 import logging
 import os
 import subprocess
+import sys
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QPoint, Qt
@@ -63,6 +64,8 @@ class MenuManager:
         self.unmark_for_delete_action: QAction
         self.commit_deletions_action: QAction
         self.clear_marked_deletions_action: QAction
+        self.pick_best_shot_action: QAction
+        self.pick_best_shots_for_clusters_action: QAction
 
         # Viewer Actions
         self.zoom_in_action: QAction
@@ -213,6 +216,26 @@ class MenuManager:
         self.clear_marked_deletions_action.setShortcut(QKeySequence("Alt+D"))
         main_win.addAction(self.clear_marked_deletions_action)
 
+        # AI Best Shot Picker action
+        self.pick_best_shot_action = QAction("Pick Best Shot with AI...", main_win)
+        self.pick_best_shot_action.setShortcut(QKeySequence("Ctrl+B"))
+        self.pick_best_shot_action.setToolTip(
+            "Use AI to select the best image from the current selection (requires 2+ images)"
+        )
+        main_win.addAction(self.pick_best_shot_action)
+
+        self.pick_best_shots_for_clusters_action = QAction(
+            "Pick Cluster Best Shots with AI...", main_win
+        )
+        self.pick_best_shots_for_clusters_action.setShortcut(
+            QKeySequence("Ctrl+Shift+B")
+        )
+        self.pick_best_shots_for_clusters_action.setEnabled(False)
+        self.pick_best_shots_for_clusters_action.setToolTip(
+            "Run AI best shot analysis across every similarity group"
+        )
+        main_win.addAction(self.pick_best_shots_for_clusters_action)
+
         # About action
         self.about_action = QAction("&About", main_win)
         self.about_action.setShortcut(QKeySequence("F12"))
@@ -318,6 +341,10 @@ class MenuManager:
         image_menu.addAction(self.rotate_180_action)
         image_menu.addSeparator()
 
+        image_menu.addAction(self.pick_best_shot_action)
+        image_menu.addAction(self.pick_best_shots_for_clusters_action)
+        image_menu.addSeparator()
+
         image_menu.addAction(self.mark_for_delete_action)
         image_menu.addAction(self.commit_deletions_action)
         image_menu.addAction(self.clear_marked_deletions_action)
@@ -362,7 +389,10 @@ class MenuManager:
         settings_menu = menu_bar.addMenu("&Settings")
 
         self.preferences_action = QAction("Preferences...", main_win)
-        self.preferences_action.setShortcut(QKeySequence("F10"))
+        if sys.platform == "darwin":
+            self.preferences_action.setShortcut(QKeySequence.StandardKey.Preferences)
+        else:
+            self.preferences_action.setShortcut(QKeySequence("F10"))
         settings_menu.addAction(self.preferences_action)
 
         settings_menu.addSeparator()
@@ -460,6 +490,14 @@ class MenuManager:
         )
         self.clear_marked_deletions_action.triggered.connect(
             main_win._clear_all_deletion_marks
+        )
+
+        # AI Best Shot Picker
+        self.pick_best_shot_action.triggered.connect(
+            main_win._pick_best_shot_with_ai
+        )
+        self.pick_best_shots_for_clusters_action.triggered.connect(
+            main_win._pick_best_shots_for_similarity_clusters
         )
 
         # Zoom actions

@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QStyle,
     QRadioButton,
     QSlider,
+    QWidget,
 )
 from PyQt6.QtCore import Qt, QSize, QUrl, QEventLoop, QThread
 from PyQt6.QtGui import QIcon, QDesktopServices
@@ -37,6 +38,7 @@ from core.image_features.model_rotation_detector import (
     ModelNotFoundError,
 )
 from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
+from ui.helpers.ai_best_shot_settings import AIBestShotSettingsWidget
 
 logger = logging.getLogger(__name__)
 
@@ -430,23 +432,28 @@ class DialogManager:
         main_layout.setSpacing(20)
         main_layout.setContentsMargins(25, 25, 25, 25)
 
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setSpacing(20)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
         # Title
         title_label = QLabel("Preferences")
         title_label.setObjectName("aboutTitle")
-        main_layout.addWidget(title_label)
+        content_layout.addWidget(title_label)
 
         # Performance Mode Section
         perf_section_label = QLabel("Performance Mode")
         perf_section_label.setObjectName("preferencesSectionLabel")
         perf_section_label.setStyleSheet("font-weight: bold; font-size: 13px;")
-        main_layout.addWidget(perf_section_label)
+        content_layout.addWidget(perf_section_label)
 
         # Description
         desc_label = QLabel(
             "Control how many CPU threads PhotoSort uses for processing:"
         )
         desc_label.setWordWrap(True)
-        main_layout.addWidget(desc_label)
+        content_layout.addWidget(desc_label)
 
         # Radio buttons for performance mode
         balanced_radio = QRadioButton("Balanced (Recommended)")
@@ -520,12 +527,12 @@ class DialogManager:
         custom_radio.toggled.connect(on_custom_toggled)
 
         # Add all radio options to layout
-        main_layout.addWidget(balanced_radio)
-        main_layout.addWidget(balanced_desc)
-        main_layout.addWidget(performance_radio)
-        main_layout.addWidget(perf_desc)
-        main_layout.addWidget(custom_radio)
-        main_layout.addLayout(custom_control_layout)
+        content_layout.addWidget(balanced_radio)
+        content_layout.addWidget(balanced_desc)
+        content_layout.addWidget(performance_radio)
+        content_layout.addWidget(perf_desc)
+        content_layout.addWidget(custom_radio)
+        content_layout.addLayout(custom_control_layout)
 
         # Note
         note_label = QLabel("Note: Changes take effect immediately for new operations.")
@@ -533,9 +540,21 @@ class DialogManager:
         note_label.setStyleSheet(
             "color: #888; font-style: italic; font-size: 11px; margin-top: 10px;"
         )
-        main_layout.addWidget(note_label)
+        content_layout.addWidget(note_label)
 
-        main_layout.addStretch()
+        # AI Best Shot settings section
+        ai_settings_widget = AIBestShotSettingsWidget(dialog)
+        ai_settings_widget.setObjectName("aiBestShotSettings")
+        content_layout.addWidget(ai_settings_widget)
+
+        content_layout.addStretch()
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setWidget(content_widget)
+
+        main_layout.addWidget(scroll_area)
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -558,6 +577,7 @@ class DialogManager:
             else:  # custom_radio.isChecked()
                 set_performance_mode(PerformanceMode.CUSTOM)
                 set_custom_thread_count(thread_count_slider.value())
+            ai_settings_widget.apply_settings()
             logger.info(
                 f"Preferences saved: mode={get_performance_mode().value}, custom_threads={get_custom_thread_count()}"
             )

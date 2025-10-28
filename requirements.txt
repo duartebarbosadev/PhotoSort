@@ -12,3 +12,4 @@ pyexiv2
 piexif
 onnxruntime
 torchvision
+openai
