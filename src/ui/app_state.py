@@ -75,7 +75,9 @@ class AppState:
         date_removed = self.date_cache.pop(file_path, None)
         cluster_removed = self.cluster_results.pop(file_path, None)
         embedding_removed = self.embeddings_cache.pop(file_path, None)
-        self.best_shot_scores_by_path.pop(file_path, None)
+        removed_best = self.best_shot_scores_by_path.pop(file_path, None)
+        if cluster_removed is None and removed_best:
+            cluster_removed = removed_best.get("cluster_id")
         if cluster_removed is not None:
             rankings = self.best_shot_rankings.get(cluster_removed)
             if rankings:
@@ -203,10 +205,15 @@ class AppState:
         for cluster_id, rankings in rankings_by_cluster.items():
             if not rankings:
                 continue
-            copied_rankings = [dict(result) for result in rankings]
+            copied_rankings: List[Dict[str, Any]] = []
+            for entry in rankings:
+                enriched = dict(entry)
+                enriched.setdefault("cluster_id", cluster_id)
+                copied_rankings.append(enriched)
+                path = enriched.get("image_path")
+                if path:
+                    self.best_shot_scores_by_path[path] = enriched
+            if not copied_rankings:
+                continue
             self.best_shot_rankings[cluster_id] = copied_rankings
             self.best_shot_winners[cluster_id] = copied_rankings[0]
-            for result in copied_rankings:
-                path = result.get("image_path")
-                if path:
-                    self.best_shot_scores_by_path[path] = result

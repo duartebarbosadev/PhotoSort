@@ -105,7 +105,7 @@ PREVIEW_ESTIMATED_SIZE_FACTOR = 1.35  # Factor for estimating preview sizes
 # --- AI/ML Constants ---
 # DBSCAN clustering parameters
 DBSCAN_EPS = (
-    0.05  # For cosine metric: 1 - cosine_similarity. Smaller eps = higher similarity
+    0.055  # For cosine metric: 1 - cosine_similarity. Smaller eps = higher similarity
 )
 DBSCAN_MIN_SAMPLES = 2  # Minimum number of images to form a dense region (cluster)
 DEFAULT_SIMILARITY_BATCH_SIZE = 16  # Default batch size for similarity processing

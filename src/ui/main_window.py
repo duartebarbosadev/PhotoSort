@@ -2540,14 +2540,21 @@ class MainWindow(QMainWindow):
         app_state = getattr(self, "app_state", None)
         if not app_state or not app_state.best_shot_scores_by_path:
             return
-        cluster_id = app_state.cluster_results.get(file_path)
         best_info = app_state.best_shot_scores_by_path.get(file_path)
-        if cluster_id is None or not best_info:
+        if not best_info:
             return
+
+        cluster_id = app_state.cluster_results.get(file_path)
+        if cluster_id is None:
+            cluster_id = best_info.get("cluster_id")
+        if cluster_id is None:
+            cluster_label = "Selection"
+        else:
+            cluster_label = f"Cluster {cluster_id}"
 
         metrics = best_info.get("metrics", {}) or {}
         tooltip_lines = [
-            f"Cluster {cluster_id}",
+            cluster_label,
             f"Composite: {best_info.get('composite_score', 0):.3f}",
         ]
         metric_fields = [

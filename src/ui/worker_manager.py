@@ -887,7 +887,9 @@ class WorkerManager(QObject):
 
         self.best_shot_thread = QThread()
         self.best_shot_worker = BestShotWorker(
-            cluster_map=cluster_map, models_root=models_root
+            cluster_map=cluster_map,
+            models_root=models_root,
+            image_pipeline=self.image_pipeline,
         )
         self.best_shot_worker.moveToThread(self.best_shot_thread)
 

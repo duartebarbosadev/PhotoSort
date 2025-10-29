@@ -221,6 +221,78 @@ class ImagePipeline:
         # Orientation should be handled by the processors.
         return pil_img
 
+    def get_preview_image(
+        self,
+        image_path: str,
+        display_max_size: Optional[Tuple[int, int]] = None,
+        force_regenerate: bool = False,
+        force_default_brightness: bool = False,
+    ) -> Optional[Image.Image]:
+        """Return a PIL image suitable for analysis/display, leveraging preview cache."""
+        logger.debug(f"Obtaining preview PIL image called for: {image_path}")
+        normalized_path = os.path.normpath(image_path)
+        if not os.path.isfile(normalized_path):
+            logger.error(f"File does not exist: {normalized_path}")
+            return None
+
+        ext = os.path.splitext(normalized_path)[1].lower()
+        apply_auto_edits = is_raw_extension(ext)
+        key_display_size = (
+            display_max_size if display_max_size is not None else PRELOAD_MAX_RESOLUTION
+        )
+        display_cache_key = (normalized_path, key_display_size, apply_auto_edits)
+
+        if not force_regenerate:
+            cached_display_pil = self.preview_cache.get(display_cache_key)
+            if cached_display_pil:
+                logger.debug(
+                    f"Display cache HIT (PIL): {os.path.basename(normalized_path)} (Size: {key_display_size})"
+                )
+                result_image = cached_display_pil.copy()
+                if result_image.mode != "RGB":
+                    result_image = result_image.convert("RGB")
+                result_image.info.setdefault("source_path", normalized_path)
+                result_image.info.setdefault("region", "full")
+                return result_image
+
+        preload_cache_key = (normalized_path, PRELOAD_MAX_RESOLUTION, apply_auto_edits)
+        cached_high_res_pil = self.preview_cache.get(preload_cache_key)
+        if cached_high_res_pil:
+            logger.debug(
+                f"Preview cache HIT (High-Res PIL): {os.path.basename(normalized_path)}. Resizing for display."
+            )
+            display_pil_img = cached_high_res_pil.copy()
+            if display_max_size:
+                display_pil_img.thumbnail(display_max_size, Image.Resampling.LANCZOS)
+            self.preview_cache.set(display_cache_key, display_pil_img.copy())
+            if display_pil_img.mode != "RGB":
+                display_pil_img = display_pil_img.convert("RGB")
+            display_pil_img.info.setdefault("source_path", normalized_path)
+            display_pil_img.info.setdefault("region", "full")
+            return display_pil_img
+
+        logger.debug(
+            f"Preview cache MISS for {os.path.basename(normalized_path)}. Generating PIL preview on-demand..."
+        )
+        generated_display_pil = self._generate_pil_preview_for_display(
+            normalized_path,
+            display_max_size,
+            force_default_brightness,
+        )
+        if generated_display_pil:
+            self.preview_cache.set(display_cache_key, generated_display_pil.copy())
+            if generated_display_pil.mode != "RGB":
+                generated_display_pil = generated_display_pil.convert("RGB")
+            generated_display_pil.info.setdefault("source_path", normalized_path)
+            generated_display_pil.info.setdefault("region", "full")
+            return generated_display_pil
+
+        logger.error(
+            f"Failed to generate or retrieve preview PIL for {os.path.basename(normalized_path)}",
+            exc_info=True,
+        )
+        return None
+
     def get_preview_qpixmap(
         self,
         image_path: str,
