@@ -1,7 +1,8 @@
-from typing import List, Tuple
+from typing import List, Tuple, Set, Optional
 import webbrowser
 import os
 import logging
+import time
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -22,6 +23,9 @@ from PyQt6.QtWidgets import (
     QStyle,
     QRadioButton,
     QSlider,
+    QLineEdit,
+    QPlainTextEdit,
+    QSpinBox,
 )
 from PyQt6.QtCore import Qt, QSize, QUrl, QEventLoop, QThread
 from PyQt6.QtGui import QIcon, QDesktopServices
@@ -415,6 +419,20 @@ class DialogManager:
             set_performance_mode,
             get_custom_thread_count,
             set_custom_thread_count,
+            get_best_shot_engine,
+            set_best_shot_engine,
+            get_openai_config,
+            set_openai_config,
+            DEFAULT_OPENAI_API_KEY,
+            DEFAULT_OPENAI_MODEL,
+            DEFAULT_OPENAI_BASE_URL,
+            DEFAULT_OPENAI_MAX_TOKENS,
+            DEFAULT_OPENAI_TIMEOUT,
+            DEFAULT_OPENAI_MAX_WORKERS,
+        )
+        from core.ai.best_shot_pipeline import (
+            DEFAULT_BEST_SHOT_PROMPT,
+            DEFAULT_RATING_PROMPT,
         )
 
         logger.info("Showing preferences dialog")
@@ -422,7 +440,8 @@ class DialogManager:
         dialog.setWindowTitle("Preferences")
         dialog.setObjectName("preferencesDialog")
         dialog.setModal(True)
-        dialog.setFixedSize(500, 380)
+        dialog.resize(640, 600)
+        dialog.setMinimumSize(520, 480)
         # Frameless window for consistent UI
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
@@ -435,18 +454,29 @@ class DialogManager:
         title_label.setObjectName("aboutTitle")
         main_layout.addWidget(title_label)
 
+        scroll_area = QScrollArea()
+        scroll_area.setObjectName("preferencesScrollArea")
+        scroll_area.setWidgetResizable(True)
+        main_layout.addWidget(scroll_area)
+
+        content_frame = QFrame()
+        content_layout = QVBoxLayout(content_frame)
+        content_layout.setSpacing(20)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_area.setWidget(content_frame)
+
         # Performance Mode Section
         perf_section_label = QLabel("Performance Mode")
         perf_section_label.setObjectName("preferencesSectionLabel")
         perf_section_label.setStyleSheet("font-weight: bold; font-size: 13px;")
-        main_layout.addWidget(perf_section_label)
+        content_layout.addWidget(perf_section_label)
 
         # Description
         desc_label = QLabel(
             "Control how many CPU threads PhotoSort uses for processing:"
         )
         desc_label.setWordWrap(True)
-        main_layout.addWidget(desc_label)
+        content_layout.addWidget(desc_label)
 
         # Radio buttons for performance mode
         balanced_radio = QRadioButton("Balanced (Recommended)")
@@ -518,14 +548,15 @@ class DialogManager:
             thread_count_label.setEnabled(checked)
 
         custom_radio.toggled.connect(on_custom_toggled)
+        on_custom_toggled(custom_radio.isChecked())
 
         # Add all radio options to layout
-        main_layout.addWidget(balanced_radio)
-        main_layout.addWidget(balanced_desc)
-        main_layout.addWidget(performance_radio)
-        main_layout.addWidget(perf_desc)
-        main_layout.addWidget(custom_radio)
-        main_layout.addLayout(custom_control_layout)
+        content_layout.addWidget(balanced_radio)
+        content_layout.addWidget(balanced_desc)
+        content_layout.addWidget(performance_radio)
+        content_layout.addWidget(perf_desc)
+        content_layout.addWidget(custom_radio)
+        content_layout.addLayout(custom_control_layout)
 
         # Note
         note_label = QLabel("Note: Changes take effect immediately for new operations.")
@@ -533,9 +564,369 @@ class DialogManager:
         note_label.setStyleSheet(
             "color: #888; font-style: italic; font-size: 11px; margin-top: 10px;"
         )
-        main_layout.addWidget(note_label)
+        content_layout.addWidget(note_label)
 
-        main_layout.addStretch()
+        # AI Engine Section
+        ai_section_label = QLabel("AI Rating Engine")
+        ai_section_label.setObjectName("preferencesSectionLabel")
+        ai_section_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        content_layout.addWidget(ai_section_label)
+
+        ai_desc_label = QLabel(
+            "Choose between the on-device model and the OpenAI LLM for image ranking and ratings."
+        )
+        ai_desc_label.setWordWrap(True)
+        content_layout.addWidget(ai_desc_label)
+
+        engine_combo = QComboBox()
+        engine_combo.setObjectName("bestShotEngineCombo")
+        engine_combo.addItem("Local (on-device models)", "local")
+        engine_combo.addItem("OpenAI (LLM)", "llm")
+        content_layout.addWidget(engine_combo)
+
+        openai_config = get_openai_config()
+        api_key_value = openai_config.get("api_key") or DEFAULT_OPENAI_API_KEY
+        model_value = openai_config.get("model") or DEFAULT_OPENAI_MODEL
+        base_url_value = openai_config.get("base_url") or DEFAULT_OPENAI_BASE_URL
+        try:
+            max_tokens_value = int(
+                openai_config.get("max_tokens") or DEFAULT_OPENAI_MAX_TOKENS
+            )
+        except (TypeError, ValueError):
+            max_tokens_value = DEFAULT_OPENAI_MAX_TOKENS
+        try:
+            timeout_value = int(
+                openai_config.get("timeout") or DEFAULT_OPENAI_TIMEOUT
+            )
+        except (TypeError, ValueError):
+            timeout_value = DEFAULT_OPENAI_TIMEOUT
+        try:
+            max_workers_value = int(
+                openai_config.get("max_workers") or DEFAULT_OPENAI_MAX_WORKERS
+            )
+        except (TypeError, ValueError):
+            max_workers_value = DEFAULT_OPENAI_MAX_WORKERS
+        best_prompt_value = (
+            openai_config.get("best_shot_prompt") or DEFAULT_BEST_SHOT_PROMPT
+        )
+        rating_prompt_value = (
+            openai_config.get("rating_prompt") or DEFAULT_RATING_PROMPT
+        )
+
+        current_engine = (get_best_shot_engine() or "local").lower()
+        index = engine_combo.findData(current_engine)
+        if index >= 0:
+            engine_combo.setCurrentIndex(index)
+
+        openai_frame = QFrame()
+        openai_frame.setObjectName("openAISettingsFrame")
+        openai_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        openai_layout = QVBoxLayout(openai_frame)
+        openai_layout.setSpacing(12)
+        openai_layout.setContentsMargins(15, 12, 15, 12)
+
+        openai_info_label = QLabel(
+            "Configure OpenAI access used by the LLM engine. Leave prompts blank to use defaults."
+        )
+        openai_info_label.setWordWrap(True)
+        openai_info_label.setStyleSheet("color: #888; font-size: 11px;")
+        openai_layout.addWidget(openai_info_label)
+
+        openai_form = QGridLayout()
+        openai_form.setHorizontalSpacing(12)
+        openai_form.setVerticalSpacing(12)
+
+        api_key_label = QLabel("API Key")
+        api_key_input = QLineEdit()
+        api_key_input.setObjectName("openAIKeyInput")
+        api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        api_key_input.setPlaceholderText("sk-...")
+        api_key_input.setClearButtonEnabled(True)
+        api_key_input.setText(api_key_value)
+        openai_form.addWidget(api_key_label, 0, 0)
+        openai_form.addWidget(api_key_input, 0, 1)
+
+        model_label = QLabel("Model")
+        model_combo = QComboBox()
+        model_combo.setObjectName("openAIModelCombo")
+        model_combo.setEditable(True)
+        model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        model_combo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        if model_value:
+            model_combo.addItem(model_value)
+            model_combo.setCurrentText(model_value)
+        else:
+            model_combo.setCurrentText(DEFAULT_OPENAI_MODEL)
+
+        fetch_models_button = QPushButton("Fetch Models")
+        fetch_models_button.setObjectName("openAIFetchModelsButton")
+
+        model_row = QHBoxLayout()
+        model_row.setContentsMargins(0, 0, 0, 0)
+        model_row.setSpacing(6)
+        model_row.addWidget(model_combo)
+        model_row.addWidget(fetch_models_button)
+
+        openai_form.addWidget(model_label, 1, 0)
+        openai_form.addLayout(model_row, 1, 1)
+
+        base_url_label = QLabel("Base URL")
+        base_url_input = QLineEdit()
+        base_url_input.setObjectName("openAIBaseUrlInput")
+        base_url_input.setPlaceholderText(DEFAULT_OPENAI_BASE_URL)
+        base_url_input.setClearButtonEnabled(True)
+        base_url_input.setText(base_url_value)
+        openai_form.addWidget(base_url_label, 2, 0)
+        openai_form.addWidget(base_url_input, 2, 1)
+
+        max_tokens_label = QLabel("Max Tokens")
+        max_tokens_spin = QSpinBox()
+        max_tokens_spin.setObjectName("openAIMaxTokensSpin")
+        max_tokens_spin.setRange(64, 32768)
+        max_tokens_spin.setSingleStep(64)
+        max_tokens_spin.setValue(max_tokens_value)
+        openai_form.addWidget(max_tokens_label, 3, 0)
+        openai_form.addWidget(max_tokens_spin, 3, 1)
+
+        timeout_label = QLabel("Timeout (s)")
+        timeout_spin = QSpinBox()
+        timeout_spin.setObjectName("openAITimeoutSpin")
+        timeout_spin.setRange(10, 600)
+        timeout_spin.setSingleStep(5)
+        timeout_spin.setValue(timeout_value)
+        openai_form.addWidget(timeout_label, 4, 0)
+        openai_form.addWidget(timeout_spin, 4, 1)
+
+        max_workers_label = QLabel("Concurrent Workers")
+        max_workers_spin = QSpinBox()
+        max_workers_spin.setObjectName("openAIMaxWorkersSpin")
+        max_workers_spin.setRange(1, 16)
+        max_workers_spin.setValue(max_workers_value)
+        openai_form.addWidget(max_workers_label, 5, 0)
+        openai_form.addWidget(max_workers_spin, 5, 1)
+
+        best_prompt_label = QLabel("Best Shot Prompt")
+        best_prompt_edit = QPlainTextEdit()
+        best_prompt_edit.setObjectName("openAIBestPromptEdit")
+        best_prompt_edit.setPlaceholderText("Leave blank to use the default best-shot prompt.")
+        best_prompt_edit.setPlainText(best_prompt_value)
+        best_prompt_edit.setMinimumHeight(80)
+        openai_form.addWidget(best_prompt_label, 6, 0, Qt.AlignmentFlag.AlignTop)
+        openai_form.addWidget(best_prompt_edit, 6, 1)
+
+        rating_prompt_label = QLabel("Rating Prompt")
+        rating_prompt_edit = QPlainTextEdit()
+        rating_prompt_edit.setObjectName("openAIRatingPromptEdit")
+        rating_prompt_edit.setPlaceholderText("Leave blank to use the default rating prompt.")
+        rating_prompt_edit.setPlainText(rating_prompt_value)
+        rating_prompt_edit.setMinimumHeight(80)
+        openai_form.addWidget(rating_prompt_label, 7, 0, Qt.AlignmentFlag.AlignTop)
+        openai_form.addWidget(rating_prompt_edit, 7, 1)
+
+        test_connection_button = QPushButton("Test Connection")
+        test_connection_button.setObjectName("openAITestConnectionButton")
+
+        def _resolve_or_default(value: str, default_value: str) -> str:
+            stripped = value.strip()
+            return stripped or default_value
+
+        def _create_openai_client():
+            try:
+                from openai import OpenAI  # type: ignore
+            except ImportError:
+                QMessageBox.warning(
+                    dialog,
+                    "OpenAI Package Missing",
+                    "Install the 'openai' package to test the connection.",
+                )
+                return None
+
+            try:
+                return OpenAI(
+                    api_key=_resolve_or_default(
+                        api_key_input.text(), DEFAULT_OPENAI_API_KEY
+                    ),
+                    base_url=_resolve_or_default(
+                        base_url_input.text(), DEFAULT_OPENAI_BASE_URL
+                    ),
+                    timeout=timeout_spin.value(),
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                QMessageBox.critical(
+                    dialog,
+                    "Client Creation Failed",
+                    f"Unable to create OpenAI client:\n{exc}",
+                )
+                return None
+
+        def _extract_model_ids(response) -> Set[str]:
+            model_ids: Set[str] = set()
+            data = getattr(response, "data", None)
+            if data is None and isinstance(response, dict):
+                data = response.get("data")
+            if not data:
+                return model_ids
+            for entry in data:
+                if isinstance(entry, dict):
+                    identifier = entry.get("id") or entry.get("name")
+                else:
+                    identifier = getattr(entry, "id", None) or getattr(
+                        entry, "name", None
+                    )
+                if identifier:
+                    model_ids.add(str(identifier))
+            return model_ids
+
+        def handle_test_connection():
+            client = _create_openai_client()
+            if client is None:
+                return
+            test_connection_button.setEnabled(False)
+            fetch_models_button.setEnabled(False)
+            try:
+                probe_timeout = min(timeout_spin.value(), 30)
+                probe_client = (
+                    client.with_options(timeout=probe_timeout)
+                    if hasattr(client, "with_options")
+                    else client
+                )
+
+                models_start = time.perf_counter()
+                response = probe_client.models.list()
+                models_duration = time.perf_counter() - models_start
+                model_ids = _extract_model_ids(response)
+                test_model = _resolve_or_default(
+                    model_combo.currentText(), DEFAULT_OPENAI_MODEL
+                )
+                completion_duration: Optional[float] = None
+                completion_error: Optional[Exception] = None
+                try:
+                    completion_client = (
+                        client.with_options(timeout=probe_timeout)
+                        if hasattr(client, "with_options")
+                        else client
+                    )
+                    completion_start = time.perf_counter()
+                    completion_client.chat.completions.create(
+                        model=test_model,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": "PhotoSort connectivity check.",
+                            }
+                        ],
+                        max_tokens=8,
+                    )
+                    completion_duration = time.perf_counter() - completion_start
+                except Exception as exc:  # pragma: no cover - network dependent
+                    completion_error = exc
+
+                if completion_error is None:
+                    QMessageBox.information(
+                        dialog,
+                        "Connection Successful",
+                        (
+                            f"Models endpoint responded in {models_duration:.2f}s ("
+                            f"{len(model_ids)} models).\n"
+                            f"Chat completion succeeded in {completion_duration:.2f}s using '{test_model}'."
+                        ),
+                    )
+                else:
+                    QMessageBox.warning(
+                        dialog,
+                        "Partial Success",
+                        (
+                            f"Models endpoint responded in {models_duration:.2f}s ("
+                            f"{len(model_ids)} models).\n"
+                            f"Chat completion failed for '{test_model}':\n{completion_error}"
+                        ),
+                    )
+            except Exception as exc:  # pragma: no cover - network dependent
+                QMessageBox.critical(
+                    dialog,
+                    "Connection Failed",
+                    f"Connection test failed:\n{exc}",
+                )
+            finally:
+                test_connection_button.setEnabled(True)
+                fetch_models_button.setEnabled(True)
+
+        def handle_fetch_models():
+            client = _create_openai_client()
+            if client is None:
+                return
+            test_connection_button.setEnabled(False)
+            fetch_models_button.setEnabled(False)
+            start = time.perf_counter()
+            try:
+                probe_client = (
+                    client.with_options(timeout=min(timeout_spin.value(), 30))
+                    if hasattr(client, "with_options")
+                    else client
+                )
+                response = probe_client.models.list()
+                duration = time.perf_counter() - start
+                model_ids = _extract_model_ids(response)
+                if not model_ids:
+                    QMessageBox.information(
+                        dialog,
+                        "No Models Found",
+                        "The endpoint is reachable but returned no models.",
+                    )
+                else:
+                    existing_text = model_combo.currentText().strip()
+                    sorted_ids = sorted(model_ids)
+                    model_combo.blockSignals(True)
+                    model_combo.clear()
+                    for identifier in sorted_ids:
+                        model_combo.addItem(identifier)
+                    if existing_text and existing_text in model_ids:
+                        model_combo.setCurrentText(existing_text)
+                    else:
+                        model_combo.setCurrentText(sorted_ids[0])
+                        if existing_text and existing_text not in model_ids:
+                            model_combo.insertItem(0, existing_text)
+                            model_combo.setCurrentIndex(0)
+                    model_combo.blockSignals(False)
+                    QMessageBox.information(
+                        dialog,
+                        "Models Retrieved",
+                        (
+                            f"Loaded {len(model_ids)} models in {duration:.2f}s.\n"
+                            "You can pick one from the dropdown."
+                        ),
+                    )
+            except Exception as exc:  # pragma: no cover - network dependent
+                QMessageBox.critical(
+                    dialog,
+                    "Fetch Models Failed",
+                    f"Failed to fetch models:\n{exc}",
+                )
+            finally:
+                fetch_models_button.setEnabled(True)
+                test_connection_button.setEnabled(True)
+
+        fetch_models_button.clicked.connect(handle_fetch_models)
+        test_connection_button.clicked.connect(handle_test_connection)
+
+        openai_layout.addLayout(openai_form)
+        buttons_row = QHBoxLayout()
+        buttons_row.setContentsMargins(0, 0, 0, 0)
+        buttons_row.setSpacing(6)
+        buttons_row.addWidget(test_connection_button)
+        buttons_row.addStretch()
+        openai_layout.addLayout(buttons_row)
+        content_layout.addWidget(openai_frame)
+
+        def update_openai_visibility():
+            openai_frame.setVisible(engine_combo.currentData() == "llm")
+
+        engine_combo.currentIndexChanged.connect(update_openai_visibility)
+        update_openai_visibility()
+
+        content_layout.addStretch()
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -558,8 +949,50 @@ class DialogManager:
             else:  # custom_radio.isChecked()
                 set_performance_mode(PerformanceMode.CUSTOM)
                 set_custom_thread_count(thread_count_slider.value())
+
+            set_best_shot_engine(engine_combo.currentData())
+
+            api_key_text = api_key_input.text().strip()
+            base_url_text = base_url_input.text().strip()
+            model_text = model_combo.currentText().strip()
+            max_tokens_value = max_tokens_spin.value()
+            timeout_value = timeout_spin.value()
+            max_workers_value = max_workers_spin.value()
+            best_prompt_text = best_prompt_edit.toPlainText()
+            rating_prompt_text = rating_prompt_edit.toPlainText()
+
+            def _value_or_none(value: str, default_value: str) -> Optional[str]:
+                trimmed = value.strip()
+                if not trimmed or trimmed == default_value:
+                    return ""
+                return trimmed
+
+            set_openai_config(
+                api_key=_value_or_none(api_key_text, DEFAULT_OPENAI_API_KEY),
+                model=_value_or_none(model_text, DEFAULT_OPENAI_MODEL),
+                base_url=_value_or_none(base_url_text, DEFAULT_OPENAI_BASE_URL),
+                max_tokens=None
+                if max_tokens_value == DEFAULT_OPENAI_MAX_TOKENS
+                else max_tokens_value,
+                timeout=None
+                if timeout_value == DEFAULT_OPENAI_TIMEOUT
+                else timeout_value,
+                max_workers=None
+                if max_workers_value == DEFAULT_OPENAI_MAX_WORKERS
+                else max_workers_value,
+                best_shot_prompt=None
+                if best_prompt_text.strip() == DEFAULT_BEST_SHOT_PROMPT.strip()
+                else best_prompt_text.strip() or None,
+                rating_prompt=None
+                if rating_prompt_text.strip() == DEFAULT_RATING_PROMPT.strip()
+                else rating_prompt_text.strip() or None,
+            )
+
             logger.info(
-                f"Preferences saved: mode={get_performance_mode().value}, custom_threads={get_custom_thread_count()}"
+                "Preferences saved: mode=%s, custom_threads=%s, engine=%s",
+                get_performance_mode().value,
+                get_custom_thread_count(),
+                get_best_shot_engine(),
             )
             dialog.accept()
 

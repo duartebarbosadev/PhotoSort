@@ -34,6 +34,7 @@ class AppState:
         self.best_shot_rankings: Dict[int, List[Dict[str, Any]]] = {}
         self.best_shot_scores_by_path: Dict[str, Dict[str, Any]] = {}
         self.best_shot_winners: Dict[int, Dict[str, Any]] = {}
+        self.ai_rating_results: Dict[str, Dict[str, Any]] = {}
 
         # Could also hold current folder path, filter states, etc. if desired.
         self.current_folder_path: Optional[str] = None
@@ -55,6 +56,7 @@ class AppState:
             self.exif_disk_cache.clear()  # Decide if folder clear should wipe the whole disk cache
         self.focused_image_path = None
         self.clear_best_shot_results()
+        self.ai_rating_results.clear()
         # self.current_folder_path = None # Optionally reset current folder path
 
     def remove_data_for_path(self, file_path: str):
@@ -89,6 +91,8 @@ class AppState:
             winner = self.best_shot_winners.get(cluster_removed)
             if winner and winner.get("image_path") == file_path:
                 self.best_shot_winners.pop(cluster_removed, None)
+
+        self.ai_rating_results.pop(file_path, None)
 
         logger.debug(
             f"Removed data for {os.path.basename(file_path)}: "
@@ -126,6 +130,8 @@ class AppState:
         for winner in self.best_shot_winners.values():
             if winner.get("image_path") == old_path:
                 winner["image_path"] = new_path
+        if old_path in self.ai_rating_results:
+            self.ai_rating_results[new_path] = self.ai_rating_results.pop(old_path)
 
         # Update disk caches
         if self.rating_disk_cache:

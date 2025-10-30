@@ -5,6 +5,7 @@ Manages persistent application settings using QSettings.
 
 import os
 from enum import Enum
+from typing import Optional
 from PyQt6.QtCore import QSettings
 
 
@@ -52,6 +53,15 @@ PERFORMANCE_MODE_KEY = (
 CUSTOM_THREAD_COUNT_KEY = (
     "Performance/CustomThreadCount"  # User-defined thread count for custom mode
 )
+BEST_SHOT_ENGINE_KEY = "AI/BestShotEngine"
+OPENAI_API_KEY_KEY = "AI/OpenAIKey"
+OPENAI_MODEL_KEY = "AI/OpenAIModel"
+OPENAI_BASE_URL_KEY = "AI/OpenAIBaseUrl"
+OPENAI_MAX_TOKENS_KEY = "AI/OpenAIMaxTokens"
+OPENAI_TIMEOUT_KEY = "AI/OpenAITimeout"
+OPENAI_MAX_WORKERS_KEY = "AI/OpenAIMaxWorkers"
+OPENAI_BEST_SHOT_PROMPT_KEY = "AI/BestShotPrompt"
+OPENAI_RATING_PROMPT_KEY = "AI/RatingPrompt"
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
@@ -62,6 +72,13 @@ DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
 DEFAULT_UPDATE_CHECK_ENABLED = True  # Default to enable automatic update checks
 DEFAULT_PERFORMANCE_MODE = PerformanceMode.BALANCED  # Default to balanced mode
 DEFAULT_CUSTOM_THREAD_COUNT = 4  # Default custom thread count
+DEFAULT_BEST_SHOT_ENGINE = "local"
+DEFAULT_OPENAI_API_KEY = "not-needed"
+DEFAULT_OPENAI_MODEL = "Qwen3-VL-30B-A3B-Instruct-MLX-4bit"
+DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:8000/v1"
+DEFAULT_OPENAI_MAX_TOKENS = 200
+DEFAULT_OPENAI_TIMEOUT = 600
+DEFAULT_OPENAI_MAX_WORKERS = 4
 
 # --- UI Constants ---
 # Grid view settings
@@ -379,3 +396,106 @@ def calculate_max_workers(min_workers: int = 1, max_workers: int = None) -> int:
         workers = min(max_workers, workers)
 
     return workers
+
+
+def get_best_shot_engine() -> str:
+    env_value = os.getenv("PHOTOSORT_BEST_SHOT_ENGINE")
+    if env_value:
+        return env_value.lower()
+    settings = _get_settings()
+    return settings.value(BEST_SHOT_ENGINE_KEY, DEFAULT_BEST_SHOT_ENGINE, type=str)
+
+
+def set_best_shot_engine(engine: str) -> None:
+    settings = _get_settings()
+    settings.setValue(BEST_SHOT_ENGINE_KEY, engine.lower())
+
+
+def get_openai_config() -> dict:
+    settings = _get_settings()
+
+    api_key = os.getenv("PHOTOSORT_OPENAI_API_KEY") or settings.value(
+        OPENAI_API_KEY_KEY, None, type=str
+    )
+    if not api_key:
+        api_key = DEFAULT_OPENAI_API_KEY
+    model = (
+        os.getenv("PHOTOSORT_OPENAI_MODEL")
+        or settings.value(OPENAI_MODEL_KEY, DEFAULT_OPENAI_MODEL, type=str)
+    )
+    base_url = os.getenv("PHOTOSORT_OPENAI_BASE_URL") or settings.value(
+        OPENAI_BASE_URL_KEY, DEFAULT_OPENAI_BASE_URL, type=str
+    )
+    max_tokens_env = os.getenv("PHOTOSORT_OPENAI_MAX_TOKENS")
+    max_tokens = (
+        int(max_tokens_env)
+        if max_tokens_env is not None
+        else settings.value(OPENAI_MAX_TOKENS_KEY, DEFAULT_OPENAI_MAX_TOKENS, type=int)
+    )
+    timeout_env = os.getenv("PHOTOSORT_OPENAI_TIMEOUT")
+    timeout = (
+        int(timeout_env)
+        if timeout_env is not None
+        else settings.value(OPENAI_TIMEOUT_KEY, DEFAULT_OPENAI_TIMEOUT, type=int)
+    )
+    max_workers_env = os.getenv("PHOTOSORT_LLM_MAX_WORKERS")
+    max_workers = (
+        int(max_workers_env)
+        if max_workers_env is not None
+        else settings.value(OPENAI_MAX_WORKERS_KEY, DEFAULT_OPENAI_MAX_WORKERS, type=int)
+    )
+
+    best_shot_prompt = settings.value(OPENAI_BEST_SHOT_PROMPT_KEY, None, type=str)
+    rating_prompt = settings.value(OPENAI_RATING_PROMPT_KEY, None, type=str)
+
+    config = {
+        "api_key": api_key,
+        "model": model,
+        "base_url": base_url,
+        "max_tokens": max_tokens,
+        "timeout": timeout,
+        "max_workers": max_workers,
+        "best_shot_prompt": best_shot_prompt,
+        "rating_prompt": rating_prompt,
+    }
+    # Remove optional None entries for prompts/base_url so dataclass defaults apply
+    return {k: v for k, v in config.items() if v is not None or k == "api_key"}
+
+
+def set_openai_config(
+    *,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    timeout: Optional[int] = None,
+    max_workers: Optional[int] = None,
+    best_shot_prompt: Optional[str] = None,
+    rating_prompt: Optional[str] = None,
+) -> None:
+    settings = _get_settings()
+
+    def _set_or_clear(key: str, value):
+        if isinstance(value, str):
+            value = value.strip()
+        if value is None or value == "":
+            settings.remove(key)
+        else:
+            settings.setValue(key, value)
+
+    if api_key is not None:
+        _set_or_clear(OPENAI_API_KEY_KEY, api_key)
+    if model is not None:
+        _set_or_clear(OPENAI_MODEL_KEY, model)
+    if base_url is not None:
+        _set_or_clear(OPENAI_BASE_URL_KEY, base_url)
+    if max_tokens is not None:
+        _set_or_clear(OPENAI_MAX_TOKENS_KEY, max_tokens)
+    if timeout is not None:
+        _set_or_clear(OPENAI_TIMEOUT_KEY, timeout)
+    if max_workers is not None:
+        _set_or_clear(OPENAI_MAX_WORKERS_KEY, max_workers)
+    if best_shot_prompt is not None:
+        _set_or_clear(OPENAI_BEST_SHOT_PROMPT_KEY, best_shot_prompt)
+    if rating_prompt is not None:
+        _set_or_clear(OPENAI_RATING_PROMPT_KEY, rating_prompt)

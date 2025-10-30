@@ -38,6 +38,9 @@ class MenuManager:
         self.group_by_similarity_action: QAction
         self.toggle_thumbnails_action: QAction
         self.analyze_similarity_action: QAction
+        self.analyze_best_shots_action: QAction
+        self.analyze_best_shots_selected_action: QAction
+        self.ai_rate_images_action: QAction
         self.detect_blur_action: QAction
         self.auto_rotate_action: QAction
         self.toggle_metadata_sidebar_action: QAction
@@ -302,6 +305,14 @@ class MenuManager:
         self.analyze_best_shots_selected_action.setShortcut(QKeySequence("Ctrl+Alt+S"))
         view_menu.addAction(self.analyze_best_shots_selected_action)
 
+        self.ai_rate_images_action = QAction("AI Rate Images", main_win)
+        self.ai_rate_images_action.setToolTip(
+            "Ask the configured AI engine to rate every visible image individually"
+        )
+        self.ai_rate_images_action.setEnabled(False)
+        self.ai_rate_images_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
+        view_menu.addAction(self.ai_rate_images_action)
+
         self.detect_blur_action = QAction("Detect Blurriness", main_win)
         self.detect_blur_action.setToolTip(
             "Analyze images for blurriness (can be slow for many images)"
@@ -421,6 +432,9 @@ class MenuManager:
         )
         self.analyze_best_shots_selected_action.triggered.connect(
             main_win.app_controller.start_best_shot_analysis_for_selected
+        )
+        self.ai_rate_images_action.triggered.connect(
+            main_win.app_controller.start_ai_rating_all
         )
         self.detect_blur_action.triggered.connect(
             main_win.app_controller.start_blur_detection_analysis

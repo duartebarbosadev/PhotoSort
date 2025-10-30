@@ -8,6 +8,7 @@ from core.app_settings import (
     add_recent_folder,
     get_preview_cache_size_bytes,
     PREVIEW_ESTIMATED_SIZE_FACTOR,
+    get_best_shot_engine,
 )
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
@@ -220,6 +221,20 @@ class AppController(QObject):
             self.handle_best_shot_models_missing
         )
 
+        # AI Rating Worker
+        self.worker_manager.ai_rating_progress.connect(
+            self.handle_ai_rating_progress
+        )
+        self.worker_manager.ai_rating_complete.connect(
+            self.handle_ai_rating_complete
+        )
+        self.worker_manager.ai_rating_error.connect(self.handle_ai_rating_error)
+        self.worker_manager.ai_rating_warning.connect(
+            self.handle_ai_rating_warning
+        )
+
+        self._ai_rating_warning_messages: list[str] = []
+
     # --- Public Methods (called from MainWindow) ---
 
     def load_folder(self, folder_path: str):
@@ -296,6 +311,7 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.main_window.menu_manager.detect_blur_action.setEnabled(False)
         self.main_window.menu_manager.auto_rotate_action.setEnabled(False)
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
 
         logger.debug(
             f"Folder prep complete in {time.perf_counter() - load_folder_start_time:.2f}s. Starting file scan."
@@ -451,6 +467,51 @@ class AppController(QObject):
         )
         self.worker_manager.start_best_shot_analysis(cluster_map)
 
+    def start_ai_rating_all(self):
+        """Kick off AI-driven rating for every loaded image."""
+        logger.info("Starting AI rating for all images.")
+
+        if self.worker_manager.is_ai_rating_running():
+            self.main_window.statusBar().showMessage(
+                "AI rating is already running.", 3000
+            )
+            return
+
+        if not self.app_state.image_files_data:
+            self.main_window.statusBar().showMessage(
+                "No images loaded to rate.", 3000
+            )
+            return
+
+        image_paths = [item.get("path") for item in self.app_state.image_files_data]
+        image_paths = [path for path in image_paths if path]
+        if not image_paths:
+            self.main_window.statusBar().showMessage(
+                "No valid image paths available for AI rating.", 3000
+            )
+            return
+
+        self.main_window.show_loading_overlay("Requesting AI ratings...")
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
+        self.main_window.statusBar().showMessage(
+            f"AI rating started for {len(image_paths)} image(s)...",
+            4000,
+        )
+
+        self._ai_rating_warning_messages = []
+
+        try:
+            engine = get_best_shot_engine()
+        except Exception:  # pragma: no cover - defensive guard
+            logger.exception("Failed to resolve best-shot engine from settings.")
+            engine = None
+
+        self.worker_manager.start_ai_rating(
+            image_paths=image_paths,
+            models_root=DEFAULT_MODELS_ROOT,
+            engine=engine,
+        )
+
     def reload_current_folder(self):
         if self.app_state.image_files_data:
             if (
@@ -557,6 +618,9 @@ class AppController(QObject):
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
 
         self.main_window._rebuild_model_view()
 
@@ -591,6 +655,7 @@ class AppController(QObject):
         )
 
         self.main_window.hide_loading_overlay()
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
 
     def handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0
@@ -778,6 +843,99 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
             True
         )
+
+    def handle_ai_rating_progress(self, percentage: int, message: str):
+        progress_text = message
+        if percentage is not None:
+            progress_text = f"{message} ({percentage}%)"
+        self.main_window.update_loading_text(f"AI rating: {progress_text}")
+
+    def handle_ai_rating_warning(self, message: str):
+        logger.warning("AI rating warning: %s", message)
+        self.main_window.statusBar().showMessage(message, 6000)
+        lowered = message.lower()
+        if "failed" in lowered or "skipped" in lowered:
+            self._ai_rating_warning_messages.append(message)
+
+    def handle_ai_rating_complete(self, results: Dict[str, Dict[str, Any]]):
+        self.main_window.hide_loading_overlay()
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
+
+        normalized_results = results or {}
+        self.app_state.ai_rating_results = dict(normalized_results)
+
+        ratings_applied = 0
+        rating_operations: List[Tuple[str, int]] = []
+        for image_path, payload in normalized_results.items():
+            if not isinstance(payload, dict):
+                continue
+            rating_value = payload.get("rating")
+            if rating_value is None:
+                continue
+            try:
+                rating_int = int(round(float(rating_value)))
+            except (TypeError, ValueError):
+                logger.debug("Skipping non-numeric AI rating for %s", image_path)
+                continue
+
+            ratings_applied += 1
+            self.app_state.rating_cache[image_path] = rating_int
+            if self.app_state.rating_disk_cache:
+                try:
+                    self.app_state.rating_disk_cache.set(image_path, rating_int)
+                except Exception:  # pragma: no cover - cache writes should not crash UI
+                    logger.exception(
+                        "Failed to persist AI rating cache for %s", image_path
+                    )
+
+            for viewer in self.main_window.advanced_image_viewer.image_viewers:
+                if viewer.isVisible() and viewer._file_path == image_path:
+                    viewer.update_rating_display(rating_int)
+
+            rating_operations.append((image_path, rating_int))
+
+        if ratings_applied:
+            self.main_window._apply_filter()
+            self.main_window.statusBar().showMessage(
+                f"AI rating complete for {ratings_applied} image(s).", 4000
+            )
+            if rating_operations:
+                if self.worker_manager.is_rating_writer_running():
+                    logger.info(
+                        "Rating writer already running; skipping automatic metadata write"
+                    )
+                else:
+                    self.main_window.statusBar().showMessage(
+                        f"Saving AI ratings to image metadata ({len(rating_operations)} files)...",
+                        5000,
+                    )
+                    self.worker_manager.start_rating_writer(
+                        rating_operations=rating_operations,
+                        rating_disk_cache=self.app_state.rating_disk_cache,
+                        exif_disk_cache=self.app_state.exif_disk_cache,
+                    )
+        else:
+            self.main_window.statusBar().showMessage(
+                "AI rating finished but no ratings were applied.", 5000
+            )
+
+        if self._ai_rating_warning_messages:
+            summary_message = self._ai_rating_warning_messages[-1]
+            self.main_window.statusBar().showMessage(summary_message, 7000)
+            self._ai_rating_warning_messages = []
+
+    def handle_ai_rating_error(self, message: str):
+        logger.error(f"AI rating failed: {message}", exc_info=True)
+        self.main_window.hide_loading_overlay()
+        self.main_window.statusBar().showMessage(
+            f"AI rating error: {message}", 8000
+        )
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
+        self._ai_rating_warning_messages = []
 
     def handle_blur_detection_progress(
         self, current: int, total: int, path_basename: str

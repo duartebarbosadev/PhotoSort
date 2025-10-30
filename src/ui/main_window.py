@@ -2947,14 +2947,6 @@ class MainWindow(QMainWindow):
             is_image_viewer = obj in self._image_viewer_views
 
             if is_left_panel_view or is_image_viewer:
-                logger.debug(
-                    "EventFilter KeyPress: obj=%s, is_left_panel_view=%s, is_image_viewer=%s",
-                    obj.__class__.__name__,
-                    is_left_panel_view,
-                    is_image_viewer,
-                )
-
-            if is_left_panel_view or is_image_viewer:
                 key_event: QKeyEvent = event
                 key = key_event.key()
                 modifiers = key_event.modifiers()
@@ -2969,9 +2961,6 @@ class MainWindow(QMainWindow):
                     mod_str.append("Alt")
                 if modifiers & Qt.KeyboardModifier.MetaModifier:
                     mod_str.append("Meta/Cmd")
-                logger.debug(
-                    f"KeyPress in view: Key={key}, Modifiers=[{', '.join(mod_str)}]"
-                )
 
                 search_has_focus = self.left_panel.search_input.hasFocus()
 

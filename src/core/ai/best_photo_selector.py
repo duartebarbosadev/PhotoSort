@@ -511,6 +511,17 @@ class BestPhotoSelector:
                 )
             except FileNotFoundError as exc:
                 logger.warning("Eye-state classifier disabled: %s", exc)
+            except RuntimeError as exc:
+                logger.warning(
+                    "Eye-state classifier disabled (install transformers>=4.30 and torch>=2.1 to enable eye scoring): %s",
+                    exc,
+                )
+                self.eye_classifier = None
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.warning(
+                    "Eye-state classifier initialisation failed: %s", exc, exc_info=True
+                )
+                self.eye_classifier = None
         if self.quality_model is None:
             try:
                 self.quality_model = QualityFusionModel(models_root=self.models_root)

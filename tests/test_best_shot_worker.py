@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 from PyQt6.QtWidgets import QApplication
 
+from core.ai.best_shot_pipeline import BaseBestShotStrategy
 from workers.best_shot_worker import BestShotWorker
 
 
@@ -29,44 +30,40 @@ class DummyPipeline:
         return img
 
 
-class _DummyResult:
-    def __init__(self, path: str):
-        self.image_path = path
-        self.composite_score = 1.0
-        self.metrics = {}
-        self.raw_metrics = {}
+class DummyStrategy(BaseBestShotStrategy):
+    def __init__(self, pipeline):
+        super().__init__(models_root=None, image_pipeline=pipeline)
+        self.pipeline = pipeline
 
-    def to_dict(self):
-        return {
-            "image_path": self.image_path,
-            "composite_score": self.composite_score,
-            "metrics": self.metrics,
-            "raw_metrics": self.raw_metrics,
-        }
+    @property
+    def max_workers(self) -> int:  # pragma: no cover - simple override
+        return 4
 
-
-class DummySelector:
-    def __init__(self, **kwargs):
-        self.loader = kwargs["image_loader"]
-        self.rank_calls = []
-
-    def rank_images(self, image_paths):
-        results = []
+    def rank_cluster(self, cluster_id, image_paths):
+        payload = []
         for path in image_paths:
-            img = self.loader(path)
+            img = self.pipeline.get_preview_image(path)
             assert isinstance(img, Image.Image)
-            results.append(_DummyResult(path))
-        return results
+            payload.append({
+                "image_path": path,
+                "composite_score": 1.0,
+                "metrics": {},
+            })
+        return payload
+
+    def rate_image(self, image_path):  # pragma: no cover - unused in test
+        return None
 
 
 def test_best_shot_worker_uses_preview_pipeline(monkeypatch):
     pipeline = DummyPipeline()
-    worker = BestShotWorker({0: ["/tmp/sel1.jpg", "/tmp/sel2.jpg"]}, image_pipeline=pipeline)
-
-    monkeypatch.setattr(
-        "core.ai.best_photo_selector.BestPhotoSelector",
-        DummySelector,
+    strategy = DummyStrategy(pipeline)
+    worker = BestShotWorker(
+        {0: ["/tmp/sel1.jpg", "/tmp/sel2.jpg"]},
+        image_pipeline=pipeline,
+        strategy=strategy,
     )
+
     monkeypatch.setattr(
         "core.ai.model_checker.check_best_shot_models",
         lambda models_root: [],

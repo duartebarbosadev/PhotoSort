@@ -1,14 +1,23 @@
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Sequence, TYPE_CHECKING
 
 from PyQt6.QtCore import QObject, pyqtSignal
-from PIL import Image, ImageOps
 
 if TYPE_CHECKING:
     from core.image_pipeline import ImagePipeline
 
-from core.app_settings import calculate_max_workers
+from core.ai.best_shot_pipeline import (
+    BaseBestShotStrategy,
+    BestShotEngine,
+    LLMConfig,
+    create_best_shot_strategy,
+)
+from core.app_settings import (
+    calculate_max_workers,
+    get_best_shot_engine,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +37,9 @@ class BestShotWorker(QObject):
         models_root: Optional[str] = None,
         image_pipeline: Optional["ImagePipeline"] = None,
         max_workers: Optional[int] = None,
+        engine: Optional[str] = None,
+        llm_config: Optional[LLMConfig] = None,
+        strategy: Optional[BaseBestShotStrategy] = None,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
@@ -35,10 +47,12 @@ class BestShotWorker(QObject):
         self.models_root = models_root
         self._should_stop = False
         self._image_pipeline = image_pipeline
+        self._engine = (engine or get_best_shot_engine() or "local").lower()
+        self._llm_config = llm_config
+        self._strategy: Optional[BaseBestShotStrategy] = strategy
         self._max_workers = max_workers or calculate_max_workers(
             min_workers=2, max_workers=8
         )
-        self._selector = None
 
     def stop(self):
         self._should_stop = True
@@ -47,22 +61,18 @@ class BestShotWorker(QObject):
         for cluster_id in sorted(self.cluster_map.keys()):
             yield cluster_id, self.cluster_map[cluster_id]
 
-    def _load_image_for_analysis(self, image_path: str) -> Image.Image:
-        preview_image: Optional[Image.Image] = None
-        if self._image_pipeline is not None:
-            try:
-                preview_image = self._image_pipeline.get_preview_image(image_path)
-            except Exception:
-                logger.error(
-                    "ImagePipeline preview lookup failed for %s", image_path, exc_info=True
+    def _ensure_strategy(self):
+        if self._strategy is None:
+            self._strategy = create_best_shot_strategy(
+                self._engine,
+                models_root=self.models_root,
+                image_pipeline=self._image_pipeline,
+                llm_config=self._llm_config,
+            )
+            if self._strategy.max_workers:
+                self._max_workers = min(
+                    self._max_workers, max(1, self._strategy.max_workers)
                 )
-        if preview_image is None:
-            with Image.open(image_path) as img:
-                prepared = ImageOps.exif_transpose(img).convert("RGB")
-                preview_image = prepared.copy()
-        preview_image.info.setdefault("source_path", image_path)
-        preview_image.info.setdefault("region", "full")
-        return preview_image
 
     def _analyze_cluster(
         self, cluster_id: int, paths: Sequence[str]
@@ -72,15 +82,13 @@ class BestShotWorker(QObject):
         normalized_paths = [p for p in paths if p]
         if not normalized_paths:
             return []
-        selector = self._selector
-        if selector is None:
-            raise RuntimeError("Selector not initialized")
-        rankings = selector.rank_images(normalized_paths)
-        return [r.to_dict() for r in rankings]
+        if self._strategy is None:
+            raise RuntimeError("Best-shot strategy not initialised")
+        rankings = self._strategy.rank_cluster(cluster_id, normalized_paths)
+        return rankings
 
     def run(self):
         try:
-            from core.ai.best_photo_selector import BestPhotoSelector
             from core.ai.model_checker import (
                 ModelDependencyError,
                 check_best_shot_models,
@@ -91,28 +99,30 @@ class BestShotWorker(QObject):
             self.finished.emit()
             return
 
-        # Check for missing models before attempting to instantiate selector
-        missing_models = check_best_shot_models(self.models_root)
-        if missing_models:
-            logger.warning(
-                "Best-shot analysis aborted: %d model(s) missing", len(missing_models)
-            )
-            self.models_missing.emit(missing_models)
-            self.finished.emit()
-            return
-
         try:
-            selector = BestPhotoSelector(
-                models_root=self.models_root,
-                image_loader=self._load_image_for_analysis,
-            )
-            self._selector = selector
+            if self._engine == BestShotEngine.LOCAL.value:
+                missing_models = check_best_shot_models(self.models_root)
+                if missing_models:
+                    logger.warning(
+                        "Best-shot analysis aborted: %d model(s) missing", len(missing_models)
+                    )
+                    self.models_missing.emit(missing_models)
+                    self.finished.emit()
+                    return
+            try:
+                self._ensure_strategy()
+            except ModelDependencyError as exc:
+                logger.error("Failed to initialise best-shot strategy: %s", exc)
+                self.error.emit(str(exc))
+                self.finished.emit()
+                return
 
             total_clusters = sum(1 for _, paths in self._iter_clusters() if paths)
             if total_clusters == 0:
                 self.completed.emit({})
                 return
 
+            logger.info(f"Starting best shot analysis of {total_clusters} clusters using {self._engine} engine")
             results: Dict[int, List[dict]] = {}
             futures = {}
             with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
@@ -165,10 +175,17 @@ class BestShotWorker(QObject):
                     )
                     self.progress_update.emit(
                         percent,
-                        f"Cluster {cluster_id}: best candidate {best_path}",
+                        f"Cluster {cluster_id}: best candidate {os.path.basename(best_path)}",
                     )
 
             if not self._should_stop:
+                total_results = sum(len(results) for results in results.values())
+                logger.info(f"Best shot analysis completed: {total_results} results from {len(results)} clusters")
                 self.completed.emit(results)
         finally:
+            if self._strategy is not None:
+                try:
+                    self._strategy.shutdown()
+                except Exception:  # pragma: no cover - best effort cleanup
+                    logger.warning("Best-shot strategy shutdown failed", exc_info=True)
             self.finished.emit()
