@@ -294,8 +294,10 @@ class AppController(QObject):
         self.main_window.cluster_filter_combo.clear()
         self.main_window.cluster_filter_combo.addItems(["All Clusters"])
         self.main_window.cluster_filter_combo.setEnabled(False)
-        self.main_window.menu_manager.cluster_sort_action.setVisible(False)
+        self.main_window.menu_manager.update_cluster_filter_menu([])
+        self.main_window.menu_manager.set_cluster_sort_menu_visible(False)
         self.main_window.cluster_sort_combo.setEnabled(False)
+        self.main_window.menu_manager.set_cluster_sort_menu_enabled(False)
         self.main_window.cluster_sort_combo.setCurrentIndex(0)
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(False)
         self.main_window.menu_manager.group_by_similarity_action.setChecked(False)
@@ -772,13 +774,15 @@ class AppController(QObject):
             ["All Clusters"] + [f"Cluster {cid}" for cid in cluster_ids]
         )
         self.main_window.cluster_filter_combo.setEnabled(True)
+        self.main_window.menu_manager.update_cluster_filter_menu(cluster_ids)
         self.main_window.menu_manager.group_by_similarity_action.setChecked(True)
         if (
             self.main_window.menu_manager.group_by_similarity_action.isChecked()
             and self.app_state.cluster_results
         ):
-            self.main_window.menu_manager.cluster_sort_action.setVisible(True)
+            self.main_window.menu_manager.set_cluster_sort_menu_visible(True)
             self.main_window.cluster_sort_combo.setEnabled(True)
+            self.main_window.menu_manager.set_cluster_sort_menu_enabled(True)
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
         if self.main_window.group_by_similarity_mode:
             self.main_window._rebuild_model_view()

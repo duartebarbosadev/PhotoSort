@@ -3,9 +3,9 @@ import os
 import subprocess
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QPoint, Qt
-from PyQt6.QtGui import QAction, QIcon, QKeySequence
-from PyQt6.QtWidgets import QMenu, QStyle, QWidget, QWidgetAction, QHBoxLayout, QLabel
+from PyQt6.QtCore import QPoint, Qt, QSignalBlocker
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
+from PyQt6.QtWidgets import QMenu, QStyle
 
 from core.image_processing.image_rotator import ImageRotator
 from core.app_settings import get_recent_folders
@@ -51,8 +51,16 @@ class MenuManager:
         self.view_grid_action: QAction
         self.view_rotation_action: QAction
 
-        # Filter Menu
-        self.cluster_sort_action: QWidgetAction
+        # Filter Menu state
+        self.rating_filter_actions: dict[str, QAction] = {}
+        self.cluster_filter_actions: dict[int, QAction] = {}
+        self.cluster_sort_actions: dict[str, QAction] = {}
+        self.rating_action_group: QActionGroup | None = None
+        self.cluster_action_group: QActionGroup | None = None
+        self.cluster_sort_action_group: QActionGroup | None = None
+        self.cluster_filter_menu: QMenu | None = None
+        self.cluster_sort_menu: QMenu | None = None
+        self.cluster_sort_menu_action: QAction | None = None
 
         # Settings Menu
         self.preferences_action: QAction
@@ -201,6 +209,7 @@ class MenuManager:
         # Deletion marking actions
         self.mark_for_delete_action = QAction("Mark for Deletion", main_win)
         self.mark_for_delete_action.setShortcut(QKeySequence("D"))
+        self.mark_for_delete_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         main_win.addAction(self.mark_for_delete_action)
 
         self.unmark_for_delete_action = QAction("Unmark for Deletion", main_win)
@@ -355,36 +364,147 @@ class MenuManager:
         main_win = self.main_window
         filter_menu = menu_bar.addMenu("&Filter")
 
-        # Rating filter
-        rating_widget = QWidget()
-        rating_layout = QHBoxLayout(rating_widget)
-        rating_layout.setContentsMargins(10, 5, 10, 5)
-        rating_layout.addWidget(QLabel("Rating:"))
-        rating_layout.addWidget(main_win.filter_combo)
-        rating_action = QWidgetAction(main_win)
-        rating_action.setDefaultWidget(rating_widget)
-        filter_menu.addAction(rating_action)
+        # Rating filter submenu
+        rating_menu = filter_menu.addMenu("Rating")
+        self.rating_action_group = QActionGroup(main_win)
+        self.rating_action_group.setExclusive(True)
+        self.rating_filter_actions.clear()
+        for option in self._iterate_combobox_options(main_win.filter_combo):
+            action = rating_menu.addAction(option)
+            action.setCheckable(True)
+            action.setData(option)
+            self.rating_action_group.addAction(action)
+            action.triggered.connect(
+                lambda checked, value=option: self._handle_rating_filter_selection(value)
+            )
+            self.rating_filter_actions[option] = action
+        self.sync_rating_menu_selection(main_win.filter_combo.currentText())
 
-        # Cluster filter
-        cluster_widget = QWidget()
-        cluster_layout = QHBoxLayout(cluster_widget)
-        cluster_layout.setContentsMargins(10, 5, 10, 5)
-        cluster_layout.addWidget(QLabel("Cluster:"))
-        cluster_layout.addWidget(main_win.cluster_filter_combo)
-        cluster_action = QWidgetAction(main_win)
-        cluster_action.setDefaultWidget(cluster_widget)
-        filter_menu.addAction(cluster_action)
+        # Cluster filter submenu
+        self.cluster_filter_menu = filter_menu.addMenu("Cluster")
+        self.cluster_action_group = QActionGroup(main_win)
+        self.cluster_action_group.setExclusive(True)
+        self.cluster_filter_actions.clear()
+        self.update_cluster_filter_menu([])
 
-        # Cluster sort
-        sort_widget = QWidget()
-        sort_layout = QHBoxLayout(sort_widget)
-        sort_layout.setContentsMargins(10, 5, 10, 5)
-        sort_layout.addWidget(QLabel("Sort Clusters By:"))
-        sort_layout.addWidget(main_win.cluster_sort_combo)
-        self.cluster_sort_action = QWidgetAction(main_win)
-        self.cluster_sort_action.setDefaultWidget(sort_widget)
-        self.cluster_sort_action.setVisible(False)
-        filter_menu.addAction(self.cluster_sort_action)
+        # Cluster sort submenu
+        cluster_sort_menu = filter_menu.addMenu("Sort Clusters By")
+        self.cluster_sort_menu = cluster_sort_menu
+        self.cluster_sort_menu_action = cluster_sort_menu.menuAction()
+        self.cluster_sort_menu_action.setVisible(False)
+        self.cluster_sort_action_group = QActionGroup(main_win)
+        self.cluster_sort_action_group.setExclusive(True)
+        self.cluster_sort_actions.clear()
+        for option in self._iterate_combobox_options(main_win.cluster_sort_combo):
+            action = cluster_sort_menu.addAction(option)
+            action.setCheckable(True)
+            action.setData(option)
+            self.cluster_sort_action_group.addAction(action)
+            action.triggered.connect(
+                lambda checked, value=option: self._handle_cluster_sort_selection(
+                    value
+                )
+            )
+            self.cluster_sort_actions[option] = action
+        self.sync_cluster_sort_selection(main_win.cluster_sort_combo.currentText())
+        self.set_cluster_sort_menu_enabled(main_win.cluster_sort_combo.isEnabled())
+
+    def _iterate_combobox_options(self, combo_box) -> list[str]:
+        return [combo_box.itemText(i) for i in range(combo_box.count())]
+
+    def _handle_rating_filter_selection(self, value: str) -> None:
+        combo = self.main_window.filter_combo
+        if combo.currentText() == value:
+            return
+        combo.setCurrentText(value)
+
+    def sync_rating_menu_selection(self, value: str) -> None:
+        action = self.rating_filter_actions.get(value)
+        if not action:
+            return
+        if action.isChecked():
+            return
+        with QSignalBlocker(action):
+            action.setChecked(True)
+
+    def update_cluster_filter_menu(self, cluster_ids: list[int]) -> None:
+        if not self.cluster_filter_menu or not self.cluster_action_group:
+            return
+
+        self.cluster_filter_menu.clear()
+        self.cluster_filter_actions.clear()
+
+        def add_action(label: str, cluster_id: int) -> None:
+            action = self.cluster_filter_menu.addAction(label)
+            action.setCheckable(True)
+            action.setData(cluster_id)
+            self.cluster_action_group.addAction(action)
+            action.triggered.connect(
+                lambda checked, cid=cluster_id: self._handle_cluster_filter_selection(
+                    cid
+                )
+            )
+            self.cluster_filter_actions[cluster_id] = action
+
+        add_action("All Clusters", -1)
+        for cluster_id in cluster_ids:
+            add_action(f"Cluster {cluster_id}", cluster_id)
+
+        self.cluster_filter_menu.setEnabled(bool(cluster_ids))
+
+        self.sync_cluster_filter_selection(self.main_window.cluster_filter_combo.currentText())
+
+    def _handle_cluster_filter_selection(self, cluster_id: int) -> None:
+        combo = self.main_window.cluster_filter_combo
+        target_text = "All Clusters" if cluster_id == -1 else f"Cluster {cluster_id}"
+        current_text = combo.currentText()
+        if current_text == target_text:
+            return
+        index = combo.findText(target_text)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def sync_cluster_filter_selection(self, combo_text: str) -> None:
+        if combo_text == "All Clusters":
+            cluster_id = -1
+        else:
+            try:
+                cluster_id = int(combo_text.split(" ")[-1])
+            except ValueError:
+                cluster_id = -1
+
+        action = self.cluster_filter_actions.get(cluster_id)
+        if not action:
+            return
+        if action.isChecked():
+            return
+        with QSignalBlocker(action):
+            action.setChecked(True)
+
+    def _handle_cluster_sort_selection(self, value: str) -> None:
+        combo = self.main_window.cluster_sort_combo
+        if combo.currentText() == value:
+            return
+        index = combo.findText(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def sync_cluster_sort_selection(self, value: str) -> None:
+        action = self.cluster_sort_actions.get(value)
+        if not action:
+            return
+        if action.isChecked():
+            return
+        with QSignalBlocker(action):
+            action.setChecked(True)
+
+    def set_cluster_sort_menu_visible(self, visible: bool) -> None:
+        if self.cluster_sort_menu_action:
+            self.cluster_sort_menu_action.setVisible(visible)
+
+    def set_cluster_sort_menu_enabled(self, enabled: bool) -> None:
+        if self.cluster_sort_menu:
+            self.cluster_sort_menu.setEnabled(enabled)
 
     def _create_settings_menu(self, menu_bar):
         main_win = self.main_window

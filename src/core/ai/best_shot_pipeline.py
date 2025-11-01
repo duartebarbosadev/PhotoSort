@@ -33,7 +33,7 @@ class BestShotEngine(str, Enum):
 
 
 DEFAULT_BEST_SHOT_PROMPT = (
-    "You are an expert photography critic tasked with selecting the best image from a set of {image_count} images.\n\n"
+    "You are an expert photography critic tasked with selecting the best image from a similar set of {image_count} images.\n\n"
     "Analyze each image based on the following criteria:\n"
     "- Sharpness and Focus\n- Color/Lighting\n- Composition\n- Subject Expression\n- Technical Quality\n- Overall Appeal\n- Editing Potential\n- Subject Sharpness\n\n"
     "If any person’s eyes are closed, the photo automatically receives a low rating (1–2).\n\n"
@@ -45,13 +45,12 @@ DEFAULT_BEST_SHOT_PROMPT = (
 )
 
 DEFAULT_RATING_PROMPT = (
-    "You are judging whether a single photo is usable and share-worthy. Rate it from 1 (bad) to 5 (excellent) using these simple rules:\n\n"
+    "You are judging whether this photo is usable and share-worthy. Rate it from 1 (bad) to 5 (excellent) using these simple rules:\n\n"
     "1 – Unusable: heavy blur or missed focus, subject blinking or eyes closed, severe exposure or color problems.\n"
     "2 – Weak: noticeable softness, awkward expression, distracting clutter, flat lighting. Only use if nothing better exists.\n"
     "3 – OK: sharp enough and exposed correctly but ordinary. Minor distractions or stiff posing are acceptable.\n"
     "4 – Strong: crisp focus, pleasing expression, good composition, looks ready for social media.\n"
     "5 – Outstanding: clean, vibrant, and well-composed. Eye-catching and instagrammable. Portraits with great expression score high.\n\n"
-    "Always drop the score if the subject is blinking, eyes are closed, or motion blur makes the shot unusable.\n"
     "Return exactly: {\"rating\": <integer 1-5>, \"reason\": \"<concise justification>\"}"
 )
 

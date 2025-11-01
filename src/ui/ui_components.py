@@ -32,6 +32,27 @@ logger = logging.getLogger(__name__)
 
 # --- Custom Tree View for Drag and Drop ---
 class DroppableTreeView(QTreeView):
+    """
+    Custom QTreeView that prevents single-letter shortcuts from being consumed by type-ahead search.
+    
+    Architecture for keyboard shortcuts in PhotoSort:
+    
+    1. Single-letter QAction shortcuts (D, R, A, I, S, T, F, B):
+       - Defined in MenuManager with ApplicationShortcut context
+       - This class ignores them in keyPressEvent() to prevent type-ahead search
+       - Qt's QAction system then processes them normally
+    
+    2. Navigation keys (arrows, HJKL):
+       - Handled by MainWindow.eventFilter() -> HotkeyController
+    
+    3. Modified shortcuts (Ctrl+S, Alt+1, Shift+R, etc.):
+       - Work automatically via QActions, no special handling needed
+    
+    This architecture is:
+    - Simple: One place for each type of shortcut
+    - Future-proof: Adding new single-letter shortcuts only requires updating shortcut_keys set
+    - Maintainable: Clear separation between navigation, single-key, and modified shortcuts
+    """
     def __init__(self, model, main_window, parent=None):
         super().__init__(parent)
         self.setModel(model)
@@ -40,6 +61,40 @@ class DroppableTreeView(QTreeView):
         # self.setDefaultDropAction(Qt.DropAction.MoveAction) # Disable drag and drop
         self.highlighted_drop_target_index = None
         self.original_item_brush = None
+
+    def keyPressEvent(self, event):
+        """
+        Override to prevent type-ahead search from consuming single-letter shortcuts.
+        
+        When adding a new single-letter shortcut:
+        1. Add it to MenuManager with setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        2. Add the Qt.Key constant to the shortcut_keys set below
+        """
+        key = event.key()
+        modifiers = event.modifiers()
+        
+        # Single-key shortcuts that should NOT be consumed by type-ahead search
+        # Note: Only truly unmodified single keys need to be listed here
+        # Modified shortcuts (Ctrl+S, Alt+1, etc.) are already handled correctly by Qt
+        shortcut_keys = {
+            Qt.Key.Key_A,  # Actual size zoom
+            Qt.Key.Key_B,  # Detect blur
+            Qt.Key.Key_D,  # Mark for deletion
+            Qt.Key.Key_F,  # Toggle folder view
+            Qt.Key.Key_I,  # Toggle metadata sidebar
+            Qt.Key.Key_R,  # Rotate clockwise
+            Qt.Key.Key_S,  # Group by similarity
+            Qt.Key.Key_T,  # Toggle thumbnails
+        }
+        
+        # If it's an unmodified single-letter shortcut, ignore it
+        # This prevents QTreeView's type-ahead search from consuming it
+        if modifiers == Qt.KeyboardModifier.NoModifier and key in shortcut_keys:
+            event.ignore()
+            return
+        
+        # For all other keys, use default QTreeView behavior
+        super().keyPressEvent(event)
 
     def dragEnterEvent(self, event: Optional[QDragEnterEvent]):
         if event:

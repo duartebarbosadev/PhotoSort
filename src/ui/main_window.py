@@ -23,6 +23,7 @@ from typing import (
     Optional,
     Any,
     Tuple,
+    Callable,
 )  # Import List and Dict for type hinting, Optional, Any, Tuple
 from PyQt6.QtCore import (
     Qt,
@@ -86,6 +87,37 @@ from ui.controllers.metadata_controller import MetadataController
 
 logger = logging.getLogger(__name__)
 
+RATING_FILTER_DEFINITIONS = [
+    ("Show All", ("all", 0)),
+    ("Unrated (0)", ("eq", 0)),
+    ("Exactly 1 Star", ("eq", 1)),
+    ("1 Star +", ("ge", 1)),
+    ("Exactly 2 Stars", ("eq", 2)),
+    ("2 Stars +", ("ge", 2)),
+    ("Exactly 3 Stars", ("eq", 3)),
+    ("3 Stars +", ("ge", 3)),
+    ("Exactly 4 Stars", ("eq", 4)),
+    ("4 Stars +", ("ge", 4)),
+    ("5 Stars", ("eq", 5)),
+]
+
+RATING_FILTER_RULES = {label: rule for label, rule in RATING_FILTER_DEFINITIONS}
+RATING_FILTER_OPTIONS = [label for label, _ in RATING_FILTER_DEFINITIONS]
+
+
+def rating_matches_filter(filter_label: str, current_rating: int) -> bool:
+    rule = RATING_FILTER_RULES.get(filter_label)
+    if not rule:
+        return True
+    mode, threshold = rule
+    if mode == "all":
+        return True
+    if mode == "eq":
+        return current_rating == threshold
+    if mode == "ge":
+        return current_rating >= threshold
+    return True
+
 
 # --- Custom Proxy Model for Filtering ---
 class CustomFilterProxyModel(QSortFilterProxyModel):
@@ -122,15 +154,7 @@ class CustomFilterProxyModel(QSortFilterProxyModel):
             file_path, 0
         )  # Uses in-memory cache, populated by RatingLoaderWorker
         rating_filter = self.current_rating_filter
-        rating_passes = (
-            rating_filter == "Show All"
-            or (rating_filter == "Unrated (0)" and current_rating == 0)
-            or (rating_filter == "1 Star +" and current_rating >= 1)
-            or (rating_filter == "2 Stars +" and current_rating >= 2)
-            or (rating_filter == "3 Stars +" and current_rating >= 3)
-            or (rating_filter == "4 Stars +" and current_rating >= 4)
-            or (rating_filter == "5 Stars" and current_rating == 5)
-        )
+        rating_passes = rating_matches_filter(rating_filter, current_rating)
         if not rating_passes:
             return False
 
@@ -224,17 +248,7 @@ class MainWindow(QMainWindow):
         self.hotkey_controller = HotkeyController(self)
 
         self.filter_combo = QComboBox()
-        self.filter_combo.addItems(
-            [
-                "Show All",
-                "Unrated (0)",
-                "1 Star +",
-                "2 Stars +",
-                "3 Stars +",
-                "4 Stars +",
-                "5 Stars",
-            ]
-        )
+        self.filter_combo.addItems(RATING_FILTER_OPTIONS)
         self.cluster_filter_combo = QComboBox()
         self.cluster_filter_combo.addItems(["All Clusters"])
         self.cluster_filter_combo.setEnabled(False)
@@ -249,6 +263,8 @@ class MainWindow(QMainWindow):
 
         self.menu_manager = MenuManager(self)
         self.menu_manager.create_menus(self.menuBar())
+        self._shortcut_handlers: dict[tuple[int, int], Callable[[], None]] = {}
+        self._init_shortcut_handlers()
         self._create_widgets()
 
         # At this point _create_widgets() built file_system_model + proxy_model and wired it;
@@ -689,9 +705,20 @@ class MainWindow(QMainWindow):
             self._handle_file_selection_changed
         )
         self.filter_combo.currentIndexChanged.connect(self._apply_filter)
+        self.filter_combo.currentTextChanged.connect(
+            self.menu_manager.sync_rating_menu_selection
+        )
         self.cluster_filter_combo.currentIndexChanged.connect(self._apply_filter)
+        self.cluster_filter_combo.currentTextChanged.connect(
+            self.menu_manager.sync_cluster_filter_selection
+        )
         self.cluster_sort_combo.currentIndexChanged.connect(self._cluster_sort_changed)
-        self.left_panel.search_input.textChanged.connect(self._apply_filter)
+        self.cluster_sort_combo.currentTextChanged.connect(
+            self.menu_manager.sync_cluster_sort_selection
+        )
+        # Don't filter while typing - only when Enter is pressed or focus is lost
+        self.left_panel.search_input.returnPressed.connect(self._apply_filter)
+        self.left_panel.search_input.editingFinished.connect(self._apply_filter)
         self.left_panel.tree_display_view.collapsed.connect(self._handle_item_collapsed)
         self.left_panel.connect_signals()
 
@@ -892,10 +919,11 @@ class MainWindow(QMainWindow):
         self.menu_manager.group_by_similarity_action.setChecked(checked)
 
     def set_cluster_sort_visible(self, visible: bool) -> None:
-        self.menu_manager.cluster_sort_action.setVisible(visible)
+        self.menu_manager.set_cluster_sort_menu_visible(visible)
 
     def enable_cluster_sort_combo(self, enabled: bool) -> None:
         self.cluster_sort_combo.setEnabled(enabled)
+        self.menu_manager.set_cluster_sort_menu_enabled(enabled)
 
     def populate_cluster_filter(self, cluster_ids: List[int]) -> None:
         self.cluster_filter_combo.clear()
@@ -903,6 +931,7 @@ class MainWindow(QMainWindow):
             ["All Clusters"] + [f"Cluster {cid}" for cid in cluster_ids]
         )
         self.cluster_filter_combo.setEnabled(bool(cluster_ids))
+        self.menu_manager.update_cluster_filter_menu(cluster_ids)
 
     def get_selected_file_paths(self) -> List[str]:  # For MetadataController
         # Prefer SelectionController; fall back only if something unexpected occurs
@@ -2072,15 +2101,6 @@ class MainWindow(QMainWindow):
         deselected=None,
         override_selected_paths: Optional[List[str]] = None,
     ):
-        # If the user is typing in the search bar, filtering the model can
-        # trigger selection changes. We want to ignore these automated changes
-        # to prevent the image preview from updating and stealing focus from the search bar.
-        if self.left_panel.search_input.hasFocus():
-            logger.info(
-                "Search input is active, skipping selection change handler to maintain focus."
-            )
-            return
-
         if self._is_syncing_selection and override_selected_paths is None:
             logger.debug("_handle_file_selection_changed: Skipping due to sync lock")
             return
@@ -2215,6 +2235,25 @@ class MainWindow(QMainWindow):
         self.proxy_model.setFilterKeyColumn(-1)
         self.proxy_model.setFilterRole(Qt.ItemDataRole.DisplayRole)
         self.proxy_model.invalidateFilter()
+        
+        # Return focus to the view if search box had focus
+        if self.left_panel.search_input.hasFocus():
+            QTimer.singleShot(0, self._return_focus_to_view)
+        # Log the currently focused widget after filtering
+        focus_widget = QApplication.focusWidget()
+        logger.debug(f"[after filter] focusWidget={focus_widget}, class={type(focus_widget).__name__ if focus_widget else None}")
+
+    def _return_focus_to_view(self):
+        """Return focus to the active view after filtering."""
+        active_view = self._get_active_file_view()
+        if not active_view:
+            return
+        
+        # Simple, direct focus transfer
+        active_view.setFocus(Qt.FocusReason.OtherFocusReason)
+        logger.debug(
+            f"Returned focus to {type(active_view).__name__}, hasFocus={active_view.hasFocus()}"
+        )
 
     def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
         try:
@@ -2414,11 +2453,13 @@ class MainWindow(QMainWindow):
 
         # If not checking, or if already clustered, proceed to rebuild view
         if checked:  # Only show sort options if grouping is active
-            self.menu_manager.cluster_sort_action.setVisible(True)
+            self.menu_manager.set_cluster_sort_menu_visible(True)
             self.cluster_sort_combo.setEnabled(True)
+            self.menu_manager.set_cluster_sort_menu_enabled(True)
         else:
-            self.menu_manager.cluster_sort_action.setVisible(False)
+            self.menu_manager.set_cluster_sort_menu_visible(False)
             self.cluster_sort_combo.setEnabled(False)
+            self.menu_manager.set_cluster_sort_menu_enabled(False)
 
         # Rebuild view if not waiting for analysis, or if unchecking
         if self.left_panel.current_view_mode == "list":
@@ -2946,6 +2987,11 @@ class MainWindow(QMainWindow):
             is_left_panel_view = obj in self._left_panel_views
             is_image_viewer = obj in self._image_viewer_views
 
+            logger.debug(
+                f"eventFilter: KeyPress from {type(obj).__name__}, "
+                f"is_left_panel_view={is_left_panel_view}, is_image_viewer={is_image_viewer}"
+            )
+
             if is_left_panel_view or is_image_viewer:
                 key_event: QKeyEvent = event
                 key = key_event.key()
@@ -2963,8 +3009,13 @@ class MainWindow(QMainWindow):
                     mod_str.append("Meta/Cmd")
 
                 search_has_focus = self.left_panel.search_input.hasFocus()
+                logger.debug(
+                    f"eventFilter: key={key}, modifiers={mod_str}, search_has_focus={search_has_focus}"
+                )
 
                 if not search_has_focus:
+                    if self._handle_registered_shortcut(key, modifiers):
+                        return True
                     # Rotation view-specific shortcuts
                     if self.left_panel.current_view_mode == "rotation":
                         if key == Qt.Key.Key_Y:
@@ -3046,8 +3097,76 @@ class MainWindow(QMainWindow):
                     f"EventFilter: Key press not from tracked views, obj={obj.__class__.__name__ if obj else 'None'}"
                 )
 
-        # For all other key presses (including Shift+Arrows), pass the event on.
-        return super().eventFilter(obj, event)
+        # For all other events, return False to allow normal Qt processing (including QAction shortcuts)
+        return False
+
+    @staticmethod
+    def _normalize_qt_enum(value: object) -> int:
+        if isinstance(value, int):
+            return value
+
+        raw_value = getattr(value, "value", None)
+        if raw_value is not None:
+            return int(raw_value)
+
+        try:
+            return int(value)  # type: ignore[arg-type]
+        except TypeError as exc:  # pragma: no cover - defensive safeguard
+            raise TypeError(f"Unsupported Qt enum conversion for {value!r}") from exc
+
+    def _register_shortcut_handler(
+        self, key: int, modifiers: Qt.KeyboardModifier, handler: Callable[[], None]
+    ) -> None:
+        if not handler:
+            return
+
+        key_value = self._normalize_qt_enum(key)
+        modifier_value = self._normalize_qt_enum(modifiers)
+        self._shortcut_handlers[(key_value, modifier_value)] = handler
+
+    def _init_shortcut_handlers(self) -> None:
+        if not hasattr(self, "menu_manager"):
+            return
+
+        mm = self.menu_manager
+        register = self._register_shortcut_handler
+
+        self._shortcut_handlers.clear()
+
+        register(Qt.Key.Key_D, Qt.KeyboardModifier.NoModifier, mm.mark_for_delete_action.trigger)
+        register(Qt.Key.Key_D, Qt.KeyboardModifier.ShiftModifier, mm.commit_deletions_action.trigger)
+        register(Qt.Key.Key_D, Qt.KeyboardModifier.AltModifier, mm.clear_marked_deletions_action.trigger)
+
+        register(Qt.Key.Key_R, Qt.KeyboardModifier.NoModifier, mm.rotate_clockwise_action.trigger)
+        register(Qt.Key.Key_R, Qt.KeyboardModifier.ShiftModifier, mm.rotate_counterclockwise_action.trigger)
+        register(Qt.Key.Key_R, Qt.KeyboardModifier.AltModifier, mm.rotate_180_action.trigger)
+
+        register(Qt.Key.Key_F, Qt.KeyboardModifier.NoModifier, mm.toggle_folder_view_action.trigger)
+        register(Qt.Key.Key_S, Qt.KeyboardModifier.NoModifier, mm.group_by_similarity_action.trigger)
+        register(Qt.Key.Key_T, Qt.KeyboardModifier.NoModifier, mm.toggle_thumbnails_action.trigger)
+        register(Qt.Key.Key_B, Qt.KeyboardModifier.NoModifier, mm.detect_blur_action.trigger)
+        register(Qt.Key.Key_I, Qt.KeyboardModifier.NoModifier, mm.toggle_metadata_sidebar_action.trigger)
+        register(Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier, mm.actual_size_action.trigger)
+
+        register(Qt.Key.Key_0, Qt.KeyboardModifier.NoModifier, mm.fit_to_view_action.trigger)
+        register(Qt.Key.Key_0, Qt.KeyboardModifier.KeypadModifier, mm.fit_to_view_action.trigger)
+
+        for index, action in mm.image_focus_actions.items():
+            key_value = Qt.Key.Key_0 + index
+            register(key_value, Qt.KeyboardModifier.NoModifier, action.trigger)
+            register(key_value, Qt.KeyboardModifier.KeypadModifier, action.trigger)
+
+    def _handle_registered_shortcut(self, key: int, modifiers: Qt.KeyboardModifier) -> bool:
+        key_value = self._normalize_qt_enum(key)
+        modifier_value = self._normalize_qt_enum(modifiers)
+        handler = self._shortcut_handlers.get((key_value, modifier_value))
+        if handler:
+            logger.debug(
+                "Shortcut handled via map: key=%s, modifiers=%s", key_value, modifier_value
+            )
+            handler()
+            return True
+        return False
 
     def _toggle_metadata_sidebar(self, checked: bool):
         """Toggle the metadata sidebar visibility"""
@@ -3630,8 +3749,10 @@ class MainWindow(QMainWindow):
 
     def _mark_selection_for_deletion(self):
         """Toggles the deletion mark for selected files, updating the model in-place."""
+        logger.debug("_mark_selection_for_deletion called (QAction triggered)")
         active_view = self._get_active_file_view()
         if not active_view:
+            logger.debug("No active view, returning")
             return
 
         original_selection_paths = self._get_selected_file_paths_from_view()
