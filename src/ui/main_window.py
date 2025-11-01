@@ -2613,28 +2613,27 @@ class MainWindow(QMainWindow):
             tooltip = f"{tooltip}\n{existing_tooltip}"
         item.setToolTip(tooltip)
 
-        winner = app_state.best_shot_winners.get(cluster_id)
-        if winner and winner.get("image_path") == file_path:
-            prefix = "[BEST] "
-            if not item.text().startswith(prefix):
-                item.setText(f"{prefix}{item.text()}")
+        # Text decoration for best-shot winners is handled centrally in DeletionMarkController.
 
     def _remove_temporary_best_labels(self):
-        """Remove temporary [BEST] labels from all items after analysis completes."""
-        logger.debug("Removing temporary [BEST] labels from items")
+        """Remove temporary best-shot labels (legacy prefix/suffix) from all items."""
+        logger.debug("Removing temporary best-shot labels from items")
         
         def remove_label_recursive(parent_item: QStandardItem):
-            """Recursively remove [BEST] prefix from all items."""
+            """Recursively remove best-shot indicators from all items."""
             for row in range(parent_item.rowCount()):
                 child_item = parent_item.child(row)
                 if not child_item:
                     continue
                     
-                # Remove [BEST] prefix if present
-                text = child_item.text()
-                if text.startswith("[BEST] "):
-                    new_text = text.replace("[BEST] ", "", 1)
-                    child_item.setText(new_text)
+                text = child_item.text() or ""
+                modified = text
+                if modified.startswith("[BEST] "):
+                    modified = modified.replace("[BEST] ", "", 1)
+                if modified.endswith(" (Best)"):
+                    modified = modified[: -len(" (Best)")]
+                if modified != text:
+                    child_item.setText(modified)
                 
                 # Recurse into children (for grouped/folder views)
                 if child_item.hasChildren():
@@ -2646,7 +2645,7 @@ class MainWindow(QMainWindow):
             if item:
                 remove_label_recursive(item)
         
-        logger.debug("Finished removing temporary [BEST] labels")
+        logger.debug("Finished removing temporary best-shot labels")
 
     def _update_thumbnails_from_cache(self):
         """

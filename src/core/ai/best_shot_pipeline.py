@@ -9,7 +9,7 @@ import re
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Sequence, Tuple, Set
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Set
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -45,13 +45,20 @@ DEFAULT_BEST_SHOT_PROMPT = (
 )
 
 DEFAULT_RATING_PROMPT = (
-    "You are judging whether this photo is usable and share-worthy. Rate it from 1 (bad) to 5 (excellent) using these simple rules:\n\n"
-    "1 – Unusable: heavy blur or missed focus, subject blinking or eyes closed, severe exposure or color problems.\n"
-    "2 – Weak: noticeable softness, awkward expression, distracting clutter, flat lighting. Only use if nothing better exists.\n"
-    "3 – OK: sharp enough and exposed correctly but ordinary. Minor distractions or stiff posing are acceptable.\n"
-    "4 – Strong: crisp focus, pleasing expression, good composition, looks ready for social media.\n"
-    "5 – Outstanding: clean, vibrant, and well-composed. Eye-catching and instagrammable. Portraits with great expression score high.\n\n"
-    "Return exactly: {\"rating\": <integer 1-5>, \"reason\": \"<concise justification>\"}"
+    "Quantitatively evaluate the photograph by inspecting the high-frequency detail (micro-contrast), subject facial cues, noise distribution, tonal balance, color fidelity, compositional geometry, and lighting directionality.\n"
+    "Assign each of the following metrics a score from 0–100 (integers) where 50 represents acceptable quality for professional sharing:\n"
+    "- sharpness: edge acuity and micro-contrast on the subject's eyes and key textures\n"
+    "- noise_control: luminance/chroma noise in mid-tones and shadows (higher = cleaner)\n"
+    "- exposure_balance: dynamic range handling, highlight retention, and shadow lift\n"
+    "- color_accuracy: white balance correctness and skin tone realism\n"
+    "- composition_balance: adherence to composition rules (framing, leading lines, clutter control)\n"
+    "- subject_expression: clarity of subject intent (eyes open, engaging expression, lack of motion blur)\n\n"
+    "Compute an overall_quality score as the weighted average of the metrics with weights:\n"
+    "sharpness 0.25, noise_control 0.15, exposure_balance 0.15, color_accuracy 0.15, composition_balance 0.15, subject_expression 0.15.\n"
+    "Map overall_quality to a 1–5 star rating using these deterministic thresholds (include the boundary in the higher rating):\n"
+    "1 star <= 40 < 2 star, 2 star <= 55 < 3 star, 3 star <= 70 < 4 star, 4 star <= 85 < 5 star, 5 star >= 85.\n"
+    "The same image must always produce the same rating when scored with this rubric.\n"
+    "Provide one concise sentence noting the dominant strengths and the limiting flaw(s)."
 )
 
 
@@ -288,7 +295,13 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         
         return preview
 
-    def _build_messages(self, prompt: str, labelled_images: List[Tuple[int, str]]) -> List[Dict[str, object]]:
+    def _build_messages(
+        self,
+        prompt: str,
+        labelled_images: List[Tuple[int, str]],
+        *,
+        system_prompt: Optional[str] = None,
+    ) -> List[Dict[str, object]]:
         content: List[Dict[str, object]] = [
             {"type": "text", "text": prompt}
         ]
@@ -302,21 +315,40 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                     },
                 }
             )
-        return [{"role": "user", "content": content}]
+        messages: List[Dict[str, object]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": content})
+        return messages
 
-    def _call_llm(self, messages: List[Dict[str, object]]) -> str:
+    def _call_llm(
+        self,
+        messages: List[Dict[str, object]],
+        *,
+        tools: Optional[List[Dict[str, object]]] = None,
+        tool_choice: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ):
         with self._lock:
             try:
-                response = self._client.chat.completions.create(
-                    model=self._model,
-                    messages=messages,
-                    max_tokens=self._max_tokens,
-                )
+                kwargs: Dict[str, object] = {
+                    "model": self._model,
+                    "messages": messages,
+                    "max_tokens": max(max_tokens or self._max_tokens, 256),
+                    "temperature": 0.3,
+                }
+                if tools is not None:
+                    kwargs["tools"] = tools
+                if tool_choice is not None:
+                    kwargs["tool_choice"] = tool_choice
+                response = self._client.chat.completions.create(**kwargs)
             except Exception as exc:
                 raise RuntimeError(
                     f"LLM request failed for model '{self._model}' at {self._base_url}: {exc}"
                 ) from exc
-        return response.choices[0].message.content or ""
+        message = response.choices[0].message
+        content = getattr(message, "content", None) or ""
+        return message, content
 
     def _extract_rating(self, analysis: str) -> Optional[int]:
         if not analysis:
@@ -394,7 +426,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         messages = self._build_messages(prompt, labelled_payloads)
         
         logger.info(f"Sending {len(image_paths)} images to LLM for analysis")
-        analysis = self._call_llm(messages)
+        _, analysis = self._call_llm(messages)
         logger.info(f"Received LLM analysis response (length: {len(analysis)} chars)")
 
         best_match = re.search(r"Best Image\s*:\s*\[?\s*(\d+)", analysis, re.IGNORECASE)
@@ -437,12 +469,99 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         annotated = _annotate_image(preview, "1")
         b64 = _image_to_base64(annotated)
         prompt = self._rating_prompt
-        messages = self._build_messages(prompt, [(1, b64)])
+        system_prompt = (
+            "You are a photography scientist performing repeatable image quality audits. "
+            "Use the provided evaluation rubric and respond only by calling the provided tool."
+        )
+        messages = self._build_messages(
+            prompt,
+            [(1, b64)],
+            system_prompt=system_prompt,
+        )
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_photo_quality",
+                    "description": "Store deterministic quality scores for a single photograph.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "overall_rating": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 5,
+                                "description": "Overall star rating derived from the weighted quality score (1-5).",
+                            },
+                            "overall_quality": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 100,
+                                "description": "Weighted quantitative quality score (0-100).",
+                            },
+                            "confidence": {
+                                "type": "string",
+                                "enum": ["low", "medium", "high"],
+                                "description": "Confidence in the rating after evaluating visual evidence.",
+                            },
+                            "score_breakdown": {
+                                "type": "object",
+                                "properties": {
+                                    "sharpness": {"type": "integer", "minimum": 0, "maximum": 100},
+                                    "noise_control": {"type": "integer", "minimum": 0, "maximum": 100},
+                                    "exposure_balance": {"type": "integer", "minimum": 0, "maximum": 100},
+                                    "color_accuracy": {"type": "integer", "minimum": 0, "maximum": 100},
+                                    "composition_balance": {"type": "integer", "minimum": 0, "maximum": 100},
+                                    "subject_expression": {"type": "integer", "minimum": 0, "maximum": 100},
+                                },
+                                "required": [
+                                    "sharpness",
+                                    "noise_control",
+                                    "exposure_balance",
+                                    "color_accuracy",
+                                    "composition_balance",
+                                    "subject_expression",
+                                ],
+                            },
+                            "notes": {
+                                "type": "string",
+                                "description": "One concise sentence summarising the key strengths and weaknesses.",
+                            },
+                        },
+                        "required": [
+                            "overall_rating",
+                            "overall_quality",
+                            "confidence",
+                            "score_breakdown",
+                            "notes",
+                        ],
+                    },
+                },
+            }
+        ]
+        tool_choice = "required"
         
         logger.debug(f"Sending image to LLM for rating analysis")
-        analysis = self._call_llm(messages)
-        
-        rating = self._extract_rating(analysis)
+        message, freeform_analysis = self._call_llm(
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        analysis = freeform_analysis
+        structured_payload: Dict[str, Any] = {}
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if tool_calls:
+            try:
+                raw_args = tool_calls[0].function.arguments  # type: ignore[attr-defined]
+                structured_payload = json.loads(raw_args) if raw_args else {}
+            except Exception:
+                logger.exception("Failed to parse AI rating tool output")
+        else:
+            raise RuntimeError(
+                "AI rating response did not include the required tool call."
+            )
+
+        rating = structured_payload.get("overall_rating")
         if rating is not None:
             rating = max(1, min(5, rating))
             logger.info(
@@ -455,11 +574,31 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 os.path.basename(image_path),
                 snippet or "<empty response>",
             )
-        return {
+        if structured_payload and not analysis:
+            breakdown = structured_payload.get("score_breakdown", {})
+            breakdown_parts = [
+                f"{name.replace('_', ' ')} {value}"
+                for name, value in breakdown.items()
+            ]
+            notes = structured_payload.get("notes")
+            confidence = structured_payload.get("confidence")
+            summary_bits = []
+            if breakdown_parts:
+                summary_bits.append(" | ".join(breakdown_parts))
+            if notes:
+                summary_bits.append(notes)
+            if confidence:
+                summary_bits.append(f"confidence: {confidence}")
+            analysis = " ".join(summary_bits)
+
+        payload = {
             "image_path": image_path,
             "rating": rating,
             "analysis": analysis,
         }
+        if structured_payload:
+            payload["quality_scores"] = structured_payload
+        return payload
 
 
 def create_best_shot_strategy(

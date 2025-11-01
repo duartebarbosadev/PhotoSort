@@ -10,30 +10,43 @@ from typing import Optional
 class DeletionPresentation:
     text: str
     is_marked: bool
+    is_best: Optional[bool]
     is_blurred: Optional[bool]
 
 
-def build_item_text(basename: str, is_marked: bool, is_blurred: Optional[bool]) -> str:
+def build_item_text(
+    basename: str,
+    is_marked: bool,
+    is_best: Optional[bool],
+    is_blurred: Optional[bool],
+) -> str:
     """Return the display text given mark + blur states.
 
     Rules (mirrors legacy inline logic):
     - Append (DELETED) when marked.
+    - Append (Best) when flagged as best-shot winner.
     - Append (Blurred) when blurred.
-    - Order: filename (DELETED) (Blurred)
+    - Order: filename (DELETED) (Best) (Blurred)
     """
     parts = [basename]
     if is_marked:
         parts.append("(DELETED)")
+    if is_best:
+        parts.append("(Best)")
     if is_blurred:
         parts.append("(Blurred)")
     return " ".join(parts)
 
 
 def build_presentation(
-    basename: str, is_marked: bool, is_blurred: Optional[bool]
+    basename: str,
+    is_marked: bool,
+    is_best: Optional[bool],
+    is_blurred: Optional[bool],
 ) -> DeletionPresentation:
     return DeletionPresentation(
-        text=build_item_text(basename, is_marked, is_blurred),
+        text=build_item_text(basename, is_marked, is_best, is_blurred),
         is_marked=is_marked,
+        is_best=is_best,
         is_blurred=is_blurred,
     )

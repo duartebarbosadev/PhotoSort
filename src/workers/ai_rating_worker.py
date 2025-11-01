@@ -162,10 +162,20 @@ class AiRatingWorker(QObject):
                         logger.error("%s", message, exc_info=True)
                         failures.append((path, str(exc)))
                         self.warning.emit(message)
+                        self._should_stop = True
+                        # Cancel pending tasks
+                        for pending_future, pending_path in futures.items():
+                            if pending_future is future:
+                                continue
+                            if not pending_future.done():
+                                pending_future.cancel()
                         processed += 1
                         percent = int((processed / total) * 100)
-                        self.progress_update.emit(percent, f"Rated {processed}/{total}")
-                        continue
+                        self.progress_update.emit(
+                            percent,
+                            f"Aborted at {processed}/{total} after failure",
+                        )
+                        break
 
                     if rating_data:
                         results[path] = rating_data

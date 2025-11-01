@@ -27,6 +27,7 @@ from workers.rating_loader_worker import (
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
 from ui.app_state import AppState
+from core.app_settings import get_best_shot_batch_size
 
 logger = logging.getLogger(__name__)
 
@@ -916,6 +917,7 @@ class WorkerManager(QObject):
             cluster_map=cluster_map,
             models_root=models_root,
             image_pipeline=self.image_pipeline,
+            best_shot_batch_size=get_best_shot_batch_size(),
         )
         self.best_shot_worker.moveToThread(self.best_shot_thread)
 

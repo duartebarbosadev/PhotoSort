@@ -62,6 +62,7 @@ OPENAI_TIMEOUT_KEY = "AI/OpenAITimeout"
 OPENAI_MAX_WORKERS_KEY = "AI/OpenAIMaxWorkers"
 OPENAI_BEST_SHOT_PROMPT_KEY = "AI/BestShotPrompt"
 OPENAI_RATING_PROMPT_KEY = "AI/RatingPrompt"
+BEST_SHOT_BATCH_SIZE_KEY = "AI/BestShotBatchSize"
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
@@ -79,6 +80,7 @@ DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_OPENAI_MAX_TOKENS = 200
 DEFAULT_OPENAI_TIMEOUT = 600
 DEFAULT_OPENAI_MAX_WORKERS = 4
+DEFAULT_BEST_SHOT_BATCH_SIZE = 3
 
 # --- UI Constants ---
 # Grid view settings
@@ -409,6 +411,26 @@ def get_best_shot_engine() -> str:
 def set_best_shot_engine(engine: str) -> None:
     settings = _get_settings()
     settings.setValue(BEST_SHOT_ENGINE_KEY, engine.lower())
+
+
+def get_best_shot_batch_size() -> int:
+    env_value = os.getenv("PHOTOSORT_BEST_SHOT_BATCH_SIZE")
+    if env_value:
+        try:
+            value = int(env_value)
+        except ValueError:
+            value = DEFAULT_BEST_SHOT_BATCH_SIZE
+    else:
+        settings = _get_settings()
+        value = settings.value(
+            BEST_SHOT_BATCH_SIZE_KEY, DEFAULT_BEST_SHOT_BATCH_SIZE, type=int
+        )
+    return max(2, int(value))
+
+
+def set_best_shot_batch_size(batch_size: int) -> None:
+    settings = _get_settings()
+    settings.setValue(BEST_SHOT_BATCH_SIZE_KEY, max(2, int(batch_size)))
 
 
 def get_openai_config() -> dict:
