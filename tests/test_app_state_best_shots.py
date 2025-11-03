@@ -43,8 +43,9 @@ def test_best_shot_results_selection_cluster_fallback():
     with patch("ui.app_state.RatingCache"), patch("ui.app_state.ExifCache"):
         state = AppState()
 
+        selection_cluster_id = -1
         rankings = {
-            0: [
+            selection_cluster_id: [
                 {
                     "image_path": "sel1.jpg",
                     "composite_score": 0.95,
@@ -60,9 +61,15 @@ def test_best_shot_results_selection_cluster_fallback():
 
         state.set_best_shot_results(rankings)
 
-        assert state.best_shot_scores_by_path["sel1.jpg"]["cluster_id"] == 0
-        assert state.best_shot_winners[0]["image_path"] == "sel1.jpg"
+        assert (
+            state.best_shot_scores_by_path["sel1.jpg"]["cluster_id"]
+            == selection_cluster_id
+        )
+        assert state.best_shot_winners[selection_cluster_id]["image_path"] == "sel1.jpg"
 
         # Removing a selection-only image should clear the cached rankings
         state.remove_data_for_path("sel1.jpg")
-        assert state.best_shot_rankings[0][0]["image_path"] == "sel2.jpg"
+        assert (
+            state.best_shot_rankings[selection_cluster_id][0]["image_path"]
+            == "sel2.jpg"
+        )

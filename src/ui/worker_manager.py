@@ -5,7 +5,12 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 # Import worker classes
 from core.file_scanner import FileScanner
 
-from PyQt6 import sip
+try:
+    from PyQt6 import sip as _sip  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - environment dependent
+    import sip as _sip  # type: ignore[import-not-found]
+
+sip = _sip
 
 from ui.ui_components import (
     PreviewPreloaderWorker,

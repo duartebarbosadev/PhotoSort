@@ -91,6 +91,8 @@ def _load_font(image_size: Tuple[int, int]) -> ImageFont.ImageFont:
 
 def _annotate_image(image: Image.Image, label: str) -> Image.Image:
     annotated = image.copy()
+    if annotated.mode != "RGBA":
+        annotated = annotated.convert("RGBA")
     draw = ImageDraw.Draw(annotated)
     font = _load_font(annotated.size)
     text_bbox = draw.textbbox((0, 0), label, font=font)
@@ -105,7 +107,7 @@ def _annotate_image(image: Image.Image, label: str) -> Image.Image:
         position[1] + text_height + padding // 2,
     )
     draw.rectangle(background_box, fill=(0, 0, 0, 180))
-    draw.text(position, label, font=font, fill=(255, 255, 255))
+    draw.text(position, label, font=font, fill=(255, 255, 255, 255))
     return annotated
 
 

@@ -18,6 +18,8 @@ from core.ai.best_photo_selector import DEFAULT_MODELS_ROOT
 
 logger = logging.getLogger(__name__)
 
+AD_HOC_SELECTION_CLUSTER_ID = -1
+
 
 # Forward declarations for type hinting to avoid circular imports.
 class MainWindow:
@@ -579,8 +581,8 @@ class AppController(QObject):
             )
             return
 
-        # Create a single "cluster" with ID 0 containing the selected paths
-        cluster_map = {0: selected_paths}
+        # Create a synthetic cluster for ad-hoc comparison that cannot collide with real IDs
+        cluster_map = {AD_HOC_SELECTION_CLUSTER_ID: selected_paths}
 
         self.main_window.show_loading_overlay(
             f"Analyzing {len(selected_paths)} selected images..."
