@@ -4,6 +4,7 @@ import logging
 import os
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
+from core.caching.analysis_cache import AnalysisCache
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class AppState:
             RatingCache()
         )  # Instance of the new disk cache for ratings
         self.exif_disk_cache = ExifCache()  # Instance of the new disk cache for EXIF data, now reads size from app_settings
+        self.analysis_cache = AnalysisCache()
         self.marked_for_deletion: set = set()  # Set of file paths marked for deletion
         self.best_shot_rankings: Dict[int, List[Dict[str, Any]]] = {}
         self.best_shot_scores_by_path: Dict[str, Dict[str, Any]] = {}
@@ -44,6 +46,7 @@ class AppState:
 
     def clear_all_file_specific_data(self):
         """Clears all data that is specific to a loaded set of files/folder."""
+        folder_path = self.current_folder_path
         self.image_files_data.clear()
         self.rating_cache.clear()  # Clears in-memory dict
         self.date_cache.clear()
@@ -54,6 +57,8 @@ class AppState:
             self.rating_disk_cache.clear()  # Decide if folder clear should wipe the whole disk cache
         if self.exif_disk_cache:
             self.exif_disk_cache.clear()  # Decide if folder clear should wipe the whole disk cache
+        if folder_path and self.analysis_cache:
+            self.analysis_cache.clear_folder(folder_path)
         self.focused_image_path = None
         self.clear_best_shot_results()
         self.ai_rating_results.clear()
@@ -201,25 +206,30 @@ class AppState:
         self.best_shot_scores_by_path.clear()
         self.best_shot_winners.clear()
 
+    def merge_best_shot_results(
+        self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
+    ) -> None:
+        for cluster_id, rankings in rankings_by_cluster.items():
+            if not rankings:
+                continue
+            normalized_rankings: List[Dict[str, Any]] = []
+            for entry in rankings:
+                if not isinstance(entry, dict):
+                    continue
+                normalized = dict(entry)
+                normalized.setdefault("cluster_id", cluster_id)
+                normalized_rankings.append(normalized)
+                path = normalized.get("image_path")
+                if path:
+                    self.best_shot_scores_by_path[path] = normalized
+            if not normalized_rankings:
+                continue
+            self.best_shot_rankings[cluster_id] = normalized_rankings
+            self.best_shot_winners[cluster_id] = normalized_rankings[0]
+
     def set_best_shot_results(
         self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
     ):
         """Persist best-shot rankings emitted by the analysis worker."""
-        self.best_shot_rankings = {}
-        self.best_shot_scores_by_path = {}
-        self.best_shot_winners = {}
-        for cluster_id, rankings in rankings_by_cluster.items():
-            if not rankings:
-                continue
-            copied_rankings: List[Dict[str, Any]] = []
-            for entry in rankings:
-                enriched = dict(entry)
-                enriched.setdefault("cluster_id", cluster_id)
-                copied_rankings.append(enriched)
-                path = enriched.get("image_path")
-                if path:
-                    self.best_shot_scores_by_path[path] = enriched
-            if not copied_rankings:
-                continue
-            self.best_shot_rankings[cluster_id] = copied_rankings
-            self.best_shot_winners[cluster_id] = copied_rankings[0]
+        self.clear_best_shot_results()
+        self.merge_best_shot_results(rankings_by_cluster)

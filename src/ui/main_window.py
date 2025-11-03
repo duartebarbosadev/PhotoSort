@@ -445,6 +445,17 @@ class MainWindow(QMainWindow):
             self.exif_cache_configured_limit_label.setText("N/A")
             self.exif_cache_usage_label.setText("N/A")
 
+        if hasattr(self, "analysis_cache_usage_label"):
+            usage_text = "N/A"
+            analysis_cache = getattr(self.app_state, "analysis_cache", None)
+            if analysis_cache:
+                try:
+                    volume_bytes = analysis_cache.volume()
+                    usage_text = f"{volume_bytes / (1024 * 1024):.2f} MB"
+                except Exception:
+                    usage_text = "Error"
+            self.analysis_cache_usage_label.setText(usage_text)
+
     def _clear_thumbnail_cache_action(self):
         self.image_pipeline.thumbnail_cache.clear()
         self.statusBar().showMessage("Thumbnail cache cleared.", 5000)
@@ -458,6 +469,44 @@ class MainWindow(QMainWindow):
         )
         self._update_cache_dialog_labels()
         self._refresh_current_selection_preview()
+
+    def _clear_analysis_cache_action(self):
+        analysis_cache = getattr(self.app_state, "analysis_cache", None)
+        if not analysis_cache:
+            self.statusBar().showMessage("Analysis cache is not available.", 3000)
+            return
+        try:
+            analysis_cache.clear_all()
+            self.statusBar().showMessage("Analysis cache cleared.", 5000)
+        except Exception:
+            logger.error("Failed to clear analysis cache.", exc_info=True)
+            self.statusBar().showMessage("Failed to clear analysis cache.", 5000)
+        finally:
+            self.group_by_similarity_mode = False
+            self.app_state.cluster_results.clear()
+            self.app_state.clear_best_shot_results()
+            self.cluster_filter_combo.clear()
+            self.cluster_filter_combo.addItem("All Clusters")
+            self.cluster_filter_combo.setEnabled(False)
+            self.menu_manager.group_by_similarity_action.setChecked(False)
+            self.menu_manager.group_by_similarity_action.setEnabled(
+                bool(self.app_state.image_files_data)
+            )
+            self.menu_manager.set_cluster_sort_menu_visible(False)
+            self.menu_manager.set_cluster_sort_menu_enabled(False)
+            self.cluster_sort_combo.setEnabled(False)
+            self.menu_manager.analyze_best_shots_action.setEnabled(False)
+            self.menu_manager.stop_best_shots_action.setEnabled(False)
+            if hasattr(self.menu_manager, "analyze_best_shots_selected_action"):
+                self.menu_manager.analyze_best_shots_selected_action.setEnabled(
+                    bool(self.app_state.image_files_data)
+                )
+            if hasattr(self.menu_manager, "analyze_similarity_action"):
+                self.menu_manager.analyze_similarity_action.setEnabled(
+                    bool(self.app_state.image_files_data)
+                )
+            self._rebuild_model_view()
+            self._update_cache_dialog_labels()
 
     def _apply_preview_cache_limit_action(self):
         selected_index = self.preview_cache_size_combo.currentIndex()

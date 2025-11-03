@@ -904,7 +904,12 @@ class WorkerManager(QObject):
         logger.info("AI rating thread and worker cleaned up.")
 
     def start_best_shot_analysis(
-        self, cluster_map: Dict[int, List[str]], models_root: Optional[str] = None
+        self,
+        cluster_map: Dict[int, List[str]],
+        models_root: Optional[str] = None,
+        *,
+        folder_path: Optional[str] = None,
+        analysis_cache=None,
     ):
         """Start the best-shot ranking worker."""
         self.stop_best_shot_analysis()
@@ -917,6 +922,8 @@ class WorkerManager(QObject):
             cluster_map=cluster_map,
             models_root=models_root,
             image_pipeline=self.image_pipeline,
+            folder_path=folder_path,
+            analysis_cache=analysis_cache,
             best_shot_batch_size=get_best_shot_batch_size(),
         )
         self.best_shot_worker.moveToThread(self.best_shot_thread)

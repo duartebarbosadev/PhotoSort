@@ -413,7 +413,23 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
 
     def rank_cluster(self, cluster_id: int, image_paths: Sequence[str]) -> List[Dict[str, object]]:
         logger.info(f"AI ranking cluster {cluster_id} with {len(image_paths)} images using LLM strategy")
-        
+        if len(image_paths) <= 1:
+            normalized_results: List[Dict[str, object]] = []
+            for path in image_paths:
+                normalized_results.append(
+                    {
+                        "image_path": path,
+                        "composite_score": 1.0,
+                        "metrics": {"llm_selected": True},
+                        "analysis": "",
+                    }
+                )
+            if normalized_results:
+                logger.info(
+                    "Cluster %s has a single image; skipping LLM call.", cluster_id
+                )
+            return normalized_results
+
         images = []
         labelled_payloads: List[Tuple[int, str]] = []
         for idx, path in enumerate(image_paths, start=1):

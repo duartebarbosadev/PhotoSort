@@ -7,6 +7,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 if TYPE_CHECKING:
     from core.image_pipeline import ImagePipeline
+    from core.caching.analysis_cache import AnalysisCache
 
 from core.ai.best_shot_pipeline import (
     BaseBestShotStrategy,
@@ -43,6 +44,8 @@ class BestShotWorker(QObject):
         strategy: Optional[BaseBestShotStrategy] = None,
         parent: Optional[QObject] = None,
         best_shot_batch_size: Optional[int] = None,
+        folder_path: Optional[str] = None,
+        analysis_cache: Optional["AnalysisCache"] = None,
     ):
         super().__init__(parent)
         self.cluster_map = cluster_map
@@ -58,6 +61,8 @@ class BestShotWorker(QObject):
         self._best_shot_batch_size = max(
             2, int(best_shot_batch_size or get_best_shot_batch_size())
         )
+        self._folder_path = folder_path
+        self._analysis_cache = analysis_cache
 
     def stop(self):
         self._should_stop = True
@@ -272,6 +277,15 @@ class BestShotWorker(QObject):
                 entry.get("batch_rank", 0),
             )
         )
+        if self._analysis_cache and self._folder_path:
+            try:
+                self._analysis_cache.update_best_shot_results(
+                    self._folder_path, cluster_id, final_results
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist best-shot results for cluster %s", cluster_id
+                )
         return final_results
 
     def _analyze_cluster(
@@ -284,6 +298,26 @@ class BestShotWorker(QObject):
             return []
         if self._strategy is None:
             raise RuntimeError("Best-shot strategy not initialised")
+        if len(normalized_paths) <= 1:
+            single_results: List[Dict[str, object]] = [
+                {
+                    "image_path": normalized_paths[0],
+                    "composite_score": 1.0,
+                    "metrics": {"llm_selected": True},
+                    "analysis": "",
+                }
+            ]
+            if self._analysis_cache and self._folder_path:
+                try:
+                    self._analysis_cache.update_best_shot_results(
+                        self._folder_path, cluster_id, single_results
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to persist single-image best-shot result for cluster %s",
+                        cluster_id,
+                    )
+            return single_results
         rankings = self._rank_cluster_with_batching(cluster_id, normalized_paths)
         return rankings
 

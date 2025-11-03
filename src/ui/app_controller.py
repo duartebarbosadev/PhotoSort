@@ -1,8 +1,9 @@
 import glob
 import os
+import re
 import time
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from PyQt6.QtCore import QObject
 from core.app_settings import (
     add_recent_folder,
@@ -409,6 +410,108 @@ class AppController(QObject):
             cluster_map.setdefault(cluster_id, []).append(path)
         return cluster_map
 
+    def _restore_analysis_state(self):
+        folder_path = self.app_state.current_folder_path
+        if not folder_path:
+            return
+        saved = self.app_state.analysis_cache.load(folder_path)
+        if not saved:
+            return
+
+        available_paths = {
+            item.get("path") for item in self.app_state.image_files_data if item.get("path")
+        }
+
+        def _parse_cluster_key(key) -> Optional[int]:
+            if isinstance(key, int):
+                return key
+            if isinstance(key, str):
+                stripped = key.strip()
+                match = re.match(r"(-?\d+)", stripped)
+                if match:
+                    try:
+                        return int(match.group(1))
+                    except ValueError:
+                        return None
+            return None
+
+        restored_anything = False
+
+        saved_clusters = saved.get("cluster_results") or {}
+        if isinstance(saved_clusters, dict):
+            filtered_clusters = {
+                path: _parse_cluster_key(cluster_id)
+                for path, cluster_id in saved_clusters.items()
+                if path in available_paths and _parse_cluster_key(cluster_id) is not None
+            }
+            if filtered_clusters:
+                self.app_state.cluster_results = {
+                    path: int(cluster_id)
+                    for path, cluster_id in filtered_clusters.items()
+                }
+                cluster_ids = sorted(set(filtered_clusters.values()))
+                self.main_window.populate_cluster_filter(cluster_ids)
+                self.main_window.menu_manager.group_by_similarity_action.setEnabled(True)
+                if cluster_ids:
+                    self.main_window.menu_manager.set_cluster_sort_menu_visible(True)
+                    self.main_window.menu_manager.set_cluster_sort_menu_enabled(True)
+                    self.main_window.cluster_sort_combo.setEnabled(True)
+                self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
+                restored_anything = True
+        clustered_paths = set(self.app_state.cluster_results.keys())
+        missing_paths = available_paths - clustered_paths
+
+        saved_rankings = saved.get("best_shot_rankings") or {}
+        if isinstance(saved_rankings, dict):
+            normalized_rankings: Dict[int, List[Dict[str, Any]]] = {}
+            for key, value in saved_rankings.items():
+                cluster_id = _parse_cluster_key(key)
+                if cluster_id is None:
+                    continue
+                if isinstance(value, list):
+                    normalized_rankings[cluster_id] = value
+            if normalized_rankings:
+                self.app_state.merge_best_shot_results(normalized_rankings)
+                restored_anything = True
+
+        saved_scores = saved.get("best_shot_scores_by_path")
+        if isinstance(saved_scores, dict):
+            for path, data in saved_scores.items():
+                if path in available_paths and isinstance(data, dict):
+                    self.app_state.best_shot_scores_by_path[path] = data
+
+        saved_winners = saved.get("best_shot_winners")
+        if isinstance(saved_winners, dict):
+            for key, winner in saved_winners.items():
+                cluster_id = _parse_cluster_key(key)
+                if cluster_id is None:
+                    continue
+                if isinstance(winner, dict):
+                    self.app_state.best_shot_winners[cluster_id] = winner
+
+        if self.app_state.best_shot_rankings:
+            remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
+                self.app_state.best_shot_rankings.keys()
+            )
+            self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
+                bool(remaining_clusters)
+            )
+
+        if restored_anything:
+            self.main_window.statusBar().showMessage(
+                "Restored previous analysis results.", 4000
+            )
+
+        if missing_paths:
+            self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
+            self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
+            self.main_window.menu_manager.analyze_similarity_action.setEnabled(True)
+            self.main_window.menu_manager.group_by_similarity_action.setChecked(False)
+            self.main_window.menu_manager.group_by_similarity_action.setEnabled(True)
+            self.main_window.statusBar().showMessage(
+                "New images detected. Run Analyze Similarity to include them.", 5000
+            )
+
     def start_best_shot_analysis(self):
         logger.info("Starting best shot analysis.")
         if self.worker_manager.is_best_shot_worker_running():
@@ -424,15 +527,33 @@ class AppController(QObject):
             return
 
         cluster_map = self._build_cluster_path_map()
+        existing_clusters = set(self.app_state.best_shot_rankings.keys())
+        if not existing_clusters and self.app_state.current_folder_path:
+            cached_clusters = self.app_state.analysis_cache.get_completed_best_shot_clusters(
+                self.app_state.current_folder_path
+            )
+            existing_clusters.update(cached_clusters)
+        if existing_clusters:
+            cluster_map = {
+                cid: paths
+                for cid, paths in cluster_map.items()
+                if cid not in existing_clusters
+            }
         if not cluster_map:
             self.main_window.statusBar().showMessage(
-                "No similarity clusters available for best shot analysis.", 4000
+                "All similarity clusters already have best-shot results.", 4000
             )
+            self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
             return
 
         self.main_window.show_loading_overlay("Analyzing best shots...")
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
-        self.worker_manager.start_best_shot_analysis(cluster_map)
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(True)
+        self.worker_manager.start_best_shot_analysis(
+            cluster_map,
+            folder_path=self.app_state.current_folder_path,
+            analysis_cache=self.app_state.analysis_cache,
+        )
 
     def start_best_shot_analysis_for_selected(self):
         """Run best-shot analysis on currently selected images only."""
@@ -467,7 +588,33 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
             False
         )
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(True)
         self.worker_manager.start_best_shot_analysis(cluster_map)
+
+    def stop_best_shot_analysis(self):
+        if not self.worker_manager.is_best_shot_worker_running():
+            self.main_window.statusBar().showMessage(
+                "Best shot analysis is not currently running.", 3000
+            )
+            return
+
+        self.worker_manager.stop_best_shot_analysis()
+        self.main_window.hide_loading_overlay()
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
+        remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
+            self.app_state.best_shot_rankings.keys()
+        )
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
+            bool(remaining_clusters)
+        )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
+        self.main_window.statusBar().showMessage(
+            "Best shot analysis cancelled.", 4000
+        )
+        self._restore_analysis_state()
+        self.main_window._rebuild_model_view()
 
     def start_ai_rating_all(self):
         """Kick off AI-driven rating for every loaded image."""
@@ -624,6 +771,7 @@ class AppController(QObject):
             bool(self.app_state.image_files_data)
         )
 
+        self._restore_analysis_state()
         self.main_window._rebuild_model_view()
 
         if self.app_state.image_files_data:
@@ -756,6 +904,10 @@ class AppController(QObject):
     def handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
         self.app_state.cluster_results = cluster_results_dict
         self.app_state.clear_best_shot_results()
+        if self.app_state.current_folder_path:
+            self.app_state.analysis_cache.save_cluster_results(
+                self.app_state.current_folder_path, cluster_results_dict
+            )
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
@@ -805,18 +957,33 @@ class AppController(QObject):
     def handle_best_shot_complete(
         self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
     ):
-        self.app_state.set_best_shot_results(rankings_by_cluster or {})
+        new_results = rankings_by_cluster or {}
+        if new_results:
+            self.app_state.merge_best_shot_results(new_results)
+            if self.app_state.current_folder_path:
+                for cluster_id, rankings in new_results.items():
+                    self.app_state.analysis_cache.update_best_shot_results(
+                        self.app_state.current_folder_path,
+                        cluster_id,
+                        rankings,
+                    )
         self.main_window.hide_loading_overlay()
-        analyzed = len(rankings_by_cluster or {})
+        analyzed = len(new_results)
         self.main_window.statusBar().showMessage(
             f"Best shot analysis complete for {analyzed} group(s).", 4000
         )
+        remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
+            self.app_state.best_shot_rankings.keys()
+        )
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
-            bool(self.app_state.cluster_results)
+            bool(remaining_clusters)
         )
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
             True
         )
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
+        self._restore_analysis_state()
+        self.main_window._rebuild_model_view()
         self.main_window._rebuild_model_view()
 
     def handle_best_shot_error(self, message: str):
@@ -825,12 +992,18 @@ class AppController(QObject):
         self.main_window.statusBar().showMessage(
             f"Best shot analysis error: {message}", 8000
         )
+        remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
+            self.app_state.best_shot_rankings.keys()
+        )
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
-            bool(self.app_state.cluster_results)
+            bool(remaining_clusters)
         )
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
             True
         )
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
+        self._restore_analysis_state()
+        self.main_window._rebuild_model_view()
 
     def handle_best_shot_models_missing(self, missing_models: list):
         """Handle the case where best-shot models are not found."""
@@ -847,6 +1020,7 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
             True
         )
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
 
     def handle_ai_rating_progress(self, percentage: int, message: str):
         progress_text = message

@@ -40,6 +40,7 @@ class MenuManager:
         self.analyze_similarity_action: QAction
         self.analyze_best_shots_action: QAction
         self.analyze_best_shots_selected_action: QAction
+        self.stop_best_shots_action: QAction
         self.ai_rate_images_action: QAction
         self.detect_blur_action: QAction
         self.auto_rotate_action: QAction
@@ -314,6 +315,10 @@ class MenuManager:
         self.analyze_best_shots_selected_action.setShortcut(QKeySequence("Ctrl+Alt+S"))
         view_menu.addAction(self.analyze_best_shots_selected_action)
 
+        self.stop_best_shots_action = QAction("Stop Best Shot Analysis", main_win)
+        self.stop_best_shots_action.setEnabled(False)
+        view_menu.addAction(self.stop_best_shots_action)
+
         self.ai_rate_images_action = QAction("AI Rate Images", main_win)
         self.ai_rate_images_action.setToolTip(
             "Ask the configured AI engine to rate every visible image individually"
@@ -552,6 +557,9 @@ class MenuManager:
         )
         self.analyze_best_shots_selected_action.triggered.connect(
             main_win.app_controller.start_best_shot_analysis_for_selected
+        )
+        self.stop_best_shots_action.triggered.connect(
+            main_win.app_controller.stop_best_shot_analysis
         )
         self.ai_rate_images_action.triggered.connect(
             main_win.app_controller.start_ai_rating_all

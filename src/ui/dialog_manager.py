@@ -421,6 +421,8 @@ class DialogManager:
             set_custom_thread_count,
             get_best_shot_engine,
             set_best_shot_engine,
+            get_best_shot_batch_size,
+            set_best_shot_batch_size,
             get_openai_config,
             set_openai_config,
             DEFAULT_OPENAI_API_KEY,
@@ -707,14 +709,22 @@ class DialogManager:
         openai_form.addWidget(max_workers_label, 5, 0)
         openai_form.addWidget(max_workers_spin, 5, 1)
 
+        best_shot_batch_label = QLabel("Best-shot Batch Size")
+        best_shot_batch_spin = QSpinBox()
+        best_shot_batch_spin.setObjectName("bestShotBatchSpin")
+        best_shot_batch_spin.setRange(2, 12)
+        best_shot_batch_spin.setValue(get_best_shot_batch_size())
+        openai_form.addWidget(best_shot_batch_label, 6, 0)
+        openai_form.addWidget(best_shot_batch_spin, 6, 1)
+
         best_prompt_label = QLabel("Best Shot Prompt")
         best_prompt_edit = QPlainTextEdit()
         best_prompt_edit.setObjectName("openAIBestPromptEdit")
         best_prompt_edit.setPlaceholderText("Leave blank to use the default best-shot prompt.")
         best_prompt_edit.setPlainText(best_prompt_value)
         best_prompt_edit.setMinimumHeight(80)
-        openai_form.addWidget(best_prompt_label, 6, 0, Qt.AlignmentFlag.AlignTop)
-        openai_form.addWidget(best_prompt_edit, 6, 1)
+        openai_form.addWidget(best_prompt_label, 7, 0, Qt.AlignmentFlag.AlignTop)
+        openai_form.addWidget(best_prompt_edit, 7, 1)
 
         rating_prompt_label = QLabel("Rating Prompt")
         rating_prompt_edit = QPlainTextEdit()
@@ -722,8 +732,8 @@ class DialogManager:
         rating_prompt_edit.setPlaceholderText("Leave blank to use the default rating prompt.")
         rating_prompt_edit.setPlainText(rating_prompt_value)
         rating_prompt_edit.setMinimumHeight(80)
-        openai_form.addWidget(rating_prompt_label, 7, 0, Qt.AlignmentFlag.AlignTop)
-        openai_form.addWidget(rating_prompt_edit, 7, 1)
+        openai_form.addWidget(rating_prompt_label, 8, 0, Qt.AlignmentFlag.AlignTop)
+        openai_form.addWidget(rating_prompt_edit, 8, 1)
 
         test_connection_button = QPushButton("Test Connection")
         test_connection_button.setObjectName("openAITestConnectionButton")
@@ -958,6 +968,7 @@ class DialogManager:
             max_tokens_value = max_tokens_spin.value()
             timeout_value = timeout_spin.value()
             max_workers_value = max_workers_spin.value()
+            best_shot_batch_value = best_shot_batch_spin.value()
             best_prompt_text = best_prompt_edit.toPlainText()
             rating_prompt_text = rating_prompt_edit.toPlainText()
 
@@ -988,6 +999,9 @@ class DialogManager:
                 else rating_prompt_text.strip() or None,
             )
 
+            if best_shot_batch_value != get_best_shot_batch_size():
+                set_best_shot_batch_size(best_shot_batch_value)
+
             logger.info(
                 "Preferences saved: mode=%s, custom_threads=%s, engine=%s",
                 get_performance_mode().value,
@@ -1011,10 +1025,23 @@ class DialogManager:
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Cache Management")
         dialog.setObjectName("cacheManagementDialog")
-        # Frameless window for fancy UI
+        dialog.setMinimumSize(520, 480)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        main_layout = QVBoxLayout(dialog)
+
+        outer_layout = QVBoxLayout(dialog)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setObjectName("cacheManagementScrollArea")
+        outer_layout.addWidget(scroll_area)
+
+        content_widget = QFrame()
+        scroll_area.setWidget(content_widget)
+        main_layout = QVBoxLayout(content_widget)
         main_layout.setSpacing(15)
+        main_layout.setContentsMargins(25, 25, 25, 25)
 
         # Thumbnail Cache Section
         thumb_section_title = QLabel("Thumbnail Cache")
@@ -1154,15 +1181,43 @@ class DialogManager:
         exif_layout.addWidget(delete_exif_cache_button, 4, 0, 1, 2)
         main_layout.addWidget(exif_frame)
 
+        # Analysis Cache Section
+        analysis_section_title = QLabel("Analysis Cache")
+        analysis_section_title.setObjectName("cacheSectionTitle")
+        main_layout.addWidget(analysis_section_title)
+
+        analysis_frame = QFrame()
+        analysis_frame.setObjectName("cacheSectionFrame")
+        analysis_layout = QGridLayout(analysis_frame)
+
+        analysis_layout.addWidget(QLabel("Current Disk Usage:"), 0, 0)
+        self.parent.analysis_cache_usage_label = QLabel()
+        analysis_layout.addWidget(self.parent.analysis_cache_usage_label, 0, 1)
+
+        clear_analysis_cache_button = QPushButton("Clear Analysis Cache")
+        clear_analysis_cache_button.setObjectName("clearAnalysisCacheButton")
+        clear_analysis_cache_button.clicked.connect(
+            self.parent._clear_analysis_cache_action
+        )
+        analysis_layout.addWidget(clear_analysis_cache_button, 1, 0, 1, 2)
+        main_layout.addWidget(analysis_frame)
+
         main_layout.addSpacerItem(
             QSpacerItem(
-                20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
+                20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
             )
         )
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(25, 15, 25, 15)
+        button_row.addStretch()
         close_button = QPushButton("Close")
         close_button.setObjectName("cacheDialogCloseButton")
         close_button.clicked.connect(dialog.accept)
-        main_layout.addWidget(close_button)
+        button_row.addWidget(close_button)
+        outer_layout.addLayout(button_row)
+
+        self.parent._update_cache_dialog_labels()
 
         self.parent._update_cache_dialog_labels()
         dialog.setLayout(main_layout)
