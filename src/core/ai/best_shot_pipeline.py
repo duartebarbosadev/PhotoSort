@@ -17,6 +17,7 @@ from core.ai.best_photo_selector import BestPhotoSelector
 from core.app_settings import (
     get_best_shot_engine,
     get_openai_config,
+    DEFAULT_OPENAI_API_KEY,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_OPENAI_BASE_URL,
     DEFAULT_OPENAI_MAX_TOKENS,
@@ -236,18 +237,15 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 "openai package not installed. Install it to use LLM best-shot engine."
             ) from exc
 
-        if not llm_config.api_key:
-            raise RuntimeError(
-                "OpenAI API key missing. Set PHOTOSORT_OPENAI_API_KEY or configure via settings."
-            )
-
         self._timeout = llm_config.timeout
         self._base_url = llm_config.base_url or DEFAULT_OPENAI_BASE_URL
-        self._client = OpenAI(
-            api_key=llm_config.api_key,
-            base_url=self._base_url,
-            timeout=self._timeout,
-        )
+        client_kwargs: Dict[str, object] = {
+            "base_url": self._base_url,
+            "timeout": self._timeout,
+        }
+        if llm_config.api_key and llm_config.api_key != DEFAULT_OPENAI_API_KEY:
+            client_kwargs["api_key"] = llm_config.api_key
+        self._client = OpenAI(**client_kwargs)
         self._model = llm_config.model
         self._max_tokens = llm_config.max_tokens
         self._prompt_template = llm_config.best_shot_prompt

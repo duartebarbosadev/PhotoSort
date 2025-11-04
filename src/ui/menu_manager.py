@@ -302,7 +302,7 @@ class MenuManager:
             "Run the multi-model quality ranking inside each similarity cluster"
         )
         self.analyze_best_shots_action.setEnabled(False)
-        self.analyze_best_shots_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self.analyze_best_shots_action.setShortcut(QKeySequence("Ctrl+B"))
         view_menu.addAction(self.analyze_best_shots_action)
 
         self.analyze_best_shots_selected_action = QAction(
@@ -312,7 +312,7 @@ class MenuManager:
             "Run quality ranking on currently selected images only"
         )
         self.analyze_best_shots_selected_action.setEnabled(False)
-        self.analyze_best_shots_selected_action.setShortcut(QKeySequence("Ctrl+Alt+S"))
+        self.analyze_best_shots_selected_action.setShortcut(QKeySequence("Alt+B"))
         view_menu.addAction(self.analyze_best_shots_selected_action)
 
         self.stop_best_shots_action = QAction("Stop Best Shot Analysis", main_win)
@@ -324,7 +324,7 @@ class MenuManager:
             "Ask the configured AI engine to rate every visible image individually"
         )
         self.ai_rate_images_action.setEnabled(False)
-        self.ai_rate_images_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
+        self.ai_rate_images_action.setShortcut(QKeySequence("Ctrl+A"))
         view_menu.addAction(self.ai_rate_images_action)
 
         self.detect_blur_action = QAction("Detect Blurriness", main_win)

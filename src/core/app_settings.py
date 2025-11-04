@@ -74,7 +74,7 @@ DEFAULT_UPDATE_CHECK_ENABLED = True  # Default to enable automatic update checks
 DEFAULT_PERFORMANCE_MODE = PerformanceMode.BALANCED  # Default to balanced mode
 DEFAULT_CUSTOM_THREAD_COUNT = 4  # Default custom thread count
 DEFAULT_BEST_SHOT_ENGINE = "local"
-DEFAULT_OPENAI_API_KEY = "not-needed"
+DEFAULT_OPENAI_API_KEY = ""
 DEFAULT_OPENAI_MODEL = "Qwen3-VL-30B-A3B-Instruct-MLX-4bit"
 DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_OPENAI_MAX_TOKENS = 200
@@ -401,9 +401,6 @@ def calculate_max_workers(min_workers: int = 1, max_workers: int = None) -> int:
 
 
 def get_best_shot_engine() -> str:
-    env_value = os.getenv("PHOTOSORT_BEST_SHOT_ENGINE")
-    if env_value:
-        return env_value.lower()
     settings = _get_settings()
     return settings.value(BEST_SHOT_ENGINE_KEY, DEFAULT_BEST_SHOT_ENGINE, type=str)
 
@@ -414,17 +411,10 @@ def set_best_shot_engine(engine: str) -> None:
 
 
 def get_best_shot_batch_size() -> int:
-    env_value = os.getenv("PHOTOSORT_BEST_SHOT_BATCH_SIZE")
-    if env_value:
-        try:
-            value = int(env_value)
-        except ValueError:
-            value = DEFAULT_BEST_SHOT_BATCH_SIZE
-    else:
-        settings = _get_settings()
-        value = settings.value(
-            BEST_SHOT_BATCH_SIZE_KEY, DEFAULT_BEST_SHOT_BATCH_SIZE, type=int
-        )
+    settings = _get_settings()
+    value = settings.value(
+        BEST_SHOT_BATCH_SIZE_KEY, DEFAULT_BEST_SHOT_BATCH_SIZE, type=int
+    )
     return max(2, int(value))
 
 
@@ -436,35 +426,15 @@ def set_best_shot_batch_size(batch_size: int) -> None:
 def get_openai_config() -> dict:
     settings = _get_settings()
 
-    api_key = os.getenv("PHOTOSORT_OPENAI_API_KEY") or settings.value(
-        OPENAI_API_KEY_KEY, None, type=str
+    api_key = settings.value(OPENAI_API_KEY_KEY, DEFAULT_OPENAI_API_KEY, type=str)
+    model = settings.value(OPENAI_MODEL_KEY, DEFAULT_OPENAI_MODEL, type=str)
+    base_url = settings.value(OPENAI_BASE_URL_KEY, DEFAULT_OPENAI_BASE_URL, type=str)
+    max_tokens = settings.value(
+        OPENAI_MAX_TOKENS_KEY, DEFAULT_OPENAI_MAX_TOKENS, type=int
     )
-    if not api_key:
-        api_key = DEFAULT_OPENAI_API_KEY
-    model = (
-        os.getenv("PHOTOSORT_OPENAI_MODEL")
-        or settings.value(OPENAI_MODEL_KEY, DEFAULT_OPENAI_MODEL, type=str)
-    )
-    base_url = os.getenv("PHOTOSORT_OPENAI_BASE_URL") or settings.value(
-        OPENAI_BASE_URL_KEY, DEFAULT_OPENAI_BASE_URL, type=str
-    )
-    max_tokens_env = os.getenv("PHOTOSORT_OPENAI_MAX_TOKENS")
-    max_tokens = (
-        int(max_tokens_env)
-        if max_tokens_env is not None
-        else settings.value(OPENAI_MAX_TOKENS_KEY, DEFAULT_OPENAI_MAX_TOKENS, type=int)
-    )
-    timeout_env = os.getenv("PHOTOSORT_OPENAI_TIMEOUT")
-    timeout = (
-        int(timeout_env)
-        if timeout_env is not None
-        else settings.value(OPENAI_TIMEOUT_KEY, DEFAULT_OPENAI_TIMEOUT, type=int)
-    )
-    max_workers_env = os.getenv("PHOTOSORT_LLM_MAX_WORKERS")
-    max_workers = (
-        int(max_workers_env)
-        if max_workers_env is not None
-        else settings.value(OPENAI_MAX_WORKERS_KEY, DEFAULT_OPENAI_MAX_WORKERS, type=int)
+    timeout = settings.value(OPENAI_TIMEOUT_KEY, DEFAULT_OPENAI_TIMEOUT, type=int)
+    max_workers = settings.value(
+        OPENAI_MAX_WORKERS_KEY, DEFAULT_OPENAI_MAX_WORKERS, type=int
     )
 
     best_shot_prompt = settings.value(OPENAI_BEST_SHOT_PROMPT_KEY, None, type=str)

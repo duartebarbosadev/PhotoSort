@@ -7,7 +7,7 @@
 
 PhotoSort is a powerful desktop application focused on speed designed to streamline the management of large photo libraries, making it easier than ever to sort, cull, and organize your images.
 
-**Warning - Use this at your personal risk. Always use backups.**
+** Use this at your personal risk. Always use backups. **
 
 ## Key Features
 
@@ -19,6 +19,8 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * **Fast Processing**: Intensive operations (scanning, thumbnailing, analysis) run once in batch to ensure fast image scrolling.
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
   * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed.
+  * **AI Best-Shot Ranking**: Compare stacks with either the bundled multi-model pipeline or an OpenAI-compatible vision model (e.g. Qwen3-VL).
+  * **AI Star Ratings**: Ask the configured AI engine to score individual photos with 1–5 stars.
 
 - **Update Notifications**: Automatically checks for new releases and notifies users when updates are available, with direct download links.
 - **Performance Modes**: Configurable threading system (Settings → Preferences, `F10`) to balance between system responsiveness (Balanced) and maximum processing speed (Performance).
@@ -98,63 +100,46 @@ To use the **Auto Rotate Images** feature (`Ctrl+R`), you need to download the p
 
 The application will automatically detect and load the model when you use the rotation detection feature.
 
-### Experimental: AI Best Shot Ranking
+### AI Best Shot Ranking & Engines
 
-PhotoSort includes an experimental multi-model pipeline (see
-`core/ai/best_photo_selector.py`) that chains together Hugging Face models to
-pick the best frame inside a stack of similar photos.
+PhotoSort can rank similar shots and assign AI ratings using either a local
+multi-model pipeline or an OpenAI-compatible vision model; switch engines in
+**Preferences → AI Rating Engine** (`F10`). Settings persist between sessions.
 
-**⚠️ Important: Models are NOT included in the repository**
+**Local pipeline (default)**  
+Runs entirely offline with three Hugging Face checkpoints:
+BlazeFace face detector (`qualcomm/MediaPipe-Face-Detection`), eye-state classifier
+(`MichalMlodawski/open-closed-eye-classification-mobilev2`), and the aesthetic predictor
+(`shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE`). Place each bundle
+under `models/` and choose **Local Pipeline** in preferences.
 
-Due to size (~500MB–600MB) and licensing restrictions, the required models must be
-downloaded separately. The application will automatically detect missing models and
-guide you through the download process via a dialog.
+Required downloads (install into `models/`):
 
-**Required Models** (all must be placed in the `models/` directory):
+1. **Face detector** – [`qualcomm/MediaPipe-Face-Detection`](https://huggingface.co/qualcomm/MediaPipe-Face-Detection)  
+   Extract `model.onnx` to `models/job_*/model.onnx` (or e.g. `models/MediaPipe-Face-Detection_FaceDetector_float/model.onnx`).
+2. **Eye-state classifier** – [`MichalMlodawski/open-closed-eye-classification-mobilev2`](https://huggingface.co/MichalMlodawski/open-closed-eye-classification-mobilev2)  
+   Copy all files into `models/open-closed-eye-classification-mobilev2/`.
+3. **Aesthetic predictor** – [`shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE`](https://huggingface.co/shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE)  
+   Copy all files into `models/aesthetic_predictor/` (includes the CLIP backbone plus regression head).
 
-1. **Face detector** – Download the ONNX package from
-   [`qualcomm/MediaPipe-Face-Detection`](https://huggingface.co/qualcomm/MediaPipe-Face-Detection)
-   and extract `model.onnx` to `models/job_*/model.onnx` (or create a folder like
-   `models/MediaPipe-Face-Detection_FaceDetector_float/model.onnx`).
+**LLM engine**  
+Connect PhotoSort to any OpenAI-compatible endpoint that accepts images
+—for example Qwen3-VL. Configure API key, base URL,
+model name, prompt templates, and timeouts directly in the preferences dialog.
+For local deployments that do not require authentication (e.g. LM Studio), leave
+the API key blank.
 
-2. **Eye-state classifier** – Download all files from
-   [`MichalMlodawski/open-closed-eye-classification-mobilev2`](https://huggingface.co/MichalMlodawski/open-closed-eye-classification-mobilev2)
-   and place them under `models/open-closed-eye-classification-mobilev2/`.
-
-3. **Aesthetic predictor** – Download all files from
-   [`shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE`](https://huggingface.co/shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE)
-   and place them under `models/aesthetic_predictor/`. This bundle includes the
-   CLIP vision backbone plus the regression head used to score each frame.
-
-Once the models are in place you can rank a folder (or the members of a
-similarity cluster) from a Python shell:
-
-```python
-from core.ai.best_photo_selector import BestPhotoSelector
-
-selector = BestPhotoSelector()
-results = selector.rank_directory("/path/to/similar/stack")
-
-best = results[0]
-print("Best image:", best.image_path)
-print("Composite:", best.composite_score)
-print("Metrics:", best.metrics)
-```
-
-The selector yields a sorted `BestShotResult` list that includes the composite
-score plus sub-metrics (eyes open probability, technical sharpness, framing
-score, etc.). These scores can be fed back into the UI to highlight the best
-candidate inside a similarity cluster.
-
-In the desktop app, run **View → Analyze Similarity** first, then trigger
-**View → Analyze Best Shots** to execute the same ranking pipeline on every
-cluster. PhotoSort will label the best image per group (and expose the metrics
-in the item tooltip) so you can cull stacks faster.
-
-**Quick Selection Analysis**: You can also select multiple images manually
-(using Ctrl+Click or Shift+Click) and run **View → Analyze Best Shots (Selected)**
-(`Ctrl+Alt+S`) to rank just those images without needing similarity clustering.
-This is useful for quick comparisons of 2-10 images from different groups.
+**Using the results**  
+- **Similarity stacks**: After running **View → Analyze Similarity**, launch
+  **View → Analyze Best Shots** (`Ctrl+B`) to automatically pick a winner for every cluster
+  (metrics appear in the UI tooltips). For ad-hoc comparisons select a handful of
+  images and trigger **View → Analyze Best Shots (Selected)** (`Alt+B`) to rank
+  just that group.
+- **AI star ratings**: To score every visible image, run **View → AI Rate Images**
+  (`Ctrl+A`). The ratings are stored in your XMP sidecars/metadata cache so
+  they survive reloads, and you can filter the library using the standard rating
+  controls. (Detailed breakdowns from the AI response are kept internally for future
+  UI integrations.)
 
 ### Exporting Logs
 
