@@ -10,8 +10,6 @@ try:
 except ImportError:  # pragma: no cover - environment dependent
     import sip as _sip  # type: ignore[import-not-found]
 
-sip = _sip
-
 from ui.ui_components import (
     PreviewPreloaderWorker,
     BlurDetectionWorker,
@@ -33,6 +31,8 @@ from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
 from ui.app_state import AppState
 from core.app_settings import get_best_shot_batch_size
+
+sip = _sip
 
 logger = logging.getLogger(__name__)
 
@@ -613,10 +613,7 @@ class WorkerManager(QObject):
         )
 
     def is_best_shot_worker_running(self) -> bool:
-        return (
-            self.best_shot_thread is not None
-            and self.best_shot_thread.isRunning()
-        )
+        return self.best_shot_thread is not None and self.best_shot_thread.isRunning()
 
     def is_ai_rating_running(self) -> bool:
         return self.ai_rating_thread is not None and self.ai_rating_thread.isRunning()

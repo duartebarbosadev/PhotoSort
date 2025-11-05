@@ -210,7 +210,9 @@ class MenuManager:
         # Deletion marking actions
         self.mark_for_delete_action = QAction("Mark for Deletion", main_win)
         self.mark_for_delete_action.setShortcut(QKeySequence("D"))
-        self.mark_for_delete_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.mark_for_delete_action.setShortcutContext(
+            Qt.ShortcutContext.ApplicationShortcut
+        )
         main_win.addAction(self.mark_for_delete_action)
 
         self.unmark_for_delete_action = QAction("Unmark for Deletion", main_win)
@@ -380,7 +382,9 @@ class MenuManager:
             action.setData(option)
             self.rating_action_group.addAction(action)
             action.triggered.connect(
-                lambda checked, value=option: self._handle_rating_filter_selection(value)
+                lambda checked, value=option: self._handle_rating_filter_selection(
+                    value
+                )
             )
             self.rating_filter_actions[option] = action
         self.sync_rating_menu_selection(main_win.filter_combo.currentText())
@@ -406,9 +410,7 @@ class MenuManager:
             action.setData(option)
             self.cluster_sort_action_group.addAction(action)
             action.triggered.connect(
-                lambda checked, value=option: self._handle_cluster_sort_selection(
-                    value
-                )
+                lambda checked, value=option: self._handle_cluster_sort_selection(value)
             )
             self.cluster_sort_actions[option] = action
         self.sync_cluster_sort_selection(main_win.cluster_sort_combo.currentText())
@@ -457,7 +459,9 @@ class MenuManager:
 
         self.cluster_filter_menu.setEnabled(bool(cluster_ids))
 
-        self.sync_cluster_filter_selection(self.main_window.cluster_filter_combo.currentText())
+        self.sync_cluster_filter_selection(
+            self.main_window.cluster_filter_combo.currentText()
+        )
 
     def _handle_cluster_filter_selection(self, cluster_id: int) -> None:
         combo = self.main_window.cluster_filter_combo

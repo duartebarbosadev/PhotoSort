@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
 
 import pytest
 
@@ -26,7 +25,7 @@ def temp_models_root(tmp_path):
 def test_check_all_models_present(temp_models_root):
     """Test that check passes when all models are present."""
     import numpy as np
-    
+
     # Create all required model directories and files
     face_dir = os.path.join(temp_models_root, "job_jgzjewkop_optimized_onnx")
     os.makedirs(face_dir)
@@ -40,7 +39,9 @@ def test_check_all_models_present(temp_models_root):
     os.makedirs(aesthetic_dir)
 
     # Create anchors in the models root
-    np.save(os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]]))
+    np.save(
+        os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]])
+    )
 
     missing = check_best_shot_models(temp_models_root)
     assert len(missing) == 0
@@ -61,7 +62,7 @@ def test_check_all_models_missing(temp_models_root):
 def test_check_face_detector_missing(temp_models_root):
     """Test face detector missing detection."""
     import numpy as np
-    
+
     # Create only eye classifier and aesthetic predictor
     eye_dir = os.path.join(temp_models_root, "open-closed-eye-classification-mobilev2")
     os.makedirs(eye_dir)
@@ -70,7 +71,9 @@ def test_check_face_detector_missing(temp_models_root):
     os.makedirs(aesthetic_dir)
 
     # Create anchors
-    np.save(os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]]))
+    np.save(
+        os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]])
+    )
 
     missing = check_best_shot_models(temp_models_root)
 
@@ -82,7 +85,7 @@ def test_check_face_detector_missing(temp_models_root):
 def test_check_eye_classifier_missing(temp_models_root):
     """Test eye classifier missing detection."""
     import numpy as np
-    
+
     # Create only face detector and aesthetic predictor
     face_dir = os.path.join(temp_models_root, "job_jgzjewkop_optimized_onnx")
     os.makedirs(face_dir)
@@ -93,7 +96,9 @@ def test_check_eye_classifier_missing(temp_models_root):
     os.makedirs(aesthetic_dir)
 
     # Create anchors
-    np.save(os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]]))
+    np.save(
+        os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]])
+    )
 
     missing = check_best_shot_models(temp_models_root)
 
@@ -105,7 +110,7 @@ def test_check_eye_classifier_missing(temp_models_root):
 def test_check_aesthetic_predictor_missing(temp_models_root):
     """Test aesthetic predictor missing detection."""
     import numpy as np
-    
+
     # Create only face detector and eye classifier
     face_dir = os.path.join(temp_models_root, "job_jgzjewkop_optimized_onnx")
     os.makedirs(face_dir)
@@ -116,7 +121,9 @@ def test_check_aesthetic_predictor_missing(temp_models_root):
     os.makedirs(eye_dir)
 
     # Create anchors
-    np.save(os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]]))
+    np.save(
+        os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]])
+    )
 
     missing = check_best_shot_models(temp_models_root)
 
@@ -137,7 +144,7 @@ def test_ensure_models_raises_on_missing(temp_models_root):
 def test_ensure_models_passes_when_present(temp_models_root):
     """Test that ensure_best_shot_models doesn't raise when all models present."""
     import numpy as np
-    
+
     # Create all required model directories and files
     face_dir = os.path.join(temp_models_root, "job_jgzjewkop_optimized_onnx")
     os.makedirs(face_dir)
@@ -151,7 +158,9 @@ def test_ensure_models_passes_when_present(temp_models_root):
     os.makedirs(aesthetic_dir)
 
     # Create anchors
-    np.save(os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]]))
+    np.save(
+        os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]])
+    )
 
     # Should not raise
     ensure_best_shot_models(temp_models_root)
@@ -198,7 +207,7 @@ def test_model_dependency_error_message():
 def test_alternative_face_detector_path(temp_models_root):
     """Test that alternative face detector path is recognized."""
     import numpy as np
-    
+
     # Create face detector in alternative location
     face_dir = os.path.join(
         temp_models_root, "MediaPipe-Face-Detection_FaceDetector_float"
@@ -214,7 +223,9 @@ def test_alternative_face_detector_path(temp_models_root):
     os.makedirs(aesthetic_dir)
 
     # Create anchors
-    np.save(os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]]))
+    np.save(
+        os.path.join(temp_models_root, "blazeface_anchors.npy"), np.array([[1, 2, 3]])
+    )
 
     missing = check_best_shot_models(temp_models_root)
 

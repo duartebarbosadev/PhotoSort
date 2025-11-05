@@ -26,7 +26,6 @@ shunk031 (Apache 2.0).
 from __future__ import annotations
 
 import importlib.util
-import json
 import logging
 import os
 import sys
@@ -41,7 +40,9 @@ from PIL import Image, ImageOps
 logger = logging.getLogger(__name__)
 
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..")
+)
 DEFAULT_MODELS_ROOT = os.environ.get(
     "PHOTOSORT_MODELS_DIR", os.path.join(PROJECT_ROOT, "models")
 )
@@ -165,7 +166,9 @@ class BlazeFaceDetector:
         self.models_root = models_root or DEFAULT_MODELS_ROOT
         self.model_path = model_path or _first_existing_path(
             [
-                os.path.join(self.models_root, "job_jgzjewkop_optimized_onnx", "model.onnx"),
+                os.path.join(
+                    self.models_root, "job_jgzjewkop_optimized_onnx", "model.onnx"
+                ),
                 os.path.join(
                     self.models_root,
                     "MediaPipe-Face-Detection_FaceDetector_float",
@@ -373,7 +376,11 @@ class EyeStateClassifier:
     ) -> float:
         import torch  # type: ignore
 
-        assert self._processor is not None and self._model is not None and self._device is not None
+        assert (
+            self._processor is not None
+            and self._model is not None
+            and self._device is not None
+        )
         inputs = self._processor(images=eye_image, return_tensors="pt")
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
         with torch.no_grad():
@@ -401,7 +408,9 @@ class QualityFusionModel:
                 "Download shunk031/aesthetics-predictor-v2 (linear) into "
                 "models/aesthetic_predictor."
             )
-        self._package_name = f"photosort_aesthetic_predictor_{abs(hash(self.predictor_dir))}"
+        self._package_name = (
+            f"photosort_aesthetic_predictor_{abs(hash(self.predictor_dir))}"
+        )
         if self._package_name not in sys.modules:
             package = types.ModuleType(self._package_name)
             package.__path__ = [self.predictor_dir]
@@ -434,9 +443,7 @@ class QualityFusionModel:
             f"{package_prefix}.modeling_v2",
             os.path.join(self.predictor_dir, "modeling_v2.py"),
         )
-        AestheticsPredictorConfig = getattr(
-            config_module, "AestheticsPredictorConfig"
-        )
+        AestheticsPredictorConfig = getattr(config_module, "AestheticsPredictorConfig")
         PredictorModel = getattr(model_module, "AestheticsPredictorV2Linear")
 
         config = AestheticsPredictorConfig.from_pretrained(self.predictor_dir)
@@ -507,7 +514,9 @@ class BestPhotoSelector:
         if self.eye_classifier is None:
             try:
                 self.eye_classifier = EyeStateClassifier(
-                    os.path.join(self.models_root, "open-closed-eye-classification-mobilev2")
+                    os.path.join(
+                        self.models_root, "open-closed-eye-classification-mobilev2"
+                    )
                 )
             except FileNotFoundError as exc:
                 logger.warning("Eye-state classifier disabled: %s", exc)
@@ -529,7 +538,9 @@ class BestPhotoSelector:
                 logger.error("Quality model unavailable: %s", exc)
                 raise
 
-    def rank_directory(self, directory: str, recursive: bool = False) -> List[BestShotResult]:
+    def rank_directory(
+        self, directory: str, recursive: bool = False
+    ) -> List[BestShotResult]:
         image_paths: List[str] = []
         if recursive:
             for root, _, files in os.walk(directory):
@@ -588,7 +599,9 @@ class BestPhotoSelector:
         framing_score: Optional[float] = None
         if self.face_detector:
             try:
-                detections = self.face_detector.detect_faces(image, image_path=image_path)
+                detections = self.face_detector.detect_faces(
+                    image, image_path=image_path
+                )
             except Exception as exc:
                 logger.warning("Face detection failed for %s: %s", image_path, exc)
                 detections = []
@@ -602,7 +615,9 @@ class BestPhotoSelector:
                 raw_metrics["focus_face"] = focus_face
 
                 try:
-                    face_quality = self.quality_model.score(face_crop, return_embedding=True)
+                    face_quality = self.quality_model.score(
+                        face_crop, return_embedding=True
+                    )
                     raw_metrics["quality_face_raw"] = face_quality.raw
                     technical_score = 0.6 * focus_face + 0.4 * face_quality.normalized
                     if (
@@ -610,11 +625,18 @@ class BestPhotoSelector:
                         and face_quality.embedding is not None
                     ):
                         framing_score = _clamp(
-                            (_cosine_similarity(full_quality.embedding, face_quality.embedding) + 1.0)
+                            (
+                                _cosine_similarity(
+                                    full_quality.embedding, face_quality.embedding
+                                )
+                                + 1.0
+                            )
                             / 2.0
                         )
                 except Exception as exc:
-                    logger.warning("Subject quality scoring failed for %s: %s", image_path, exc)
+                    logger.warning(
+                        "Subject quality scoring failed for %s: %s", image_path, exc
+                    )
                 finally:
                     face_crop.close()
 
@@ -624,13 +646,19 @@ class BestPhotoSelector:
                         eye_crop.info["source_path"] = image_path
                         eye_crop.info["region"] = "eyes"
                         try:
-                            eyes_open_prob = self.eye_classifier.predict_open_probability(
-                                eye_crop, image_path=image_path
+                            eyes_open_prob = (
+                                self.eye_classifier.predict_open_probability(
+                                    eye_crop, image_path=image_path
+                                )
                             )
                             metrics["eyes_open"] = eyes_open_prob
                             raw_metrics["eyes_open_probability"] = eyes_open_prob
                         except Exception as exc:
-                            logger.warning("Eye-state classification failed for %s: %s", image_path, exc)
+                            logger.warning(
+                                "Eye-state classification failed for %s: %s",
+                                image_path,
+                                exc,
+                            )
                         finally:
                             eye_crop.close()
 
@@ -659,7 +687,10 @@ class BestPhotoSelector:
         return numerator / denom if denom else 0.0
 
     def _extract_eye_region(
-        self, image: Image.Image, detection: FaceDetectionResult, padding_ratio: float = 0.35
+        self,
+        image: Image.Image,
+        detection: FaceDetectionResult,
+        padding_ratio: float = 0.35,
     ) -> Optional[Image.Image]:
         if len(detection.keypoints) < 2:
             return None

@@ -92,9 +92,7 @@ class AiRatingWorker(QObject):
                 last_error = exc
                 if attempts < self._max_retries and not self._should_stop:
                     delay = self._retry_delay * attempts
-                    warning_msg = (
-                        f"Retry {attempts}/{self._max_retries} for {os.path.basename(image_path)}: {exc}"
-                    )
+                    warning_msg = f"Retry {attempts}/{self._max_retries} for {os.path.basename(image_path)}: {exc}"
                     logger.warning(warning_msg)
                     self.warning.emit(warning_msg)
                     if delay > 0:
@@ -128,7 +126,9 @@ class AiRatingWorker(QObject):
                     return
             self._ensure_strategy()
         except Exception as exc:
-            logger.error("Failed to initialise AI rating strategy: %s", exc, exc_info=True)
+            logger.error(
+                "Failed to initialise AI rating strategy: %s", exc, exc_info=True
+            )
             self.error.emit(str(exc))
             self.finished.emit()
             return
@@ -139,7 +139,9 @@ class AiRatingWorker(QObject):
                 self.completed.emit({})
                 return
 
-            logger.info(f"Starting AI rating of {total} images using {self._engine} engine")
+            logger.info(
+                f"Starting AI rating of {total} images using {self._engine} engine"
+            )
             results: Dict[str, Dict[str, object]] = {}
             failures: list[tuple[str, str]] = []
 
@@ -152,13 +154,17 @@ class AiRatingWorker(QObject):
                 processed = 0
                 for future in as_completed(futures):
                     if self._should_stop:
-                        logger.info("AI rating stop requested; skipping remaining results.")
+                        logger.info(
+                            "AI rating stop requested; skipping remaining results."
+                        )
                         break
                     path = futures[future]
                     try:
                         rating_data = future.result()
                     except Exception as exc:
-                        message = f"AI rating failed for {os.path.basename(path)}: {exc}"
+                        message = (
+                            f"AI rating failed for {os.path.basename(path)}: {exc}"
+                        )
                         logger.error("%s", message, exc_info=True)
                         failures.append((path, str(exc)))
                         self.warning.emit(message)
@@ -184,15 +190,16 @@ class AiRatingWorker(QObject):
                     self.progress_update.emit(percent, f"Rated {processed}/{total}")
 
             if not self._should_stop:
-                logger.info(f"AI rating completed: {len(results)} successful, {len(failures)} failed")
+                logger.info(
+                    f"AI rating completed: {len(results)} successful, {len(failures)} failed"
+                )
                 if failures:
                     failed_count = len(failures)
                     sample = ", ".join(
                         os.path.basename(path) for path, _ in failures[:3]
                     )
-                    summary = (
-                        f"AI rating skipped {failed_count} image(s)."
-                        + (f" Examples: {sample}" if sample else "")
+                    summary = f"AI rating skipped {failed_count} image(s)." + (
+                        f" Examples: {sample}" if sample else ""
                     )
                     self.warning.emit(summary)
                 self.completed.emit(results)

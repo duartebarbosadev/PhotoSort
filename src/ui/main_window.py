@@ -2284,20 +2284,22 @@ class MainWindow(QMainWindow):
         self.proxy_model.setFilterKeyColumn(-1)
         self.proxy_model.setFilterRole(Qt.ItemDataRole.DisplayRole)
         self.proxy_model.invalidateFilter()
-        
+
         # Return focus to the view if search box had focus
         if self.left_panel.search_input.hasFocus():
             QTimer.singleShot(0, self._return_focus_to_view)
         # Log the currently focused widget after filtering
         focus_widget = QApplication.focusWidget()
-        logger.debug(f"[after filter] focusWidget={focus_widget}, class={type(focus_widget).__name__ if focus_widget else None}")
+        logger.debug(
+            f"[after filter] focusWidget={focus_widget}, class={type(focus_widget).__name__ if focus_widget else None}"
+        )
 
     def _return_focus_to_view(self):
         """Return focus to the active view after filtering."""
         active_view = self._get_active_file_view()
         if not active_view:
             return
-        
+
         # Simple, direct focus transfer
         active_view.setFocus(Qt.FocusReason.OtherFocusReason)
         logger.debug(
@@ -2667,14 +2669,14 @@ class MainWindow(QMainWindow):
     def _remove_temporary_best_labels(self):
         """Remove temporary best-shot labels (legacy prefix/suffix) from all items."""
         logger.debug("Removing temporary best-shot labels from items")
-        
+
         def remove_label_recursive(parent_item: QStandardItem):
             """Recursively remove best-shot indicators from all items."""
             for row in range(parent_item.rowCount()):
                 child_item = parent_item.child(row)
                 if not child_item:
                     continue
-                    
+
                 text = child_item.text() or ""
                 modified = text
                 if modified.startswith("[BEST] "):
@@ -2683,17 +2685,17 @@ class MainWindow(QMainWindow):
                     modified = modified[: -len(" (Best)")]
                 if modified != text:
                     child_item.setText(modified)
-                
+
                 # Recurse into children (for grouped/folder views)
                 if child_item.hasChildren():
                     remove_label_recursive(child_item)
-        
+
         # Process root items
         for row in range(self.file_system_model.rowCount()):
             item = self.file_system_model.item(row)
             if item:
                 remove_label_recursive(item)
-        
+
         logger.debug("Finished removing temporary best-shot labels")
 
     def _update_thumbnails_from_cache(self):
@@ -3181,36 +3183,88 @@ class MainWindow(QMainWindow):
 
         self._shortcut_handlers.clear()
 
-        register(Qt.Key.Key_D, Qt.KeyboardModifier.NoModifier, mm.mark_for_delete_action.trigger)
-        register(Qt.Key.Key_D, Qt.KeyboardModifier.ShiftModifier, mm.commit_deletions_action.trigger)
-        register(Qt.Key.Key_D, Qt.KeyboardModifier.AltModifier, mm.clear_marked_deletions_action.trigger)
+        register(
+            Qt.Key.Key_D,
+            Qt.KeyboardModifier.NoModifier,
+            mm.mark_for_delete_action.trigger,
+        )
+        register(
+            Qt.Key.Key_D,
+            Qt.KeyboardModifier.ShiftModifier,
+            mm.commit_deletions_action.trigger,
+        )
+        register(
+            Qt.Key.Key_D,
+            Qt.KeyboardModifier.AltModifier,
+            mm.clear_marked_deletions_action.trigger,
+        )
 
-        register(Qt.Key.Key_R, Qt.KeyboardModifier.NoModifier, mm.rotate_clockwise_action.trigger)
-        register(Qt.Key.Key_R, Qt.KeyboardModifier.ShiftModifier, mm.rotate_counterclockwise_action.trigger)
-        register(Qt.Key.Key_R, Qt.KeyboardModifier.AltModifier, mm.rotate_180_action.trigger)
+        register(
+            Qt.Key.Key_R,
+            Qt.KeyboardModifier.NoModifier,
+            mm.rotate_clockwise_action.trigger,
+        )
+        register(
+            Qt.Key.Key_R,
+            Qt.KeyboardModifier.ShiftModifier,
+            mm.rotate_counterclockwise_action.trigger,
+        )
+        register(
+            Qt.Key.Key_R, Qt.KeyboardModifier.AltModifier, mm.rotate_180_action.trigger
+        )
 
-        register(Qt.Key.Key_F, Qt.KeyboardModifier.NoModifier, mm.toggle_folder_view_action.trigger)
-        register(Qt.Key.Key_S, Qt.KeyboardModifier.NoModifier, mm.group_by_similarity_action.trigger)
-        register(Qt.Key.Key_T, Qt.KeyboardModifier.NoModifier, mm.toggle_thumbnails_action.trigger)
-        register(Qt.Key.Key_B, Qt.KeyboardModifier.NoModifier, mm.detect_blur_action.trigger)
-        register(Qt.Key.Key_I, Qt.KeyboardModifier.NoModifier, mm.toggle_metadata_sidebar_action.trigger)
-        register(Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier, mm.actual_size_action.trigger)
+        register(
+            Qt.Key.Key_F,
+            Qt.KeyboardModifier.NoModifier,
+            mm.toggle_folder_view_action.trigger,
+        )
+        register(
+            Qt.Key.Key_S,
+            Qt.KeyboardModifier.NoModifier,
+            mm.group_by_similarity_action.trigger,
+        )
+        register(
+            Qt.Key.Key_T,
+            Qt.KeyboardModifier.NoModifier,
+            mm.toggle_thumbnails_action.trigger,
+        )
+        register(
+            Qt.Key.Key_B, Qt.KeyboardModifier.NoModifier, mm.detect_blur_action.trigger
+        )
+        register(
+            Qt.Key.Key_I,
+            Qt.KeyboardModifier.NoModifier,
+            mm.toggle_metadata_sidebar_action.trigger,
+        )
+        register(
+            Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier, mm.actual_size_action.trigger
+        )
 
-        register(Qt.Key.Key_0, Qt.KeyboardModifier.NoModifier, mm.fit_to_view_action.trigger)
-        register(Qt.Key.Key_0, Qt.KeyboardModifier.KeypadModifier, mm.fit_to_view_action.trigger)
+        register(
+            Qt.Key.Key_0, Qt.KeyboardModifier.NoModifier, mm.fit_to_view_action.trigger
+        )
+        register(
+            Qt.Key.Key_0,
+            Qt.KeyboardModifier.KeypadModifier,
+            mm.fit_to_view_action.trigger,
+        )
 
         for index, action in mm.image_focus_actions.items():
             key_value = Qt.Key.Key_0 + index
             register(key_value, Qt.KeyboardModifier.NoModifier, action.trigger)
             register(key_value, Qt.KeyboardModifier.KeypadModifier, action.trigger)
 
-    def _handle_registered_shortcut(self, key: int, modifiers: Qt.KeyboardModifier) -> bool:
+    def _handle_registered_shortcut(
+        self, key: int, modifiers: Qt.KeyboardModifier
+    ) -> bool:
         key_value = self._normalize_qt_enum(key)
         modifier_value = self._normalize_qt_enum(modifiers)
         handler = self._shortcut_handlers.get((key_value, modifier_value))
         if handler:
             logger.debug(
-                "Shortcut handled via map: key=%s, modifiers=%s", key_value, modifier_value
+                "Shortcut handled via map: key=%s, modifiers=%s",
+                key_value,
+                modifier_value,
             )
             handler()
             return True

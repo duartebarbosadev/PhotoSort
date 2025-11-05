@@ -22,7 +22,13 @@ class DummyPipeline:
     def __init__(self):
         self.calls = []
 
-    def get_preview_image(self, image_path, display_max_size=None, force_regenerate=False, force_default_brightness=False):
+    def get_preview_image(
+        self,
+        image_path,
+        display_max_size=None,
+        force_regenerate=False,
+        force_default_brightness=False,
+    ):
         self.calls.append((image_path, display_max_size))
         img = Image.new("RGB", (64, 64), color="white")
         img.info["source_path"] = image_path
@@ -46,11 +52,13 @@ class DummyStrategy(BaseBestShotStrategy):
         for path in image_paths:
             img = self.pipeline.get_preview_image(path)
             assert isinstance(img, Image.Image)
-            payload.append({
-                "image_path": path,
-                "composite_score": 1.0,
-                "metrics": {},
-            })
+            payload.append(
+                {
+                    "image_path": path,
+                    "composite_score": 1.0,
+                    "metrics": {},
+                }
+            )
         return payload
 
     def rate_image(self, image_path):  # pragma: no cover - unused in test
@@ -79,7 +87,10 @@ def test_best_shot_worker_uses_preview_pipeline(monkeypatch):
     assert [call[0] for call in pipeline.calls] == ["/tmp/sel1.jpg", "/tmp/sel2.jpg"]
     assert completed_payload
     assert 0 in completed_payload[0]
-    assert [entry["image_path"] for entry in completed_payload[0][0]] == ["/tmp/sel1.jpg", "/tmp/sel2.jpg"]
+    assert [entry["image_path"] for entry in completed_payload[0][0]] == [
+        "/tmp/sel1.jpg",
+        "/tmp/sel2.jpg",
+    ]
 
 
 def test_best_shot_worker_batches_large_clusters(monkeypatch):

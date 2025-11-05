@@ -16,7 +16,9 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..")
+)
 DEFAULT_MODELS_ROOT = os.environ.get(
     "PHOTOSORT_MODELS_DIR", os.path.join(PROJECT_ROOT, "models")
 )

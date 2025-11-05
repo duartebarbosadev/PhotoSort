@@ -597,9 +597,7 @@ class DialogManager:
         except (TypeError, ValueError):
             max_tokens_value = DEFAULT_OPENAI_MAX_TOKENS
         try:
-            timeout_value = int(
-                openai_config.get("timeout") or DEFAULT_OPENAI_TIMEOUT
-            )
+            timeout_value = int(openai_config.get("timeout") or DEFAULT_OPENAI_TIMEOUT)
         except (TypeError, ValueError):
             timeout_value = DEFAULT_OPENAI_TIMEOUT
         try:
@@ -720,7 +718,9 @@ class DialogManager:
         best_prompt_label = QLabel("Best Shot Prompt")
         best_prompt_edit = QPlainTextEdit()
         best_prompt_edit.setObjectName("openAIBestPromptEdit")
-        best_prompt_edit.setPlaceholderText("Leave blank to use the default best-shot prompt.")
+        best_prompt_edit.setPlaceholderText(
+            "Leave blank to use the default best-shot prompt."
+        )
         best_prompt_edit.setPlainText(best_prompt_value)
         best_prompt_edit.setMinimumHeight(80)
         openai_form.addWidget(best_prompt_label, 7, 0, Qt.AlignmentFlag.AlignTop)
@@ -729,7 +729,9 @@ class DialogManager:
         rating_prompt_label = QLabel("Rating Prompt")
         rating_prompt_edit = QPlainTextEdit()
         rating_prompt_edit.setObjectName("openAIRatingPromptEdit")
-        rating_prompt_edit.setPlaceholderText("Leave blank to use the default rating prompt.")
+        rating_prompt_edit.setPlaceholderText(
+            "Leave blank to use the default rating prompt."
+        )
         rating_prompt_edit.setPlainText(rating_prompt_value)
         rating_prompt_edit.setMinimumHeight(80)
         openai_form.addWidget(rating_prompt_label, 8, 0, Qt.AlignmentFlag.AlignTop)
@@ -1216,8 +1218,6 @@ class DialogManager:
         close_button.clicked.connect(dialog.accept)
         button_row.addWidget(close_button)
         outer_layout.addLayout(button_row)
-
-        self.parent._update_cache_dialog_labels()
 
         self.parent._update_cache_dialog_labels()
         dialog.setLayout(main_layout)

@@ -101,11 +101,7 @@ class BestShotWorker(QObject):
         phase: str,
         cluster_id: Optional[int] = None,
     ) -> str:
-        cluster_hint = (
-            f" for cluster {cluster_id}"
-            if cluster_id is not None
-            else ""
-        )
+        cluster_hint = f" for cluster {cluster_id}" if cluster_id is not None else ""
         if phase == "initialization":
             prefix = "AI service is unreachable"
         else:
@@ -182,9 +178,9 @@ class BestShotWorker(QObject):
             enriched["batch_index"] = batch_index
             enriched["batch_rank"] = rank_idx
             existing = results_by_path.get(path)
-            if existing is None or enriched.get(
+            if existing is None or enriched.get("composite_score", 0.0) >= existing.get(
                 "composite_score", 0.0
-            ) >= existing.get("composite_score", 0.0):
+            ):
                 results_by_path[path] = enriched
 
     def _determine_global_winner(
@@ -338,7 +334,8 @@ class BestShotWorker(QObject):
                 missing_models = check_best_shot_models(self.models_root)
                 if missing_models:
                     logger.warning(
-                        "Best-shot analysis aborted: %d model(s) missing", len(missing_models)
+                        "Best-shot analysis aborted: %d model(s) missing",
+                        len(missing_models),
                     )
                     self.models_missing.emit(missing_models)
                     self.finished.emit()
@@ -350,7 +347,9 @@ class BestShotWorker(QObject):
                 self.error.emit(str(exc))
                 return
             except Exception as exc:
-                logger.error("Failed to initialise best-shot strategy: %s", exc, exc_info=True)
+                logger.error(
+                    "Failed to initialise best-shot strategy: %s", exc, exc_info=True
+                )
                 self.error.emit(str(exc))
                 return
 
@@ -359,7 +358,9 @@ class BestShotWorker(QObject):
                 self.completed.emit({})
                 return
 
-            logger.info(f"Starting best shot analysis of {total_clusters} clusters using {self._engine} engine")
+            logger.info(
+                f"Starting best shot analysis of {total_clusters} clusters using {self._engine} engine"
+            )
             results: Dict[int, List[dict]] = {}
             futures = {}
             with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
@@ -381,7 +382,9 @@ class BestShotWorker(QObject):
                 processed = 0
                 for future in as_completed(futures):
                     if self._should_stop:
-                        logger.info("Best shot worker stop requested. Skipping remaining results.")
+                        logger.info(
+                            "Best shot worker stop requested. Skipping remaining results."
+                        )
                         break
                     cluster_id = futures[future]
                     try:
@@ -415,7 +418,9 @@ class BestShotWorker(QObject):
 
             if not self._should_stop:
                 total_results = sum(len(results) for results in results.values())
-                logger.info(f"Best shot analysis completed: {total_results} results from {len(results)} clusters")
+                logger.info(
+                    f"Best shot analysis completed: {total_results} results from {len(results)} clusters"
+                )
                 self.completed.emit(results)
         finally:
             if self._strategy is not None:

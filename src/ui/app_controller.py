@@ -1,4 +1,3 @@
-import glob
 import os
 import re
 import time
@@ -213,28 +212,18 @@ class AppController(QObject):
         )
 
         # Best Shot Worker
-        self.worker_manager.best_shot_progress.connect(
-            self.handle_best_shot_progress
-        )
-        self.worker_manager.best_shot_complete.connect(
-            self.handle_best_shot_complete
-        )
+        self.worker_manager.best_shot_progress.connect(self.handle_best_shot_progress)
+        self.worker_manager.best_shot_complete.connect(self.handle_best_shot_complete)
         self.worker_manager.best_shot_error.connect(self.handle_best_shot_error)
         self.worker_manager.best_shot_models_missing.connect(
             self.handle_best_shot_models_missing
         )
 
         # AI Rating Worker
-        self.worker_manager.ai_rating_progress.connect(
-            self.handle_ai_rating_progress
-        )
-        self.worker_manager.ai_rating_complete.connect(
-            self.handle_ai_rating_complete
-        )
+        self.worker_manager.ai_rating_progress.connect(self.handle_ai_rating_progress)
+        self.worker_manager.ai_rating_complete.connect(self.handle_ai_rating_complete)
         self.worker_manager.ai_rating_error.connect(self.handle_ai_rating_error)
-        self.worker_manager.ai_rating_warning.connect(
-            self.handle_ai_rating_warning
-        )
+        self.worker_manager.ai_rating_warning.connect(self.handle_ai_rating_warning)
 
         self._ai_rating_warning_messages: list[str] = []
 
@@ -421,7 +410,9 @@ class AppController(QObject):
             return
 
         available_paths = {
-            item.get("path") for item in self.app_state.image_files_data if item.get("path")
+            item.get("path")
+            for item in self.app_state.image_files_data
+            if item.get("path")
         }
 
         def _parse_cluster_key(key) -> Optional[int]:
@@ -444,7 +435,8 @@ class AppController(QObject):
             filtered_clusters = {
                 path: _parse_cluster_key(cluster_id)
                 for path, cluster_id in saved_clusters.items()
-                if path in available_paths and _parse_cluster_key(cluster_id) is not None
+                if path in available_paths
+                and _parse_cluster_key(cluster_id) is not None
             }
             if filtered_clusters:
                 self.app_state.cluster_results = {
@@ -453,7 +445,9 @@ class AppController(QObject):
                 }
                 cluster_ids = sorted(set(filtered_clusters.values()))
                 self.main_window.populate_cluster_filter(cluster_ids)
-                self.main_window.menu_manager.group_by_similarity_action.setEnabled(True)
+                self.main_window.menu_manager.group_by_similarity_action.setEnabled(
+                    True
+                )
                 if cluster_ids:
                     self.main_window.menu_manager.set_cluster_sort_menu_visible(True)
                     self.main_window.menu_manager.set_cluster_sort_menu_enabled(True)
@@ -531,8 +525,10 @@ class AppController(QObject):
         cluster_map = self._build_cluster_path_map()
         existing_clusters = set(self.app_state.best_shot_rankings.keys())
         if not existing_clusters and self.app_state.current_folder_path:
-            cached_clusters = self.app_state.analysis_cache.get_completed_best_shot_clusters(
-                self.app_state.current_folder_path
+            cached_clusters = (
+                self.app_state.analysis_cache.get_completed_best_shot_clusters(
+                    self.app_state.current_folder_path
+                )
             )
             existing_clusters.update(cached_clusters)
         if existing_clusters:
@@ -560,7 +556,7 @@ class AppController(QObject):
     def start_best_shot_analysis_for_selected(self):
         """Run best-shot analysis on currently selected images only."""
         logger.info("Starting best shot analysis for selected images.")
-        
+
         if self.worker_manager.is_best_shot_worker_running():
             self.main_window.statusBar().showMessage(
                 "Best shot analysis is already running.", 3000
@@ -612,9 +608,7 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
-        self.main_window.statusBar().showMessage(
-            "Best shot analysis cancelled.", 4000
-        )
+        self.main_window.statusBar().showMessage("Best shot analysis cancelled.", 4000)
         self._restore_analysis_state()
         self.main_window._rebuild_model_view()
 
@@ -629,9 +623,7 @@ class AppController(QObject):
             return
 
         if not self.app_state.image_files_data:
-            self.main_window.statusBar().showMessage(
-                "No images loaded to rate.", 3000
-            )
+            self.main_window.statusBar().showMessage("No images loaded to rate.", 3000)
             return
 
         image_paths = [item.get("path") for item in self.app_state.image_files_data]
@@ -952,9 +944,7 @@ class AppController(QObject):
         self.main_window.hide_loading_overlay()
 
     def handle_best_shot_progress(self, percentage: int, message: str):
-        self.main_window.update_loading_text(
-            f"Best shots: {message} ({percentage}%)"
-        )
+        self.main_window.update_loading_text(f"Best shots: {message} ({percentage}%)")
 
     def handle_best_shot_complete(
         self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
@@ -985,7 +975,6 @@ class AppController(QObject):
         )
         self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
         self._restore_analysis_state()
-        self.main_window._rebuild_model_view()
         self.main_window._rebuild_model_view()
 
     def handle_best_shot_error(self, message: str):
@@ -1109,9 +1098,7 @@ class AppController(QObject):
     def handle_ai_rating_error(self, message: str):
         logger.error(f"AI rating failed: {message}", exc_info=True)
         self.main_window.hide_loading_overlay()
-        self.main_window.statusBar().showMessage(
-            f"AI rating error: {message}", 8000
-        )
+        self.main_window.statusBar().showMessage(f"AI rating error: {message}", 8000)
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(
             bool(self.app_state.image_files_data)
         )

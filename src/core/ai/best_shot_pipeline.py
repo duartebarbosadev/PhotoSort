@@ -133,7 +133,9 @@ class BaseBestShotStrategy:
     def max_workers(self) -> int:
         return 4
 
-    def rank_cluster(self, cluster_id: int, image_paths: Sequence[str]) -> List[Dict[str, object]]:
+    def rank_cluster(
+        self, cluster_id: int, image_paths: Sequence[str]
+    ) -> List[Dict[str, object]]:
         raise NotImplementedError
 
     def rate_image(self, image_path: str) -> Optional[Dict[str, object]]:
@@ -157,14 +159,14 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
             # Use image pipeline for better RAW and format support
             image_loader = self._create_image_loader() if self.image_pipeline else None
             selector = BestPhotoSelector(
-                models_root=self.models_root,
-                image_loader=image_loader
+                models_root=self.models_root, image_loader=image_loader
             )
             self._thread_local.selector = selector
         return selector
 
     def _create_image_loader(self):
         """Create an image loader that uses the image pipeline for RAW and format support."""
+
         def pipeline_image_loader(image_path: str) -> Image.Image:
             try:
                 # Use image pipeline to get preview (handles RAW files properly)
@@ -178,33 +180,53 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
                     return preview
             except Exception as exc:
                 logger.warning("Image pipeline failed for %s: %s", image_path, exc)
-            
+
             # Fallback to direct loading for standard formats only
             ext = os.path.splitext(image_path)[1].lower()
-            if ext in {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif', '.webp'}:
+            if ext in {
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".bmp",
+                ".gif",
+                ".tiff",
+                ".tif",
+                ".webp",
+            }:
                 try:
                     from PIL import ImageOps
+
                     with Image.open(image_path) as img:
                         prepared = ImageOps.exif_transpose(img).convert("RGB")
                         prepared.info["source_path"] = image_path
                         prepared.info["region"] = "full"
                         return prepared.copy()
                 except Exception as exc:
-                    logger.error("Failed to load standard format image %s: %s", image_path, exc)
+                    logger.error(
+                        "Failed to load standard format image %s: %s", image_path, exc
+                    )
             else:
-                logger.error("Unsupported format for local AI analysis: %s (%s)", ext, image_path)
-            
+                logger.error(
+                    "Unsupported format for local AI analysis: %s (%s)", ext, image_path
+                )
+
             raise RuntimeError(f"Cannot load image for local AI analysis: {image_path}")
-        
+
         return pipeline_image_loader
 
-    def rank_cluster(self, cluster_id: int, image_paths: Sequence[str]) -> List[Dict[str, object]]:
-        logger.info(f"Local AI ranking cluster {cluster_id} with {len(image_paths)} images using local models")
+    def rank_cluster(
+        self, cluster_id: int, image_paths: Sequence[str]
+    ) -> List[Dict[str, object]]:
+        logger.info(
+            f"Local AI ranking cluster {cluster_id} with {len(image_paths)} images using local models"
+        )
         selector = self._get_selector()
         results = selector.rank_images(image_paths)
         ranked_results = [r.to_dict() for r in results]
         if ranked_results:
-            logger.info(f"Completed local AI ranking for cluster {cluster_id}. Best image: {os.path.basename(ranked_results[0]['image_path'])}")
+            logger.info(
+                f"Completed local AI ranking for cluster {cluster_id}. Best image: {os.path.basename(ranked_results[0]['image_path'])}"
+            )
         return ranked_results
 
     def rate_image(self, image_path: str) -> Optional[Dict[str, object]]:
@@ -268,7 +290,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
 
     def _load_preview(self, image_path: str) -> Image.Image:
         """Load image as RGB preview, ensuring compatibility with AI services.
-        
+
         Always uses the image pipeline to handle RAW files and other formats properly,
         as AI services typically don't support RAW formats natively.
         """
@@ -280,19 +302,30 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                     preview = preview.convert("RGB")
             except Exception:
                 logger.exception("Preview generation failed for %s", image_path)
-        
+
         if preview is None:
             try:
                 # Fallback for standard formats only - avoid RAW files
                 ext = os.path.splitext(image_path)[1].lower()
-                if ext in {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif', '.webp'}:
+                if ext in {
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".bmp",
+                    ".gif",
+                    ".tiff",
+                    ".tif",
+                    ".webp",
+                }:
                     preview = Image.open(image_path).convert("RGB")
                 else:
-                    raise RuntimeError(f"Unsupported format for AI analysis: {ext}. Preview generation required.")
+                    raise RuntimeError(
+                        f"Unsupported format for AI analysis: {ext}. Preview generation required."
+                    )
             except Exception as exc:
                 logger.error("Failed to load image %s: %s", image_path, exc)
                 raise RuntimeError(f"Cannot load image for AI analysis: {exc}") from exc
-        
+
         return preview
 
     def _build_messages(
@@ -302,9 +335,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         *,
         system_prompt: Optional[str] = None,
     ) -> List[Dict[str, object]]:
-        content: List[Dict[str, object]] = [
-            {"type": "text", "text": prompt}
-        ]
+        content: List[Dict[str, object]] = [{"type": "text", "text": prompt}]
         for index, b64 in labelled_images:
             content.append(
                 {
@@ -360,6 +391,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
             if isinstance(parsed, dict) and "rating" in parsed:
                 return int(round(float(parsed["rating"])))
         except (ValueError, TypeError, json.JSONDecodeError):
+            # Fall back to unstructured parsing if the model returned plain text.
             pass
 
         patterns = [
@@ -411,8 +443,12 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 f"LLM endpoint reachable, but model '{self._model}' not found. Available models: {', '.join(sorted(model_ids))}."
             )
 
-    def rank_cluster(self, cluster_id: int, image_paths: Sequence[str]) -> List[Dict[str, object]]:
-        logger.info(f"AI ranking cluster {cluster_id} with {len(image_paths)} images using LLM strategy")
+    def rank_cluster(
+        self, cluster_id: int, image_paths: Sequence[str]
+    ) -> List[Dict[str, object]]:
+        logger.info(
+            f"AI ranking cluster {cluster_id} with {len(image_paths)} images using LLM strategy"
+        )
         if len(image_paths) <= 1:
             normalized_results: List[Dict[str, object]] = []
             for path in image_paths:
@@ -440,7 +476,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
 
         prompt = self._prompt_template.format(image_count=len(image_paths))
         messages = self._build_messages(prompt, labelled_payloads)
-        
+
         logger.info(f"Sending {len(image_paths)} images to LLM for analysis")
         _, analysis = self._call_llm(messages)
         logger.info(f"Received LLM analysis response (length: {len(analysis)} chars)")
@@ -452,12 +488,16 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 candidate = int(best_match.group(1))
                 if 1 <= candidate <= len(image_paths):
                     best_index = candidate
-                    logger.info(f"LLM selected image {best_index} as best from {len(image_paths)} options")
+                    logger.info(
+                        f"LLM selected image {best_index} as best from {len(image_paths)} options"
+                    )
             except ValueError:
                 best_index = None
-        
+
         if best_index is None:
-            logger.warning(f"Could not parse best image selection from LLM response: {analysis[:200]}...")
+            logger.warning(
+                f"Could not parse best image selection from LLM response: {analysis[:200]}..."
+            )
 
         ranked: List[Dict[str, object]] = []
         for idx, path in images:
@@ -473,14 +513,18 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
 
         if best_index is not None:
             ranked.sort(key=lambda item: item["metrics"]["llm_selected"], reverse=True)
-            logger.info(f"Completed AI ranking for cluster {cluster_id}. Best image: {os.path.basename(ranked[0]['image_path'])}")
+            logger.info(
+                f"Completed AI ranking for cluster {cluster_id}. Best image: {os.path.basename(ranked[0]['image_path'])}"
+            )
         else:
-            logger.warning(f"Completed AI ranking for cluster {cluster_id} but no clear winner identified")
+            logger.warning(
+                f"Completed AI ranking for cluster {cluster_id} but no clear winner identified"
+            )
         return ranked
 
     def rate_image(self, image_path: str) -> Optional[Dict[str, object]]:
         logger.info(f"AI rating image: {os.path.basename(image_path)}")
-        
+
         preview = self._load_preview(image_path)
         annotated = _annotate_image(preview, "1")
         b64 = _image_to_base64(annotated)
@@ -523,12 +567,36 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                             "score_breakdown": {
                                 "type": "object",
                                 "properties": {
-                                    "sharpness": {"type": "integer", "minimum": 0, "maximum": 100},
-                                    "noise_control": {"type": "integer", "minimum": 0, "maximum": 100},
-                                    "exposure_balance": {"type": "integer", "minimum": 0, "maximum": 100},
-                                    "color_accuracy": {"type": "integer", "minimum": 0, "maximum": 100},
-                                    "composition_balance": {"type": "integer", "minimum": 0, "maximum": 100},
-                                    "subject_expression": {"type": "integer", "minimum": 0, "maximum": 100},
+                                    "sharpness": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 100,
+                                    },
+                                    "noise_control": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 100,
+                                    },
+                                    "exposure_balance": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 100,
+                                    },
+                                    "color_accuracy": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 100,
+                                    },
+                                    "composition_balance": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 100,
+                                    },
+                                    "subject_expression": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 100,
+                                    },
                                 },
                                 "required": [
                                     "sharpness",
@@ -556,8 +624,8 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
             }
         ]
         tool_choice = "required"
-        
-        logger.debug(f"Sending image to LLM for rating analysis")
+
+        logger.debug("Sending image to LLM for rating analysis")
         message, freeform_analysis = self._call_llm(
             messages,
             tools=tools,
@@ -580,9 +648,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         rating = structured_payload.get("overall_rating")
         if rating is not None:
             rating = max(1, min(5, rating))
-            logger.info(
-                f"AI rated {os.path.basename(image_path)} as {rating}/5"
-            )
+            logger.info(f"AI rated {os.path.basename(image_path)} as {rating}/5")
         else:
             snippet = (analysis or "").strip()[:200]
             logger.warning(
@@ -593,8 +659,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         if structured_payload and not analysis:
             breakdown = structured_payload.get("score_breakdown", {})
             breakdown_parts = [
-                f"{name.replace('_', ' ')} {value}"
-                for name, value in breakdown.items()
+                f"{name.replace('_', ' ')} {value}" for name, value in breakdown.items()
             ]
             notes = structured_payload.get("notes")
             confidence = structured_payload.get("confidence")
@@ -625,7 +690,7 @@ def create_best_shot_strategy(
     llm_config: Optional[LLMConfig] = None,
 ) -> BaseBestShotStrategy:
     """Create AI strategy for image analysis.
-    
+
     Both LLM and Local strategies now properly support RAW images by using
     the image_pipeline to generate RGB previews suitable for AI analysis.
     """

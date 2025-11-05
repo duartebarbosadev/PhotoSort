@@ -7,7 +7,7 @@
 
 PhotoSort is a powerful desktop application focused on speed designed to streamline the management of large photo libraries, making it easier than ever to sort, cull, and organize your images.
 
-** Use this at your personal risk. Always use backups. **
+**Use this at your personal risk. Always use backups.**
 
 ## Key Features
 
