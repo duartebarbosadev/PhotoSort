@@ -1,18 +1,23 @@
 import os
+import re
 import time
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from PyQt6.QtCore import QObject
 from core.app_settings import (
     add_recent_folder,
     get_preview_cache_size_bytes,
     PREVIEW_ESTIMATED_SIZE_FACTOR,
+    get_best_shot_engine,
 )
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
+from core.ai.best_photo_selector import DEFAULT_MODELS_ROOT
 
 
 logger = logging.getLogger(__name__)
+
+AD_HOC_SELECTION_CLUSTER_ID = -1
 
 
 # Forward declarations for type hinting to avoid circular imports.
@@ -206,6 +211,22 @@ class AppController(QObject):
             self.handle_thumbnail_preload_error
         )
 
+        # Best Shot Worker
+        self.worker_manager.best_shot_progress.connect(self.handle_best_shot_progress)
+        self.worker_manager.best_shot_complete.connect(self.handle_best_shot_complete)
+        self.worker_manager.best_shot_error.connect(self.handle_best_shot_error)
+        self.worker_manager.best_shot_models_missing.connect(
+            self.handle_best_shot_models_missing
+        )
+
+        # AI Rating Worker
+        self.worker_manager.ai_rating_progress.connect(self.handle_ai_rating_progress)
+        self.worker_manager.ai_rating_complete.connect(self.handle_ai_rating_complete)
+        self.worker_manager.ai_rating_error.connect(self.handle_ai_rating_error)
+        self.worker_manager.ai_rating_warning.connect(self.handle_ai_rating_warning)
+
+        self._ai_rating_warning_messages: list[str] = []
+
     # --- Public Methods (called from MainWindow) ---
 
     def load_folder(self, folder_path: str):
@@ -265,8 +286,10 @@ class AppController(QObject):
         self.main_window.cluster_filter_combo.clear()
         self.main_window.cluster_filter_combo.addItems(["All Clusters"])
         self.main_window.cluster_filter_combo.setEnabled(False)
-        self.main_window.menu_manager.cluster_sort_action.setVisible(False)
+        self.main_window.menu_manager.update_cluster_filter_menu([])
+        self.main_window.menu_manager.set_cluster_sort_menu_visible(False)
         self.main_window.cluster_sort_combo.setEnabled(False)
+        self.main_window.menu_manager.set_cluster_sort_menu_enabled(False)
         self.main_window.cluster_sort_combo.setCurrentIndex(0)
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(False)
         self.main_window.menu_manager.group_by_similarity_action.setChecked(False)
@@ -279,8 +302,10 @@ class AppController(QObject):
         )
         self.main_window.menu_manager.open_folder_action.setEnabled(False)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.main_window.menu_manager.detect_blur_action.setEnabled(False)
         self.main_window.menu_manager.auto_rotate_action.setEnabled(False)
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
 
         logger.debug(
             f"Folder prep complete in {time.perf_counter() - load_folder_start_time:.2f}s. Starting file scan."
@@ -316,6 +341,7 @@ class AppController(QObject):
 
         self.main_window.show_loading_overlay("Starting similarity analysis...")
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.worker_manager.start_similarity_analysis(paths_for_similarity)
 
     def start_blur_detection_analysis(self):
@@ -365,6 +391,268 @@ class AppController(QObject):
         self.worker_manager.start_rotation_detection(
             image_paths,
             self.app_state.exif_disk_cache,
+        )
+
+    def _build_cluster_path_map(self) -> Dict[int, List[str]]:
+        cluster_map: Dict[int, List[str]] = {}
+        for path, cluster_id in self.app_state.cluster_results.items():
+            if cluster_id is None:
+                continue
+            cluster_map.setdefault(cluster_id, []).append(path)
+        return cluster_map
+
+    def _restore_analysis_state(self):
+        folder_path = self.app_state.current_folder_path
+        if not folder_path:
+            return
+        saved = self.app_state.analysis_cache.load(folder_path)
+        if not saved:
+            return
+
+        available_paths = {
+            item.get("path")
+            for item in self.app_state.image_files_data
+            if item.get("path")
+        }
+
+        def _parse_cluster_key(key) -> Optional[int]:
+            if isinstance(key, int):
+                return key
+            if isinstance(key, str):
+                stripped = key.strip()
+                match = re.match(r"(-?\d+)", stripped)
+                if match:
+                    try:
+                        return int(match.group(1))
+                    except ValueError:
+                        return None
+            return None
+
+        restored_anything = False
+
+        saved_clusters = saved.get("cluster_results") or {}
+        if isinstance(saved_clusters, dict):
+            filtered_clusters = {
+                path: _parse_cluster_key(cluster_id)
+                for path, cluster_id in saved_clusters.items()
+                if path in available_paths
+                and _parse_cluster_key(cluster_id) is not None
+            }
+            if filtered_clusters:
+                self.app_state.cluster_results = {
+                    path: int(cluster_id)
+                    for path, cluster_id in filtered_clusters.items()
+                }
+                cluster_ids = sorted(set(filtered_clusters.values()))
+                self.main_window.populate_cluster_filter(cluster_ids)
+                self.main_window.menu_manager.group_by_similarity_action.setEnabled(
+                    True
+                )
+                if cluster_ids:
+                    self.main_window.menu_manager.set_cluster_sort_menu_visible(True)
+                    self.main_window.menu_manager.set_cluster_sort_menu_enabled(True)
+                    self.main_window.cluster_sort_combo.setEnabled(True)
+                self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
+                restored_anything = True
+        clustered_paths = set(self.app_state.cluster_results.keys())
+        missing_paths = available_paths - clustered_paths
+
+        saved_rankings = saved.get("best_shot_rankings") or {}
+        if isinstance(saved_rankings, dict):
+            normalized_rankings: Dict[int, List[Dict[str, Any]]] = {}
+            for key, value in saved_rankings.items():
+                cluster_id = _parse_cluster_key(key)
+                if cluster_id is None:
+                    continue
+                if isinstance(value, list):
+                    normalized_rankings[cluster_id] = value
+            if normalized_rankings:
+                self.app_state.merge_best_shot_results(normalized_rankings)
+                restored_anything = True
+
+        saved_scores = saved.get("best_shot_scores_by_path")
+        if isinstance(saved_scores, dict):
+            for path, data in saved_scores.items():
+                if path in available_paths and isinstance(data, dict):
+                    self.app_state.best_shot_scores_by_path[path] = data
+
+        saved_winners = saved.get("best_shot_winners")
+        if isinstance(saved_winners, dict):
+            for key, winner in saved_winners.items():
+                cluster_id = _parse_cluster_key(key)
+                if cluster_id is None:
+                    continue
+                if isinstance(winner, dict):
+                    self.app_state.best_shot_winners[cluster_id] = winner
+
+        if self.app_state.best_shot_rankings:
+            remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
+                self.app_state.best_shot_rankings.keys()
+            )
+            self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
+                bool(remaining_clusters)
+            )
+
+        if restored_anything:
+            self.main_window.statusBar().showMessage(
+                "Restored previous analysis results.", 4000
+            )
+
+        if missing_paths:
+            self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
+            self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
+            self.main_window.menu_manager.analyze_similarity_action.setEnabled(True)
+            self.main_window.menu_manager.group_by_similarity_action.setChecked(False)
+            self.main_window.menu_manager.group_by_similarity_action.setEnabled(True)
+            self.main_window.statusBar().showMessage(
+                "New images detected. Run Analyze Similarity to include them.", 5000
+            )
+
+    def start_best_shot_analysis(self):
+        logger.info("Starting best shot analysis.")
+        if self.worker_manager.is_best_shot_worker_running():
+            self.main_window.statusBar().showMessage(
+                "Best shot analysis is already running.", 3000
+            )
+            return
+
+        if not self.app_state.cluster_results:
+            self.main_window.statusBar().showMessage(
+                "Run Analyze Similarity before best shot analysis.", 4000
+            )
+            return
+
+        cluster_map = self._build_cluster_path_map()
+        existing_clusters = set(self.app_state.best_shot_rankings.keys())
+        if not existing_clusters and self.app_state.current_folder_path:
+            cached_clusters = (
+                self.app_state.analysis_cache.get_completed_best_shot_clusters(
+                    self.app_state.current_folder_path
+                )
+            )
+            existing_clusters.update(cached_clusters)
+        if existing_clusters:
+            cluster_map = {
+                cid: paths
+                for cid, paths in cluster_map.items()
+                if cid not in existing_clusters
+            }
+        if not cluster_map:
+            self.main_window.statusBar().showMessage(
+                "All similarity clusters already have best-shot results.", 4000
+            )
+            self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
+            return
+
+        self.main_window.show_loading_overlay("Analyzing best shots...")
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(True)
+        self.worker_manager.start_best_shot_analysis(
+            cluster_map,
+            folder_path=self.app_state.current_folder_path,
+            analysis_cache=self.app_state.analysis_cache,
+        )
+
+    def start_best_shot_analysis_for_selected(self):
+        """Run best-shot analysis on currently selected images only."""
+        logger.info("Starting best shot analysis for selected images.")
+
+        if self.worker_manager.is_best_shot_worker_running():
+            self.main_window.statusBar().showMessage(
+                "Best shot analysis is already running.", 3000
+            )
+            return
+
+        # Get selected images
+        selected_paths = self.main_window.get_selected_file_paths()
+        if not selected_paths:
+            self.main_window.statusBar().showMessage(
+                "No images selected. Please select images first.", 3000
+            )
+            return
+
+        if len(selected_paths) < 2:
+            self.main_window.statusBar().showMessage(
+                "Please select at least 2 images for comparison.", 3000
+            )
+            return
+
+        # Create a synthetic cluster for ad-hoc comparison that cannot collide with real IDs
+        cluster_map = {AD_HOC_SELECTION_CLUSTER_ID: selected_paths}
+
+        self.main_window.show_loading_overlay(
+            f"Analyzing {len(selected_paths)} selected images..."
+        )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            False
+        )
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(True)
+        self.worker_manager.start_best_shot_analysis(cluster_map)
+
+    def stop_best_shot_analysis(self):
+        if not self.worker_manager.is_best_shot_worker_running():
+            self.main_window.statusBar().showMessage(
+                "Best shot analysis is not currently running.", 3000
+            )
+            return
+
+        self.worker_manager.stop_best_shot_analysis()
+        self.main_window.hide_loading_overlay()
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
+        remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
+            self.app_state.best_shot_rankings.keys()
+        )
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
+            bool(remaining_clusters)
+        )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
+        self.main_window.statusBar().showMessage("Best shot analysis cancelled.", 4000)
+        self._restore_analysis_state()
+        self.main_window._rebuild_model_view()
+
+    def start_ai_rating_all(self):
+        """Kick off AI-driven rating for every loaded image."""
+        logger.info("Starting AI rating for all images.")
+
+        if self.worker_manager.is_ai_rating_running():
+            self.main_window.statusBar().showMessage(
+                "AI rating is already running.", 3000
+            )
+            return
+
+        if not self.app_state.image_files_data:
+            self.main_window.statusBar().showMessage("No images loaded to rate.", 3000)
+            return
+
+        image_paths = [item.get("path") for item in self.app_state.image_files_data]
+        image_paths = [path for path in image_paths if path]
+        if not image_paths:
+            self.main_window.statusBar().showMessage(
+                "No valid image paths available for AI rating.", 3000
+            )
+            return
+
+        self.main_window.show_loading_overlay("Requesting AI ratings...")
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
+        self.main_window.statusBar().showMessage(
+            f"AI rating started for {len(image_paths)} image(s)...",
+            4000,
+        )
+
+        self._ai_rating_warning_messages = []
+
+        try:
+            engine = get_best_shot_engine()
+        except Exception:  # pragma: no cover - defensive guard
+            logger.exception("Failed to resolve best-shot engine from settings.")
+            engine = None
+
+        self.worker_manager.start_ai_rating(
+            image_paths=image_paths,
+            models_root=DEFAULT_MODELS_ROOT,
+            engine=engine,
         )
 
     def reload_current_folder(self):
@@ -461,6 +749,9 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
         self.main_window.menu_manager.detect_blur_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
@@ -470,7 +761,11 @@ class AppController(QObject):
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
 
+        self._restore_analysis_state()
         self.main_window._rebuild_model_view()
 
         if self.app_state.image_files_data:
@@ -504,6 +799,7 @@ class AppController(QObject):
         )
 
         self.main_window.hide_loading_overlay()
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
 
     def handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0
@@ -601,6 +897,11 @@ class AppController(QObject):
 
     def handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
         self.app_state.cluster_results = cluster_results_dict
+        self.app_state.clear_best_shot_results()
+        if self.app_state.current_folder_path:
+            self.app_state.analysis_cache.save_cluster_results(
+                self.app_state.current_folder_path, cluster_results_dict
+            )
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
@@ -619,13 +920,16 @@ class AppController(QObject):
             ["All Clusters"] + [f"Cluster {cid}" for cid in cluster_ids]
         )
         self.main_window.cluster_filter_combo.setEnabled(True)
+        self.main_window.menu_manager.update_cluster_filter_menu(cluster_ids)
         self.main_window.menu_manager.group_by_similarity_action.setChecked(True)
         if (
             self.main_window.menu_manager.group_by_similarity_action.isChecked()
             and self.app_state.cluster_results
         ):
-            self.main_window.menu_manager.cluster_sort_action.setVisible(True)
+            self.main_window.menu_manager.set_cluster_sort_menu_visible(True)
             self.main_window.cluster_sort_combo.setEnabled(True)
+            self.main_window.menu_manager.set_cluster_sort_menu_enabled(True)
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
         if self.main_window.group_by_similarity_mode:
             self.main_window._rebuild_model_view()
         self.main_window.hide_loading_overlay()
@@ -636,7 +940,169 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self.app_state.image_files_data)
         )
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.main_window.hide_loading_overlay()
+
+    def handle_best_shot_progress(self, percentage: int, message: str):
+        self.main_window.update_loading_text(f"Best shots: {message} ({percentage}%)")
+
+    def handle_best_shot_complete(
+        self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
+    ):
+        new_results = rankings_by_cluster or {}
+        if new_results:
+            self.app_state.merge_best_shot_results(new_results)
+            if self.app_state.current_folder_path:
+                for cluster_id, rankings in new_results.items():
+                    self.app_state.analysis_cache.update_best_shot_results(
+                        self.app_state.current_folder_path,
+                        cluster_id,
+                        rankings,
+                    )
+        self.main_window.hide_loading_overlay()
+        analyzed = len(new_results)
+        self.main_window.statusBar().showMessage(
+            f"Best shot analysis complete for {analyzed} group(s).", 4000
+        )
+        remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
+            self.app_state.best_shot_rankings.keys()
+        )
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
+            bool(remaining_clusters)
+        )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            True
+        )
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
+        self._restore_analysis_state()
+        self.main_window._rebuild_model_view()
+
+    def handle_best_shot_error(self, message: str):
+        logger.error(f"Best shot analysis failed: {message}", exc_info=True)
+        self.main_window.hide_loading_overlay()
+        self.main_window.statusBar().showMessage(
+            f"Best shot analysis error: {message}", 8000
+        )
+        remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
+            self.app_state.best_shot_rankings.keys()
+        )
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
+            bool(remaining_clusters)
+        )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            True
+        )
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
+        self._restore_analysis_state()
+        self.main_window._rebuild_model_view()
+
+    def handle_best_shot_models_missing(self, missing_models: list):
+        """Handle the case where best-shot models are not found."""
+        self.main_window.hide_loading_overlay()
+        self.main_window.dialog_manager.show_best_shot_models_missing_dialog(
+            missing_models
+        )
+        self.main_window.statusBar().showMessage(
+            "Best shot models not found. Analysis cancelled.", 5000
+        )
+        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
+            bool(self.app_state.cluster_results)
+        )
+        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
+            True
+        )
+        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
+
+    def handle_ai_rating_progress(self, percentage: int, message: str):
+        progress_text = message
+        if percentage is not None:
+            progress_text = f"{message} ({percentage}%)"
+        self.main_window.update_loading_text(f"AI rating: {progress_text}")
+
+    def handle_ai_rating_warning(self, message: str):
+        logger.warning("AI rating warning: %s", message)
+        self.main_window.statusBar().showMessage(message, 6000)
+        lowered = message.lower()
+        if "failed" in lowered or "skipped" in lowered:
+            self._ai_rating_warning_messages.append(message)
+
+    def handle_ai_rating_complete(self, results: Dict[str, Dict[str, Any]]):
+        self.main_window.hide_loading_overlay()
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
+
+        normalized_results = results or {}
+        self.app_state.ai_rating_results = dict(normalized_results)
+
+        ratings_applied = 0
+        rating_operations: List[Tuple[str, int]] = []
+        for image_path, payload in normalized_results.items():
+            if not isinstance(payload, dict):
+                continue
+            rating_value = payload.get("rating")
+            if rating_value is None:
+                continue
+            try:
+                rating_int = int(round(float(rating_value)))
+            except (TypeError, ValueError):
+                logger.debug("Skipping non-numeric AI rating for %s", image_path)
+                continue
+
+            ratings_applied += 1
+            self.app_state.rating_cache[image_path] = rating_int
+            if self.app_state.rating_disk_cache:
+                try:
+                    self.app_state.rating_disk_cache.set(image_path, rating_int)
+                except Exception:  # pragma: no cover - cache writes should not crash UI
+                    logger.exception(
+                        "Failed to persist AI rating cache for %s", image_path
+                    )
+
+            for viewer in self.main_window.advanced_image_viewer.image_viewers:
+                if viewer.isVisible() and viewer._file_path == image_path:
+                    viewer.update_rating_display(rating_int)
+
+            rating_operations.append((image_path, rating_int))
+
+        if ratings_applied:
+            self.main_window._apply_filter()
+            self.main_window.statusBar().showMessage(
+                f"AI rating complete for {ratings_applied} image(s).", 4000
+            )
+            if rating_operations:
+                if self.worker_manager.is_rating_writer_running():
+                    logger.info(
+                        "Rating writer already running; skipping automatic metadata write"
+                    )
+                else:
+                    self.main_window.statusBar().showMessage(
+                        f"Saving AI ratings to image metadata ({len(rating_operations)} files)...",
+                        5000,
+                    )
+                    self.worker_manager.start_rating_writer(
+                        rating_operations=rating_operations,
+                        rating_disk_cache=self.app_state.rating_disk_cache,
+                        exif_disk_cache=self.app_state.exif_disk_cache,
+                    )
+        else:
+            self.main_window.statusBar().showMessage(
+                "AI rating finished but no ratings were applied.", 5000
+            )
+
+        if self._ai_rating_warning_messages:
+            summary_message = self._ai_rating_warning_messages[-1]
+            self.main_window.statusBar().showMessage(summary_message, 7000)
+            self._ai_rating_warning_messages = []
+
+    def handle_ai_rating_error(self, message: str):
+        logger.error(f"AI rating failed: {message}", exc_info=True)
+        self.main_window.hide_loading_overlay()
+        self.main_window.statusBar().showMessage(f"AI rating error: {message}", 8000)
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
+            bool(self.app_state.image_files_data)
+        )
+        self._ai_rating_warning_messages = []
 
     def handle_blur_detection_progress(
         self, current: int, total: int, path_basename: str

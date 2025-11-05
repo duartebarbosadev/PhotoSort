@@ -24,9 +24,9 @@ class DummyCtx:
                         "setChecked": lambda *a, **k: None,
                     },
                 )(),
-                "cluster_sort_action": type(
-                    "B", (), {"setVisible": lambda *a, **k: None}
-                )(),
+                "set_cluster_sort_menu_visible": lambda *a, **k: None,
+                "set_cluster_sort_menu_enabled": lambda *a, **k: None,
+                "update_cluster_filter_menu": lambda *a, **k: None,
             },
         )()
         self.loading = []

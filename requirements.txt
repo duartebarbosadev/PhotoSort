@@ -5,6 +5,8 @@ Pillow-heif
 sentence-transformers
 scikit-learn
 torch
+transformers
+safetensors
 diskcache
 send2trash
 opencv-python

@@ -7,7 +7,7 @@
 
 PhotoSort is a powerful desktop application focused on speed designed to streamline the management of large photo libraries, making it easier than ever to sort, cull, and organize your images.
 
-**Warning - Use this at your personal risk. Always use backups.**
+**Use this at your personal risk. Always use backups.**
 
 ## Key Features
 
@@ -19,6 +19,8 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * **Fast Processing**: Intensive operations (scanning, thumbnailing, analysis) run once in batch to ensure fast image scrolling.
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
   * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed.
+  * **AI Best-Shot Ranking**: Compare stacks with either the bundled multi-model pipeline or an OpenAI-compatible vision model (e.g. Qwen3-VL).
+  * **AI Star Ratings**: Ask the configured AI engine to score individual photos with 1–5 stars.
 
 - **Update Notifications**: Automatically checks for new releases and notifies users when updates are available, with direct download links.
 - **Performance Modes**: Configurable threading system (Settings → Preferences, `F10`) to balance between system responsiveness (Balanced) and maximum processing speed (Performance).
@@ -97,6 +99,47 @@ To use the **Auto Rotate Images** feature (`Ctrl+R`), you need to download the p
 3. **Place the downloaded model file inside the `models` directory.**
 
 The application will automatically detect and load the model when you use the rotation detection feature.
+
+### AI Best Shot Ranking & Engines
+
+PhotoSort can rank similar shots and assign AI ratings using either a local
+multi-model pipeline or an OpenAI-compatible vision model; switch engines in
+**Preferences → AI Rating Engine** (`F10`). Settings persist between sessions.
+
+**Local pipeline (default)**  
+Runs entirely offline with three Hugging Face checkpoints:
+BlazeFace face detector (`qualcomm/MediaPipe-Face-Detection`), eye-state classifier
+(`MichalMlodawski/open-closed-eye-classification-mobilev2`), and the aesthetic predictor
+(`shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE`). Place each bundle
+under `models/` and choose **Local Pipeline** in preferences.
+
+Required downloads (install into `models/`):
+
+1. **Face detector** – [`qualcomm/MediaPipe-Face-Detection`](https://huggingface.co/qualcomm/MediaPipe-Face-Detection)  
+   Extract `model.onnx` to `models/job_*/model.onnx` (or e.g. `models/MediaPipe-Face-Detection_FaceDetector_float/model.onnx`).
+2. **Eye-state classifier** – [`MichalMlodawski/open-closed-eye-classification-mobilev2`](https://huggingface.co/MichalMlodawski/open-closed-eye-classification-mobilev2)  
+   Copy all files into `models/open-closed-eye-classification-mobilev2/`.
+3. **Aesthetic predictor** – [`shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE`](https://huggingface.co/shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE)  
+   Copy all files into `models/aesthetic_predictor/` (includes the CLIP backbone plus regression head).
+
+**LLM engine**  
+Connect PhotoSort to any OpenAI-compatible endpoint that accepts images
+—for example Qwen3-VL. Configure API key, base URL,
+model name, prompt templates, and timeouts directly in the preferences dialog.
+For local deployments that do not require authentication (e.g. LM Studio), leave
+the API key blank.
+
+**Using the results**  
+- **Similarity stacks**: After running **View → Analyze Similarity**, launch
+  **View → Analyze Best Shots** (`Ctrl+B`) to automatically pick a winner for every cluster
+  (metrics appear in the UI tooltips). For ad-hoc comparisons select a handful of
+  images and trigger **View → Analyze Best Shots (Selected)** (`Alt+B`) to rank
+  just that group.
+- **AI star ratings**: To score every visible image, run **View → AI Rate Images**
+  (`Ctrl+A`). The ratings are stored in your XMP sidecars/metadata cache so
+  they survive reloads, and you can filter the library using the standard rating
+  controls. (Detailed breakdowns from the AI response are kept internally for future
+  UI integrations.)
 
 ### Exporting Logs
 
