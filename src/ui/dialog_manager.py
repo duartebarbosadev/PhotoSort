@@ -1503,61 +1503,63 @@ class DialogManager:
             log_message += f" - {details}"
         logger.info(log_message)
 
-    def show_close_confirmation_dialog(self, marked_files: List[str]) -> str:
+    def _show_marked_files_confirmation_dialog(
+        self,
+        marked_files: List[str],
+        *,
+        window_title: str,
+        dialog_title: str,
+        message: str,
+        ignore_button_text: str,
+        commit_button_text: str,
+        log_context: str,
+        object_name_prefix: str,
+    ) -> str:
         """
-        Shows a confirmation dialog when closing the application with marked files.
-
-        Args:
-            marked_files: The list of files marked for deletion.
-
-        Returns:
-            A string indicating the user's choice: "commit", "ignore", or "cancel".
+        Shared helper to present a confirmation dialog for pending deletions.
         """
         if marked_files:
             self._preload_thumbnails_for_dialog(marked_files)
 
         dialog = QDialog(self.parent)
-        dialog.setWindowTitle("Confirm Close")
-        dialog.setObjectName("closeConfirmationDialog")
+        dialog.setWindowTitle(window_title)
+        dialog.setObjectName(f"{object_name_prefix}Dialog")
         dialog.setModal(True)
-        dialog.setMinimumSize(500, 300)
+        dialog.setMinimumSize(600, 450)
         # Frameless window for fancy UI
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
         layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(12)
 
         # Title
-        title = QLabel("Uncommitted Deletions")
-        title.setObjectName("closeDialogTitle")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title = QLabel(dialog_title)
+        title.setObjectName(f"{object_name_prefix}Title")
+        title.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(title)
 
         # Message
-        message = QLabel(
-            f"You have {len(marked_files)} image(s) marked for deletion that have not been committed.\n\n"
-            "What would you like to do?"
-        )
-        message.setObjectName("closeDialogMessage")
-        message.setWordWrap(True)
-        layout.addWidget(message)
+        message_label = QLabel(message)
+        message_label.setObjectName(f"{object_name_prefix}Message")
+        message_label.setWordWrap(True)
+        layout.addWidget(message_label)
 
         # Scroll area for the list of images
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setObjectName("closeDialogScrollArea")
+        scroll_area.setObjectName(f"{object_name_prefix}ScrollArea")
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
 
         # Use QListWidget for thumbnails and filenames
         list_widget = QListWidget()
-        list_widget.setObjectName("closeDialogListWidget")
-        list_widget.setIconSize(QSize(64, 64))  # Smaller thumbnails for this dialog
+        list_widget.setObjectName(f"{object_name_prefix}ListWidget")
+        list_widget.setIconSize(QSize(128, 128))
         list_widget.setViewMode(QListWidget.ViewMode.IconMode)
         list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
         list_widget.setMovement(QListWidget.Movement.Static)
         list_widget.setWordWrap(True)
-        list_widget.setSpacing(5)
+        list_widget.setSpacing(10)
 
         # Populate the list
         for file_path in marked_files:
@@ -1567,14 +1569,7 @@ class DialogManager:
                 apply_orientation=True,  # Ensure orientation is applied
             )
             if thumbnail_pixmap:
-                # Scale down the thumbnail to fit the icon size
-                scaled_pixmap = thumbnail_pixmap.scaled(
-                    64,
-                    64,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                icon = QIcon(scaled_pixmap)
+                icon = QIcon(thumbnail_pixmap)
             else:
                 # Fallback to a generic icon if thumbnail generation fails
                 icon = self.parent.style().standardIcon(
@@ -1582,7 +1577,7 @@ class DialogManager:
                 )
 
             item = QListWidgetItem(icon, os.path.basename(file_path))
-            item.setSizeHint(QSize(84, 104))
+            item.setSizeHint(QSize(148, 168))
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             list_widget.addItem(item)
 
@@ -1591,25 +1586,29 @@ class DialogManager:
 
         # Buttons
         button_layout = QHBoxLayout()
-        button_layout.setSpacing(10)
+        button_layout.setSpacing(15)
+        button_layout.addStretch()
 
         # Cancel button (don't close)
         cancel_button = QPushButton("Cancel")
-        cancel_button.setObjectName("closeDialogCancelButton")
+        cancel_button.setObjectName(f"{object_name_prefix}CancelButton")
+        cancel_button.setMinimumSize(120, 40)
         cancel_button.clicked.connect(dialog.reject)
         button_layout.addWidget(cancel_button)
 
-        # Ignore button (close without committing)
-        ignore_button = QPushButton("Ignore and Close")
-        ignore_button.setObjectName("closeDialogIgnoreButton")
+        # Ignore button (proceed without committing)
+        ignore_button = QPushButton(ignore_button_text)
+        ignore_button.setObjectName(f"{object_name_prefix}IgnoreButton")
+        ignore_button.setMinimumSize(160, 40)
         ignore_button.clicked.connect(
             lambda: dialog.done(1)
         )  # Custom result code for "ignore"
         button_layout.addWidget(ignore_button)
 
-        # Commit button (commit and then close)
-        commit_button = QPushButton("Commit and Close")
-        commit_button.setObjectName("closeDialogCommitButton")
+        # Commit button (commit and then proceed)
+        commit_button = QPushButton(commit_button_text)
+        commit_button.setObjectName(f"{object_name_prefix}CommitButton")
+        commit_button.setMinimumSize(180, 40)
         commit_button.clicked.connect(
             lambda: dialog.done(2)
         )  # Custom result code for "commit"
@@ -1620,25 +1619,69 @@ class DialogManager:
 
         # Show the dialog and return the user's choice
         logger.info(
-            f"Showing close confirmation dialog with {len(marked_files)} marked files"
+            f"Showing {log_context.lower()} dialog with {len(marked_files)} marked files"
         )
         result = dialog.exec()
 
         if result == 1:  # Ignore
             self.log_dialog_interaction(
-                "Close Confirmation", "Ignore and Close", f"{len(marked_files)} files"
+                log_context, ignore_button_text, f"{len(marked_files)} files"
             )
             return "ignore"
         elif result == 2:  # Commit
             self.log_dialog_interaction(
-                "Close Confirmation", "Commit and Close", f"{len(marked_files)} files"
+                log_context, commit_button_text, f"{len(marked_files)} files"
             )
             return "commit"
         else:  # Cancel or closed
             self.log_dialog_interaction(
-                "Close Confirmation", "Cancel", f"{len(marked_files)} files"
+                log_context, "Cancel", f"{len(marked_files)} files"
             )
             return "cancel"
+
+    def show_close_confirmation_dialog(self, marked_files: List[str]) -> str:
+        """
+        Shows a confirmation dialog when closing the application with marked files.
+
+        Args:
+            marked_files: The list of files marked for deletion.
+
+        Returns:
+            A string indicating the user's choice: "commit", "ignore", or "cancel".
+        """
+        message = (
+            f"You have {len(marked_files)} image(s) marked for deletion that have not been committed.\n\n"
+            "What would you like to do?"
+        )
+        return self._show_marked_files_confirmation_dialog(
+            marked_files,
+            window_title="Confirm Close",
+            dialog_title="Uncommitted Deletions",
+            message=message,
+            ignore_button_text="Ignore and Close",
+            commit_button_text="Commit and Close",
+            log_context="Close Confirmation",
+            object_name_prefix="closeDialog",
+        )
+
+    def show_folder_change_confirmation_dialog(self, marked_files: List[str]) -> str:
+        """
+        Shows a confirmation dialog when changing folders with marked files.
+        """
+        message = (
+            f"You have {len(marked_files)} image(s) marked for deletion that have not been committed.\n\n"
+            "Would you like to commit or ignore them before opening a different folder?"
+        )
+        return self._show_marked_files_confirmation_dialog(
+            marked_files,
+            window_title="Confirm Folder Change",
+            dialog_title="Uncommitted Deletions",
+            message=message,
+            ignore_button_text="Ignore and Switch",
+            commit_button_text="Commit and Switch",
+            log_context="Folder Change Confirmation",
+            object_name_prefix="folderChangeDialog",
+        )
 
     def show_model_not_found_dialog(self, model_path: str):
         """Show a dialog informing the user that the rotation model is missing."""
@@ -1741,7 +1784,7 @@ class DialogManager:
         if readme_button:
             readme_button.clicked.connect(
                 lambda: webbrowser.open(
-                    "https://github.com/duartebarbosadev/PhotoSort#experimental-ai-best-shot-ranking"
+                    "https://github.com/duartebarbosadev/PhotoSort#ai-best-shot-ranking--engines"
                 )
             )
         if open_models_button:

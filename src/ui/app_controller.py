@@ -232,6 +232,32 @@ class AppController(QObject):
     def load_folder(self, folder_path: str):
         load_folder_start_time = time.perf_counter()
         logger.info("Loading folder: %s", folder_path)
+
+        marked_files = self.app_state.get_marked_files()
+        if marked_files:
+            choice = (
+                self.main_window.dialog_manager.show_folder_change_confirmation_dialog(
+                    marked_files
+                )
+            )
+            if choice == "commit":
+                logger.info(
+                    "User chose to commit deletions before switching folders (%d files).",
+                    len(marked_files),
+                )
+                self.main_window._commit_marked_deletions_without_confirmation()
+            elif choice == "ignore":
+                logger.info(
+                    "User chose to ignore %d marked deletions before switching folders.",
+                    len(marked_files),
+                )
+                self.app_state.clear_all_deletion_marks()
+                self.main_window._refresh_visible_items_icons()
+            else:
+                logger.info("Folder load cancelled due to pending deletions.")
+                self.main_window.statusBar().showMessage("Folder load cancelled.", 3000)
+                return
+
         self.main_window.show_loading_overlay("Preparing to scan folder...")
 
         add_recent_folder(folder_path)
