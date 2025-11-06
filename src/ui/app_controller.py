@@ -251,8 +251,7 @@ class AppController(QObject):
                     "User chose to ignore %d marked deletions before switching folders.",
                     len(marked_files),
                 )
-                self.app_state.clear_all_deletion_marks()
-                self.main_window._refresh_visible_items_icons()
+                self.main_window._clear_all_deletion_marks()
             else:
                 logger.info("Folder load cancelled due to pending deletions.")
                 self.main_window.statusBar().showMessage("Folder load cancelled.", 3000)

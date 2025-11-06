@@ -1667,6 +1667,12 @@ class DialogManager:
     def show_folder_change_confirmation_dialog(self, marked_files: List[str]) -> str:
         """
         Shows a confirmation dialog when changing folders with marked files.
+
+        Args:
+            marked_files: The list of files marked for deletion.
+
+        Returns:
+            A string indicating the user's choice: "commit", "ignore", or "cancel".
         """
         message = (
             f"You have {len(marked_files)} image(s) marked for deletion that have not been committed.\n\n"
