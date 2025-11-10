@@ -9,7 +9,7 @@ import re
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Set
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Set
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -124,10 +124,12 @@ class BaseBestShotStrategy:
         models_root: Optional[str],
         image_pipeline,
         llm_config: Optional[LLMConfig] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.models_root = models_root
         self.image_pipeline = image_pipeline
         self.llm_config = llm_config
+        self._status_callback = status_callback
 
     @property
     def max_workers(self) -> int:
@@ -148,9 +150,51 @@ class BaseBestShotStrategy:
         """Optional connectivity check before work begins."""
 
 
+def _normalize_for_rating(value: float, *, lower: float, upper: float) -> float:
+    if upper <= lower:
+        return 0.0
+    normalized = (value - lower) / (upper - lower)
+    return max(0.0, min(1.0, normalized))
+
+
+def _map_score_to_rating(normalized_score: float) -> int:
+    thresholds = [0.22, 0.42, 0.62, 0.8]
+    for idx, threshold in enumerate(thresholds, start=1):
+        if normalized_score < threshold:
+            return idx
+    return 5
+
+
+def _compute_quality_rating(result) -> Tuple[int, float]:
+    samples: List[float] = []
+    raw = result.raw_metrics
+    musiq_raw = raw.get("musiq_raw")
+    if isinstance(musiq_raw, (int, float)):
+        samples.append(_normalize_for_rating(musiq_raw, lower=25.0, upper=85.0))
+    liqe_raw = raw.get("liqe_raw")
+    if isinstance(liqe_raw, (int, float)):
+        samples.append(_normalize_for_rating(liqe_raw, lower=30.0, upper=90.0))
+    maniqa_raw = raw.get("maniqa_raw")
+    if isinstance(maniqa_raw, (int, float)):
+        samples.append(_normalize_for_rating(maniqa_raw, lower=0.25, upper=0.85))
+    samples.append(max(0.0, min(1.0, float(result.composite_score))))
+
+    quality_score = sum(samples) / len(samples)
+    rating = _map_score_to_rating(quality_score)
+    return rating, quality_score
+
+
 class LocalBestShotStrategy(BaseBestShotStrategy):
-    def __init__(self, models_root, image_pipeline, llm_config=None) -> None:
-        super().__init__(models_root, image_pipeline, llm_config)
+    def __init__(
+        self,
+        models_root,
+        image_pipeline,
+        llm_config=None,
+        status_callback: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        super().__init__(
+            models_root, image_pipeline, llm_config, status_callback=status_callback
+        )
         self._thread_local = threading.local()
 
     def _get_selector(self) -> BestPhotoSelector:
@@ -159,7 +203,9 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
             # Use image pipeline for better RAW and format support
             image_loader = self._create_image_loader() if self.image_pipeline else None
             selector = BestPhotoSelector(
-                models_root=self.models_root, image_loader=image_loader
+                models_root=self.models_root,
+                image_loader=image_loader,
+                status_callback=self._status_callback,
             )
             self._thread_local.selector = selector
         return selector
@@ -236,22 +282,32 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
         if not results:
             return None
         result = results[0]
-        score = result.composite_score
-        rating = max(1, min(5, int(round(score * 4 + 1))))
+        rating, quality_score = _compute_quality_rating(result)
         logger.info(
-            f"Local AI rated {os.path.basename(image_path)} as {rating}/5 (score: {score:.3f})"
+            "Local AI rated %s as %d/5 (quality score %.3f)",
+            os.path.basename(image_path),
+            rating,
+            quality_score,
         )
         return {
             "image_path": image_path,
             "rating": rating,
-            "score": score,
+            "score": quality_score,
             "metrics": result.metrics,
         }
 
 
 class LLMBestShotStrategy(BaseBestShotStrategy):
-    def __init__(self, models_root, image_pipeline, llm_config: LLMConfig) -> None:
-        super().__init__(models_root, image_pipeline, llm_config)
+    def __init__(
+        self,
+        models_root,
+        image_pipeline,
+        llm_config: LLMConfig,
+        status_callback: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        super().__init__(
+            models_root, image_pipeline, llm_config, status_callback=status_callback
+        )
         try:
             from openai import OpenAI  # type: ignore
         except ImportError as exc:  # pragma: no cover
@@ -688,6 +744,7 @@ def create_best_shot_strategy(
     models_root: Optional[str] = None,
     image_pipeline=None,
     llm_config: Optional[LLMConfig] = None,
+    status_callback: Optional[Callable[[str], None]] = None,
 ) -> BaseBestShotStrategy:
     """Create AI strategy for image analysis.
 
@@ -699,9 +756,19 @@ def create_best_shot_strategy(
     if engine_name == BestShotEngine.LLM.value:
         config = llm_config or LLMConfig(**get_openai_config())
         logger.info(f"Using LLM strategy with endpoint: {config.base_url}")
-        return LLMBestShotStrategy(models_root, image_pipeline, config)
+        return LLMBestShotStrategy(
+            models_root,
+            image_pipeline,
+            config,
+            status_callback=status_callback,
+        )
     logger.info("Using local model strategy")
-    return LocalBestShotStrategy(models_root, image_pipeline, llm_config)
+    return LocalBestShotStrategy(
+        models_root,
+        image_pipeline,
+        llm_config,
+        status_callback=status_callback,
+    )
 
 
 __all__ = [

@@ -19,7 +19,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * **Fast Processing**: Intensive operations (scanning, thumbnailing, analysis) run once in batch to ensure fast image scrolling.
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
   * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed.
-  * **AI Best-Shot Ranking**: Compare stacks with either the bundled multi-model pipeline or an OpenAI-compatible vision model (e.g. Qwen3-VL).
+* **AI Best-Shot Ranking**: Compare stacks with either the bundled MUSIQ/MANIQA/LIQE pipeline or an OpenAI-compatible vision model (e.g. Qwen3-VL).
   * **AI Star Ratings**: Ask the configured AI engine to score individual photos with 1–5 stars.
 
 - **Update Notifications**: Automatically checks for new releases and notifies users when updates are available, with direct download links.
@@ -102,25 +102,15 @@ The application will automatically detect and load the model when you use the ro
 
 ### AI Best Shot Ranking & Engines
 
-PhotoSort can rank similar shots and assign AI ratings using either a local
-multi-model pipeline or an OpenAI-compatible vision model; switch engines in
+PhotoSort can rank similar shots and assign AI ratings using either the local
+MUSIQ/MANIQA/LIQE pipeline or an OpenAI-compatible vision model; switch engines in
 **Preferences → AI Rating Engine** (`F10`). Settings persist between sessions.
 
 **Local pipeline (default)**  
-Runs entirely offline with three Hugging Face checkpoints:
-BlazeFace face detector (`qualcomm/MediaPipe-Face-Detection`), eye-state classifier
-(`MichalMlodawski/open-closed-eye-classification-mobilev2`), and the aesthetic predictor
-(`shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE`). Place each bundle
-under `models/` and choose **Local Pipeline** in preferences.
-
-Required downloads (install into `models/`):
-
-1. **Face detector** – [`qualcomm/MediaPipe-Face-Detection`](https://huggingface.co/qualcomm/MediaPipe-Face-Detection)  
-   Extract `model.onnx` to `models/job_*/model.onnx` (or e.g. `models/MediaPipe-Face-Detection_FaceDetector_float/model.onnx`).
-2. **Eye-state classifier** – [`MichalMlodawski/open-closed-eye-classification-mobilev2`](https://huggingface.co/MichalMlodawski/open-closed-eye-classification-mobilev2)  
-   Copy all files into `models/open-closed-eye-classification-mobilev2/`.
-3. **Aesthetic predictor** – [`shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE`](https://huggingface.co/shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE)  
-   Copy all files into `models/aesthetic_predictor/` (includes the CLIP backbone plus regression head).
+Runs entirely offline by blending three state-of-the-art no-reference IQA models:
+**MUSIQ**, **MANIQA**, and **LIQE**. These metrics are loaded
+through [`pyiqa`](https://github.com/chaofengc/IQA-PyTorch); no manual model
+downloads are required.
 
 **LLM engine**  
 Connect PhotoSort to any OpenAI-compatible endpoint that accepts images

@@ -76,6 +76,13 @@ class BestShotWorker(QObject):
         message = str(exc).strip()
         return message or exc.__class__.__name__
 
+    def _emit_status_message(self, message: str) -> None:
+        logger.info("Best-shot status: %s", message)
+        try:
+            self.progress_update.emit(-1, message)
+        except Exception:
+            logger.debug("Failed to emit status message", exc_info=True)
+
     @staticmethod
     def _looks_like_connectivity_issue(message: str) -> bool:
         lowered = message.lower()
@@ -146,6 +153,7 @@ class BestShotWorker(QObject):
                 models_root=self.models_root,
                 image_pipeline=self._image_pipeline,
                 llm_config=self._llm_config,
+                status_callback=self._emit_status_message,
             )
             if self._strategy.max_workers:
                 self._max_workers = min(

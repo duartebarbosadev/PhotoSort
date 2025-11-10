@@ -12,3 +12,5 @@ pyexiv2
 piexif
 onnxruntime-gpu
 torchvision
+pyiqa
+mediapipe

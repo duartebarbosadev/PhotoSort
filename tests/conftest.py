@@ -3,6 +3,7 @@ import pyexiv2  # noqa: F401  # Must be imported first to avoid Windows crashes
 # Ensure root path (containing src/) is on sys.path for test imports
 import sys
 import os
+from src.core.numpy_compat import ensure_numpy_sctypes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(ROOT, os.pardir))
@@ -13,3 +14,5 @@ if PROJECT_ROOT not in sys.path:
 SRC_ROOT = os.path.join(PROJECT_ROOT, "src")
 if SRC_ROOT not in sys.path:
     sys.path.insert(0, SRC_ROOT)
+
+ensure_numpy_sctypes()

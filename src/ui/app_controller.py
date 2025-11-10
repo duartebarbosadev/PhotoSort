@@ -45,6 +45,7 @@ class AppController(QObject):
         from core.caching.preview_cache import PreviewCache
         from core.caching.exif_cache import ExifCache
         from core.caching.rating_cache import RatingCache
+        from core.caching.analysis_cache import AnalysisCache
 
         cache_classes = (
             ("thumbnail", ThumbnailCache),
@@ -79,6 +80,22 @@ class AppController(QObject):
             SimilarityEngine.clear_embedding_cache()
         except Exception:
             logger.error("Error clearing similarity cache.", exc_info=True)
+
+        analysis_cache_instance = None
+        try:
+            analysis_cache_instance = AnalysisCache()
+            analysis_cache_instance.clear_all()
+        except Exception:
+            logger.error("Error clearing analysis cache.", exc_info=True)
+        finally:
+            if analysis_cache_instance is not None:
+                try:
+                    analysis_cache_instance.close()
+                except Exception:
+                    logger.error(
+                        "Error closing analysis cache after clearing.",
+                        exc_info=True,
+                    )
 
         logger.info(
             f"Application caches cleared in {time.perf_counter() - start_time:.2f}s."
@@ -969,7 +986,10 @@ class AppController(QObject):
         self.main_window.hide_loading_overlay()
 
     def handle_best_shot_progress(self, percentage: int, message: str):
-        self.main_window.update_loading_text(f"Best shots: {message} ({percentage}%)")
+        suffix = (
+            f" ({percentage}%)" if percentage is not None and percentage >= 0 else ""
+        )
+        self.main_window.update_loading_text(f"Best shots: {message}{suffix}")
 
     def handle_best_shot_complete(
         self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
@@ -1039,10 +1059,10 @@ class AppController(QObject):
         self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
 
     def handle_ai_rating_progress(self, percentage: int, message: str):
-        progress_text = message
-        if percentage is not None:
-            progress_text = f"{message} ({percentage}%)"
-        self.main_window.update_loading_text(f"AI rating: {progress_text}")
+        suffix = (
+            f" ({percentage}%)" if percentage is not None and percentage >= 0 else ""
+        )
+        self.main_window.update_loading_text(f"AI rating: {message}{suffix}")
 
     def handle_ai_rating_warning(self, message: str):
         logger.warning("AI rating warning: %s", message)

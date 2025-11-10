@@ -147,6 +147,7 @@ jobs:
             --icon assets/app_icon.ico `
             --paths src `
             --hidden-import core.build_info `
+            --hidden-import mediapipe `
             --add-data "src/ui/dark_theme.qss;." `
             --add-data "assets/app_icon.ico;." `
             --add-data "assets/app_icon.png;." `
@@ -161,6 +162,8 @@ jobs:
             --hidden-import torch `
             --hidden-import sklearn `
             --hidden-import sentence_transformers `
+            --collect-data mediapipe `
+            --collect-data pyiqa `
             --add-data "models;models" `
             --runtime-hook runtime_hook.py `
             src/main.py
@@ -214,6 +217,7 @@ jobs:
             --icon assets/photosort.icns \
             --paths src \
             --hidden-import core.build_info \
+            --hidden-import mediapipe \
             --add-data src/ui/dark_theme.qss:. \
             --add-data assets/app_icon.ico:. \
             --add-data assets/app_icon.png:. \
@@ -236,6 +240,8 @@ jobs:
             --hidden-import torch \
             --hidden-import sklearn \
             --hidden-import sentence_transformers \
+            --collect-data mediapipe \
+            --collect-data pyiqa \
             --add-data models:models \
             src/main.py
 

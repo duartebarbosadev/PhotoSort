@@ -8,6 +8,28 @@ SRC_DIR = os.path.dirname(__file__)
 if SRC_DIR and SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+from core.runtime_paths import (  # noqa: E402
+    is_frozen_runtime,
+    iter_bundle_roots,
+    resolve_runtime_root,
+)
+
+
+def _ensure_local_model_cache():
+    """Point PyInstaller builds to the bundled models directory."""
+    if not is_frozen_runtime():
+        return
+    base_dir = resolve_runtime_root(PROJECT_ROOT)
+    models_dir = os.path.abspath(os.path.join(base_dir, "models"))
+    os.makedirs(models_dir, exist_ok=True)
+    os.environ.setdefault("PHOTOSORT_MODELS_DIR", models_dir)
+    os.environ.setdefault("PYIQA_CACHE_DIR", models_dir)
+
+
+_ensure_local_model_cache()
+
 # Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
 try:
     from core.pyexiv2_init import ensure_pyexiv2_initialized  # noqa: E402
@@ -33,16 +55,7 @@ def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
     checking for the temporary extraction directory at runtime.
     """
     try:
-        # Determine base directory depending on runtime context
-        base_dir: str
-        meipass = getattr(sys, "_MEIPASS", None)  # type: ignore[attr-defined]
-        if meipass:
-            base_dir = meipass  # PyInstaller onefile extraction dir
-        elif getattr(sys, "frozen", False):  # PyInstaller onedir
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            # Running from source
-            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        base_dir = resolve_runtime_root(PROJECT_ROOT)
 
         # Candidate locations, in order of preference
         candidates = [
@@ -168,18 +181,12 @@ def _find_resource_path(filename: str, include_exe_dir: bool = False) -> Optiona
 
     Returns the first existing file path, or None if not found.
     """
-    meipass = getattr(sys, "_MEIPASS", None)
+    candidates = [
+        os.path.join(root, filename)
+        for root in iter_bundle_roots(include_executable_dir=include_exe_dir)
+    ]
 
-    candidates = []
-    if meipass:
-        candidates.append(os.path.join(meipass, filename))
-
-    if include_exe_dir and getattr(sys, "frozen", False):
-        candidates.append(os.path.join(os.path.dirname(sys.executable), filename))
-
-    candidates.append(
-        os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", filename)
-    )
+    candidates.append(os.path.join(PROJECT_ROOT, "assets", filename))
     candidates.append(os.path.abspath(filename))
 
     for candidate in candidates:

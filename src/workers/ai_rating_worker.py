@@ -59,6 +59,13 @@ class AiRatingWorker(QObject):
     def stop(self) -> None:
         self._should_stop = True
 
+    def _emit_status_message(self, message: str) -> None:
+        logger.info("AI rating status: %s", message)
+        try:
+            self.progress_update.emit(-1, message)
+        except Exception:
+            logger.debug("Failed to emit AI rating status", exc_info=True)
+
     def _ensure_strategy(self) -> None:
         if self._strategy is None:
             self._strategy = create_best_shot_strategy(
@@ -66,6 +73,7 @@ class AiRatingWorker(QObject):
                 models_root=self.models_root,
                 image_pipeline=self._image_pipeline,
                 llm_config=self._llm_config,
+                status_callback=self._emit_status_message,
             )
             if self._strategy.max_workers:
                 self._max_workers = min(

@@ -1,9 +1,7 @@
-"""
-AI helper utilities for advanced ranking/scoring pipelines.
+"""AI helper utilities for best-shot ranking and scoring."""
 
-Currently exposes the experimental best-photo selector which chains together
-multiple pre-trained models (face detection, eye-state classification, and
-image quality scoring) to rank similar shots.
-"""
-
-from .best_photo_selector import BestPhotoSelector, BestShotResult  # noqa: F401
+from .best_photo_selector import (  # noqa: F401
+    BestPhotoSelector,
+    BestShotResult,
+    MetricSpec,
+)
