@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,6 +19,46 @@ from core.ai.best_shot_pipeline import (
 from core.app_settings import calculate_max_workers, get_best_shot_engine
 
 logger = logging.getLogger(__name__)
+
+
+def _format_duration(seconds: float) -> str:
+    if not math.isfinite(seconds):
+        return ""
+    seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes or hours:
+        parts.append(f"{minutes}m")
+    if secs or not parts:
+        parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
+def _format_eta_suffix(
+    processed: int, total: int, start_time: Optional[float]
+) -> str:
+    if (
+        start_time is None
+        or processed <= 0
+        or total <= 0
+        or processed > total
+    ):
+        return ""
+    remaining = total - processed
+    if remaining <= 0:
+        return "ETA 0s"
+    elapsed = time.perf_counter() - start_time
+    if elapsed <= 0:
+        return ""
+    per_item = elapsed / processed
+    eta_seconds = per_item * remaining
+    if not math.isfinite(eta_seconds) or eta_seconds < 0:
+        return ""
+    eta_text = _format_duration(eta_seconds)
+    return f"ETA {eta_text}" if eta_text else ""
 
 
 class AiRatingWorker(QObject):
@@ -160,6 +201,7 @@ class AiRatingWorker(QObject):
                 }
 
                 processed = 0
+                start_time = time.perf_counter()
                 for future in as_completed(futures):
                     if self._should_stop:
                         logger.info(
@@ -195,7 +237,11 @@ class AiRatingWorker(QObject):
                         results[path] = rating_data
                     processed += 1
                     percent = int((processed / total) * 100)
-                    self.progress_update.emit(percent, f"Rated {processed}/{total}")
+                    eta_suffix = _format_eta_suffix(processed, total, start_time)
+                    message = f"Rated {processed}/{total}"
+                    if eta_suffix:
+                        message = f"{message} - {eta_suffix}"
+                    self.progress_update.emit(percent, message)
 
             if not self._should_stop:
                 logger.info(

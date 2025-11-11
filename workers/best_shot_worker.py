@@ -1,5 +1,7 @@
 import logging
+import math
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Iterable, List, Optional, Sequence, TYPE_CHECKING
 
@@ -22,6 +24,57 @@ from core.app_settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _format_duration(seconds: float) -> str:
+    """Return a compact human readable duration."""
+    if not math.isfinite(seconds):
+        return ""
+    seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts: List[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes or hours:
+        parts.append(f"{minutes}m")
+    if secs or not parts:
+        parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
+def _estimate_eta_seconds(
+    processed: int, total: int, start_time: Optional[float]
+) -> Optional[float]:
+    if (
+        start_time is None
+        or processed <= 0
+        or total <= 0
+        or processed > total
+    ):
+        return None
+    remaining = total - processed
+    if remaining <= 0:
+        return 0.0
+    elapsed = time.perf_counter() - start_time
+    if elapsed <= 0:
+        return None
+    per_item = elapsed / processed
+    eta = per_item * remaining
+    return eta if math.isfinite(eta) and eta >= 0 else None
+
+
+def _build_progress_detail(
+    processed: int, total: int, start_time: Optional[float]
+) -> str:
+    eta_seconds = _estimate_eta_seconds(processed, total, start_time)
+    base = f"{processed}/{total} done"
+    if eta_seconds is None:
+        return base
+    eta_text = _format_duration(eta_seconds)
+    if not eta_text:
+        return base
+    return f"{base}, ETA {eta_text}"
 
 
 class BestShotWorker(QObject):
@@ -388,6 +441,7 @@ class BestShotWorker(QObject):
                     return
 
                 processed = 0
+                start_time = time.perf_counter()
                 for future in as_completed(futures):
                     if self._should_stop:
                         logger.info(
@@ -419,10 +473,16 @@ class BestShotWorker(QObject):
                         if cluster_results
                         else "No result"
                     )
-                    self.progress_update.emit(
-                        percent,
-                        f"Cluster {cluster_id}: best candidate {os.path.basename(best_path)}",
+                    progress_detail = _build_progress_detail(
+                        processed,
+                        total_jobs,
+                        start_time,
                     )
+                    progress_message = (
+                        f"Cluster {cluster_id}: best candidate {os.path.basename(best_path)}"
+                        f" - {progress_detail}"
+                    )
+                    self.progress_update.emit(percent, progress_message)
 
             if not self._should_stop:
                 total_results = sum(len(results) for results in results.values())
