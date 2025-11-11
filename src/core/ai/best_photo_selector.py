@@ -21,6 +21,7 @@ from PIL import Image, ImageOps
 from src.core.numpy_compat import ensure_numpy_sctypes
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..")
@@ -455,6 +456,7 @@ class BestPhotoSelector:
         try:
             image = self._image_loader(image_path)
             image.info.setdefault("source_path", image_path)
+            logger.info("Analyzing image through BestPhotoSelector: %s", image_path)
         except Exception as exc:
             logger.error("Failed to load %s: %s", image_path, exc)
             return None
@@ -480,12 +482,21 @@ class BestPhotoSelector:
         if self._eye_analyzer is not None:
             try:
                 eye_prob = self._eye_analyzer.predict_open_probability(image)
+                logger.info(
+                    "Eye analyzer processed %s successfully",
+                    os.path.basename(image_path),
+                )
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.warning("Eye-state analysis failed for %s: %s", image_path, exc)
                 eye_prob = None
             if eye_prob is not None:
                 metrics["eyes_open"] = eye_prob
                 raw_metrics["eyes_open_probability"] = eye_prob
+                logger.info(
+                    "Eye openness for %s: %.3f",
+                    os.path.basename(image_path),
+                    eye_prob,
+                )
 
         image.close()
 
