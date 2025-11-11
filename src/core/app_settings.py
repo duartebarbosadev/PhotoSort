@@ -284,6 +284,28 @@ def is_pytorch_cuda_available() -> bool:
         return False
 
 
+def get_preferred_torch_device() -> str:
+    """Return the fastest available torch.device string (cuda, mps, or cpu)."""
+
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+
+    if torch.cuda.is_available():
+        return "cuda"
+
+    mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
+    if mps_backend is not None:
+        try:
+            if mps_backend.is_available():  # type: ignore[attr-defined]
+                return "mps"
+        except Exception:
+            pass
+
+    return "cpu"
+
+
 # --- Orientation Model ---
 def get_orientation_model_name() -> str | None:
     """Gets the configured orientation model name from settings."""

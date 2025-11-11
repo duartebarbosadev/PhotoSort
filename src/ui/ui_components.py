@@ -479,14 +479,14 @@ class SimilarityWorker(QObject):
 
 # --- CUDA Detection Worker ---
 class CudaDetectionWorker(QObject):
-    finished = pyqtSignal(bool)  # cuda_available
+    finished = pyqtSignal(str)  # torch_device
 
     def run(self):
-        from core.app_settings import is_pytorch_cuda_available
+        from core.app_settings import get_preferred_torch_device
 
         try:
-            available = is_pytorch_cuda_available()
-            self.finished.emit(available)
+            device = get_preferred_torch_device()
         except Exception as e:
-            logger.error(f"Error during CUDA detection: {e}", exc_info=True)
-            self.finished.emit(False)  # default to CPU on error
+            logger.error(f"Error during torch device detection: {e}", exc_info=True)
+            device = "cpu"
+        self.finished.emit(device)

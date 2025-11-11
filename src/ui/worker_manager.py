@@ -88,7 +88,7 @@ class WorkerManager(QObject):
     rotation_model_not_found = pyqtSignal(str)  # model_path
 
     # CUDA Detection Signals
-    cuda_detection_finished = pyqtSignal(bool)
+    cuda_detection_finished = pyqtSignal(str)
 
     # Update Check Signals
     update_check_finished = pyqtSignal(

@@ -13,6 +13,7 @@ from core.app_settings import (
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
 from core.ai.best_photo_selector import DEFAULT_MODELS_ROOT
+from core.pyexiv2_wrapper import PyExiv2Operations
 
 
 logger = logging.getLogger(__name__)
@@ -676,12 +677,21 @@ class AppController(QObject):
             )
             return
 
+        image_paths_to_rate, already_rated_count = self._partition_unrated_images(
+            image_paths
+        )
+        if not image_paths_to_rate:
+            self.main_window.statusBar().showMessage(
+                "All images already have ratings.", 4000
+            )
+            return
+
         self.main_window.show_loading_overlay("Requesting AI ratings...")
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
-        self.main_window.statusBar().showMessage(
-            f"AI rating started for {len(image_paths)} image(s)...",
-            4000,
-        )
+        status_message = f"AI rating started for {len(image_paths_to_rate)} image(s)..."
+        if already_rated_count:
+            status_message += f" ({already_rated_count} already-rated image(s) skipped)"
+        self.main_window.statusBar().showMessage(status_message, 4000)
 
         self._ai_rating_warning_messages = []
 
@@ -692,7 +702,7 @@ class AppController(QObject):
             engine = None
 
         self.worker_manager.start_ai_rating(
-            image_paths=image_paths,
+            image_paths=image_paths_to_rate,
             models_root=DEFAULT_MODELS_ROOT,
             engine=engine,
         )
@@ -750,6 +760,65 @@ class AppController(QObject):
                 f"Error calculating folder image size for {folder_path}", exc_info=True
             )
         return total_size_bytes
+
+    def _get_existing_rating_for_path(self, image_path: str) -> Optional[int]:
+        normalized_path = os.path.normpath(image_path)
+        cached_rating = self.app_state.rating_cache.get(normalized_path)
+        if cached_rating is not None:
+            return int(cached_rating)
+
+        disk_cache = getattr(self.app_state, "rating_disk_cache", None)
+        if disk_cache:
+            disk_rating = disk_cache.get(normalized_path)
+            if disk_rating is not None:
+                rating_int = int(disk_rating)
+                self.app_state.rating_cache[normalized_path] = rating_int
+                return rating_int
+
+        try:
+            metadata_rating = PyExiv2Operations.get_rating(normalized_path)
+        except Exception:
+            logger.debug(
+                "Failed to read rating metadata for %s",
+                normalized_path,
+                exc_info=True,
+            )
+            return None
+
+        if metadata_rating is None:
+            self.app_state.rating_cache.setdefault(normalized_path, 0)
+            if disk_cache:
+                disk_cache.set(normalized_path, 0)
+            return None
+
+        try:
+            rating_int = int(round(float(metadata_rating)))
+        except (TypeError, ValueError):
+            logger.debug(
+                "Unexpected rating value for %s: %s",
+                normalized_path,
+                metadata_rating,
+            )
+            return None
+
+        rating_int = max(0, min(5, rating_int))
+        self.app_state.rating_cache[normalized_path] = rating_int
+        if disk_cache:
+            disk_cache.set(normalized_path, rating_int)
+        return rating_int
+
+    def _partition_unrated_images(
+        self, image_paths: List[str]
+    ) -> Tuple[List[str], int]:
+        unrated: List[str] = []
+        already_rated_count = 0
+        for path in image_paths:
+            existing_rating = self._get_existing_rating_for_path(path)
+            if existing_rating is not None and existing_rating != 0:
+                already_rated_count += 1
+                continue
+            unrated.append(path)
+        return unrated, already_rated_count
 
     def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
         logger.info(f"Starting preview preloader for {len(image_data_list)} images.")

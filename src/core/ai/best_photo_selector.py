@@ -12,7 +12,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field, replace
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 import numpy as np
@@ -30,7 +30,16 @@ DEFAULT_MODELS_ROOT = os.environ.get(
 )
 
 _PYIQA_DOWNLOAD_LOCK = threading.Lock()
+_METRIC_CACHE_LOCK = threading.Lock()
+_METRIC_CACHE: Dict[Tuple[str, str], Tuple[Any, threading.Lock]] = {}
 DEFAULT_EYE_OPEN_WEIGHT = 0.35
+
+if hasattr(Image, "Resampling"):
+    _RESAMPLE_LANCZOS = Image.Resampling.LANCZOS
+else:  # pragma: no cover - Pillow < 10 fallback
+    _RESAMPLE_LANCZOS = Image.LANCZOS
+
+MANIQA_SAFE_INPUT = 224
 
 ensure_numpy_sctypes()
 
@@ -126,6 +135,9 @@ def _normalize(value: float, lower: float, upper: float) -> float:
     return _clamp((value - lower) / (upper - lower))
 
 
+MODEL_STRIDE = 32
+
+
 def _pil_to_tensor(image: Image.Image):
     try:
         import torch  # type: ignore
@@ -141,9 +153,21 @@ def _pil_to_tensor(image: Image.Image):
         arr = np.stack([arr, arr, arr], axis=-1)
     if arr.shape[2] == 4:  # RGBA → RGB
         arr = arr[:, :, :3]
+    arr = _pad_to_model_stride(arr)
     arr /= 255.0
     tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
     return tensor
+
+
+def _pad_to_model_stride(arr: np.ndarray) -> np.ndarray:
+    if MODEL_STRIDE <= 1 or arr.ndim != 3:
+        return arr
+    height, width, _ = arr.shape
+    pad_h = (-height) % MODEL_STRIDE
+    pad_w = (-width) % MODEL_STRIDE
+    if pad_h == 0 and pad_w == 0:
+        return arr
+    return np.pad(arr, ((0, pad_h), (0, pad_w), (0, 0)), mode="edge")
 
 
 @dataclass(frozen=True)
@@ -203,27 +227,63 @@ class IQAMetricRunner:
         else:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        def _factory():
-            return pyiqa.create_metric(
-                self.spec.name,
-                device=device,
-                as_loss=False,
-            )
+        cache_key = (self.spec.name, str(device))
 
-        if self.status_callback is None:
-            metric = _factory()
-        else:
-            with _PYIQA_DOWNLOAD_LOCK:
-                metric = self._with_download_notifications(download_util, _factory)
-        metric.eval()
+        with _METRIC_CACHE_LOCK:
+            cached = _METRIC_CACHE.get(cache_key)
+            if cached is None:
+                def _factory():
+                    return pyiqa.create_metric(
+                        self.spec.name,
+                        device=device,
+                        as_loss=False,
+                    )
+
+                if self.status_callback is None:
+                    metric = _factory()
+                else:
+                    with _PYIQA_DOWNLOAD_LOCK:
+                        metric = self._with_download_notifications(
+                            download_util, _factory
+                        )
+                metric.eval()
+                cached = (metric, threading.Lock())
+                _METRIC_CACHE[cache_key] = cached
+
+        metric, metric_lock = cached
+        torch_module = torch
+
+        def _run_metric(input_tensor):
+            with torch_module.no_grad():
+                output = metric(input_tensor)
+            return float(output.item()) if hasattr(output, "item") else float(output)
 
         def _score(image: Image.Image) -> float:
             tensor = _pil_to_tensor(image).to(device)
-            with torch.no_grad():
-                value = metric(tensor)
-            if hasattr(value, "item"):
-                return float(value.item())
-            return float(value)
+            with metric_lock:
+                try:
+                    value = _run_metric(tensor)
+                except Exception as exc:
+                    if (
+                        self.spec.name != "maniqa"
+                        or "list index out of range" not in str(exc).lower()
+                    ):
+                        raise
+                    logger.debug(
+                        "MANIQA failed on %s; retrying with %dx%d center crop",
+                        image.info.get("source_path", "<unknown>"),
+                        MANIQA_SAFE_INPUT,
+                        MANIQA_SAFE_INPUT,
+                    )
+                    safe_image = ImageOps.fit(
+                        image,
+                        (MANIQA_SAFE_INPUT, MANIQA_SAFE_INPUT),
+                        method=_RESAMPLE_LANCZOS,
+                        centering=(0.5, 0.5),
+                    )
+                    tensor = _pil_to_tensor(safe_image).to(device)
+                    value = _run_metric(tensor)
+            return value
 
         return _score
 

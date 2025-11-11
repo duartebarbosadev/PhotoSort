@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -11,12 +12,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Set
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from core.ai.best_photo_selector import BestPhotoSelector
 from core.app_settings import (
     get_best_shot_engine,
     get_openai_config,
+    get_preferred_torch_device,
     DEFAULT_OPENAI_API_KEY,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_OPENAI_BASE_URL,
@@ -61,6 +63,13 @@ DEFAULT_RATING_PROMPT = (
     "The same image must always produce the same rating when scored with this rubric.\n"
     "Provide one concise sentence noting the dominant strengths and the limiting flaw(s)."
 )
+
+MAX_LOCAL_ANALYSIS_EDGE = 1024
+
+if hasattr(Image, "Resampling"):
+    _RESAMPLE_BEST = Image.Resampling.LANCZOS
+else:  # pragma: no cover - Pillow < 10
+    _RESAMPLE_BEST = Image.LANCZOS
 
 
 @dataclass
@@ -118,6 +127,19 @@ def _image_to_base64(image: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+def _downscale_image(image: Image.Image, max_edge: int = MAX_LOCAL_ANALYSIS_EDGE) -> Image.Image:
+    width, height = image.size
+    longest = max(width, height)
+    if longest <= max_edge:
+        return image
+    scale = max_edge / float(longest)
+    new_size = (
+        max(1, int(round(width * scale))),
+        max(1, int(round(height * scale))),
+    )
+    return image.resize(new_size, _RESAMPLE_BEST)
+
+
 class BaseBestShotStrategy:
     def __init__(
         self,
@@ -166,20 +188,50 @@ def _map_score_to_rating(normalized_score: float) -> int:
 
 
 def _compute_quality_rating(result) -> Tuple[int, float]:
-    samples: List[float] = []
-    raw = result.raw_metrics
-    musiq_raw = raw.get("musiq_raw")
-    if isinstance(musiq_raw, (int, float)):
-        samples.append(_normalize_for_rating(musiq_raw, lower=25.0, upper=85.0))
-    liqe_raw = raw.get("liqe_raw")
-    if isinstance(liqe_raw, (int, float)):
-        samples.append(_normalize_for_rating(liqe_raw, lower=30.0, upper=90.0))
-    maniqa_raw = raw.get("maniqa_raw")
-    if isinstance(maniqa_raw, (int, float)):
-        samples.append(_normalize_for_rating(maniqa_raw, lower=0.25, upper=0.85))
-    samples.append(max(0.0, min(1.0, float(result.composite_score))))
+    def _is_number(value: object) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
 
-    quality_score = sum(samples) / len(samples)
+    quality_score: Optional[float] = None
+
+    composite = getattr(result, "composite_score", None)
+    if _is_number(composite):
+        composite_value = float(composite)
+        if math.isfinite(composite_value):
+            quality_score = composite_value
+
+    if quality_score is None:
+        metrics = getattr(result, "metrics", {}) or {}
+        metric_values = [
+            float(value) for value in metrics.values() if _is_number(value)
+        ]
+        if metric_values:
+            quality_score = sum(metric_values) / len(metric_values)
+
+    if quality_score is None:
+        samples: List[float] = []
+        raw = getattr(result, "raw_metrics", {}) or {}
+        musiq_raw = raw.get("musiq_raw")
+        if _is_number(musiq_raw):
+            samples.append(
+                _normalize_for_rating(musiq_raw, lower=25.0, upper=85.0)
+            )
+        liqe_raw = raw.get("liqe_raw")
+        if _is_number(liqe_raw):
+            samples.append(
+                _normalize_for_rating(liqe_raw, lower=30.0, upper=90.0)
+            )
+        maniqa_raw = raw.get("maniqa_raw")
+        if _is_number(maniqa_raw):
+            samples.append(
+                _normalize_for_rating(maniqa_raw, lower=0.25, upper=0.85)
+            )
+        if samples:
+            quality_score = sum(samples) / len(samples)
+
+    if quality_score is None:
+        quality_score = 0.0
+
+    quality_score = max(0.0, min(1.0, float(quality_score)))
     rating = _map_score_to_rating(quality_score)
     return rating, quality_score
 
@@ -196,6 +248,10 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
             models_root, image_pipeline, llm_config, status_callback=status_callback
         )
         self._thread_local = threading.local()
+        self._device_hint = get_preferred_torch_device()
+        logger.info(
+            "Local best-shot strategy targeting torch device '%s'", self._device_hint
+        )
 
     def _get_selector(self) -> BestPhotoSelector:
         selector = getattr(self._thread_local, "selector", None)
@@ -206,24 +262,20 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
                 models_root=self.models_root,
                 image_loader=image_loader,
                 status_callback=self._status_callback,
+                device=self._device_hint,
             )
             self._thread_local.selector = selector
         return selector
 
     def _create_image_loader(self):
-        """Create an image loader that uses the image pipeline for RAW and format support."""
+        """Create an image loader using the app pipeline + downscaling for efficiency."""
 
         def pipeline_image_loader(image_path: str) -> Image.Image:
             try:
                 # Use image pipeline to get preview (handles RAW files properly)
                 preview = self.image_pipeline.get_preview_image(image_path)
                 if preview is not None:
-                    if preview.mode != "RGB":
-                        preview = preview.convert("RGB")
-                    # Ensure required metadata is set
-                    preview.info.setdefault("source_path", image_path)
-                    preview.info.setdefault("region", "full")
-                    return preview
+                    return self._prepare_image(preview, image_path)
             except Exception as exc:
                 logger.warning("Image pipeline failed for %s: %s", image_path, exc)
 
@@ -240,13 +292,9 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
                 ".webp",
             }:
                 try:
-                    from PIL import ImageOps
-
                     with Image.open(image_path) as img:
-                        prepared = ImageOps.exif_transpose(img).convert("RGB")
-                        prepared.info["source_path"] = image_path
-                        prepared.info["region"] = "full"
-                        return prepared.copy()
+                        prepared = ImageOps.exif_transpose(img)
+                        return self._prepare_image(prepared, image_path)
                 except Exception as exc:
                     logger.error(
                         "Failed to load standard format image %s: %s", image_path, exc
@@ -259,6 +307,15 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
             raise RuntimeError(f"Cannot load image for local AI analysis: {image_path}")
 
         return pipeline_image_loader
+
+    def _prepare_image(self, image: Image.Image, source_path: str) -> Image.Image:
+        prepared = image.copy()
+        if prepared.mode != "RGB":
+            prepared = prepared.convert("RGB")
+        prepared = _downscale_image(prepared, MAX_LOCAL_ANALYSIS_EDGE)
+        prepared.info.setdefault("source_path", source_path)
+        prepared.info.setdefault("region", "full")
+        return prepared
 
     def rank_cluster(
         self, cluster_id: int, image_paths: Sequence[str]
@@ -436,37 +493,6 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         message = response.choices[0].message
         content = getattr(message, "content", None) or ""
         return message, content
-
-    def _extract_rating(self, analysis: str) -> Optional[int]:
-        if not analysis:
-            return None
-
-        # Try JSON parsing first, as the prompt requests structured output
-        try:
-            parsed = json.loads(analysis)
-            if isinstance(parsed, dict) and "rating" in parsed:
-                return int(round(float(parsed["rating"])))
-        except (ValueError, TypeError, json.JSONDecodeError):
-            # Fall back to unstructured parsing if the model returned plain text.
-            pass
-
-        patterns = [
-            r"\brating\b[^0-9]*([1-5](?:\.[0-9]+)?)",
-            r"\boverall rating\b[^0-9]*([1-5](?:\.[0-9]+)?)",
-            r"\bscore\b[^0-9]*([1-5](?:\.[0-9]+)?)",
-            r"([1-5])\s*/\s*5",
-            r"([1-5])\s*out of\s*5",
-            r"([1-5])\s*stars",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, analysis, re.IGNORECASE)
-            if match:
-                try:
-                    return int(round(float(match.group(1))))
-                except (ValueError, TypeError):
-                    continue
-
-        return None
 
     def validate_connection(self) -> None:
         probe_timeout = min(max(5, int(self._timeout * 0.25)), max(self._timeout, 5))
