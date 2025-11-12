@@ -37,15 +37,8 @@ def _format_duration(seconds: float) -> str:
     return " ".join(parts)
 
 
-def _format_eta_suffix(
-    processed: int, total: int, start_time: Optional[float]
-) -> str:
-    if (
-        start_time is None
-        or processed <= 0
-        or total <= 0
-        or processed > total
-    ):
+def _format_eta_suffix(processed: int, total: int, start_time: Optional[float]) -> str:
+    if start_time is None or processed <= 0 or total <= 0 or processed > total:
         return ""
     remaining = total - processed
     if remaining <= 0:

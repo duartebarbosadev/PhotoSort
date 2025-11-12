@@ -46,12 +46,7 @@ def _format_duration(seconds: float) -> str:
 def _estimate_eta_seconds(
     processed: int, total: int, start_time: Optional[float]
 ) -> Optional[float]:
-    if (
-        start_time is None
-        or processed <= 0
-        or total <= 0
-        or processed > total
-    ):
+    if start_time is None or processed <= 0 or total <= 0 or processed > total:
         return None
     remaining = total - processed
     if remaining <= 0:

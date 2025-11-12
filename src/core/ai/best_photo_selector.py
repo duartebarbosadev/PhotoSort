@@ -233,6 +233,7 @@ class IQAMetricRunner:
         with _METRIC_CACHE_LOCK:
             cached = _METRIC_CACHE.get(cache_key)
             if cached is None:
+
                 def _factory():
                     return pyiqa.create_metric(
                         self.spec.name,

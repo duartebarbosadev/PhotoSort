@@ -12,12 +12,26 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Set
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
 
-from core.ai.best_photo_selector import BestPhotoSelector
+try:  # pragma: no cover - OpenCV optional during tests
+    import cv2
+except Exception:  # pragma: no cover - gracefully degrade if OpenCV missing
+    cv2 = None
+
+from core.ai.best_photo_selector import (
+    BestPhotoSelector,
+    DEFAULT_METRIC_SPECS,
+    EyeStateAnalyzer,
+    MetricSpec,
+)
 from core.app_settings import (
+    PerformanceMode,
+    get_custom_thread_count,
     get_best_shot_engine,
     get_openai_config,
+    get_performance_mode,
     get_preferred_torch_device,
     DEFAULT_OPENAI_API_KEY,
     DEFAULT_OPENAI_MODEL,
@@ -65,6 +79,13 @@ DEFAULT_RATING_PROMPT = (
 )
 
 MAX_LOCAL_ANALYSIS_EDGE = 1024
+RESPONSIVE_LOCAL_ANALYSIS_EDGE = 640
+PERFORMANCE_RATIO_THRESHOLD = 0.95
+PREFILTER_PREVIEW_MAX_EDGE = 512
+PREFILTER_MAX_CANDIDATES = 3
+PREFILTER_MIN_CLUSTER_SIZE = 4
+HEURISTIC_SHARPNESS_NORMALIZER = 250.0
+HEURISTIC_CONTRAST_NORMALIZER = 75.0
 
 if hasattr(Image, "Resampling"):
     _RESAMPLE_BEST = Image.Resampling.LANCZOS
@@ -88,6 +109,233 @@ class LLMConfig:
             self.best_shot_prompt = DEFAULT_BEST_SHOT_PROMPT
         if not self.rating_prompt:
             self.rating_prompt = DEFAULT_RATING_PROMPT
+
+
+@dataclass(frozen=True)
+class LocalAnalysisProfile:
+    name: str
+    max_edge: int
+    metric_specs: Sequence[MetricSpec]
+
+
+def _metric_specs_for(names: Sequence[str]) -> Tuple[MetricSpec, ...]:
+    enabled = {name.lower() for name in names}
+    filtered = tuple(
+        spec for spec in DEFAULT_METRIC_SPECS if spec.name.lower() in enabled
+    )
+    return filtered or tuple(DEFAULT_METRIC_SPECS)
+
+
+_PERFORMANCE_ANALYSIS_PROFILE = LocalAnalysisProfile(
+    name="performance",
+    max_edge=MAX_LOCAL_ANALYSIS_EDGE,
+    metric_specs=tuple(DEFAULT_METRIC_SPECS),
+)
+
+_RESPONSIVE_ANALYSIS_PROFILE = LocalAnalysisProfile(
+    name="responsive",
+    max_edge=RESPONSIVE_LOCAL_ANALYSIS_EDGE,
+    metric_specs=_metric_specs_for(("musiq", "maniqa")),
+)
+
+
+def _calculate_custom_thread_ratio() -> Optional[float]:
+    cpu_count = os.cpu_count() or 0
+    if cpu_count <= 0:
+        return None
+    try:
+        custom_threads = get_custom_thread_count()
+    except Exception:
+        return None
+    clamped = max(1, min(cpu_count, int(custom_threads)))
+    return clamped / float(cpu_count)
+
+
+def select_local_analysis_profile(
+    mode: PerformanceMode,
+    *,
+    custom_thread_ratio: Optional[float] = None,
+) -> LocalAnalysisProfile:
+    if mode in (PerformanceMode.PERFORMANCE, PerformanceMode.BALANCED):
+        return _PERFORMANCE_ANALYSIS_PROFILE
+    if mode == PerformanceMode.CUSTOM and custom_thread_ratio is not None:
+        if custom_thread_ratio >= PERFORMANCE_RATIO_THRESHOLD:
+            return _PERFORMANCE_ANALYSIS_PROFILE
+    return _RESPONSIVE_ANALYSIS_PROFILE
+
+
+def _determine_local_analysis_profile() -> LocalAnalysisProfile:
+    mode = get_performance_mode()
+    ratio = _calculate_custom_thread_ratio() if mode == PerformanceMode.CUSTOM else None
+    profile = select_local_analysis_profile(mode, custom_thread_ratio=ratio)
+    logger.info(
+        "Using '%s' local AI profile (max edge %d px, metrics: %s)",
+        profile.name,
+        profile.max_edge,
+        ", ".join(spec.name.upper() for spec in profile.metric_specs),
+    )
+    return profile
+
+
+@dataclass(frozen=True)
+class HeuristicCandidate:
+    image_path: str
+    score: float
+    sharpness: float
+    exposure_balance: float
+    histogram_balance: float
+    eye_openness: float
+
+    def as_dict(self) -> Dict[str, float]:
+        return {
+            "score": self.score,
+            "sharpness": self.sharpness,
+            "exposure_balance": self.exposure_balance,
+            "histogram_balance": self.histogram_balance,
+            "eye_openness": self.eye_openness,
+        }
+
+
+class FastHeuristicStage:
+    """
+    Lightweight heuristics that quickly reject obviously bad frames before heavy IQA.
+
+    Signals reuse the same Laplacian variance idea as the blur detector plus
+    coarse histogram/contrast checks and (optionally) the eye-state classifier.
+    """
+
+    def __init__(
+        self, image_pipeline, preview_max_edge: int = PREFILTER_PREVIEW_MAX_EDGE
+    ):
+        self._image_pipeline = image_pipeline
+        self._preview_max_edge = preview_max_edge
+        self._eye_analyzer: Optional["EyeStateAnalyzer"] = None
+        self._eye_detection_disabled = False
+
+    def _load_preview(self, image_path: str) -> Optional[Image.Image]:
+        preview = None
+        if self._image_pipeline is not None:
+            try:
+                preview = self._image_pipeline.get_preview_image(image_path)
+                if preview is not None:
+                    preview = preview.copy()
+            except Exception:
+                logger.debug(
+                    "Heuristic preview load failed via pipeline for %s",
+                    image_path,
+                    exc_info=True,
+                )
+        if preview is None:
+            try:
+                with Image.open(image_path) as raw:
+                    prepared = ImageOps.exif_transpose(raw)
+                    preview = prepared.convert("RGB").copy()
+            except Exception:
+                logger.debug(
+                    "Heuristic preview load failed from disk for %s",
+                    image_path,
+                    exc_info=True,
+                )
+                return None
+        try:
+            prepared = _downscale_image(preview, self._preview_max_edge)
+            if prepared is preview:
+                # Ensure caller gets a live image even if no resize was needed.
+                prepared = prepared.copy()
+            return prepared
+        finally:
+            try:
+                preview.close()
+            except Exception:
+                pass
+
+    def _estimate_sharpness(self, image: Image.Image) -> float:
+        if cv2 is None:
+            return 0.5
+        try:
+            gray = np.array(image.convert("L"))
+            variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            normalized = variance / HEURISTIC_SHARPNESS_NORMALIZER
+            return max(0.0, min(1.0, normalized))
+        except Exception:
+            logger.debug("Sharpness heuristic failed", exc_info=True)
+            return 0.5
+
+    @staticmethod
+    def _estimate_exposure_balance(image: Image.Image) -> float:
+        gray = image.convert("L")
+        stats = ImageStat.Stat(gray)
+        mean_luma = stats.mean[0] / 255.0 if stats.mean else 0.5
+        stddev = (
+            stats.stddev[0] if stats.stddev else 0.0
+        ) / HEURISTIC_CONTRAST_NORMALIZER
+        brightness_penalty = min(1.0, abs(mean_luma - 0.5) * 2.0)
+        score = max(0.0, 1.0 - brightness_penalty)
+        contrast_bonus = max(0.0, min(1.0, stddev))
+        return 0.6 * score + 0.4 * contrast_bonus
+
+    @staticmethod
+    def _estimate_histogram_balance(image: Image.Image) -> float:
+        gray = image.convert("L")
+        hist = gray.histogram()
+        total = sum(hist)
+        if total <= 0:
+            return 0.5
+        tail_bins = 6
+        shadow_ratio = sum(hist[:tail_bins]) / total
+        highlight_ratio = sum(hist[-tail_bins:]) / total
+        clipping = shadow_ratio + highlight_ratio
+        return max(0.0, 1.0 - clipping * 3.0)
+
+    def _estimate_eye_openness(self, image: Image.Image) -> float:
+        if self._eye_detection_disabled:
+            return 0.5
+        if self._eye_analyzer is None:
+            try:
+                self._eye_analyzer = EyeStateAnalyzer(max_faces=1)
+            except Exception:
+                logger.warning(
+                    "EyeStateAnalyzer unavailable; heuristic stage will skip eye checks."
+                )
+                self._eye_detection_disabled = True
+                return 0.5
+        try:
+            probability = self._eye_analyzer.predict_open_probability(image)
+            if probability is None:
+                return 0.5
+            return max(0.0, min(1.0, float(probability)))
+        except Exception:
+            logger.debug("Eye-state heuristic failed", exc_info=True)
+            return 0.5
+
+    def evaluate(self, image_path: str) -> Optional[HeuristicCandidate]:
+        preview = self._load_preview(image_path)
+        if preview is None:
+            return None
+        try:
+            sharpness = self._estimate_sharpness(preview)
+            exposure = self._estimate_exposure_balance(preview)
+            histogram_balance = self._estimate_histogram_balance(preview)
+            eye_openness = self._estimate_eye_openness(preview)
+            score = (
+                0.5 * sharpness
+                + 0.2 * exposure
+                + 0.15 * histogram_balance
+                + 0.15 * eye_openness
+            )
+            return HeuristicCandidate(
+                image_path=image_path,
+                score=score,
+                sharpness=sharpness,
+                exposure_balance=exposure,
+                histogram_balance=histogram_balance,
+                eye_openness=eye_openness,
+            )
+        finally:
+            try:
+                preview.close()
+            except Exception:
+                pass
 
 
 def _load_font(image_size: Tuple[int, int]) -> ImageFont.ImageFont:
@@ -127,7 +375,9 @@ def _image_to_base64(image: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-def _downscale_image(image: Image.Image, max_edge: int = MAX_LOCAL_ANALYSIS_EDGE) -> Image.Image:
+def _downscale_image(
+    image: Image.Image, max_edge: int = MAX_LOCAL_ANALYSIS_EDGE
+) -> Image.Image:
     width, height = image.size
     longest = max(width, height)
     if longest <= max_edge:
@@ -212,19 +462,13 @@ def _compute_quality_rating(result) -> Tuple[int, float]:
         raw = getattr(result, "raw_metrics", {}) or {}
         musiq_raw = raw.get("musiq_raw")
         if _is_number(musiq_raw):
-            samples.append(
-                _normalize_for_rating(musiq_raw, lower=25.0, upper=85.0)
-            )
+            samples.append(_normalize_for_rating(musiq_raw, lower=25.0, upper=85.0))
         liqe_raw = raw.get("liqe_raw")
         if _is_number(liqe_raw):
-            samples.append(
-                _normalize_for_rating(liqe_raw, lower=30.0, upper=90.0)
-            )
+            samples.append(_normalize_for_rating(liqe_raw, lower=30.0, upper=90.0))
         maniqa_raw = raw.get("maniqa_raw")
         if _is_number(maniqa_raw):
-            samples.append(
-                _normalize_for_rating(maniqa_raw, lower=0.25, upper=0.85)
-            )
+            samples.append(_normalize_for_rating(maniqa_raw, lower=0.25, upper=0.85))
         if samples:
             quality_score = sum(samples) / len(samples)
 
@@ -249,6 +493,10 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
         )
         self._thread_local = threading.local()
         self._device_hint = get_preferred_torch_device()
+        self._analysis_profile = _determine_local_analysis_profile()
+        self._max_local_analysis_edge = self._analysis_profile.max_edge
+        self._metric_specs = self._analysis_profile.metric_specs
+        self._prefilter_stage = FastHeuristicStage(image_pipeline)
         logger.info(
             "Local best-shot strategy targeting torch device '%s'", self._device_hint
         )
@@ -263,6 +511,7 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
                 image_loader=image_loader,
                 status_callback=self._status_callback,
                 device=self._device_hint,
+                metric_specs=self._metric_specs,
             )
             self._thread_local.selector = selector
         return selector
@@ -312,10 +561,56 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
         prepared = image.copy()
         if prepared.mode != "RGB":
             prepared = prepared.convert("RGB")
-        prepared = _downscale_image(prepared, MAX_LOCAL_ANALYSIS_EDGE)
+        prepared = _downscale_image(prepared, self._max_local_analysis_edge)
         prepared.info.setdefault("source_path", source_path)
         prepared.info.setdefault("region", "full")
         return prepared
+
+    def _prefilter_cluster(
+        self, cluster_id: int, image_paths: Sequence[str]
+    ) -> Tuple[List[str], Dict[str, HeuristicCandidate]]:
+        if len(image_paths) < PREFILTER_MIN_CLUSTER_SIZE:
+            return list(image_paths), {}
+
+        limit = min(PREFILTER_MAX_CANDIDATES, len(image_paths))
+        if limit >= len(image_paths):
+            return list(image_paths), {}
+
+        stage = self._prefilter_stage
+        if stage is None:
+            return list(image_paths), {}
+
+        scored: List[HeuristicCandidate] = []
+        fallbacks: List[str] = []
+        for path in image_paths:
+            candidate = stage.evaluate(path)
+            if candidate is None:
+                fallbacks.append(path)
+                continue
+            scored.append(candidate)
+
+        if not scored:
+            return list(image_paths), {}
+
+        scored.sort(key=lambda c: c.score, reverse=True)
+        selected = [candidate.image_path for candidate in scored[:limit]]
+        if len(selected) < limit:
+            for path in fallbacks:
+                if path not in selected:
+                    selected.append(path)
+                if len(selected) >= limit:
+                    break
+
+        if len(selected) < len(image_paths):
+            logger.info(
+                "Heuristic prefilter reduced cluster %s from %d to %d candidates",
+                cluster_id,
+                len(image_paths),
+                len(selected),
+            )
+
+        info_map = {candidate.image_path: candidate for candidate in scored}
+        return selected, info_map
 
     def rank_cluster(
         self, cluster_id: int, image_paths: Sequence[str]
@@ -323,9 +618,24 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
         logger.info(
             f"Local AI ranking cluster {cluster_id} with {len(image_paths)} images using local models"
         )
+        candidate_paths, prefilter_map = self._prefilter_cluster(
+            cluster_id, image_paths
+        )
+        if len(candidate_paths) != len(image_paths):
+            logger.info(
+                "Cluster %s trimmed to %d candidate(s) prior to IQA",
+                cluster_id,
+                len(candidate_paths),
+            )
         selector = self._get_selector()
-        results = selector.rank_images(image_paths)
-        ranked_results = [r.to_dict() for r in results]
+        results = selector.rank_images(candidate_paths)
+        ranked_results: List[Dict[str, object]] = []
+        for result in results:
+            payload = result.to_dict()
+            info = prefilter_map.get(payload.get("image_path"))
+            if info:
+                payload["prefilter"] = info.as_dict()
+            ranked_results.append(payload)
         if ranked_results:
             logger.info(
                 f"Completed local AI ranking for cluster {cluster_id}. Best image: {os.path.basename(ranked_results[0]['image_path'])}"
@@ -801,6 +1111,8 @@ __all__ = [
     "BestShotEngine",
     "LLMBestShotStrategy",
     "LocalBestShotStrategy",
+    "LocalAnalysisProfile",
     "create_best_shot_strategy",
     "LLMConfig",
+    "select_local_analysis_profile",
 ]

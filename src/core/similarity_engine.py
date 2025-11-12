@@ -8,6 +8,11 @@ import numpy as np  # Import numpy for array manipulation
 from sklearn.cluster import DBSCAN
 
 from core.image_pipeline import ImagePipeline
+from core.similarity_utils import (
+    adaptive_dbscan_eps,
+    l2_normalize_rows,
+    normalize_embedding_dict,
+)
 from .app_settings import (
     DEFAULT_CLIP_MODEL,
     is_pytorch_cuda_available,
@@ -123,6 +128,13 @@ class SimilarityEngine(QObject):
                 logger.info(f"Loading embeddings cache: {self._cache_path}")
                 with open(self._cache_path, "rb") as f:
                     cache_data = pickle.load(f)
+                    if isinstance(cache_data, dict) and cache_data:
+                        if normalize_embedding_dict(cache_data):
+                            logger.info(
+                                "Detected legacy non-normalized embeddings. "
+                                "Updating cache to normalized vectors."
+                            )
+                            self._save_embeddings_to_cache(cache_data)
                     logger.info(
                         f"Loaded {len(cache_data)} embeddings from cache in {time.perf_counter() - cache_load_start_time:.4f}s"
                     )
@@ -229,6 +241,8 @@ class SimilarityEngine(QObject):
                 batch_embeds = self.model.encode(
                     batch_images, show_progress_bar=False, convert_to_numpy=True
                 )
+                batch_embeds = np.asarray(batch_embeds, dtype=np.float32)
+                batch_embeds = l2_normalize_rows(batch_embeds)
 
                 for path_idx, path in enumerate(valid_paths_in_batch):
                     new_embeddings[path] = batch_embeds[path_idx].tolist()
@@ -283,19 +297,26 @@ class SimilarityEngine(QObject):
 
         filepaths = list(embeddings.keys())
         embedding_matrix = np.array(list(embeddings.values()), dtype=np.float32)
+        embedding_matrix = l2_normalize_rows(embedding_matrix)
         num_samples, _ = embedding_matrix.shape
 
         labels = None
+        adaptive_eps = adaptive_dbscan_eps(
+            embedding_matrix, DBSCAN_EPS, DBSCAN_MIN_SAMPLES
+        )
         try:
             logger.info(
-                f"Running DBSCAN clustering on {num_samples} embeddings (eps={DBSCAN_EPS}, min_samples={DBSCAN_MIN_SAMPLES})."
+                "Running DBSCAN clustering on %d embeddings (eps=%.4f, min_samples=%d).",
+                num_samples,
+                adaptive_eps,
+                DBSCAN_MIN_SAMPLES,
             )
             # Ensure embedding_matrix is C-contiguous, which is expected by DBSCAN
             if not embedding_matrix.flags["C_CONTIGUOUS"]:
                 embedding_matrix = np.ascontiguousarray(embedding_matrix)
 
             dbscan = DBSCAN(
-                eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES, metric="cosine"
+                eps=adaptive_eps, min_samples=DBSCAN_MIN_SAMPLES, metric="cosine"
             )
             dbscan_labels = dbscan.fit_predict(embedding_matrix)
 
