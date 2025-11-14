@@ -521,6 +521,10 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
             "Local best-shot strategy targeting torch device '%s'", self._device_hint
         )
 
+    @property
+    def max_workers(self) -> int:
+        return calculate_max_workers(min_workers=1, max_workers=8)
+
     def _get_selector(self) -> BestPhotoSelector:
         selector = getattr(self._thread_local, "selector", None)
         if selector is None:
@@ -684,10 +688,19 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
                 cluster_id,
                 len(candidate_paths),
             )
-        selector = self._get_selector()
-        results = selector.rank_images(candidate_paths)
+        worker_count = min(self.max_workers, len(candidate_paths))
+        if worker_count > 1:
+            logger.debug(
+                "Parallel IQA scoring enabled for cluster %s with %d worker(s)",
+                cluster_id,
+                worker_count,
+            )
+            result_objects = self._rank_images_parallel(candidate_paths, worker_count)
+        else:
+            selector = self._get_selector()
+            result_objects = selector.rank_images(candidate_paths)
         ranked_results: List[Dict[str, object]] = []
-        for result in results:
+        for result in result_objects:
             payload = result.to_dict()
             info = prefilter_map.get(payload.get("image_path"))
             if info:
@@ -732,6 +745,31 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
                 f"Completed local AI ranking for cluster {cluster_id}. Best image: {os.path.basename(ranked_results[0]['image_path'])}"
             )
         return ranked_results
+
+    def _rank_images_parallel(
+        self, image_paths: Sequence[str], worker_count: int
+    ) -> List[BestShotResult]:
+        results: List[BestShotResult] = []
+
+        def _evaluate(path: str) -> Optional[BestShotResult]:
+            selector = self._get_selector()
+            return selector.analyze_image(path)
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {executor.submit(_evaluate, path): path for path in image_paths}
+            for future in as_completed(futures):
+                path = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    logger.warning(
+                        "Parallel IQA scoring failed for %s: %s", path, exc, exc_info=True
+                    )
+                    continue
+                if result:
+                    results.append(result)
+        results.sort(key=lambda r: r.composite_score, reverse=True)
+        return results
 
     def rate_image(self, image_path: str) -> Optional[Dict[str, object]]:
         logger.info(f"Local AI rating image: {os.path.basename(image_path)}")

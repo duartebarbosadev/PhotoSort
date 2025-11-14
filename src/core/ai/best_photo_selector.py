@@ -438,10 +438,13 @@ class BestPhotoSelector:
     def rank_images(self, image_paths: Sequence[str]) -> List[BestShotResult]:
         results: List[BestShotResult] = []
         for path in image_paths:
-            result = self._analyze_image(path)
+            result = self.analyze_image(path)
             if result:
                 results.append(result)
         return sorted(results, key=lambda r: r.composite_score, reverse=True)
+
+    def analyze_image(self, image_path: str) -> Optional[BestShotResult]:
+        return self._analyze_image(image_path)
 
     def _is_supported_file(self, filename: str) -> bool:
         _, ext = os.path.splitext(filename)
