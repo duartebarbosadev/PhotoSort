@@ -4,6 +4,7 @@ Manages persistent application settings using QSettings.
 """
 
 import os
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 from PyQt6.QtCore import QSettings
@@ -81,6 +82,16 @@ DEFAULT_OPENAI_MAX_TOKENS = 200
 DEFAULT_OPENAI_TIMEOUT = 600
 DEFAULT_OPENAI_MAX_WORKERS = 4
 DEFAULT_BEST_SHOT_BATCH_SIZE = 3
+
+
+@dataclass(frozen=True)
+class LocalBestShotConstants:
+    model_stride: int = 32
+    tensor_cache_key: str = "_photosort_pyiqa_tensor"
+    eye_fallback_max_edge: int = 2048
+
+
+_LOCAL_BEST_SHOT_CONSTANTS = LocalBestShotConstants()
 
 # --- UI Constants ---
 # Grid view settings
@@ -443,6 +454,11 @@ def get_best_shot_batch_size() -> int:
 def set_best_shot_batch_size(batch_size: int) -> None:
     settings = _get_settings()
     settings.setValue(BEST_SHOT_BATCH_SIZE_KEY, max(2, int(batch_size)))
+
+
+def get_local_best_shot_constants() -> LocalBestShotConstants:
+    """Return immutable constants for the local best-shot pipeline."""
+    return _LOCAL_BEST_SHOT_CONSTANTS
 
 
 def get_openai_config() -> dict:

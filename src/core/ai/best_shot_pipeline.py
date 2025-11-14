@@ -8,6 +8,7 @@ import math
 import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Set
@@ -33,6 +34,7 @@ from core.app_settings import (
     get_openai_config,
     get_performance_mode,
     get_preferred_torch_device,
+    calculate_max_workers,
     DEFAULT_OPENAI_API_KEY,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_OPENAI_BASE_URL,
@@ -209,8 +211,8 @@ class FastHeuristicStage:
     ):
         self._image_pipeline = image_pipeline
         self._preview_max_edge = preview_max_edge
-        self._eye_analyzer: Optional["EyeStateAnalyzer"] = None
         self._eye_detection_disabled = False
+        self._eye_analyzer_local = threading.local()
 
     def _load_preview(self, image_path: str) -> Optional[Image.Image]:
         preview = None
@@ -287,20 +289,29 @@ class FastHeuristicStage:
         clipping = shadow_ratio + highlight_ratio
         return max(0.0, 1.0 - clipping * 3.0)
 
-    def _estimate_eye_openness(self, image: Image.Image) -> float:
+    def _get_eye_analyzer(self) -> Optional["EyeStateAnalyzer"]:
         if self._eye_detection_disabled:
-            return 0.5
-        if self._eye_analyzer is None:
-            try:
-                self._eye_analyzer = EyeStateAnalyzer(max_faces=1)
-            except Exception:
-                logger.warning(
-                    "EyeStateAnalyzer unavailable; heuristic stage will skip eye checks."
-                )
-                self._eye_detection_disabled = True
-                return 0.5
+            return None
+        analyzer = getattr(self._eye_analyzer_local, "instance", None)
+        if analyzer is not None:
+            return analyzer
         try:
-            probability = self._eye_analyzer.predict_open_probability(image)
+            analyzer = EyeStateAnalyzer(max_faces=1)
+        except Exception:
+            logger.warning(
+                "EyeStateAnalyzer unavailable; heuristic stage will skip eye checks."
+            )
+            self._eye_detection_disabled = True
+            return None
+        self._eye_analyzer_local.instance = analyzer
+        return analyzer
+
+    def _estimate_eye_openness(self, image: Image.Image) -> float:
+        analyzer = self._get_eye_analyzer()
+        if analyzer is None:
+            return 0.5
+        try:
+            probability = analyzer.predict_open_probability(image)
             if probability is None:
                 return 0.5
             return max(0.0, min(1.0, float(probability)))
@@ -497,6 +508,15 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
         self._max_local_analysis_edge = self._analysis_profile.max_edge
         self._metric_specs = self._analysis_profile.metric_specs
         self._prefilter_stage = FastHeuristicStage(image_pipeline)
+        responsive_profile = self._analysis_profile is _RESPONSIVE_ANALYSIS_PROFILE
+        min_prefilter_workers = 1 if responsive_profile else 2
+        max_prefilter_workers = 2 if responsive_profile else 4
+        self._prefilter_workers = max(
+            1,
+            calculate_max_workers(
+                min_workers=min_prefilter_workers, max_workers=max_prefilter_workers
+            ),
+        )
         logger.info(
             "Local best-shot strategy targeting torch device '%s'", self._device_hint
         )
@@ -566,6 +586,42 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
         prepared.info.setdefault("region", "full")
         return prepared
 
+    def _evaluate_prefilter_candidates(
+        self, stage: FastHeuristicStage, image_paths: Sequence[str]
+    ) -> Dict[str, Optional[HeuristicCandidate]]:
+        results: Dict[str, Optional[HeuristicCandidate]] = {}
+        if not image_paths:
+            return results
+        worker_count = min(self._prefilter_workers, len(image_paths))
+        if worker_count <= 1:
+            for path in image_paths:
+                try:
+                    results[path] = stage.evaluate(path)
+                except Exception:
+                    logger.debug(
+                        "Heuristic evaluation failed for %s", path, exc_info=True
+                    )
+                    results[path] = None
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                future_map = {
+                    executor.submit(stage.evaluate, path): path for path in image_paths
+                }
+                for future in as_completed(future_map):
+                    path = future_map[future]
+                    try:
+                        results[path] = future.result()
+                    except Exception:
+                        logger.debug(
+                            "Heuristic evaluation raised unexpectedly for %s",
+                            path,
+                            exc_info=True,
+                        )
+                        results[path] = None
+        for path in image_paths:
+            results.setdefault(path, None)
+        return results
+
     def _prefilter_cluster(
         self, cluster_id: int, image_paths: Sequence[str]
     ) -> Tuple[List[str], Dict[str, HeuristicCandidate]]:
@@ -580,10 +636,11 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
         if stage is None:
             return list(image_paths), {}
 
+        evaluations = self._evaluate_prefilter_candidates(stage, image_paths)
         scored: List[HeuristicCandidate] = []
         fallbacks: List[str] = []
         for path in image_paths:
-            candidate = stage.evaluate(path)
+            candidate = evaluations.get(path)
             if candidate is None:
                 fallbacks.append(path)
                 continue
@@ -635,6 +692,40 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
             info = prefilter_map.get(payload.get("image_path"))
             if info:
                 payload["prefilter"] = info.as_dict()
+            if logger.isEnabledFor(logging.DEBUG):
+                image_name = os.path.basename(payload.get("image_path", ""))
+                composite = payload.get("composite_score", 0.0)
+                metrics = payload.get("metrics") or {}
+                metric_summary = ", ".join(
+                    f"{name.upper()} {value:.3f}"
+                    for name, value in sorted(metrics.items())
+                    if isinstance(value, (int, float))
+                )
+                eye_value = metrics.get("eyes_open")
+                if isinstance(eye_value, (int, float)) and "EYES_OPEN" not in metric_summary:
+                    metric_summary = (
+                        f"{metric_summary}, EYES_OPEN {eye_value:.3f}"
+                        if metric_summary
+                        else f"EYES_OPEN {eye_value:.3f}"
+                    )
+                prefilter = payload.get("prefilter") or {}
+                if prefilter:
+                    prefilter_summary = ", ".join(
+                        f"{key}={value:.3f}" if isinstance(value, (int, float)) else f"{key}={value}"
+                        for key, value in sorted(prefilter.items())
+                    )
+                    metric_summary = (
+                        f"{metric_summary} | prefilter: {prefilter_summary}"
+                        if metric_summary
+                        else f"prefilter: {prefilter_summary}"
+                    )
+                logger.debug(
+                    "Cluster %s candidate %s -> composite %.4f%s",
+                    cluster_id,
+                    image_name or payload.get("image_path"),
+                    composite,
+                    f" ({metric_summary})" if metric_summary else "",
+                )
             ranked_results.append(payload)
         if ranked_results:
             logger.info(

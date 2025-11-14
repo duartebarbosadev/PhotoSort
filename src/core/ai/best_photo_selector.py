@@ -19,6 +19,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from src.core.numpy_compat import ensure_numpy_sctypes
+from core.app_settings import get_local_best_shot_constants
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -136,7 +137,7 @@ def _normalize(value: float, lower: float, upper: float) -> float:
     return _clamp((value - lower) / (upper - lower))
 
 
-MODEL_STRIDE = 32
+_LOCAL_BEST_SHOT_SETTINGS = get_local_best_shot_constants()
 
 
 def _pil_to_tensor(image: Image.Image):
@@ -147,6 +148,13 @@ def _pil_to_tensor(image: Image.Image):
             "torch is required for IQA scoring. Install it via `pip install torch`."
         ) from exc
 
+    cache_key = _LOCAL_BEST_SHOT_SETTINGS.tensor_cache_key
+    cache_dict = image.info if isinstance(getattr(image, "info", None), dict) else None
+    if cache_dict is not None:
+        cached = cache_dict.get(cache_key)
+        if cached is not None:
+            return cached
+
     if image.mode != "RGB":
         image = image.convert("RGB")
     arr = np.asarray(image, dtype=np.float32)
@@ -154,18 +162,20 @@ def _pil_to_tensor(image: Image.Image):
         arr = np.stack([arr, arr, arr], axis=-1)
     if arr.shape[2] == 4:  # RGBA → RGB
         arr = arr[:, :, :3]
-    arr = _pad_to_model_stride(arr)
+    arr = _pad_to_model_stride(arr, _LOCAL_BEST_SHOT_SETTINGS.model_stride)
     arr /= 255.0
     tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
+    if cache_dict is not None:
+        cache_dict[cache_key] = tensor
     return tensor
 
 
-def _pad_to_model_stride(arr: np.ndarray) -> np.ndarray:
-    if MODEL_STRIDE <= 1 or arr.ndim != 3:
+def _pad_to_model_stride(arr: np.ndarray, stride: int) -> np.ndarray:
+    if stride <= 1 or arr.ndim != 3:
         return arr
     height, width, _ = arr.shape
-    pad_h = (-height) % MODEL_STRIDE
-    pad_w = (-width) % MODEL_STRIDE
+    pad_h = (-height) % stride
+    pad_w = (-width) % stride
     if pad_h == 0 and pad_w == 0:
         return arr
     return np.pad(arr, ((0, pad_h), (0, pad_w), (0, 0)), mode="edge")
@@ -480,24 +490,20 @@ class BestPhotoSelector:
             metrics[runner.spec.name] = payload["normalized"]
             raw_metrics[f"{runner.spec.name}_raw"] = payload["raw"]
 
-        if self._eye_analyzer is not None:
-            try:
-                eye_prob = self._eye_analyzer.predict_open_probability(image)
-                logger.info(
-                    "Eye analyzer processed %s successfully",
-                    os.path.basename(image_path),
-                )
-            except Exception as exc:  # pragma: no cover - defensive logging
-                logger.warning("Eye-state analysis failed for %s: %s", image_path, exc)
-                eye_prob = None
-            if eye_prob is not None:
-                metrics["eyes_open"] = eye_prob
-                raw_metrics["eyes_open_probability"] = eye_prob
-                logger.info(
-                    "Eye openness for %s: %.3f",
-                    os.path.basename(image_path),
-                    eye_prob,
-                )
+        eye_prob = self._compute_eye_openness(image)
+        if eye_prob is not None:
+            metrics["eyes_open"] = eye_prob
+            raw_metrics["eyes_open_probability"] = eye_prob
+            logger.info(
+                "Eye openness for %s: %.3f",
+                os.path.basename(image_path),
+                eye_prob,
+            )
+        elif self._eye_analyzer is not None:
+            logger.debug(
+                "Eye analyzer could not determine probability for %s",
+                os.path.basename(image_path),
+            )
 
         image.close()
 
@@ -512,6 +518,104 @@ class BestPhotoSelector:
             metrics=metrics,
             raw_metrics=raw_metrics,
         )
+
+    def _compute_eye_openness(self, image: Image.Image) -> Optional[float]:
+        if self._eye_analyzer is None:
+            return None
+
+        def _predict(candidate: Image.Image) -> Optional[float]:
+            try:
+                value = self._eye_analyzer.predict_open_probability(candidate)
+                if value is None:
+                    return None
+                return max(0.0, min(1.0, float(value)))
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "Eye-state analysis failed for %s: %s",
+                    candidate.info.get("source_path", "<unknown>"),
+                    exc,
+                )
+                return None
+
+        source_path = image.info.get("source_path")
+        disposable: List[Image.Image] = []
+        candidates: List[Image.Image] = [image]
+
+        def _append_candidate(candidate: Optional[Image.Image]) -> None:
+            if candidate is None:
+                return
+            candidates.append(candidate)
+            disposable.append(candidate)
+
+        # Center crops of the working preview sometimes help MediaPipe to focus on faces
+        for crop in self._build_eye_crops(image):
+            _append_candidate(crop)
+
+        if source_path:
+            fallback = self._load_eye_image(source_path)
+            _append_candidate(fallback)
+            if fallback is not None:
+                for crop in self._build_eye_crops(fallback):
+                    _append_candidate(crop)
+
+        try:
+            for candidate in candidates:
+                result = _predict(candidate)
+                if result is not None:
+                    return result
+        finally:
+            for extra in disposable:
+                try:
+                    extra.close()
+                except Exception:
+                    pass
+
+        return None
+
+    def _load_eye_image(self, source_path: str) -> Optional[Image.Image]:
+        try:
+            with Image.open(source_path) as raw:
+                prepared = ImageOps.exif_transpose(raw).convert("RGB")
+                prepared.thumbnail(
+                    (
+                        _LOCAL_BEST_SHOT_SETTINGS.eye_fallback_max_edge,
+                        _LOCAL_BEST_SHOT_SETTINGS.eye_fallback_max_edge,
+                    ),
+                    _RESAMPLE_LANCZOS,
+                )
+                buffered = prepared.copy()
+                buffered.info.setdefault("source_path", source_path)
+                return buffered
+        except Exception:
+            logger.debug(
+                "Fallback eye preview load failed for %s", source_path, exc_info=True
+            )
+            return None
+
+    def _build_eye_crops(self, image: Image.Image) -> List[Image.Image]:
+        width, height = image.size
+        if width < 80 or height < 80:
+            return []
+        scales = (0.85, 0.7)
+        vertical_bias = (0.35, 0.25)
+        crops: List[Image.Image] = []
+        source_path = image.info.get("source_path")
+        for scale, bias in zip(scales, vertical_bias):
+            crop_w = max(64, int(width * scale))
+            crop_h = max(64, int(height * scale))
+            left = max(0, (width - crop_w) // 2)
+            top = max(0, int((height - crop_h) * bias))
+            right = min(width, left + crop_w)
+            bottom = min(height, top + crop_h)
+            if right - left < 64 or bottom - top < 64:
+                continue
+            crop = image.crop((left, top, right, bottom)).copy()
+            max_edge = _LOCAL_BEST_SHOT_SETTINGS.eye_fallback_max_edge
+            if max(crop.size) > max_edge:
+                crop.thumbnail((max_edge, max_edge), _RESAMPLE_LANCZOS)
+            crop.info.setdefault("source_path", source_path)
+            crops.append(crop)
+        return crops
 
     def _combine_scores(self, normalized_metrics: Dict[str, float]) -> float:
         numerator = 0.0
