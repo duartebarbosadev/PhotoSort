@@ -29,7 +29,7 @@ def test_quality_rating_spreads_scores():
     assert poor_score < 0.3 < rich_score
 
 
-def test_mid_quality_maps_to_three():
+def test_mid_quality_maps_to_four():
     mid = _make_result(55.0, 0.45, 60.0, 0.5)
     rating, _ = _compute_quality_rating(mid)
-    assert rating == 3
+    assert rating == 4
