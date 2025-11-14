@@ -128,8 +128,7 @@ the API key blank.
 - **AI star ratings**: To score every visible image, run **View → AI Rate Images**
   (`Ctrl+A`). The ratings are stored in your XMP sidecars/metadata cache so
   they survive reloads, and you can filter the library using the standard rating
-  controls. (Detailed breakdowns from the AI response are kept internally for future
-  UI integrations.)
+  controls.
 
 ### Exporting Logs
 

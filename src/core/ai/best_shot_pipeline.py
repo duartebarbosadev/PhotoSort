@@ -89,6 +89,12 @@ PREFILTER_MAX_CANDIDATES = 3
 PREFILTER_MIN_CLUSTER_SIZE = 4
 HEURISTIC_SHARPNESS_NORMALIZER = 250.0
 HEURISTIC_CONTRAST_NORMALIZER = 75.0
+RATING_THRESHOLDS = (0.22, 0.42, 0.62, 0.8)
+QUALITY_NORMALIZATION_RANGES = {
+    "musiq_raw": (25.0, 85.0),
+    "liqe_raw": (30.0, 90.0),
+    "maniqa_raw": (0.25, 0.85),
+}
 
 if hasattr(Image, "Resampling"):
     _RESAMPLE_BEST = Image.Resampling.LANCZOS
@@ -442,11 +448,10 @@ def _normalize_for_rating(value: float, *, lower: float, upper: float) -> float:
 
 
 def _map_score_to_rating(normalized_score: float) -> int:
-    thresholds = [0.22, 0.42, 0.62, 0.8]
-    for idx, threshold in enumerate(thresholds, start=1):
+    for idx, threshold in enumerate(RATING_THRESHOLDS, start=1):
         if normalized_score < threshold:
             return idx
-    return 5
+    return len(RATING_THRESHOLDS) + 1
 
 
 def _compute_quality_rating(result) -> Tuple[int, float]:
@@ -472,15 +477,12 @@ def _compute_quality_rating(result) -> Tuple[int, float]:
     if quality_score is None:
         samples: List[float] = []
         raw = getattr(result, "raw_metrics", {}) or {}
-        musiq_raw = raw.get("musiq_raw")
-        if _is_number(musiq_raw):
-            samples.append(_normalize_for_rating(musiq_raw, lower=25.0, upper=85.0))
-        liqe_raw = raw.get("liqe_raw")
-        if _is_number(liqe_raw):
-            samples.append(_normalize_for_rating(liqe_raw, lower=30.0, upper=90.0))
-        maniqa_raw = raw.get("maniqa_raw")
-        if _is_number(maniqa_raw):
-            samples.append(_normalize_for_rating(maniqa_raw, lower=0.25, upper=0.85))
+        for field_name, (lower, upper) in QUALITY_NORMALIZATION_RANGES.items():
+            raw_value = raw.get(field_name)
+            if _is_number(raw_value):
+                samples.append(
+                    _normalize_for_rating(raw_value, lower=lower, upper=upper)
+                )
         if samples:
             quality_score = sum(samples) / len(samples)
 
@@ -1186,29 +1188,10 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 os.path.basename(image_path),
                 snippet or "<empty response>",
             )
-        if structured_payload and not analysis:
-            breakdown = structured_payload.get("score_breakdown", {})
-            breakdown_parts = [
-                f"{name.replace('_', ' ')} {value}" for name, value in breakdown.items()
-            ]
-            notes = structured_payload.get("notes")
-            confidence = structured_payload.get("confidence")
-            summary_bits = []
-            if breakdown_parts:
-                summary_bits.append(" | ".join(breakdown_parts))
-            if notes:
-                summary_bits.append(notes)
-            if confidence:
-                summary_bits.append(f"confidence: {confidence}")
-            analysis = " ".join(summary_bits)
-
         payload = {
             "image_path": image_path,
             "rating": rating,
-            "analysis": analysis,
         }
-        if structured_payload:
-            payload["quality_scores"] = structured_payload
         return payload
 
 

@@ -18,11 +18,11 @@ from urllib.parse import urlparse
 import numpy as np
 from PIL import Image, ImageOps
 
-from src.core.numpy_compat import ensure_numpy_sctypes
 from core.app_settings import get_local_best_shot_constants
 
+from core.numpy_compat import ensure_numpy_sctypes
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..")
@@ -102,6 +102,15 @@ class EyeStateAnalyzer:
     def _compute_ratio(
         landmarks, width: int, height: int, indices: Dict[str, int]
     ) -> Optional[float]:
+        max_index = max(indices.values(), default=-1)
+        if max_index >= 0 and hasattr(landmarks, "__len__"):
+            try:
+                if len(landmarks) <= max_index:
+                    # Not enough landmarks to satisfy the requested indices.
+                    return None
+            except TypeError:
+                return None
+
         try:
             upper = landmarks[indices["upper"]]
             lower = landmarks[indices["lower"]]
@@ -254,10 +263,9 @@ class IQAMetricRunner:
                 if self.status_callback is None:
                     metric = _factory()
                 else:
-                    with _PYIQA_DOWNLOAD_LOCK:
-                        metric = self._with_download_notifications(
-                            download_util, _factory
-                        )
+                    metric = self._with_download_notifications(
+                        download_util, _factory
+                    )
                 metric.eval()
                 cached = (metric, threading.Lock())
                 _METRIC_CACHE[cache_key] = cached
@@ -270,12 +278,16 @@ class IQAMetricRunner:
                 output = metric(input_tensor)
             return float(output.item()) if hasattr(output, "item") else float(output)
 
+        def _tensor_on_device(source: Image.Image):
+            return _pil_to_tensor(source).to(device)
+
         def _score(image: Image.Image) -> float:
-            tensor = _pil_to_tensor(image).to(device)
+            tensor = _tensor_on_device(image)
             with metric_lock:
                 try:
                     value = _run_metric(tensor)
                 except Exception as exc:
+                    # MANIQA is known to raise a "list index out of range" error on some inputs; fallback by recropping.
                     if (
                         self.spec.name != "maniqa"
                         or "list index out of range" not in str(exc).lower()
@@ -293,7 +305,7 @@ class IQAMetricRunner:
                         method=_RESAMPLE_LANCZOS,
                         centering=(0.5, 0.5),
                     )
-                    tensor = _pil_to_tensor(safe_image).to(device)
+                    tensor = _tensor_on_device(safe_image)
                     value = _run_metric(tensor)
             return value
 
@@ -320,11 +332,12 @@ class IQAMetricRunner:
                 if should_notify:
                     self._report_download_status("done", destination)
 
-        download_util.load_file_from_url = wrapped_loader
-        try:
-            return factory()
-        finally:
-            download_util.load_file_from_url = original_loader
+        with _PYIQA_DOWNLOAD_LOCK:
+            download_util.load_file_from_url = wrapped_loader
+            try:
+                return factory()
+            finally:
+                download_util.load_file_from_url = original_loader
 
     def _report_download_status(self, stage: str, destination: str) -> None:
         if not self.status_callback:
@@ -570,8 +583,10 @@ class BestPhotoSelector:
             for extra in disposable:
                 try:
                     extra.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "Failed to close disposable eye candidate: %s", exc, exc_info=True
+                    )
 
         return None
 

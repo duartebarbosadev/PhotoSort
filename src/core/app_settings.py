@@ -312,6 +312,7 @@ def get_preferred_torch_device() -> str:
             if mps_backend.is_available():  # type: ignore[attr-defined]
                 return "mps"
         except Exception:
+            # Ignore transient failures when probing MPS; fall back to CPU instead.
             pass
 
     return "cpu"
