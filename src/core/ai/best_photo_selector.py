@@ -19,6 +19,10 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from core.app_settings import get_local_best_shot_constants
+from core.image_processing.raw_image_processor import (
+    RawImageProcessor,
+    is_raw_extension,
+)
 
 from core.numpy_compat import ensure_numpy_sctypes
 
@@ -591,16 +595,23 @@ class BestPhotoSelector:
         return None
 
     def _load_eye_image(self, source_path: str) -> Optional[Image.Image]:
+        normalized_path = os.path.normpath(source_path)
+        target_edge = _LOCAL_BEST_SHOT_SETTINGS.eye_fallback_max_edge
+        resolution = (target_edge, target_edge)
+        if is_raw_extension(os.path.splitext(normalized_path)[1].lower()):
+            preview = RawImageProcessor.process_raw_for_preview(
+                normalized_path,
+                apply_auto_edits=False,
+                preview_max_resolution=resolution,
+            )
+            if preview:
+                preview = ImageOps.exif_transpose(preview).convert("RGB")
+                preview.info.setdefault("source_path", source_path)
+                return preview
         try:
             with Image.open(source_path) as raw:
                 prepared = ImageOps.exif_transpose(raw).convert("RGB")
-                prepared.thumbnail(
-                    (
-                        _LOCAL_BEST_SHOT_SETTINGS.eye_fallback_max_edge,
-                        _LOCAL_BEST_SHOT_SETTINGS.eye_fallback_max_edge,
-                    ),
-                    _RESAMPLE_LANCZOS,
-                )
+                prepared.thumbnail(resolution, _RESAMPLE_LANCZOS)
                 buffered = prepared.copy()
                 buffered.info.setdefault("source_path", source_path)
                 return buffered

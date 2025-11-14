@@ -763,10 +763,26 @@ class AppController(QObject):
 
     def _get_existing_rating_for_path(self, image_path: str) -> Optional[int]:
         normalized_path = os.path.normpath(image_path)
+        cached_rating = self._get_cached_rating(normalized_path)
+        if cached_rating is not None:
+            return cached_rating
+
+        metadata_rating = self._read_metadata_rating(normalized_path)
+        if metadata_rating is None:
+            self._cache_missing_rating(normalized_path)
+            return None
+
+        rating_int = self._normalize_rating_value(metadata_rating, normalized_path)
+        if rating_int is None:
+            return None
+
+        self._cache_rating(normalized_path, rating_int)
+        return rating_int
+
+    def _get_cached_rating(self, normalized_path: str) -> Optional[int]:
         cached_rating = self.app_state.rating_cache.get(normalized_path)
         if cached_rating is not None:
             return int(cached_rating)
-
         disk_cache = getattr(self.app_state, "rating_disk_cache", None)
         if disk_cache:
             disk_rating = disk_cache.get(normalized_path)
@@ -774,9 +790,11 @@ class AppController(QObject):
                 rating_int = int(disk_rating)
                 self.app_state.rating_cache[normalized_path] = rating_int
                 return rating_int
+        return None
 
+    def _read_metadata_rating(self, normalized_path: str) -> Optional[float]:
         try:
-            metadata_rating = PyExiv2Operations.get_rating(normalized_path)
+            return PyExiv2Operations.get_rating(normalized_path)
         except Exception:
             logger.debug(
                 "Failed to read rating metadata for %s",
@@ -785,12 +803,9 @@ class AppController(QObject):
             )
             return None
 
-        if metadata_rating is None:
-            self.app_state.rating_cache.setdefault(normalized_path, 0)
-            if disk_cache:
-                disk_cache.set(normalized_path, 0)
-            return None
-
+    def _normalize_rating_value(
+        self, metadata_rating: object, normalized_path: str
+    ) -> Optional[int]:
         try:
             rating_int = int(round(float(metadata_rating)))
         except (TypeError, ValueError):
@@ -800,12 +815,19 @@ class AppController(QObject):
                 metadata_rating,
             )
             return None
+        return max(0, min(5, rating_int))
 
-        rating_int = max(0, min(5, rating_int))
-        self.app_state.rating_cache[normalized_path] = rating_int
+    def _cache_rating(self, normalized_path: str, rating: int) -> None:
+        self.app_state.rating_cache[normalized_path] = rating
+        disk_cache = getattr(self.app_state, "rating_disk_cache", None)
         if disk_cache:
-            disk_cache.set(normalized_path, rating_int)
-        return rating_int
+            disk_cache.set(normalized_path, rating)
+
+    def _cache_missing_rating(self, normalized_path: str) -> None:
+        self.app_state.rating_cache.setdefault(normalized_path, 0)
+        disk_cache = getattr(self.app_state, "rating_disk_cache", None)
+        if disk_cache:
+            disk_cache.set(normalized_path, 0)
 
     def _partition_unrated_images(
         self, image_paths: List[str]

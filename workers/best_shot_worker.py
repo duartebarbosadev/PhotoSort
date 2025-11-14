@@ -22,25 +22,9 @@ from core.app_settings import (
     get_best_shot_engine,
     get_best_shot_batch_size,
 )
+from core.utils.time_utils import format_duration
 
 logger = logging.getLogger(__name__)
-
-
-def _format_duration(seconds: float) -> str:
-    """Return a compact human readable duration."""
-    if not math.isfinite(seconds):
-        return ""
-    seconds = max(0, int(round(seconds)))
-    hours, remainder = divmod(seconds, 3600)
-    minutes, secs = divmod(remainder, 60)
-    parts: List[str] = []
-    if hours:
-        parts.append(f"{hours}h")
-    if minutes or hours:
-        parts.append(f"{minutes}m")
-    if secs or not parts:
-        parts.append(f"{secs}s")
-    return " ".join(parts)
 
 
 def _estimate_eta_seconds(
@@ -66,7 +50,7 @@ def _build_progress_detail(
     base = f"{processed}/{total} done"
     if eta_seconds is None:
         return base
-    eta_text = _format_duration(eta_seconds)
+    eta_text = format_duration(eta_seconds)
     if not eta_text:
         return base
     return f"{base}, ETA {eta_text}"

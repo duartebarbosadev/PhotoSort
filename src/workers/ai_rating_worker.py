@@ -17,24 +17,9 @@ from core.ai.best_shot_pipeline import (
     create_best_shot_strategy,
 )
 from core.app_settings import calculate_max_workers, get_best_shot_engine
+from core.utils.time_utils import format_duration
 
 logger = logging.getLogger(__name__)
-
-
-def _format_duration(seconds: float) -> str:
-    if not math.isfinite(seconds):
-        return ""
-    seconds = max(0, int(round(seconds)))
-    hours, remainder = divmod(seconds, 3600)
-    minutes, secs = divmod(remainder, 60)
-    parts: list[str] = []
-    if hours:
-        parts.append(f"{hours}h")
-    if minutes or hours:
-        parts.append(f"{minutes}m")
-    if secs or not parts:
-        parts.append(f"{secs}s")
-    return " ".join(parts)
 
 
 def _format_eta_suffix(processed: int, total: int, start_time: Optional[float]) -> str:
@@ -50,7 +35,7 @@ def _format_eta_suffix(processed: int, total: int, start_time: Optional[float]) 
     eta_seconds = per_item * remaining
     if not math.isfinite(eta_seconds) or eta_seconds < 0:
         return ""
-    eta_text = _format_duration(eta_seconds)
+    eta_text = format_duration(eta_seconds)
     return f"ETA {eta_text}" if eta_text else ""
 
 
