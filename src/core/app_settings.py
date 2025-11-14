@@ -4,6 +4,7 @@ Manages persistent application settings using QSettings.
 """
 
 import os
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 from PyQt6.QtCore import QSettings
@@ -81,6 +82,16 @@ DEFAULT_OPENAI_MAX_TOKENS = 200
 DEFAULT_OPENAI_TIMEOUT = 600
 DEFAULT_OPENAI_MAX_WORKERS = 4
 DEFAULT_BEST_SHOT_BATCH_SIZE = 3
+
+
+@dataclass(frozen=True)
+class LocalBestShotConstants:
+    model_stride: int = 32
+    tensor_cache_key: str = "_photosort_pyiqa_tensor"
+    eye_fallback_max_edge: int = 2048
+
+
+_LOCAL_BEST_SHOT_CONSTANTS = LocalBestShotConstants()
 
 # --- UI Constants ---
 # Grid view settings
@@ -284,6 +295,29 @@ def is_pytorch_cuda_available() -> bool:
         return False
 
 
+def get_preferred_torch_device() -> str:
+    """Return the fastest available torch.device string (cuda, mps, or cpu)."""
+
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+
+    if torch.cuda.is_available():
+        return "cuda"
+
+    mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
+    if mps_backend is not None:
+        try:
+            if mps_backend.is_available():  # type: ignore[attr-defined]
+                return "mps"
+        except Exception:
+            # Ignore transient failures when probing MPS; fall back to CPU instead.
+            pass
+
+    return "cpu"
+
+
 # --- Orientation Model ---
 def get_orientation_model_name() -> str | None:
     """Gets the configured orientation model name from settings."""
@@ -421,6 +455,11 @@ def get_best_shot_batch_size() -> int:
 def set_best_shot_batch_size(batch_size: int) -> None:
     settings = _get_settings()
     settings.setValue(BEST_SHOT_BATCH_SIZE_KEY, max(2, int(batch_size)))
+
+
+def get_local_best_shot_constants() -> LocalBestShotConstants:
+    """Return immutable constants for the local best-shot pipeline."""
+    return _LOCAL_BEST_SHOT_CONSTANTS
 
 
 def get_openai_config() -> dict:

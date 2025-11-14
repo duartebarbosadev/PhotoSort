@@ -264,11 +264,21 @@ class DialogManager:
         worker_manager = self.parent.app_controller.worker_manager
         if embeddings_label_ref:
 
-            def update_embeddings_label(available):
+            def update_embeddings_label(device_name: str):
+                device_key = (device_name or "cpu").lower()
+                friendly = {
+                    "cuda": "GPU (CUDA)",
+                    "mps": "GPU (Apple MPS)",
+                    "cpu": "CPU",
+                }
+                label_text = friendly.get(
+                    device_key,
+                    device_key.upper(),
+                )
                 try:
                     if embeddings_label_ref:
                         embeddings_label_ref.setText(
-                            f"🧠 Embeddings: SentenceTransformer (CLIP) on {'GPU (CUDA)' if available else 'CPU'}"
+                            f"🧠 Embeddings: SentenceTransformer (CLIP) on {label_text}"
                         )
                 except RuntimeError:
                     pass  # Label has been deleted

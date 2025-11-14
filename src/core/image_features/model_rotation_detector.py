@@ -25,6 +25,7 @@ from core.app_settings import (
     set_orientation_model_name,
     ROTATION_MODEL_IMAGE_SIZE,
 )
+from core.runtime_paths import is_frozen_runtime, resolve_runtime_root
 
 logger = logging.getLogger(__name__)
 
@@ -221,13 +222,8 @@ class ModelRotationDetector(RotationDetectorProtocol):
         """
         # Build candidate base dirs
         base_dirs = []
-        try:
-            import sys as _sys
-
-            if getattr(_sys, "_MEIPASS", None):  # type: ignore[attr-defined]
-                base_dirs.append(os.path.join(_sys._MEIPASS, MODEL_SAVE_DIR))  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        if is_frozen_runtime():
+            base_dirs.append(os.path.join(resolve_runtime_root(), MODEL_SAVE_DIR))
 
         project_root = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "..")

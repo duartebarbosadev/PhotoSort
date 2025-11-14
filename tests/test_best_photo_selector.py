@@ -1,151 +1,197 @@
 from __future__ import annotations
 
-import numpy as np
+import os
+from pathlib import Path
+from typing import Dict
+from urllib.parse import urlparse
+
 from PIL import Image
 
-from core.ai.best_photo_selector import (
-    BestPhotoSelector,
-    FaceDetectionResult,
-    QualityScore,
-    _default_focus_score,
-)
-
-
-def _make_detection() -> FaceDetectionResult:
-    return FaceDetectionResult(
-        score=0.92,
-        bbox=(10, 10, 90, 90),
-        bbox_normalized=(0.1, 0.1, 0.9, 0.9),
-        keypoints=[
-            (0.3, 0.4),
-            (0.7, 0.4),
-            (0.5, 0.55),
-            (0.5, 0.65),
-            (0.25, 0.5),
-            (0.75, 0.5),
-        ],
-        image_size=(100, 100),
-    )
-
-
-class DummyFaceDetector:
-    def __init__(self, mapping):
-        self.mapping = mapping
-
-    def detect_faces(self, image, image_path=None, max_faces=None):
-        return list(self.mapping.get(image_path, []))
-
-
-class DummyEyeClassifier:
-    def __init__(self, mapping):
-        self.mapping = mapping
-
-    def predict_open_probability(self, eye_image, image_path=None):
-        path = image_path or eye_image.info.get("source_path")
-        return float(self.mapping.get(path, 0.5))
-
-
-class DummyQualityModel:
-    def __init__(self, full_scores, face_scores):
-        self.full_scores = full_scores
-        self.face_scores = face_scores
-
-    def score(self, image, return_embedding=False):
-        path = image.info.get("source_path")
-        region = image.info.get("region", "full")
-        table = self.face_scores if region == "face" else self.full_scores
-        result = table[path]
-        return result
+from core.ai.best_photo_selector import BestPhotoSelector, MetricSpec
 
 
 def _loader_factory():
     def _loader(image_path: str) -> Image.Image:
-        img = Image.new("RGB", (100, 100), color="white")
+        img = Image.new("RGB", (32, 32), color="white")
         img.info["source_path"] = image_path
-        img.info["region"] = "full"
         return img
 
     return _loader
 
 
-def test_selector_prefers_open_eyes_and_subject_focus(tmp_path):
+def _scorer(scores: Dict[str, float]):
+    def _score(image: Image.Image) -> float:
+        path = image.info["source_path"]
+        return scores[path]
+
+    return _score
+
+
+def test_selector_ranks_images_by_weighted_iqa(tmp_path):
     img_a = str(tmp_path / "a.jpg")
     img_b = str(tmp_path / "b.jpg")
-    tmp_path.joinpath("a.jpg").write_text("a")
-    tmp_path.joinpath("b.jpg").write_text("b")
 
-    face_detector = DummyFaceDetector({img_a: [_make_detection()]})
-    eye_classifier = DummyEyeClassifier({img_a: 0.9})
-
-    full_scores = {
-        img_a: QualityScore(raw=8.5, normalized=0.83, embedding=np.array([1.0, 0.0])),
-        img_b: QualityScore(raw=7.0, normalized=0.66, embedding=np.array([0.0, 1.0])),
+    metric_specs = (
+        MetricSpec(name="musiq", weight=0.6, min_score=0.0, max_score=100.0),
+        MetricSpec(name="maniqa", weight=0.4, min_score=0.0, max_score=1.0),
+    )
+    metric_factories = {
+        "musiq": _scorer({img_a: 82.0, img_b: 78.0}),
+        "maniqa": _scorer({img_a: 0.85, img_b: 0.35}),
     }
-    face_scores = {
-        img_a: QualityScore(raw=7.2, normalized=0.7, embedding=np.array([0.9, 0.1])),
-    }
-
-    def focus_metric(image: Image.Image) -> float:
-        region = image.info.get("region", "full")
-        path = image.info.get("source_path")
-        if region == "face" and path == img_a:
-            return 0.8
-        if region == "full" and path == img_a:
-            return 0.75
-        return 0.55
 
     selector = BestPhotoSelector(
-        face_detector=face_detector,
-        eye_classifier=eye_classifier,
-        quality_model=DummyQualityModel(full_scores, face_scores),
+        metric_specs=metric_specs,
+        metric_factories=metric_factories,
         image_loader=_loader_factory(),
-        focus_metric_fn=focus_metric,
+        enable_eye_detection=False,
     )
 
     results = selector.rank_images([img_b, img_a])
     assert [r.image_path for r in results] == [img_a, img_b]
+    assert results[0].metrics["musiq"] > results[1].metrics["musiq"]
+    assert results[0].metrics["maniqa"] > results[1].metrics["maniqa"]
+
+
+def test_selector_clamps_scores_outside_known_range(tmp_path):
+    img_a = str(tmp_path / "a.jpg")
+    img_b = str(tmp_path / "b.jpg")
+
+    metric_specs = (
+        MetricSpec(name="liqe", weight=1.0, min_score=0.0, max_score=100.0),
+    )
+    metric_factories = {
+        "liqe": _scorer({img_a: 150.0, img_b: -10.0}),
+    }
+
+    selector = BestPhotoSelector(
+        metric_specs=metric_specs,
+        metric_factories=metric_factories,
+        image_loader=_loader_factory(),
+        enable_eye_detection=False,
+    )
+
+    results = selector.rank_images([img_b, img_a])
+    assert results[0].metrics["liqe"] == 1.0  # clamped upper bound
+    assert results[1].metrics["liqe"] == 0.0  # clamped lower bound
+
+
+def test_selector_handles_partial_metric_failures(tmp_path):
+    img_a = str(tmp_path / "a.jpg")
+    img_b = str(tmp_path / "b.jpg")
+
+    musiq_scores = {img_a: 75.0, img_b: 80.0}
+
+    def flaky_maniqa(image: Image.Image) -> float:
+        if image.info["source_path"] == img_b:
+            raise RuntimeError("simulated metric failure")
+        return 0.9
+
+    selector = BestPhotoSelector(
+        metric_specs=(
+            MetricSpec(name="musiq", weight=0.5, min_score=0.0, max_score=100.0),
+            MetricSpec(name="maniqa", weight=0.5, min_score=0.0, max_score=1.0),
+        ),
+        metric_factories={
+            "musiq": _scorer(musiq_scores),
+            "maniqa": flaky_maniqa,
+        },
+        image_loader=_loader_factory(),
+        enable_eye_detection=False,
+    )
+
+    results = selector.rank_images([img_b, img_a])
+    assert len(results) == 2
+    maniqa_present = {
+        result.image_path: ("maniqa" in result.metrics) for result in results
+    }
+    assert maniqa_present[img_a] is True
+    assert maniqa_present[img_b] is False
+    musiq_metrics = {result.image_path: result.metrics["musiq"] for result in results}
+    assert musiq_metrics[img_a] == 0.75
+    assert musiq_metrics[img_b] == 0.8
+
+
+def test_selector_notifies_weight_download(monkeypatch, tmp_path):
+    import torch
+    import pyiqa  # type: ignore
+    import pyiqa.utils.download_util as download_util  # type: ignore
+
+    messages: list[str] = []
+
+    def status_cb(message: str) -> None:
+        messages.append(message)
+
+    cache_dir = tmp_path / "pyiqa"
+    monkeypatch.setattr(
+        download_util, "DEFAULT_CACHE_DIR", str(cache_dir), raising=False
+    )
+
+    def fake_loader(url, model_dir=None, progress=True, file_name=None):
+        target_dir = model_dir or str(cache_dir)
+        os.makedirs(target_dir, exist_ok=True)
+        filename = file_name or os.path.basename(urlparse(url).path)
+        destination = os.path.join(target_dir, filename)
+        Path(destination).write_bytes(b"weights")
+        return destination
+
+    monkeypatch.setattr(download_util, "load_file_from_url", fake_loader)
+
+    class DummyMetric:
+        def eval(self):
+            return self
+
+        def __call__(self, tensor):
+            return torch.tensor([0.5])
+
+    def fake_create_metric(*_, **__):
+        download_util.load_file_from_url(
+            "https://example.com/musiq_koniq_ckpt-e95806b9.pth"
+        )
+        return DummyMetric()
+
+    monkeypatch.setattr(pyiqa, "create_metric", fake_create_metric)
+
+    selector = BestPhotoSelector(
+        image_loader=_loader_factory(),
+        metric_specs=(
+            MetricSpec(name="musiq", weight=1.0, min_score=0.0, max_score=1.0),
+        ),
+        metric_factories={},
+        status_callback=status_cb,
+        enable_eye_detection=False,
+    )
+
+    img_path = str(tmp_path / "a.jpg")
+    results = selector.rank_images([img_path])
+    assert results
+    assert any("Downloading MUSIQ" in msg for msg in messages)
+    assert any("MUSIQ weights cached" in msg for msg in messages)
+
+
+def test_eye_open_probability_influences_ranking(tmp_path):
+    img_a = str(tmp_path / "closed.jpg")
+    img_b = str(tmp_path / "open.jpg")
+
+    class EyeStub:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+        def predict_open_probability(self, image: Image.Image):
+            return self.mapping.get(image.info["source_path"], 0.5)
+
+    metric_specs = (
+        MetricSpec(name="musiq", weight=1.0, min_score=0.0, max_score=100.0),
+    )
+    constant_scores = {img_a: 60.0, img_b: 60.0}
+
+    selector = BestPhotoSelector(
+        metric_specs=metric_specs,
+        metric_factories={"musiq": _scorer(constant_scores)},
+        image_loader=_loader_factory(),
+        eye_state_analyzer=EyeStub({img_a: 0.1, img_b: 0.9}),
+    )
+
+    results = selector.rank_images([img_a, img_b])
+    assert [r.image_path for r in results] == [img_b, img_a]
     assert results[0].metrics["eyes_open"] == 0.9
-    assert "framing" in results[0].metrics
-    assert "eyes_open" not in results[1].metrics
-
-
-def test_selector_handles_images_without_faces(tmp_path):
-    img_a = str(tmp_path / "a.jpg")
-    img_b = str(tmp_path / "b.jpg")
-    tmp_path.joinpath("a.jpg").write_text("a")
-    tmp_path.joinpath("b.jpg").write_text("b")
-
-    full_scores = {
-        img_a: QualityScore(raw=7.5, normalized=0.7, embedding=None),
-        img_b: QualityScore(raw=6.5, normalized=0.6, embedding=None),
-    }
-
-    def focus_metric(image: Image.Image) -> float:
-        return 0.8 if image.info.get("source_path") == img_a else 0.5
-
-    selector = BestPhotoSelector(
-        face_detector=DummyFaceDetector({}),
-        eye_classifier=DummyEyeClassifier({}),
-        quality_model=DummyQualityModel(full_scores, {}),
-        image_loader=_loader_factory(),
-        focus_metric_fn=focus_metric,
-    )
-
-    results = selector.rank_images([img_b, img_a])
-    assert [r.image_path for r in results] == [img_a, img_b]
-
-    result = results[0]
-    assert result.metrics["technical"] == 0.8
-    assert "eyes_open" not in result.metrics
-    assert "framing" not in result.metrics
-
-    # Only aesthetic + technical contribute (equal weight in normalization)
-    expected = (0.7 + 0.8) / 2.0
-    assert abs(result.composite_score - expected) < 1e-6
-
-
-def test_default_focus_score_handles_uint16_image():
-    data = np.random.randint(0, 65535, (12, 12), dtype=np.uint16)
-    img = Image.fromarray(data, mode="I;16")
-    score = _default_focus_score(img)
-    assert 0.0 <= score <= 1.0

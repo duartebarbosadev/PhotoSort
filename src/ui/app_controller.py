@@ -13,6 +13,7 @@ from core.app_settings import (
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
 from core.ai.best_photo_selector import DEFAULT_MODELS_ROOT
+from core.pyexiv2_wrapper import PyExiv2Operations
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class AppController(QObject):
         from core.caching.preview_cache import PreviewCache
         from core.caching.exif_cache import ExifCache
         from core.caching.rating_cache import RatingCache
+        from core.caching.analysis_cache import AnalysisCache
 
         cache_classes = (
             ("thumbnail", ThumbnailCache),
@@ -79,6 +81,22 @@ class AppController(QObject):
             SimilarityEngine.clear_embedding_cache()
         except Exception:
             logger.error("Error clearing similarity cache.", exc_info=True)
+
+        analysis_cache_instance = None
+        try:
+            analysis_cache_instance = AnalysisCache()
+            analysis_cache_instance.clear_all()
+        except Exception:
+            logger.error("Error clearing analysis cache.", exc_info=True)
+        finally:
+            if analysis_cache_instance is not None:
+                try:
+                    analysis_cache_instance.close()
+                except Exception:
+                    logger.error(
+                        "Error closing analysis cache after clearing.",
+                        exc_info=True,
+                    )
 
         logger.info(
             f"Application caches cleared in {time.perf_counter() - start_time:.2f}s."
@@ -659,12 +677,21 @@ class AppController(QObject):
             )
             return
 
+        image_paths_to_rate, already_rated_count = self._partition_unrated_images(
+            image_paths
+        )
+        if not image_paths_to_rate:
+            self.main_window.statusBar().showMessage(
+                "All images already have ratings.", 4000
+            )
+            return
+
         self.main_window.show_loading_overlay("Requesting AI ratings...")
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
-        self.main_window.statusBar().showMessage(
-            f"AI rating started for {len(image_paths)} image(s)...",
-            4000,
-        )
+        status_message = f"AI rating started for {len(image_paths_to_rate)} image(s)..."
+        if already_rated_count:
+            status_message += f" ({already_rated_count} already-rated image(s) skipped)"
+        self.main_window.statusBar().showMessage(status_message, 4000)
 
         self._ai_rating_warning_messages = []
 
@@ -675,7 +702,7 @@ class AppController(QObject):
             engine = None
 
         self.worker_manager.start_ai_rating(
-            image_paths=image_paths,
+            image_paths=image_paths_to_rate,
             models_root=DEFAULT_MODELS_ROOT,
             engine=engine,
         )
@@ -733,6 +760,87 @@ class AppController(QObject):
                 f"Error calculating folder image size for {folder_path}", exc_info=True
             )
         return total_size_bytes
+
+    def _get_existing_rating_for_path(self, image_path: str) -> Optional[int]:
+        normalized_path = os.path.normpath(image_path)
+        cached_rating = self._get_cached_rating(normalized_path)
+        if cached_rating is not None:
+            return cached_rating
+
+        metadata_rating = self._read_metadata_rating(normalized_path)
+        if metadata_rating is None:
+            self._cache_missing_rating(normalized_path)
+            return None
+
+        rating_int = self._normalize_rating_value(metadata_rating, normalized_path)
+        if rating_int is None:
+            return None
+
+        self._cache_rating(normalized_path, rating_int)
+        return rating_int
+
+    def _get_cached_rating(self, normalized_path: str) -> Optional[int]:
+        cached_rating = self.app_state.rating_cache.get(normalized_path)
+        if cached_rating is not None:
+            return int(cached_rating)
+        disk_cache = getattr(self.app_state, "rating_disk_cache", None)
+        if disk_cache:
+            disk_rating = disk_cache.get(normalized_path)
+            if disk_rating is not None:
+                rating_int = int(disk_rating)
+                self.app_state.rating_cache[normalized_path] = rating_int
+                return rating_int
+        return None
+
+    def _read_metadata_rating(self, normalized_path: str) -> Optional[float]:
+        try:
+            return PyExiv2Operations.get_rating(normalized_path)
+        except Exception:
+            logger.debug(
+                "Failed to read rating metadata for %s",
+                normalized_path,
+                exc_info=True,
+            )
+            return None
+
+    def _normalize_rating_value(
+        self, metadata_rating: object, normalized_path: str
+    ) -> Optional[int]:
+        try:
+            rating_int = int(round(float(metadata_rating)))
+        except (TypeError, ValueError):
+            logger.debug(
+                "Unexpected rating value for %s: %s",
+                normalized_path,
+                metadata_rating,
+            )
+            return None
+        return max(0, min(5, rating_int))
+
+    def _cache_rating(self, normalized_path: str, rating: int) -> None:
+        self.app_state.rating_cache[normalized_path] = rating
+        disk_cache = getattr(self.app_state, "rating_disk_cache", None)
+        if disk_cache:
+            disk_cache.set(normalized_path, rating)
+
+    def _cache_missing_rating(self, normalized_path: str) -> None:
+        self.app_state.rating_cache.setdefault(normalized_path, 0)
+        disk_cache = getattr(self.app_state, "rating_disk_cache", None)
+        if disk_cache:
+            disk_cache.set(normalized_path, 0)
+
+    def _partition_unrated_images(
+        self, image_paths: List[str]
+    ) -> Tuple[List[str], int]:
+        unrated: List[str] = []
+        already_rated_count = 0
+        for path in image_paths:
+            existing_rating = self._get_existing_rating_for_path(path)
+            if existing_rating is not None and existing_rating != 0:
+                already_rated_count += 1
+                continue
+            unrated.append(path)
+        return unrated, already_rated_count
 
     def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
         logger.info(f"Starting preview preloader for {len(image_data_list)} images.")
@@ -969,7 +1077,10 @@ class AppController(QObject):
         self.main_window.hide_loading_overlay()
 
     def handle_best_shot_progress(self, percentage: int, message: str):
-        self.main_window.update_loading_text(f"Best shots: {message} ({percentage}%)")
+        suffix = (
+            f" ({percentage}%)" if percentage is not None and percentage >= 0 else ""
+        )
+        self.main_window.update_loading_text(f"Best shots: {message}{suffix}")
 
     def handle_best_shot_complete(
         self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
@@ -1039,10 +1150,10 @@ class AppController(QObject):
         self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
 
     def handle_ai_rating_progress(self, percentage: int, message: str):
-        progress_text = message
-        if percentage is not None:
-            progress_text = f"{message} ({percentage}%)"
-        self.main_window.update_loading_text(f"AI rating: {progress_text}")
+        suffix = (
+            f" ({percentage}%)" if percentage is not None and percentage >= 0 else ""
+        )
+        self.main_window.update_loading_text(f"AI rating: {message}{suffix}")
 
     def handle_ai_rating_warning(self, message: str):
         logger.warning("AI rating warning: %s", message)
