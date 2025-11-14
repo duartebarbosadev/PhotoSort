@@ -263,9 +263,7 @@ class IQAMetricRunner:
                 if self.status_callback is None:
                     metric = _factory()
                 else:
-                    metric = self._with_download_notifications(
-                        download_util, _factory
-                    )
+                    metric = self._with_download_notifications(download_util, _factory)
                 metric.eval()
                 cached = (metric, threading.Lock())
                 _METRIC_CACHE[cache_key] = cached
@@ -585,7 +583,9 @@ class BestPhotoSelector:
                     extra.close()
                 except Exception as exc:
                     logger.debug(
-                        "Failed to close disposable eye candidate: %s", exc, exc_info=True
+                        "Failed to close disposable eye candidate: %s",
+                        exc,
+                        exc_info=True,
                     )
 
         return None
