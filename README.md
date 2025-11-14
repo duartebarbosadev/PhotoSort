@@ -50,10 +50,12 @@ https://github.com/duartebarbosadev/photosort/releases
 
    > **Note**: These dependencies are only required on macOS. Windows and Linux users can skip this step.
 
-3. **Create a virtual environment (recommended):**
+> **Python version:** PhotoSort currently targets Python 3.12 because several dependencies (e.g., MediaPipe) do not yet ship wheels for newer interpreters.
+
+3. **Create a Python 3.12 virtual environment (recommended):**
 
    ```bash
-   python -m venv venv
+   python3.12 -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
