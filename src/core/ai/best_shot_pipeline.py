@@ -23,6 +23,7 @@ except Exception:  # pragma: no cover - gracefully degrade if OpenCV missing
 
 from core.ai.best_photo_selector import (
     BestPhotoSelector,
+    BestShotResult,
     DEFAULT_METRIC_SPECS,
     EyeStateAnalyzer,
     MetricSpec,
@@ -715,7 +716,10 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
                     if isinstance(value, (int, float))
                 )
                 eye_value = metrics.get("eyes_open")
-                if isinstance(eye_value, (int, float)) and "EYES_OPEN" not in metric_summary:
+                if (
+                    isinstance(eye_value, (int, float))
+                    and "EYES_OPEN" not in metric_summary
+                ):
                     metric_summary = (
                         f"{metric_summary}, EYES_OPEN {eye_value:.3f}"
                         if metric_summary
@@ -724,7 +728,9 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
                 prefilter = payload.get("prefilter") or {}
                 if prefilter:
                     prefilter_summary = ", ".join(
-                        f"{key}={value:.3f}" if isinstance(value, (int, float)) else f"{key}={value}"
+                        f"{key}={value:.3f}"
+                        if isinstance(value, (int, float))
+                        else f"{key}={value}"
                         for key, value in sorted(prefilter.items())
                     )
                     metric_summary = (
@@ -763,7 +769,10 @@ class LocalBestShotStrategy(BaseBestShotStrategy):
                     result = future.result()
                 except Exception as exc:
                     logger.warning(
-                        "Parallel IQA scoring failed for %s: %s", path, exc, exc_info=True
+                        "Parallel IQA scoring failed for %s: %s",
+                        path,
+                        exc,
+                        exc_info=True,
                     )
                     continue
                 if result:
