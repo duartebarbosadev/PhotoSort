@@ -6,7 +6,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 from PyQt6.QtCore import QObject, pyqtSignal
 import numpy as np  # Import numpy for array manipulation
 from sklearn.cluster import DBSCAN
-from datetime import timedelta
+from core.utils.time_utils import format_eta
 
 from core.image_pipeline import ImagePipeline
 from core.similarity_utils import (
@@ -72,11 +72,6 @@ class SimilarityEngine(QObject):
         logger.info(
             f"SimilarityEngine initialized in {time.perf_counter() - init_start_time:.4f}s"
         )
-
-    @staticmethod
-    def _format_eta(seconds: float) -> str:
-        bounded = max(0, int(round(seconds)))
-        return str(timedelta(seconds=bounded))
 
     def stop(self):
         logger.info("Stop request received.")
@@ -267,7 +262,7 @@ class SimilarityEngine(QObject):
                 avg = elapsed / processed_count
                 remaining = max(0, total_to_process - processed_count)
                 eta_seconds = avg * remaining
-                eta_text = self._format_eta(eta_seconds)
+                eta_text = format_eta(eta_seconds)
                 self.progress_update.emit(
                     progress,
                     f"Generating embeddings ({processed_count}/{total_to_process}) • ETA {eta_text}",

@@ -2,7 +2,6 @@ import logging
 import os
 import time
 import threading
-from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from typing import Dict, Optional, Sequence, TYPE_CHECKING, List
 
@@ -17,6 +16,7 @@ from core.ai.best_shot_pipeline import (
     create_best_shot_strategy,
 )
 from core.app_settings import calculate_max_workers
+from core.utils.time_utils import format_eta
 
 logger = logging.getLogger(__name__)
 
@@ -225,16 +225,11 @@ class AiRatingWorker(QObject):
                     logger.warning("AI rating strategy shutdown failed", exc_info=True)
             self.finished.emit()
 
-    @staticmethod
-    def _format_eta(seconds: float) -> str:
-        bounded = max(0, int(round(seconds)))
-        return str(timedelta(seconds=bounded))
-
     def _estimate_eta_text(self, start_time: float, processed: int, total: int) -> str:
         if processed <= 0 or total <= 0:
-            return self._format_eta(0)
+            return format_eta(0)
         remaining = max(0, total - processed)
         elapsed = max(0.0, time.perf_counter() - start_time)
         avg = elapsed / processed
         eta_seconds = avg * remaining
-        return self._format_eta(eta_seconds)
+        return format_eta(eta_seconds)

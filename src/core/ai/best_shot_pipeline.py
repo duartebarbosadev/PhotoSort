@@ -187,19 +187,21 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 return client
         return client
 
+    def _close_client(self) -> None:
+        with self._lock:
+            try:
+                if hasattr(self._client, "close") and not self._client_closed:
+                    self._client.close()
+                    self._client_closed = True
+            except Exception:
+                logger.debug("Failed to close LLM client", exc_info=True)
+
     def request_cancel(self) -> None:
         self._cancel_event.set()
-        try:
-            if hasattr(self._client, "close") and not self._client_closed:
-                self._client.close()
-                self._client_closed = True
-        except Exception:
-            logger.debug(
-                "Failed to close LLM client during cancellation", exc_info=True
-            )
+        self._close_client()
 
     def shutdown(self) -> None:
-        self.request_cancel()
+        self._close_client()
 
     def _load_preview(self, image_path: str) -> Image.Image:
         """Load image as RGB preview, ensuring compatibility with AI services.

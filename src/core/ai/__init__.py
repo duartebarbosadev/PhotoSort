@@ -1,9 +1,4 @@
-"""
-AI helper utilities for advanced ranking/scoring pipelines.
-
-This package exposes the LLM-based best-shot pipeline used for ranking clusters
-and assigning AI star ratings.
-"""
+"""AI helper utilities for LLM-based best-shot ranking and scoring."""
 
 from .best_shot_pipeline import BaseBestShotStrategy, LLMBestShotStrategy, LLMConfig
 

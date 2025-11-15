@@ -2,11 +2,11 @@ import logging
 import os
 import time
 import threading
-from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from typing import Dict, Iterable, List, Optional, Sequence, TYPE_CHECKING
 
 from PyQt6.QtCore import QObject, pyqtSignal
+from core.utils.time_utils import format_eta
 
 if TYPE_CHECKING:
     from core.image_pipeline import ImagePipeline
@@ -421,7 +421,7 @@ class BestShotWorker(QObject):
                     avg = elapsed / processed
                     remaining = max(0, total_jobs - processed)
                     eta_seconds = avg * remaining
-                    eta_text = self._format_eta(eta_seconds)
+                    eta_text = format_eta(eta_seconds)
                     best_path = (
                         cluster_results[0]["image_path"]
                         if cluster_results
@@ -449,8 +449,3 @@ class BestShotWorker(QObject):
                 except Exception:  # pragma: no cover - best effort cleanup
                     logger.warning("Best-shot strategy shutdown failed", exc_info=True)
             self.finished.emit()
-
-    @staticmethod
-    def _format_eta(seconds: float) -> str:
-        bounded = max(0, int(round(seconds)))
-        return str(timedelta(seconds=bounded))
