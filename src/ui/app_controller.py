@@ -8,14 +8,10 @@ from core.app_settings import (
     add_recent_folder,
     get_preview_cache_size_bytes,
     PREVIEW_ESTIMATED_SIZE_FACTOR,
-    get_best_shot_engine,
 )
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
-from core.ai.best_photo_selector import DEFAULT_MODELS_ROOT
 from core.pyexiv2_wrapper import PyExiv2Operations
-
-
 logger = logging.getLogger(__name__)
 
 AD_HOC_SELECTION_CLUSTER_ID = -1
@@ -233,9 +229,6 @@ class AppController(QObject):
         self.worker_manager.best_shot_progress.connect(self.handle_best_shot_progress)
         self.worker_manager.best_shot_complete.connect(self.handle_best_shot_complete)
         self.worker_manager.best_shot_error.connect(self.handle_best_shot_error)
-        self.worker_manager.best_shot_models_missing.connect(
-            self.handle_best_shot_models_missing
-        )
 
         # AI Rating Worker
         self.worker_manager.ai_rating_progress.connect(self.handle_ai_rating_progress)
@@ -695,17 +688,7 @@ class AppController(QObject):
 
         self._ai_rating_warning_messages = []
 
-        try:
-            engine = get_best_shot_engine()
-        except Exception:  # pragma: no cover - defensive guard
-            logger.exception("Failed to resolve best-shot engine from settings.")
-            engine = None
-
-        self.worker_manager.start_ai_rating(
-            image_paths=image_paths_to_rate,
-            models_root=DEFAULT_MODELS_ROOT,
-            engine=engine,
-        )
+        self.worker_manager.start_ai_rating(image_paths=image_paths_to_rate)
 
     def reload_current_folder(self):
         if self.app_state.image_files_data:
@@ -1131,23 +1114,6 @@ class AppController(QObject):
         self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
         self._restore_analysis_state()
         self.main_window._rebuild_model_view()
-
-    def handle_best_shot_models_missing(self, missing_models: list):
-        """Handle the case where best-shot models are not found."""
-        self.main_window.hide_loading_overlay()
-        self.main_window.dialog_manager.show_best_shot_models_missing_dialog(
-            missing_models
-        )
-        self.main_window.statusBar().showMessage(
-            "Best shot models not found. Analysis cancelled.", 5000
-        )
-        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
-            bool(self.app_state.cluster_results)
-        )
-        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            True
-        )
-        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
 
     def handle_ai_rating_progress(self, percentage: int, message: str):
         suffix = (

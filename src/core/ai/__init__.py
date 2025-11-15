@@ -1,7 +1,14 @@
-"""AI helper utilities for best-shot ranking and scoring."""
+"""
+AI helper utilities for advanced ranking/scoring pipelines.
 
-from .best_photo_selector import (  # noqa: F401
-    BestPhotoSelector,
-    BestShotResult,
-    MetricSpec,
-)
+This package exposes the LLM-based best-shot pipeline used for ranking clusters
+and assigning AI star ratings.
+"""
+
+from .best_shot_pipeline import BaseBestShotStrategy, LLMBestShotStrategy, LLMConfig
+
+__all__ = [
+    "BaseBestShotStrategy",
+    "LLMBestShotStrategy",
+    "LLMConfig",
+]

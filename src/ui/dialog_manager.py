@@ -429,8 +429,6 @@ class DialogManager:
             set_performance_mode,
             get_custom_thread_count,
             set_custom_thread_count,
-            get_best_shot_engine,
-            set_best_shot_engine,
             get_best_shot_batch_size,
             set_best_shot_batch_size,
             get_openai_config,
@@ -585,16 +583,10 @@ class DialogManager:
         content_layout.addWidget(ai_section_label)
 
         ai_desc_label = QLabel(
-            "Choose between the on-device model and the OpenAI LLM for image ranking and ratings."
+            "Configure the OpenAI-compatible vision model used for best-shot analysis and AI star ratings."
         )
         ai_desc_label.setWordWrap(True)
         content_layout.addWidget(ai_desc_label)
-
-        engine_combo = QComboBox()
-        engine_combo.setObjectName("bestShotEngineCombo")
-        engine_combo.addItem("Local (on-device models)", "local")
-        engine_combo.addItem("OpenAI (LLM)", "llm")
-        content_layout.addWidget(engine_combo)
 
         openai_config = get_openai_config()
         api_key_value = openai_config.get("api_key") or DEFAULT_OPENAI_API_KEY
@@ -622,11 +614,6 @@ class DialogManager:
         rating_prompt_value = (
             openai_config.get("rating_prompt") or DEFAULT_RATING_PROMPT
         )
-
-        current_engine = (get_best_shot_engine() or "local").lower()
-        index = engine_combo.findData(current_engine)
-        if index >= 0:
-            engine_combo.setCurrentIndex(index)
 
         openai_frame = QFrame()
         openai_frame.setObjectName("openAISettingsFrame")
@@ -942,12 +929,6 @@ class DialogManager:
         openai_layout.addLayout(buttons_row)
         content_layout.addWidget(openai_frame)
 
-        def update_openai_visibility():
-            openai_frame.setVisible(engine_combo.currentData() == "llm")
-
-        engine_combo.currentIndexChanged.connect(update_openai_visibility)
-        update_openai_visibility()
-
         content_layout.addStretch()
 
         # Buttons
@@ -971,8 +952,6 @@ class DialogManager:
             else:  # custom_radio.isChecked()
                 set_performance_mode(PerformanceMode.CUSTOM)
                 set_custom_thread_count(thread_count_slider.value())
-
-            set_best_shot_engine(engine_combo.currentData())
 
             api_key_text = api_key_input.text().strip()
             base_url_text = base_url_input.text().strip()
@@ -1015,10 +994,9 @@ class DialogManager:
                 set_best_shot_batch_size(best_shot_batch_value)
 
             logger.info(
-                "Preferences saved: mode=%s, custom_threads=%s, engine=%s",
+                "Preferences saved: mode=%s, custom_threads=%s",
                 get_performance_mode().value,
                 get_custom_thread_count(),
-                get_best_shot_engine(),
             )
             dialog.accept()
 
@@ -1745,66 +1723,3 @@ class DialogManager:
 
         dialog.exec()
         logger.info("Closed model not found dialog")
-
-    def show_best_shot_models_missing_dialog(self, missing_models: list):
-        """Show a dialog informing the user that best-shot models are missing.
-
-        Args:
-            missing_models: List of MissingModelInfo objects describing missing models.
-        """
-        logger.info(
-            f"Showing best-shot models missing dialog for {len(missing_models)} model(s)"
-        )
-        dialog = QMessageBox(self.parent)
-        dialog.setWindowTitle("Best Shot Models Not Found")
-        dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-
-        # Build main text
-        model_names = ", ".join(m.name for m in missing_models)
-        text = (
-            f"The best shot analysis feature requires {len(missing_models)} model(s) "
-            f"that were not found:\n\n{model_names}\n\n"
-            "Please download the required models to enable this feature."
-        )
-        dialog.setText(text)
-
-        # Build detailed instructions
-        detailed_lines = [
-            "Download instructions:\n",
-        ]
-        for i, model in enumerate(missing_models, 1):
-            detailed_lines.append(
-                f"{i}. {model.name} ({model.description})\n"
-                f"   Download from: {model.download_url}\n"
-                f"   Expected location: {model.expected_path}\n"
-            )
-        detailed_lines.append(
-            "\nAfter downloading, place the models in the 'models' directory "
-            "and restart the analysis."
-        )
-        dialog.setInformativeText("".join(detailed_lines))
-
-        # Add buttons
-        readme_button = dialog.addButton(
-            "View Documentation", QMessageBox.ButtonRole.ActionRole
-        )
-        open_models_button = dialog.addButton(
-            "Open Models Folder", QMessageBox.ButtonRole.ActionRole
-        )
-        ok_button = dialog.addButton(QMessageBox.StandardButton.Ok)
-
-        dialog.setDefaultButton(ok_button)
-
-        # Connect button actions
-        if readme_button:
-            readme_button.clicked.connect(
-                lambda: webbrowser.open(
-                    "https://github.com/duartebarbosadev/PhotoSort#ai-best-shot-ranking--engines"
-                )
-            )
-        if open_models_button:
-            open_models_button.clicked.connect(self._open_models_folder)
-
-        dialog.exec()
-        logger.info("Closed best-shot models missing dialog")
