@@ -300,37 +300,6 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         content = getattr(message, "content", None) or ""
         return message, content
 
-    def _extract_rating(self, analysis: str) -> Optional[int]:
-        if not analysis:
-            return None
-
-        # Try JSON parsing first, as the prompt requests structured output
-        try:
-            parsed = json.loads(analysis)
-            if isinstance(parsed, dict) and "rating" in parsed:
-                return int(round(float(parsed["rating"])))
-        except (ValueError, TypeError, json.JSONDecodeError):
-            # Fall back to unstructured parsing if the model returned plain text.
-            pass
-
-        patterns = [
-            r"\brating\b[^0-9]*([1-5](?:\.[0-9]+)?)",
-            r"\boverall rating\b[^0-9]*([1-5](?:\.[0-9]+)?)",
-            r"\bscore\b[^0-9]*([1-5](?:\.[0-9]+)?)",
-            r"([1-5])\s*/\s*5",
-            r"([1-5])\s*out of\s*5",
-            r"([1-5])\s*stars",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, analysis, re.IGNORECASE)
-            if match:
-                try:
-                    return int(round(float(match.group(1))))
-                except (ValueError, TypeError):
-                    continue
-
-        return None
-
     def validate_connection(self) -> None:
         probe_timeout = min(max(5, int(self._timeout * 0.25)), max(self._timeout, 5))
         client = self._with_timeout(probe_timeout)

@@ -374,9 +374,9 @@ class BestShotWorker(QObject):
                         break
                     if not paths:
                         continue
-                    futures[
-                        executor.submit(self._analyze_cluster, cluster_id, paths)
-                    ] = cluster_id
+                    future = executor.submit(self._analyze_cluster, cluster_id, paths)
+                    with self._executor_lock:
+                        futures[future] = cluster_id
 
                 total_jobs = len(futures)
                 if total_jobs == 0:

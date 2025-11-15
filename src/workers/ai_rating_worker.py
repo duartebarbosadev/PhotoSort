@@ -154,7 +154,9 @@ class AiRatingWorker(QObject):
             start_time = time.perf_counter()
             try:
                 for path in self.image_paths:
-                    futures[executor.submit(self._rate_single, path)] = path
+                    future = executor.submit(self._rate_single, path)
+                    with self._executor_lock:
+                        futures[future] = path
 
                 processed = 0
                 for future in as_completed(futures):
