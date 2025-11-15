@@ -150,13 +150,14 @@ class AiRatingWorker(QObject):
             futures: Dict[Future, str] = {}
             with self._executor_lock:
                 self._executor = executor
-                self._futures = futures
+                self._futures = {}
             start_time = time.perf_counter()
             try:
                 for path in self.image_paths:
                     future = executor.submit(self._rate_single, path)
                     with self._executor_lock:
                         futures[future] = path
+                        self._futures[future] = path
 
                 processed = 0
                 for future in as_completed(futures):
@@ -185,6 +186,8 @@ class AiRatingWorker(QObject):
                             percent,
                             f"Aborted at {processed}/{total} after failure • ETA {eta_text}",
                         )
+                        with self._executor_lock:
+                            self._futures.pop(future, None)
                         break
 
                     if rating_data:
@@ -195,6 +198,8 @@ class AiRatingWorker(QObject):
                     self.progress_update.emit(
                         percent, f"Rated {processed}/{total} • ETA {eta_text}"
                     )
+                    with self._executor_lock:
+                        self._futures.pop(future, None)
             finally:
                 self._shutdown_executor(cancel=self._should_stop)
 
@@ -230,6 +235,6 @@ class AiRatingWorker(QObject):
             return self._format_eta(0)
         remaining = max(0, total - processed)
         elapsed = max(0.0, time.perf_counter() - start_time)
-        avg = elapsed / processed if processed else 0.0
+        avg = elapsed / processed
         eta_seconds = avg * remaining
         return self._format_eta(eta_seconds)

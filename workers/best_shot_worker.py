@@ -365,7 +365,7 @@ class BestShotWorker(QObject):
             executor = ThreadPoolExecutor(max_workers=self._max_workers)
             with self._executor_lock:
                 self._executor = executor
-                self._futures = futures
+                self._futures = {}
             start_time = time.perf_counter()
             try:
                 for cluster_id, paths in self._iter_clusters():
@@ -377,6 +377,7 @@ class BestShotWorker(QObject):
                     future = executor.submit(self._analyze_cluster, cluster_id, paths)
                     with self._executor_lock:
                         futures[future] = cluster_id
+                        self._futures[future] = cluster_id
 
                 total_jobs = len(futures)
                 if total_jobs == 0:
@@ -404,16 +405,20 @@ class BestShotWorker(QObject):
                         )
                         self.error.emit(self._format_cluster_error(exc, cluster_id))
                         self._should_stop = True
+                        with self._executor_lock:
+                            self._futures.pop(future, None)
                         break
 
                     if cluster_results is None:
+                        with self._executor_lock:
+                            self._futures.pop(future, None)
                         continue
 
                     results[cluster_id] = cluster_results
                     processed += 1
                     percent = int((processed / total_jobs) * 100)
                     elapsed = max(0.0, time.perf_counter() - start_time)
-                    avg = elapsed / processed if processed else 0.0
+                    avg = elapsed / processed
                     remaining = max(0, total_jobs - processed)
                     eta_seconds = avg * remaining
                     eta_text = self._format_eta(eta_seconds)
@@ -426,6 +431,8 @@ class BestShotWorker(QObject):
                         percent,
                         f"Cluster {cluster_id}: best candidate {os.path.basename(best_path)} • ETA {eta_text}",
                     )
+                    with self._executor_lock:
+                        self._futures.pop(future, None)
             finally:
                 self._shutdown_executor(cancel=self._should_stop)
 

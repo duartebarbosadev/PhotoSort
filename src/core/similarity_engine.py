@@ -264,14 +264,10 @@ class SimilarityEngine(QObject):
                     else 100
                 )
                 elapsed = max(0.0, time.perf_counter() - start_time)
-                avg = elapsed / processed_count if processed_count else 0.0
+                avg = elapsed / processed_count
                 remaining = max(0, total_to_process - processed_count)
-                eta_seconds = avg * remaining if processed_count else 0.0
-                eta_text = (
-                    self._format_eta(eta_seconds)
-                    if processed_count
-                    else eta_placeholder
-                )
+                eta_seconds = avg * remaining
+                eta_text = self._format_eta(eta_seconds)
                 self.progress_update.emit(
                     progress,
                     f"Generating embeddings ({processed_count}/{total_to_process}) • ETA {eta_text}",
