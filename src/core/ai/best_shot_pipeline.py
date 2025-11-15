@@ -194,7 +194,9 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 self._client.close()
                 self._client_closed = True
         except Exception:
-            logger.debug("Failed to close LLM client during cancellation", exc_info=True)
+            logger.debug(
+                "Failed to close LLM client during cancellation", exc_info=True
+            )
 
     def shutdown(self) -> None:
         self.request_cancel()

@@ -12,6 +12,7 @@ from core.app_settings import (
 from core.file_scanner import SUPPORTED_EXTENSIONS
 from core.image_file_ops import ImageFileOperations
 from core.pyexiv2_wrapper import PyExiv2Operations
+
 logger = logging.getLogger(__name__)
 
 AD_HOC_SELECTION_CLUSTER_ID = -1
