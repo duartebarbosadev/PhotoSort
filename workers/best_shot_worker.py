@@ -1,11 +1,12 @@
 import logging
-import math
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from typing import Dict, Iterable, List, Optional, Sequence, TYPE_CHECKING
 
 from PyQt6.QtCore import QObject, pyqtSignal
+from core.utils.time_utils import format_eta
 
 if TYPE_CHECKING:
     from core.image_pipeline import ImagePipeline
@@ -19,41 +20,10 @@ from core.ai.best_shot_pipeline import (
 )
 from core.app_settings import (
     calculate_max_workers,
-    get_best_shot_engine,
     get_best_shot_batch_size,
 )
-from core.utils.time_utils import format_duration
 
 logger = logging.getLogger(__name__)
-
-
-def _estimate_eta_seconds(
-    processed: int, total: int, start_time: Optional[float]
-) -> Optional[float]:
-    if start_time is None or processed <= 0 or total <= 0 or processed > total:
-        return None
-    remaining = total - processed
-    if remaining <= 0:
-        return 0.0
-    elapsed = time.perf_counter() - start_time
-    if elapsed <= 0:
-        return None
-    per_item = elapsed / processed
-    eta = per_item * remaining
-    return eta if math.isfinite(eta) and eta >= 0 else None
-
-
-def _build_progress_detail(
-    processed: int, total: int, start_time: Optional[float]
-) -> str:
-    eta_seconds = _estimate_eta_seconds(processed, total, start_time)
-    base = f"{processed}/{total} done"
-    if eta_seconds is None:
-        return base
-    eta_text = format_duration(eta_seconds)
-    if not eta_text:
-        return base
-    return f"{base}, ETA {eta_text}"
 
 
 class BestShotWorker(QObject):
@@ -62,16 +32,13 @@ class BestShotWorker(QObject):
     progress_update = pyqtSignal(int, str)
     completed = pyqtSignal(object)  # Emits Dict[int, List[dict]]
     error = pyqtSignal(str)
-    models_missing = pyqtSignal(object)  # Emits List[MissingModelInfo]
     finished = pyqtSignal()
 
     def __init__(
         self,
         cluster_map: Dict[int, Sequence[str]],
-        models_root: Optional[str] = None,
         image_pipeline: Optional["ImagePipeline"] = None,
         max_workers: Optional[int] = None,
-        engine: Optional[str] = None,
         llm_config: Optional[LLMConfig] = None,
         strategy: Optional[BaseBestShotStrategy] = None,
         parent: Optional[QObject] = None,
@@ -81,10 +48,9 @@ class BestShotWorker(QObject):
     ):
         super().__init__(parent)
         self.cluster_map = cluster_map
-        self.models_root = models_root
         self._should_stop = False
         self._image_pipeline = image_pipeline
-        self._engine = (engine or get_best_shot_engine() or "local").lower()
+        self._engine = BestShotEngine.LLM.value
         self._llm_config = llm_config
         self._strategy: Optional[BaseBestShotStrategy] = strategy
         self._max_workers = max_workers or calculate_max_workers(
@@ -95,9 +61,36 @@ class BestShotWorker(QObject):
         )
         self._folder_path = folder_path
         self._analysis_cache = analysis_cache
+        self._executor_lock = threading.Lock()
+        self._executor: Optional[ThreadPoolExecutor] = None
+        self._futures: Dict[Future, int] = {}
 
     def stop(self):
         self._should_stop = True
+        self._shutdown_executor(cancel=True)
+        if self._strategy is not None:
+            try:
+                self._strategy.request_cancel()
+            except Exception:
+                logger.debug("Failed to cancel best-shot strategy", exc_info=True)
+
+    def _shutdown_executor(self, *, cancel: bool) -> None:
+        executor: Optional[ThreadPoolExecutor] = None
+        futures: List[Future] = []
+        with self._executor_lock:
+            executor = self._executor
+            if executor is not None:
+                futures = list(self._futures.keys())
+            self._executor = None
+            self._futures = {}
+        if executor is None:
+            return
+        if cancel:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+        else:
+            executor.shutdown(wait=True, cancel_futures=False)
 
     def _iter_clusters(self):
         for cluster_id in sorted(self.cluster_map.keys()):
@@ -107,13 +100,6 @@ class BestShotWorker(QObject):
     def _normalize_detail(exc: Exception) -> str:
         message = str(exc).strip()
         return message or exc.__class__.__name__
-
-    def _emit_status_message(self, message: str) -> None:
-        logger.info("Best-shot status: %s", message)
-        try:
-            self.progress_update.emit(-1, message)
-        except Exception:
-            logger.debug("Failed to emit status message", exc_info=True)
 
     @staticmethod
     def _looks_like_connectivity_issue(message: str) -> bool:
@@ -181,11 +167,8 @@ class BestShotWorker(QObject):
     def _ensure_strategy(self):
         if self._strategy is None:
             self._strategy = create_best_shot_strategy(
-                self._engine,
-                models_root=self.models_root,
                 image_pipeline=self._image_pipeline,
                 llm_config=self._llm_config,
-                status_callback=self._emit_status_message,
             )
             if self._strategy.max_workers:
                 self._max_workers = min(
@@ -359,40 +342,16 @@ class BestShotWorker(QObject):
 
     def run(self):
         try:
-            from core.ai.model_checker import (
-                ModelDependencyError,
-                check_best_shot_models,
+            self._ensure_strategy()
+        except Exception as exc:
+            logger.error(
+                "Failed to initialise best-shot strategy: %s", exc, exc_info=True
             )
-        except Exception as exc:  # pragma: no cover - import failure handled at runtime
-            logger.error("BestPhotoSelector import failed: %s", exc, exc_info=True)
             self.error.emit(str(exc))
             self.finished.emit()
             return
 
         try:
-            if self._engine == BestShotEngine.LOCAL.value:
-                missing_models = check_best_shot_models(self.models_root)
-                if missing_models:
-                    logger.warning(
-                        "Best-shot analysis aborted: %d model(s) missing",
-                        len(missing_models),
-                    )
-                    self.models_missing.emit(missing_models)
-                    self.finished.emit()
-                    return
-            try:
-                self._ensure_strategy()
-            except ModelDependencyError as exc:
-                logger.error("Failed to initialise best-shot strategy: %s", exc)
-                self.error.emit(str(exc))
-                return
-            except Exception as exc:
-                logger.error(
-                    "Failed to initialise best-shot strategy: %s", exc, exc_info=True
-                )
-                self.error.emit(str(exc))
-                return
-
             total_clusters = sum(1 for _, paths in self._iter_clusters() if paths)
             if total_clusters == 0:
                 self.completed.emit({})
@@ -402,17 +361,23 @@ class BestShotWorker(QObject):
                 f"Starting best shot analysis of {total_clusters} clusters using {self._engine} engine"
             )
             results: Dict[int, List[dict]] = {}
-            futures = {}
-            with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            futures: Dict[Future, int] = {}
+            executor = ThreadPoolExecutor(max_workers=self._max_workers)
+            with self._executor_lock:
+                self._executor = executor
+                self._futures = {}
+            start_time = time.perf_counter()
+            try:
                 for cluster_id, paths in self._iter_clusters():
                     if self._should_stop:
                         logger.info("Best shot worker stop requested before submit.")
                         break
                     if not paths:
                         continue
-                    futures[
-                        executor.submit(self._analyze_cluster, cluster_id, paths)
-                    ] = cluster_id
+                    future = executor.submit(self._analyze_cluster, cluster_id, paths)
+                    with self._executor_lock:
+                        futures[future] = cluster_id
+                        self._futures[future] = cluster_id
 
                 total_jobs = len(futures)
                 if total_jobs == 0:
@@ -420,14 +385,15 @@ class BestShotWorker(QObject):
                     return
 
                 processed = 0
-                start_time = time.perf_counter()
                 for future in as_completed(futures):
                     if self._should_stop:
                         logger.info(
                             "Best shot worker stop requested. Skipping remaining results."
                         )
                         break
-                    cluster_id = futures[future]
+                    cluster_id = futures.get(future)
+                    if cluster_id is None:
+                        continue
                     try:
                         cluster_results = future.result()
                     except Exception as exc:
@@ -439,29 +405,36 @@ class BestShotWorker(QObject):
                         )
                         self.error.emit(self._format_cluster_error(exc, cluster_id))
                         self._should_stop = True
+                        with self._executor_lock:
+                            self._futures.pop(future, None)
                         break
 
                     if cluster_results is None:
+                        with self._executor_lock:
+                            self._futures.pop(future, None)
                         continue
 
                     results[cluster_id] = cluster_results
                     processed += 1
                     percent = int((processed / total_jobs) * 100)
+                    elapsed = max(0.0, time.perf_counter() - start_time)
+                    avg = elapsed / processed
+                    remaining = max(0, total_jobs - processed)
+                    eta_seconds = avg * remaining
+                    eta_text = format_eta(eta_seconds)
                     best_path = (
                         cluster_results[0]["image_path"]
                         if cluster_results
                         else "No result"
                     )
-                    progress_detail = _build_progress_detail(
-                        processed,
-                        total_jobs,
-                        start_time,
+                    self.progress_update.emit(
+                        percent,
+                        f"Cluster {cluster_id}: best candidate {os.path.basename(best_path)} • ETA {eta_text}",
                     )
-                    progress_message = (
-                        f"Cluster {cluster_id}: best candidate {os.path.basename(best_path)}"
-                        f" - {progress_detail}"
-                    )
-                    self.progress_update.emit(percent, progress_message)
+                    with self._executor_lock:
+                        self._futures.pop(future, None)
+            finally:
+                self._shutdown_executor(cancel=self._should_stop)
 
             if not self._should_stop:
                 total_results = sum(len(results) for results in results.values())

@@ -6,6 +6,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 from PyQt6.QtCore import QObject, pyqtSignal
 import numpy as np  # Import numpy for array manipulation
 from sklearn.cluster import DBSCAN
+from core.utils.time_utils import format_eta
 
 from core.image_pipeline import ImagePipeline
 from core.similarity_utils import (
@@ -184,11 +185,15 @@ class SimilarityEngine(QObject):
         logger.info(
             f"Found {len(all_embeddings)} cached. Processing {total_to_process} new files."
         )
-        self.progress_update.emit(0, f"Processing {total_to_process} new images...")
+        eta_placeholder = "--:--:--"
+        self.progress_update.emit(
+            0, f"Processing {total_to_process} new images... • ETA {eta_placeholder}"
+        )
 
         processed_count = 0
         new_embeddings = {}
         batch_size = DEFAULT_SIMILARITY_BATCH_SIZE
+        start_time = time.perf_counter()
 
         for i in range(0, total_to_process, batch_size):
             if not self._is_running:
@@ -253,9 +258,14 @@ class SimilarityEngine(QObject):
                     if total_to_process > 0
                     else 100
                 )
+                elapsed = max(0.0, time.perf_counter() - start_time)
+                avg = elapsed / processed_count
+                remaining = max(0, total_to_process - processed_count)
+                eta_seconds = avg * remaining
+                eta_text = format_eta(eta_seconds)
                 self.progress_update.emit(
                     progress,
-                    f"Generating embeddings ({processed_count}/{total_to_process})...",
+                    f"Generating embeddings ({processed_count}/{total_to_process}) • ETA {eta_text}",
                 )
 
             except Exception as e:

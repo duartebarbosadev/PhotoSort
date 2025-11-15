@@ -19,7 +19,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * **Fast Processing**: Intensive operations (scanning, thumbnailing, analysis) run once in batch to ensure fast image scrolling.
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
   * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed.
-* **AI Best-Shot Ranking**: Compare stacks with either the bundled MUSIQ/MANIQA/LIQE pipeline or an OpenAI-compatible vision model (e.g. Qwen3-VL).
+  * **AI Best-Shot Ranking**: Send stacks to an OpenAI-compatible vision model (e.g. Qwen3-VL) to pick the keeper frame automatically.
   * **AI Star Ratings**: Ask the configured AI engine to score individual photos with 1–5 stars.
 
 - **Update Notifications**: Automatically checks for new releases and notifies users when updates are available, with direct download links.
@@ -102,24 +102,14 @@ To use the **Auto Rotate Images** feature (`Ctrl+R`), you need to download the p
 
 The application will automatically detect and load the model when you use the rotation detection feature.
 
-### AI Best Shot Ranking & Engines
+### AI Best Shot Ranking & Ratings
 
-PhotoSort can rank similar shots and assign AI ratings using either the local
-MUSIQ/MANIQA/LIQE pipeline or an OpenAI-compatible vision model; switch engines in
-**Preferences → AI Rating Engine** (`F10`). Settings persist between sessions.
-
-**Local pipeline (default)**  
-Runs entirely offline by blending three state-of-the-art no-reference IQA models:
-**MUSIQ**, **MANIQA**, and **LIQE**. These metrics are loaded
-through [`pyiqa`](https://github.com/chaofengc/IQA-PyTorch); no manual model
-downloads are required.
-
-**LLM engine**  
-Connect PhotoSort to any OpenAI-compatible endpoint that accepts images
-—for example Qwen3-VL. Configure API key, base URL,
-model name, prompt templates, and timeouts directly in the preferences dialog.
-For local deployments that do not require authentication (e.g. LM Studio), leave
-the API key blank.
+PhotoSort relies on an OpenAI-compatible vision model to rank
+similar shots and request AI star ratings. Configure the endpoint under
+**Preferences → AI Rating Engine** (`F10`) by providing the API key (optional for
+local deployments), base URL, model name, prompt templates, max tokens, timeout,
+and concurrency. Any server that implements the OpenAI Chat Completions API with
+vision support (for example, Qwen3-VL running in LM Studio) will work.
 
 **Using the results**  
 - **Similarity stacks**: After running **View → Analyze Similarity**, launch

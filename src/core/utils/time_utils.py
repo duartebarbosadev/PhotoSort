@@ -25,4 +25,17 @@ def format_duration(seconds: float) -> str:
     return " ".join(parts)
 
 
-__all__ = ["format_duration"]
+def format_eta(seconds: float) -> str:
+    """
+    Return a fixed HH:MM:SS representation suitable for ETAs.
+    Clamps negative input to zero and returns "0:00:00" for invalid values.
+    """
+    if not math.isfinite(seconds):
+        seconds = 0
+    seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:d}:{minutes:02d}:{secs:02d}"
+
+
+__all__ = ["format_duration", "format_eta"]

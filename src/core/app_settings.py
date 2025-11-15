@@ -54,7 +54,6 @@ PERFORMANCE_MODE_KEY = (
 CUSTOM_THREAD_COUNT_KEY = (
     "Performance/CustomThreadCount"  # User-defined thread count for custom mode
 )
-BEST_SHOT_ENGINE_KEY = "AI/BestShotEngine"
 OPENAI_API_KEY_KEY = "AI/OpenAIKey"
 OPENAI_MODEL_KEY = "AI/OpenAIModel"
 OPENAI_BASE_URL_KEY = "AI/OpenAIBaseUrl"
@@ -74,7 +73,6 @@ DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
 DEFAULT_UPDATE_CHECK_ENABLED = True  # Default to enable automatic update checks
 DEFAULT_PERFORMANCE_MODE = PerformanceMode.BALANCED  # Default to balanced mode
 DEFAULT_CUSTOM_THREAD_COUNT = 4  # Default custom thread count
-DEFAULT_BEST_SHOT_ENGINE = "local"
 DEFAULT_OPENAI_API_KEY = ""
 DEFAULT_OPENAI_MODEL = "Qwen3-VL-30B-A3B-Instruct-MLX-4bit"
 DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:8000/v1"
@@ -432,16 +430,6 @@ def calculate_max_workers(min_workers: int = 1, max_workers: int = None) -> int:
         workers = min(max_workers, workers)
 
     return workers
-
-
-def get_best_shot_engine() -> str:
-    settings = _get_settings()
-    return settings.value(BEST_SHOT_ENGINE_KEY, DEFAULT_BEST_SHOT_ENGINE, type=str)
-
-
-def set_best_shot_engine(engine: str) -> None:
-    settings = _get_settings()
-    settings.setValue(BEST_SHOT_ENGINE_KEY, engine.lower())
 
 
 def get_best_shot_batch_size() -> int:

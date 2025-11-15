@@ -4,38 +4,17 @@ import base64
 import io
 import json
 import logging
-import math
 import os
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Set
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Set
 
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
+from PIL import Image, ImageDraw, ImageFont
 
-try:  # pragma: no cover - OpenCV optional during tests
-    import cv2
-except Exception:  # pragma: no cover - gracefully degrade if OpenCV missing
-    cv2 = None
-
-from core.ai.best_photo_selector import (
-    BestPhotoSelector,
-    BestShotResult,
-    DEFAULT_METRIC_SPECS,
-    EyeStateAnalyzer,
-    MetricSpec,
-)
 from core.app_settings import (
-    PerformanceMode,
-    get_custom_thread_count,
-    get_best_shot_engine,
     get_openai_config,
-    get_performance_mode,
-    get_preferred_torch_device,
-    calculate_max_workers,
     DEFAULT_OPENAI_API_KEY,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_OPENAI_BASE_URL,
@@ -48,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 
 class BestShotEngine(str, Enum):
-    LOCAL = "local"
     LLM = "llm"
 
 
@@ -81,26 +59,6 @@ DEFAULT_RATING_PROMPT = (
     "Provide one concise sentence noting the dominant strengths and the limiting flaw(s)."
 )
 
-MAX_LOCAL_ANALYSIS_EDGE = 1024
-RESPONSIVE_LOCAL_ANALYSIS_EDGE = 640
-PERFORMANCE_RATIO_THRESHOLD = 0.95
-PREFILTER_PREVIEW_MAX_EDGE = 512
-PREFILTER_MAX_CANDIDATES = 3
-PREFILTER_MIN_CLUSTER_SIZE = 4
-HEURISTIC_SHARPNESS_NORMALIZER = 250.0
-HEURISTIC_CONTRAST_NORMALIZER = 75.0
-RATING_THRESHOLDS = (0.16, 0.34, 0.44, 0.64)
-QUALITY_NORMALIZATION_RANGES = {
-    "musiq_raw": (25.0, 85.0),
-    "liqe_raw": (30.0, 90.0),
-    "maniqa_raw": (0.25, 0.85),
-}
-
-if hasattr(Image, "Resampling"):
-    _RESAMPLE_BEST = Image.Resampling.LANCZOS
-else:  # pragma: no cover - Pillow < 10
-    _RESAMPLE_BEST = Image.LANCZOS
-
 
 @dataclass
 class LLMConfig:
@@ -118,242 +76,6 @@ class LLMConfig:
             self.best_shot_prompt = DEFAULT_BEST_SHOT_PROMPT
         if not self.rating_prompt:
             self.rating_prompt = DEFAULT_RATING_PROMPT
-
-
-@dataclass(frozen=True)
-class LocalAnalysisProfile:
-    name: str
-    max_edge: int
-    metric_specs: Sequence[MetricSpec]
-
-
-def _metric_specs_for(names: Sequence[str]) -> Tuple[MetricSpec, ...]:
-    enabled = {name.lower() for name in names}
-    filtered = tuple(
-        spec for spec in DEFAULT_METRIC_SPECS if spec.name.lower() in enabled
-    )
-    return filtered or tuple(DEFAULT_METRIC_SPECS)
-
-
-_PERFORMANCE_ANALYSIS_PROFILE = LocalAnalysisProfile(
-    name="performance",
-    max_edge=MAX_LOCAL_ANALYSIS_EDGE,
-    metric_specs=tuple(DEFAULT_METRIC_SPECS),
-)
-
-_RESPONSIVE_ANALYSIS_PROFILE = LocalAnalysisProfile(
-    name="responsive",
-    max_edge=RESPONSIVE_LOCAL_ANALYSIS_EDGE,
-    metric_specs=_metric_specs_for(("musiq", "maniqa")),
-)
-
-
-def _calculate_custom_thread_ratio() -> Optional[float]:
-    cpu_count = os.cpu_count() or 0
-    if cpu_count <= 0:
-        return None
-    try:
-        custom_threads = get_custom_thread_count()
-    except Exception:
-        return None
-    clamped = max(1, min(cpu_count, int(custom_threads)))
-    return clamped / float(cpu_count)
-
-
-def select_local_analysis_profile(
-    mode: PerformanceMode,
-    *,
-    custom_thread_ratio: Optional[float] = None,
-) -> LocalAnalysisProfile:
-    if mode in (PerformanceMode.PERFORMANCE, PerformanceMode.BALANCED):
-        return _PERFORMANCE_ANALYSIS_PROFILE
-    if mode == PerformanceMode.CUSTOM and custom_thread_ratio is not None:
-        if custom_thread_ratio >= PERFORMANCE_RATIO_THRESHOLD:
-            return _PERFORMANCE_ANALYSIS_PROFILE
-    return _RESPONSIVE_ANALYSIS_PROFILE
-
-
-def _determine_local_analysis_profile() -> LocalAnalysisProfile:
-    mode = get_performance_mode()
-    ratio = _calculate_custom_thread_ratio() if mode == PerformanceMode.CUSTOM else None
-    profile = select_local_analysis_profile(mode, custom_thread_ratio=ratio)
-    logger.info(
-        "Using '%s' local AI profile (max edge %d px, metrics: %s)",
-        profile.name,
-        profile.max_edge,
-        ", ".join(spec.name.upper() for spec in profile.metric_specs),
-    )
-    return profile
-
-
-@dataclass(frozen=True)
-class HeuristicCandidate:
-    image_path: str
-    score: float
-    sharpness: float
-    exposure_balance: float
-    histogram_balance: float
-    eye_openness: float
-
-    def as_dict(self) -> Dict[str, float]:
-        return {
-            "score": self.score,
-            "sharpness": self.sharpness,
-            "exposure_balance": self.exposure_balance,
-            "histogram_balance": self.histogram_balance,
-            "eye_openness": self.eye_openness,
-        }
-
-
-class FastHeuristicStage:
-    """
-    Lightweight heuristics that quickly reject obviously bad frames before heavy IQA.
-
-    Signals reuse the same Laplacian variance idea as the blur detector plus
-    coarse histogram/contrast checks and (optionally) the eye-state classifier.
-    """
-
-    def __init__(
-        self, image_pipeline, preview_max_edge: int = PREFILTER_PREVIEW_MAX_EDGE
-    ):
-        self._image_pipeline = image_pipeline
-        self._preview_max_edge = preview_max_edge
-        self._eye_detection_disabled = False
-        self._eye_analyzer_local = threading.local()
-
-    def _load_preview(self, image_path: str) -> Optional[Image.Image]:
-        preview = None
-        if self._image_pipeline is not None:
-            try:
-                preview = self._image_pipeline.get_preview_image(image_path)
-                if preview is not None:
-                    preview = preview.copy()
-            except Exception:
-                logger.debug(
-                    "Heuristic preview load failed via pipeline for %s",
-                    image_path,
-                    exc_info=True,
-                )
-        if preview is None:
-            try:
-                with Image.open(image_path) as raw:
-                    prepared = ImageOps.exif_transpose(raw)
-                    preview = prepared.convert("RGB").copy()
-            except Exception:
-                logger.debug(
-                    "Heuristic preview load failed from disk for %s",
-                    image_path,
-                    exc_info=True,
-                )
-                return None
-        try:
-            prepared = _downscale_image(preview, self._preview_max_edge)
-            if prepared is preview:
-                # Ensure caller gets a live image even if no resize was needed.
-                prepared = prepared.copy()
-            return prepared
-        finally:
-            try:
-                preview.close()
-            except Exception:
-                pass
-
-    def _estimate_sharpness(self, image: Image.Image) -> float:
-        if cv2 is None:
-            return 0.5
-        try:
-            gray = np.array(image.convert("L"))
-            variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-            normalized = variance / HEURISTIC_SHARPNESS_NORMALIZER
-            return max(0.0, min(1.0, normalized))
-        except Exception:
-            logger.debug("Sharpness heuristic failed", exc_info=True)
-            return 0.5
-
-    @staticmethod
-    def _estimate_exposure_balance(image: Image.Image) -> float:
-        gray = image.convert("L")
-        stats = ImageStat.Stat(gray)
-        mean_luma = stats.mean[0] / 255.0 if stats.mean else 0.5
-        stddev = (
-            stats.stddev[0] if stats.stddev else 0.0
-        ) / HEURISTIC_CONTRAST_NORMALIZER
-        brightness_penalty = min(1.0, abs(mean_luma - 0.5) * 2.0)
-        score = max(0.0, 1.0 - brightness_penalty)
-        contrast_bonus = max(0.0, min(1.0, stddev))
-        return 0.6 * score + 0.4 * contrast_bonus
-
-    @staticmethod
-    def _estimate_histogram_balance(image: Image.Image) -> float:
-        gray = image.convert("L")
-        hist = gray.histogram()
-        total = sum(hist)
-        if total <= 0:
-            return 0.5
-        tail_bins = 6
-        shadow_ratio = sum(hist[:tail_bins]) / total
-        highlight_ratio = sum(hist[-tail_bins:]) / total
-        clipping = shadow_ratio + highlight_ratio
-        return max(0.0, 1.0 - clipping * 3.0)
-
-    def _get_eye_analyzer(self) -> Optional["EyeStateAnalyzer"]:
-        if self._eye_detection_disabled:
-            return None
-        analyzer = getattr(self._eye_analyzer_local, "instance", None)
-        if analyzer is not None:
-            return analyzer
-        try:
-            analyzer = EyeStateAnalyzer(max_faces=1)
-        except Exception:
-            logger.warning(
-                "EyeStateAnalyzer unavailable; heuristic stage will skip eye checks."
-            )
-            self._eye_detection_disabled = True
-            return None
-        self._eye_analyzer_local.instance = analyzer
-        return analyzer
-
-    def _estimate_eye_openness(self, image: Image.Image) -> float:
-        analyzer = self._get_eye_analyzer()
-        if analyzer is None:
-            return 0.5
-        try:
-            probability = analyzer.predict_open_probability(image)
-            if probability is None:
-                return 0.5
-            return max(0.0, min(1.0, float(probability)))
-        except Exception:
-            logger.debug("Eye-state heuristic failed", exc_info=True)
-            return 0.5
-
-    def evaluate(self, image_path: str) -> Optional[HeuristicCandidate]:
-        preview = self._load_preview(image_path)
-        if preview is None:
-            return None
-        try:
-            sharpness = self._estimate_sharpness(preview)
-            exposure = self._estimate_exposure_balance(preview)
-            histogram_balance = self._estimate_histogram_balance(preview)
-            eye_openness = self._estimate_eye_openness(preview)
-            score = (
-                0.5 * sharpness
-                + 0.2 * exposure
-                + 0.15 * histogram_balance
-                + 0.15 * eye_openness
-            )
-            return HeuristicCandidate(
-                image_path=image_path,
-                score=score,
-                sharpness=sharpness,
-                exposure_balance=exposure,
-                histogram_balance=histogram_balance,
-                eye_openness=eye_openness,
-            )
-        finally:
-            try:
-                preview.close()
-            except Exception:
-                pass
 
 
 def _load_font(image_size: Tuple[int, int]) -> ImageFont.ImageFont:
@@ -393,33 +115,14 @@ def _image_to_base64(image: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-def _downscale_image(
-    image: Image.Image, max_edge: int = MAX_LOCAL_ANALYSIS_EDGE
-) -> Image.Image:
-    width, height = image.size
-    longest = max(width, height)
-    if longest <= max_edge:
-        return image
-    scale = max_edge / float(longest)
-    new_size = (
-        max(1, int(round(width * scale))),
-        max(1, int(round(height * scale))),
-    )
-    return image.resize(new_size, _RESAMPLE_BEST)
-
-
 class BaseBestShotStrategy:
     def __init__(
         self,
-        models_root: Optional[str],
         image_pipeline,
         llm_config: Optional[LLMConfig] = None,
-        status_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
-        self.models_root = models_root
         self.image_pipeline = image_pipeline
         self.llm_config = llm_config
-        self._status_callback = status_callback
 
     @property
     def max_workers(self) -> int:
@@ -439,382 +142,13 @@ class BaseBestShotStrategy:
     def validate_connection(self) -> None:
         """Optional connectivity check before work begins."""
 
-
-def _normalize_for_rating(value: float, *, lower: float, upper: float) -> float:
-    if upper <= lower:
-        return 0.0
-    normalized = (value - lower) / (upper - lower)
-    return max(0.0, min(1.0, normalized))
-
-
-def _map_score_to_rating(normalized_score: float) -> int:
-    for idx, threshold in enumerate(RATING_THRESHOLDS, start=1):
-        if normalized_score < threshold:
-            return idx
-    return len(RATING_THRESHOLDS) + 1
-
-
-def _compute_quality_rating(result) -> Tuple[int, float]:
-    def _is_number(value: object) -> bool:
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-    quality_score: Optional[float] = None
-
-    composite = getattr(result, "composite_score", None)
-    if _is_number(composite):
-        composite_value = float(composite)
-        if math.isfinite(composite_value):
-            quality_score = composite_value
-
-    if quality_score is None:
-        metrics = getattr(result, "metrics", {}) or {}
-        metric_values = [
-            float(value) for value in metrics.values() if _is_number(value)
-        ]
-        if metric_values:
-            quality_score = sum(metric_values) / len(metric_values)
-
-    if quality_score is None:
-        samples: List[float] = []
-        raw = getattr(result, "raw_metrics", {}) or {}
-        for field_name, (lower, upper) in QUALITY_NORMALIZATION_RANGES.items():
-            raw_value = raw.get(field_name)
-            if _is_number(raw_value):
-                samples.append(
-                    _normalize_for_rating(raw_value, lower=lower, upper=upper)
-                )
-        if samples:
-            quality_score = sum(samples) / len(samples)
-
-    if quality_score is None:
-        quality_score = 0.0
-
-    quality_score = max(0.0, min(1.0, float(quality_score)))
-    rating = _map_score_to_rating(quality_score)
-    return rating, quality_score
-
-
-class LocalBestShotStrategy(BaseBestShotStrategy):
-    def __init__(
-        self,
-        models_root,
-        image_pipeline,
-        llm_config=None,
-        status_callback: Optional[Callable[[str], None]] = None,
-    ) -> None:
-        super().__init__(
-            models_root, image_pipeline, llm_config, status_callback=status_callback
-        )
-        self._thread_local = threading.local()
-        self._device_hint = get_preferred_torch_device()
-        self._analysis_profile = _determine_local_analysis_profile()
-        self._max_local_analysis_edge = self._analysis_profile.max_edge
-        self._metric_specs = self._analysis_profile.metric_specs
-        self._prefilter_stage = FastHeuristicStage(image_pipeline)
-        responsive_profile = self._analysis_profile is _RESPONSIVE_ANALYSIS_PROFILE
-        min_prefilter_workers = 1 if responsive_profile else 2
-        max_prefilter_workers = 2 if responsive_profile else 4
-        self._prefilter_workers = max(
-            1,
-            calculate_max_workers(
-                min_workers=min_prefilter_workers, max_workers=max_prefilter_workers
-            ),
-        )
-        logger.info(
-            "Local best-shot strategy targeting torch device '%s'", self._device_hint
-        )
-
-    @property
-    def max_workers(self) -> int:
-        return calculate_max_workers(min_workers=1, max_workers=8)
-
-    def _get_selector(self) -> BestPhotoSelector:
-        selector = getattr(self._thread_local, "selector", None)
-        if selector is None:
-            # Use image pipeline for better RAW and format support
-            image_loader = self._create_image_loader() if self.image_pipeline else None
-            selector = BestPhotoSelector(
-                models_root=self.models_root,
-                image_loader=image_loader,
-                status_callback=self._status_callback,
-                device=self._device_hint,
-                metric_specs=self._metric_specs,
-            )
-            self._thread_local.selector = selector
-        return selector
-
-    def _create_image_loader(self):
-        """Create an image loader using the app pipeline + downscaling for efficiency."""
-
-        def pipeline_image_loader(image_path: str) -> Image.Image:
-            try:
-                # Use image pipeline to get preview (handles RAW files properly)
-                preview = self.image_pipeline.get_preview_image(image_path)
-                if preview is not None:
-                    return self._prepare_image(preview, image_path)
-            except Exception as exc:
-                logger.warning("Image pipeline failed for %s: %s", image_path, exc)
-
-            # Fallback to direct loading for standard formats only
-            ext = os.path.splitext(image_path)[1].lower()
-            if ext in {
-                ".jpg",
-                ".jpeg",
-                ".png",
-                ".bmp",
-                ".gif",
-                ".tiff",
-                ".tif",
-                ".webp",
-            }:
-                try:
-                    with Image.open(image_path) as img:
-                        prepared = ImageOps.exif_transpose(img)
-                        return self._prepare_image(prepared, image_path)
-                except Exception as exc:
-                    logger.error(
-                        "Failed to load standard format image %s: %s", image_path, exc
-                    )
-            else:
-                logger.error(
-                    "Unsupported format for local AI analysis: %s (%s)", ext, image_path
-                )
-
-            raise RuntimeError(f"Cannot load image for local AI analysis: {image_path}")
-
-        return pipeline_image_loader
-
-    def _prepare_image(self, image: Image.Image, source_path: str) -> Image.Image:
-        prepared = image.copy()
-        if prepared.mode != "RGB":
-            prepared = prepared.convert("RGB")
-        prepared = _downscale_image(prepared, self._max_local_analysis_edge)
-        prepared.info.setdefault("source_path", source_path)
-        prepared.info.setdefault("region", "full")
-        return prepared
-
-    def _evaluate_prefilter_candidates(
-        self, stage: FastHeuristicStage, image_paths: Sequence[str]
-    ) -> Dict[str, Optional[HeuristicCandidate]]:
-        results: Dict[str, Optional[HeuristicCandidate]] = {}
-        if not image_paths:
-            return results
-        worker_count = min(self._prefilter_workers, len(image_paths))
-        if worker_count <= 1:
-            for path in image_paths:
-                try:
-                    results[path] = stage.evaluate(path)
-                except Exception:
-                    logger.debug(
-                        "Heuristic evaluation failed for %s", path, exc_info=True
-                    )
-                    results[path] = None
-        else:
-            with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                future_map = {
-                    executor.submit(stage.evaluate, path): path for path in image_paths
-                }
-                for future in as_completed(future_map):
-                    path = future_map[future]
-                    try:
-                        results[path] = future.result()
-                    except Exception:
-                        logger.debug(
-                            "Heuristic evaluation raised unexpectedly for %s",
-                            path,
-                            exc_info=True,
-                        )
-                        results[path] = None
-        for path in image_paths:
-            results.setdefault(path, None)
-        return results
-
-    def _prefilter_cluster(
-        self, cluster_id: int, image_paths: Sequence[str]
-    ) -> Tuple[List[str], Dict[str, HeuristicCandidate]]:
-        if len(image_paths) < PREFILTER_MIN_CLUSTER_SIZE:
-            return list(image_paths), {}
-
-        limit = min(PREFILTER_MAX_CANDIDATES, len(image_paths))
-        if limit >= len(image_paths):
-            return list(image_paths), {}
-
-        stage = self._prefilter_stage
-        if stage is None:
-            return list(image_paths), {}
-
-        evaluations = self._evaluate_prefilter_candidates(stage, image_paths)
-        scored: List[HeuristicCandidate] = []
-        fallbacks: List[str] = []
-        for path in image_paths:
-            candidate = evaluations.get(path)
-            if candidate is None:
-                fallbacks.append(path)
-                continue
-            scored.append(candidate)
-
-        if not scored:
-            return list(image_paths), {}
-
-        scored.sort(key=lambda c: c.score, reverse=True)
-        selected = [candidate.image_path for candidate in scored[:limit]]
-        if len(selected) < limit:
-            for path in fallbacks:
-                if path not in selected:
-                    selected.append(path)
-                if len(selected) >= limit:
-                    break
-
-        if len(selected) < len(image_paths):
-            logger.info(
-                "Heuristic prefilter reduced cluster %s from %d to %d candidates",
-                cluster_id,
-                len(image_paths),
-                len(selected),
-            )
-
-        info_map = {candidate.image_path: candidate for candidate in scored}
-        return selected, info_map
-
-    def rank_cluster(
-        self, cluster_id: int, image_paths: Sequence[str]
-    ) -> List[Dict[str, object]]:
-        logger.info(
-            f"Local AI ranking cluster {cluster_id} with {len(image_paths)} images using local models"
-        )
-        candidate_paths, prefilter_map = self._prefilter_cluster(
-            cluster_id, image_paths
-        )
-        if len(candidate_paths) != len(image_paths):
-            logger.info(
-                "Cluster %s trimmed to %d candidate(s) prior to IQA",
-                cluster_id,
-                len(candidate_paths),
-            )
-        worker_count = min(self.max_workers, len(candidate_paths))
-        if worker_count > 1:
-            logger.debug(
-                "Parallel IQA scoring enabled for cluster %s with %d worker(s)",
-                cluster_id,
-                worker_count,
-            )
-            result_objects = self._rank_images_parallel(candidate_paths, worker_count)
-        else:
-            selector = self._get_selector()
-            result_objects = selector.rank_images(candidate_paths)
-        ranked_results: List[Dict[str, object]] = []
-        for result in result_objects:
-            payload = result.to_dict()
-            info = prefilter_map.get(payload.get("image_path"))
-            if info:
-                payload["prefilter"] = info.as_dict()
-            if logger.isEnabledFor(logging.DEBUG):
-                image_name = os.path.basename(payload.get("image_path", ""))
-                composite = payload.get("composite_score", 0.0)
-                metrics = payload.get("metrics") or {}
-                metric_summary = ", ".join(
-                    f"{name.upper()} {value:.3f}"
-                    for name, value in sorted(metrics.items())
-                    if isinstance(value, (int, float))
-                )
-                eye_value = metrics.get("eyes_open")
-                if (
-                    isinstance(eye_value, (int, float))
-                    and "EYES_OPEN" not in metric_summary
-                ):
-                    metric_summary = (
-                        f"{metric_summary}, EYES_OPEN {eye_value:.3f}"
-                        if metric_summary
-                        else f"EYES_OPEN {eye_value:.3f}"
-                    )
-                prefilter = payload.get("prefilter") or {}
-                if prefilter:
-                    prefilter_summary = ", ".join(
-                        f"{key}={value:.3f}"
-                        if isinstance(value, (int, float))
-                        else f"{key}={value}"
-                        for key, value in sorted(prefilter.items())
-                    )
-                    metric_summary = (
-                        f"{metric_summary} | prefilter: {prefilter_summary}"
-                        if metric_summary
-                        else f"prefilter: {prefilter_summary}"
-                    )
-                logger.debug(
-                    "Cluster %s candidate %s -> composite %.4f%s",
-                    cluster_id,
-                    image_name or payload.get("image_path"),
-                    composite,
-                    f" ({metric_summary})" if metric_summary else "",
-                )
-            ranked_results.append(payload)
-        if ranked_results:
-            logger.info(
-                f"Completed local AI ranking for cluster {cluster_id}. Best image: {os.path.basename(ranked_results[0]['image_path'])}"
-            )
-        return ranked_results
-
-    def _rank_images_parallel(
-        self, image_paths: Sequence[str], worker_count: int
-    ) -> List[BestShotResult]:
-        results: List[BestShotResult] = []
-
-        def _evaluate(path: str) -> Optional[BestShotResult]:
-            selector = self._get_selector()
-            return selector.analyze_image(path)
-
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {executor.submit(_evaluate, path): path for path in image_paths}
-            for future in as_completed(futures):
-                path = futures[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    logger.warning(
-                        "Parallel IQA scoring failed for %s: %s",
-                        path,
-                        exc,
-                        exc_info=True,
-                    )
-                    continue
-                if result:
-                    results.append(result)
-        results.sort(key=lambda r: r.composite_score, reverse=True)
-        return results
-
-    def rate_image(self, image_path: str) -> Optional[Dict[str, object]]:
-        logger.info(f"Local AI rating image: {os.path.basename(image_path)}")
-        selector = self._get_selector()
-        results = selector.rank_images([image_path])
-        if not results:
-            return None
-        result = results[0]
-        rating, quality_score = _compute_quality_rating(result)
-        logger.info(
-            "Local AI rated %s as %d/5 (quality score %.3f)",
-            os.path.basename(image_path),
-            rating,
-            quality_score,
-        )
-        return {
-            "image_path": image_path,
-            "rating": rating,
-            "score": quality_score,
-            "metrics": result.metrics,
-        }
+    def request_cancel(self) -> None:
+        """Signal any in-flight operations to halt as soon as possible."""
 
 
 class LLMBestShotStrategy(BaseBestShotStrategy):
-    def __init__(
-        self,
-        models_root,
-        image_pipeline,
-        llm_config: LLMConfig,
-        status_callback: Optional[Callable[[str], None]] = None,
-    ) -> None:
-        super().__init__(
-            models_root, image_pipeline, llm_config, status_callback=status_callback
-        )
+    def __init__(self, image_pipeline, llm_config: LLMConfig) -> None:
+        super().__init__(image_pipeline, llm_config)
         try:
             from openai import OpenAI  # type: ignore
         except ImportError as exc:  # pragma: no cover
@@ -837,6 +171,8 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         self._rating_prompt = llm_config.rating_prompt
         self._lock = threading.Lock()
         self._worker_count = llm_config.max_workers
+        self._cancel_event = threading.Event()
+        self._client_closed = False
 
     @property
     def max_workers(self) -> int:
@@ -850,6 +186,22 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
             except Exception:
                 return client
         return client
+
+    def _close_client(self) -> None:
+        with self._lock:
+            try:
+                if hasattr(self._client, "close") and not self._client_closed:
+                    self._client.close()
+                    self._client_closed = True
+            except Exception:
+                logger.debug("Failed to close LLM client", exc_info=True)
+
+    def request_cancel(self) -> None:
+        self._cancel_event.set()
+        self._close_client()
+
+    def shutdown(self) -> None:
+        self._close_client()
 
     def _load_preview(self, image_path: str) -> Image.Image:
         """Load image as RGB preview, ensuring compatibility with AI services.
@@ -923,8 +275,12 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         tool_choice: Optional[str] = None,
         max_tokens: Optional[int] = None,
     ):
+        if self._cancel_event.is_set():
+            raise RuntimeError("LLM request cancelled")
         with self._lock:
             try:
+                if self._cancel_event.is_set():
+                    raise RuntimeError("LLM request cancelled")
                 kwargs: Dict[str, object] = {
                     "model": self._model,
                     "messages": messages,
@@ -937,6 +293,8 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                     kwargs["tool_choice"] = tool_choice
                 response = self._client.chat.completions.create(**kwargs)
             except Exception as exc:
+                if self._cancel_event.is_set():
+                    raise RuntimeError("LLM request cancelled") from exc
                 raise RuntimeError(
                     f"LLM request failed for model '{self._model}' at {self._base_url}: {exc}"
                 ) from exc
@@ -1188,52 +546,46 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 os.path.basename(image_path),
                 snippet or "<empty response>",
             )
+        if structured_payload and not analysis:
+            breakdown = structured_payload.get("score_breakdown", {})
+            breakdown_parts = [
+                f"{name.replace('_', ' ')} {value}" for name, value in breakdown.items()
+            ]
+            notes = structured_payload.get("notes")
+            confidence = structured_payload.get("confidence")
+            summary_bits = []
+            if breakdown_parts:
+                summary_bits.append(" | ".join(breakdown_parts))
+            if notes:
+                summary_bits.append(notes)
+            if confidence:
+                summary_bits.append(f"confidence: {confidence}")
+            analysis = " ".join(summary_bits)
+
         payload = {
             "image_path": image_path,
             "rating": rating,
+            "analysis": analysis,
         }
+        if structured_payload:
+            payload["quality_scores"] = structured_payload
         return payload
 
 
 def create_best_shot_strategy(
-    engine: Optional[str] = None,
     *,
-    models_root: Optional[str] = None,
     image_pipeline=None,
     llm_config: Optional[LLMConfig] = None,
-    status_callback: Optional[Callable[[str], None]] = None,
 ) -> BaseBestShotStrategy:
-    """Create AI strategy for image analysis.
-
-    Both LLM and Local strategies now properly support RAW images by using
-    the image_pipeline to generate RGB previews suitable for AI analysis.
-    """
-    engine_name = (engine or get_best_shot_engine() or "local").lower()
-    logger.info(f"Creating AI strategy with engine: {engine_name}")
-    if engine_name == BestShotEngine.LLM.value:
-        config = llm_config or LLMConfig(**get_openai_config())
-        logger.info(f"Using LLM strategy with endpoint: {config.base_url}")
-        return LLMBestShotStrategy(
-            models_root,
-            image_pipeline,
-            config,
-            status_callback=status_callback,
-        )
-    logger.info("Using local model strategy")
-    return LocalBestShotStrategy(
-        models_root,
-        image_pipeline,
-        llm_config,
-        status_callback=status_callback,
-    )
+    """Create the LLM AI strategy for image analysis."""
+    config = llm_config or LLMConfig(**get_openai_config())
+    logger.info(f"Creating AI strategy with LLM endpoint: {config.base_url}")
+    return LLMBestShotStrategy(image_pipeline, config)
 
 
 __all__ = [
     "BestShotEngine",
-    "LLMBestShotStrategy",
-    "LocalBestShotStrategy",
-    "LocalAnalysisProfile",
-    "create_best_shot_strategy",
     "LLMConfig",
-    "select_local_analysis_profile",
+    "LLMBestShotStrategy",
+    "create_best_shot_strategy",
 ]

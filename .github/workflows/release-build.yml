@@ -146,6 +146,7 @@ jobs:
           pyinstaller -w --onefile -n PhotoSort `
             --icon assets/app_icon.ico `
             --paths src `
+            --paths . `
             --hidden-import core.build_info `
             --hidden-import mediapipe `
             --add-data "src/ui/dark_theme.qss;." `
@@ -216,6 +217,7 @@ jobs:
           pyinstaller -w --name PhotoSort \
             --icon assets/photosort.icns \
             --paths src \
+            --paths . \
             --hidden-import core.build_info \
             --hidden-import mediapipe \
             --add-data src/ui/dark_theme.qss:. \

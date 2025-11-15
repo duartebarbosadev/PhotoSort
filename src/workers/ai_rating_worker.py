@@ -1,9 +1,9 @@
 import logging
-import math
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Optional, Sequence, TYPE_CHECKING
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from typing import Dict, Optional, Sequence, TYPE_CHECKING, List
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -12,31 +12,13 @@ if TYPE_CHECKING:
 
 from core.ai.best_shot_pipeline import (
     BaseBestShotStrategy,
-    BestShotEngine,
     LLMConfig,
     create_best_shot_strategy,
 )
-from core.app_settings import calculate_max_workers, get_best_shot_engine
-from core.utils.time_utils import format_duration
+from core.app_settings import calculate_max_workers
+from core.utils.time_utils import format_eta
 
 logger = logging.getLogger(__name__)
-
-
-def _format_eta_suffix(processed: int, total: int, start_time: Optional[float]) -> str:
-    if start_time is None or processed <= 0 or total <= 0 or processed > total:
-        return ""
-    remaining = total - processed
-    if remaining <= 0:
-        return "ETA 0s"
-    elapsed = time.perf_counter() - start_time
-    if elapsed <= 0:
-        return ""
-    per_item = elapsed / processed
-    eta_seconds = per_item * remaining
-    if not math.isfinite(eta_seconds) or eta_seconds < 0:
-        return ""
-    eta_text = format_duration(eta_seconds)
-    return f"ETA {eta_text}" if eta_text else ""
 
 
 class AiRatingWorker(QObject):
@@ -51,10 +33,8 @@ class AiRatingWorker(QObject):
     def __init__(
         self,
         image_paths: Sequence[str],
-        models_root: Optional[str] = None,
         image_pipeline: Optional["ImagePipeline"] = None,
         max_workers: Optional[int] = None,
-        engine: Optional[str] = None,
         llm_config: Optional[LLMConfig] = None,
         strategy: Optional[BaseBestShotStrategy] = None,
         parent: Optional[QObject] = None,
@@ -63,10 +43,8 @@ class AiRatingWorker(QObject):
     ) -> None:
         super().__init__(parent)
         self.image_paths = list(image_paths)
-        self.models_root = models_root
         self._image_pipeline = image_pipeline
         self._strategy = strategy
-        self._engine = (engine or get_best_shot_engine() or "local").lower()
         self._llm_config = llm_config
         self._max_workers = max_workers or calculate_max_workers(
             min_workers=2, max_workers=6
@@ -74,25 +52,42 @@ class AiRatingWorker(QObject):
         self._should_stop = False
         self._max_retries = max(1, int(max_retries))
         self._retry_delay = max(0.0, float(retry_delay_seconds))
+        self._executor_lock = threading.Lock()
+        self._executor: Optional[ThreadPoolExecutor] = None
+        self._futures: Dict[Future, str] = {}
 
     def stop(self) -> None:
         self._should_stop = True
+        self._shutdown_executor(cancel=True)
+        if self._strategy is not None:
+            try:
+                self._strategy.request_cancel()
+            except Exception:
+                logger.debug("Failed to cancel AI rating strategy", exc_info=True)
 
-    def _emit_status_message(self, message: str) -> None:
-        logger.info("AI rating status: %s", message)
-        try:
-            self.progress_update.emit(-1, message)
-        except Exception:
-            logger.debug("Failed to emit AI rating status", exc_info=True)
+    def _shutdown_executor(self, *, cancel: bool) -> None:
+        executor: Optional[ThreadPoolExecutor] = None
+        futures: List[Future] = []
+        with self._executor_lock:
+            executor = self._executor
+            if executor is not None:
+                futures = list(self._futures.keys())
+            self._executor = None
+            self._futures = {}
+        if executor is None:
+            return
+        if cancel:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+        else:
+            executor.shutdown(wait=True, cancel_futures=False)
 
     def _ensure_strategy(self) -> None:
         if self._strategy is None:
             self._strategy = create_best_shot_strategy(
-                self._engine,
-                models_root=self.models_root,
                 image_pipeline=self._image_pipeline,
                 llm_config=self._llm_config,
-                status_callback=self._emit_status_message,
             )
             if self._strategy.max_workers:
                 self._max_workers = min(
@@ -132,25 +127,6 @@ class AiRatingWorker(QObject):
 
     def run(self) -> None:
         try:
-            from core.ai.model_checker import check_best_shot_models
-        except Exception as exc:  # pragma: no cover
-            logger.error("Failed to import model checker: %s", exc, exc_info=True)
-            self.error.emit(str(exc))
-            self.finished.emit()
-            return
-
-        try:
-            if self._engine == BestShotEngine.LOCAL.value:
-                missing_models = check_best_shot_models(self.models_root)
-                if missing_models:
-                    logger.warning(
-                        "AI rating aborted: %d model(s) missing", len(missing_models)
-                    )
-                    self.error.emit(
-                        "Required best-shot models missing; install models or switch engine."
-                    )
-                    self.finished.emit()
-                    return
             self._ensure_strategy()
         except Exception as exc:
             logger.error(
@@ -166,27 +142,33 @@ class AiRatingWorker(QObject):
                 self.completed.emit({})
                 return
 
-            logger.info(
-                f"Starting AI rating of {total} images using {self._engine} engine"
-            )
+            logger.info("Starting AI rating of %d images using LLM engine", total)
             results: Dict[str, Dict[str, object]] = {}
             failures: list[tuple[str, str]] = []
 
-            with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-                futures = {
-                    executor.submit(self._rate_single, path): path
-                    for path in self.image_paths
-                }
+            executor = ThreadPoolExecutor(max_workers=self._max_workers)
+            futures: Dict[Future, str] = {}
+            with self._executor_lock:
+                self._executor = executor
+                self._futures = {}
+            start_time = time.perf_counter()
+            try:
+                for path in self.image_paths:
+                    future = executor.submit(self._rate_single, path)
+                    with self._executor_lock:
+                        futures[future] = path
+                        self._futures[future] = path
 
                 processed = 0
-                start_time = time.perf_counter()
                 for future in as_completed(futures):
                     if self._should_stop:
                         logger.info(
                             "AI rating stop requested; skipping remaining results."
                         )
                         break
-                    path = futures[future]
+                    path = futures.get(future)
+                    if path is None:
+                        continue
                     try:
                         rating_data = future.result()
                     except Exception as exc:
@@ -197,29 +179,29 @@ class AiRatingWorker(QObject):
                         failures.append((path, str(exc)))
                         self.warning.emit(message)
                         self._should_stop = True
-                        # Cancel pending tasks
-                        for pending_future, pending_path in futures.items():
-                            if pending_future is future:
-                                continue
-                            if not pending_future.done():
-                                pending_future.cancel()
                         processed += 1
                         percent = int((processed / total) * 100)
+                        eta_text = self._estimate_eta_text(start_time, processed, total)
                         self.progress_update.emit(
                             percent,
-                            f"Aborted at {processed}/{total} after failure",
+                            f"Aborted at {processed}/{total} after failure • ETA {eta_text}",
                         )
+                        with self._executor_lock:
+                            self._futures.pop(future, None)
                         break
 
                     if rating_data:
                         results[path] = rating_data
                     processed += 1
                     percent = int((processed / total) * 100)
-                    eta_suffix = _format_eta_suffix(processed, total, start_time)
-                    message = f"Rated {processed}/{total}"
-                    if eta_suffix:
-                        message = f"{message} - {eta_suffix}"
-                    self.progress_update.emit(percent, message)
+                    eta_text = self._estimate_eta_text(start_time, processed, total)
+                    self.progress_update.emit(
+                        percent, f"Rated {processed}/{total} • ETA {eta_text}"
+                    )
+                    with self._executor_lock:
+                        self._futures.pop(future, None)
+            finally:
+                self._shutdown_executor(cancel=self._should_stop)
 
             if not self._should_stop:
                 logger.info(
@@ -242,3 +224,12 @@ class AiRatingWorker(QObject):
                 except Exception:  # pragma: no cover
                     logger.warning("AI rating strategy shutdown failed", exc_info=True)
             self.finished.emit()
+
+    def _estimate_eta_text(self, start_time: float, processed: int, total: int) -> str:
+        if processed <= 0 or total <= 0:
+            return format_eta(0)
+        remaining = max(0, total - processed)
+        elapsed = max(0.0, time.perf_counter() - start_time)
+        avg = elapsed / processed
+        eta_seconds = avg * remaining
+        return format_eta(eta_seconds)

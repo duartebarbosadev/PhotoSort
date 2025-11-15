@@ -122,7 +122,6 @@ class WorkerManager(QObject):
     best_shot_progress = pyqtSignal(int, str)
     best_shot_complete = pyqtSignal(object)
     best_shot_error = pyqtSignal(str)
-    best_shot_models_missing = pyqtSignal(object)  # List[MissingModelInfo]
 
     # AI Rating Signals
     ai_rating_progress = pyqtSignal(int, str)
@@ -908,7 +907,6 @@ class WorkerManager(QObject):
     def start_best_shot_analysis(
         self,
         cluster_map: Dict[int, List[str]],
-        models_root: Optional[str] = None,
         *,
         folder_path: Optional[str] = None,
         analysis_cache=None,
@@ -922,7 +920,6 @@ class WorkerManager(QObject):
         self.best_shot_thread = QThread()
         self.best_shot_worker = BestShotWorker(
             cluster_map=cluster_map,
-            models_root=models_root,
             image_pipeline=self.image_pipeline,
             folder_path=folder_path,
             analysis_cache=analysis_cache,
@@ -933,7 +930,6 @@ class WorkerManager(QObject):
         self.best_shot_worker.progress_update.connect(self.best_shot_progress.emit)
         self.best_shot_worker.completed.connect(self.best_shot_complete.emit)
         self.best_shot_worker.error.connect(self.best_shot_error.emit)
-        self.best_shot_worker.models_missing.connect(self.best_shot_models_missing.emit)
         self.best_shot_worker.finished.connect(self.best_shot_thread.quit)
         self.best_shot_worker.finished.connect(self.best_shot_worker.deleteLater)
         self.best_shot_thread.finished.connect(self._cleanup_best_shot_worker)
@@ -954,8 +950,6 @@ class WorkerManager(QObject):
     def start_ai_rating(
         self,
         image_paths: List[str],
-        models_root: Optional[str] = None,
-        engine: Optional[str] = None,
     ) -> None:
         """Start AI-driven rating for the provided images."""
         self.stop_ai_rating()
@@ -966,9 +960,7 @@ class WorkerManager(QObject):
         self.ai_rating_thread = QThread()
         self.ai_rating_worker = AiRatingWorker(
             image_paths=image_paths,
-            models_root=models_root,
             image_pipeline=self.image_pipeline,
-            engine=engine,
         )
         self.ai_rating_worker.moveToThread(self.ai_rating_thread)
 

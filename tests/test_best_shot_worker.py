@@ -38,7 +38,7 @@ class DummyPipeline:
 
 class DummyStrategy(BaseBestShotStrategy):
     def __init__(self, pipeline):
-        super().__init__(models_root=None, image_pipeline=pipeline)
+        super().__init__(image_pipeline=pipeline)
         self.pipeline = pipeline
         self.rank_calls: list[tuple[str, ...]] = []
 
@@ -65,18 +65,13 @@ class DummyStrategy(BaseBestShotStrategy):
         return None
 
 
-def test_best_shot_worker_uses_preview_pipeline(monkeypatch):
+def test_best_shot_worker_uses_preview_pipeline():
     pipeline = DummyPipeline()
     strategy = DummyStrategy(pipeline)
     worker = BestShotWorker(
         {0: ["/tmp/sel1.jpg", "/tmp/sel2.jpg"]},
         image_pipeline=pipeline,
         strategy=strategy,
-    )
-
-    monkeypatch.setattr(
-        "core.ai.model_checker.check_best_shot_models",
-        lambda models_root: [],
     )
 
     completed_payload = []
@@ -93,7 +88,7 @@ def test_best_shot_worker_uses_preview_pipeline(monkeypatch):
     ]
 
 
-def test_best_shot_worker_batches_large_clusters(monkeypatch):
+def test_best_shot_worker_batches_large_clusters():
     pipeline = DummyPipeline()
 
     class RecordingStrategy(DummyStrategy):
@@ -106,11 +101,6 @@ def test_best_shot_worker_batches_large_clusters(monkeypatch):
         image_pipeline=pipeline,
         strategy=strategy,
         best_shot_batch_size=3,
-    )
-
-    monkeypatch.setattr(
-        "core.ai.model_checker.check_best_shot_models",
-        lambda models_root: [],
     )
 
     completed_payload = []
