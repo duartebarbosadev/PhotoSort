@@ -70,6 +70,14 @@ jobs:
           pytest -q --cov=src --cov-report=xml:coverage.xml --cov-report=term
           # Single coverage dataset only; no secondary copying.
 
+      - name: Smoke launch (headless)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PHOTOSORT_ENABLE_FILE_LOGGING: 'false'
+        run: |
+          # Launch the app briefly in headless mode to catch startup regressions
+          timeout 20s python src/main.py --smoke-test --smoke-delay-ms 1500
+
       - name: Upload coverage XML
         uses: actions/upload-artifact@v4
         if: success() || failure()
