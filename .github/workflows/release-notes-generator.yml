@@ -56,6 +56,11 @@ jobs:
             TAG_NAME="$(git tag --sort=-creatordate | head -n 1 || true)"
           fi
 
+          # Fallback for workflow_call or any other trigger if tag was not provided/resolved
+          if [[ -z "${TAG_NAME}" ]]; then
+            TAG_NAME="$(git tag --sort=-creatordate | head -n 1 || true)"
+          fi
+
           if [[ -z "${TAG_NAME}" ]]; then
             echo "No tag found/provided. Exiting."
             exit 1
