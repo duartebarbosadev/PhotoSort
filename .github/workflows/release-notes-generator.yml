@@ -7,6 +7,7 @@ on:
   workflow_call:
     inputs:
       tag:
+        description: 'Release tag to generate notes for. If not provided, uses the release event tag or the most recent tag.'
         required: false
         type: string
 
@@ -52,11 +53,7 @@ jobs:
             TAG_NAME="${{ github.event.release.tag_name }}"
           fi
 
-          if [[ -z "${TAG_NAME}" && "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            TAG_NAME="$(git tag --sort=-creatordate | head -n 1 || true)"
-          fi
-
-          # Fallback for workflow_call or any other trigger if tag was not provided/resolved
+          # Fallback to most recent tag for workflow_call, workflow_dispatch, or any other trigger
           if [[ -z "${TAG_NAME}" ]]; then
             TAG_NAME="$(git tag --sort=-creatordate | head -n 1 || true)"
           fi
