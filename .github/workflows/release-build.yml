@@ -379,3 +379,11 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-notes:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: release
+    uses: ./.github/workflows/release-notes-generator.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit
