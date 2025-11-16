@@ -73,6 +73,11 @@ from ui.menu_manager import MenuManager
 from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
 from ui.helpers.index_lookup_utils import find_proxy_index_for_path
+from ui.helpers.navigation_utils import (
+    find_next_multi_image_cluster_head,
+    find_next_rating_match,
+    find_next_in_same_multi_cluster,
+)
 
 from ui.controllers.deletion_mark_controller import DeletionMarkController
 from ui.controllers.file_deletion_controller import FileDeletionController
@@ -222,6 +227,8 @@ class MainWindow(QMainWindow):
         self.thumbnail_delegate = None
         self.show_folders_mode = False
         self.group_by_similarity_mode = False
+        self.navigation_skip_singleton_clusters = False
+        self.navigation_rating_target: Optional[int] = None
         self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
         self.rotation_suggestions = {}
         # Controllers (always created – treat as invariants for simpler code paths)
@@ -263,6 +270,7 @@ class MainWindow(QMainWindow):
 
         self.menu_manager = MenuManager(self)
         self.menu_manager.create_menus(self.menuBar())
+        self.refresh_navigation_shortcut_actions()
         self._shortcut_handlers: dict[tuple[int, int], Callable[[], None]] = {}
         self._init_shortcut_handlers()
         self._create_widgets()
@@ -505,6 +513,7 @@ class MainWindow(QMainWindow):
                 self.menu_manager.analyze_similarity_action.setEnabled(
                     bool(self.app_state.image_files_data)
                 )
+            self.refresh_navigation_shortcut_actions()
             self._rebuild_model_view()
             self._update_cache_dialog_labels()
 
@@ -981,6 +990,7 @@ class MainWindow(QMainWindow):
         )
         self.cluster_filter_combo.setEnabled(bool(cluster_ids))
         self.menu_manager.update_cluster_filter_menu(cluster_ids)
+        self.refresh_navigation_shortcut_actions()
 
     def get_selected_file_paths(self) -> List[str]:  # For MetadataController
         # Prefer SelectionController; fall back only if something unexpected occurs
@@ -1661,6 +1671,179 @@ class MainWindow(QMainWindow):
 
         return True
 
+    def _get_current_visible_path(self) -> Optional[str]:
+        active_view = self._get_active_file_view()
+        if not active_view:
+            return None
+        current_index = active_view.currentIndex()
+        if not current_index.isValid() or not self._is_valid_image_item(current_index):
+            return None
+        source_idx = self.proxy_model.mapToSource(current_index)
+        item = self.file_system_model.itemFromIndex(source_idx)
+        if not item:
+            return None
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict):
+            return data.get("path")
+        return None
+
+    def _lookup_path_dict(
+        self, mapping: Dict[str, Any], path: Optional[str], default: Any = None
+    ) -> Any:
+        if not mapping or not path:
+            return default
+        if path in mapping:
+            return mapping[path]
+        normalized = os.path.normpath(path)
+        if normalized in mapping:
+            return mapping[normalized]
+        return default
+
+    def _get_cached_rating(self, path: str) -> Optional[int]:
+        try:
+            value = self._lookup_path_dict(self.app_state.rating_cache, path, 0)
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    def _get_cluster_id_for_path(self, path: str) -> Optional[int]:
+        value = self._lookup_path_dict(self.app_state.cluster_results, path, None)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        return value
+
+    def _select_path_for_navigation(
+        self, path: Optional[str], direction: str, skip_deleted: bool
+    ) -> bool:
+        if not path:
+            return False
+        proxy_idx = self._find_proxy_index_for_path(path)
+        if not proxy_idx.isValid():
+            return False
+        return bool(
+            self.validate_and_select_image_candidate(proxy_idx, direction, skip_deleted)
+        )
+
+    def _apply_navigation_preferences(self, direction: str, skip_deleted: bool) -> bool:
+        if not skip_deleted:
+            return False
+        rating_target = self.navigation_rating_target
+        cluster_mode_active = (
+            self.navigation_skip_singleton_clusters
+            and self.group_by_similarity_mode
+            and bool(self.app_state.cluster_results)
+        )
+        if rating_target is None and not cluster_mode_active:
+            return False
+        visible_paths = self._get_all_visible_image_paths()
+        if not visible_paths:
+            return False
+        current_path = self._get_current_visible_path()
+        if not current_path:
+            focused = getattr(self.app_state, "focused_image_path", None)
+            if focused in visible_paths:
+                current_path = focused
+        try:
+            current_index = (
+                visible_paths.index(current_path)
+                if current_path in visible_paths
+                else -1
+            )
+        except ValueError:
+            current_index = -1
+
+        if rating_target is not None:
+            target_path = find_next_rating_match(
+                visible_paths,
+                direction,
+                current_index,
+                rating_target,
+                self._get_cached_rating,
+                skip_deleted,
+                self._is_marked_for_deletion,
+            )
+            if target_path:
+                return self._select_path_for_navigation(
+                    target_path, direction, skip_deleted
+                )
+            # Avoid falling back to generic navigation when rating jump is active
+            plural = "s" if rating_target != 1 else ""
+            self.statusBar().showMessage(
+                f"No more images rated {rating_target} star{plural} in this direction.",
+                3000,
+            )
+            return True
+
+        if cluster_mode_active:
+            # First try to move within the current multi-image cluster
+            within_cluster = find_next_in_same_multi_cluster(
+                visible_paths,
+                direction,
+                current_index,
+                self._get_cluster_id_for_path,
+                skip_deleted,
+                self._is_marked_for_deletion,
+            )
+            if within_cluster:
+                return self._select_path_for_navigation(
+                    within_cluster, direction, skip_deleted
+                )
+
+            # Otherwise jump to the next cluster head that has multiple images
+            target_path = find_next_multi_image_cluster_head(
+                visible_paths,
+                direction,
+                current_index,
+                self._get_cluster_id_for_path,
+                skip_deleted,
+                self._is_marked_for_deletion,
+            )
+            if target_path:
+                return self._select_path_for_navigation(
+                    target_path, direction, skip_deleted
+                )
+        return False
+
+    def set_navigation_skip_singleton_clusters(self, enabled: bool) -> None:
+        if self.navigation_skip_singleton_clusters == enabled:
+            return
+        self.navigation_skip_singleton_clusters = enabled
+        logger.info("Navigation: skip-singleton-clusters set to %s", enabled)
+        message = (
+            "Up/Down will skip single-image similarity clusters."
+            if enabled
+            else "Up/Down will stop on every visible image."
+        )
+        self.statusBar().showMessage(message, 4000)
+
+    def set_navigation_rating_target(self, rating: Optional[int]) -> None:
+        if self.navigation_rating_target == rating:
+            return
+        self.navigation_rating_target = rating
+        logger.info("Navigation: rating jump target set to %s", rating)
+        if hasattr(self.menu_manager, "sync_rating_navigation_selection"):
+            self.menu_manager.sync_rating_navigation_selection(rating)
+        if rating is None:
+            self.statusBar().showMessage("Rating-based navigation disabled.", 4000)
+        else:
+            plural = "s" if rating != 1 else ""
+            self.statusBar().showMessage(
+                f"Up/Down now stop only on images rated {rating} star{plural}.",
+                4000,
+            )
+
+    def refresh_navigation_shortcut_actions(self) -> None:
+        menu_manager = getattr(self, "menu_manager", None)
+        if not menu_manager:
+            return
+        can_skip = bool(
+            self.group_by_similarity_mode and self.app_state.cluster_results
+        )
+        menu_manager.set_skip_singleton_action_available(can_skip)
+
     def _navigate_left_in_group(self, skip_deleted: bool = True):
         self.navigation_controller.navigate_group("left", skip_deleted)
 
@@ -1668,9 +1851,13 @@ class MainWindow(QMainWindow):
         self.navigation_controller.navigate_group("right", skip_deleted)
 
     def _navigate_up_sequential(self, skip_deleted: bool = True):
+        if self._apply_navigation_preferences("up", skip_deleted):
+            return
         self.navigation_controller.navigate_linear("up", skip_deleted)
 
     def _navigate_down_sequential(self, skip_deleted: bool = True):
+        if self._apply_navigation_preferences("down", skip_deleted):
+            return
         self.navigation_controller.navigate_linear("down", skip_deleted)
 
     # HotkeyController expects context methods without underscores (now accept skip_deleted)
@@ -2523,6 +2710,8 @@ class MainWindow(QMainWindow):
             self.left_panel.set_view_mode_date()
         else:
             self._rebuild_model_view()
+
+        self.refresh_navigation_shortcut_actions()
 
     def _populate_model_by_date(
         self, parent_item: QStandardItem, image_data_list: List[Dict[str, any]]

@@ -154,13 +154,6 @@ Logs will be saved to `~/.photosort_logs/photosort_app.log`.
 
 * **Enhanced Search Capabilities**:
   * Search by EXIF metadata (camera model, settings, date ranges)
-  * Search by color labels and custom tags
-  * Saved search presets
-* **Sort/Order by Rating**: Implement functionality to sort or reorder images directly based on their assigned star ratings.
-* **AI-Driven Exposure Analysis**: Introduce a feature to detect and flag images with potentially good or problematic exposure (e.g., under/overexposed).
-* **Automated Best Shot Selection in Clusters**:
-  * Within similarity clusters, automatically suggest or select the "best" image(s).
-  * Criteria could include: lowest blurriness score, optimal exposure, AI composition analysis, no one with eyes close etc.
 * **Advanced AI Object/Scene Detections & Grouping**:
   * **Car Model Recognition**: Identify and allow grouping by specific car models in photos.
   * **Face Recognition/Clustering**: Detect faces and group photos by the people present.

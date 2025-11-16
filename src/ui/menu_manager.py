@@ -1,7 +1,7 @@
 import logging
 import os
 import subprocess
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from PyQt6.QtCore import QPoint, Qt, QSignalBlocker
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
@@ -45,6 +45,10 @@ class MenuManager:
         self.detect_blur_action: QAction
         self.auto_rotate_action: QAction
         self.toggle_metadata_sidebar_action: QAction
+        self.skip_singleton_nav_action: QAction
+        self.rating_navigation_menu: QMenu
+        self.rating_navigation_group: QActionGroup | None = None
+        self.rating_navigation_actions: dict[Optional[int], QAction] = {}
 
         # New: View Mode Shortcut Actions
         self.view_list_action: QAction
@@ -273,8 +277,6 @@ class MenuManager:
         self.group_by_similarity_action.setShortcut(QKeySequence("S"))
         view_menu.addAction(self.group_by_similarity_action)
 
-        view_menu.addSeparator()
-
         self.toggle_thumbnails_action = QAction("Show Thumbnails", main_win)
         self.toggle_thumbnails_action.setCheckable(True)
         self.toggle_thumbnails_action.setChecked(True)
@@ -396,6 +398,45 @@ class MenuManager:
         self.cluster_filter_actions.clear()
         self.update_cluster_filter_menu([])
 
+        filter_menu.addSeparator()
+
+        # Navigation options that act like filters on movement
+        self.skip_singleton_nav_action = QAction(
+            "Skip Single-Image Clusters (Up/Down)", main_win
+        )
+        self.skip_singleton_nav_action.setCheckable(True)
+        self.skip_singleton_nav_action.setChecked(False)
+        self.skip_singleton_nav_action.setEnabled(False)
+        self.skip_singleton_nav_action.setToolTip(
+            "Enable 'Group by Similarity' to activate this navigation mode."
+        )
+        self.skip_singleton_nav_action.toggled.connect(
+            main_win.set_navigation_skip_singleton_clusters
+        )
+        filter_menu.addAction(self.skip_singleton_nav_action)
+
+        rating_jump_menu = filter_menu.addMenu("Jump to Rating (Up/Down)")
+        self.rating_navigation_menu = rating_jump_menu
+        self.rating_navigation_group = QActionGroup(main_win)
+        self.rating_navigation_group.setExclusive(True)
+        self.rating_navigation_actions.clear()
+        rating_jump_options: list[tuple[str, Optional[int]]] = [("Disabled", None)]
+        rating_jump_options.extend(
+            [(f"{i} Star{'s' if i != 1 else ''}", i) for i in range(0, 6)]
+        )
+        for label, value in rating_jump_options:
+            action = rating_jump_menu.addAction(label)
+            action.setCheckable(True)
+            self.rating_navigation_group.addAction(action)
+            action.triggered.connect(
+                lambda checked, rating=value: (
+                    main_win.set_navigation_rating_target(rating) if checked else None
+                )
+            )
+            self.rating_navigation_actions[value] = action
+            if value is None:
+                action.setChecked(True)
+
         # Cluster sort submenu
         cluster_sort_menu = filter_menu.addMenu("Sort Clusters By")
         self.cluster_sort_menu = cluster_sort_menu
@@ -412,9 +453,33 @@ class MenuManager:
             action.triggered.connect(
                 lambda checked, value=option: self._handle_cluster_sort_selection(value)
             )
-            self.cluster_sort_actions[option] = action
+        self.cluster_sort_actions[option] = action
         self.sync_cluster_sort_selection(main_win.cluster_sort_combo.currentText())
         self.set_cluster_sort_menu_enabled(main_win.cluster_sort_combo.isEnabled())
+
+    def set_skip_singleton_action_available(self, available: bool) -> None:
+        action = getattr(self, "skip_singleton_nav_action", None)
+        if not action:
+            return
+        action.setEnabled(available)
+        if available:
+            action.setToolTip(
+                "Skip single-image similarity clusters when navigating with Up/Down."
+            )
+        else:
+            action.setToolTip(
+                "Enable 'Group by Similarity' to activate this navigation mode."
+            )
+
+    def sync_rating_navigation_selection(self, rating: Optional[int]) -> None:
+        if not self.rating_navigation_actions:
+            return
+        target = rating if rating in self.rating_navigation_actions else None
+        action = self.rating_navigation_actions.get(target)
+        if not action:
+            return
+        with QSignalBlocker(action):
+            action.setChecked(True)
 
     def _iterate_combobox_options(self, combo_box) -> list[str]:
         return [combo_box.itemText(i) for i in range(combo_box.count())]
