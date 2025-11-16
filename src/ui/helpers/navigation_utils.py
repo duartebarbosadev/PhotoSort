@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import Optional, Sequence, Iterable, Set
+from collections import Counter
+from typing import Callable, Optional, Sequence, Iterable, Set
 
 # Navigation helpers extracted from MainWindow. These are UI-agnostic and operate on
 # ordered path lists plus simple state flags. MainWindow is responsible for mapping
@@ -99,3 +100,138 @@ def navigate_linear(
         return None
     else:
         return current_path
+
+
+def _iter_indices(direction: str, current_index: int, total: int):
+    if total <= 0:
+        return tuple()
+    if direction == "down":
+        start = current_index + 1 if current_index >= 0 else 0
+        return range(max(0, start), total)
+    if direction == "up":
+        start = current_index - 1 if current_index >= 0 else total - 1
+        return range(min(start, total - 1), -1, -1)
+    return tuple()
+
+
+def find_next_rating_match(
+    ordered_paths: Sequence[str],
+    direction: str,
+    current_index: int,
+    target_rating: Optional[int],
+    rating_lookup: Callable[[str], Optional[int]],
+    skip_deleted: bool,
+    is_deleted: Optional[Callable[[str], bool]] = None,
+) -> Optional[str]:
+    if target_rating is None or direction not in {"up", "down"}:
+        return None
+    total = len(ordered_paths)
+    if total == 0:
+        return None
+
+    for idx in _iter_indices(direction, current_index, total):
+        if idx < 0 or idx >= total:
+            continue
+        path = ordered_paths[idx]
+        if skip_deleted and is_deleted and is_deleted(path):
+            continue
+        rating = rating_lookup(path) if rating_lookup else None
+        if rating == target_rating:
+            return path
+    return None
+
+
+def find_next_multi_image_cluster_head(
+    ordered_paths: Sequence[str],
+    direction: str,
+    current_index: int,
+    cluster_lookup: Callable[[str], Optional[int]],
+    skip_deleted: bool,
+    is_deleted: Optional[Callable[[str], bool]] = None,
+) -> Optional[str]:
+    if direction not in {"up", "down"}:
+        return None
+    total = len(ordered_paths)
+    if total == 0:
+        return None
+    cluster_values = [
+        cluster_lookup(path) if cluster_lookup else None for path in ordered_paths
+    ]
+    cluster_counts = Counter(cid for cid in cluster_values if cid is not None)
+    multi_clusters = {cid for cid, count in cluster_counts.items() if count > 1}
+    if not multi_clusters:
+        return None
+
+    current_cluster = None
+    if 0 <= current_index < total:
+        current_cluster = cluster_values[current_index]
+
+    def is_cluster_head(index: int) -> bool:
+        cid = cluster_values[index]
+        if cid not in multi_clusters:
+            return False
+        prev_index = index - 1
+        while prev_index >= 0:
+            prev_path = ordered_paths[prev_index]
+            prev_cid = cluster_values[prev_index]
+            if skip_deleted and is_deleted and is_deleted(prev_path):
+                prev_index -= 1
+                continue
+            return prev_cid != cid
+        return True
+
+    for idx in _iter_indices(direction, current_index, total):
+        if idx < 0 or idx >= total:
+            continue
+        path = ordered_paths[idx]
+        if skip_deleted and is_deleted and is_deleted(path):
+            continue
+        cid = cluster_values[idx]
+        if current_cluster is not None and cid == current_cluster:
+            continue
+        if is_cluster_head(idx):
+            return path
+    return None
+
+
+def find_next_in_same_multi_cluster(
+    ordered_paths: Sequence[str],
+    direction: str,
+    current_index: int,
+    cluster_lookup: Callable[[str], Optional[int]],
+    skip_deleted: bool,
+    is_deleted: Optional[Callable[[str], bool]] = None,
+) -> Optional[str]:
+    """Move within the current multi-image cluster if possible.
+
+    Returns the next path inside the same cluster following display order,
+    or None if the current cluster is singleton, unknown, or you are at its edge.
+    """
+    if direction not in {"up", "down"}:
+        return None
+    if current_index < 0 or current_index >= len(ordered_paths):
+        return None
+
+    current_cluster = cluster_lookup(ordered_paths[current_index])
+    if current_cluster is None:
+        return None
+
+    # Pre-compute cluster membership for quick lookups
+    cluster_values = [
+        cluster_lookup(p) if cluster_lookup else None for p in ordered_paths
+    ]
+    cluster_counts = Counter(cid for cid in cluster_values if cid is not None)
+    if cluster_counts.get(current_cluster, 0) <= 1:
+        return None
+
+    step = 1 if direction == "down" else -1
+    idx = current_index + step
+    while 0 <= idx < len(ordered_paths):
+        if cluster_values[idx] != current_cluster:
+            break
+        path = ordered_paths[idx]
+        if skip_deleted and is_deleted and is_deleted(path):
+            idx += step
+            continue
+        return path
+    return None

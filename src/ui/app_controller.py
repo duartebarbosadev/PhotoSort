@@ -330,6 +330,7 @@ class AppController(QObject):
         self.main_window.cluster_sort_combo.setCurrentIndex(0)
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(False)
         self.main_window.menu_manager.group_by_similarity_action.setChecked(False)
+        self.main_window.refresh_navigation_shortcut_actions()
 
         self.main_window.file_system_model.clear()
         self.main_window.file_system_model.setColumnCount(1)
@@ -1047,6 +1048,7 @@ class AppController(QObject):
             self.main_window.cluster_sort_combo.setEnabled(True)
             self.main_window.menu_manager.set_cluster_sort_menu_enabled(True)
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
+        self.main_window.refresh_navigation_shortcut_actions()
         if self.main_window.group_by_similarity_mode:
             self.main_window._rebuild_model_view()
         self.main_window.hide_loading_overlay()
