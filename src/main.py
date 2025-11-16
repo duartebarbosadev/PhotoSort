@@ -9,6 +9,9 @@ if SRC_DIR and SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# Ensure the project root is on sys.path so top-level packages (e.g., workers/) are importable
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from core.runtime_paths import (  # noqa: E402
     is_frozen_runtime,
