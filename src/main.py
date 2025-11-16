@@ -9,6 +9,9 @@ if SRC_DIR and SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# Ensure the project root is on sys.path so top-level packages (e.g., workers/) are importable
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from core.runtime_paths import (  # noqa: E402
     is_frozen_runtime,
@@ -288,6 +291,17 @@ def main():
     parser.add_argument(
         "--clear-cache", action="store_true", help="Clear all caches before starting"
     )
+    parser.add_argument(
+        "--smoke-test",
+        action="store_true",
+        help="Start the UI and auto-exit after a short delay (for CI sanity checks)",
+    )
+    parser.add_argument(
+        "--smoke-delay-ms",
+        type=int,
+        default=2000,
+        help="Delay before auto-exit when --smoke-test is enabled (milliseconds)",
+    )
     args = parser.parse_args()
 
     # --- Aggressive Logging Setup ---
@@ -409,6 +423,13 @@ def main():
         0,
         apply_stylesheet,
     )
+
+    if args.smoke_test:
+        delay_ms = max(200, args.smoke_delay_ms)
+        logging.info(
+            f"Smoke test mode enabled; will exit automatically after {delay_ms} ms"
+        )
+        QTimer.singleShot(delay_ms, app.quit)
 
     logging.info(
         f"Application setup complete in {time.perf_counter() - main_start_time:.4f}s. Entering event loop."

@@ -50,7 +50,7 @@ https://github.com/duartebarbosadev/photosort/releases
 
    > **Note**: These dependencies are only required on macOS. Windows and Linux users can skip this step.
 
-> **Python version:** PhotoSort currently targets Python 3.12 because several dependencies (e.g., MediaPipe) do not yet ship wheels for newer interpreters.
+> **Python version:** PhotoSort is tested on Python 3.12. Newer interpreters may work, but 3.12 is the supported target for now.
 
 3. **Create a Python 3.12 virtual environment (recommended):**
 
