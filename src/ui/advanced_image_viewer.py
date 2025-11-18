@@ -100,7 +100,7 @@ class ZoomableImageView(QGraphicsView):
     def event(self, event: Any) -> bool:
         """Handle native gestures (e.g., trackpad pinch-to-zoom)."""
         if isinstance(event, QNativeGestureEvent):
-            if event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
+            if not self._empty and event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
                 # Native gesture 'value' is a delta scale; 1.0 + delta gives a multiplier.
                 scale_delta = 1.0 + event.value()
                 if scale_delta > 0:  # Guard against invalid/negative deltas
