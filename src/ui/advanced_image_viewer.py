@@ -11,6 +11,7 @@ from PyQt6.QtGui import (
     QColor,
     QAction,
     QIcon,
+    QNativeGestureEvent,
 )
 from PyQt6.QtWidgets import (
     QWidget,
@@ -95,6 +96,23 @@ class ZoomableImageView(QGraphicsView):
         self._resize_timer = QTimer()
         self._resize_timer.setSingleShot(True)
         self._resize_timer.timeout.connect(self.fit_in_view)
+
+    def event(self, event: Any) -> bool:
+        """Handle native gestures (e.g., trackpad pinch-to-zoom)."""
+        if isinstance(event, QNativeGestureEvent):
+            if event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
+                # Native gesture 'value' is a delta scale; 1.0 + delta gives a multiplier.
+                scale_delta = 1.0 + event.value()
+                if scale_delta > 0:  # Guard against invalid/negative deltas
+                    # Map the gesture center (global) into scene coordinates for precise anchoring
+                    gesture_pos_viewport = self.viewport().mapFromGlobal(
+                        event.globalPosition().toPoint()
+                    )
+                    center_point = self.mapToScene(gesture_pos_viewport)
+                    self.set_zoom_factor(self._zoom_factor * scale_delta, center_point)
+                event.accept()
+                return True
+        return super().event(event)
 
     def resizeEvent(self, event):
         """Refit image to view on resize, with debouncing."""
