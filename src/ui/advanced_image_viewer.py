@@ -1,6 +1,16 @@
 import logging
 from typing import Optional, List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal, QTimer, QPoint
+from PyQt6.QtCore import (
+    Qt,
+    QRectF,
+    QPointF,
+    pyqtSignal,
+    QTimer,
+    QPoint,
+    QUrl,
+    QEvent,
+    QObject,
+)
 from PyQt6.QtGui import (
     QPixmap,
     QWheelEvent,
@@ -26,9 +36,12 @@ from PyQt6.QtWidgets import (
     QSlider,
     QSplitter,
     QButtonGroup,
+    QStackedWidget,
     QMenu,
     QStyle,
 )
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt6.QtMultimediaWidgets import QVideoWidget
 
 logger = logging.getLogger(__name__)
 
@@ -477,8 +490,11 @@ class IndividualViewer(QWidget):
         super().__init__(parent)
         self._file_path = None
         self._is_selected = False
+        self._media_type: Optional[str] = None
+        self._is_seeking = False
 
         self._setup_ui()
+        self._setup_video()
         self._connect_signals()
 
     def get_file_path(self) -> Optional[str]:
@@ -487,6 +503,8 @@ class IndividualViewer(QWidget):
 
     def get_current_pixmap(self) -> Optional[QPixmap]:
         """Expose the currently displayed pixmap for external consumers."""
+        if self._media_type == "video":
+            return None
         return self.image_view.current_pixmap()
 
     def _is_marked_for_deletion(self) -> bool:
@@ -527,8 +545,14 @@ class IndividualViewer(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        self.media_stack = QStackedWidget()
         self.image_view = ZoomableImageView()
-        layout.addWidget(self.image_view, 1)  # Image view takes up all available space
+        self.video_widget = QVideoWidget()
+        self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.video_widget.installEventFilter(self)
+        self.media_stack.addWidget(self.image_view)
+        self.media_stack.addWidget(self.video_widget)
+        layout.addWidget(self.media_stack, 1)
 
         # --- Control Bar ---
         self.control_bar = QFrame()
@@ -541,6 +565,9 @@ class IndividualViewer(QWidget):
         control_layout.setContentsMargins(10, 0, 10, 0)
         control_layout.setSpacing(15)
 
+        self.video_controls = self._create_video_controls()
+        self.video_controls.setVisible(False)
+        control_layout.addWidget(self.video_controls)
         control_layout.addStretch()
 
         # Rating controls
@@ -571,6 +598,29 @@ class IndividualViewer(QWidget):
 
         return widget
 
+    def _create_video_controls(self) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self.video_play_button = QPushButton("▶")
+        self.video_play_button.setToolTip("Play/Pause")
+        self.video_play_button.setObjectName("videoPlayButton")
+        layout.addWidget(self.video_play_button)
+
+        self.video_position_slider = QSlider(Qt.Orientation.Horizontal)
+        self.video_position_slider.setObjectName("videoPositionSlider")
+        self.video_position_slider.setRange(0, 0)
+        self.video_position_slider.setFixedWidth(160)
+        layout.addWidget(self.video_position_slider)
+
+        self.video_time_label = QLabel("0:00 / 0:00")
+        self.video_time_label.setObjectName("videoTimeLabel")
+        layout.addWidget(self.video_time_label)
+
+        return widget
+
     def _connect_signals(self):
         """Connect button signals to handlers."""
         for i, btn in enumerate(self.star_buttons):
@@ -578,6 +628,47 @@ class IndividualViewer(QWidget):
                 lambda checked, rating=i + 1: self._on_rating_button_clicked(rating)
             )
         self.delete_button.clicked.connect(self._on_delete_button_clicked)
+
+    def _setup_video(self):
+        self.video_player = QMediaPlayer(self)
+        self.audio_output = QAudioOutput(self)
+        self.audio_output.setVolume(0.5)
+        self.video_player.setAudioOutput(self.audio_output)
+        self.video_player.setVideoOutput(self.video_widget)
+        self._connect_video_signals()
+
+    def _connect_video_signals(self):
+        self.video_play_button.clicked.connect(self._toggle_video_playback)
+        self.video_position_slider.sliderPressed.connect(
+            self._on_video_slider_pressed
+        )
+        self.video_position_slider.sliderReleased.connect(
+            self._on_video_slider_released
+        )
+        self.video_position_slider.sliderMoved.connect(self._on_video_slider_moved)
+
+        self.video_player.positionChanged.connect(self._on_video_position_changed)
+        self.video_player.durationChanged.connect(self._on_video_duration_changed)
+        self.video_player.playbackStateChanged.connect(
+            self._on_video_playback_state_changed
+        )
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if obj is self.video_widget:
+            if event.type() == QEvent.Type.KeyPress:
+                key_event: QKeyEvent = event  # type: ignore[assignment]
+                if key_event.key() == Qt.Key.Key_Space:
+                    self._toggle_video_playback()
+                    return True
+            elif event.type() == QEvent.Type.MouseButtonDblClick:
+                mouse_event: QMouseEvent = event  # type: ignore[assignment]
+                if mouse_event.button() == Qt.MouseButton.LeftButton:
+                    if mouse_event.position().x() < self.video_widget.width() / 2:
+                        self._seek_relative(-10)
+                    else:
+                        self._seek_relative(10)
+                    return True
+        return super().eventFilter(obj, event)
 
     def _on_rating_button_clicked(self, rating_override=None):
         """Handle rating button clicks and emit signal."""
@@ -613,12 +704,115 @@ class IndividualViewer(QWidget):
         # We'll need to add this signal to the IndividualViewer class
         self.deleteRequested.emit(self._file_path)
 
+    def _toggle_video_playback(self):
+        if self.video_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.video_player.pause()
+        else:
+            self.video_player.play()
+
+    def _on_video_playback_state_changed(self, state):
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            self.video_play_button.setText("⏸")
+        else:
+            self.video_play_button.setText("▶")
+
+    def _on_video_duration_changed(self, duration_ms: int):
+        self.video_position_slider.setRange(0, max(0, duration_ms))
+        self._update_video_time_label(self.video_player.position(), duration_ms)
+
+    def _on_video_position_changed(self, position_ms: int):
+        if self._is_seeking:
+            return
+        self.video_position_slider.setValue(position_ms)
+        self._update_video_time_label(position_ms, self.video_player.duration())
+
+    def _on_video_slider_pressed(self):
+        self._is_seeking = True
+
+    def _on_video_slider_released(self):
+        self.video_player.setPosition(self.video_position_slider.value())
+        self._is_seeking = False
+
+    def _on_video_slider_moved(self, position_ms: int):
+        if self._is_seeking:
+            self._update_video_time_label(position_ms, self.video_player.duration())
+
+    def _format_video_time(self, ms: int) -> str:
+        if ms <= 0:
+            return "0:00"
+        seconds = ms // 1000
+        minutes = seconds // 60
+        seconds = seconds % 60
+        return f"{minutes}:{seconds:02d}"
+
+    def _update_video_time_label(self, position_ms: int, duration_ms: int):
+        position_text = self._format_video_time(position_ms)
+        duration_text = self._format_video_time(duration_ms)
+        self.video_time_label.setText(f"{position_text} / {duration_text}")
+
+    def _seek_relative(self, seconds: int):
+        if seconds == 0:
+            return
+        current_pos = self.video_player.position()
+        duration = self.video_player.duration()
+        delta_ms = seconds * 1000
+        new_pos = max(0, current_pos + delta_ms)
+        if duration > 0:
+            new_pos = min(new_pos, duration)
+        self.video_player.setPosition(new_pos)
+
+    def toggle_video_playback(self) -> bool:
+        if not self.is_video_loaded():
+            return False
+        self._toggle_video_playback()
+        return True
+
+    def seek_video_relative(self, seconds: int) -> bool:
+        if not self.is_video_loaded():
+            return False
+        self._seek_relative(seconds)
+        return True
+
+    def _reset_video_state(self):
+        self.video_position_slider.setRange(0, 0)
+        self.video_position_slider.setValue(0)
+        self.video_play_button.setText("▶")
+        self._update_video_time_label(0, 0)
+
+    def _stop_video(self):
+        if getattr(self, "video_player", None):
+            self.video_player.stop()
+            self.video_player.setSource(QUrl())
+        self._reset_video_state()
+
+    def _set_media_mode(self, media_type: str):
+        self._media_type = media_type
+        if media_type == "video":
+            self.media_stack.setCurrentWidget(self.video_widget)
+            self.video_controls.setVisible(True)
+        else:
+            self.media_stack.setCurrentWidget(self.image_view)
+            self.video_controls.setVisible(False)
+
+    def set_video_data(self, file_path: str, rating: int):
+        logger.debug(f"IndividualViewer.set_video_data called with file_path: {file_path}")
+        self._file_path = file_path
+        self._stop_video()
+        self._set_media_mode("video")
+        self.image_view.clear()
+        self.video_player.setSource(QUrl.fromLocalFile(file_path))
+        self.video_player.pause()
+        self.video_widget.setFocus()
+        self.update_rating_display(rating)
+
     def set_data(
         self, pixmap: QPixmap, file_path: str, rating: int, label: Optional[str]
     ):
         """Set all data for the viewer at once."""
         logger.debug(f"IndividualViewer.set_data called with file_path: {file_path}")
         self._file_path = file_path
+        self._stop_video()
+        self._set_media_mode("image")
         self.image_view.set_image(pixmap)
         logger.debug(f"Updating rating display to {rating}")
         self.update_rating_display(rating)
@@ -632,12 +826,19 @@ class IndividualViewer(QWidget):
         """Clear the viewer and its associated data."""
         logger.debug("Clearing image_view")
         self._file_path = None
+        self._stop_video()
+        self._set_media_mode("image")
         self.image_view.clear()
         self.update_rating_display(0)
 
     def has_image(self) -> bool:
-        """Check if the internal image view has an image."""
+        """Check if the viewer currently displays media."""
+        if self._media_type == "video":
+            return self._file_path is not None
         return self.image_view.has_image()
+
+    def is_video_loaded(self) -> bool:
+        return self._media_type == "video" and self._file_path is not None
 
     def set_selected(self, is_selected: bool):
         """Set the visual selection state of the viewer."""
@@ -1111,7 +1312,7 @@ class SynchronizedImageViewer(QWidget):
 
     def _fit_visible_images_after_layout_change(self):
         for viewer in self.image_viewers:
-            if viewer.isVisible() and viewer.has_image():
+            if viewer.isVisible() and viewer.has_image() and not viewer.is_video_loaded():
                 viewer.image_view.fit_in_view()
 
     def get_focused_image_path_if_any(self) -> Optional[str]:
@@ -1137,6 +1338,28 @@ class SynchronizedImageViewer(QWidget):
             return None
         return self.image_viewers[0]
 
+    def has_video_loaded(self) -> bool:
+        for viewer in self.image_viewers:
+            if viewer.isVisible() and viewer.is_video_loaded():
+                return True
+        return False
+
+    def _get_focused_viewer(self) -> Optional[IndividualViewer]:
+        if not self.image_viewers:
+            return None
+        if 0 <= self._focused_index < len(self.image_viewers):
+            return self.image_viewers[self._focused_index]
+        return self.image_viewers[0]
+
+    def toggle_focused_video_playback(self) -> bool:
+        viewer = self._get_focused_viewer()
+        if viewer and viewer.toggle_video_playback():
+            return True
+        for v in self.image_viewers:
+            if v.isVisible() and v.toggle_video_playback():
+                return True
+        return False
+
     def set_image_data(
         self,
         image_data: Dict[str, Any],
@@ -1156,10 +1379,20 @@ class SynchronizedImageViewer(QWidget):
         for i, viewer in enumerate(self.image_viewers):
             if i == viewer_index:
                 pixmap = image_data.get("pixmap")
+                media_type = image_data.get("media_type", "image")
                 logger.debug(
                     f"Setting data for viewer {i}, pixmap valid: {bool(pixmap)}"
                 )
-                if pixmap:
+                if media_type == "video":
+                    file_path = image_data.get("path", "")
+                    if file_path:
+                        viewer.set_video_data(
+                            file_path,
+                            image_data.get("rating", 0),
+                        )
+                    else:
+                        viewer.clear()
+                elif pixmap:
                     viewer.set_data(
                         pixmap,
                         image_data.get("path", ""),  # Ensure path is always a string
@@ -1202,13 +1435,23 @@ class SynchronizedImageViewer(QWidget):
         for i, viewer in enumerate(self.image_viewers):
             if i < num_images:
                 data = images_data[i]
-                if data and data.get("pixmap"):
-                    viewer.set_data(
-                        data["pixmap"],
-                        data["path"],
-                        data.get("rating", 0),
-                        data.get("label"),
-                    )
+                if data:
+                    media_type = data.get("media_type", "image")
+                    if media_type == "video":
+                        file_path = data.get("path")
+                        if file_path:
+                            viewer.set_video_data(file_path, data.get("rating", 0))
+                        else:
+                            viewer.clear()
+                    elif data.get("pixmap"):
+                        viewer.set_data(
+                            data["pixmap"],
+                            data["path"],
+                            data.get("rating", 0),
+                            data.get("label"),
+                        )
+                    else:
+                        viewer.clear()
                 else:
                     viewer.clear()
             else:

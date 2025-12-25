@@ -9,7 +9,7 @@ from core.app_settings import (
     get_preview_cache_size_bytes,
     PREVIEW_ESTIMATED_SIZE_FACTOR,
 )
-from core.file_scanner import SUPPORTED_EXTENSIONS
+from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS, is_image_extension
 from core.image_file_ops import ImageFileOperations
 from core.pyexiv2_wrapper import PyExiv2Operations
 
@@ -369,7 +369,7 @@ class AppController(QObject):
             )
             return
 
-        paths_for_similarity = [fd["path"] for fd in self.app_state.image_files_data]
+        paths_for_similarity = self._get_image_paths()
         if not paths_for_similarity:
             self.main_window.hide_loading_overlay()
             self.main_window.statusBar().showMessage(
@@ -399,8 +399,16 @@ class AppController(QObject):
         self.main_window.show_loading_overlay("Starting blur detection...")
         self.main_window.menu_manager.detect_blur_action.setEnabled(False)
 
+        image_data_list = self._get_image_file_data()
+        if not image_data_list:
+            self.main_window.hide_loading_overlay()
+            self.main_window.statusBar().showMessage(
+                "No images available for blur detection.", 3000
+            )
+            return
+
         self.worker_manager.start_blur_detection(
-            self.app_state.image_files_data.copy(),
+            image_data_list,
             self.main_window.blur_detection_threshold,
             True,  # Always enable processing for RAW files
         )
@@ -425,7 +433,13 @@ class AppController(QObject):
 
         self.main_window.rotation_suggestions.clear()
 
-        image_paths = [fd["path"] for fd in self.app_state.image_files_data]
+        image_paths = self._get_image_paths()
+        if not image_paths:
+            self.main_window.hide_loading_overlay()
+            self.main_window.statusBar().showMessage(
+                "No images available for rotation analysis.", 3000
+            )
+            return
         self.worker_manager.start_rotation_detection(
             image_paths,
             self.app_state.exif_disk_cache,
@@ -449,7 +463,7 @@ class AppController(QObject):
 
         available_paths = {
             item.get("path")
-            for item in self.app_state.image_files_data
+            for item in self._get_image_file_data()
             if item.get("path")
         }
 
@@ -602,7 +616,9 @@ class AppController(QObject):
             return
 
         # Get selected images
-        selected_paths = self.main_window.get_selected_file_paths()
+        selected_paths = self._filter_image_paths(
+            self.main_window.get_selected_file_paths()
+        )
         if not selected_paths:
             self.main_window.statusBar().showMessage(
                 "No images selected. Please select images first.", 3000
@@ -644,7 +660,7 @@ class AppController(QObject):
             bool(remaining_clusters)
         )
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
         self.main_window.statusBar().showMessage("Best shot analysis cancelled.", 4000)
         self._restore_analysis_state()
@@ -664,8 +680,7 @@ class AppController(QObject):
             self.main_window.statusBar().showMessage("No images loaded to rate.", 3000)
             return
 
-        image_paths = [item.get("path") for item in self.app_state.image_files_data]
-        image_paths = [path for path in image_paths if path]
+        image_paths = self._get_image_paths()
         if not image_paths:
             self.main_window.statusBar().showMessage(
                 "No valid image paths available for AI rating.", 3000
@@ -728,13 +743,37 @@ class AppController(QObject):
 
     # --- Private Helper Methods ---
 
+    def _get_image_file_data(
+        self, file_data_list: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        source = file_data_list if file_data_list is not None else []
+        if file_data_list is None:
+            source = getattr(self.app_state, "image_files_data", []) or []
+        return [
+            fd
+            for fd in source
+            if isinstance(fd, dict) and fd.get("media_type", "image") == "image"
+        ]
+
+    def _get_image_paths(
+        self, file_data_list: Optional[List[Dict[str, Any]]] = None
+    ) -> List[str]:
+        return [
+            fd.get("path")
+            for fd in self._get_image_file_data(file_data_list)
+            if fd.get("path")
+        ]
+
+    def _filter_image_paths(self, paths: List[str]) -> List[str]:
+        return [path for path in paths if path and is_image_extension(path)]
+
     def _calculate_folder_image_size(self, folder_path: str) -> int:
         total_size_bytes = 0
         try:
             for root, _, files in os.walk(folder_path):
                 for filename in files:
                     ext = os.path.splitext(filename)[1].lower()
-                    if ext in SUPPORTED_EXTENSIONS:
+                    if ext in SUPPORTED_IMAGE_EXTENSIONS:
                         try:
                             full_path = os.path.join(root, filename)
                             total_size_bytes += os.path.getsize(full_path)
@@ -833,11 +872,7 @@ class AppController(QObject):
             self.main_window.hide_loading_overlay()
             return
 
-        paths_for_preloader = [
-            fd["path"]
-            for fd in image_data_list
-            if fd and isinstance(fd, dict) and "path" in fd
-        ]
+        paths_for_preloader = self._get_image_paths(image_data_list)
 
         if not paths_for_preloader:
             self.main_window.hide_loading_overlay()
@@ -855,7 +890,7 @@ class AppController(QObject):
     def handle_files_found(self, batch_of_file_data: List[Dict[str, any]]):
         self.app_state.image_files_data.extend(batch_of_file_data)
         self.main_window.update_loading_text(
-            f"Scanning... {len(self.app_state.image_files_data)} images found"
+            f"Scanning... {len(self.app_state.image_files_data)} files found"
         )
         self.main_window._update_image_info_label()
 
@@ -863,37 +898,40 @@ class AppController(QObject):
         self.main_window.update_loading_text(
             "Scan finished. Populating view and starting background loads..."
         )
+        has_images = bool(self._get_image_file_data())
         self.main_window.menu_manager.open_folder_action.setEnabled(True)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            has_images
         )
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            has_images
         )
         self.main_window.menu_manager.detect_blur_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            has_images
         )
         self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            has_images
         )
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            has_images
         )
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            has_images
         )
 
         self._restore_analysis_state()
         self.main_window._rebuild_model_view()
 
-        if self.app_state.image_files_data:
+        image_file_data = self._get_image_file_data()
+        if image_file_data:
             # Start thumbnail preload in background (non-blocking)
-            image_paths = [item["path"] for item in self.app_state.image_files_data]
-            self.worker_manager.start_thumbnail_preload(image_paths)
+            image_paths = self._get_image_paths(image_file_data)
+            if image_paths:
+                self.worker_manager.start_thumbnail_preload(image_paths)
 
             self.main_window.update_loading_text("Loading Exiftool data...")
             self.worker_manager.start_rating_load(
-                self.app_state.image_files_data.copy(),
+                image_file_data.copy(),
                 self.app_state.rating_disk_cache,
                 self.app_state,
             )
@@ -1021,7 +1059,7 @@ class AppController(QObject):
                 self.app_state.current_folder_path, cluster_results_dict
             )
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
         if not self.app_state.cluster_results:
@@ -1057,7 +1095,7 @@ class AppController(QObject):
         logger.error(f"Similarity analysis failed: {message}", exc_info=True)
         self.main_window.statusBar().showMessage(f"Similarity Error: {message}", 8000)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.main_window.hide_loading_overlay()
@@ -1093,7 +1131,7 @@ class AppController(QObject):
             bool(remaining_clusters)
         )
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            True
+            bool(self._get_image_file_data())
         )
         self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
         self._restore_analysis_state()
@@ -1112,7 +1150,7 @@ class AppController(QObject):
             bool(remaining_clusters)
         )
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            True
+            bool(self._get_image_file_data())
         )
         self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
         self._restore_analysis_state()
@@ -1134,7 +1172,7 @@ class AppController(QObject):
     def handle_ai_rating_complete(self, results: Dict[str, Dict[str, Any]]):
         self.main_window.hide_loading_overlay()
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
         normalized_results = results or {}
@@ -1205,7 +1243,7 @@ class AppController(QObject):
         self.main_window.hide_loading_overlay()
         self.main_window.statusBar().showMessage(f"AI rating error: {message}", 8000)
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
         self._ai_rating_warning_messages = []
 
@@ -1225,7 +1263,7 @@ class AppController(QObject):
         self.main_window.hide_loading_overlay()
         self.main_window.statusBar().showMessage("Blur detection complete.", 5000)
         self.main_window.menu_manager.detect_blur_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
     def handle_blur_detection_error(self, message: str):
@@ -1235,7 +1273,7 @@ class AppController(QObject):
             f"Blur Detection Error: {message}", 8000
         )
         self.main_window.menu_manager.detect_blur_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
     # --- Rotation Detection Handlers ---
@@ -1258,7 +1296,7 @@ class AppController(QObject):
     def handle_rotation_detection_finished(self):
         """Handle completion of rotation detection analysis."""
         self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
         if not self.main_window.rotation_suggestions:
@@ -1307,7 +1345,7 @@ class AppController(QObject):
             f"Rotation Detection Error: {message}", 8000
         )
         self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
     def handle_rotation_model_not_found(self, model_path: str):
@@ -1318,7 +1356,7 @@ class AppController(QObject):
             "Rotation model not found. Analysis cancelled.", 5000
         )
         self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
     def _apply_approved_rotations(self, approved_rotations: Dict[str, int]):

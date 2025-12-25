@@ -53,6 +53,8 @@ from core.image_file_ops import ImageFileOperations
 from core.image_processing.raw_image_processor import is_raw_extension
 
 from core.metadata_processor import MetadataProcessor  # New metadata processor
+from core.media_utils import is_video_extension
+from core.video_metadata import get_basic_video_metadata
 from core.app_settings import (
     get_preview_cache_size_gb,
     set_preview_cache_size_gb,
@@ -321,6 +323,7 @@ class MainWindow(QMainWindow):
             return
 
         num_images = 0
+        num_videos = 0
         total_size_mb = 0.0
         folder_name_display = "N/A"
         # Default text if no folder is loaded yet
@@ -338,12 +341,20 @@ class MainWindow(QMainWindow):
 
             if scan_logically_active:
                 # Scan is in progress
-                num_images_found_so_far = len(
+                num_files_found_so_far = len(
                     self.app_state.image_files_data
                 )  # Current count during scan
-                status_text = f"Folder: {folder_name_display}  |  Scanning... ({num_images_found_so_far} files found)"
+                status_text = (
+                    f"Folder: {folder_name_display}  |  Scanning... ({num_files_found_so_far} files found)"
+                )
             elif self.app_state.image_files_data:  # Scan is finished and there's data
                 num_images = len(self.app_state.image_files_data)
+                num_videos = sum(
+                    1
+                    for file_data in self.app_state.image_files_data
+                    if file_data.get("media_type") == "video"
+                )
+                num_images -= num_videos
                 current_files_size_bytes = 0
                 for file_data in self.app_state.image_files_data:
                     try:
@@ -364,11 +375,12 @@ class MainWindow(QMainWindow):
 
                 status_text = (
                     f"Folder: {folder_name_display} | "
-                    f"Images: {num_images} ({total_size_mb:.2f} MB) | "
+                    f"Images: {num_images} | Videos: {num_videos} "
+                    f"({total_size_mb:.2f} MB) | "
                     f"Preview Cache: {preview_cache_size_mb:.2f} MB"
                 )
             else:  # Folder path set, scan finished (or not started if folder just selected), no image data
-                status_text = f"Folder: {folder_name_display}  |  Images: 0 (0.00 MB)"
+                status_text = f"Folder: {folder_name_display}  |  Files: 0 (0.00 MB)"
 
         self.statusBar().showMessage(status_text)
 
@@ -410,14 +422,23 @@ class MainWindow(QMainWindow):
 
     def show_loading_overlay(self, text="Loading..."):
         if self.loading_overlay:
+            has_video = False
+            if hasattr(self, "advanced_image_viewer") and self.advanced_image_viewer:
+                has_video = self.advanced_image_viewer.has_video_loaded()
+            self.loading_overlay.set_floating(has_video)
             self.loading_overlay.setText(text)
-            self.loading_overlay.update_position()
             self.loading_overlay.show()
+            self.loading_overlay.update_position()
             QApplication.processEvents()
 
     def update_loading_text(self, text):
         if self.loading_overlay and self.loading_overlay.isVisible():
+            has_video = False
+            if hasattr(self, "advanced_image_viewer") and self.advanced_image_viewer:
+                has_video = self.advanced_image_viewer.has_video_loaded()
+            self.loading_overlay.set_floating(has_video)
             self.loading_overlay.setText(text)
+            self.loading_overlay.update_position()
             QApplication.processEvents()
 
     def hide_loading_overlay(self):
@@ -841,40 +862,106 @@ class MainWindow(QMainWindow):
         if self.left_panel.current_view_mode == "rotation":
             self._rebuild_rotation_view()
         elif self.group_by_similarity_mode:
+            current_sort_method = self.cluster_sort_combo.currentText()
+            images_by_cluster = self.similarity_controller.get_images_by_cluster()
+            cluster_info = (
+                self.similarity_controller.prepare_clusters(current_sort_method)
+                if images_by_cluster
+                else {"sorted_cluster_ids": [], "total_images": 0}
+            )
+            sorted_cluster_ids = cluster_info.get("sorted_cluster_ids", [])
+            total_clustered_images = cluster_info.get("total_images", 0)
+
+            clustered_paths = {
+                fd.get("path")
+                for files in images_by_cluster.values()
+                for fd in files
+                if isinstance(fd, dict) and fd.get("path")
+            }
+            unclustered_files = [
+                fd
+                for fd in self.app_state.image_files_data
+                if fd.get("path") not in clustered_paths
+            ]
+
             if not self.app_state.cluster_results:
                 no_cluster_item = QStandardItem("Run 'Analyze Similarity' to group.")
                 no_cluster_item.setEditable(False)
                 root_item.appendRow(no_cluster_item)
-                return
 
-            current_sort_method = self.cluster_sort_combo.currentText()
-            cluster_info = self.similarity_controller.prepare_clusters(
-                current_sort_method
-            )
-            images_by_cluster = self.similarity_controller.get_images_by_cluster()
-            sorted_cluster_ids = cluster_info.get("sorted_cluster_ids", [])
-            total_clustered_images = cluster_info.get("total_images", 0)
+            def earliest_date_for_files(files):
+                earliest = date_obj.max
+                for fd in files:
+                    path = fd.get("path") if isinstance(fd, dict) else None
+                    if not path:
+                        continue
+                    date_val = self.app_state.date_cache.get(path)
+                    if date_val and date_val < earliest:
+                        earliest = date_val
+                return earliest
 
-            if not images_by_cluster:
-                no_images_in_clusters = QStandardItem("No images assigned to clusters.")
-                no_images_in_clusters.setEditable(False)
-                root_item.appendRow(no_images_in_clusters)
-                return
-
-            for cluster_id in sorted_cluster_ids:
+            def build_cluster_item(cluster_id: int):
                 cluster_item = QStandardItem(f"Group {cluster_id}")
                 cluster_item.setEditable(False)
                 cluster_item.setData(
                     f"cluster_header_{cluster_id}", Qt.ItemDataRole.UserRole
                 )
                 cluster_item.setForeground(QColor(Qt.GlobalColor.gray))
-                root_item.appendRow(cluster_item)
                 files_in_cluster = images_by_cluster.get(cluster_id, [])
                 self._populate_model_standard(cluster_item, files_in_cluster)
-            self.statusBar().showMessage(
-                f"Grouped {total_clustered_images} images into {len(sorted_cluster_ids)} clusters.",
-                3000,
-            )
+                return cluster_item
+
+            def build_timeline_item():
+                timeline_item = QStandardItem("Timeline")
+                timeline_item.setEditable(False)
+                timeline_item.setData(
+                    "cluster_header_timeline", Qt.ItemDataRole.UserRole
+                )
+                timeline_item.setForeground(QColor(Qt.GlobalColor.gray))
+                self._populate_model_standard(timeline_item, unclustered_files)
+                return timeline_item
+
+            if current_sort_method == "Time":
+                cluster_entries = []
+                for idx, cluster_id in enumerate(sorted_cluster_ids):
+                    files_in_cluster = images_by_cluster.get(cluster_id, [])
+                    cluster_entries.append(
+                        (earliest_date_for_files(files_in_cluster), idx, cluster_id)
+                    )
+                timeline_entry = (
+                    (earliest_date_for_files(unclustered_files), len(sorted_cluster_ids))
+                    if unclustered_files
+                    else None
+                )
+                combined = [
+                    ("cluster", entry[0], entry[1], entry[2])
+                    for entry in cluster_entries
+                ]
+                if timeline_entry:
+                    combined.append(
+                        ("timeline", timeline_entry[0], timeline_entry[1], None)
+                    )
+                combined.sort(key=lambda entry: (entry[1], entry[2]))
+                for entry in combined:
+                    if entry[0] == "timeline":
+                        root_item.appendRow(build_timeline_item())
+                    else:
+                        root_item.appendRow(build_cluster_item(entry[3]))
+            else:
+                for cluster_id in sorted_cluster_ids:
+                    root_item.appendRow(build_cluster_item(cluster_id))
+                if unclustered_files:
+                    root_item.appendRow(build_timeline_item())
+
+            status_parts = []
+            if sorted_cluster_ids:
+                status_parts.append(
+                    f"Grouped {total_clustered_images} images into {len(sorted_cluster_ids)} clusters."
+                )
+            if unclustered_files:
+                status_parts.append(f"Timeline items: {len(unclustered_files)}.")
+            if status_parts:
+                self.statusBar().showMessage(" ".join(status_parts), 3000)
         else:  # Not grouping by similarity
             self._populate_model_standard(root_item, self.app_state.image_files_data)
             self.statusBar().showMessage(
@@ -2084,6 +2171,10 @@ class MainWindow(QMainWindow):
             self.invalidate_last_displayed_preview()
             return
 
+        if is_video_extension(file_path):
+            self._display_single_video_preview(file_path, metadata, file_data_from_model)
+            return
+
         primary_viewer = self.advanced_image_viewer.get_primary_viewer()
         reuse_preview = (
             primary_viewer is not None
@@ -2139,6 +2230,34 @@ class MainWindow(QMainWindow):
 
         if self.sidebar_visible:
             logger.debug("Updating sidebar with current selection")
+            self._update_sidebar_with_current_selection()
+
+    def _display_single_video_preview(
+        self,
+        file_path: str,
+        metadata: Dict[str, Any],
+        file_data_from_model: Optional[Dict[str, Any]],
+    ):
+        logger.debug(f"Displaying single video preview: {os.path.basename(file_path)}")
+        if not os.path.exists(file_path):
+            self.advanced_image_viewer.clear()
+            self.statusBar().showMessage(
+                f"Error: File not found - {os.path.basename(file_path)}", 5000
+            )
+            self.invalidate_last_displayed_preview()
+            return
+
+        self.advanced_image_viewer.set_image_data(
+            {
+                "media_type": "video",
+                "path": file_path,
+                "rating": metadata.get("rating", 0),
+            }
+        )
+        self._last_displayed_preview_path = file_path
+        self._update_status_bar_for_image(file_path, metadata, None, file_data_from_model)
+
+        if self.sidebar_visible:
             self._update_sidebar_with_current_selection()
 
     def _display_rotated_image_preview(
@@ -2236,13 +2355,32 @@ class MainWindow(QMainWindow):
         metadata_for_sidebar = []
 
         for path in selected_paths:
+            if is_video_extension(path):
+                basic_metadata = self._get_cached_metadata_for_selection(path)
+                images_data_for_viewer.append(
+                    {
+                        "media_type": "video",
+                        "path": path,
+                        "rating": basic_metadata.get("rating", 0)
+                        if basic_metadata
+                        else 0,
+                        "label": basic_metadata.get("label")
+                        if basic_metadata
+                        else None,
+                    }
+                )
+                combined_meta = (basic_metadata or {}).copy()
+                combined_meta["raw_exif"] = {}
+                metadata_for_sidebar.append(combined_meta)
+                continue
+
             pixmap = self.image_pipeline.get_preview_qpixmap(
                 path, display_max_size=(8000, 8000)
             )
             if not pixmap or pixmap.isNull():
                 pixmap = self.image_pipeline.get_thumbnail_qpixmap(path)
 
-            if pixmap:
+            if pixmap and not pixmap.isNull():
                 basic_metadata = self._get_cached_metadata_for_selection(path)
                 raw_exif = MetadataProcessor.get_detailed_metadata(
                     path, self.app_state.exif_disk_cache
@@ -2250,6 +2388,7 @@ class MainWindow(QMainWindow):
 
                 images_data_for_viewer.append(
                     {
+                        "media_type": "image",
                         "pixmap": pixmap,
                         "path": path,
                         "rating": basic_metadata.get("rating", 0)
@@ -2278,7 +2417,11 @@ class MainWindow(QMainWindow):
                     # Fallback to single selection view if something goes wrong
                     self._update_sidebar_with_current_selection()
 
-            if len(images_data_for_viewer) >= 2:
+            has_video = any(
+                d.get("media_type") == "video" for d in images_data_for_viewer
+            )
+
+            if len(images_data_for_viewer) >= 2 and not has_video:
                 # Show similarity for the first two images in a multi-selection
                 path1, path2 = (
                     images_data_for_viewer[0]["path"],
@@ -2301,12 +2444,17 @@ class MainWindow(QMainWindow):
                         f"Comparing {len(images_data_for_viewer)} images."
                     )
             else:
+                if has_video and len(images_data_for_viewer) >= 2:
+                    self.statusBar().showMessage(
+                        f"Displaying {len(images_data_for_viewer)} item(s)."
+                    )
+                    return
                 self.statusBar().showMessage(
                     f"Displaying {len(images_data_for_viewer)} image(s)."
                 )
         else:
             self.statusBar().showMessage(
-                "Could not load any selected images for display.", 3000
+                "Could not load any selected items for display.", 3000
             )
             self.advanced_image_viewer.clear()
             if self.sidebar_visible:
@@ -2325,9 +2473,9 @@ class MainWindow(QMainWindow):
             self.app_state.focused_image_path = None
             self._get_active_file_view().viewport().update()
 
-        logger.debug("Clearing viewer and setting 'Select an image' text")
+        logger.debug("Clearing viewer and setting 'Select an image or video' text")
         self.advanced_image_viewer.clear()
-        self.advanced_image_viewer.setText("Select an image to view details.")
+        self.advanced_image_viewer.setText("Select an image or video to view details.")
         self.invalidate_last_displayed_preview()
         self.statusBar().showMessage("Ready")
 
@@ -2779,6 +2927,7 @@ class MainWindow(QMainWindow):
     def _create_standard_item(self, file_data: Dict[str, any]):
         file_path = file_data["path"]
         is_blurred = file_data.get("is_blurred")
+        media_type = file_data.get("media_type", "image")
 
         item_text = os.path.basename(file_path)
         item = QStandardItem(item_text)
@@ -2790,7 +2939,11 @@ class MainWindow(QMainWindow):
         # This dramatically improves initial folder load time (from ~50s to <2s for 1000+ images)
         #
         # Note: We only try to get from cache (no generation) if thumbnails are enabled
-        if self.menu_manager.toggle_thumbnails_action.isChecked():
+        if media_type == "video":
+            item.setIcon(
+                self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
+            )
+        elif self.menu_manager.toggle_thumbnails_action.isChecked():
             # Try to get from cache only (won't generate if missing)
             # Determine cache key: apply_auto_edits is True for RAW files
             from core.image_processing.raw_image_processor import is_raw_extension
@@ -3253,6 +3406,15 @@ class MainWindow(QMainWindow):
                 )
 
                 if not search_has_focus:
+                    if key == Qt.Key.Key_Space and modifiers in (
+                        Qt.KeyboardModifier.NoModifier,
+                        Qt.KeyboardModifier.KeypadModifier,
+                    ):
+                        if (
+                            self.advanced_image_viewer
+                            and self.advanced_image_viewer.toggle_focused_video_playback()
+                        ):
+                            return True
                     if self._handle_registered_shortcut(key, modifiers):
                         return True
                     # Rotation view-specific shortcuts
@@ -3487,7 +3649,7 @@ class MainWindow(QMainWindow):
 
         self._set_sidebar_visibility(True)
         self.statusBar().showMessage(
-            "Image details sidebar shown. Press I to toggle.", 3000
+            "Details sidebar shown. Press I to toggle.", 3000
         )
 
     def _hide_metadata_sidebar(self):
@@ -3537,6 +3699,7 @@ class MainWindow(QMainWindow):
     def _show_advanced_viewer(self):
         """Show the advanced image viewer"""
         selected_paths = self._get_selected_file_paths_from_view()
+        selected_paths = [p for p in selected_paths if not is_video_extension(p)]
 
         if not selected_paths:
             self.statusBar().showMessage(
@@ -3580,7 +3743,7 @@ class MainWindow(QMainWindow):
         self.advanced_viewer_window.show()
 
     def _update_sidebar_with_current_selection(self):
-        """Update sidebar with the currently selected image metadata"""
+        """Update sidebar with the currently selected file metadata"""
 
         if not self.metadata_sidebar or not self.sidebar_visible:
             logger.debug(
@@ -3643,23 +3806,35 @@ class MainWindow(QMainWindow):
             f"_update_sidebar_with_current_selection: Got cached metadata for {os.path.basename(file_path)}: {metadata}"
         )
 
-        # Get detailed EXIF data for sidebar - now much cleaner
-        logger.info(
-            f"_update_sidebar_with_current_selection: Calling get_detailed_metadata for {os.path.basename(file_path)}"
-        )
-        raw_exif = MetadataProcessor.get_detailed_metadata(
-            file_path, self.app_state.exif_disk_cache
-        )
-
-        if not raw_exif:
-            logger.warning(
-                f"_update_sidebar_with_current_selection: No raw EXIF data returned for {os.path.basename(file_path)}"
-            )
-            raw_exif = {}
-        else:
+        if is_video_extension(file_path):
+            raw_exif = get_basic_video_metadata(file_path)
             logger.info(
-                f"_update_sidebar_with_current_selection: Got {len(raw_exif)} raw EXIF keys for {os.path.basename(file_path)}"
+                "_update_sidebar_with_current_selection: Loaded %d video metadata field(s) for %s",
+                len(raw_exif),
+                os.path.basename(file_path),
             )
+        else:
+            # Get detailed EXIF data for sidebar - now much cleaner
+            logger.info(
+                "_update_sidebar_with_current_selection: Calling get_detailed_metadata for %s",
+                os.path.basename(file_path),
+            )
+            raw_exif = MetadataProcessor.get_detailed_metadata(
+                file_path, self.app_state.exif_disk_cache
+            )
+
+            if not raw_exif:
+                logger.warning(
+                    "_update_sidebar_with_current_selection: No raw EXIF data returned for %s",
+                    os.path.basename(file_path),
+                )
+                raw_exif = {}
+            else:
+                logger.info(
+                    "_update_sidebar_with_current_selection: Got %d raw EXIF keys for %s",
+                    len(raw_exif),
+                    os.path.basename(file_path),
+                )
 
         # Update sidebar
         logger.info(

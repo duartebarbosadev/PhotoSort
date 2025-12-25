@@ -18,7 +18,7 @@ class AppState:
     def __init__(self):
         self.image_files_data: List[
             Dict[str, Any]
-        ] = []  # {'path': str, 'is_blurred': Optional[bool]}
+        ] = []  # {'path': str, 'is_blurred': Optional[bool], 'media_type': str}
         self.rating_cache: Dict[
             str, int
         ] = {}  # This is an in-memory dictionary for quick UI access

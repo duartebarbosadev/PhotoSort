@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QStyleOptionViewItem,
     QListView,
 )
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex, QPoint, QRect
 from PyQt6.QtGui import (
     QPainter,
     QPalette,
@@ -199,6 +199,8 @@ class LoadingOverlay(QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._base_flags = self.windowFlags()
+        self._floating = False
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -234,8 +236,29 @@ class LoadingOverlay(QWidget):
 
     def update_position(self):
         if self.parentWidget() and self.isVisible():
-            self.setGeometry(self.parentWidget().rect())
+            parent = self.parentWidget()
+            if self._floating:
+                top_left = parent.mapToGlobal(QPoint(0, 0))
+                self.setGeometry(QRect(top_left, parent.size()))
+            else:
+                self.setGeometry(parent.rect())
             self.raise_()
+
+    def set_floating(self, enabled: bool):
+        if self._floating == enabled:
+            return
+        self._floating = enabled
+        if enabled:
+            self.setWindowFlags(
+                Qt.WindowType.Tool
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint
+            )
+        else:
+            self.setWindowFlags(self._base_flags)
+        if self.isVisible():
+            self.hide()
+            self.show()
 
 
 # --- Preview Preloader Worker ---
