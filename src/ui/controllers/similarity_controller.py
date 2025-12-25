@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Protocol, Dict, List, Any, Optional
-from datetime import date as date_obj
+from datetime import datetime as datetime_obj
 
 from ui.helpers.cluster_utils import ClusterUtils
 
@@ -30,7 +30,7 @@ class AppStateSimilarityView(Protocol):
 
     image_files_data: List[Dict[str, Any]]
     cluster_results: Dict[str, int]
-    date_cache: Dict[str, Optional[date_obj]]
+    date_cache: Dict[str, Optional[datetime_obj]]
     embeddings_cache: Dict[str, List[float]] | Dict[str, Any]
 
 
@@ -56,8 +56,13 @@ class SimilarityController:
             self.ctx.status_message("Clustering did not produce results.")
             return
         self.ctx.update_loading_text("Clustering complete. Updating view...")
-        cluster_ids = sorted(set(cluster_results.values()))
-        self.ctx.populate_cluster_filter(cluster_ids)
+        # Parse cluster IDs from values (can be "1 - 87.34%" format or integers)
+        cluster_ids = set()
+        for value in cluster_results.values():
+            parsed_id = ClusterUtils.parse_cluster_id(value)
+            if parsed_id is not None:
+                cluster_ids.add(parsed_id)
+        self.ctx.populate_cluster_filter(sorted(cluster_ids))
         self.ctx.enable_group_by_similarity(True)
         self.ctx.set_group_by_similarity_checked(True)
         if cluster_results:
@@ -89,15 +94,15 @@ class SimilarityController:
     def _get_cluster_timestamps(
         self,
         images_by_cluster: Dict[int, List[Dict[str, Any]]],
-        date_cache: Dict[str, Optional[date_obj]],
-    ) -> Dict[int, date_obj]:
+        date_cache: Dict[str, Optional[datetime_obj]],
+    ) -> Dict[int, datetime_obj]:
         return ClusterUtils.get_cluster_timestamps(images_by_cluster, date_cache)
 
     def _sort_by_similarity_time(
         self,
         images_by_cluster: Dict[int, List[Dict[str, Any]]],
         embeddings_cache: Dict[str, List[float]],
-        date_cache: Dict[str, Optional[date_obj]],
+        date_cache: Dict[str, Optional[datetime_obj]],
     ) -> List[int]:
         return ClusterUtils.sort_clusters_by_similarity_time(
             images_by_cluster, embeddings_cache, date_cache
@@ -129,11 +134,11 @@ class SimilarityController:
 
         if sort_method == "Time":
             timestamps = self._get_cluster_timestamps(images_by_cluster, date_cache)
-            cluster_ids.sort(key=lambda cid: timestamps.get(cid, date_obj.max))
+            cluster_ids.sort(key=lambda cid: timestamps.get(cid, datetime_obj.max))
         elif sort_method == "Similarity then Time":
             if not embeddings_cache:
                 timestamps = self._get_cluster_timestamps(images_by_cluster, date_cache)
-                cluster_ids.sort(key=lambda cid: timestamps.get(cid, date_obj.max))
+                cluster_ids.sort(key=lambda cid: timestamps.get(cid, datetime_obj.max))
             else:
                 cluster_ids = self._sort_by_similarity_time(
                     images_by_cluster, embeddings_cache, date_cache

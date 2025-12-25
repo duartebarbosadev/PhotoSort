@@ -130,9 +130,10 @@ class LeftPanel(QWidget):
             Qt.ContextMenuPolicy.CustomContextMenu
         )
         self.tree_display_view.setMinimumWidth(300)
-        self.tree_display_view.setDragEnabled(False)
-        self.tree_display_view.setAcceptDrops(False)
-        self.tree_display_view.setDropIndicatorShown(False)
+        # Drag-drop enabled for cluster management in similarity mode
+        self.tree_display_view.setDragEnabled(True)
+        self.tree_display_view.setAcceptDrops(True)
+        self.tree_display_view.setDropIndicatorShown(True)
 
         self.grid_display_view = NoCtrlListView()
         self.grid_display_view.setModel(self.proxy_model)

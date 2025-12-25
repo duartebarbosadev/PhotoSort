@@ -11,8 +11,10 @@ from core.utils.time_utils import format_eta
 from core.image_pipeline import ImagePipeline
 from core.similarity_utils import (
     adaptive_dbscan_eps,
+    build_orientation_map,
     l2_normalize_rows,
     normalize_embedding_dict,
+    Orientation,
 )
 from .app_settings import (
     DEFAULT_CLIP_MODEL,
@@ -20,6 +22,7 @@ from .app_settings import (
     DBSCAN_EPS,
     DBSCAN_MIN_SAMPLES,
     DEFAULT_SIMILARITY_BATCH_SIZE,
+    SENTENCE_TRANSFORMERS_CACHE_DIR,
 )  # Import from app_settings
 
 logger = logging.getLogger(__name__)
@@ -91,7 +94,11 @@ class SimilarityEngine(QObject):
                     "cuda" if is_pytorch_cuda_available() else "cpu"
                 )  # Use imported function
                 logger.info(f"Attempting to load model on device: '{model_device}'")
-                self.model = SentenceTransformer(self.model_name, device=model_device)
+                self.model = SentenceTransformer(
+                    self.model_name,
+                    device=model_device,
+                    cache_folder=SENTENCE_TRANSFORMERS_CACHE_DIR,
+                )
 
                 # Log actual device model is on
                 actual_device_str = "Unknown"
@@ -289,12 +296,79 @@ class SimilarityEngine(QObject):
         )
 
         if self._is_running:  # Only cluster if not stopped
-            self.cluster_embeddings(final_embeddings_for_requested_files)
+            # Build orientation map for orientation-aware clustering
+            logger.info("Building orientation map for %d files...", len(file_paths))
+            orientation_map = build_orientation_map(file_paths)
+            self.cluster_embeddings(final_embeddings_for_requested_files, orientation_map)
         else:
             logger.info("Skipping clustering as stop was requested.")
             self.clustering_complete.emit({})  # Emit empty if stopped before clustering
 
-    def cluster_embeddings(self, embeddings: Dict[str, List[float]]):
+    def _run_dbscan_on_subset(
+        self,
+        embeddings: Dict[str, List[float]],
+        subset_paths: List[str],
+        start_cluster_id: int,
+    ) -> tuple[Dict[str, int], int]:
+        """
+        Run DBSCAN on a subset of embeddings.
+
+        Args:
+            embeddings: Full embeddings dictionary.
+            subset_paths: Paths to cluster.
+            start_cluster_id: Starting cluster ID for this subset.
+
+        Returns:
+            Tuple of (path_to_cluster_id dict, next_available_cluster_id).
+        """
+        if not subset_paths:
+            return {}, start_cluster_id
+
+        subset_embeddings = [embeddings[path] for path in subset_paths]
+        embedding_matrix = np.array(subset_embeddings, dtype=np.float32)
+        embedding_matrix = l2_normalize_rows(embedding_matrix)
+
+        if not embedding_matrix.flags["C_CONTIGUOUS"]:
+            embedding_matrix = np.ascontiguousarray(embedding_matrix)
+
+        adaptive_eps = adaptive_dbscan_eps(
+            embedding_matrix, DBSCAN_EPS, DBSCAN_MIN_SAMPLES
+        )
+
+        dbscan = DBSCAN(
+            eps=adaptive_eps, min_samples=DBSCAN_MIN_SAMPLES, metric="cosine"
+        )
+        dbscan_labels = dbscan.fit_predict(embedding_matrix)
+
+        # Map DBSCAN labels to our cluster IDs
+        label_map: Dict[int, int] = {}
+        current_id = start_cluster_id
+        result: Dict[str, int] = {}
+
+        # First pass: map actual clusters (non-noise)
+        for original_label in sorted(set(dbscan_labels)):
+            if original_label != -1:
+                label_map[original_label] = current_id
+                current_id += 1
+
+        # Second pass: assign cluster IDs to paths
+        next_noise_id = current_id
+        for i, path in enumerate(subset_paths):
+            original_label = dbscan_labels[i]
+            if original_label == -1:
+                # Noise point gets unique ID
+                result[path] = next_noise_id
+                next_noise_id += 1
+            else:
+                result[path] = label_map[original_label]
+
+        return result, next_noise_id
+
+    def cluster_embeddings(
+        self,
+        embeddings: Dict[str, List[float]],
+        orientation_map: Optional[Dict[str, Orientation]] = None,
+    ):
         if not self._is_running:
             logger.info("Clustering skipped (stop requested).")
             self.clustering_complete.emit({})
@@ -306,96 +380,145 @@ class SimilarityEngine(QObject):
             return
 
         filepaths = list(embeddings.keys())
-        embedding_matrix = np.array(list(embeddings.values()), dtype=np.float32)
-        embedding_matrix = l2_normalize_rows(embedding_matrix)
-        num_samples, _ = embedding_matrix.shape
+        num_samples = len(filepaths)
 
-        labels = None
-        adaptive_eps = adaptive_dbscan_eps(
-            embedding_matrix, DBSCAN_EPS, DBSCAN_MIN_SAMPLES
-        )
-        try:
+        # Partition by orientation if orientation_map is provided
+        if orientation_map:
+            portrait_paths = [
+                p for p in filepaths if orientation_map.get(p) == "portrait"
+            ]
+            # Landscape and square are grouped together
+            landscape_paths = [
+                p for p in filepaths if orientation_map.get(p) != "portrait"
+            ]
+
             logger.info(
-                "Running DBSCAN clustering on %d embeddings (eps=%.4f, min_samples=%d).",
-                num_samples,
-                adaptive_eps,
-                DBSCAN_MIN_SAMPLES,
-            )
-            # Ensure embedding_matrix is C-contiguous, which is expected by DBSCAN
-            if not embedding_matrix.flags["C_CONTIGUOUS"]:
-                embedding_matrix = np.ascontiguousarray(embedding_matrix)
-
-            dbscan = DBSCAN(
-                eps=adaptive_eps, min_samples=DBSCAN_MIN_SAMPLES, metric="cosine"
-            )
-            dbscan_labels = dbscan.fit_predict(embedding_matrix)
-
-            final_labels = np.zeros_like(
-                dbscan_labels, dtype=int
-            )  # Array to store new group IDs
-            unique_dbscan_labels = set(dbscan_labels)
-
-            label_map_for_actual_clusters = {}
-            current_new_label_id = 1  # Start actual clusters from ID 1
-
-            # Sort original non-noise cluster indices from DBSCAN to assign new IDs consistently
-            sorted_original_actual_cluster_indices = sorted(
-                [label for label in unique_dbscan_labels if label != -1]
+                "Orientation-aware clustering: %d portrait, %d landscape/square images.",
+                len(portrait_paths),
+                len(landscape_paths),
             )
 
-            for original_cluster_idx in sorted_original_actual_cluster_indices:
-                label_map_for_actual_clusters[original_cluster_idx] = (
-                    current_new_label_id
-                )
-                current_new_label_id += 1
+            path_to_cluster: Dict[str, int] = {}
 
-            # next_available_group_id_for_noise will start from where actual cluster IDs left off
-            next_available_group_id_for_noise = current_new_label_id
-
-            noise_points_count = 0
-
-            for i, original_label in enumerate(dbscan_labels):
-                if original_label == -1:  # This is a noise point
-                    final_labels[i] = next_available_group_id_for_noise
-                    next_available_group_id_for_noise += (
-                        1  # Each noise point gets a new, unique ID
+            try:
+                # Cluster portrait images first (IDs start at 1)
+                if portrait_paths:
+                    portrait_clusters, next_id = self._run_dbscan_on_subset(
+                        embeddings, portrait_paths, start_cluster_id=1
                     )
-                    noise_points_count += 1
-                else:  # This point belongs to an actual cluster
-                    final_labels[i] = label_map_for_actual_clusters[original_label]
+                    path_to_cluster.update(portrait_clusters)
+                    logger.info(
+                        "Portrait clustering: %d clusters/groups formed.",
+                        len(set(portrait_clusters.values())),
+                    )
+                else:
+                    next_id = 1
 
-            labels = final_labels  # Use these new labels for results
+                # Cluster landscape images (IDs continue from portrait)
+                if landscape_paths:
+                    landscape_clusters, _ = self._run_dbscan_on_subset(
+                        embeddings, landscape_paths, start_cluster_id=next_id
+                    )
+                    path_to_cluster.update(landscape_clusters)
+                    logger.info(
+                        "Landscape clustering: %d clusters/groups formed.",
+                        len(set(landscape_clusters.values())),
+                    )
 
-            num_actual_clusters_formed = len(label_map_for_actual_clusters)
-
-            log_message_parts = []
-            if num_actual_clusters_formed > 0:
-                log_message_parts.append(
-                    f"{num_actual_clusters_formed} actual cluster(s)"
+                # Convert to labels array in original order
+                labels = np.array(
+                    [path_to_cluster[path] for path in filepaths], dtype=int
                 )
-            if noise_points_count > 0:
-                log_message_parts.append(
-                    f"{noise_points_count} image(s) assigned to individual groups"
+
+            except Exception as e_dbscan:
+                error_msg = f"Error during orientation-aware DBSCAN clustering: {e_dbscan}"
+                logger.error(error_msg, exc_info=True)
+                self.error.emit(error_msg)
+                labels = np.zeros(num_samples, dtype=int)
+                logger.warning(
+                    "Clustering failed. Assigning all items to a single group."
+                )
+        else:
+            # Original clustering logic without orientation awareness
+            embedding_matrix = np.array(list(embeddings.values()), dtype=np.float32)
+            embedding_matrix = l2_normalize_rows(embedding_matrix)
+
+            labels = None
+            adaptive_eps = adaptive_dbscan_eps(
+                embedding_matrix, DBSCAN_EPS, DBSCAN_MIN_SAMPLES
+            )
+            try:
+                logger.info(
+                    "Running DBSCAN clustering on %d embeddings (eps=%.4f, min_samples=%d).",
+                    num_samples,
+                    adaptive_eps,
+                    DBSCAN_MIN_SAMPLES,
+                )
+                if not embedding_matrix.flags["C_CONTIGUOUS"]:
+                    embedding_matrix = np.ascontiguousarray(embedding_matrix)
+
+                dbscan = DBSCAN(
+                    eps=adaptive_eps, min_samples=DBSCAN_MIN_SAMPLES, metric="cosine"
+                )
+                dbscan_labels = dbscan.fit_predict(embedding_matrix)
+
+                final_labels = np.zeros_like(dbscan_labels, dtype=int)
+                unique_dbscan_labels = set(dbscan_labels)
+
+                label_map_for_actual_clusters = {}
+                current_new_label_id = 1
+
+                sorted_original_actual_cluster_indices = sorted(
+                    [label for label in unique_dbscan_labels if label != -1]
                 )
 
-            clustering_summary_log_message = (
-                ", ".join(log_message_parts)
-                if log_message_parts
-                else "No distinct groups formed"
-            )
-            logger.info(
-                f"DBSCAN clustering processed. {clustering_summary_log_message}."
-            )
+                for original_cluster_idx in sorted_original_actual_cluster_indices:
+                    label_map_for_actual_clusters[original_cluster_idx] = (
+                        current_new_label_id
+                    )
+                    current_new_label_id += 1
 
-        except Exception as e_dbscan:
-            error_msg = f"Error during DBSCAN clustering: {e_dbscan}"
-            logger.error(error_msg, exc_info=True)
-            self.error.emit(error_msg)
-            # Minimal fallback: assign all to cluster 0 if DBSCAN fails
-            labels = np.zeros(num_samples, dtype=int)
-            logger.warning(
-                "DBSCAN clustering failed. Assigning all items to a single group."
-            )
+                next_available_group_id_for_noise = current_new_label_id
+                noise_points_count = 0
+
+                for i, original_label in enumerate(dbscan_labels):
+                    if original_label == -1:
+                        final_labels[i] = next_available_group_id_for_noise
+                        next_available_group_id_for_noise += 1
+                        noise_points_count += 1
+                    else:
+                        final_labels[i] = label_map_for_actual_clusters[original_label]
+
+                labels = final_labels
+
+                num_actual_clusters_formed = len(label_map_for_actual_clusters)
+                log_message_parts = []
+                if num_actual_clusters_formed > 0:
+                    log_message_parts.append(
+                        f"{num_actual_clusters_formed} actual cluster(s)"
+                    )
+                if noise_points_count > 0:
+                    log_message_parts.append(
+                        f"{noise_points_count} image(s) assigned to individual groups"
+                    )
+
+                clustering_summary_log_message = (
+                    ", ".join(log_message_parts)
+                    if log_message_parts
+                    else "No distinct groups formed"
+                )
+                logger.info(
+                    f"DBSCAN clustering processed. {clustering_summary_log_message}."
+                )
+
+            except Exception as e_dbscan:
+                error_msg = f"Error during DBSCAN clustering: {e_dbscan}"
+                logger.error(error_msg, exc_info=True)
+                self.error.emit(error_msg)
+                labels = np.zeros(num_samples, dtype=int)
+                logger.warning(
+                    "DBSCAN clustering failed. Assigning all items to a single group."
+                )
 
         # Group filepaths by their assigned label
         grouped_filepaths: Dict[int, List[str]] = {}
@@ -479,6 +602,26 @@ class SimilarityEngine(QObject):
                 logger.warning(
                     f"Embedding cache directory not found: {EMBEDDING_CACHE_DIR}"
                 )
+                
+            # Also clear Hugging Face cache directory
+            hf_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "photosort_hf")
+            if os.path.exists(hf_cache_dir):
+                logger.info(f"Clearing Hugging Face cache directory: {hf_cache_dir}")
+                for item in os.listdir(hf_cache_dir):
+                    item_path = os.path.join(hf_cache_dir, item)
+                    try:
+                        if os.path.isfile(item_path) or os.path.islink(item_path):
+                            os.unlink(item_path)
+                        elif os.path.isdir(item_path):
+                            shutil.rmtree(item_path)
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to delete HF cache item {item_path}: {e}", exc_info=True
+                        )
+                logger.info("Hugging Face cache cleared.")
+            else:
+                logger.info(f"Hugging Face cache directory not found: {hf_cache_dir}")
+                
         except Exception as e:
             logger.error(
                 f"Error clearing embedding cache directory '{EMBEDDING_CACHE_DIR}': {e}",

@@ -1,5 +1,5 @@
 from typing import Dict, Any, List, Optional
-from datetime import date as date_obj
+from datetime import datetime as datetime_obj
 import logging
 import os
 from core.caching.rating_cache import RatingCache
@@ -22,7 +22,7 @@ class AppState:
         self.rating_cache: Dict[
             str, int
         ] = {}  # This is an in-memory dictionary for quick UI access
-        self.date_cache: Dict[str, Optional[date_obj]] = {}
+        self.date_cache: Dict[str, Optional[datetime_obj]] = {}
         self.cluster_results: Dict[str, int] = {}  # {image_path: cluster_id}
         self.embeddings_cache: Dict[
             str, List[float]

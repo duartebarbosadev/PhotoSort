@@ -2,7 +2,7 @@ import pyexiv2  # noqa: F401  # This must be the first import or else it will ca
 import pytest
 import os
 import sys
-from datetime import date
+from datetime import datetime
 
 # Add the project root to Python path so we can import src modules
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -40,11 +40,11 @@ class TestHelperFunctions:
     @pytest.mark.parametrize(
         "date_string,expected",
         [
-            ("2023:12:25 14:30:45", date(2023, 12, 25)),
-            ("2023-12-25 14:30:45", date(2023, 12, 25)),
-            ("2023-12-25T14:30:45", date(2023, 12, 25)),
-            ("2023:12:25", date(2023, 12, 25)),
-            ("2023-12-25", date(2023, 12, 25)),
+            ("2023:12:25 14:30:45", datetime(2023, 12, 25, 14, 30, 45)),
+            ("2023-12-25 14:30:45", datetime(2023, 12, 25, 14, 30, 45)),
+            ("2023-12-25T14:30:45", datetime(2023, 12, 25, 14, 30, 45)),
+            ("2023:12:25", datetime(2023, 12, 25, 0, 0)),
+            ("2023-12-25", datetime(2023, 12, 25, 0, 0)),
             ("invalid", None),
             ("", None),
             (None, None),
@@ -58,10 +58,10 @@ class TestHelperFunctions:
     @pytest.mark.parametrize(
         "filename,expected",
         [
-            ("IMG_20231225_143045.jpg", date(2023, 12, 25)),
-            ("2023-12-25_photo.jpg", date(2023, 12, 25)),
-            ("20231225_143045.jpg", date(2023, 12, 25)),
-            ("photo_2023.12.25.jpg", date(2023, 12, 25)),
+            ("IMG_20231225_143045.jpg", datetime(2023, 12, 25, 0, 0)),
+            ("2023-12-25_photo.jpg", datetime(2023, 12, 25, 0, 0)),
+            ("20231225_143045.jpg", datetime(2023, 12, 25, 0, 0)),
+            ("photo_2023.12.25.jpg", datetime(2023, 12, 25, 0, 0)),
             ("random_filename.jpg", None),
             ("IMG_20991301_invalid.jpg", None),  # Invalid date
         ],

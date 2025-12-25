@@ -146,3 +146,109 @@ class AnalysisCache:
         except Exception:
             logger.exception("Failed to get analysis cache volume")
             return 0
+
+    # --- Manual Cluster Override Methods ---
+
+    def save_manual_cluster_override(
+        self,
+        folder_path: str,
+        file_path: str,
+        cluster_id: int,
+    ) -> None:
+        """
+        Save a single manual cluster assignment.
+
+        This also updates the cluster_results to reflect the change.
+        """
+        key = _normalize_folder_path(folder_path)
+        entry = self.load(folder_path)
+
+        overrides = entry.setdefault("manual_cluster_overrides", {})
+        overrides[file_path] = cluster_id
+
+        # Also update cluster_results
+        cluster_results = entry.setdefault("cluster_results", {})
+        cluster_results[file_path] = cluster_id
+
+        entry["version"] = CACHE_VERSION
+        entry["updated_at"] = time.time()
+        try:
+            self._cache.set(key, entry)
+        except Exception:
+            logger.exception(
+                "Failed to persist manual cluster override for %s", folder_path
+            )
+
+    def save_manual_cluster_overrides(
+        self,
+        folder_path: str,
+        overrides_to_save: Dict[str, int],
+    ) -> None:
+        """
+        Save multiple manual cluster assignments at once.
+
+        This also updates the cluster_results to reflect all changes.
+        """
+        if not overrides_to_save:
+            return
+
+        key = _normalize_folder_path(folder_path)
+        entry = self.load(folder_path)
+
+        overrides = entry.setdefault("manual_cluster_overrides", {})
+        overrides.update(overrides_to_save)
+
+        # Also update cluster_results
+        cluster_results = entry.setdefault("cluster_results", {})
+        cluster_results.update(overrides_to_save)
+
+        entry["version"] = CACHE_VERSION
+        entry["updated_at"] = time.time()
+        try:
+            self._cache.set(key, entry)
+        except Exception:
+            logger.exception(
+                "Failed to persist manual cluster overrides for %s", folder_path
+            )
+
+    def get_manual_overrides(self, folder_path: str) -> Dict[str, int]:
+        """Get all manual cluster overrides for a folder."""
+        entry = self.load(folder_path)
+        overrides = entry.get("manual_cluster_overrides", {})
+        if isinstance(overrides, dict):
+            return dict(overrides)
+        return {}
+
+    def clear_manual_override(self, folder_path: str, file_path: str) -> None:
+        """Remove a single manual override for a file."""
+        key = _normalize_folder_path(folder_path)
+        entry = self.load(folder_path)
+
+        overrides = entry.get("manual_cluster_overrides", {})
+        if file_path in overrides:
+            del overrides[file_path]
+            entry["manual_cluster_overrides"] = overrides
+            entry["version"] = CACHE_VERSION
+            entry["updated_at"] = time.time()
+            try:
+                self._cache.set(key, entry)
+            except Exception:
+                logger.exception(
+                    "Failed to clear manual override for %s in %s", file_path, folder_path
+                )
+
+    def clear_all_manual_overrides(self, folder_path: str) -> None:
+        """Clear all manual overrides for a folder."""
+        key = _normalize_folder_path(folder_path)
+        entry = self.load(folder_path)
+
+        if "manual_cluster_overrides" in entry:
+            del entry["manual_cluster_overrides"]
+            entry["version"] = CACHE_VERSION
+            entry["updated_at"] = time.time()
+            try:
+                self._cache.set(key, entry)
+            except Exception:
+                logger.exception(
+                    "Failed to clear all manual overrides for %s", folder_path
+                )

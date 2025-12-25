@@ -14,7 +14,6 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.runtime_paths import (  # noqa: E402
-    is_frozen_runtime,
     iter_bundle_roots,
     resolve_runtime_root,
 )
@@ -22,8 +21,6 @@ from core.runtime_paths import (  # noqa: E402
 
 def _ensure_local_model_cache():
     """Point PyInstaller builds to the bundled models directory."""
-    if not is_frozen_runtime():
-        return
     base_dir = resolve_runtime_root(PROJECT_ROOT)
     models_dir = os.path.abspath(os.path.join(base_dir, "models"))
     os.makedirs(models_dir, exist_ok=True)

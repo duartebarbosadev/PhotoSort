@@ -1042,9 +1042,18 @@ class AppController(QObject):
     def handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
         self.app_state.cluster_results = cluster_results_dict
         self.app_state.clear_best_shot_results()
+
+        # Apply saved manual overrides on top of auto-clustering results
         if self.app_state.current_folder_path:
+            manual_overrides = self.app_state.analysis_cache.get_manual_overrides(
+                self.app_state.current_folder_path
+            )
+            for path, cluster_id in manual_overrides.items():
+                if path in self.app_state.cluster_results:
+                    self.app_state.cluster_results[path] = cluster_id
+
             self.app_state.analysis_cache.save_cluster_results(
-                self.app_state.current_folder_path, cluster_results_dict
+                self.app_state.current_folder_path, self.app_state.cluster_results
             )
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self._get_image_file_data())

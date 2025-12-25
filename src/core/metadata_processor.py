@@ -6,7 +6,7 @@ import re
 import time
 import logging
 import unicodedata
-from datetime import datetime as dt_parser, date as date_obj
+from datetime import datetime as dt_parser
 from typing import Dict, Any, Optional, List, Tuple
 import concurrent.futures
 import sys
@@ -82,10 +82,10 @@ COMPREHENSIVE_METADATA_TAGS: List[str] = [
 ] + DATE_TAGS_PREFERENCE
 
 
-def _parse_exif_date(date_string: str) -> Optional[date_obj]:
+def _parse_exif_date(date_string: str) -> Optional[dt_parser]:
     """
     Attempts to parse various EXIF/XMP date string formats.
-    Returns a datetime.date object or None.
+    Returns a datetime object (with time if available) or None.
     """
     if not date_string or not isinstance(date_string, str):
         return None
@@ -120,28 +120,29 @@ def _parse_exif_date(date_string: str) -> Optional[date_obj]:
         "%Y.%m.%d",
     ]
 
-    # First pass: try to parse as full datetime
+    # First pass: try to parse as full datetime (preserving time)
     for fmt in datetime_formats:
         try:
-            return dt_parser.strptime(s, fmt).date()
+            return dt_parser.strptime(s, fmt)
         except (ValueError, TypeError):
             continue
 
     # Second pass: if there's a time component, trim it and try date-only formats
+    # Return datetime at midnight for date-only values
     s_date_part = s.split("T")[0].split(" ")[0]
     for fmt in date_only_formats:
         try:
-            return dt_parser.strptime(s_date_part, fmt).date()
+            return dt_parser.strptime(s_date_part, fmt)
         except (ValueError, TypeError):
             continue
 
     return None
 
 
-def _parse_date_from_filename(filename: str) -> Optional[date_obj]:
+def _parse_date_from_filename(filename: str) -> Optional[dt_parser]:
     """
     Attempts to parse a date (YYYY, MM, DD) from common filename patterns.
-    Returns a datetime.date object or None.
+    Returns a datetime object (at midnight) or None.
     """
     match1 = re.search(r"(\d{4})(\d{2})(\d{2})(?:[_ \-T]|$)", filename)
     match2 = re.search(r"(\d{4})[-_\.](\d{2})[-_\.](\d{2})", filename)
@@ -173,7 +174,7 @@ def _parse_date_from_filename(filename: str) -> Optional[date_obj]:
 
     if year and month and day:
         try:
-            return date_obj(year, month, day)
+            return dt_parser(year, month, day)  # Returns datetime at midnight
         except ValueError:  # Handles invalid date like Feb 30
             return None
     return None
@@ -512,7 +513,7 @@ class MetadataProcessor:
                     if fs_timestamp is None or fs_timestamp < 1000000:
                         fs_timestamp = stat_result.st_mtime
                     if fs_timestamp:
-                        parsed_date = dt_parser.fromtimestamp(fs_timestamp).date()
+                        parsed_date = dt_parser.fromtimestamp(fs_timestamp)
                 except Exception as e_fs:
                     logger.warning(
                         f"Filesystem date fallback error for {filename_only}: {e_fs}"

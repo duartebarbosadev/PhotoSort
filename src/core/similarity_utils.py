@@ -1,12 +1,72 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Literal, Tuple
 
 import numpy as np
+from PIL import Image
+from PIL.ImageOps import exif_transpose
 from sklearn.neighbors import NearestNeighbors
 
 logger = logging.getLogger(__name__)
+
+Orientation = Literal["portrait", "landscape", "square"]
+
+
+def classify_orientation(image_path: str) -> Orientation:
+    """
+    Classify an image as 'portrait', 'landscape', or 'square'.
+
+    Uses PIL to load the image and applies EXIF orientation correction
+    before determining the aspect ratio.
+
+    Args:
+        image_path: Path to the image file.
+
+    Returns:
+        'portrait' if height > width, 'landscape' if width > height,
+        'square' if approximately equal (within 10% ratio).
+    """
+    try:
+        with Image.open(image_path) as img:
+            # Apply EXIF orientation to get actual visual dimensions
+            transposed = exif_transpose(img)
+            if transposed is not None:
+                width, height = transposed.size
+            else:
+                width, height = img.size
+
+            if width == 0 or height == 0:
+                return "landscape"  # Default for invalid dimensions
+
+            aspect_ratio = width / height
+
+            # Square threshold: within 10% of 1:1 ratio
+            if 0.9 <= aspect_ratio <= 1.1:
+                return "square"
+            elif aspect_ratio < 1.0:
+                return "portrait"
+            else:
+                return "landscape"
+    except Exception:
+        logger.warning("Failed to classify orientation for %s, defaulting to landscape", image_path)
+        return "landscape"
+
+
+def build_orientation_map(file_paths: List[str]) -> Dict[str, Orientation]:
+    """
+    Build a mapping of file paths to their orientations.
+
+    Args:
+        file_paths: List of image file paths.
+
+    Returns:
+        Dictionary mapping each path to its orientation.
+    """
+    orientation_map: Dict[str, Orientation] = {}
+    for path in file_paths:
+        orientation_map[path] = classify_orientation(path)
+    return orientation_map
 
 
 def l2_normalize_rows(matrix: np.ndarray) -> np.ndarray:

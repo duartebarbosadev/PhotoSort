@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QApplication,  # For selection and edit triggersor dialogs
 )
 import os
-from datetime import date as date_obj
+from datetime import datetime as datetime_obj, date as date_obj
 from typing import (
     List,
     Dict,
@@ -896,7 +896,7 @@ class MainWindow(QMainWindow):
                 root_item.appendRow(no_cluster_item)
 
             def earliest_date_for_files(files):
-                earliest = date_obj.max
+                earliest = datetime_obj.max
                 for fd in files:
                     path = fd.get("path") if isinstance(fd, dict) else None
                     if not path:
@@ -1264,7 +1264,7 @@ class MainWindow(QMainWindow):
 
                     def image_sort_key_func(fd):
                         return (
-                            self.app_state.date_cache.get(fd["path"], date_obj.max),
+                            self.app_state.date_cache.get(fd["path"], datetime_obj.max),
                             os.path.basename(fd["path"]),
                         )
 
@@ -2885,7 +2885,7 @@ class MainWindow(QMainWindow):
 
         for file_data in image_data_list:
             file_path = file_data["path"]
-            img_date: date_obj | None = self.app_state.date_cache.get(file_path)
+            img_date: datetime_obj | None = self.app_state.date_cache.get(file_path)
             year = img_date.year if img_date else unknown_date_key
             month = (
                 img_date.month if img_date else 1
@@ -2929,7 +2929,7 @@ class MainWindow(QMainWindow):
                 files_in_group_data = sorted(
                     images_by_year_month[year_val][month_val],
                     key=lambda fd: (
-                        self.app_state.date_cache.get(fd["path"]) or date_obj.min,
+                        self.app_state.date_cache.get(fd["path"]) or datetime_obj.min,
                         os.path.basename(fd["path"]),
                     ),
                 )
@@ -3355,7 +3355,7 @@ class MainWindow(QMainWindow):
 
         # Sort the paths to match display order
         def sort_key(path):
-            date = self.app_state.date_cache.get(path, date_obj.max)
+            date = self.app_state.date_cache.get(path, datetime_obj.max)
             basename = os.path.basename(path)
             sort_mode = self.cluster_sort_combo.currentText()
             if sort_mode == "Time" or sort_mode == "Similarity then Time":
