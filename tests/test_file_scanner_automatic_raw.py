@@ -54,7 +54,9 @@ class TestFileScannerAutomaticRaw:
         # Mock the _is_running attribute and SUPPORTED_MEDIA_EXTENSIONS
         scanner._is_running = True
 
-        with patch("src.core.file_scanner.SUPPORTED_MEDIA_EXTENSIONS", {".jpg", ".arw"}):
+        with patch(
+            "src.core.file_scanner.SUPPORTED_MEDIA_EXTENSIONS", {".jpg", ".arw"}
+        ):
             # Call scan_directory with blur detection enabled
             scanner.scan_directory(
                 "/test", perform_blur_detection=True, blur_threshold=100.0
@@ -87,7 +89,9 @@ class TestFileScannerAutomaticRaw:
 
         # Mock the image pipeline's preload_thumbnails method
         with patch.object(scanner.image_pipeline, "preload_thumbnails") as mock_preload:
-            with patch("src.core.file_scanner.SUPPORTED_MEDIA_EXTENSIONS", {".jpg", ".arw"}):
+            with patch(
+                "src.core.file_scanner.SUPPORTED_MEDIA_EXTENSIONS", {".jpg", ".arw"}
+            ):
                 # Call scan_directory
                 scanner.scan_directory("/test")
 

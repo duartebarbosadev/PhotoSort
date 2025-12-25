@@ -403,7 +403,9 @@ class MetadataSidebar(QWidget):
             self.show_error_message(str(e))
 
     def _is_video_selection(self) -> bool:
-        return bool(self.current_image_path and is_video_extension(self.current_image_path))
+        return bool(
+            self.current_image_path and is_video_extension(self.current_image_path)
+        )
 
     def _format_bitrate(self, bitrate_bps: Any) -> str:
         try:

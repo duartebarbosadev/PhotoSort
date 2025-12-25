@@ -166,9 +166,7 @@ class FileScanner(QObject):
                 self.error.emit("Scan cancelled after file discovery.")
                 return
 
-            logger.info(
-                f"File discovery complete. Found {len(all_file_data)} files."
-            )
+            logger.info(f"File discovery complete. Found {len(all_file_data)} files.")
 
             # Phase 2: Parallel blur detection (if enabled)
             file_data_by_path = {fd["path"]: fd for fd in all_file_data}

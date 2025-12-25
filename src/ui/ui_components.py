@@ -207,8 +207,9 @@ class LoadingOverlay(QWidget):
         main_layout.setSpacing(0)
 
         self.bg_widget = QWidget(self)
-        # Stylesheet will be applied from dark_theme.qss based on object name or class
-        # self.bg_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0.7);")
+        # Fallback inline style ensures visibility before external stylesheet loads.
+        # External stylesheet (dark_theme.qss) will override this when applied.
+        self.bg_widget.setStyleSheet("background-color: rgba(32, 32, 32, 0.85);")
         main_layout.addWidget(self.bg_widget)
 
         content_layout = QVBoxLayout(self.bg_widget)
@@ -218,6 +219,11 @@ class LoadingOverlay(QWidget):
         self.text_label = QLabel("Loading...", self)
         self.text_label.setObjectName("loading_text_label")  # For styling
         self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Fallback inline style for text visibility before external stylesheet loads
+        self.text_label.setStyleSheet(
+            "color: #E5E5E5; font-size: 15pt; font-weight: bold; "
+            "background-color: transparent; padding: 25px;"
+        )
 
         content_layout.addWidget(self.text_label)
         self.hide()

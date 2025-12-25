@@ -51,9 +51,7 @@ class WorkerManager(QObject):
     file_scan_found_files = pyqtSignal(
         list
     )  # list of dicts: [{'path': str, 'is_blurred': Optional[bool], 'media_type': str}]
-    file_scan_thumbnail_preload_finished = pyqtSignal(
-        list
-    )  # list of dicts
+    file_scan_thumbnail_preload_finished = pyqtSignal(list)  # list of dicts
     file_scan_finished = pyqtSignal()
     file_scan_error = pyqtSignal(str)
 

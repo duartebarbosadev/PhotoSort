@@ -639,9 +639,7 @@ class IndividualViewer(QWidget):
 
     def _connect_video_signals(self):
         self.video_play_button.clicked.connect(self._toggle_video_playback)
-        self.video_position_slider.sliderPressed.connect(
-            self._on_video_slider_pressed
-        )
+        self.video_position_slider.sliderPressed.connect(self._on_video_slider_pressed)
         self.video_position_slider.sliderReleased.connect(
             self._on_video_slider_released
         )
@@ -795,7 +793,9 @@ class IndividualViewer(QWidget):
             self.video_controls.setVisible(False)
 
     def set_video_data(self, file_path: str, rating: int):
-        logger.debug(f"IndividualViewer.set_video_data called with file_path: {file_path}")
+        logger.debug(
+            f"IndividualViewer.set_video_data called with file_path: {file_path}"
+        )
         self._file_path = file_path
         self._stop_video()
         self._set_media_mode("video")
@@ -1312,7 +1312,11 @@ class SynchronizedImageViewer(QWidget):
 
     def _fit_visible_images_after_layout_change(self):
         for viewer in self.image_viewers:
-            if viewer.isVisible() and viewer.has_image() and not viewer.is_video_loaded():
+            if (
+                viewer.isVisible()
+                and viewer.has_image()
+                and not viewer.is_video_loaded()
+            ):
                 viewer.image_view.fit_in_view()
 
     def get_focused_image_path_if_any(self) -> Optional[str]:

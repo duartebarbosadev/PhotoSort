@@ -462,9 +462,7 @@ class AppController(QObject):
             return
 
         available_paths = {
-            item.get("path")
-            for item in self._get_image_file_data()
-            if item.get("path")
+            item.get("path") for item in self._get_image_file_data() if item.get("path")
         }
 
         def _parse_cluster_key(key) -> Optional[int]:
@@ -900,24 +898,14 @@ class AppController(QObject):
         )
         has_images = bool(self._get_image_file_data())
         self.main_window.menu_manager.open_folder_action.setEnabled(True)
-        self.main_window.menu_manager.analyze_similarity_action.setEnabled(
-            has_images
-        )
+        self.main_window.menu_manager.analyze_similarity_action.setEnabled(has_images)
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
             has_images
         )
-        self.main_window.menu_manager.detect_blur_action.setEnabled(
-            has_images
-        )
-        self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            has_images
-        )
-        self.main_window.menu_manager.group_by_similarity_action.setEnabled(
-            has_images
-        )
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
-            has_images
-        )
+        self.main_window.menu_manager.detect_blur_action.setEnabled(has_images)
+        self.main_window.menu_manager.auto_rotate_action.setEnabled(has_images)
+        self.main_window.menu_manager.group_by_similarity_action.setEnabled(has_images)
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(has_images)
 
         self._restore_analysis_state()
         self.main_window._rebuild_model_view()

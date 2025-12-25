@@ -344,9 +344,7 @@ class MainWindow(QMainWindow):
                 num_files_found_so_far = len(
                     self.app_state.image_files_data
                 )  # Current count during scan
-                status_text = (
-                    f"Folder: {folder_name_display}  |  Scanning... ({num_files_found_so_far} files found)"
-                )
+                status_text = f"Folder: {folder_name_display}  |  Scanning... ({num_files_found_so_far} files found)"
             elif self.app_state.image_files_data:  # Scan is finished and there's data
                 num_images = len(self.app_state.image_files_data)
                 num_videos = sum(
@@ -421,6 +419,7 @@ class MainWindow(QMainWindow):
         )
 
     def show_loading_overlay(self, text="Loading..."):
+        logger.debug(f"show_loading_overlay called with text: {text}")
         if self.loading_overlay:
             has_video = False
             if hasattr(self, "advanced_image_viewer") and self.advanced_image_viewer:
@@ -429,7 +428,13 @@ class MainWindow(QMainWindow):
             self.loading_overlay.setText(text)
             self.loading_overlay.show()
             self.loading_overlay.update_position()
+            logger.debug(
+                f"Loading overlay shown. Visible: {self.loading_overlay.isVisible()}, "
+                f"Geometry: {self.loading_overlay.geometry()}"
+            )
             QApplication.processEvents()
+        else:
+            logger.warning("show_loading_overlay called but loading_overlay is None")
 
     def update_loading_text(self, text):
         if self.loading_overlay and self.loading_overlay.isVisible():
@@ -442,6 +447,7 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
 
     def hide_loading_overlay(self):
+        logger.debug("hide_loading_overlay called")
         if self.loading_overlay:
             self.loading_overlay.hide()
             QApplication.processEvents()
@@ -929,7 +935,10 @@ class MainWindow(QMainWindow):
                         (earliest_date_for_files(files_in_cluster), idx, cluster_id)
                     )
                 timeline_entry = (
-                    (earliest_date_for_files(unclustered_files), len(sorted_cluster_ids))
+                    (
+                        earliest_date_for_files(unclustered_files),
+                        len(sorted_cluster_ids),
+                    )
                     if unclustered_files
                     else None
                 )
@@ -2172,7 +2181,9 @@ class MainWindow(QMainWindow):
             return
 
         if is_video_extension(file_path):
-            self._display_single_video_preview(file_path, metadata, file_data_from_model)
+            self._display_single_video_preview(
+                file_path, metadata, file_data_from_model
+            )
             return
 
         primary_viewer = self.advanced_image_viewer.get_primary_viewer()
@@ -2255,7 +2266,9 @@ class MainWindow(QMainWindow):
             }
         )
         self._last_displayed_preview_path = file_path
-        self._update_status_bar_for_image(file_path, metadata, None, file_data_from_model)
+        self._update_status_bar_for_image(
+            file_path, metadata, None, file_data_from_model
+        )
 
         if self.sidebar_visible:
             self._update_sidebar_with_current_selection()
@@ -2940,9 +2953,7 @@ class MainWindow(QMainWindow):
         #
         # Note: We only try to get from cache (no generation) if thumbnails are enabled
         if media_type == "video":
-            item.setIcon(
-                self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
-            )
+            item.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         elif self.menu_manager.toggle_thumbnails_action.isChecked():
             # Try to get from cache only (won't generate if missing)
             # Determine cache key: apply_auto_edits is True for RAW files
@@ -3648,9 +3659,7 @@ class MainWindow(QMainWindow):
             self._update_sidebar_with_current_selection()
 
         self._set_sidebar_visibility(True)
-        self.statusBar().showMessage(
-            "Details sidebar shown. Press I to toggle.", 3000
-        )
+        self.statusBar().showMessage("Details sidebar shown. Press I to toggle.", 3000)
 
     def _hide_metadata_sidebar(self):
         """Hide the metadata sidebar"""
