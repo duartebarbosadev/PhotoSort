@@ -284,7 +284,15 @@ def main():
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="PhotoSort")
-    parser.add_argument("--folder", type=str, help="Open specified folder at startup")
+    startup_group = parser.add_mutually_exclusive_group()
+    startup_group.add_argument(
+        "--folder", type=str, help="Open specified folder at startup"
+    )
+    startup_group.add_argument(
+        "--last-folder",
+        action="store_true",
+        help="Open the most recently used folder at startup",
+    )
     parser.add_argument(
         "--clear-cache", action="store_true", help="Clear all caches before starting"
     )
@@ -379,6 +387,7 @@ def main():
 
     from ui.main_window import MainWindow
     from ui.app_controller import AppController
+    from core.app_settings import get_recent_folders
 
     # Handle clear-cache argument
     if args.clear_cache:
@@ -388,8 +397,17 @@ def main():
             f"Caches cleared via command line in {time.perf_counter() - clear_application_caches_start_time:.4f}s"
         )
 
+    initial_folder = args.folder
+    if not initial_folder and args.last_folder:
+        recent_folders = get_recent_folders()
+        if recent_folders:
+            initial_folder = recent_folders[0]
+            logging.info("Opening last used folder: %s", initial_folder)
+        else:
+            logging.warning("No recent folders available for --last-folder.")
+
     mainwindow_instantiation_start_time = time.perf_counter()
-    window = MainWindow(initial_folder=args.folder)
+    window = MainWindow(initial_folder=initial_folder)
     apply_app_identity(app, window)
     logging.debug(
         f"MainWindow instantiated in {time.perf_counter() - mainwindow_instantiation_start_time:.4f}s"
