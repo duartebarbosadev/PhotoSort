@@ -159,7 +159,7 @@ class FileScanner(QObject):
                             image_paths_for_blur.append(full_path)
 
                         # Emit found file immediately (with no blur status yet)
-                        self.files_found.emit([file_info])
+                        self.files_found.emit([dict(file_info)])
                         logger.debug(f"Found: {os.path.basename(full_path)}")
 
             if not self._is_running:

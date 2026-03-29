@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QMenu, QStyle
 from core.image_processing.image_rotator import ImageRotator
 from core.app_settings import get_recent_folders
 from core.media_utils import is_image_extension
+from ui.helpers.cluster_utils import ClusterUtils
 
 logger = logging.getLogger(__name__)
 
@@ -825,8 +826,12 @@ class MenuManager:
         # Cluster Management (only in similarity mode)
         if main_win.group_by_similarity_mode and self.app_state.cluster_results:
             menu.addSeparator()
-            selected_paths = main_win._get_selected_file_paths_from_view()
-            num_selected = len(selected_paths) if len(selected_paths) > 1 else 1
+            selected_paths = [
+                path
+                for path in main_win._get_selected_file_paths_from_view()
+                if is_image_extension(path)
+            ]
+            num_selected = len(selected_paths)
             label_suffix = f" ({num_selected} images)" if num_selected > 1 else ""
 
             move_to_new_cluster = QAction(
@@ -857,22 +862,8 @@ class MenuManager:
             )
 
     def _parse_cluster_id(self, value) -> Optional[int]:
-        """Parse cluster ID from a cluster result value.
-
-        Values can be either integers or strings like "1 - 87.34%".
-        """
-        if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            # Try to extract the cluster ID from "1 - 87.34%" format
-            try:
-                return int(value.split(" - ")[0])
-            except (ValueError, IndexError):
-                try:
-                    return int(value)
-                except ValueError:
-                    return None
-        return None
+        """Delegate to the shared parser used elsewhere in the UI."""
+        return ClusterUtils.parse_cluster_id(value)
 
     def _move_selection_to_new_cluster(self):
         """Move selected images to a new cluster."""

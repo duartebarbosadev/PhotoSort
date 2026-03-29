@@ -26,6 +26,7 @@ from core.image_features.blur_detector import (
 from core.caching.exif_cache import ExifCache
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.media_utils import is_image_extension
+from ui.helpers.cluster_utils import ClusterUtils
 import logging
 
 logger = logging.getLogger(__name__)
@@ -140,21 +141,8 @@ class DroppableTreeView(QTreeView):
         return None
 
     def _parse_cluster_id(self, value) -> Optional[int]:
-        """Parse cluster ID from a cluster result value.
-
-        Values can be either integers or strings like "1 - 87.34%".
-        """
-        if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            try:
-                return int(value.split(" - ")[0])
-            except (ValueError, IndexError):
-                try:
-                    return int(value)
-                except ValueError:
-                    return None
-        return None
+        """Delegate to the shared parser used elsewhere in the UI."""
+        return ClusterUtils.parse_cluster_id(value)
 
     def _move_dragged_items_to_cluster(self, target_cluster_id: int):
         """Move currently selected items to the target cluster."""
@@ -212,7 +200,9 @@ class DroppableTreeView(QTreeView):
             self.highlighted_drop_target_index
             and self.highlighted_drop_target_index.isValid()
         ):
-            item = self.model().itemFromIndex(self.highlighted_drop_target_index)
+            item = self.main_window.file_system_model.itemFromIndex(
+                self.highlighted_drop_target_index
+            )
             if item:
                 item.setBackground(
                     self.original_item_brush
@@ -227,14 +217,16 @@ class DroppableTreeView(QTreeView):
         pos = event.position().toPoint()
         proxy_index = self.indexAt(pos)
 
-        # Clear previous highlight if different
-        if self.highlighted_drop_target_index != proxy_index:
-            self._clear_drop_highlight()
-
         if not proxy_index.isValid():
+            self._clear_drop_highlight()
             return
 
         source_index = self.main_window.proxy_model.mapToSource(proxy_index)
+
+        # Clear previous highlight if different
+        if self.highlighted_drop_target_index != source_index:
+            self._clear_drop_highlight()
+
         item = self.main_window.file_system_model.itemFromIndex(source_index)
         if not item:
             return
