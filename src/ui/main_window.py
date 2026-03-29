@@ -742,7 +742,7 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         central_widget.setObjectName("appCentralWidget")
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
