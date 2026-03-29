@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
 )
 from PyQt6.QtCore import Qt, QSize, QUrl, QEventLoop, QThread
-from PyQt6.QtGui import QIcon, QDesktopServices, QFont
+from PyQt6.QtGui import QIcon, QDesktopServices
 
 from core.app_settings import (
     get_rotation_confirm_lossy,
@@ -39,81 +39,15 @@ from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
     ModelNotFoundError,
 )
+from ui.dialog_components import (
+    build_card,
+    build_dialog_footer,
+    build_dialog_header,
+    make_dialog_draggable,
+)
 from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 
 logger = logging.getLogger(__name__)
-
-
-def _make_dialog_draggable(dialog):
-    """Attach mouse handlers to a frameless dialog to support click-drag moving."""
-    _state = {"offset": None}
-
-    def _press(e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            _state["offset"] = (
-                e.globalPosition().toPoint() - dialog.frameGeometry().topLeft()
-            )
-            e.accept()
-
-    def _move(e):
-        if (e.buttons() & Qt.MouseButton.LeftButton) and _state["offset"] is not None:
-            dialog.move(e.globalPosition().toPoint() - _state["offset"])
-            e.accept()
-
-    dialog.mousePressEvent = _press  # type: ignore[assignment]
-    dialog.mouseMoveEvent = _move  # type: ignore[assignment]
-
-
-def _build_dialog_header(title, icon_text, parent_layout):
-    """Build a standard dialog header bar with icon and title. Returns the header frame."""
-    header = QFrame()
-    header.setObjectName("dialogHeader")
-    h_layout = QHBoxLayout(header)
-    h_layout.setContentsMargins(22, 14, 22, 14)
-    h_layout.setSpacing(10)
-    icon_lbl = QLabel(icon_text)
-    icon_lbl.setObjectName("dialogHeaderIcon")
-    h_layout.addWidget(icon_lbl)
-    title_lbl = QLabel(title)
-    title_lbl.setObjectName("dialogHeaderTitle")
-    font = QFont()
-    font.setPointSize(13)
-    font.setBold(True)
-    title_lbl.setFont(font)
-    h_layout.addWidget(title_lbl)
-    h_layout.addStretch()
-    parent_layout.addWidget(header)
-    return header
-
-
-def _build_dialog_footer(dialog, parent_layout, buttons):
-    """Build a footer bar with the given buttons list [(text, objectName, callback, is_default)].
-    Returns the footer frame."""
-    footer = QFrame()
-    footer.setObjectName("dialogFooter")
-    f_layout = QHBoxLayout(footer)
-    f_layout.setContentsMargins(22, 10, 22, 14)
-    f_layout.setSpacing(10)
-    f_layout.addStretch()
-    for text, obj_name, callback, is_default in buttons:
-        btn = QPushButton(text)
-        btn.setObjectName(obj_name)
-        btn.clicked.connect(callback)
-        if is_default:
-            btn.setDefault(True)
-        f_layout.addWidget(btn)
-    parent_layout.addWidget(footer)
-    return footer
-
-
-def _build_card(object_name="dialogCard"):
-    """Create a card frame and its inner VBoxLayout. Returns (card, layout)."""
-    card = QFrame()
-    card.setObjectName(object_name)
-    layout = QVBoxLayout(card)
-    layout.setSpacing(10)
-    layout.setContentsMargins(16, 14, 16, 14)
-    return card, layout
 
 
 def _build_kv_row(key_text, value_widget, parent_layout):
@@ -179,14 +113,14 @@ class DialogManager:
         dialog.setFixedSize(500, 480)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        _make_dialog_draggable(dialog)
+        make_dialog_draggable(dialog)
 
         outer = QVBoxLayout(dialog)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         # --- Header ---
-        _build_dialog_header("About PhotoSort", "📷", outer)
+        build_dialog_header("About PhotoSort", "📷", outer)
 
         # --- Scrollable content ---
         scroll = QScrollArea()
@@ -212,7 +146,7 @@ class DialogManager:
             version_text = None
 
         if version_text:
-            ver_card, ver_layout = _build_card("dialogCard")
+            ver_card, ver_layout = build_card("dialogCard")
             ver_layout.setSpacing(6)
             ver_lbl = QLabel(f"Version {version_text}")
             ver_lbl.setObjectName("aboutVersion")
@@ -220,7 +154,7 @@ class DialogManager:
             body.addWidget(ver_card)
 
         # Technology card
-        tech_card, tech_layout = _build_card("dialogCard")
+        tech_card, tech_layout = build_card("dialogCard")
 
         tech_title = QLabel("Technology Stack")
         tech_title.setObjectName("cardSectionTitle")
@@ -257,7 +191,7 @@ class DialogManager:
         body.addWidget(tech_card)
 
         # Quick actions card
-        actions_card, actions_layout = _build_card("dialogCard")
+        actions_card, actions_layout = build_card("dialogCard")
         act_title = QLabel("Quick Actions")
         act_title.setObjectName("cardSectionTitle")
         actions_layout.addWidget(act_title)
@@ -291,8 +225,7 @@ class DialogManager:
         body.addStretch()
 
         # --- Footer ---
-        _build_dialog_footer(
-            dialog,
+        build_dialog_footer(
             outer,
             [
                 ("Close", "aboutCloseButton", dialog.accept, True),
@@ -401,21 +334,21 @@ class DialogManager:
         dialog.setModal(True)
         dialog.setFixedSize(500, 260)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        _make_dialog_draggable(dialog)
+        make_dialog_draggable(dialog)
 
         outer = QVBoxLayout(dialog)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         # Header
-        _build_dialog_header("Lossy Rotation", "⚠", outer)
+        build_dialog_header("Lossy Rotation", "⚠", outer)
 
         # Content
         body = QVBoxLayout()
         body.setSpacing(14)
         body.setContentsMargins(22, 16, 22, 10)
 
-        card, card_layout = _build_card("dialogCard")
+        card, card_layout = build_card("dialogCard")
         card_layout.setSpacing(10)
 
         message_text = f"Lossless rotation failed for:\n{filename}"
@@ -443,8 +376,7 @@ class DialogManager:
         outer.addStretch()
 
         # Footer
-        _build_dialog_footer(
-            dialog,
+        build_dialog_footer(
             outer,
             [
                 ("Cancel", "lossyRotationCancelButton", dialog.reject, False),
@@ -495,14 +427,14 @@ class DialogManager:
         dialog.resize(640, 620)
         dialog.setMinimumSize(520, 480)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        _make_dialog_draggable(dialog)
+        make_dialog_draggable(dialog)
 
         outer = QVBoxLayout(dialog)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         # Header
-        _build_dialog_header("Preferences", "⚙", outer)
+        build_dialog_header("Preferences", "⚙", outer)
 
         # Scrollable content
         scroll_area = QScrollArea()
@@ -519,7 +451,7 @@ class DialogManager:
         scroll_area.setWidget(content_frame)
 
         # --- Performance Mode Card ---
-        perf_card, perf_layout = _build_card("dialogCard")
+        perf_card, perf_layout = build_card("dialogCard")
         perf_title = QLabel("Performance Mode")
         perf_title.setObjectName("cardSectionTitle")
         perf_layout.addWidget(perf_title)
@@ -604,7 +536,7 @@ class DialogManager:
         content_layout.addWidget(perf_card)
 
         # --- AI Engine Card ---
-        ai_card, ai_layout = _build_card("dialogCard")
+        ai_card, ai_layout = build_card("dialogCard")
         ai_title = QLabel("AI Rating Engine")
         ai_title.setObjectName("cardSectionTitle")
         ai_layout.addWidget(ai_title)
@@ -951,16 +883,6 @@ class DialogManager:
 
         content_layout.addStretch()
 
-        # Footer
-        _build_dialog_footer(
-            dialog,
-            outer,
-            [
-                ("Cancel", "preferencesCancelButton", dialog.reject, False),
-                ("Save", "preferencesSaveButton", lambda: None, True),
-            ],
-        )
-
         def save_preferences():
             if balanced_radio.isChecked():
                 set_performance_mode(PerformanceMode.BALANCED)
@@ -1017,14 +939,15 @@ class DialogManager:
             )
             dialog.accept()
 
-        # Re-bind the save button to the actual save function
-        footer_widget = outer.itemAt(outer.count() - 1).widget()
-        for btn in footer_widget.findChildren(QPushButton):
-            if btn.objectName() == "preferencesSaveButton":
-                btn.clicked.connect(save_preferences)
-                break
+        # Footer
+        build_dialog_footer(
+            outer,
+            [
+                ("Cancel", "preferencesCancelButton", dialog.reject, False),
+                ("Save", "preferencesSaveButton", save_preferences, True),
+            ],
+        )
 
-        dialog.setLayout(outer)
         dialog.exec()
         logger.info("Closed preferences dialog")
 
@@ -1078,14 +1001,14 @@ class DialogManager:
         dialog.setObjectName("cacheManagementDialog")
         dialog.setMinimumSize(480, 520)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        _make_dialog_draggable(dialog)
+        make_dialog_draggable(dialog)
 
         outer_layout = QVBoxLayout(dialog)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
 
         # Dialog header
-        _build_dialog_header("Cache Management", "⚙", outer_layout)
+        build_dialog_header("Cache Management", "⚙", outer_layout)
 
         # Scrollable content
         scroll_area = QScrollArea()
@@ -1254,8 +1177,7 @@ class DialogManager:
         main_layout.addStretch()
 
         # Footer
-        _build_dialog_footer(
-            dialog,
+        build_dialog_footer(
             outer_layout,
             [
                 ("Close", "cacheDialogCloseButton", dialog.accept, True),
@@ -1291,14 +1213,14 @@ class DialogManager:
         dialog.setModal(True)
         dialog.setMinimumSize(600, 450)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        _make_dialog_draggable(dialog)
+        make_dialog_draggable(dialog)
 
         outer = QVBoxLayout(dialog)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         # Header
-        _build_dialog_header(title_text, "🗑", outer)
+        build_dialog_header(title_text, "🗑", outer)
 
         # Content
         body = QVBoxLayout()
@@ -1336,8 +1258,7 @@ class DialogManager:
         outer.addLayout(body)
 
         # Footer
-        _build_dialog_footer(
-            dialog,
+        build_dialog_footer(
             outer,
             [
                 ("Cancel", "deleteDialogCancelButton", dialog.reject, False),
@@ -1558,14 +1479,14 @@ class DialogManager:
         dialog.setModal(True)
         dialog.setMinimumSize(600, 450)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        _make_dialog_draggable(dialog)
+        make_dialog_draggable(dialog)
 
         outer = QVBoxLayout(dialog)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         # Header
-        _build_dialog_header(dialog_title, "⚠", outer)
+        build_dialog_header(dialog_title, "⚠", outer)
 
         # Content
         body = QVBoxLayout()

@@ -20,7 +20,11 @@ from PyQt6.QtWidgets import (
 
 from core.update_checker import UpdateInfo
 from core.app_settings import set_update_check_enabled
-from ui.dialog_manager import _make_dialog_draggable, _build_dialog_header, _build_card
+from ui.dialog_components import (
+    build_card,
+    build_dialog_header,
+    make_dialog_draggable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +43,7 @@ class UpdateNotificationDialog(QDialog):
         self.resize(550, 520)
         self.setObjectName("updateNotificationDialog")
 
-        _make_dialog_draggable(self)
+        make_dialog_draggable(self)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -49,7 +53,7 @@ class UpdateNotificationDialog(QDialog):
         outer.setSpacing(0)
 
         # Header
-        _build_dialog_header(
+        build_dialog_header(
             f"PhotoSort {self.update_info.version} Available", "🔄", outer
         )
 
@@ -59,7 +63,7 @@ class UpdateNotificationDialog(QDialog):
         body.setContentsMargins(20, 14, 20, 14)
 
         # Version comparison card
-        ver_card, ver_layout = _build_card("dialogCard")
+        ver_card, ver_layout = build_card("dialogCard")
         ver_row = QHBoxLayout()
         ver_row.setSpacing(12)
 
@@ -95,7 +99,7 @@ class UpdateNotificationDialog(QDialog):
         body.addWidget(notes_area)
 
         # Settings card
-        settings_card, settings_layout = _build_card("dialogCard")
+        settings_card, settings_layout = build_card("dialogCard")
         self.disable_checks_checkbox = QCheckBox(
             "Don't check for updates automatically"
         )
@@ -253,7 +257,7 @@ class UpdateCheckDialog(QDialog):
         self.resize(400, 160)
         self.setObjectName("updateCheckDialog")
 
-        _make_dialog_draggable(self)
+        make_dialog_draggable(self)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -263,7 +267,7 @@ class UpdateCheckDialog(QDialog):
         outer.setSpacing(0)
 
         # Header
-        _build_dialog_header("Check for Updates", "🔍", outer)
+        build_dialog_header("Check for Updates", "🔍", outer)
 
         # Content
         body = QVBoxLayout()
