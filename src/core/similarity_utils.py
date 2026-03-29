@@ -35,7 +35,7 @@ def _get_raw_dimensions(image_path: str) -> Tuple[int, int] | None:
                 getattr(sizes, "height", 0) or getattr(sizes, "iheight", 0) or 0
             )
             flip = int(getattr(sizes, "flip", 0) or 0)
-            if flip in {5, 6}:
+            if flip in {5, 6, 7, 8}:
                 width, height = height, width
 
             if width > 0 and height > 0:

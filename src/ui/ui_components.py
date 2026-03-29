@@ -120,7 +120,10 @@ class DroppableTreeView(QTreeView):
             return False
 
         item_data = item.data(Qt.ItemDataRole.UserRole)
-        return isinstance(item_data, str) and item_data.startswith("cluster_header_")
+        if not (isinstance(item_data, str) and item_data.startswith("cluster_header_")):
+            return False
+
+        return self._get_cluster_id_from_index(proxy_index) is not None
 
     def _get_cluster_id_from_index(self, proxy_index) -> Optional[int]:
         """Extract cluster ID from a cluster header item."""

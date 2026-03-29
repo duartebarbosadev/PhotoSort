@@ -337,6 +337,15 @@ class MetadataProcessor:
                     os.path.basename(operational_path),
                 )
                 video_metadata = _build_basic_video_metadata(operational_path)
+                if isinstance(video_metadata, dict):
+                    if (
+                        video_metadata.get("file_path") != cache_key_path
+                        and "operational_path" not in video_metadata
+                    ):
+                        video_metadata["operational_path"] = video_metadata.get(
+                            "file_path"
+                        )
+                    video_metadata["file_path"] = cache_key_path
                 results[cache_key_path]["raw_metadata"] = video_metadata
                 if exif_disk_cache:
                     exif_disk_cache.set(cache_key_path, video_metadata)
