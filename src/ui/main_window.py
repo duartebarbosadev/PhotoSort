@@ -245,8 +245,8 @@ class MainWindow(QMainWindow):
         self.file_deletion_controller = FileDeletionController(self)
         self.rotation_controller = RotationController(
             rotation_suggestions=self.rotation_suggestions,
-            apply_rotations=lambda mapping: self.app_controller._apply_approved_rotations(
-                mapping
+            apply_rotations=lambda mapping: (
+                self.app_controller._apply_approved_rotations(mapping)
             ),
         )
         # Navigation & selection controllers use this MainWindow as context

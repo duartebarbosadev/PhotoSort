@@ -749,8 +749,9 @@ class MenuManager:
             for folder in recent_folders:
                 action = QAction(folder, self.main_window)
                 action.triggered.connect(
-                    lambda checked=False,
-                    f=folder: self.main_window.app_controller.load_folder(f)
+                    lambda checked=False, f=folder: (
+                        self.main_window.app_controller.load_folder(f)
+                    )
                 )
                 self.open_recent_menu.addAction(action)
 
