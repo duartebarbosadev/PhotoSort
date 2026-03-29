@@ -488,6 +488,7 @@ class IndividualViewer(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("individualViewerCard")
         self._file_path = None
         self._is_selected = False
         self._media_type: Optional[str] = None
@@ -854,20 +855,14 @@ class IndividualViewer(QWidget):
         """Set the visual selection state of the viewer."""
         if self._is_selected != is_selected:
             self._is_selected = is_selected
-            if is_selected:
-                self.setProperty("selected", True)
-                self.setStyleSheet(
-                    "IndividualViewer[selected='true'] { border: 2px solid #0078d7; }"
-                )
-            else:
-                self.setProperty("selected", False)
-                self.setStyleSheet("IndividualViewer { border: none; }")
+            self.setProperty("selected", is_selected)
 
             # Refresh style
             current_style = self.style()
             if current_style:
                 current_style.unpolish(self)
                 current_style.polish(self)
+            self.update()
 
     def mousePressEvent(self, event: QMouseEvent):
         """Handle mouse press events to show context menu on right-click."""
@@ -1034,7 +1029,7 @@ class SynchronizedImageViewer(QWidget):
         self.view_mode_group = QButtonGroup(self)
 
         # Single View Button
-        self.single_view_btn = QPushButton("▢")
+        self.single_view_btn = QPushButton("Single")
         self.single_view_btn.setToolTip("Single View")
         self.single_view_btn.setCheckable(True)
         self.single_view_btn.setChecked(True)
@@ -1045,7 +1040,7 @@ class SynchronizedImageViewer(QWidget):
         view_mode_layout.addWidget(self.single_view_btn)
 
         # Side by Side Button
-        self.side_by_side_btn = QPushButton("▢▢")
+        self.side_by_side_btn = QPushButton("Compare")
         self.side_by_side_btn.setToolTip("Side by Side")
         self.side_by_side_btn.setCheckable(True)
         self.side_by_side_btn.setObjectName("viewModeButton")
@@ -1112,7 +1107,7 @@ class SynchronizedImageViewer(QWidget):
         fit_layout.setSpacing(8)
 
         # Fit to View Button
-        self.fit_btn = QPushButton("⊡")
+        self.fit_btn = QPushButton("Fit")
         self.fit_btn.setToolTip("Fit to View (0)")
         self.fit_btn.setObjectName("fitButton")
         self.fit_btn.clicked.connect(self._fit_all)
@@ -1131,7 +1126,7 @@ class SynchronizedImageViewer(QWidget):
         controls_layout.addStretch()
 
         # -- Sync Toggle --
-        self.sync_button = QPushButton("⟲ Sync")
+        self.sync_button = QPushButton("Sync")
         self.sync_button.setCheckable(True)
         self.sync_button.setChecked(True)
         self.sync_button.setToolTip("Synchronize Pan & Zoom")

@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class MetadataCard(QFrame):
     """A card widget that displays a category of metadata with smooth animations"""
 
-    def __init__(self, title: str, icon: str = "📷", parent=None):
+    def __init__(self, title: str, icon: str = "MD", parent=None):
         super().__init__(parent)
         self.setObjectName("metadataCard")
         self.title = title
@@ -53,21 +53,32 @@ class MetadataCard(QFrame):
         # Header with title and expand/collapse functionality
         self.header = QFrame()
         self.header.setObjectName("cardHeader")
-        self.header.setFixedHeight(32)
+        self.header.setFixedHeight(38)
         self.header.setCursor(Qt.CursorShape.PointingHandCursor)
 
         header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(10, 6, 10, 6)
+        header_layout.setContentsMargins(10, 7, 10, 7)
+        header_layout.setSpacing(8)
 
-        # Icon and title
         self.icon_label = QLabel(self.icon)
-        self.icon_label.setFont(QFont("Segoe UI Emoji", 14))
-        self.title_label = QLabel(self.title)
-        self.title_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.icon_label.setObjectName("metadataCardIcon")
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setFixedSize(24, 20)
 
-        # Expand/collapse indicator
-        self.expand_indicator = QLabel("▼")
-        self.expand_indicator.setFont(QFont("Segoe UI", 8))
+        self.title_label = QLabel(self.title)
+        self.title_label.setObjectName("metadataCardTitle")
+        title_font = self.title_label.font()
+        title_font.setPointSize(10)
+        title_font.setWeight(QFont.Weight.Bold)
+        self.title_label.setFont(title_font)
+
+        self.expand_indicator = QLabel("v")
+        self.expand_indicator.setObjectName("metadataCardChevron")
+        indicator_font = self.expand_indicator.font()
+        indicator_font.setPointSize(8)
+        self.expand_indicator.setFont(indicator_font)
+        self.expand_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.expand_indicator.setFixedWidth(14)
 
         header_layout.addWidget(self.icon_label)
         header_layout.addWidget(self.title_label)
@@ -81,8 +92,8 @@ class MetadataCard(QFrame):
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
         )
         self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(10, 6, 10, 8)
-        self.content_layout.setSpacing(4)
+        self.content_layout.setContentsMargins(10, 8, 10, 10)
+        self.content_layout.setSpacing(6)
 
         main_layout.addWidget(self.header)
         main_layout.addWidget(self.content_widget)
@@ -101,11 +112,11 @@ class MetadataCard(QFrame):
         self.is_expanded = not self.is_expanded
 
         if self.is_expanded:
-            self.expand_indicator.setText("▼")
+            self.expand_indicator.setText("v")
             self.animation.setStartValue(0)
             self.animation.setEndValue(self.content_widget.sizeHint().height())
         else:
-            self.expand_indicator.setText("▶")
+            self.expand_indicator.setText(">")
             self.animation.setStartValue(self.content_widget.height())
             self.animation.setEndValue(0)
 
@@ -113,15 +124,18 @@ class MetadataCard(QFrame):
 
     def add_info_row(self, label: str, value: str, value_color: Optional[str] = None):
         """Add an information row to the card"""
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 1, 0, 1)
+        row_widget = QWidget()
+        row_widget.setObjectName("metadataRow")
+        row = QHBoxLayout(row_widget)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.setSpacing(8)
 
-        label_widget = QLabel(label + ":")
-        label_widget.setObjectName("metadataLabel")
-        label_widget.setFixedWidth(65)
+        label_widget = QLabel(label.upper())
+        label_widget.setObjectName("metadataRowLabel")
+        label_widget.setFixedWidth(92)
 
         value_widget = QLabel(str(value) if value is not None else "N/A")
-        value_widget.setObjectName("metadataValue")
+        value_widget.setObjectName("metadataRowValue")
         value_widget.setWordWrap(True)
 
         if value_color:
@@ -129,8 +143,7 @@ class MetadataCard(QFrame):
 
         row.addWidget(label_widget)
         row.addWidget(value_widget, 1)
-
-        self.content_layout.addLayout(row)
+        self.content_layout.addWidget(row_widget)
 
     def add_progress_bar(
         self, label: str, value: float, max_value: float = 100.0, color: str = "#0078D4"
@@ -167,13 +180,14 @@ class MetadataCard(QFrame):
     ):
         """Add a row for comparing multiple values."""
         row_widget = QWidget()
+        row_widget.setObjectName("metadataRow")
         row_layout = QHBoxLayout(row_widget)
-        row_layout.setContentsMargins(0, 1, 0, 1)
-        row_layout.setSpacing(12)
+        row_layout.setContentsMargins(8, 4, 8, 4)
+        row_layout.setSpacing(10)
 
-        label_widget = QLabel(label + ":")
-        label_widget.setObjectName("metadataLabel")
-        label_widget.setFixedWidth(65)
+        label_widget = QLabel(label.upper())
+        label_widget.setObjectName("metadataRowLabel")
+        label_widget.setFixedWidth(92)
         row_layout.addWidget(label_widget)
 
         # This widget will contain all the value labels
@@ -188,7 +202,7 @@ class MetadataCard(QFrame):
         for value in values:
             value_str = str(value) if value is not None else "N/A"
             value_widget = QLabel(value_str)
-            value_widget.setObjectName("metadataValue")
+            value_widget.setObjectName("metadataRowValue")
             value_widget.setWordWrap(False)
             value_widget.setMinimumWidth(120)
             value_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -269,17 +283,24 @@ class MetadataSidebar(QWidget):
         layout = QHBoxLayout(header)
         layout.setContentsMargins(16, 12, 16, 12)
 
-        # Icon and title
-        icon_label = QLabel("📋")
-        icon_label.setFont(QFont("Segoe UI Emoji", 16))
+        icon_label = QLabel("MD")
+        icon_label.setObjectName("sidebarHeaderBadge")
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_label.setFixedSize(28, 22)
 
         self.title_label = QLabel("Image Details")
-        self.title_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        self.title_label.setObjectName("sidebarHeaderTitle")
+        sidebar_title_font = self.title_label.font()
+        sidebar_title_font.setPointSize(12)
+        sidebar_title_font.setWeight(QFont.Weight.Bold)
+        self.title_label.setFont(sidebar_title_font)
 
         # Close button
         close_button = QLabel("✕")
         close_button.setObjectName("closeButton")
-        close_button.setFont(QFont("Segoe UI", 12))
+        close_button_font = close_button.font()
+        close_button_font.setPointSize(12)
+        close_button.setFont(close_button_font)
         close_button.setFixedSize(24, 24)
         close_button.setAlignment(Qt.AlignmentFlag.AlignCenter)
         close_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -918,7 +939,7 @@ class MetadataSidebar(QWidget):
 
     def add_file_info_card(self):
         """Add file information card"""
-        card = MetadataCard("File Information", "📁")
+        card = MetadataCard("File Information", "FI")
 
         if os.path.exists(self.current_image_path):
             # File name
@@ -981,7 +1002,7 @@ class MetadataSidebar(QWidget):
 
     def add_video_properties_card(self):
         """Add video-specific metadata card"""
-        card = MetadataCard("Video Details", "▶")
+        card = MetadataCard("Video Details", "VD")
         rows_added = 0
 
         width = self.raw_metadata.get("video_width") or self.raw_metadata.get(
@@ -1033,7 +1054,7 @@ class MetadataSidebar(QWidget):
     def add_camera_settings_card(self):
         """Add camera and capture settings card"""
 
-        card = MetadataCard("Camera & Settings", "📷")
+        card = MetadataCard("Camera & Settings", "CA")
 
         # Check if we have any camera-related metadata using pyexiv2 format
         make = (
@@ -1152,7 +1173,7 @@ class MetadataSidebar(QWidget):
 
     def add_technical_details_card(self):
         """Add technical image details card"""
-        card = MetadataCard("Technical Details", "⚙️")
+        card = MetadataCard("Technical Details", "TD")
 
         # Color space
         color_space = (
@@ -1271,7 +1292,7 @@ class MetadataSidebar(QWidget):
 
     def add_image_properties_card(self):
         """Add image properties card"""
-        card = MetadataCard("Image Properties", "🖼️")
+        card = MetadataCard("Image Properties", "IP")
 
         # Dimensions - try multiple possible tag names, pyexiv2 format first
         width = (
@@ -1332,7 +1353,7 @@ class MetadataSidebar(QWidget):
         logger.info(
             f"[MetadataSidebar] add_debug_metadata_card called with {len(self.raw_metadata)} keys"
         )
-        card = MetadataCard("Debug: Raw Metadata", "🔍")
+        card = MetadataCard("Debug: Raw Metadata", "DB")
 
         # Show first 15 key-value pairs for debugging
         items_shown = 0

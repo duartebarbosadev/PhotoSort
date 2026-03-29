@@ -45,7 +45,7 @@ import traceback  # noqa: E402  # For global exception handler
 
 from PyQt6.QtCore import Qt, QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen  # noqa: E402
-from PyQt6.QtGui import QIcon, QPixmap  # noqa: E402
+from PyQt6.QtGui import QIcon, QPixmap, QFont, QFontDatabase  # noqa: E402
 
 
 def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
@@ -86,6 +86,57 @@ def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
     except Exception as e:
         logging.error(f"Failed to load stylesheet '{filename}': {e}")
         return ""
+
+
+def _pick_ui_font_family() -> str:
+    """Choose a professional sans font that is commonly available on each OS."""
+    available = set(QFontDatabase.families())
+
+    candidates_by_platform = {
+        "darwin": [
+            "SF Pro Text",
+            "SF Pro Display",
+            "Helvetica Neue",
+            "Helvetica",
+            "Arial",
+        ],
+        "win32": [
+            "Segoe UI Variable Text",
+            "Segoe UI Variable",
+            "Segoe UI",
+            "Arial",
+        ],
+    }
+    default_candidates = [
+        "Inter",
+        "Noto Sans",
+        "Ubuntu",
+        "Cantarell",
+        "DejaVu Sans",
+        "Liberation Sans",
+        "Arial",
+    ]
+
+    candidates = candidates_by_platform.get(sys.platform, default_candidates)
+    if sys.platform not in candidates_by_platform:
+        candidates = default_candidates
+
+    for family in candidates:
+        if family in available:
+            return family
+
+    app_default = QFont().defaultFamily()
+    return app_default or "Sans Serif"
+
+
+def configure_application_font(app: QApplication) -> str:
+    """Set the global UI font once so widgets and dialogs inherit it consistently."""
+    family = _pick_ui_font_family()
+    font = app.font()
+    font.setFamily(family)
+    app.setFont(font)
+    logging.info("Using UI font family: %s", family)
+    return family
 
 
 # --- Global Exception Handler ---
@@ -233,6 +284,7 @@ def main():
 
     # Create QApplication early for splash screen
     app = QApplication(sys.argv)
+    configure_application_font(app)
 
     # --- Splash: show immediately (no text), then set message after it’s visible ---
     splash_total_start = time.perf_counter()
