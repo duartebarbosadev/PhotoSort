@@ -1016,14 +1016,14 @@ class SynchronizedImageViewer(QWidget):
         self.controls_frame = QFrame()
         self.controls_frame.setObjectName("advancedViewerToolbar")
         controls_layout = QHBoxLayout(self.controls_frame)
-        controls_layout.setContentsMargins(12, 6, 12, 6)
-        controls_layout.setSpacing(16)
+        controls_layout.setContentsMargins(14, 0, 14, 0)
+        controls_layout.setSpacing(10)
 
         # -- View Mode Section --
         view_mode_container = QFrame()
         view_mode_container.setObjectName("viewModeContainer")
         view_mode_layout = QHBoxLayout(view_mode_container)
-        view_mode_layout.setContentsMargins(4, 2, 4, 2)
+        view_mode_layout.setContentsMargins(3, 3, 3, 3)
         view_mode_layout.setSpacing(0)
 
         self.view_mode_group = QButtonGroup(self)
@@ -1051,6 +1051,9 @@ class SynchronizedImageViewer(QWidget):
         self.view_mode_group.addButton(self.side_by_side_btn)
         view_mode_layout.addWidget(self.side_by_side_btn)
 
+        # Leading spacer to center controls
+        controls_layout.addStretch()
+
         controls_layout.addWidget(view_mode_container)
 
         # Vertical separator
@@ -1063,8 +1066,8 @@ class SynchronizedImageViewer(QWidget):
         zoom_container = QFrame()
         zoom_container.setObjectName("zoomContainer")
         zoom_layout = QHBoxLayout(zoom_container)
-        zoom_layout.setContentsMargins(8, 2, 8, 2)
-        zoom_layout.setSpacing(10)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(8)
 
         # Zoom Out Button
         self.zoom_out_btn = QPushButton("−")
@@ -1103,8 +1106,8 @@ class SynchronizedImageViewer(QWidget):
         fit_container = QFrame()
         fit_container.setObjectName("fitContainer")
         fit_layout = QHBoxLayout(fit_container)
-        fit_layout.setContentsMargins(8, 2, 8, 2)
-        fit_layout.setSpacing(8)
+        fit_layout.setContentsMargins(0, 0, 0, 0)
+        fit_layout.setSpacing(6)
 
         # Fit to View Button
         self.fit_btn = QPushButton("Fit")
@@ -1122,10 +1125,10 @@ class SynchronizedImageViewer(QWidget):
 
         controls_layout.addWidget(fit_container)
 
-        # Spacer
+        # Trailing spacer to center controls
         controls_layout.addStretch()
 
-        # -- Sync Toggle --
+        # -- Sync Toggle (far right) --
         self.sync_button = QPushButton("Sync")
         self.sync_button.setCheckable(True)
         self.sync_button.setChecked(True)
