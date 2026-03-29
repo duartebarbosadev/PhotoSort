@@ -273,7 +273,13 @@ class DialogManager:
         for text, obj, callback in [
             ("Models Folder", "aboutModelsButton", self._open_models_folder),
             ("Logs Folder", "aboutLogsButton", self._open_logs_folder),
-            ("GitHub", "aboutGithubButton", lambda: webbrowser.open("https://github.com/duartebarbosadev/PhotoSort")),
+            (
+                "GitHub",
+                "aboutGithubButton",
+                lambda: webbrowser.open(
+                    "https://github.com/duartebarbosadev/PhotoSort"
+                ),
+            ),
         ]:
             btn = QPushButton(text)
             btn.setObjectName(obj)
@@ -285,9 +291,13 @@ class DialogManager:
         body.addStretch()
 
         # --- Footer ---
-        _build_dialog_footer(dialog, outer, [
-            ("Close", "aboutCloseButton", dialog.accept, True),
-        ])
+        _build_dialog_footer(
+            dialog,
+            outer,
+            [
+                ("Close", "aboutCloseButton", dialog.accept, True),
+            ],
+        )
 
         # Start CUDA detection worker
         worker_manager = self.parent.app_controller.worker_manager
@@ -433,10 +443,14 @@ class DialogManager:
         outer.addStretch()
 
         # Footer
-        _build_dialog_footer(dialog, outer, [
-            ("Cancel", "lossyRotationCancelButton", dialog.reject, False),
-            ("Proceed", "lossyRotationProceedButton", dialog.accept, True),
-        ])
+        _build_dialog_footer(
+            dialog,
+            outer,
+            [
+                ("Cancel", "lossyRotationCancelButton", dialog.reject, False),
+                ("Proceed", "lossyRotationProceedButton", dialog.accept, True),
+            ],
+        )
 
         result = dialog.exec()
         proceed = result == QDialog.DialogCode.Accepted
@@ -938,10 +952,14 @@ class DialogManager:
         content_layout.addStretch()
 
         # Footer
-        _build_dialog_footer(dialog, outer, [
-            ("Cancel", "preferencesCancelButton", dialog.reject, False),
-            ("Save", "preferencesSaveButton", lambda: None, True),
-        ])
+        _build_dialog_footer(
+            dialog,
+            outer,
+            [
+                ("Cancel", "preferencesCancelButton", dialog.reject, False),
+                ("Save", "preferencesSaveButton", lambda: None, True),
+            ],
+        )
 
         def save_preferences():
             if balanced_radio.isChecked():
@@ -1086,19 +1104,31 @@ class DialogManager:
         # --- Thumbnail Cache Card ---
         thumb_card_layout = self._build_cache_card("Thumbnails", "🖼", main_layout)
         self.parent.thumb_cache_usage_label = QLabel()
-        self._build_cache_row("Disk Usage", self.parent.thumb_cache_usage_label, thumb_card_layout)
+        self._build_cache_row(
+            "Disk Usage", self.parent.thumb_cache_usage_label, thumb_card_layout
+        )
 
         delete_thumb_cache_button = QPushButton("Clear Thumbnails")
         delete_thumb_cache_button.setObjectName("deleteThumbnailCacheButton")
-        delete_thumb_cache_button.clicked.connect(self.parent._clear_thumbnail_cache_action)
+        delete_thumb_cache_button.clicked.connect(
+            self.parent._clear_thumbnail_cache_action
+        )
         thumb_card_layout.addWidget(delete_thumb_cache_button)
 
         # --- Preview Image Cache Card ---
-        preview_card_layout = self._build_cache_card("Preview Images", "🔍", main_layout)
+        preview_card_layout = self._build_cache_card(
+            "Preview Images", "🔍", main_layout
+        )
         self.parent.preview_cache_configured_limit_label = QLabel()
-        self._build_cache_row("Size Limit", self.parent.preview_cache_configured_limit_label, preview_card_layout)
+        self._build_cache_row(
+            "Size Limit",
+            self.parent.preview_cache_configured_limit_label,
+            preview_card_layout,
+        )
         self.parent.preview_cache_usage_label = QLabel()
-        self._build_cache_row("Disk Usage", self.parent.preview_cache_usage_label, preview_card_layout)
+        self._build_cache_row(
+            "Disk Usage", self.parent.preview_cache_usage_label, preview_card_layout
+        )
 
         # Limit selector row
         limit_row = QHBoxLayout()
@@ -1110,16 +1140,28 @@ class DialogManager:
 
         self.parent.preview_cache_size_combo = QComboBox()
         self.parent.preview_cache_size_combo.setObjectName("previewCacheSizeCombo")
-        self.parent.preview_cache_size_options_gb = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
+        self.parent.preview_cache_size_options_gb = [
+            0.25,
+            0.5,
+            1.0,
+            2.0,
+            4.0,
+            8.0,
+            16.0,
+        ]
         self.parent.preview_cache_size_combo.addItems(
             [f"{size:.2f} GB" for size in self.parent.preview_cache_size_options_gb]
         )
         current_conf_gb = get_preview_cache_size_gb()
         try:
-            current_index = self.parent.preview_cache_size_options_gb.index(current_conf_gb)
+            current_index = self.parent.preview_cache_size_options_gb.index(
+                current_conf_gb
+            )
             self.parent.preview_cache_size_combo.setCurrentIndex(current_index)
         except ValueError:
-            self.parent.preview_cache_size_combo.addItem(f"{current_conf_gb:.2f} GB (Custom)")
+            self.parent.preview_cache_size_combo.addItem(
+                f"{current_conf_gb:.2f} GB (Custom)"
+            )
             self.parent.preview_cache_size_combo.setCurrentIndex(
                 self.parent.preview_cache_size_combo.count() - 1
             )
@@ -1127,21 +1169,31 @@ class DialogManager:
 
         apply_preview_limit_button = QPushButton("Apply")
         apply_preview_limit_button.setObjectName("applyPreviewLimitButton")
-        apply_preview_limit_button.clicked.connect(self.parent._apply_preview_cache_limit_action)
+        apply_preview_limit_button.clicked.connect(
+            self.parent._apply_preview_cache_limit_action
+        )
         limit_row.addWidget(apply_preview_limit_button)
         preview_card_layout.addLayout(limit_row)
 
         delete_preview_cache_button = QPushButton("Clear Preview Cache")
         delete_preview_cache_button.setObjectName("deletePreviewCacheButton")
-        delete_preview_cache_button.clicked.connect(self.parent._clear_preview_cache_action)
+        delete_preview_cache_button.clicked.connect(
+            self.parent._clear_preview_cache_action
+        )
         preview_card_layout.addWidget(delete_preview_cache_button)
 
         # --- EXIF Cache Card ---
         exif_card_layout = self._build_cache_card("EXIF Metadata", "📋", main_layout)
         self.parent.exif_cache_configured_limit_label = QLabel()
-        self._build_cache_row("Size Limit", self.parent.exif_cache_configured_limit_label, exif_card_layout)
+        self._build_cache_row(
+            "Size Limit",
+            self.parent.exif_cache_configured_limit_label,
+            exif_card_layout,
+        )
         self.parent.exif_cache_usage_label = QLabel()
-        self._build_cache_row("Disk Usage", self.parent.exif_cache_usage_label, exif_card_layout)
+        self._build_cache_row(
+            "Disk Usage", self.parent.exif_cache_usage_label, exif_card_layout
+        )
 
         # EXIF limit selector row
         exif_limit_row = QHBoxLayout()
@@ -1159,10 +1211,14 @@ class DialogManager:
         )
         current_exif_conf_mb = get_exif_cache_size_mb()
         try:
-            current_exif_index = self.parent.exif_cache_size_options_mb.index(current_exif_conf_mb)
+            current_exif_index = self.parent.exif_cache_size_options_mb.index(
+                current_exif_conf_mb
+            )
             self.parent.exif_cache_size_combo.setCurrentIndex(current_exif_index)
         except ValueError:
-            self.parent.exif_cache_size_combo.addItem(f"{current_exif_conf_mb} MB (Custom)")
+            self.parent.exif_cache_size_combo.addItem(
+                f"{current_exif_conf_mb} MB (Custom)"
+            )
             self.parent.exif_cache_size_combo.setCurrentIndex(
                 self.parent.exif_cache_size_combo.count() - 1
             )
@@ -1170,7 +1226,9 @@ class DialogManager:
 
         apply_exif_limit_button = QPushButton("Apply")
         apply_exif_limit_button.setObjectName("applyExifLimitButton")
-        apply_exif_limit_button.clicked.connect(self.parent._apply_exif_cache_limit_action)
+        apply_exif_limit_button.clicked.connect(
+            self.parent._apply_exif_cache_limit_action
+        )
         exif_limit_row.addWidget(apply_exif_limit_button)
         exif_card_layout.addLayout(exif_limit_row)
 
@@ -1182,19 +1240,27 @@ class DialogManager:
         # --- Analysis Cache Card ---
         analysis_card_layout = self._build_cache_card("Analysis", "🧠", main_layout)
         self.parent.analysis_cache_usage_label = QLabel()
-        self._build_cache_row("Disk Usage", self.parent.analysis_cache_usage_label, analysis_card_layout)
+        self._build_cache_row(
+            "Disk Usage", self.parent.analysis_cache_usage_label, analysis_card_layout
+        )
 
         clear_analysis_cache_button = QPushButton("Clear Analysis Cache")
         clear_analysis_cache_button.setObjectName("clearAnalysisCacheButton")
-        clear_analysis_cache_button.clicked.connect(self.parent._clear_analysis_cache_action)
+        clear_analysis_cache_button.clicked.connect(
+            self.parent._clear_analysis_cache_action
+        )
         analysis_card_layout.addWidget(clear_analysis_cache_button)
 
         main_layout.addStretch()
 
         # Footer
-        _build_dialog_footer(dialog, outer_layout, [
-            ("Close", "cacheDialogCloseButton", dialog.accept, True),
-        ])
+        _build_dialog_footer(
+            dialog,
+            outer_layout,
+            [
+                ("Close", "cacheDialogCloseButton", dialog.accept, True),
+            ],
+        )
 
         self.parent._update_cache_dialog_labels()
         dialog.exec()
@@ -1270,10 +1336,14 @@ class DialogManager:
         outer.addLayout(body)
 
         # Footer
-        _build_dialog_footer(dialog, outer, [
-            ("Cancel", "deleteDialogCancelButton", dialog.reject, False),
-            ("Move to Trash", "deleteDialogConfirmButton", dialog.accept, True),
-        ])
+        _build_dialog_footer(
+            dialog,
+            outer,
+            [
+                ("Cancel", "deleteDialogCancelButton", dialog.reject, False),
+                ("Move to Trash", "deleteDialogConfirmButton", dialog.accept, True),
+            ],
+        )
 
         result = dialog.exec()
         confirmed = result == QDialog.DialogCode.Accepted

@@ -327,7 +327,9 @@ class MainWindow(QMainWindow):
             if hasattr(self, "left_panel"):
                 folder_display = None
                 if self.app_state.current_folder_path:
-                    folder_display = os.path.basename(self.app_state.current_folder_path)
+                    folder_display = os.path.basename(
+                        self.app_state.current_folder_path
+                    )
                     if not folder_display:
                         folder_display = self.app_state.current_folder_path
                 item_count = len(getattr(self.app_state, "image_files_data", []) or [])
@@ -366,7 +368,9 @@ class MainWindow(QMainWindow):
                 )  # Current count during scan
                 status_text = f"Folder: {folder_name_display}  |  Scanning... ({num_files_found_so_far} files found)"
                 sidebar_item_count = num_files_found_so_far
-                sidebar_subtitle = f"Scanning library • {num_files_found_so_far} files found"
+                sidebar_subtitle = (
+                    f"Scanning library • {num_files_found_so_far} files found"
+                )
             elif self.app_state.image_files_data:  # Scan is finished and there's data
                 num_images = len(self.app_state.image_files_data)
                 num_videos = sum(
