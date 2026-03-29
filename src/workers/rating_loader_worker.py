@@ -12,11 +12,13 @@ from ui.app_state import AppState
 logger = logging.getLogger(__name__)
 
 # DEFAULT_METADATA_WORKERS is no longer needed as batching is handled by MetadataProcessor
+PROGRESS_LOG_INTERVAL = 100
+BATCH_LOG_INTERVAL = 10
 
 
 class RatingLoaderWorker(QObject):
     """
-    Worker to load ratings and other essential metadata for images in the background.
+    Worker to load ratings and other essential metadata for media files in the background.
     Metadata fetching is now done in a single batch call.
     """
 
@@ -69,7 +71,7 @@ class RatingLoaderWorker(QObject):
         processed_count = 0
 
         if not image_paths_to_process:
-            logger.warning("No valid image paths to process.")
+            logger.warning("No valid media paths to process.")
             self._emit(self.finished)
             return
 
@@ -101,6 +103,7 @@ class RatingLoaderWorker(QObject):
             )
 
             metadata_batch_to_emit = []
+            emitted_batch_count = 0
 
             for i, image_path_norm in enumerate(image_paths_to_process):
                 if not self._is_running:
@@ -140,9 +143,17 @@ class RatingLoaderWorker(QObject):
                     or processed_count == total_files
                 ):
                     if metadata_batch_to_emit:
-                        logger.debug(
-                            f"Emitting metadata batch with {len(metadata_batch_to_emit)} items."
-                        )
+                        emitted_batch_count += 1
+                        if (
+                            emitted_batch_count == 1
+                            or emitted_batch_count % BATCH_LOG_INTERVAL == 0
+                            or processed_count == total_files
+                        ):
+                            logger.debug(
+                                "Emitting metadata batch #%d with %d items.",
+                                emitted_batch_count,
+                                len(metadata_batch_to_emit),
+                            )
                         self._emit(
                             self.metadata_batch_loaded, list(metadata_batch_to_emit)
                         )  # Emit a copy
@@ -157,12 +168,25 @@ class RatingLoaderWorker(QObject):
                         self.progress_update, processed_count, total_files, basename
                     )
 
-                logger.debug(f"Processed {processed_count}/{total_files}: {basename}")
+                if (
+                    processed_count == 1
+                    or processed_count % PROGRESS_LOG_INTERVAL == 0
+                    or processed_count == total_files
+                ):
+                    logger.debug(
+                        "Processed %d/%d: %s",
+                        processed_count,
+                        total_files,
+                        basename,
+                    )
 
             # Ensure any remaining items in metadata_batch_to_emit are sent
             if metadata_batch_to_emit:
+                emitted_batch_count += 1
                 logger.debug(
-                    f"Emitting final metadata batch with {len(metadata_batch_to_emit)} items."
+                    "Emitting final metadata batch #%d with %d items.",
+                    emitted_batch_count,
+                    len(metadata_batch_to_emit),
                 )
                 self._emit(self.metadata_batch_loaded, list(metadata_batch_to_emit))
                 metadata_batch_to_emit.clear()

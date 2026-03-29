@@ -1,5 +1,6 @@
 import logging
-from datetime import date as date_obj
+import os
+from datetime import datetime as datetime_obj
 from typing import Dict, List, Optional, Any
 
 import numpy as np
@@ -16,6 +17,24 @@ class ClusterUtils:
     """
 
     @staticmethod
+    def parse_cluster_id(value) -> Optional[int]:
+        """Parse cluster ID from a cluster result value.
+
+        Values can be either integers or strings like "1 - 87.34%".
+        """
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value.split(" - ")[0])
+            except (ValueError, IndexError):
+                try:
+                    return int(value)
+                except ValueError:
+                    return None
+        return None
+
+    @staticmethod
     def group_images_by_cluster(
         image_files_data: List[Dict[str, Any]],
         cluster_results: Dict[str, int],
@@ -29,32 +48,67 @@ class ClusterUtils:
             for img_data in image_files_data
             if isinstance(img_data, dict)
         }
-        for file_path, cluster_id in cluster_results.items():
-            if file_path in image_data_map:
+        for file_path, cluster_value in cluster_results.items():
+            cluster_id = ClusterUtils.parse_cluster_id(cluster_value)
+            if cluster_id is not None and file_path in image_data_map:
                 images_by_cluster.setdefault(cluster_id, []).append(
                     image_data_map[file_path]
                 )
         return images_by_cluster
 
     @staticmethod
+    def _resolve_image_datetime(
+        path: str,
+        date_cache: Dict[str, Optional[datetime_obj]],
+    ) -> Optional[datetime_obj]:
+        """Resolve best-effort image datetime for sorting.
+
+        Priority:
+          1. Existing metadata date cache entry (typically EXIF/XMP creation date).
+          2. Filesystem birth time when available.
+          3. Filesystem modification time fallback.
+        """
+        cached = date_cache.get(path)
+        if cached is not None:
+            return cached
+
+        try:
+            stat_result = os.stat(path)
+        except OSError:
+            return None
+
+        timestamp: Optional[float] = None
+        birth_time = getattr(stat_result, "st_birthtime", 0)
+        if birth_time and birth_time > 0:
+            timestamp = birth_time
+        if timestamp is None or timestamp < 1000000:
+            timestamp = stat_result.st_mtime
+        if not timestamp:
+            return None
+
+        resolved = datetime_obj.fromtimestamp(timestamp)
+        date_cache[path] = resolved
+        return resolved
+
+    @staticmethod
     def get_cluster_timestamps(
         images_by_cluster: Dict[int, List[Dict[str, Any]]],
-        date_cache: Dict[str, Optional[date_obj]],
-    ) -> Dict[int, date_obj]:
-        cluster_timestamps: Dict[int, date_obj] = {}
+        date_cache: Dict[str, Optional[datetime_obj]],
+    ) -> Dict[int, datetime_obj]:
+        cluster_timestamps: Dict[int, datetime_obj] = {}
         for cluster_id, file_data_list in images_by_cluster.items():
-            earliest_date = date_obj.max
+            earliest_date = datetime_obj.max
             found_date = False
             for file_data in file_data_list:
                 path = file_data.get("path") if isinstance(file_data, dict) else None
                 if not path:
                     continue
-                img_date = date_cache.get(path)
+                img_date = ClusterUtils._resolve_image_datetime(path, date_cache)
                 if img_date and img_date < earliest_date:
                     earliest_date = img_date
                     found_date = True
             cluster_timestamps[cluster_id] = (
-                earliest_date if found_date else date_obj.max
+                earliest_date if found_date else datetime_obj.max
             )
         return cluster_timestamps
 
@@ -97,7 +151,7 @@ class ClusterUtils:
     def sort_clusters_by_similarity_time(
         images_by_cluster: Dict[int, List[Dict[str, Any]]],
         embeddings_cache: Dict[str, List[float]],
-        date_cache: Dict[str, Optional[date_obj]],
+        date_cache: Dict[str, Optional[datetime_obj]],
     ) -> List[int]:
         """Sort clusters using PCA of centroids, falling back to time.
 
@@ -113,7 +167,7 @@ class ClusterUtils:
             ordering without computing a full distance matrix (O(n^2)). The
             earliest timestamp is used as deterministic secondary ordering.
 
-            date_obj.max is used as a sentinel for missing timestamps so that
+            datetime_obj.max is used as a sentinel for missing timestamps so that
             clusters lacking dates naturally sink to the end of time-based
             sorts without additional conditionals.
         """
@@ -135,7 +189,7 @@ class ClusterUtils:
             )
             return sorted(
                 cluster_ids,
-                key=lambda cid: cluster_timestamps_fb.get(cid, date_obj.max),
+                key=lambda cid: cluster_timestamps_fb.get(cid, datetime_obj.max),
             )
 
         centroid_matrix = np.stack(
@@ -164,7 +218,7 @@ class ClusterUtils:
         sortable = []
         for cid in cluster_ids:
             pca_val = pca_scores.get(cid, float("inf"))
-            ts_val = cluster_timestamps.get(cid, date_obj.max)
+            ts_val = cluster_timestamps.get(cid, datetime_obj.max)
             sortable.append((cid, pca_val, ts_val))
         sortable.sort(key=lambda x: (x[1], x[2]))
         return [cid for cid, _, _ in sortable]

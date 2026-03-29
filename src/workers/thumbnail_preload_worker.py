@@ -1,6 +1,6 @@
 """
 Thumbnail Preload Worker
-Background worker for preloading image thumbnails without blocking the UI.
+Background worker for preloading media thumbnails without blocking the UI.
 """
 
 import logging
@@ -32,10 +32,10 @@ class ThumbnailPreloadWorker(QObject):
 
     def preload_thumbnails(self, image_paths: List[str]):
         """
-        Preload thumbnails for a list of image paths.
+        Preload thumbnails for a list of media paths.
 
         Args:
-            image_paths: List of image file paths to preload thumbnails for
+            image_paths: List of media file paths to preload thumbnails for
         """
         self._is_running = True
         total = len(image_paths)

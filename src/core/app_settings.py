@@ -64,6 +64,11 @@ OPENAI_BEST_SHOT_PROMPT_KEY = "AI/BestShotPrompt"
 OPENAI_RATING_PROMPT_KEY = "AI/RatingPrompt"
 BEST_SHOT_BATCH_SIZE_KEY = "AI/BestShotBatchSize"
 
+# Cache directories
+SENTENCE_TRANSFORMERS_CACHE_DIR = os.path.join(
+    os.path.expanduser("~"), ".cache", "photosort_hf", "sentence-transformers"
+)
+
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
 DEFAULT_EXIF_CACHE_SIZE_MB = 256  # Default to 256 MB for EXIF cache
@@ -128,7 +133,9 @@ THUMBNAIL_PRELOAD_VISIBLE_MARGIN = (
 THUMBNAIL_MAX_WORKERS = 4  # Max concurrent thumbnail generation threads
 
 # Preview size estimation
-PREVIEW_ESTIMATED_SIZE_FACTOR = 1.35  # Factor for estimating preview sizes
+# Preview cache payload for this app is usually well below original image bytes,
+# especially with large RAW sources. Keep modest headroom to avoid noisy warnings.
+PREVIEW_ESTIMATED_SIZE_FACTOR = 0.30  # Estimate preview cache as 30% of source bytes
 
 # --- AI/ML Constants ---
 # DBSCAN clustering parameters

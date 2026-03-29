@@ -232,6 +232,35 @@ class TestFileScannerParallelBlur:
             assert first_call_file_info["is_blurred"] is None
 
     @patch("core.file_scanner.BlurDetector")
+    def test_discovery_emits_detached_file_info_objects(
+        self, mock_blur_detector, tmp_path
+    ):
+        """Discovery emissions should not share mutable dicts with blur-detection state."""
+        test_file = tmp_path / "test_0.jpg"
+        test_file.touch()
+
+        mock_blur_detector.is_image_blurred.return_value = True
+
+        scanner = FileScanner(Mock())
+        emitted_batches = []
+        final_batches = []
+        scanner.files_found.connect(lambda batch: emitted_batches.append(batch))
+        scanner.thumbnail_preload_finished.connect(
+            lambda batch: final_batches.append(batch)
+        )
+
+        scanner.scan_directory(str(tmp_path), perform_blur_detection=True)
+
+        assert len(emitted_batches) == 1
+        assert len(final_batches) == 1
+        emitted_file_info = emitted_batches[0][0]
+        final_file_info = final_batches[0][0]
+
+        assert emitted_file_info is not final_file_info
+        assert emitted_file_info["is_blurred"] is None
+        assert final_file_info["is_blurred"] is True
+
+    @patch("core.file_scanner.BlurDetector")
     def test_empty_directory_scan(self, mock_blur_detector, tmp_path):
         """Test scanning an empty directory"""
         scanner = FileScanner(Mock())

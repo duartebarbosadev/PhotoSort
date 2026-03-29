@@ -20,6 +20,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 
+from core.media_utils import is_video_extension
+from core.utils.time_utils import format_duration
+
 logger = logging.getLogger(__name__)
 
 
@@ -330,7 +333,10 @@ class MetadataSidebar(QWidget):
         self.comparison_mode = False
         self.current_image_path = image_path
         self.raw_metadata = raw_exif or {}
-        self.title_label.setText("Image Details")
+        if is_video_extension(image_path):
+            self.title_label.setText("Video Details")
+        else:
+            self.title_label.setText("Image Details")
 
         self.update_timer.start()
 
@@ -377,14 +383,17 @@ class MetadataSidebar(QWidget):
                 # File Information Card
                 self.add_file_info_card()
 
-                # Camera & Capture Settings Card
-                self.add_camera_settings_card()
+                if self._is_video_selection():
+                    self.add_video_properties_card()
+                else:
+                    # Camera & Capture Settings Card
+                    self.add_camera_settings_card()
 
-                # Image Properties Card
-                self.add_image_properties_card()
+                    # Image Properties Card
+                    self.add_image_properties_card()
 
-                # Technical Details Card
-                self.add_technical_details_card()
+                    # Technical Details Card
+                    self.add_technical_details_card()
 
             # Add stretch at the end to push all content up
             self.content_layout.addStretch()
@@ -392,6 +401,24 @@ class MetadataSidebar(QWidget):
         except Exception as e:
             logger.error(f"Error updating metadata sidebar: {e}", exc_info=True)
             self.show_error_message(str(e))
+
+    def _is_video_selection(self) -> bool:
+        return bool(
+            self.current_image_path and is_video_extension(self.current_image_path)
+        )
+
+    def _format_bitrate(self, bitrate_bps: Any) -> str:
+        try:
+            bps = float(bitrate_bps)
+        except (TypeError, ValueError):
+            return str(bitrate_bps)
+        if bps <= 0:
+            return "N/A"
+        if bps >= 1_000_000:
+            return f"{bps / 1_000_000:.2f} Mbps"
+        if bps >= 1_000:
+            return f"{bps / 1_000:.0f} Kbps"
+        return f"{bps:.0f} bps"
 
     def _format_display_value(
         self, value: Any, fmt: Optional[str], path: str = ""
@@ -750,15 +777,52 @@ class MetadataSidebar(QWidget):
                 card.content_layout.addWidget(header_row_widget)
 
                 try:
-                    mod_times = [
-                        datetime.fromtimestamp(os.stat(p).st_mtime).strftime(
-                            "%Y-%m-%d %H:%M"
-                        )
-                        for p in self.current_image_paths_for_comparison
-                    ]
-                    card.add_comparison_row("Modified", mod_times)
+                    creation_times = []
+                    for i, p in enumerate(self.current_image_paths_for_comparison):
+                        creation_date = None
+
+                        # Try to get creation date from EXIF data first
+                        if (
+                            self.raw_metadata_for_comparison
+                            and len(self.raw_metadata_for_comparison) > i
+                            and self.raw_metadata_for_comparison[i]
+                        ):
+                            metadata = self.raw_metadata_for_comparison[i]
+                            date_tags = [
+                                "Exif.Photo.DateTimeOriginal",
+                                "Xmp.xmp.CreateDate",
+                                "Exif.Image.DateTime",
+                                "Exif.Photo.DateTime",
+                                "Xmp.photoshop.DateCreated",
+                            ]
+
+                            for tag in date_tags:
+                                if tag in metadata:
+                                    try:
+                                        date_str = metadata[tag]
+                                        creation_date = datetime.strptime(
+                                            date_str.split(".")[0], "%Y:%m:%d %H:%M:%S"
+                                        )
+                                        break
+                                    except (ValueError, TypeError, AttributeError):
+                                        continue
+
+                        # Fallback to filesystem creation/birth time
+                        if creation_date is None:
+                            stat = os.stat(p)
+                            # Use birth time if available, otherwise modified time
+                            if hasattr(stat, "st_birthtime") and stat.st_birthtime > 0:
+                                creation_date = datetime.fromtimestamp(
+                                    stat.st_birthtime
+                                )
+                            else:
+                                creation_date = datetime.fromtimestamp(stat.st_mtime)
+
+                        creation_times.append(creation_date.strftime("%Y-%m-%d %H:%M"))
+
+                    card.add_comparison_row("Created", creation_times)
                     rows_added += 1
-                except FileNotFoundError:
+                except (FileNotFoundError, IndexError):
                     pass
 
             for field in card_def["fields"]:
@@ -874,16 +938,97 @@ class MetadataSidebar(QWidget):
                     size_str = f"{size_mb:.2f} MB"
                 card.add_info_row("Size", size_str)
 
-            # Modified date
-            stat = os.stat(self.current_image_path)
-            mod_time = datetime.fromtimestamp(stat.st_mtime)
-            card.add_info_row("Modified", mod_time.strftime("%B %d, %Y"))
+            # Creation date (from EXIF data or filesystem)
+            creation_date = None
+
+            # Try to get creation date from EXIF data first
+            date_tags = [
+                "Exif.Photo.DateTimeOriginal",
+                "Xmp.xmp.CreateDate",
+                "Exif.Image.DateTime",
+                "Exif.Photo.DateTime",
+                "Xmp.photoshop.DateCreated",
+            ]
+
+            for tag in date_tags:
+                if tag in self.raw_metadata:
+                    try:
+                        date_str = self.raw_metadata[tag]
+                        creation_date = datetime.strptime(
+                            date_str.split(".")[0], "%Y:%m:%d %H:%M:%S"
+                        )
+                        break
+                    except (ValueError, TypeError, AttributeError):
+                        continue
+
+            # Fallback to filesystem creation/birth time
+            if creation_date is None:
+                stat = os.stat(self.current_image_path)
+                # Use birth time if available, otherwise modified time
+                if hasattr(stat, "st_birthtime") and stat.st_birthtime > 0:
+                    creation_date = datetime.fromtimestamp(stat.st_birthtime)
+                else:
+                    creation_date = datetime.fromtimestamp(stat.st_mtime)
+
+            if creation_date:
+                card.add_info_row("Created", creation_date.strftime("%B %d, %Y %H:%M"))
 
             # File extension
             ext = os.path.splitext(self.current_image_path)[1].upper()
             card.add_info_row("Format", ext.lstrip("."))
 
         self.content_layout.insertWidget(-1, card)
+
+    def add_video_properties_card(self):
+        """Add video-specific metadata card"""
+        card = MetadataCard("Video Details", "▶")
+        rows_added = 0
+
+        width = self.raw_metadata.get("video_width") or self.raw_metadata.get(
+            "pixel_width"
+        )
+        height = self.raw_metadata.get("video_height") or self.raw_metadata.get(
+            "pixel_height"
+        )
+        if width and height:
+            try:
+                width_int = int(width)
+                height_int = int(height)
+                card.add_info_row("Resolution", f"{width_int} × {height_int}")
+            except (TypeError, ValueError):
+                card.add_info_row("Resolution", f"{width} × {height}")
+            rows_added += 1
+
+        duration_seconds = self.raw_metadata.get("video_duration_seconds")
+        if duration_seconds:
+            try:
+                duration_text = format_duration(float(duration_seconds))
+            except (TypeError, ValueError):
+                duration_text = ""
+            if duration_text:
+                card.add_info_row("Duration", duration_text)
+                rows_added += 1
+
+        fps = self.raw_metadata.get("video_fps")
+        if fps:
+            try:
+                card.add_info_row("Frame Rate", f"{float(fps):.2f} fps")
+            except (TypeError, ValueError):
+                card.add_info_row("Frame Rate", str(fps))
+            rows_added += 1
+
+        codec = self.raw_metadata.get("video_codec")
+        if codec:
+            card.add_info_row("Codec", str(codec))
+            rows_added += 1
+
+        bitrate = self.raw_metadata.get("video_bitrate_bps")
+        if bitrate:
+            card.add_info_row("Bitrate", self._format_bitrate(bitrate))
+            rows_added += 1
+
+        if rows_added > 0:
+            self.content_layout.insertWidget(-1, card)
 
     def add_camera_settings_card(self):
         """Add camera and capture settings card"""

@@ -9,6 +9,8 @@ from PyQt6.QtWidgets import QMenu, QStyle
 
 from core.image_processing.image_rotator import ImageRotator
 from core.app_settings import get_recent_folders
+from core.media_utils import is_image_extension
+from ui.helpers.cluster_utils import ClusterUtils
 
 logger = logging.getLogger(__name__)
 
@@ -747,8 +749,9 @@ class MenuManager:
             for folder in recent_folders:
                 action = QAction(folder, self.main_window)
                 action.triggered.connect(
-                    lambda checked=False,
-                    f=folder: self.main_window.app_controller.load_folder(f)
+                    lambda checked=False, f=folder: (
+                        self.main_window.app_controller.load_folder(f)
+                    )
                 )
                 self.open_recent_menu.addAction(action)
 
@@ -821,6 +824,25 @@ class MenuManager:
         )
         menu.addAction(show_in_explorer)
 
+        # Cluster Management (only in similarity mode)
+        if main_win.group_by_similarity_mode and self.app_state.cluster_results:
+            menu.addSeparator()
+            selected_paths = [
+                path
+                for path in main_win._get_selected_file_paths_from_view()
+                if is_image_extension(path)
+            ]
+            num_selected = len(selected_paths)
+            label_suffix = f" ({num_selected} images)" if num_selected > 1 else ""
+
+            move_to_new_cluster = QAction(
+                f"Move to New Cluster{label_suffix}", main_win
+            )
+            move_to_new_cluster.triggered.connect(
+                lambda: self._move_selection_to_new_cluster()
+            )
+            menu.addAction(move_to_new_cluster)
+
         menu.exec(active_view.viewport().mapToGlobal(position))
 
     def _open_image_in_explorer(self, file_path: str):
@@ -839,3 +861,58 @@ class MenuManager:
             logger.error(
                 f"Failed to open '{file_path}' in file explorer: {e}", exc_info=True
             )
+
+    def _parse_cluster_id(self, value) -> Optional[int]:
+        """Delegate to the shared parser used elsewhere in the UI."""
+        return ClusterUtils.parse_cluster_id(value)
+
+    def _move_selection_to_new_cluster(self):
+        """Move selected images to a new cluster."""
+        main_win = self.main_window
+        selected_paths = [
+            path
+            for path in main_win._get_selected_file_paths_from_view()
+            if is_image_extension(path)
+        ]
+        if not selected_paths:
+            return
+
+        # Generate new cluster ID by finding max of existing IDs
+        existing_ids = set()
+        for value in self.app_state.cluster_results.values():
+            parsed_id = self._parse_cluster_id(value)
+            if parsed_id is not None:
+                existing_ids.add(parsed_id)
+        new_cluster_id = max(existing_ids, default=0) + 1
+
+        # Update cluster assignments
+        overrides_to_save = {}
+        for path in selected_paths:
+            self.app_state.cluster_results[path] = new_cluster_id
+            overrides_to_save[path] = new_cluster_id
+
+        # Persist to cache
+        if self.app_state.current_folder_path:
+            self.app_state.analysis_cache.save_manual_cluster_overrides(
+                self.app_state.current_folder_path,
+                overrides_to_save,
+            )
+
+        # Update UI - extract cluster IDs for display
+        cluster_ids = set()
+        for value in self.app_state.cluster_results.values():
+            parsed_id = self._parse_cluster_id(value)
+            if parsed_id is not None:
+                cluster_ids.add(parsed_id)
+        sorted_cluster_ids = sorted(cluster_ids)
+
+        main_win.cluster_filter_combo.clear()
+        main_win.cluster_filter_combo.addItems(
+            ["All Clusters"] + [f"Cluster {cid}" for cid in sorted_cluster_ids]
+        )
+        self.update_cluster_filter_menu(sorted_cluster_ids)
+        main_win._rebuild_model_view()
+
+        logger.info(
+            "Moved %d image(s) to new cluster %d", len(selected_paths), new_cluster_id
+        )

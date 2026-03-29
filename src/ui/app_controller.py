@@ -9,13 +9,14 @@ from core.app_settings import (
     get_preview_cache_size_bytes,
     PREVIEW_ESTIMATED_SIZE_FACTOR,
 )
-from core.file_scanner import SUPPORTED_EXTENSIONS
+from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS, is_image_extension
 from core.image_file_ops import ImageFileOperations
 from core.pyexiv2_wrapper import PyExiv2Operations
 
 logger = logging.getLogger(__name__)
 
 AD_HOC_SELECTION_CLUSTER_ID = -1
+THUMBNAIL_PRELOAD_PROGRESS_LOG_INTERVAL = 100
 
 
 # Forward declarations for type hinting to avoid circular imports.
@@ -117,9 +118,12 @@ class AppController(QObject):
         self.main_window = main_window
         self.app_state = app_state
         self.worker_manager = worker_manager
+        self._last_thumbnail_preload_logged = 0
 
         # Track pending rotations for batch preview regeneration
         self._pending_rotated_paths: List[str] = []
+        # Cache volume at preview-preload start, used for per-run diagnostics.
+        self._preview_preload_start_volume_bytes: Optional[int] = None
 
     def connect_signals(self):
         """Connects signals from the WorkerManager to the controller's slots."""
@@ -369,13 +373,19 @@ class AppController(QObject):
             )
             return
 
-        paths_for_similarity = [fd["path"] for fd in self.app_state.image_files_data]
+        paths_for_similarity = self._get_image_paths()
         if not paths_for_similarity:
             self.main_window.hide_loading_overlay()
             self.main_window.statusBar().showMessage(
                 "No valid image paths for similarity analysis.", 3000
             )
             return
+        skipped_videos = len(self._get_media_paths()) - len(paths_for_similarity)
+        if skipped_videos > 0:
+            self.main_window.statusBar().showMessage(
+                f"Analyzing images only. Skipping {skipped_videos} video(s).",
+                4000,
+            )
 
         self.main_window.show_loading_overlay("Starting similarity analysis...")
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
@@ -399,8 +409,22 @@ class AppController(QObject):
         self.main_window.show_loading_overlay("Starting blur detection...")
         self.main_window.menu_manager.detect_blur_action.setEnabled(False)
 
+        image_data_list = self._get_image_file_data()
+        if not image_data_list:
+            self.main_window.hide_loading_overlay()
+            self.main_window.statusBar().showMessage(
+                "No images available for blur detection.", 3000
+            )
+            return
+        skipped_videos = len(self._get_media_paths()) - len(self._get_image_paths())
+        if skipped_videos > 0:
+            self.main_window.statusBar().showMessage(
+                f"Detecting blur for images only. Skipping {skipped_videos} video(s).",
+                4000,
+            )
+
         self.worker_manager.start_blur_detection(
-            self.app_state.image_files_data.copy(),
+            image_data_list,
             self.main_window.blur_detection_threshold,
             True,  # Always enable processing for RAW files
         )
@@ -425,16 +449,29 @@ class AppController(QObject):
 
         self.main_window.rotation_suggestions.clear()
 
-        image_paths = [fd["path"] for fd in self.app_state.image_files_data]
+        image_paths = self._get_image_paths()
+        if not image_paths:
+            self.main_window.hide_loading_overlay()
+            self.main_window.statusBar().showMessage(
+                "No images available for rotation analysis.", 3000
+            )
+            return
+        skipped_videos = len(self._get_media_paths()) - len(image_paths)
+        if skipped_videos > 0:
+            self.main_window.statusBar().showMessage(
+                f"Rotation analysis is image-only. Skipping {skipped_videos} video(s).",
+                4000,
+            )
         self.worker_manager.start_rotation_detection(
             image_paths,
             self.app_state.exif_disk_cache,
         )
 
     def _build_cluster_path_map(self) -> Dict[int, List[str]]:
+        valid_image_paths = set(self._get_image_paths())
         cluster_map: Dict[int, List[str]] = {}
         for path, cluster_id in self.app_state.cluster_results.items():
-            if cluster_id is None:
+            if cluster_id is None or path not in valid_image_paths:
                 continue
             cluster_map.setdefault(cluster_id, []).append(path)
         return cluster_map
@@ -448,9 +485,7 @@ class AppController(QObject):
             return
 
         available_paths = {
-            item.get("path")
-            for item in self.app_state.image_files_data
-            if item.get("path")
+            item.get("path") for item in self._get_image_file_data() if item.get("path")
         }
 
         def _parse_cluster_key(key) -> Optional[int]:
@@ -602,12 +637,19 @@ class AppController(QObject):
             return
 
         # Get selected images
-        selected_paths = self.main_window.get_selected_file_paths()
+        selected_file_paths = self.main_window.get_selected_file_paths()
+        selected_paths = self._filter_image_paths(selected_file_paths)
+        skipped_videos = len(selected_file_paths) - len(selected_paths)
         if not selected_paths:
             self.main_window.statusBar().showMessage(
                 "No images selected. Please select images first.", 3000
             )
             return
+        if skipped_videos > 0:
+            self.main_window.statusBar().showMessage(
+                f"Analyzing selected images only. Skipping {skipped_videos} video(s).",
+                4000,
+            )
 
         if len(selected_paths) < 2:
             self.main_window.statusBar().showMessage(
@@ -644,7 +686,7 @@ class AppController(QObject):
             bool(remaining_clusters)
         )
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
         self.main_window.statusBar().showMessage("Best shot analysis cancelled.", 4000)
         self._restore_analysis_state()
@@ -664,13 +706,18 @@ class AppController(QObject):
             self.main_window.statusBar().showMessage("No images loaded to rate.", 3000)
             return
 
-        image_paths = [item.get("path") for item in self.app_state.image_files_data]
-        image_paths = [path for path in image_paths if path]
+        image_paths = self._get_image_paths()
         if not image_paths:
             self.main_window.statusBar().showMessage(
                 "No valid image paths available for AI rating.", 3000
             )
             return
+        skipped_videos = len(self._get_media_paths()) - len(image_paths)
+        if skipped_videos > 0:
+            self.main_window.statusBar().showMessage(
+                f"AI rating is image-only. Skipping {skipped_videos} video(s).",
+                4000,
+            )
 
         image_paths_to_rate, already_rated_count = self._partition_unrated_images(
             image_paths
@@ -728,13 +775,54 @@ class AppController(QObject):
 
     # --- Private Helper Methods ---
 
+    def _get_image_file_data(
+        self, file_data_list: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        source = file_data_list if file_data_list is not None else []
+        if file_data_list is None:
+            source = getattr(self.app_state, "image_files_data", []) or []
+        return [
+            fd
+            for fd in source
+            if isinstance(fd, dict) and fd.get("media_type", "image") == "image"
+        ]
+
+    def _get_media_file_data(
+        self, file_data_list: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        source = file_data_list if file_data_list is not None else []
+        if file_data_list is None:
+            source = getattr(self.app_state, "image_files_data", []) or []
+        return [fd for fd in source if isinstance(fd, dict) and fd.get("path")]
+
+    def _get_image_paths(
+        self, file_data_list: Optional[List[Dict[str, Any]]] = None
+    ) -> List[str]:
+        return [
+            fd.get("path")
+            for fd in self._get_image_file_data(file_data_list)
+            if fd.get("path")
+        ]
+
+    def _get_media_paths(
+        self, file_data_list: Optional[List[Dict[str, Any]]] = None
+    ) -> List[str]:
+        return [
+            fd.get("path")
+            for fd in self._get_media_file_data(file_data_list)
+            if fd.get("path")
+        ]
+
+    def _filter_image_paths(self, paths: List[str]) -> List[str]:
+        return [path for path in paths if path and is_image_extension(path)]
+
     def _calculate_folder_image_size(self, folder_path: str) -> int:
         total_size_bytes = 0
         try:
             for root, _, files in os.walk(folder_path):
                 for filename in files:
                     ext = os.path.splitext(filename)[1].lower()
-                    if ext in SUPPORTED_EXTENSIONS:
+                    if ext in SUPPORTED_IMAGE_EXTENSIONS:
                         try:
                             full_path = os.path.join(root, filename)
                             total_size_bytes += os.path.getsize(full_path)
@@ -833,11 +921,7 @@ class AppController(QObject):
             self.main_window.hide_loading_overlay()
             return
 
-        paths_for_preloader = [
-            fd["path"]
-            for fd in image_data_list
-            if fd and isinstance(fd, dict) and "path" in fd
-        ]
+        paths_for_preloader = self._get_image_paths(image_data_list)
 
         if not paths_for_preloader:
             self.main_window.hide_loading_overlay()
@@ -845,6 +929,9 @@ class AppController(QObject):
 
         self.main_window.update_loading_text(
             f"Preloading previews ({len(paths_for_preloader)} images)..."
+        )
+        self._preview_preload_start_volume_bytes = (
+            self.main_window.image_pipeline.preview_cache.volume()
         )
         self.worker_manager.start_preview_preload(
             paths_for_preloader,
@@ -855,7 +942,7 @@ class AppController(QObject):
     def handle_files_found(self, batch_of_file_data: List[Dict[str, any]]):
         self.app_state.image_files_data.extend(batch_of_file_data)
         self.main_window.update_loading_text(
-            f"Scanning... {len(self.app_state.image_files_data)} images found"
+            f"Scanning... {len(self.app_state.image_files_data)} files found"
         )
         self.main_window._update_image_info_label()
 
@@ -863,37 +950,30 @@ class AppController(QObject):
         self.main_window.update_loading_text(
             "Scan finished. Populating view and starting background loads..."
         )
+        has_images = bool(self._get_image_file_data())
         self.main_window.menu_manager.open_folder_action.setEnabled(True)
-        self.main_window.menu_manager.analyze_similarity_action.setEnabled(
-            bool(self.app_state.image_files_data)
-        )
+        self.main_window.menu_manager.analyze_similarity_action.setEnabled(has_images)
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            has_images
         )
-        self.main_window.menu_manager.detect_blur_action.setEnabled(
-            bool(self.app_state.image_files_data)
-        )
-        self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self.app_state.image_files_data)
-        )
-        self.main_window.menu_manager.group_by_similarity_action.setEnabled(
-            bool(self.app_state.image_files_data)
-        )
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
-            bool(self.app_state.image_files_data)
-        )
+        self.main_window.menu_manager.detect_blur_action.setEnabled(has_images)
+        self.main_window.menu_manager.auto_rotate_action.setEnabled(has_images)
+        self.main_window.menu_manager.group_by_similarity_action.setEnabled(has_images)
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(has_images)
 
         self._restore_analysis_state()
         self.main_window._rebuild_model_view()
 
-        if self.app_state.image_files_data:
+        media_file_data = self._get_media_file_data()
+        if media_file_data:
             # Start thumbnail preload in background (non-blocking)
-            image_paths = [item["path"] for item in self.app_state.image_files_data]
-            self.worker_manager.start_thumbnail_preload(image_paths)
+            media_paths = self._get_media_paths(media_file_data)
+            if media_paths:
+                self.worker_manager.start_thumbnail_preload(media_paths)
 
-            self.main_window.update_loading_text("Loading Exiftool data...")
+            self.main_window.update_loading_text("Loading metadata...")
             self.worker_manager.start_rating_load(
-                self.app_state.image_files_data.copy(),
+                media_file_data.copy(),
                 self.app_state.rating_disk_cache,
                 self.app_state,
             )
@@ -982,21 +1062,32 @@ class AppController(QObject):
             total_image_size_bytes = self._calculate_folder_image_size(
                 self.app_state.current_folder_path
             )
-            preview_cache_size_bytes = (
+            total_preview_cache_size_bytes = (
                 self.main_window.image_pipeline.preview_cache.volume()
             )
+            preload_start_volume = self._preview_preload_start_volume_bytes
+            if preload_start_volume is None:
+                preview_cache_size_bytes = total_preview_cache_size_bytes
+            else:
+                preview_cache_size_bytes = max(
+                    0, total_preview_cache_size_bytes - preload_start_volume
+                )
             logger.debug("--- Cache vs. Image Size Diagnostics (Post-Preload) ---")
             logger.debug(
                 f"Total Original Image Size: {total_image_size_bytes / (1024 * 1024):.2f} MB"
             )
             logger.debug(
-                f"Final Preview Cache Size: {preview_cache_size_bytes / (1024 * 1024):.2f} MB"
+                f"Preview Cache Added This Preload: {preview_cache_size_bytes / (1024 * 1024):.2f} MB"
+            )
+            logger.debug(
+                f"Current Preview Cache Total: {total_preview_cache_size_bytes / (1024 * 1024):.2f} MB"
             )
             if total_image_size_bytes > 0:
                 ratio = (preview_cache_size_bytes / total_image_size_bytes) * 100
                 logger.debug(f"Cache-to-Image Size Ratio: {ratio:.2f}%")
             logger.debug("---------------------------------------------------------")
 
+        self._preview_preload_start_volume_bytes = None
         self.main_window._update_image_info_label()
 
     def handle_preview_error(self, message: str):
@@ -1016,12 +1107,21 @@ class AppController(QObject):
     def handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
         self.app_state.cluster_results = cluster_results_dict
         self.app_state.clear_best_shot_results()
+
+        # Apply saved manual overrides on top of auto-clustering results
         if self.app_state.current_folder_path:
+            manual_overrides = self.app_state.analysis_cache.get_manual_overrides(
+                self.app_state.current_folder_path
+            )
+            for path, cluster_id in manual_overrides.items():
+                if path in self.app_state.cluster_results:
+                    self.app_state.cluster_results[path] = cluster_id
+
             self.app_state.analysis_cache.save_cluster_results(
-                self.app_state.current_folder_path, cluster_results_dict
+                self.app_state.current_folder_path, self.app_state.cluster_results
             )
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
         if not self.app_state.cluster_results:
@@ -1057,7 +1157,7 @@ class AppController(QObject):
         logger.error(f"Similarity analysis failed: {message}", exc_info=True)
         self.main_window.statusBar().showMessage(f"Similarity Error: {message}", 8000)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.main_window.hide_loading_overlay()
@@ -1093,7 +1193,7 @@ class AppController(QObject):
             bool(remaining_clusters)
         )
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            True
+            bool(self._get_image_file_data())
         )
         self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
         self._restore_analysis_state()
@@ -1112,7 +1212,7 @@ class AppController(QObject):
             bool(remaining_clusters)
         )
         self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            True
+            bool(self._get_image_file_data())
         )
         self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
         self._restore_analysis_state()
@@ -1134,7 +1234,7 @@ class AppController(QObject):
     def handle_ai_rating_complete(self, results: Dict[str, Dict[str, Any]]):
         self.main_window.hide_loading_overlay()
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
         normalized_results = results or {}
@@ -1205,7 +1305,7 @@ class AppController(QObject):
         self.main_window.hide_loading_overlay()
         self.main_window.statusBar().showMessage(f"AI rating error: {message}", 8000)
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
         self._ai_rating_warning_messages = []
 
@@ -1225,7 +1325,7 @@ class AppController(QObject):
         self.main_window.hide_loading_overlay()
         self.main_window.statusBar().showMessage("Blur detection complete.", 5000)
         self.main_window.menu_manager.detect_blur_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
     def handle_blur_detection_error(self, message: str):
@@ -1235,7 +1335,7 @@ class AppController(QObject):
             f"Blur Detection Error: {message}", 8000
         )
         self.main_window.menu_manager.detect_blur_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
     # --- Rotation Detection Handlers ---
@@ -1258,7 +1358,7 @@ class AppController(QObject):
     def handle_rotation_detection_finished(self):
         """Handle completion of rotation detection analysis."""
         self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
         if not self.main_window.rotation_suggestions:
@@ -1307,7 +1407,7 @@ class AppController(QObject):
             f"Rotation Detection Error: {message}", 8000
         )
         self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
     def handle_rotation_model_not_found(self, model_path: str):
@@ -1318,7 +1418,7 @@ class AppController(QObject):
             "Rotation model not found. Analysis cancelled.", 5000
         )
         self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self.app_state.image_files_data)
+            bool(self._get_image_file_data())
         )
 
     def _apply_approved_rotations(self, approved_rotations: Dict[str, int]):
@@ -1417,8 +1517,16 @@ class AppController(QObject):
         if not selected_paths:
             return
 
+        image_paths = self._filter_image_paths(selected_paths)
+        skipped_videos = len(selected_paths) - len(image_paths)
+        if not image_paths:
+            self.main_window.statusBar().showMessage(
+                "Ratings are currently supported for images only.", 3000
+            )
+            return
+
         # Create list of (path, rating) tuples for the worker
-        rating_operations = [(path, rating) for path in selected_paths]
+        rating_operations = [(path, rating) for path in image_paths]
 
         # Start the worker
         self.worker_manager.start_rating_writer(
@@ -1432,9 +1540,15 @@ class AppController(QObject):
             self.main_window.statusBar().showMessage(
                 f"Setting rating to {rating}...", 2000
             )
+        elif skipped_videos > 0:
+            self.main_window.statusBar().showMessage(
+                f"Setting rating to {rating} for {len(image_paths)} image(s). "
+                f"Skipping {skipped_videos} video(s).",
+                3000,
+            )
         else:
             self.main_window.statusBar().showMessage(
-                f"Setting rating to {rating} for {len(selected_paths)} images...", 2000
+                f"Setting rating to {rating} for {len(image_paths)} images...", 2000
             )
 
     def handle_rating_write_progress(self, current: int, total: int, filename: str):
@@ -1594,17 +1708,26 @@ class AppController(QObject):
 
     def handle_thumbnail_preload_progress(self, current: int, total: int, message: str):
         """Handle progress updates from thumbnail preload worker."""
-        logger.debug(f"Thumbnail preload: {current}/{total} - {message}")
+        should_log = (
+            current == 1
+            or current % THUMBNAIL_PRELOAD_PROGRESS_LOG_INTERVAL == 0
+            or current == total
+        )
+        if should_log and current != self._last_thumbnail_preload_logged:
+            self._last_thumbnail_preload_logged = current
+            logger.debug("Thumbnail preload: %d/%d - %s", current, total, message)
         # Optional: Update status bar or progress indicator
         # For now, just log - thumbnails load silently in background
 
     def handle_thumbnail_preload_complete(self):
         """Handle completion of thumbnail preload worker."""
+        self._last_thumbnail_preload_logged = 0
         logger.info("Thumbnail preloading completed - updating tree view icons")
         # Update all tree view items with the cached thumbnails
         self.main_window._update_thumbnails_from_cache()
 
     def handle_thumbnail_preload_error(self, error_message: str):
         """Handle errors from thumbnail preload worker."""
+        self._last_thumbnail_preload_logged = 0
         logger.warning(f"Thumbnail preload error: {error_message}")
         # Non-critical - don't show to user, thumbnails will load on demand

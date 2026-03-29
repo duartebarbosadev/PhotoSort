@@ -22,7 +22,9 @@ class PreviewController:
         paths = [
             d.get("path")
             for d in image_data_list
-            if isinstance(d, dict) and d.get("path")
+            if isinstance(d, dict)
+            and d.get("path")
+            and d.get("media_type", "image") == "image"
         ]
         paths = [p for p in paths if p]
         if not paths:

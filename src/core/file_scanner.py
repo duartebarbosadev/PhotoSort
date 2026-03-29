@@ -7,35 +7,21 @@ from typing import List, Dict, Any
 from PyQt6.QtCore import QObject, pyqtSignal
 from .image_pipeline import ImagePipeline
 from .image_features.blur_detector import BlurDetector
+from .media_utils import (
+    SUPPORTED_MEDIA_EXTENSIONS,
+    SUPPORTED_IMAGE_EXTENSIONS,
+    is_video_extension,
+)
 
 logger = logging.getLogger(__name__)
 
-# Define supported image extensions (case-insensitive)
-SUPPORTED_EXTENSIONS = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".tif",
-    ".tiff",  # Standard formats
-    ".heic",
-    ".heif",  # HEIC/HEIF formats
-    ".arw",
-    ".cr2",
-    ".cr3",
-    ".nef",
-    ".dng",  # Sony, Canon, Nikon, Adobe RAW
-    ".orf",
-    ".raf",
-    ".rw2",
-    ".pef",
-    ".srw",  # Olympus, Fuji, Panasonic, Pentax, Samsung RAW
-    ".raw",  # Generic RAW
-}
+# Backward-compatible alias for image-only extensions.
+SUPPORTED_EXTENSIONS = SUPPORTED_IMAGE_EXTENSIONS
 
 
 class FileScanner(QObject):
     """
-    Scans a directory recursively for supported image files.
+    Scans a directory recursively for supported media files.
     Designed to be run in a separate thread.
     """
 
@@ -43,7 +29,7 @@ class FileScanner(QObject):
     # Emits batches of found file paths
     files_found = pyqtSignal(
         list
-    )  # Emits list of dicts: [{'path': str, 'is_blurred': Optional[bool]}]
+    )  # Emits list of dicts: [{'path': str, 'is_blurred': Optional[bool], 'media_type': str}]
     # Emits progress percentage (0-100) - Optional, can be complex to estimate accurately
     # progress_update = pyqtSignal(int)
     # Emits when scanning is complete
@@ -84,14 +70,24 @@ class FileScanner(QObject):
                 if not self._is_running:
                     return
                 ext = os.path.splitext(filename)[1].lower()
-                if ext in SUPPORTED_EXTENSIONS:
+                if ext in SUPPORTED_MEDIA_EXTENSIONS:
                     full_path = os.path.normpath(os.path.join(root, filename))
-                    # Blur detection would be added here if this method were active
-                    is_blurred = BlurDetector.is_image_blurred(
-                        full_path, threshold=self.blur_detection_threshold
-                    )
+                    if is_video_extension(ext):
+                        is_blurred = None
+                        media_type = "video"
+                    else:
+                        is_blurred = BlurDetector.is_image_blurred(
+                            full_path, threshold=self.blur_detection_threshold
+                        )
+                        media_type = "image"
                     self.files_found.emit(
-                        [{"path": full_path, "is_blurred": is_blurred}]
+                        [
+                            {
+                                "path": full_path,
+                                "is_blurred": is_blurred,
+                                "media_type": media_type,
+                            }
+                        ]
                     )
                     await asyncio.sleep(0)
 
@@ -126,7 +122,8 @@ class FileScanner(QObject):
         blur_threshold: float - Threshold for blur detection if performed.
         """
         self._is_running = True
-        all_file_paths: List[str] = []
+        all_file_data: List[Dict[str, Any]] = []
+        image_paths_for_blur: List[str] = []
 
         try:
             # Phase 1: Fast file discovery
@@ -141,7 +138,7 @@ class FileScanner(QObject):
                         return
 
                     ext = os.path.splitext(filename)[1].lower()
-                    if ext in SUPPORTED_EXTENSIONS:
+                    if ext in SUPPORTED_MEDIA_EXTENSIONS:
                         full_path = os.path.normpath(os.path.join(root, filename))
 
                         # Hard existence check to avoid downstream missing-file errors
@@ -151,25 +148,33 @@ class FileScanner(QObject):
                             )
                             continue
 
-                        all_file_paths.append(full_path)
+                        media_type = "video" if is_video_extension(ext) else "image"
+                        file_info = {
+                            "path": full_path,
+                            "is_blurred": None,
+                            "media_type": media_type,
+                        }
+                        all_file_data.append(file_info)
+                        if media_type == "image":
+                            image_paths_for_blur.append(full_path)
 
                         # Emit found file immediately (with no blur status yet)
-                        file_info = {"path": full_path, "is_blurred": None}
-                        self.files_found.emit([file_info])
+                        self.files_found.emit([dict(file_info)])
                         logger.debug(f"Found: {os.path.basename(full_path)}")
 
             if not self._is_running:
                 self.error.emit("Scan cancelled after file discovery.")
                 return
 
-            logger.info(f"File discovery complete. Found {len(all_file_paths)} images.")
+            logger.info(f"File discovery complete. Found {len(all_file_data)} files.")
 
             # Phase 2: Parallel blur detection (if enabled)
-            all_file_data: List[Dict[str, Any]] = []
+            file_data_by_path = {fd["path"]: fd for fd in all_file_data}
 
-            if perform_blur_detection and all_file_paths:
+            if perform_blur_detection and image_paths_for_blur:
                 logger.info(
-                    f"Starting parallel blur detection for {len(all_file_paths)} images..."
+                    "Starting parallel blur detection for %d images...",
+                    len(image_paths_for_blur),
                 )
                 from core.app_settings import calculate_max_workers
 
@@ -183,7 +188,7 @@ class FileScanner(QObject):
                         executor.submit(
                             self._detect_blur_for_file, path, blur_threshold
                         ): path
-                        for path in all_file_paths
+                        for path in image_paths_for_blur
                     }
 
                     # Process results as they complete
@@ -195,28 +200,32 @@ class FileScanner(QObject):
 
                         try:
                             result = future.result()
-                            all_file_data.append(result)
+                            file_data = file_data_by_path.get(result.get("path", ""))
+                            if file_data:
+                                file_data["is_blurred"] = result.get("is_blurred")
                             completed += 1
 
                             if completed % 10 == 0:  # Log progress every 10 files
                                 logger.debug(
-                                    f"Blur detection progress: {completed}/{len(all_file_paths)}"
+                                    "Blur detection progress: %d/%d",
+                                    completed,
+                                    len(image_paths_for_blur),
                                 )
                         except Exception as e:
                             path = future_to_path[future]
                             logger.error(
                                 f"Error in blur detection for {os.path.basename(path)}: {e}"
                             )
-                            all_file_data.append({"path": path, "is_blurred": None})
+                            file_data = file_data_by_path.get(path)
+                            if file_data:
+                                file_data["is_blurred"] = None
 
                 logger.info(
-                    f"Parallel blur detection complete for {len(all_file_data)} images"
+                    "Parallel blur detection complete for %d images",
+                    len(image_paths_for_blur),
                 )
             else:
-                # No blur detection - just create file data with None blur status
-                all_file_data = [
-                    {"path": path, "is_blurred": None} for path in all_file_paths
-                ]
+                logger.info("Blur detection skipped or no images available.")
 
             if not self._is_running:
                 self.error.emit("Scan cancelled before completion.")

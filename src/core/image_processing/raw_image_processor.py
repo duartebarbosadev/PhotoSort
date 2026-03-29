@@ -4,7 +4,8 @@ import io
 import os
 import logging
 import time
-from typing import Optional, Set
+import threading
+from typing import Optional, Set, Dict, Tuple
 from PIL import ImageEnhance
 from core.app_settings import (
     RAW_AUTO_EDIT_BRIGHTNESS_STANDARD,
@@ -24,6 +25,75 @@ logger = logging.getLogger(__name__)
 # Helper function to check RAW extensions safely
 _rawpy_formats_checked = False
 _rawpy_supported_set: Set[str] = set()
+DETAIL_LOG_INTERVAL = 250
+_raw_thumbnail_log_lock = threading.Lock()
+_raw_thumbnail_stats: Dict[str, int] = {
+    "calls": 0,
+    "embedded": 0,
+    "auto_edits": 0,
+    "fallback_postprocess": 0,
+}
+_raw_preview_log_lock = threading.Lock()
+_raw_preview_stats: Dict[str, int] = {
+    "calls": 0,
+    "embedded_preview": 0,
+    "preview_auto_edits": 0,
+    "preview_fallback_postprocess": 0,
+}
+
+
+def _record_raw_thumbnail_stat(stat_key: str, latest_basename: str) -> None:
+    with _raw_thumbnail_log_lock:
+        if stat_key not in _raw_thumbnail_stats:
+            return
+        _raw_thumbnail_stats[stat_key] += 1
+        total_calls = _raw_thumbnail_stats["calls"]
+        should_log = stat_key == "calls" and (
+            total_calls == 1 or total_calls % DETAIL_LOG_INTERVAL == 0
+        )
+        stats_snapshot = dict(_raw_thumbnail_stats)
+
+    if should_log:
+        logger.debug(
+            "RAW thumbnail summary after %d files: embedded=%d, auto_edits=%d, fallback_postprocess=%d (latest: %s)",
+            total_calls,
+            stats_snapshot["embedded"],
+            stats_snapshot["auto_edits"],
+            stats_snapshot["fallback_postprocess"],
+            latest_basename,
+        )
+
+
+def _record_raw_preview_stat(
+    stat_key: str,
+    latest_basename: str,
+    latest_embedded_size: Optional[Tuple[int, int]] = None,
+) -> None:
+    with _raw_preview_log_lock:
+        if stat_key not in _raw_preview_stats:
+            return
+        _raw_preview_stats[stat_key] += 1
+        total_calls = _raw_preview_stats["calls"]
+        should_log = stat_key == "calls" and (
+            total_calls == 1 or total_calls % DETAIL_LOG_INTERVAL == 0
+        )
+        stats_snapshot = dict(_raw_preview_stats)
+
+    if should_log:
+        size_label = (
+            f"{latest_embedded_size[0]}x{latest_embedded_size[1]}"
+            if latest_embedded_size
+            else "n/a"
+        )
+        logger.debug(
+            "RAW preview summary after %d files: embedded=%d, auto_edits=%d, fallback_postprocess=%d (latest: %s, embedded_size: %s)",
+            total_calls,
+            stats_snapshot["embedded_preview"],
+            stats_snapshot["preview_auto_edits"],
+            stats_snapshot["preview_fallback_postprocess"],
+            latest_basename,
+            size_label,
+        )
 
 
 def is_raw_extension(ext: str) -> bool:
@@ -107,6 +177,8 @@ class RawImageProcessor:
         Applies auto-edits (brightness, contrast) if requested.
         """
         normalized_path = os.path.normpath(image_path)
+        basename = os.path.basename(normalized_path)
+        _record_raw_thumbnail_stat("calls", basename)
         final_pil_img: Optional[Image.Image] = None
 
         try:
@@ -119,15 +191,11 @@ class RawImageProcessor:
                         thumb.format == rawpy.ThumbFormat.JPEG
                         and thumb.data is not None
                     ):
-                        logger.debug(
-                            f"Using embedded JPEG thumbnail for: {os.path.basename(normalized_path)}"
-                        )
+                        _record_raw_thumbnail_stat("embedded", basename)
                         with Image.open(io.BytesIO(thumb.data)) as img:
                             img = ImageOps.exif_transpose(img)  # Correct orientation
                             if apply_auto_edits:
-                                logger.debug(
-                                    f"Applying auto-edits to embedded JPEG thumbnail from RAW: {os.path.basename(normalized_path)}"
-                                )
+                                _record_raw_thumbnail_stat("auto_edits", basename)
                                 img = ImageOps.autocontrast(img)
                                 enhancer = ImageEnhance.Brightness(img)
                                 img = enhancer.enhance(1.1)
@@ -141,9 +209,7 @@ class RawImageProcessor:
                     rawpy.LibRawNoThumbnailError,
                     rawpy.LibRawUnsupportedThumbnailError,
                 ):
-                    logger.debug(
-                        f"No suitable embedded thumbnail for {os.path.basename(normalized_path)}. Post-processing RAW."
-                    )
+                    _record_raw_thumbnail_stat("fallback_postprocess", basename)
                     # Fallback to processing the main image, optimized with half_size=True
                     postprocess_params = {
                         "use_camera_wb": True,
@@ -151,9 +217,7 @@ class RawImageProcessor:
                         "half_size": True,
                     }
                     if apply_auto_edits:
-                        logger.debug(
-                            f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_STANDARD}) via rawpy for: {os.path.basename(normalized_path)}"
-                        )
+                        _record_raw_thumbnail_stat("auto_edits", basename)
                         postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_STANDARD
                         postprocess_params["no_auto_bright"] = False
                     else:
@@ -165,9 +229,6 @@ class RawImageProcessor:
                     rgb = raw.postprocess(**postprocess_params)
                     temp_pil_img = Image.fromarray(rgb)
                     if apply_auto_edits:
-                        logger.debug(
-                            f"Applying ImageOps.autocontrast post-rawpy for: {os.path.basename(normalized_path)}"
-                        )
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
 
                 if temp_pil_img:
@@ -227,6 +288,8 @@ class RawImageProcessor:
         Applies auto-edits if requested.
         """
         normalized_path = os.path.normpath(image_path)
+        basename = os.path.basename(normalized_path)
+        _record_raw_preview_stat("calls", basename)
         pil_img: Optional[Image.Image] = None
         try:
             with rawpy.imread(normalized_path) as raw:
@@ -247,12 +310,14 @@ class RawImageProcessor:
                                 temp_img.width >= MIN_EMBEDDED_WIDTH
                                 and temp_img.height >= MIN_EMBEDDED_HEIGHT
                             ):
-                                logger.info(
-                                    f"Using embedded JPEG preview ({temp_img.width}x{temp_img.height}) for: {os.path.basename(normalized_path)}"
+                                _record_raw_preview_stat(
+                                    "embedded_preview",
+                                    basename,
+                                    (temp_img.width, temp_img.height),
                                 )
                                 if apply_auto_edits:
-                                    logger.debug(
-                                        f"Applying auto-edits to embedded JPEG preview from RAW: {os.path.basename(normalized_path)}"
+                                    _record_raw_preview_stat(
+                                        "preview_auto_edits", basename
                                     )
                                     temp_img = ImageOps.autocontrast(temp_img)
                                     enhancer = ImageEnhance.Brightness(temp_img)
@@ -297,18 +362,14 @@ class RawImageProcessor:
 
                 # Attempt 2: Fallback to postprocessing (half_size for speed)
                 if pil_img is None:
-                    logger.debug(
-                        f"Falling back to raw.postprocess for: {os.path.basename(normalized_path)}"
-                    )
+                    _record_raw_preview_stat("preview_fallback_postprocess", basename)
                     postprocess_params = {
                         "use_camera_wb": True,
                         "output_bps": 8,
                         "half_size": True,
                     }
                     if apply_auto_edits:
-                        logger.debug(
-                            f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_STANDARD}) via rawpy for: {os.path.basename(normalized_path)}"
-                        )
+                        _record_raw_preview_stat("preview_auto_edits", basename)
                         postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_STANDARD
                         postprocess_params["no_auto_bright"] = False
                     else:
@@ -321,9 +382,6 @@ class RawImageProcessor:
                     img_from_raw = Image.fromarray(rgb_array)
 
                     if apply_auto_edits:
-                        logger.debug(
-                            f"Applying ImageOps.autocontrast post-rawpy for: {os.path.basename(normalized_path)}"
-                        )
                         img_from_raw = ImageOps.autocontrast(img_from_raw)
 
                     # Two-pass resampling: fast initial downsize, then high-quality final pass

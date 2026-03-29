@@ -180,6 +180,25 @@ def find_next_multi_image_cluster_head(
             return prev_cid != cid
         return True
 
+    def is_cluster_tail(index: int) -> bool:
+        """Check if image at index is the last image in a multi-image cluster."""
+        cid = cluster_values[index]
+        if cid not in multi_clusters:
+            return False
+        next_index = index + 1
+        while next_index < total:
+            next_path = ordered_paths[next_index]
+            next_cid = cluster_values[next_index]
+            if skip_deleted and is_deleted and is_deleted(next_path):
+                next_index += 1
+                continue
+            return next_cid != cid
+        return True
+
+    # When navigating "up", enter cluster at the tail (last image)
+    # When navigating "down", enter cluster at the head (first image)
+    is_entry_point = is_cluster_tail if direction == "up" else is_cluster_head
+
     for idx in _iter_indices(direction, current_index, total):
         if idx < 0 or idx >= total:
             continue
@@ -189,7 +208,7 @@ def find_next_multi_image_cluster_head(
         cid = cluster_values[idx]
         if current_cluster is not None and cid == current_cluster:
             continue
-        if is_cluster_head(idx):
+        if is_entry_point(idx):
             return path
     return None
 

@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QStyleOptionViewItem,
     QListView,
 )
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex, QPoint, QRect
 from PyQt6.QtGui import (
     QPainter,
     QPalette,
@@ -25,6 +25,8 @@ from core.image_features.blur_detector import (
 )
 from core.caching.exif_cache import ExifCache
 from core.image_processing.raw_image_processor import is_raw_extension
+from core.media_utils import is_image_extension
+from ui.helpers.cluster_utils import ClusterUtils
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,7 @@ logger = logging.getLogger(__name__)
 class DroppableTreeView(QTreeView):
     """
     Custom QTreeView that prevents single-letter shortcuts from being consumed by type-ahead search.
+    Also supports drag-and-drop between clusters in similarity mode.
 
     Architecture for keyboard shortcuts in PhotoSort:
 
@@ -58,8 +61,9 @@ class DroppableTreeView(QTreeView):
         super().__init__(parent)
         self.setModel(model)
         self.main_window = main_window  # To access AppState
-        self.viewport().setAcceptDrops(False)  # Disable drag and drop
-        # self.setDefaultDropAction(Qt.DropAction.MoveAction) # Disable drag and drop
+        self.viewport().setAcceptDrops(True)  # Enable drops
+        self.setDragEnabled(True)  # Enable dragging
+        self.setDropIndicatorShown(True)
         self.highlighted_drop_target_index = None
         self.original_item_brush = None
 
@@ -97,16 +101,111 @@ class DroppableTreeView(QTreeView):
         # For all other keys, use default QTreeView behavior
         super().keyPressEvent(event)
 
+    def _is_cluster_drop_valid(self, event) -> bool:
+        """Check if drop target is a cluster header and we're in similarity mode."""
+        if not self.main_window.group_by_similarity_mode:
+            return False
+
+        if not self.main_window.app_state.cluster_results:
+            return False
+
+        pos = event.position().toPoint()
+        proxy_index = self.indexAt(pos)
+        if not proxy_index.isValid():
+            return False
+
+        source_index = self.main_window.proxy_model.mapToSource(proxy_index)
+        item = self.main_window.file_system_model.itemFromIndex(source_index)
+        if not item:
+            return False
+
+        item_data = item.data(Qt.ItemDataRole.UserRole)
+        if not (isinstance(item_data, str) and item_data.startswith("cluster_header_")):
+            return False
+
+        return self._get_cluster_id_from_index(proxy_index) is not None
+
+    def _get_cluster_id_from_index(self, proxy_index) -> Optional[int]:
+        """Extract cluster ID from a cluster header item."""
+        if not proxy_index.isValid():
+            return None
+
+        source_index = self.main_window.proxy_model.mapToSource(proxy_index)
+        item = self.main_window.file_system_model.itemFromIndex(source_index)
+        if not item:
+            return None
+
+        item_data = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(item_data, str) and item_data.startswith("cluster_header_"):
+            try:
+                return int(item_data.replace("cluster_header_", ""))
+            except ValueError:
+                return None
+        return None
+
+    def _parse_cluster_id(self, value) -> Optional[int]:
+        """Delegate to the shared parser used elsewhere in the UI."""
+        return ClusterUtils.parse_cluster_id(value)
+
+    def _move_dragged_items_to_cluster(self, target_cluster_id: int):
+        """Move currently selected items to the target cluster."""
+        selected_paths = [
+            path
+            for path in self.main_window._get_selected_file_paths_from_view()
+            if is_image_extension(path)
+        ]
+        if not selected_paths:
+            return
+
+        app_state = self.main_window.app_state
+        folder_path = app_state.current_folder_path
+
+        overrides_to_save = {}
+        for path in selected_paths:
+            app_state.cluster_results[path] = target_cluster_id
+            overrides_to_save[path] = target_cluster_id
+
+        # Persist to cache
+        if folder_path:
+            app_state.analysis_cache.save_manual_cluster_overrides(
+                folder_path, overrides_to_save
+            )
+
+        # Update UI - extract cluster IDs for display
+        cluster_ids = set()
+        for value in app_state.cluster_results.values():
+            parsed_id = self._parse_cluster_id(value)
+            if parsed_id is not None:
+                cluster_ids.add(parsed_id)
+        sorted_cluster_ids = sorted(cluster_ids)
+
+        self.main_window.cluster_filter_combo.clear()
+        self.main_window.cluster_filter_combo.addItems(
+            ["All Clusters"] + [f"Cluster {cid}" for cid in sorted_cluster_ids]
+        )
+        self.main_window.menu_manager.update_cluster_filter_menu(sorted_cluster_ids)
+        self.main_window._rebuild_model_view()
+
+        logger.info(
+            "Moved %d image(s) to cluster %d via drag-drop",
+            len(selected_paths),
+            target_cluster_id,
+        )
+
     def dragEnterEvent(self, event: Optional[QDragEnterEvent]):
-        if event:
-            event.ignore()  # Disable drag and drop
+        if event and self._is_cluster_drop_valid(event):
+            event.acceptProposedAction()
+        elif event:
+            event.ignore()
 
     def _clear_drop_highlight(self):
         if (
             self.highlighted_drop_target_index
             and self.highlighted_drop_target_index.isValid()
         ):
-            item = self.model().itemFromIndex(self.highlighted_drop_target_index)
+            item = self.main_window.file_system_model.itemFromIndex(
+                self.highlighted_drop_target_index
+            )
             if item:
                 item.setBackground(
                     self.original_item_brush
@@ -116,17 +215,67 @@ class DroppableTreeView(QTreeView):
         self.highlighted_drop_target_index = None
         self.original_item_brush = None
 
+    def _highlight_drop_target(self, event):
+        """Highlight the cluster header being hovered over."""
+        pos = event.position().toPoint()
+        proxy_index = self.indexAt(pos)
+
+        if not proxy_index.isValid():
+            self._clear_drop_highlight()
+            return
+
+        source_index = self.main_window.proxy_model.mapToSource(proxy_index)
+
+        # Clear previous highlight if different
+        if self.highlighted_drop_target_index != source_index:
+            self._clear_drop_highlight()
+
+        item = self.main_window.file_system_model.itemFromIndex(source_index)
+        if not item:
+            return
+
+        item_data = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(item_data, str) and item_data.startswith("cluster_header_"):
+            if self.highlighted_drop_target_index != source_index:
+                self.original_item_brush = item.background()
+                self.highlighted_drop_target_index = source_index
+                # Use a light highlight color
+                from PyQt6.QtGui import QColor, QBrush
+
+                item.setBackground(QBrush(QColor(100, 150, 200, 100)))
+
     def dragMoveEvent(self, event: Optional[QDragMoveEvent]):
-        if event:
-            event.ignore()  # Disable drag and drop
+        if event and self._is_cluster_drop_valid(event):
+            self._highlight_drop_target(event)
+            event.acceptProposedAction()
+        elif event:
+            self._clear_drop_highlight()
+            event.ignore()
 
     def dragLeaveEvent(self, event):
         self._clear_drop_highlight()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event: Optional[QDropEvent]):
-        if event:
-            event.ignore()  # Disable drag and drop
+        if not event:
+            return
+
+        if not self._is_cluster_drop_valid(event):
+            self._clear_drop_highlight()
+            event.ignore()
+            return
+
+        pos = event.position().toPoint()
+        proxy_index = self.indexAt(pos)
+        target_cluster_id = self._get_cluster_id_from_index(proxy_index)
+
+        self._clear_drop_highlight()
+
+        if target_cluster_id is not None:
+            self._move_dragged_items_to_cluster(target_cluster_id)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     # Use default selection semantics (allow Ctrl+click multi-select on Windows again)
     def selectionCommand(self, index, event=None):  # type: ignore[override]
@@ -199,14 +348,17 @@ class LoadingOverlay(QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._base_flags = self.windowFlags()
+        self._floating = False
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
         self.bg_widget = QWidget(self)
-        # Stylesheet will be applied from dark_theme.qss based on object name or class
-        # self.bg_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0.7);")
+        # Fallback inline style ensures visibility before external stylesheet loads.
+        # External stylesheet (dark_theme.qss) will override this when applied.
+        self.bg_widget.setStyleSheet("background-color: rgba(32, 32, 32, 0.85);")
         main_layout.addWidget(self.bg_widget)
 
         content_layout = QVBoxLayout(self.bg_widget)
@@ -216,6 +368,11 @@ class LoadingOverlay(QWidget):
         self.text_label = QLabel("Loading...", self)
         self.text_label.setObjectName("loading_text_label")  # For styling
         self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Fallback inline style for text visibility before external stylesheet loads
+        self.text_label.setStyleSheet(
+            "color: #E5E5E5; font-size: 15pt; font-weight: bold; "
+            "background-color: transparent; padding: 25px;"
+        )
 
         content_layout.addWidget(self.text_label)
         self.hide()
@@ -234,8 +391,29 @@ class LoadingOverlay(QWidget):
 
     def update_position(self):
         if self.parentWidget() and self.isVisible():
-            self.setGeometry(self.parentWidget().rect())
+            parent = self.parentWidget()
+            if self._floating:
+                top_left = parent.mapToGlobal(QPoint(0, 0))
+                self.setGeometry(QRect(top_left, parent.size()))
+            else:
+                self.setGeometry(parent.rect())
             self.raise_()
+
+    def set_floating(self, enabled: bool):
+        if self._floating == enabled:
+            return
+        self._floating = enabled
+        if enabled:
+            self.setWindowFlags(
+                Qt.WindowType.Tool
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint
+            )
+        else:
+            self.setWindowFlags(self._base_flags)
+        if self.isVisible():
+            self.hide()
+            self.show()
 
 
 # --- Preview Preloader Worker ---

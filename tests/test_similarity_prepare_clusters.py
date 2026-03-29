@@ -1,4 +1,4 @@
-from datetime import date as date_obj
+from datetime import datetime as datetime_obj
 
 from src.ui.controllers.similarity_controller import SimilarityController
 
@@ -81,9 +81,9 @@ def test_prepare_clusters_time_sort():
     app_state.cluster_results = {"x.jpg": 10, "y.jpg": 5, "z.jpg": 10}
     # Provide dates: cluster 10 earliest is 2024-01-01, cluster 5 earliest 2024-06-01 -> 10 should come first
     app_state.date_cache = {
-        "x.jpg": date_obj(2024, 1, 1),
-        "y.jpg": date_obj(2024, 6, 1),
-        "z.jpg": date_obj(2024, 2, 1),
+        "x.jpg": datetime_obj(2024, 1, 1, 8, 0),
+        "y.jpg": datetime_obj(2024, 6, 1, 9, 0),
+        "z.jpg": datetime_obj(2024, 2, 1, 10, 0),
     }
     ctx = DummyCtx(app_state)
     sc = SimilarityController(ctx)
@@ -97,7 +97,7 @@ def test_prepare_clusters_similarity_then_time_with_embeddings():
     app_state.cluster_results = {"p.jpg": 1, "q.jpg": 2, "r.jpg": 1, "s.jpg": 3}
     # identical timestamps so PCA/similarity ordering decides before time fallback
     app_state.date_cache = {
-        f: date_obj(2024, 1, 1) for f in ["p.jpg", "q.jpg", "r.jpg", "s.jpg"]
+        f: datetime_obj(2024, 1, 1, 12, 0) for f in ["p.jpg", "q.jpg", "r.jpg", "s.jpg"]
     }
     # embeddings: construct 2D vectors so PCA produces deterministic ordering by first component
     app_state.embeddings_cache = {
@@ -118,9 +118,9 @@ def test_prepare_clusters_similarity_then_time_without_embeddings_fallback_to_ti
     app_state.image_files_data = _build_images(["m.jpg", "n.jpg", "o.jpg"])
     app_state.cluster_results = {"m.jpg": 7, "n.jpg": 8, "o.jpg": 7}
     app_state.date_cache = {
-        "m.jpg": date_obj(2024, 5, 1),
-        "n.jpg": date_obj(2024, 4, 1),
-        "o.jpg": date_obj(2024, 5, 2),
+        "m.jpg": datetime_obj(2024, 5, 1, 14, 0),
+        "n.jpg": datetime_obj(2024, 4, 1, 10, 0),
+        "o.jpg": datetime_obj(2024, 5, 2, 8, 0),
     }
     # No embeddings -> should fallback to time ordering: cluster 7 earliest 2024-05-01; cluster 8 earliest 2024-04-01 -> 8 first
     ctx = DummyCtx(app_state)

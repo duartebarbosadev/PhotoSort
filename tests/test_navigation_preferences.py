@@ -114,3 +114,45 @@ def test_find_next_multi_cluster_head_none_when_no_multis():
     )
 
     assert target is None
+
+
+def test_find_next_multi_cluster_up_enters_at_tail():
+    """When navigating up, enter a cluster at its last image (tail), not the first."""
+    paths = ["a", "b", "c", "d", "e", "f", "g"]
+    # Cluster 1: a, b, c (3 images)
+    # Cluster 2: d (singleton)
+    # Cluster 3: e, f, g (3 images)
+    clusters = {"a": 1, "b": 1, "c": 1, "d": 2, "e": 3, "f": 3, "g": 3}
+
+    # From cluster 3, navigate up should land on "c" (tail of cluster 1), not "a" (head)
+    target = find_next_multi_image_cluster_head(
+        paths,
+        direction="up",
+        current_index=4,  # "e" in cluster 3
+        cluster_lookup=lambda p: clusters.get(p),
+        skip_deleted=True,
+        is_deleted=lambda _p: False,
+    )
+
+    assert target == "c"  # Should land on tail of cluster 1, not head "a"
+
+
+def test_find_next_multi_cluster_down_enters_at_head():
+    """When navigating down, enter a cluster at its first image (head)."""
+    paths = ["a", "b", "c", "d", "e", "f", "g"]
+    # Cluster 1: a, b, c (3 images)
+    # Cluster 2: d (singleton)
+    # Cluster 3: e, f, g (3 images)
+    clusters = {"a": 1, "b": 1, "c": 1, "d": 2, "e": 3, "f": 3, "g": 3}
+
+    # From cluster 1, navigate down should land on "e" (head of cluster 3), not "g" (tail)
+    target = find_next_multi_image_cluster_head(
+        paths,
+        direction="down",
+        current_index=2,  # "c" in cluster 1
+        cluster_lookup=lambda p: clusters.get(p),
+        skip_deleted=True,
+        is_deleted=lambda _p: False,
+    )
+
+    assert target == "e"  # Should land on head of cluster 3, not tail "g"

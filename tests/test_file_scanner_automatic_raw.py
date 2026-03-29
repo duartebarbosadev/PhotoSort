@@ -51,10 +51,12 @@ class TestFileScannerAutomaticRaw:
         # Create scanner with None parent instead of mock
         scanner = FileScanner(Mock())
 
-        # Mock the _is_running attribute and SUPPORTED_EXTENSIONS
+        # Mock the _is_running attribute and SUPPORTED_MEDIA_EXTENSIONS
         scanner._is_running = True
 
-        with patch("src.core.file_scanner.SUPPORTED_EXTENSIONS", {".jpg", ".arw"}):
+        with patch(
+            "src.core.file_scanner.SUPPORTED_MEDIA_EXTENSIONS", {".jpg", ".arw"}
+        ):
             # Call scan_directory with blur detection enabled
             scanner.scan_directory(
                 "/test", perform_blur_detection=True, blur_threshold=100.0
@@ -87,7 +89,9 @@ class TestFileScannerAutomaticRaw:
 
         # Mock the image pipeline's preload_thumbnails method
         with patch.object(scanner.image_pipeline, "preload_thumbnails") as mock_preload:
-            with patch("src.core.file_scanner.SUPPORTED_EXTENSIONS", {".jpg", ".arw"}):
+            with patch(
+                "src.core.file_scanner.SUPPORTED_MEDIA_EXTENSIONS", {".jpg", ".arw"}
+            ):
                 # Call scan_directory
                 scanner.scan_directory("/test")
 
@@ -101,7 +105,7 @@ class TestFileScannerAutomaticRaw:
 
         with (
             patch("src.core.file_scanner.BlurDetector.is_image_blurred") as mock_blur,
-            patch("src.core.file_scanner.SUPPORTED_EXTENSIONS", {".jpg"}),
+            patch("src.core.file_scanner.SUPPORTED_MEDIA_EXTENSIONS", {".jpg"}),
         ):
             mock_blur.return_value = False
             scanner.blur_detection_threshold = 100.0
@@ -141,7 +145,7 @@ class TestFileScannerIntegration:
             patch("src.core.file_scanner.os.walk") as mock_walk,
             patch("src.core.file_scanner.os.path.isfile") as mock_isfile,
             patch("src.core.file_scanner.BlurDetector.is_image_blurred") as mock_blur,
-            patch("src.core.file_scanner.SUPPORTED_EXTENSIONS", {".jpg", ".arw"}),
+            patch("src.core.file_scanner.SUPPORTED_MEDIA_EXTENSIONS", {".jpg", ".arw"}),
             patch.object(scanner.image_pipeline, "preload_thumbnails") as mock_preload,
         ):
             # Setup test data

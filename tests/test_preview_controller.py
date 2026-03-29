@@ -35,3 +35,15 @@ def test_preview_preload_no_items():
     pc.start_preload([])
     assert ctx.worker_manager.calls == []
     assert any("No previews" in s for s in ctx.statuses)
+
+
+def test_preview_preload_skips_videos():
+    ctx = DummyCtx()
+    pc = PreviewController(ctx)
+    pc.start_preload(
+        [
+            {"path": "a.jpg", "media_type": "image"},
+            {"path": "b.mp4", "media_type": "video"},
+        ]
+    )
+    assert ctx.worker_manager.calls == [["a.jpg"]]

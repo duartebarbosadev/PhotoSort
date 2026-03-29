@@ -1,5 +1,5 @@
 from typing import Dict, Any, List, Optional
-from datetime import date as date_obj
+from datetime import datetime as datetime_obj
 import logging
 import os
 from core.caching.rating_cache import RatingCache
@@ -18,11 +18,11 @@ class AppState:
     def __init__(self):
         self.image_files_data: List[
             Dict[str, Any]
-        ] = []  # {'path': str, 'is_blurred': Optional[bool]}
+        ] = []  # {'path': str, 'is_blurred': Optional[bool], 'media_type': str}
         self.rating_cache: Dict[
             str, int
         ] = {}  # This is an in-memory dictionary for quick UI access
-        self.date_cache: Dict[str, Optional[date_obj]] = {}
+        self.date_cache: Dict[str, Optional[datetime_obj]] = {}
         self.cluster_results: Dict[str, int] = {}  # {image_path: cluster_id}
         self.embeddings_cache: Dict[
             str, List[float]
@@ -44,8 +44,8 @@ class AppState:
             None  # Path of the image in the single/focused viewer
         )
 
-    def clear_all_file_specific_data(self):
-        """Clears all data that is specific to a loaded set of files/folder."""
+    def clear_all_file_specific_data(self, clear_disk_caches: bool = False):
+        """Clears file/folder-scoped state and optionally disk caches."""
         folder_path = self.current_folder_path
         self.image_files_data.clear()
         self.rating_cache.clear()  # Clears in-memory dict
@@ -53,10 +53,10 @@ class AppState:
         self.cluster_results.clear()
         self.embeddings_cache.clear()
         self.marked_for_deletion.clear()  # Clear marked for deletion set
-        if self.rating_disk_cache:
-            self.rating_disk_cache.clear()  # Decide if folder clear should wipe the whole disk cache
-        if self.exif_disk_cache:
-            self.exif_disk_cache.clear()  # Decide if folder clear should wipe the whole disk cache
+        if clear_disk_caches and self.rating_disk_cache:
+            self.rating_disk_cache.clear()
+        if clear_disk_caches and self.exif_disk_cache:
+            self.exif_disk_cache.clear()
         if folder_path and self.analysis_cache:
             self.analysis_cache.clear_folder(folder_path)
         self.focused_image_path = None
