@@ -780,42 +780,46 @@ class MetadataSidebar(QWidget):
                     creation_times = []
                     for i, p in enumerate(self.current_image_paths_for_comparison):
                         creation_date = None
-                        
+
                         # Try to get creation date from EXIF data first
                         if (
-                            self.raw_metadata_for_comparison 
-                            and len(self.raw_metadata_for_comparison) > i 
+                            self.raw_metadata_for_comparison
+                            and len(self.raw_metadata_for_comparison) > i
                             and self.raw_metadata_for_comparison[i]
                         ):
                             metadata = self.raw_metadata_for_comparison[i]
                             date_tags = [
                                 "Exif.Photo.DateTimeOriginal",
-                                "Xmp.xmp.CreateDate", 
+                                "Xmp.xmp.CreateDate",
                                 "Exif.Image.DateTime",
                                 "Exif.Photo.DateTime",
-                                "Xmp.photoshop.DateCreated"
+                                "Xmp.photoshop.DateCreated",
                             ]
-                            
+
                             for tag in date_tags:
                                 if tag in metadata:
                                     try:
                                         date_str = metadata[tag]
-                                        creation_date = datetime.strptime(date_str.split('.')[0], "%Y:%m:%d %H:%M:%S")
+                                        creation_date = datetime.strptime(
+                                            date_str.split(".")[0], "%Y:%m:%d %H:%M:%S"
+                                        )
                                         break
                                     except (ValueError, TypeError, AttributeError):
                                         continue
-                        
+
                         # Fallback to filesystem creation/birth time
                         if creation_date is None:
                             stat = os.stat(p)
                             # Use birth time if available, otherwise modified time
                             if hasattr(stat, "st_birthtime") and stat.st_birthtime > 0:
-                                creation_date = datetime.fromtimestamp(stat.st_birthtime)
+                                creation_date = datetime.fromtimestamp(
+                                    stat.st_birthtime
+                                )
                             else:
                                 creation_date = datetime.fromtimestamp(stat.st_mtime)
-                        
+
                         creation_times.append(creation_date.strftime("%Y-%m-%d %H:%M"))
-                    
+
                     card.add_comparison_row("Created", creation_times)
                     rows_added += 1
                 except (FileNotFoundError, IndexError):
@@ -936,25 +940,27 @@ class MetadataSidebar(QWidget):
 
             # Creation date (from EXIF data or filesystem)
             creation_date = None
-            
+
             # Try to get creation date from EXIF data first
             date_tags = [
                 "Exif.Photo.DateTimeOriginal",
-                "Xmp.xmp.CreateDate", 
+                "Xmp.xmp.CreateDate",
                 "Exif.Image.DateTime",
                 "Exif.Photo.DateTime",
-                "Xmp.photoshop.DateCreated"
+                "Xmp.photoshop.DateCreated",
             ]
-            
+
             for tag in date_tags:
                 if tag in self.raw_metadata:
                     try:
                         date_str = self.raw_metadata[tag]
-                        creation_date = datetime.strptime(date_str.split('.')[0], "%Y:%m:%d %H:%M:%S")
+                        creation_date = datetime.strptime(
+                            date_str.split(".")[0], "%Y:%m:%d %H:%M:%S"
+                        )
                         break
                     except (ValueError, TypeError, AttributeError):
                         continue
-            
+
             # Fallback to filesystem creation/birth time
             if creation_date is None:
                 stat = os.stat(self.current_image_path)
@@ -963,7 +969,7 @@ class MetadataSidebar(QWidget):
                     creation_date = datetime.fromtimestamp(stat.st_birthtime)
                 else:
                     creation_date = datetime.fromtimestamp(stat.st_mtime)
-            
+
             if creation_date:
                 card.add_info_row("Created", creation_date.strftime("%B %d, %Y %H:%M"))
 

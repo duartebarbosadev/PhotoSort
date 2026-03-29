@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QMenu, QStyle
 
 from core.image_processing.image_rotator import ImageRotator
 from core.app_settings import get_recent_folders
+from core.media_utils import is_image_extension
 
 logger = logging.getLogger(__name__)
 
@@ -876,7 +877,11 @@ class MenuManager:
     def _move_selection_to_new_cluster(self):
         """Move selected images to a new cluster."""
         main_win = self.main_window
-        selected_paths = main_win._get_selected_file_paths_from_view()
+        selected_paths = [
+            path
+            for path in main_win._get_selected_file_paths_from_view()
+            if is_image_extension(path)
+        ]
         if not selected_paths:
             return
 

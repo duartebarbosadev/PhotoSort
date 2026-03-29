@@ -25,6 +25,7 @@ from core.image_features.blur_detector import (
 )
 from core.caching.exif_cache import ExifCache
 from core.image_processing.raw_image_processor import is_raw_extension
+from core.media_utils import is_image_extension
 import logging
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,11 @@ class DroppableTreeView(QTreeView):
 
     def _move_dragged_items_to_cluster(self, target_cluster_id: int):
         """Move currently selected items to the target cluster."""
-        selected_paths = self.main_window._get_selected_file_paths_from_view()
+        selected_paths = [
+            path
+            for path in self.main_window._get_selected_file_paths_from_view()
+            if is_image_extension(path)
+        ]
         if not selected_paths:
             return
 
@@ -241,6 +246,7 @@ class DroppableTreeView(QTreeView):
                 self.highlighted_drop_target_index = source_index
                 # Use a light highlight color
                 from PyQt6.QtGui import QColor, QBrush
+
                 item.setBackground(QBrush(QColor(100, 150, 200, 100)))
 
     def dragMoveEvent(self, event: Optional[QDragMoveEvent]):

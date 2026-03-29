@@ -133,7 +133,9 @@ THUMBNAIL_PRELOAD_VISIBLE_MARGIN = (
 THUMBNAIL_MAX_WORKERS = 4  # Max concurrent thumbnail generation threads
 
 # Preview size estimation
-PREVIEW_ESTIMATED_SIZE_FACTOR = 1.35  # Factor for estimating preview sizes
+# Preview cache payload for this app is usually well below original image bytes,
+# especially with large RAW sources. Keep modest headroom to avoid noisy warnings.
+PREVIEW_ESTIMATED_SIZE_FACTOR = 0.30  # Estimate preview cache as 30% of source bytes
 
 # --- AI/ML Constants ---
 # DBSCAN clustering parameters

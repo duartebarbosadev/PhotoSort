@@ -1,8 +1,10 @@
 import os
 import time
 import logging
+import threading
 from typing import Optional, List, Dict, Tuple, Callable
-from PIL import Image
+from PIL import Image, ImageDraw
+import cv2
 
 try:  # Optional; some minimal Pillow builds may omit ImageQt
     from PIL.ImageQt import ImageQt  # type: ignore
@@ -19,8 +21,27 @@ from .image_processing.standard_image_processor import (
 from .image_processing.image_orientation_handler import ImageOrientationHandler
 from .caching.thumbnail_cache import ThumbnailCache
 from .caching.preview_cache import PreviewCache
+from .media_utils import is_video_extension
 
 logger = logging.getLogger(__name__)
+PREVIEW_GENERATION_LOG_INTERVAL = 250
+_preview_generation_log_lock = threading.Lock()
+_preview_generation_count = 0
+
+
+def _record_preview_generation_log(duration: float, basename: str) -> None:
+    global _preview_generation_count
+    with _preview_generation_log_lock:
+        _preview_generation_count += 1
+        count = _preview_generation_count
+    if count == 1 or count % PREVIEW_GENERATION_LOG_INTERVAL == 0:
+        logger.debug(
+            "Generated previews: %d (latest: %s in %.2fs)",
+            count,
+            basename,
+            duration,
+        )
+
 
 # Default sizes and resolutions (can be made configurable or passed in)
 THUMBNAIL_MAX_SIZE: Tuple[int, int] = (256, 256)
@@ -107,6 +128,8 @@ class ImagePipeline:
             pil_img = RawImageProcessor.process_raw_for_thumbnail(
                 normalized_path, apply_auto_edits, THUMBNAIL_MAX_SIZE
             )
+        elif is_video_extension(ext):
+            pil_img = self._extract_video_thumbnail_with_overlay(normalized_path)
         elif ext in SUPPORTED_STANDARD_EXTENSIONS:
             # For standard images, we pass apply_orientation down, as the processor
             # is responsible for reading the EXIF data.
@@ -131,6 +154,93 @@ class ImagePipeline:
 
             self.thumbnail_cache.set(cache_key, pil_img)
         return pil_img
+
+    def _extract_video_thumbnail_with_overlay(
+        self,
+        video_path: str,
+    ) -> Optional[Image.Image]:
+        """Extract first decodable frame and apply a play badge overlay."""
+        capture = cv2.VideoCapture(video_path)
+        if not capture.isOpened():
+            logger.debug(
+                "Video thumbnail extraction failed to open %s",
+                os.path.basename(video_path),
+            )
+            return None
+
+        try:
+            ok, frame = capture.read()
+        except Exception as exc:
+            logger.debug(
+                "Video thumbnail extraction read error for %s: %s",
+                os.path.basename(video_path),
+                exc,
+            )
+            return None
+        finally:
+            capture.release()
+
+        if not ok or frame is None:
+            logger.debug(
+                "Video thumbnail extraction found no frame for %s",
+                os.path.basename(video_path),
+            )
+            return None
+
+        try:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(frame_rgb)
+            pil_img.thumbnail(THUMBNAIL_MAX_SIZE, Image.Resampling.LANCZOS)
+            return self._add_video_play_overlay(pil_img)
+        except Exception as exc:
+            logger.debug(
+                "Video thumbnail conversion failed for %s: %s",
+                os.path.basename(video_path),
+                exc,
+            )
+            return None
+
+    def _add_video_play_overlay(self, pil_img: Image.Image) -> Image.Image:
+        """Draw a compact center play badge so video thumbnails are visually distinct."""
+        base = pil_img.convert("RGBA")
+        draw = ImageDraw.Draw(base, "RGBA")
+
+        width, height = base.size
+        badge_radius = max(10, min(width, height) // 7)
+        center_x = width // 2
+        center_y = height // 2
+
+        draw.ellipse(
+            (
+                center_x - badge_radius,
+                center_y - badge_radius,
+                center_x + badge_radius,
+                center_y + badge_radius,
+            ),
+            fill=(0, 0, 0, 145),
+            outline=(255, 255, 255, 180),
+            width=max(1, badge_radius // 8),
+        )
+
+        triangle_half_height = max(4, badge_radius // 2)
+        triangle_half_width = max(4, badge_radius // 3)
+        triangle_center_x = center_x + max(1, badge_radius // 8)
+        draw.polygon(
+            [
+                (
+                    triangle_center_x - triangle_half_width,
+                    center_y - triangle_half_height,
+                ),
+                (
+                    triangle_center_x - triangle_half_width,
+                    center_y + triangle_half_height,
+                ),
+                (triangle_center_x + triangle_half_width, center_y),
+            ],
+            fill=(255, 255, 255, 230),
+        )
+
+        return base.convert("RGB")
 
     def get_thumbnail_qpixmap(
         self,
@@ -388,8 +498,7 @@ class ImagePipeline:
         progress_callback: Optional[Callable[[int, int], None]] = None,
         should_continue_callback: Optional[Callable[[], bool]] = None,
     ) -> None:
-        """Preloads thumbnails for a list of image paths in parallel.
-        Automatically applies auto-edits for RAW files."""
+        """Preloads thumbnails for a list of media paths in parallel."""
         total_files = len(image_paths)
         processed_count = 0
 
@@ -476,9 +585,7 @@ class ImagePipeline:
             # pil_img = self.image_orientation_handler.exif_transpose(pil_img) # Processors should handle this.
             self.preview_cache.set(preload_cache_key, pil_img)
             duration = time.time() - start_time
-            logger.debug(
-                f"Generated preview for {os.path.basename(normalized_path)} in {duration:.2f}s"
-            )
+            _record_preview_generation_log(duration, os.path.basename(normalized_path))
             return True
         else:
             logger.error(

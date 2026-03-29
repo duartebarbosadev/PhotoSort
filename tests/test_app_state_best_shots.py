@@ -4,7 +4,11 @@ from ui.app_state import AppState
 
 
 def test_best_shot_results_set_and_cleanup():
-    with patch("ui.app_state.RatingCache"), patch("ui.app_state.ExifCache"):
+    with (
+        patch("ui.app_state.RatingCache"),
+        patch("ui.app_state.ExifCache"),
+        patch("ui.app_state.AnalysisCache"),
+    ):
         state = AppState()
         state.cluster_results = {"a.jpg": 1, "b.jpg": 1}
 
@@ -40,7 +44,11 @@ def test_best_shot_results_set_and_cleanup():
 
 
 def test_best_shot_results_selection_cluster_fallback():
-    with patch("ui.app_state.RatingCache"), patch("ui.app_state.ExifCache"):
+    with (
+        patch("ui.app_state.RatingCache"),
+        patch("ui.app_state.ExifCache"),
+        patch("ui.app_state.AnalysisCache"),
+    ):
         state = AppState()
 
         selection_cluster_id = -1
@@ -73,3 +81,33 @@ def test_best_shot_results_selection_cluster_fallback():
             state.best_shot_rankings[selection_cluster_id][0]["image_path"]
             == "sel2.jpg"
         )
+
+
+def test_clear_all_file_specific_data_keeps_disk_caches_by_default():
+    with (
+        patch("ui.app_state.RatingCache") as rating_cache_cls,
+        patch("ui.app_state.ExifCache") as exif_cache_cls,
+        patch("ui.app_state.AnalysisCache"),
+    ):
+        state = AppState()
+        state.current_folder_path = "/tmp/folder"
+
+        state.clear_all_file_specific_data()
+
+        rating_cache_cls.return_value.clear.assert_not_called()
+        exif_cache_cls.return_value.clear.assert_not_called()
+
+
+def test_clear_all_file_specific_data_can_clear_disk_caches_when_requested():
+    with (
+        patch("ui.app_state.RatingCache") as rating_cache_cls,
+        patch("ui.app_state.ExifCache") as exif_cache_cls,
+        patch("ui.app_state.AnalysisCache"),
+    ):
+        state = AppState()
+        state.current_folder_path = "/tmp/folder"
+
+        state.clear_all_file_specific_data(clear_disk_caches=True)
+
+        rating_cache_cls.return_value.clear.assert_called_once()
+        exif_cache_cls.return_value.clear.assert_called_once()

@@ -670,7 +670,7 @@ class IndividualViewer(QWidget):
 
     def _on_rating_button_clicked(self, rating_override=None):
         """Handle rating button clicks and emit signal."""
-        if self._file_path is None:
+        if self._file_path is None or self._media_type == "video":
             return
 
         rating = rating_override
@@ -788,9 +788,19 @@ class IndividualViewer(QWidget):
         if media_type == "video":
             self.media_stack.setCurrentWidget(self.video_widget)
             self.video_controls.setVisible(True)
+            self._set_rating_controls_enabled(False)
         else:
             self.media_stack.setCurrentWidget(self.image_view)
             self.video_controls.setVisible(False)
+            self._set_rating_controls_enabled(True)
+
+    def _set_rating_controls_enabled(self, enabled: bool):
+        tooltip = (
+            "Ratings are currently supported for images only." if not enabled else ""
+        )
+        for button in self.star_buttons:
+            button.setEnabled(enabled)
+            button.setToolTip(tooltip)
 
     def set_video_data(self, file_path: str, rating: int):
         logger.debug(

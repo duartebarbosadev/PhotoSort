@@ -18,6 +18,7 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * **Similarity Analysis**: Group visually similar images to easily spot duplicates or near-duplicates.
   * **Fast Processing**: Intensive operations (scanning, thumbnailing, analysis) run once in batch to ensure fast image scrolling.
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
+  * **Video Browsing Support**: Scan and browse common video formats with playback and first-frame thumbnails (analysis and ratings remain image-only).
   * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed.
   * **AI Best-Shot Ranking**: Send stacks to an OpenAI-compatible vision model (e.g. Qwen3-VL) to pick the keeper frame automatically.
   * **AI Star Ratings**: Ask the configured AI engine to score individual photos with 1–5 stars.
@@ -80,11 +81,13 @@ https://github.com/duartebarbosadev/photosort/releases
    The main entry point is [`src/main.py`](src/main.py).
 
   ```
-  python -m src.main [--folder FOLDER_PATH] [--clear-cache]
+  python -m src.main [--folder FOLDER_PATH | --last-folder] [--clear-cache]
 
   # Examples:
   #   Open a specific folder at startup:
   #       python -m src.main --folder "C:/Users/MyUser/Pictures"
+  #   Open the most recent folder at startup:
+  #       python -m src.main --last-folder
   #   Clear all caches before starting:
   #       python -m src.main --clear-cache
   #   Open folder and clear caches (useful for development):
@@ -158,7 +161,6 @@ Logs will be saved to `~/.photosort_logs/photosort_app.log`.
   * **Car Model Recognition**: Identify and allow grouping by specific car models in photos.
   * **Face Recognition/Clustering**: Detect faces and group photos by the people present.
 * **Side by Side** Select Multiple images and see them side by side, with zoom lock etc.
-* **Video Support**
 
 ## Contributing
 

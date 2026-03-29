@@ -1,4 +1,5 @@
 import datetime
+import os
 from src.ui.helpers.cluster_utils import ClusterUtils
 
 
@@ -61,3 +62,23 @@ def test_sort_clusters_with_embeddings():
     )
     assert set(order) == {1, 2}
     assert len(order) == 2
+
+
+def test_cluster_timestamps_fallback_to_filesystem_time(tmp_path):
+    older = tmp_path / "older.jpg"
+    newer = tmp_path / "newer.jpg"
+    older.write_text("a")
+    newer.write_text("b")
+
+    old_ts = 1_700_000_000
+    new_ts = 1_800_000_000
+    os.utime(older, (old_ts, old_ts))
+    os.utime(newer, (new_ts, new_ts))
+
+    data = [build_fd(str(older)), build_fd(str(newer))]
+    clusters = {str(older): 2, str(newer): 1}
+    grouped = ClusterUtils.group_images_by_cluster(data, clusters)
+
+    # Empty cache should still resolve timestamps from filesystem metadata.
+    ts = ClusterUtils.get_cluster_timestamps(grouped, date_cache={})
+    assert ts[2] < ts[1]

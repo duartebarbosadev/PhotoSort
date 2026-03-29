@@ -10,13 +10,16 @@ from datetime import datetime as dt_parser
 from typing import Dict, Any, Optional, List, Tuple
 import concurrent.futures
 import sys
+import threading
 
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
 from core.image_processing.image_rotator import ImageRotator, RotationDirection
 from core.app_settings import METADATA_PROCESSING_CHUNK_SIZE
+from core.media_utils import is_video_extension
 
 logger = logging.getLogger(__name__)
+DETAIL_LOG_INTERVAL = 250
 
 
 def _is_file_missing_error(exception: Exception, file_path: str) -> bool:
@@ -195,6 +198,24 @@ def _parse_rating(value: Any) -> int:
         return 0
 
 
+def _build_basic_video_metadata(file_path: str) -> Dict[str, Any]:
+    """Return a lightweight metadata payload for video files."""
+    try:
+        size = os.path.getsize(file_path)
+    except OSError:
+        size = "Unknown"
+
+    ext = os.path.splitext(file_path)[1].lower().lstrip(".")
+    mime_type = f"video/{ext}" if ext else "video/unknown"
+
+    return {
+        "file_path": file_path,
+        "file_size": size,
+        "mime_type": mime_type,
+        "media_type": "video",
+    }
+
+
 class MetadataProcessor:
     @staticmethod
     def _resolve_path_forms(original_path: str) -> Optional[Tuple[str, str]]:
@@ -251,7 +272,7 @@ class MetadataProcessor:
         exif_disk_cache: Optional[ExifCache] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Fetches and parses essential metadata for a batch of images.
+        Fetches and parses essential metadata for a batch of media files.
         Uses ExifCache first, then pyexiv2 in parallel for remaining files.
         Populates caches and applies date fallbacks.
 
@@ -301,6 +322,7 @@ class MetadataProcessor:
 
             operational_path, cache_key_path = resolved
             results[cache_key_path] = _init_result_dict()  # Use canonical key
+            is_video_file = is_video_extension(operational_path)
 
             cached_metadata: Optional[Dict[str, Any]] = None
             if exif_disk_cache:
@@ -309,6 +331,15 @@ class MetadataProcessor:
             if cached_metadata:
                 logger.debug(f"ExifCache HIT for: {os.path.basename(operational_path)}")
                 results[cache_key_path]["raw_metadata"] = cached_metadata
+            elif is_video_file:
+                logger.debug(
+                    "Skipping pyexiv2 extraction for video: %s",
+                    os.path.basename(operational_path),
+                )
+                video_metadata = _build_basic_video_metadata(operational_path)
+                results[cache_key_path]["raw_metadata"] = video_metadata
+                if exif_disk_cache:
+                    exif_disk_cache.set(cache_key_path, video_metadata)
             else:
                 logger.debug(
                     f"ExifCache MISS for: {os.path.basename(operational_path)}"
@@ -336,6 +367,21 @@ class MetadataProcessor:
             # Development/source mode: use performance mode calculation
             MAX_WORKERS = calculate_max_workers(min_workers=1, max_workers=6)
 
+        metadata_success_count = 0
+        metadata_success_lock = threading.Lock()
+
+        def _record_metadata_success(latest_basename: str) -> None:
+            nonlocal metadata_success_count
+            with metadata_success_lock:
+                metadata_success_count += 1
+                current_count = metadata_success_count
+            if current_count == 1 or current_count % DETAIL_LOG_INTERVAL == 0:
+                logger.debug(
+                    "Successfully extracted metadata for %d files (latest: %s)",
+                    current_count,
+                    latest_basename,
+                )
+
         def process_chunk(chunk_paths: List[str]) -> List[Dict[str, Any]]:
             chunk_results = []
             for op_path in chunk_paths:  # op_path is the operational_path
@@ -358,9 +404,7 @@ class MetadataProcessor:
                         op_path
                     )
                     chunk_results.append(combined_metadata)
-                    logger.debug(
-                        f"Successfully extracted metadata for {os.path.basename(op_path)}"
-                    )
+                    _record_metadata_success(os.path.basename(op_path))
                 except Exception as e:
                     # pyexiv2 raises RuntimeError for many IO issues; downshift errno=2 to warning without traceback
                     if _is_file_missing_error(e, op_path):
@@ -439,6 +483,15 @@ class MetadataProcessor:
                                 f"A chunk of files failed during metadata extraction: {exc}"
                             )
 
+        if (
+            metadata_success_count > 0
+            and metadata_success_count % DETAIL_LOG_INTERVAL != 0
+        ):
+            logger.debug(
+                "Successfully extracted metadata for %d files (final sample).",
+                metadata_success_count,
+            )
+
         if all_metadata_results:
             for metadata_dict in all_metadata_results:
                 op_path_processed = metadata_dict.get("file_path")
@@ -463,7 +516,9 @@ class MetadataProcessor:
                     )
 
         final_results_for_caller: Dict[str, Dict[str, Any]] = {}
-        for cache_key, data_dict in results.items():  # cache_key is NFC normalized
+        total_result_count = len(results)
+        for idx, (cache_key, data_dict) in enumerate(results.items(), start=1):
+            # cache_key is NFC normalized
             filename_only = os.path.basename(cache_key)  # For logging
             parsed_rating, parsed_date = 0, None
             parsed_label: Optional[str] = None
@@ -522,9 +577,16 @@ class MetadataProcessor:
                 "rating": parsed_rating,
                 "date": parsed_date,
             }
-            logger.debug(
-                f"Processed {filename_only}: Rating={parsed_rating}, Label={parsed_label}, Date={parsed_date}"
-            )
+            if idx == 1 or idx % DETAIL_LOG_INTERVAL == 0 or idx == total_result_count:
+                logger.debug(
+                    "Processed %d/%d: %s (Rating=%s, Label=%s, Date=%s)",
+                    idx,
+                    total_result_count,
+                    filename_only,
+                    parsed_rating,
+                    parsed_label,
+                    parsed_date,
+                )
 
         duration = time.perf_counter() - start_time
         logger.info(

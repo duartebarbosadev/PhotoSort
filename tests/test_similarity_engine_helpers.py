@@ -1,10 +1,14 @@
+import os
+import sys
 import numpy as np
 import pytest
 
 pytest.importorskip("sklearn")
 
+from core.similarity_engine import SimilarityEngine
 from core.similarity_utils import (
     adaptive_dbscan_eps,
+    classify_orientation,
     l2_normalize_rows,
     normalize_embedding_vector,
 )
@@ -58,3 +62,54 @@ def test_adaptive_eps_respects_min_samples_neighbor():
     base_eps = 0.05
     eps = adaptive_dbscan_eps(data, base_eps, min_samples=3)
     assert eps < 0.2
+
+
+def test_classify_orientation_uses_raw_dimensions_for_rotated_raw(monkeypatch):
+    class _FakeSizes:
+        width = 6000
+        height = 4000
+        flip = 6
+
+    class _FakeRaw:
+        sizes = _FakeSizes()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeRawPyModule:
+        @staticmethod
+        def imread(_path):
+            return _FakeRaw()
+
+    monkeypatch.setitem(sys.modules, "rawpy", _FakeRawPyModule())
+    monkeypatch.setattr(
+        "core.image_processing.raw_image_processor.is_raw_extension",
+        lambda _ext: True,
+    )
+
+    assert classify_orientation("/tmp/test.arw") == "portrait"
+
+
+def test_clear_embedding_cache_cleans_hf_cache_when_embedding_cache_is_missing(tmp_path, monkeypatch):
+    embedding_cache_dir = tmp_path / "missing-embeddings"
+    hf_cache_dir = tmp_path / ".cache" / "photosort_hf"
+    hf_cache_dir.mkdir(parents=True)
+    (hf_cache_dir / "token").write_text("x")
+    nested_dir = hf_cache_dir / "models"
+    nested_dir.mkdir()
+    (nested_dir / "weights.bin").write_text("y")
+
+    monkeypatch.setattr("core.similarity_engine.EMBEDDING_CACHE_DIR", str(embedding_cache_dir))
+
+    original_expanduser = os.path.expanduser
+    monkeypatch.setattr(
+        "core.similarity_engine.os.path.expanduser",
+        lambda value: str(tmp_path) if value == "~" else original_expanduser(value),
+    )
+
+    SimilarityEngine.clear_embedding_cache()
+
+    assert list(hf_cache_dir.iterdir()) == []

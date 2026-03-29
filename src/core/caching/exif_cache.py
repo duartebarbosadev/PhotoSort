@@ -2,6 +2,7 @@ import diskcache
 import os
 import logging
 import time
+import threading
 from typing import Optional, Dict, Any
 
 # Import the settings functions to get the cache size limit
@@ -12,6 +13,7 @@ from core.app_settings import (
 )
 
 logger = logging.getLogger(__name__)
+ARW_CACHE_LOG_INTERVAL = 250
 
 # Default path for the EXIF metadata cache
 DEFAULT_EXIF_CACHE_DIR = os.path.join(
@@ -45,6 +47,8 @@ class ExifCache:
         self._size_limit_bytes = (
             get_exif_cache_size_bytes()
         )  # Use function from app_settings
+        self._arw_cache_write_count = 0
+        self._arw_cache_write_lock = threading.Lock()
 
         # disk_min_file_size=0 means all entries go to disk files immediately.
         # For potentially larger dicts, this might be reasonable.
@@ -103,9 +107,16 @@ class ExifCache:
         try:
             file_ext = os.path.splitext(key)[1].lower()
             if file_ext == ".arw":
-                logger.debug(
-                    f"Caching ARW metadata for {os.path.basename(key)}: {len(value)} keys"
-                )
+                with self._arw_cache_write_lock:
+                    self._arw_cache_write_count += 1
+                    count = self._arw_cache_write_count
+                if count == 1 or count % ARW_CACHE_LOG_INTERVAL == 0:
+                    logger.debug(
+                        "Caching ARW metadata #%d for %s: %d keys",
+                        count,
+                        os.path.basename(key),
+                        len(value),
+                    )
             self._cache.set(key, value)
         except Exception as e:
             logger.error(

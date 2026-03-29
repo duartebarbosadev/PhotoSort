@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime as datetime_obj
 from typing import Dict, List, Optional, Any
 
@@ -56,6 +57,40 @@ class ClusterUtils:
         return images_by_cluster
 
     @staticmethod
+    def _resolve_image_datetime(
+        path: str,
+        date_cache: Dict[str, Optional[datetime_obj]],
+    ) -> Optional[datetime_obj]:
+        """Resolve best-effort image datetime for sorting.
+
+        Priority:
+          1. Existing metadata date cache entry (typically EXIF/XMP creation date).
+          2. Filesystem birth time when available.
+          3. Filesystem modification time fallback.
+        """
+        cached = date_cache.get(path)
+        if cached is not None:
+            return cached
+
+        try:
+            stat_result = os.stat(path)
+        except OSError:
+            return None
+
+        timestamp: Optional[float] = None
+        birth_time = getattr(stat_result, "st_birthtime", 0)
+        if birth_time and birth_time > 0:
+            timestamp = birth_time
+        if timestamp is None or timestamp < 1000000:
+            timestamp = stat_result.st_mtime
+        if not timestamp:
+            return None
+
+        resolved = datetime_obj.fromtimestamp(timestamp)
+        date_cache[path] = resolved
+        return resolved
+
+    @staticmethod
     def get_cluster_timestamps(
         images_by_cluster: Dict[int, List[Dict[str, Any]]],
         date_cache: Dict[str, Optional[datetime_obj]],
@@ -68,7 +103,7 @@ class ClusterUtils:
                 path = file_data.get("path") if isinstance(file_data, dict) else None
                 if not path:
                     continue
-                img_date = date_cache.get(path)
+                img_date = ClusterUtils._resolve_image_datetime(path, date_cache)
                 if img_date and img_date < earliest_date:
                     earliest_date = img_date
                     found_date = True

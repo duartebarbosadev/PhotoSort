@@ -2,6 +2,7 @@ import os
 import time
 import pickle  # For caching embeddings
 import logging
+import shutil
 from typing import List, Dict, Optional, TYPE_CHECKING
 from PyQt6.QtCore import QObject, pyqtSignal
 import numpy as np  # Import numpy for array manipulation
@@ -299,7 +300,9 @@ class SimilarityEngine(QObject):
             # Build orientation map for orientation-aware clustering
             logger.info("Building orientation map for %d files...", len(file_paths))
             orientation_map = build_orientation_map(file_paths)
-            self.cluster_embeddings(final_embeddings_for_requested_files, orientation_map)
+            self.cluster_embeddings(
+                final_embeddings_for_requested_files, orientation_map
+            )
         else:
             logger.info("Skipping clustering as stop was requested.")
             self.clustering_complete.emit({})  # Emit empty if stopped before clustering
@@ -431,7 +434,9 @@ class SimilarityEngine(QObject):
                 )
 
             except Exception as e_dbscan:
-                error_msg = f"Error during orientation-aware DBSCAN clustering: {e_dbscan}"
+                error_msg = (
+                    f"Error during orientation-aware DBSCAN clustering: {e_dbscan}"
+                )
                 logger.error(error_msg, exc_info=True)
                 self.error.emit(error_msg)
                 labels = np.zeros(num_samples, dtype=int)
@@ -584,8 +589,6 @@ class SimilarityEngine(QObject):
         logger.info(f"Clearing embedding cache directory: {EMBEDDING_CACHE_DIR}")
         try:
             if os.path.exists(EMBEDDING_CACHE_DIR):
-                import shutil
-
                 for item in os.listdir(EMBEDDING_CACHE_DIR):
                     item_path = os.path.join(EMBEDDING_CACHE_DIR, item)
                     try:
@@ -602,9 +605,11 @@ class SimilarityEngine(QObject):
                 logger.warning(
                     f"Embedding cache directory not found: {EMBEDDING_CACHE_DIR}"
                 )
-                
+
             # Also clear Hugging Face cache directory
-            hf_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "photosort_hf")
+            hf_cache_dir = os.path.join(
+                os.path.expanduser("~"), ".cache", "photosort_hf"
+            )
             if os.path.exists(hf_cache_dir):
                 logger.info(f"Clearing Hugging Face cache directory: {hf_cache_dir}")
                 for item in os.listdir(hf_cache_dir):
@@ -616,12 +621,13 @@ class SimilarityEngine(QObject):
                             shutil.rmtree(item_path)
                     except Exception as e:
                         logger.error(
-                            f"Failed to delete HF cache item {item_path}: {e}", exc_info=True
+                            f"Failed to delete HF cache item {item_path}: {e}",
+                            exc_info=True,
                         )
                 logger.info("Hugging Face cache cleared.")
             else:
                 logger.info(f"Hugging Face cache directory not found: {hf_cache_dir}")
-                
+
         except Exception as e:
             logger.error(
                 f"Error clearing embedding cache directory '{EMBEDDING_CACHE_DIR}': {e}",

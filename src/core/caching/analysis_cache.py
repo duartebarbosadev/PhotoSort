@@ -234,7 +234,9 @@ class AnalysisCache:
                 self._cache.set(key, entry)
             except Exception:
                 logger.exception(
-                    "Failed to clear manual override for %s in %s", file_path, folder_path
+                    "Failed to clear manual override for %s in %s",
+                    file_path,
+                    folder_path,
                 )
 
     def clear_all_manual_overrides(self, folder_path: str) -> None:

@@ -93,6 +93,7 @@ from ui.controllers.preview_controller import PreviewController
 from ui.controllers.metadata_controller import MetadataController
 
 logger = logging.getLogger(__name__)
+FILTER_LOG_INTERVAL = 100
 
 RATING_FILTER_DEFINITIONS = [
     ("Show All", ("all", 0)),
@@ -205,6 +206,9 @@ class MainWindow(QMainWindow):
         self._left_panel_views = set()
         self._image_viewer_views = set()
         self._last_displayed_preview_path: Optional[str] = None
+        self._preview_preload_start_volume_bytes: Optional[int] = None
+        self._filter_apply_count = 0
+        self._last_filter_search_text: Optional[str] = None
 
         self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
@@ -438,10 +442,10 @@ class MainWindow(QMainWindow):
 
     def update_loading_text(self, text):
         if self.loading_overlay and self.loading_overlay.isVisible():
-            has_video = False
-            if hasattr(self, "advanced_image_viewer") and self.advanced_image_viewer:
-                has_video = self.advanced_image_viewer.has_video_loaded()
-            self.loading_overlay.set_floating(has_video)
+            # Keep the current overlay mode stable while an operation is running.
+            # Recomputing floating mode here can flip to video-floating during scan/view
+            # population when the first selected item is a video, causing the overlay
+            # to disappear unexpectedly.
             self.loading_overlay.setText(text)
             self.loading_overlay.update_position()
             QApplication.processEvents()
@@ -2613,7 +2617,19 @@ class MainWindow(QMainWindow):
             logger.debug("Filter skipped: No images loaded.")
             return
         search_text = self.left_panel.search_input.text()
-        logger.info(f"Applying filters. Search term: '{search_text}'")
+        self._filter_apply_count += 1
+        should_log_filter = (
+            self._filter_apply_count == 1
+            or self._filter_apply_count % FILTER_LOG_INTERVAL == 0
+            or search_text != self._last_filter_search_text
+        )
+        self._last_filter_search_text = search_text
+        if should_log_filter:
+            logger.debug(
+                "Applying filters #%d. Search term: '%s'",
+                self._filter_apply_count,
+                search_text,
+            )
         self.filter_controller.set_search_text(search_text)
         self.filter_controller.set_rating_filter(self.filter_combo.currentText())
         cluster_text = self.cluster_filter_combo.currentText()
@@ -2637,10 +2653,13 @@ class MainWindow(QMainWindow):
         if self.left_panel.search_input.hasFocus():
             QTimer.singleShot(0, self._return_focus_to_view)
         # Log the currently focused widget after filtering
-        focus_widget = QApplication.focusWidget()
-        logger.debug(
-            f"[after filter] focusWidget={focus_widget}, class={type(focus_widget).__name__ if focus_widget else None}"
-        )
+        if should_log_filter:
+            focus_widget = QApplication.focusWidget()
+            logger.debug(
+                "[after filter] focusWidget=%s, class=%s",
+                focus_widget,
+                type(focus_widget).__name__ if focus_widget else None,
+            )
 
     def _return_focus_to_view(self):
         """Return focus to the active view after filtering."""
@@ -2660,6 +2679,9 @@ class MainWindow(QMainWindow):
                 logger.debug(
                     f"Delegating preview preload: {len(image_data_list)} items"
                 )
+            self._preview_preload_start_volume_bytes = (
+                self.image_pipeline.preview_cache.volume()
+            )
             self.preview_controller.start_preload(image_data_list)
         except Exception as e:
             logger.error(f"PreviewController error: {e}")
@@ -2781,19 +2803,30 @@ class MainWindow(QMainWindow):
             total_image_size_bytes = self._calculate_folder_image_size(
                 self.app_state.current_folder_path
             )
-            preview_cache_size_bytes = self.image_pipeline.preview_cache.volume()
+            total_preview_cache_size_bytes = self.image_pipeline.preview_cache.volume()
+            preload_start_volume = self._preview_preload_start_volume_bytes
+            if preload_start_volume is None:
+                preview_cache_size_bytes = total_preview_cache_size_bytes
+            else:
+                preview_cache_size_bytes = max(
+                    0, total_preview_cache_size_bytes - preload_start_volume
+                )
             logger.info("--- Cache vs. Image Size Diagnostics (Post-Preload) ---")
             logger.info(
                 f"Total Original Image Size: {total_image_size_bytes / (1024 * 1024):.2f} MB"
             )
             logger.info(
-                f"Final Preview Cache Size: {preview_cache_size_bytes / (1024 * 1024):.2f} MB"
+                f"Preview Cache Added This Preload: {preview_cache_size_bytes / (1024 * 1024):.2f} MB"
+            )
+            logger.info(
+                f"Current Preview Cache Total: {total_preview_cache_size_bytes / (1024 * 1024):.2f} MB"
             )
             if total_image_size_bytes > 0:
                 ratio = (preview_cache_size_bytes / total_image_size_bytes) * 100
                 logger.info(f"Cache-to-Image Size Ratio: {ratio:.2f}%")
             logger.info("---------------------------------------------------------")
 
+        self._preview_preload_start_volume_bytes = None
         self._update_image_info_label()  # Update UI with final cache size
 
         # WorkerManager handles thread cleanup
@@ -2952,9 +2985,7 @@ class MainWindow(QMainWindow):
         # This dramatically improves initial folder load time (from ~50s to <2s for 1000+ images)
         #
         # Note: We only try to get from cache (no generation) if thumbnails are enabled
-        if media_type == "video":
-            item.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-        elif self.menu_manager.toggle_thumbnails_action.isChecked():
+        if self.menu_manager.toggle_thumbnails_action.isChecked():
             # Try to get from cache only (won't generate if missing)
             # Determine cache key: apply_auto_edits is True for RAW files
             from core.image_processing.raw_image_processor import is_raw_extension
@@ -2972,7 +3003,14 @@ class MainWindow(QMainWindow):
 
                 pixmap = QPixmap.fromImage(ImageQt(cached_thumbnail))
                 item.setIcon(QIcon(pixmap))
-            # If not in cache, background worker will handle it and we'll update later
+            elif media_type == "video":
+                # Videos fall back to play icon until first-frame thumbnail is generated.
+                item.setIcon(
+                    self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
+                )
+            # If not in cache, background worker will handle it and we'll update later.
+        elif media_type == "video":
+            item.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
 
         # Unified presentation (marked / blurred) delegated to deletion controller
         self.deletion_controller.apply_presentation(item, file_path, is_blurred)
@@ -3080,6 +3118,7 @@ class MainWindow(QMainWindow):
                 file_data = child_item.data(Qt.ItemDataRole.UserRole)
                 if file_data and isinstance(file_data, dict) and "path" in file_data:
                     file_path = file_data["path"]
+                    media_type = file_data.get("media_type", "image")
 
                     # Try to get thumbnail from cache (with correct cache key for RAW files)
                     from core.image_processing.raw_image_processor import (
@@ -3093,8 +3132,12 @@ class MainWindow(QMainWindow):
                         cache_key
                     )
 
-                    if cached_thumbnail and child_item.icon().isNull():
-                        # Only set icon if not already set and thumbnail is available
+                    should_update_icon = (
+                        media_type == "video" or child_item.icon().isNull()
+                    )
+                    if cached_thumbnail and should_update_icon:
+                        # Always refresh video icons so placeholders can be replaced.
+                        # For images, only set if icon is currently empty.
                         try:
                             from PIL.ImageQt import ImageQt
 
@@ -3124,7 +3167,7 @@ class MainWindow(QMainWindow):
         paths = [
             fd.get("path")
             for fd in (self.app_state.image_files_data or [])
-            if fd.get("path")
+            if fd.get("path") and fd.get("media_type", "image") == "image"
         ]
         self.similarity_controller.start(paths)
 
@@ -3189,8 +3232,19 @@ class MainWindow(QMainWindow):
         self.show_loading_overlay("Starting blur detection...")
         self.menu_manager.detect_blur_action.setEnabled(False)
 
+        image_data = [
+            fd
+            for fd in self.app_state.image_files_data
+            if fd.get("media_type", "image") == "image"
+        ]
+        if not image_data:
+            self.hide_loading_overlay()
+            self.statusBar().showMessage(
+                "Blur detection is currently available for images only.", 3000
+            )
+            return
         self.worker_manager.start_blur_detection(
-            self.app_state.image_files_data.copy(),
+            image_data,
             self.blur_detection_threshold,
             True,  # Always enable processing for RAW files
         )
