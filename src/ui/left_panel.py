@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QFrame,
     QStyle,
     QListView,
     QAbstractItemView,
@@ -58,23 +59,38 @@ class LeftPanel(QWidget):
 
     def _create_widgets(self):
         """Creates the widgets for the left panel."""
-        # Search container
-        self.search_container = QWidget()
+        self.header_card = QFrame()
+        self.header_card.setObjectName("sidebarHeaderSection")
+
+        self.sidebar_eyebrow = QLabel("PhotoSort")
+        self.sidebar_eyebrow.setObjectName("sidebarEyebrow")
+
+        self.sidebar_title = QLabel("No folder selected")
+        self.sidebar_title.setObjectName("sidebarTitle")
+
+        self.sidebar_subtitle = QLabel("Open a folder to start sorting your library.")
+        self.sidebar_subtitle.setObjectName("sidebarSubtitle")
+        self.sidebar_subtitle.setWordWrap(True)
+
+        self.items_badge = QLabel("0 items")
+        self.items_badge.setObjectName("sidebarBadge")
+
+        self.search_container = QFrame()
         self.search_container.setObjectName("search_container")
         search_layout = QHBoxLayout(self.search_container)
         search_layout.setContentsMargins(0, 0, 0, 0)
-        search_layout.setSpacing(5)
+        search_layout.setSpacing(8)
 
-        search_layout.addWidget(QLabel("Search:"))
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Filename...")
-        search_layout.addWidget(self.search_input)
+        self.search_input.setPlaceholderText("Search by filename or extension")
+        self.search_input.setClearButtonEnabled(True)
+        search_layout.addWidget(self.search_input, 1)
 
-        # View type icons
-        view_icons_container = QWidget()
-        view_icons_layout = QHBoxLayout(view_icons_container)
-        view_icons_layout.setContentsMargins(0, 0, 0, 0)
-        view_icons_layout.setSpacing(2)
+        self.view_icons_container = QFrame()
+        self.view_icons_container.setObjectName("sidebarButtonRail")
+        view_icons_layout = QHBoxLayout(self.view_icons_container)
+        view_icons_layout.setContentsMargins(4, 4, 4, 4)
+        view_icons_layout.setSpacing(4)
 
         self.view_list_icon = QPushButton()
         self.view_list_icon.setIcon(
@@ -82,7 +98,8 @@ class LeftPanel(QWidget):
         )
         self.view_list_icon.setToolTip("List View")
         self.view_list_icon.setCheckable(True)
-        self.view_list_icon.setMaximumSize(24, 24)
+        self.view_list_icon.setObjectName("sidebarModeButton")
+        self.view_list_icon.setMinimumSize(32, 28)
 
         self.view_icons_icon = QPushButton()
         self.view_icons_icon.setIcon(
@@ -90,7 +107,8 @@ class LeftPanel(QWidget):
         )
         self.view_icons_icon.setToolTip("Icons View")
         self.view_icons_icon.setCheckable(True)
-        self.view_icons_icon.setMaximumSize(24, 24)
+        self.view_icons_icon.setObjectName("sidebarModeButton")
+        self.view_icons_icon.setMinimumSize(32, 28)
 
         self.view_grid_icon = QPushButton()
         self.view_grid_icon.setIcon(
@@ -98,7 +116,8 @@ class LeftPanel(QWidget):
         )
         self.view_grid_icon.setToolTip("Grid View")
         self.view_grid_icon.setCheckable(True)
-        self.view_grid_icon.setMaximumSize(24, 24)
+        self.view_grid_icon.setObjectName("sidebarModeButton")
+        self.view_grid_icon.setMinimumSize(32, 28)
 
         self.view_rotation_icon = QPushButton()
         self.view_rotation_icon.setIcon(
@@ -106,15 +125,21 @@ class LeftPanel(QWidget):
         )
         self.view_rotation_icon.setToolTip("Rotation View")
         self.view_rotation_icon.setCheckable(True)
-        self.view_rotation_icon.setMaximumSize(24, 24)
+        self.view_rotation_icon.setObjectName("sidebarModeButton")
+        self.view_rotation_icon.setMinimumSize(32, 28)
         self.view_rotation_icon.setVisible(False)  # Hidden by default
 
         view_icons_layout.addWidget(self.view_list_icon)
         view_icons_layout.addWidget(self.view_icons_icon)
         view_icons_layout.addWidget(self.view_grid_icon)
         view_icons_layout.addWidget(self.view_rotation_icon)
-        view_icons_layout.addStretch()
-        search_layout.addWidget(view_icons_container)
+        search_layout.addWidget(self.view_icons_container)
+
+        self.browser_title = QLabel("Browser")
+        self.browser_title.setObjectName("sidebarSectionLabel")
+
+        self.browser_mode_label = QLabel("List view")
+        self.browser_mode_label.setObjectName("sidebarInlineHint")
 
         # Tree and Grid Views
         self.tree_display_view = DroppableTreeView(self.proxy_model, self.main_window)
@@ -178,12 +203,43 @@ class LeftPanel(QWidget):
     def _create_layout(self):
         """Creates the layout for the left panel."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(5)
-        layout.addWidget(self.search_container)
-        layout.addWidget(self.tree_display_view)
-        layout.addWidget(self.grid_display_view)
-        layout.addWidget(self.rotation_suggestions_view)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
+
+        header_layout = QVBoxLayout(self.header_card)
+        header_layout.setContentsMargins(10, 8, 10, 6)
+        header_layout.setSpacing(6)
+
+        meta_row = QHBoxLayout()
+        meta_row.setContentsMargins(0, 0, 0, 0)
+        meta_row.setSpacing(8)
+        meta_row.addWidget(self.sidebar_eyebrow)
+        meta_row.addStretch()
+        header_layout.addLayout(meta_row)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+        title_row.addWidget(self.sidebar_title)
+        title_row.addStretch()
+        title_row.addWidget(self.items_badge)
+        header_layout.addLayout(title_row)
+
+        header_layout.addWidget(self.sidebar_subtitle)
+        header_layout.addWidget(self.search_container)
+
+        browser_header = QHBoxLayout()
+        browser_header.setContentsMargins(4, 0, 4, 0)
+        browser_header.setSpacing(8)
+        browser_header.addWidget(self.browser_title)
+        browser_header.addStretch()
+        browser_header.addWidget(self.browser_mode_label)
+
+        layout.addWidget(self.header_card)
+        layout.addLayout(browser_header)
+        layout.addWidget(self.tree_display_view, 1)
+        layout.addWidget(self.grid_display_view, 1)
+        layout.addWidget(self.rotation_suggestions_view, 1)
 
     def _create_delegates(self):
         """Creates and sets the item delegates for the views."""
@@ -343,6 +399,29 @@ class LeftPanel(QWidget):
             self.view_grid_icon.setChecked(True)
         elif self.current_view_mode == "rotation":
             self.view_rotation_icon.setChecked(True)
+
+        view_label = {
+            "list": "List view",
+            "icons": "Icons view",
+            "grid": "Grid view",
+            "rotation": "Rotation view",
+            "date": "Date view",
+        }.get(self.current_view_mode, "List view")
+        self.browser_mode_label.setText(view_label)
+
+    def update_context(
+        self,
+        folder_name: str | None,
+        item_count: int,
+        subtitle: str | None = None,
+    ):
+        title = folder_name or "No folder selected"
+        subtitle_text = subtitle or "Open a folder to start sorting your library."
+
+        self.sidebar_title.setText(title)
+        self.sidebar_subtitle.setText(subtitle_text)
+        noun = "item" if item_count == 1 else "items"
+        self.items_badge.setText(f"{item_count} {noun}")
 
     def update_grid_view_layout(self):
         if not self.grid_display_view.isVisible():

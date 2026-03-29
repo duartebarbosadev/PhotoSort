@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QFrame,
     QGridLayout,
-    QSpacerItem,
     QComboBox,
     QSizePolicy,
     QScrollArea,
@@ -40,9 +39,33 @@ from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
     ModelNotFoundError,
 )
+from ui.dialog_components import (
+    build_card,
+    build_dialog_footer,
+    build_dialog_header,
+    make_dialog_draggable,
+)
 from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 
 logger = logging.getLogger(__name__)
+
+
+def _build_kv_row(key_text, value_widget, parent_layout):
+    """Build a horizontal key-value row inside a card."""
+    row = QHBoxLayout()
+    row.setSpacing(0)
+    key = QLabel(key_text)
+    key.setObjectName("kvKey")
+    row.addWidget(key)
+    row.addStretch()
+    if isinstance(value_widget, str):
+        val = QLabel(value_widget)
+        val.setObjectName("kvValue")
+        row.addWidget(val)
+    else:
+        value_widget.setObjectName("kvValue")
+        row.addWidget(value_widget)
+    parent_layout.addLayout(row)
 
 
 class DialogManager:
@@ -87,98 +110,65 @@ class DialogManager:
         dialog.setWindowTitle("About PhotoSort")
         dialog.setObjectName("aboutDialog")
         dialog.setModal(True)
-        dialog.setFixedSize(480, 420)
+        dialog.setFixedSize(500, 480)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        # Make window frameless for a cleaner UI
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
 
-        # Main layout
-        main_layout = QVBoxLayout(dialog)
-        main_layout.setSpacing(15)
-        main_layout.setContentsMargins(25, 25, 25, 25)
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # Compact header section
-        header_frame = QFrame()
-        header_frame.setObjectName("aboutHeader")
-        header_layout = QHBoxLayout(header_frame)
-        header_layout.setSpacing(15)
-        header_layout.setContentsMargins(20, 15, 20, 15)
+        # --- Header ---
+        build_dialog_header("About PhotoSort", "📷", outer)
 
-        # Enable dragging the frameless window by the header
-        _drag_state = {"offset": None}
+        # --- Scrollable content ---
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setObjectName("aboutScrollArea")
+        outer.addWidget(scroll)
 
-        def _header_mouse_press(e):
-            if e.button() == Qt.MouseButton.LeftButton:
-                _drag_state["offset"] = (
-                    e.globalPosition().toPoint() - dialog.frameGeometry().topLeft()
-                )
-                e.accept()
+        content = QFrame()
+        content.setObjectName("dialogContent")
+        scroll.setWidget(content)
+        body = QVBoxLayout(content)
+        body.setSpacing(12)
+        body.setContentsMargins(20, 14, 20, 14)
 
-        def _header_mouse_move(e):
-            if (e.buttons() & Qt.MouseButton.LeftButton) and _drag_state[
-                "offset"
-            ] is not None:
-                dialog.move(e.globalPosition().toPoint() - _drag_state["offset"])
-                e.accept()
-
-        # Assign simple drag handlers to the header frame
-        header_frame.mousePressEvent = _header_mouse_press  # type: ignore[assignment]
-        header_frame.mouseMoveEvent = _header_mouse_move  # type: ignore[assignment]
-
-        # App info (left side)
-        app_info_layout = QVBoxLayout()
-        app_info_layout.setSpacing(3)
-
-        title_label = QLabel("PhotoSort")
-        title_label.setObjectName("aboutTitle")
-        app_info_layout.addWidget(title_label)
-
-        # Version label (populated only in packaged builds)
+        # Version info card
         version_text = None
         try:
-            # Populated by CI during packaged builds in core/build_info.py
             from core.build_info import VERSION  # type: ignore
 
             version_text = str(VERSION).strip() or None
         except (ImportError, AttributeError):
             version_text = None
 
-        version_label = QLabel()
-        version_label.setObjectName("aboutVersion")
         if version_text:
-            version_label.setText(f"Version {version_text}")
-            version_label.setVisible(True)
-        else:
-            # In local dev runs (python src/main.py), no version is shown
-            version_label.setVisible(False)
-        app_info_layout.addWidget(version_label)
+            ver_card, ver_layout = build_card("dialogCard")
+            ver_layout.setSpacing(6)
+            ver_lbl = QLabel(f"Version {version_text}")
+            ver_lbl.setObjectName("aboutVersion")
+            ver_layout.addWidget(ver_lbl)
+            body.addWidget(ver_card)
 
-        header_layout.addLayout(app_info_layout)
-        header_layout.addStretch()
+        # Technology card
+        tech_card, tech_layout = build_card("dialogCard")
 
-        main_layout.addWidget(header_frame)
-
-        # Content section
-        content_layout = QVBoxLayout()
-        content_layout.setSpacing(15)
-
-        # Technology section
         tech_title = QLabel("Technology Stack")
-        tech_title.setObjectName("aboutSectionTitle")
-        content_layout.addWidget(tech_title)
+        tech_title.setObjectName("cardSectionTitle")
+        tech_layout.addWidget(tech_title)
 
-        # Tech details in a more compact grid
-        tech_frame = QFrame()
-        tech_frame.setObjectName("aboutTechFrame")
-        tech_layout = QVBoxLayout(tech_frame)
-        tech_layout.setSpacing(6)
-        tech_layout.setContentsMargins(15, 10, 15, 10)
+        sep = QFrame()
+        sep.setObjectName("cardSeparator")
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFixedHeight(1)
+        tech_layout.addWidget(sep)
 
-        clustering_info = "Clustering Algorithm: DBSCAN (scikit-learn)"
         # Get ONNX provider information
         try:
             model_detector = ModelRotationDetector()
-            # Lazy detector exposes provider via internal state after load attempt
             onnx_provider = (
                 getattr(model_detector._state, "provider_name", None)
                 or "N/A (model not loaded)"
@@ -189,76 +179,58 @@ class DialogManager:
             onnx_provider = "N/A (error)"
 
         embeddings_label_ref = None
-        tech_items = [
-            "🧠 Embeddings: SentenceTransformer (CLIP)",
-            f"🤖 Rotation Model: ONNX Runtime on {onnx_provider}",
-            f"🔍 {clustering_info}",
-            "📋 Metadata: pyexiv2 • 🎨 Interface: PyQt6 • 🐍 Runtime: Python",
-        ]
+        embeddings_val = QLabel("SentenceTransformer (CLIP)")
+        embeddings_val.setObjectName("kvValue")
+        embeddings_label_ref = embeddings_val
+        _build_kv_row("Embeddings", embeddings_val, tech_layout)
+        _build_kv_row("Rotation Model", f"ONNX Runtime · {onnx_provider}", tech_layout)
+        _build_kv_row("Clustering", "DBSCAN (scikit-learn)", tech_layout)
+        _build_kv_row("Metadata", "pyexiv2", tech_layout)
+        _build_kv_row("Interface", "PyQt6", tech_layout)
 
-        for i, item in enumerate(tech_items):
-            item_label = QLabel(item)
-            item_label.setObjectName("aboutTechItem")
-            item_label.setWordWrap(True)
-            tech_layout.addWidget(item_label)
-            if i == 0:  # Embeddings item
-                embeddings_label_ref = item_label
+        body.addWidget(tech_card)
 
-        content_layout.addWidget(tech_frame)
+        # Quick actions card
+        actions_card, actions_layout = build_card("dialogCard")
+        act_title = QLabel("Quick Actions")
+        act_title.setObjectName("cardSectionTitle")
+        actions_layout.addWidget(act_title)
 
-        # Actions row: Open Models + Logs + GitHub
-        actions_layout = QHBoxLayout()
-        actions_layout.addStretch()
+        sep2 = QFrame()
+        sep2.setObjectName("cardSeparator")
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setFixedHeight(1)
+        actions_layout.addWidget(sep2)
 
-        # Open Models Folder button
-        models_button = QPushButton("📦 Open Models Folder")
-        models_button.setObjectName("aboutModelsButton")
-        models_button.setToolTip(
-            "Open the folder where ONNX rotation models are stored"
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        for text, obj, callback in [
+            ("Models Folder", "aboutModelsButton", self._open_models_folder),
+            ("Logs Folder", "aboutLogsButton", self._open_logs_folder),
+            (
+                "GitHub",
+                "aboutGithubButton",
+                lambda: webbrowser.open(
+                    "https://github.com/duartebarbosadev/PhotoSort"
+                ),
+            ),
+        ]:
+            btn = QPushButton(text)
+            btn.setObjectName(obj)
+            btn.clicked.connect(callback)
+            btn_row.addWidget(btn)
+        actions_layout.addLayout(btn_row)
+        body.addWidget(actions_card)
+
+        body.addStretch()
+
+        # --- Footer ---
+        build_dialog_footer(
+            outer,
+            [
+                ("Close", "aboutCloseButton", dialog.accept, True),
+            ],
         )
-        models_button.clicked.connect(self._open_models_folder)
-        actions_layout.addWidget(models_button)
-
-        # Open Logs Folder button
-        logs_button = QPushButton("🗂️ Open Logs Folder")
-        logs_button.setObjectName("aboutLogsButton")
-        logs_button.setToolTip("Open the folder where PhotoSort writes its log file")
-        logs_button.clicked.connect(self._open_logs_folder)
-        actions_layout.addWidget(logs_button)
-
-        # GitHub button
-        github_button = QPushButton("🔗 View on GitHub")
-        github_button.setObjectName("aboutGithubButton")
-        github_button.clicked.connect(
-            lambda: webbrowser.open("https://github.com/duartebarbosadev/PhotoSort")
-        )
-        actions_layout.addWidget(github_button)
-
-        content_layout.addLayout(actions_layout)
-
-        # Add content to main layout
-        main_layout.addLayout(content_layout)
-
-        # Spacer
-        main_layout.addSpacerItem(
-            QSpacerItem(
-                20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
-            )
-        )
-
-        # Footer with close button
-        footer_layout = QHBoxLayout()
-        footer_layout.addStretch()
-
-        close_button = QPushButton("Close")
-        close_button.setObjectName("aboutCloseButton")
-        close_button.clicked.connect(dialog.accept)
-        close_button.setDefault(True)
-        footer_layout.addWidget(close_button)
-
-        main_layout.addLayout(footer_layout)
-
-        # Styling is handled by dark_theme.qss
 
         # Start CUDA detection worker
         worker_manager = self.parent.app_controller.worker_manager
@@ -271,17 +243,14 @@ class DialogManager:
                     "mps": "GPU (Apple MPS)",
                     "cpu": "CPU",
                 }
-                label_text = friendly.get(
-                    device_key,
-                    device_key.upper(),
-                )
+                label_text = friendly.get(device_key, device_key.upper())
                 try:
                     if embeddings_label_ref:
                         embeddings_label_ref.setText(
-                            f"🧠 Embeddings: SentenceTransformer (CLIP) on {label_text}"
+                            f"SentenceTransformer (CLIP) · {label_text}"
                         )
                 except RuntimeError:
-                    pass  # Label has been deleted
+                    pass
 
             worker_manager.cuda_detection_finished.connect(update_embeddings_label)
             worker_manager.start_cuda_detection()
@@ -289,8 +258,7 @@ class DialogManager:
         if block:
             dialog.exec()
             logger.info("Closed about dialog")
-        else:  # non-blocking path for automated tests
-            # Keep a reference to prevent garbage collection in tests
+        else:
             self._about_dialog_ref = dialog  # type: ignore[attr-defined]
             dialog.show()
             logger.info("Showing about dialog (non-blocking mode)")
@@ -358,57 +326,63 @@ class DialogManager:
             logger.info(
                 "Lossy rotation confirmation disabled, proceeding without asking"
             )
-            return True, False  # Proceed without asking if the setting is disabled
+            return True, False
 
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Confirm Lossy Rotation")
         dialog.setObjectName("lossyRotationDialog")
         dialog.setModal(True)
-        dialog.setFixedSize(480, 200)
-        # Frameless window for fancy UI
+        dialog.setFixedSize(500, 260)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
 
-        layout = QVBoxLayout(dialog)
-        layout.setSpacing(20)
-        layout.setContentsMargins(25, 25, 25, 25)
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Header
+        build_dialog_header("Lossy Rotation", "⚠", outer)
+
+        # Content
+        body = QVBoxLayout()
+        body.setSpacing(14)
+        body.setContentsMargins(22, 16, 22, 10)
+
+        card, card_layout = build_card("dialogCard")
+        card_layout.setSpacing(10)
 
         message_text = f"Lossless rotation failed for:\n{filename}"
         warning_text = f"Proceed with lossy rotation {rotation_type}?\nThis will re-encode the image and may reduce quality."
-
-        if "images" in filename.lower():  # Batch operation
+        if "images" in filename.lower():
             warning_text = f"Proceed with lossy rotation {rotation_type} for all selected images?\nThis will re-encode the images and may reduce quality."
 
         message_label = QLabel(message_text)
         message_label.setObjectName("lossyRotationMessageLabel")
         message_label.setWordWrap(True)
-        layout.addWidget(message_label)
+        card_layout.addWidget(message_label)
 
         warning_label = QLabel(warning_text)
         warning_label.setObjectName("lossyRotationWarningLabel")
         warning_label.setWordWrap(True)
-        layout.addWidget(warning_label)
+        card_layout.addWidget(warning_label)
+
+        body.addWidget(card)
 
         never_ask_checkbox = QCheckBox("Don't ask again for lossy rotations")
         never_ask_checkbox.setObjectName("neverAskAgainCheckbox")
-        layout.addWidget(never_ask_checkbox)
+        body.addWidget(never_ask_checkbox)
 
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
+        outer.addLayout(body)
+        outer.addStretch()
 
-        cancel_button = QPushButton("Cancel")
-        cancel_button.setObjectName("lossyRotationCancelButton")
-        cancel_button.clicked.connect(dialog.reject)
-        button_layout.addWidget(cancel_button)
-
-        proceed_button = QPushButton("Proceed with Lossy Rotation")
-        proceed_button.setObjectName("lossyRotationProceedButton")
-        proceed_button.clicked.connect(dialog.accept)
-        proceed_button.setDefault(True)
-        button_layout.addWidget(proceed_button)
-
-        layout.addLayout(button_layout)
-
-        # Styling is handled by dark_theme.qss
+        # Footer
+        build_dialog_footer(
+            outer,
+            [
+                ("Cancel", "lossyRotationCancelButton", dialog.reject, False),
+                ("Proceed", "lossyRotationProceedButton", dialog.accept, True),
+            ],
+        )
 
         result = dialog.exec()
         proceed = result == QDialog.DialogCode.Accepted
@@ -450,109 +424,103 @@ class DialogManager:
         dialog.setWindowTitle("Preferences")
         dialog.setObjectName("preferencesDialog")
         dialog.setModal(True)
-        dialog.resize(640, 600)
+        dialog.resize(640, 620)
         dialog.setMinimumSize(520, 480)
-        # Frameless window for consistent UI
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
 
-        main_layout = QVBoxLayout(dialog)
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(25, 25, 25, 25)
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # Title
-        title_label = QLabel("Preferences")
-        title_label.setObjectName("aboutTitle")
-        main_layout.addWidget(title_label)
+        # Header
+        build_dialog_header("Preferences", "⚙", outer)
 
+        # Scrollable content
         scroll_area = QScrollArea()
         scroll_area.setObjectName("preferencesScrollArea")
         scroll_area.setWidgetResizable(True)
-        main_layout.addWidget(scroll_area)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        outer.addWidget(scroll_area)
 
         content_frame = QFrame()
+        content_frame.setObjectName("dialogContent")
         content_layout = QVBoxLayout(content_frame)
-        content_layout.setSpacing(20)
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+        content_layout.setContentsMargins(20, 14, 20, 14)
         scroll_area.setWidget(content_frame)
 
-        # Performance Mode Section
-        perf_section_label = QLabel("Performance Mode")
-        perf_section_label.setObjectName("preferencesSectionLabel")
-        perf_section_label.setStyleSheet("font-weight: bold; font-size: 13px;")
-        content_layout.addWidget(perf_section_label)
+        # --- Performance Mode Card ---
+        perf_card, perf_layout = build_card("dialogCard")
+        perf_title = QLabel("Performance Mode")
+        perf_title.setObjectName("cardSectionTitle")
+        perf_layout.addWidget(perf_title)
 
-        # Description
+        sep = QFrame()
+        sep.setObjectName("cardSeparator")
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFixedHeight(1)
+        perf_layout.addWidget(sep)
+
         desc_label = QLabel(
-            "Control how many CPU threads PhotoSort uses for processing:"
+            "Control how many CPU threads PhotoSort uses for processing."
         )
+        desc_label.setObjectName("cardDescription")
         desc_label.setWordWrap(True)
-        content_layout.addWidget(desc_label)
+        perf_layout.addWidget(desc_label)
 
-        # Radio buttons for performance mode
         balanced_radio = QRadioButton("Balanced (Recommended)")
         balanced_radio.setObjectName("balancedRadio")
-
-        balanced_desc = QLabel("    Uses 85% of CPU cores to keep system responsive")
+        balanced_desc = QLabel("Uses 85% of CPU cores to keep system responsive")
         balanced_desc.setObjectName("radioDescription")
-        balanced_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 20px;")
+        perf_layout.addWidget(balanced_radio)
+        perf_layout.addWidget(balanced_desc)
 
         performance_radio = QRadioButton("Performance")
         performance_radio.setObjectName("performanceRadio")
-
-        perf_desc = QLabel("    Uses all available CPU cores for maximum speed")
+        perf_desc = QLabel("Uses all available CPU cores for maximum speed")
         perf_desc.setObjectName("radioDescription")
-        perf_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 20px;")
+        perf_layout.addWidget(performance_radio)
+        perf_layout.addWidget(perf_desc)
 
         custom_radio = QRadioButton("Custom")
         custom_radio.setObjectName("customRadio")
+        perf_layout.addWidget(custom_radio)
 
-        # Custom thread count slider in a horizontal layout
-        custom_control_layout = QVBoxLayout()
-        custom_control_layout.setContentsMargins(20, 5, 0, 0)
-        custom_control_layout.setSpacing(5)
-
-        # Get system CPU count
         max_threads = os.cpu_count() or 4
-
-        # Label showing current value and range
         current_thread_count = min(get_custom_thread_count(), max_threads)
+
         thread_count_label = QLabel(
             f"Thread count: {current_thread_count} (max: {max_threads})"
         )
-        thread_count_label.setObjectName("threadCountLabel")
-        thread_count_label.setStyleSheet("color: #888; font-size: 11px;")
-        custom_control_layout.addWidget(thread_count_label)
+        thread_count_label.setObjectName("radioDescription")
+        perf_layout.addWidget(thread_count_label)
 
-        # Slider
         thread_count_slider = QSlider(Qt.Orientation.Horizontal)
         thread_count_slider.setObjectName("threadCountSlider")
         thread_count_slider.setMinimum(1)
         thread_count_slider.setMaximum(max_threads)
         thread_count_slider.setValue(current_thread_count)
         thread_count_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        # Set tick interval based on max threads (show ~8 ticks)
         tick_interval = max(1, max_threads // 8)
         thread_count_slider.setTickInterval(tick_interval)
         thread_count_slider.setEnabled(False)
 
-        # Update label when slider changes
         def on_slider_changed(value):
             thread_count_label.setText(f"Thread count: {value} (max: {max_threads})")
 
         thread_count_slider.valueChanged.connect(on_slider_changed)
-        custom_control_layout.addWidget(thread_count_slider)
+        perf_layout.addWidget(thread_count_slider)
 
-        # Set current mode
         current_mode = get_performance_mode()
         if current_mode == PerformanceMode.BALANCED:
             balanced_radio.setChecked(True)
         elif current_mode == PerformanceMode.PERFORMANCE:
             performance_radio.setChecked(True)
-        else:  # CUSTOM
+        else:
             custom_radio.setChecked(True)
             thread_count_slider.setEnabled(True)
 
-        # Enable/disable slider based on custom radio selection
         def on_custom_toggled(checked):
             thread_count_slider.setEnabled(checked)
             thread_count_label.setEnabled(checked)
@@ -560,33 +528,31 @@ class DialogManager:
         custom_radio.toggled.connect(on_custom_toggled)
         on_custom_toggled(custom_radio.isChecked())
 
-        # Add all radio options to layout
-        content_layout.addWidget(balanced_radio)
-        content_layout.addWidget(balanced_desc)
-        content_layout.addWidget(performance_radio)
-        content_layout.addWidget(perf_desc)
-        content_layout.addWidget(custom_radio)
-        content_layout.addLayout(custom_control_layout)
-
-        # Note
-        note_label = QLabel("Note: Changes take effect immediately for new operations.")
+        note_label = QLabel("Changes take effect immediately for new operations.")
+        note_label.setObjectName("cardNote")
         note_label.setWordWrap(True)
-        note_label.setStyleSheet(
-            "color: #888; font-style: italic; font-size: 11px; margin-top: 10px;"
-        )
-        content_layout.addWidget(note_label)
+        perf_layout.addWidget(note_label)
 
-        # AI Engine Section
-        ai_section_label = QLabel("AI Rating Engine")
-        ai_section_label.setObjectName("preferencesSectionLabel")
-        ai_section_label.setStyleSheet("font-weight: bold; font-size: 13px;")
-        content_layout.addWidget(ai_section_label)
+        content_layout.addWidget(perf_card)
+
+        # --- AI Engine Card ---
+        ai_card, ai_layout = build_card("dialogCard")
+        ai_title = QLabel("AI Rating Engine")
+        ai_title.setObjectName("cardSectionTitle")
+        ai_layout.addWidget(ai_title)
+
+        sep2 = QFrame()
+        sep2.setObjectName("cardSeparator")
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setFixedHeight(1)
+        ai_layout.addWidget(sep2)
 
         ai_desc_label = QLabel(
             "Configure the OpenAI-compatible vision model used for best-shot analysis and AI star ratings."
         )
+        ai_desc_label.setObjectName("cardDescription")
         ai_desc_label.setWordWrap(True)
-        content_layout.addWidget(ai_desc_label)
+        ai_layout.addWidget(ai_desc_label)
 
         openai_config = get_openai_config()
         api_key_value = openai_config.get("api_key") or DEFAULT_OPENAI_API_KEY
@@ -614,20 +580,6 @@ class DialogManager:
         rating_prompt_value = (
             openai_config.get("rating_prompt") or DEFAULT_RATING_PROMPT
         )
-
-        openai_frame = QFrame()
-        openai_frame.setObjectName("openAISettingsFrame")
-        openai_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        openai_layout = QVBoxLayout(openai_frame)
-        openai_layout.setSpacing(12)
-        openai_layout.setContentsMargins(15, 12, 15, 12)
-
-        openai_info_label = QLabel(
-            "Configure OpenAI access used by the LLM engine. Leave prompts blank to use defaults."
-        )
-        openai_info_label.setWordWrap(True)
-        openai_info_label.setStyleSheet("color: #888; font-size: 11px;")
-        openai_layout.addWidget(openai_info_label)
 
         openai_form = QGridLayout()
         openai_form.setHorizontalSpacing(12)
@@ -920,36 +872,23 @@ class DialogManager:
         fetch_models_button.clicked.connect(handle_fetch_models)
         test_connection_button.clicked.connect(handle_test_connection)
 
-        openai_layout.addLayout(openai_form)
-        buttons_row = QHBoxLayout()
-        buttons_row.setContentsMargins(0, 0, 0, 0)
-        buttons_row.setSpacing(6)
-        buttons_row.addWidget(test_connection_button)
-        buttons_row.addStretch()
-        openai_layout.addLayout(buttons_row)
-        content_layout.addWidget(openai_frame)
+        ai_layout.addLayout(openai_form)
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(6)
+        btn_row.addWidget(test_connection_button)
+        btn_row.addStretch()
+        ai_layout.addLayout(btn_row)
+        content_layout.addWidget(ai_card)
 
         content_layout.addStretch()
-
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-
-        cancel_button = QPushButton("Cancel")
-        cancel_button.setObjectName("preferencesCancelButton")
-        cancel_button.clicked.connect(dialog.reject)
-        button_layout.addWidget(cancel_button)
-
-        save_button = QPushButton("Save")
-        save_button.setObjectName("preferencesSaveButton")
-        save_button.setDefault(True)
 
         def save_preferences():
             if balanced_radio.isChecked():
                 set_performance_mode(PerformanceMode.BALANCED)
             elif performance_radio.isChecked():
                 set_performance_mode(PerformanceMode.PERFORMANCE)
-            else:  # custom_radio.isChecked()
+            else:
                 set_performance_mode(PerformanceMode.CUSTOM)
                 set_custom_thread_count(thread_count_slider.value())
 
@@ -1000,14 +939,59 @@ class DialogManager:
             )
             dialog.accept()
 
-        save_button.clicked.connect(save_preferences)
-        button_layout.addWidget(save_button)
+        # Footer
+        build_dialog_footer(
+            outer,
+            [
+                ("Cancel", "preferencesCancelButton", dialog.reject, False),
+                ("Save", "preferencesSaveButton", save_preferences, True),
+            ],
+        )
 
-        main_layout.addLayout(button_layout)
-
-        dialog.setLayout(main_layout)
         dialog.exec()
         logger.info("Closed preferences dialog")
+
+    def _build_cache_card(self, title_text, icon_text, parent_layout):
+        """Build a modern cache section card and return its content layout."""
+        card = QFrame()
+        card.setObjectName("cacheCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(12)
+        card_layout.setContentsMargins(18, 14, 18, 14)
+
+        # Card header with icon
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        icon = QLabel(icon_text)
+        icon.setObjectName("cacheCardIcon")
+        header.addWidget(icon)
+        title = QLabel(title_text)
+        title.setObjectName("cacheCardTitle")
+        header.addWidget(title)
+        header.addStretch()
+        card_layout.addLayout(header)
+
+        # Separator
+        sep = QFrame()
+        sep.setObjectName("cacheCardSeparator")
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFixedHeight(1)
+        card_layout.addWidget(sep)
+
+        parent_layout.addWidget(card)
+        return card_layout
+
+    def _build_cache_row(self, label_text, value_label, parent_layout):
+        """Build a key-value row for a cache card."""
+        row = QHBoxLayout()
+        row.setSpacing(0)
+        key = QLabel(label_text)
+        key.setObjectName("cacheRowKey")
+        row.addWidget(key)
+        row.addStretch()
+        value_label.setObjectName("cacheRowValue")
+        row.addWidget(value_label)
+        parent_layout.addLayout(row)
 
     def show_cache_management_dialog(self):
         """Show the cache management dialog."""
@@ -1015,63 +999,68 @@ class DialogManager:
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Cache Management")
         dialog.setObjectName("cacheManagementDialog")
-        dialog.setMinimumSize(520, 480)
+        dialog.setMinimumSize(480, 520)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
 
         outer_layout = QVBoxLayout(dialog)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
 
+        # Dialog header
+        build_dialog_header("Cache Management", "⚙", outer_layout)
+
+        # Scrollable content
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setObjectName("cacheManagementScrollArea")
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         outer_layout.addWidget(scroll_area)
 
         content_widget = QFrame()
+        content_widget.setObjectName("cacheDialogContent")
         scroll_area.setWidget(content_widget)
         main_layout = QVBoxLayout(content_widget)
-        main_layout.setSpacing(15)
-        main_layout.setContentsMargins(25, 25, 25, 25)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(20, 12, 20, 12)
 
-        # Thumbnail Cache Section
-        thumb_section_title = QLabel("Thumbnail Cache")
-        thumb_section_title.setObjectName("cacheSectionTitle")
-        main_layout.addWidget(thumb_section_title)
-
-        thumb_frame = QFrame()
-        thumb_frame.setObjectName("cacheSectionFrame")
-        thumb_layout = QGridLayout(thumb_frame)
-
+        # --- Thumbnail Cache Card ---
+        thumb_card_layout = self._build_cache_card("Thumbnails", "🖼", main_layout)
         self.parent.thumb_cache_usage_label = QLabel()
-        thumb_layout.addWidget(QLabel("Current Disk Usage:"), 0, 0)
-        thumb_layout.addWidget(self.parent.thumb_cache_usage_label, 0, 1)
+        self._build_cache_row(
+            "Disk Usage", self.parent.thumb_cache_usage_label, thumb_card_layout
+        )
 
-        delete_thumb_cache_button = QPushButton("Clear Thumbnail Cache")
+        delete_thumb_cache_button = QPushButton("Clear Thumbnails")
         delete_thumb_cache_button.setObjectName("deleteThumbnailCacheButton")
         delete_thumb_cache_button.clicked.connect(
             self.parent._clear_thumbnail_cache_action
         )
-        thumb_layout.addWidget(delete_thumb_cache_button, 1, 0, 1, 2)
-        main_layout.addWidget(thumb_frame)
+        thumb_card_layout.addWidget(delete_thumb_cache_button)
 
-        # Preview Image Cache Section
-        preview_section_title = QLabel("Preview Image Cache")
-        preview_section_title.setObjectName("cacheSectionTitle")
-        main_layout.addWidget(preview_section_title)
-
-        preview_frame = QFrame()
-        preview_frame.setObjectName("cacheSectionFrame")
-        preview_layout = QGridLayout(preview_frame)
-
+        # --- Preview Image Cache Card ---
+        preview_card_layout = self._build_cache_card(
+            "Preview Images", "🔍", main_layout
+        )
         self.parent.preview_cache_configured_limit_label = QLabel()
-        preview_layout.addWidget(QLabel("Configured Size Limit:"), 0, 0)
-        preview_layout.addWidget(self.parent.preview_cache_configured_limit_label, 0, 1)
-
+        self._build_cache_row(
+            "Size Limit",
+            self.parent.preview_cache_configured_limit_label,
+            preview_card_layout,
+        )
         self.parent.preview_cache_usage_label = QLabel()
-        preview_layout.addWidget(QLabel("Current Disk Usage:"), 1, 0)
-        preview_layout.addWidget(self.parent.preview_cache_usage_label, 1, 1)
+        self._build_cache_row(
+            "Disk Usage", self.parent.preview_cache_usage_label, preview_card_layout
+        )
 
-        preview_layout.addWidget(QLabel("Set New Limit (GB):"), 2, 0)
+        # Limit selector row
+        limit_row = QHBoxLayout()
+        limit_row.setSpacing(8)
+        limit_label = QLabel("New Limit")
+        limit_label.setObjectName("cacheRowKey")
+        limit_row.addWidget(limit_label)
+        limit_row.addStretch()
+
         self.parent.preview_cache_size_combo = QComboBox()
         self.parent.preview_cache_size_combo.setObjectName("previewCacheSizeCombo")
         self.parent.preview_cache_size_options_gb = [
@@ -1086,7 +1075,6 @@ class DialogManager:
         self.parent.preview_cache_size_combo.addItems(
             [f"{size:.2f} GB" for size in self.parent.preview_cache_size_options_gb]
         )
-
         current_conf_gb = get_preview_cache_size_gb()
         try:
             current_index = self.parent.preview_cache_size_options_gb.index(
@@ -1100,49 +1088,50 @@ class DialogManager:
             self.parent.preview_cache_size_combo.setCurrentIndex(
                 self.parent.preview_cache_size_combo.count() - 1
             )
+        limit_row.addWidget(self.parent.preview_cache_size_combo)
 
-        preview_layout.addWidget(self.parent.preview_cache_size_combo, 2, 1)
-
-        apply_preview_limit_button = QPushButton("Apply New Limit")
+        apply_preview_limit_button = QPushButton("Apply")
         apply_preview_limit_button.setObjectName("applyPreviewLimitButton")
         apply_preview_limit_button.clicked.connect(
             self.parent._apply_preview_cache_limit_action
         )
-        preview_layout.addWidget(apply_preview_limit_button, 3, 0, 1, 2)
+        limit_row.addWidget(apply_preview_limit_button)
+        preview_card_layout.addLayout(limit_row)
 
         delete_preview_cache_button = QPushButton("Clear Preview Cache")
         delete_preview_cache_button.setObjectName("deletePreviewCacheButton")
         delete_preview_cache_button.clicked.connect(
             self.parent._clear_preview_cache_action
         )
-        preview_layout.addWidget(delete_preview_cache_button, 4, 0, 1, 2)
-        main_layout.addWidget(preview_frame)
+        preview_card_layout.addWidget(delete_preview_cache_button)
 
-        # EXIF Cache Section
-        exif_section_title = QLabel("EXIF Metadata Cache")
-        exif_section_title.setObjectName("cacheSectionTitle")
-        main_layout.addWidget(exif_section_title)
-
-        exif_frame = QFrame()
-        exif_frame.setObjectName("cacheSectionFrame")
-        exif_layout = QGridLayout(exif_frame)
-
+        # --- EXIF Cache Card ---
+        exif_card_layout = self._build_cache_card("EXIF Metadata", "📋", main_layout)
         self.parent.exif_cache_configured_limit_label = QLabel()
-        exif_layout.addWidget(QLabel("Configured Size Limit:"), 0, 0)
-        exif_layout.addWidget(self.parent.exif_cache_configured_limit_label, 0, 1)
-
+        self._build_cache_row(
+            "Size Limit",
+            self.parent.exif_cache_configured_limit_label,
+            exif_card_layout,
+        )
         self.parent.exif_cache_usage_label = QLabel()
-        exif_layout.addWidget(QLabel("Current Disk Usage:"), 1, 0)
-        exif_layout.addWidget(self.parent.exif_cache_usage_label, 1, 1)
+        self._build_cache_row(
+            "Disk Usage", self.parent.exif_cache_usage_label, exif_card_layout
+        )
 
-        exif_layout.addWidget(QLabel("Set New Limit (MB):"), 2, 0)
+        # EXIF limit selector row
+        exif_limit_row = QHBoxLayout()
+        exif_limit_row.setSpacing(8)
+        exif_limit_label = QLabel("New Limit")
+        exif_limit_label.setObjectName("cacheRowKey")
+        exif_limit_row.addWidget(exif_limit_label)
+        exif_limit_row.addStretch()
+
         self.parent.exif_cache_size_combo = QComboBox()
         self.parent.exif_cache_size_combo.setObjectName("exifCacheSizeCombo")
         self.parent.exif_cache_size_options_mb = [64, 128, 256, 512, 1024]
         self.parent.exif_cache_size_combo.addItems(
             [f"{size} MB" for size in self.parent.exif_cache_size_options_mb]
         )
-
         current_exif_conf_mb = get_exif_cache_size_mb()
         try:
             current_exif_index = self.parent.exif_cache_size_options_mb.index(
@@ -1156,59 +1145,46 @@ class DialogManager:
             self.parent.exif_cache_size_combo.setCurrentIndex(
                 self.parent.exif_cache_size_combo.count() - 1
             )
-        exif_layout.addWidget(self.parent.exif_cache_size_combo, 2, 1)
+        exif_limit_row.addWidget(self.parent.exif_cache_size_combo)
 
-        apply_exif_limit_button = QPushButton("Apply New EXIF Limit")
+        apply_exif_limit_button = QPushButton("Apply")
         apply_exif_limit_button.setObjectName("applyExifLimitButton")
         apply_exif_limit_button.clicked.connect(
             self.parent._apply_exif_cache_limit_action
         )
-        exif_layout.addWidget(apply_exif_limit_button, 3, 0, 1, 2)
+        exif_limit_row.addWidget(apply_exif_limit_button)
+        exif_card_layout.addLayout(exif_limit_row)
 
         delete_exif_cache_button = QPushButton("Clear EXIF && Rating Caches")
         delete_exif_cache_button.setObjectName("deleteExifCacheButton")
         delete_exif_cache_button.clicked.connect(self.parent._clear_exif_cache_action)
-        exif_layout.addWidget(delete_exif_cache_button, 4, 0, 1, 2)
-        main_layout.addWidget(exif_frame)
+        exif_card_layout.addWidget(delete_exif_cache_button)
 
-        # Analysis Cache Section
-        analysis_section_title = QLabel("Analysis Cache")
-        analysis_section_title.setObjectName("cacheSectionTitle")
-        main_layout.addWidget(analysis_section_title)
-
-        analysis_frame = QFrame()
-        analysis_frame.setObjectName("cacheSectionFrame")
-        analysis_layout = QGridLayout(analysis_frame)
-
-        analysis_layout.addWidget(QLabel("Current Disk Usage:"), 0, 0)
+        # --- Analysis Cache Card ---
+        analysis_card_layout = self._build_cache_card("Analysis", "🧠", main_layout)
         self.parent.analysis_cache_usage_label = QLabel()
-        analysis_layout.addWidget(self.parent.analysis_cache_usage_label, 0, 1)
+        self._build_cache_row(
+            "Disk Usage", self.parent.analysis_cache_usage_label, analysis_card_layout
+        )
 
         clear_analysis_cache_button = QPushButton("Clear Analysis Cache")
         clear_analysis_cache_button.setObjectName("clearAnalysisCacheButton")
         clear_analysis_cache_button.clicked.connect(
             self.parent._clear_analysis_cache_action
         )
-        analysis_layout.addWidget(clear_analysis_cache_button, 1, 0, 1, 2)
-        main_layout.addWidget(analysis_frame)
+        analysis_card_layout.addWidget(clear_analysis_cache_button)
 
-        main_layout.addSpacerItem(
-            QSpacerItem(
-                20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
-            )
+        main_layout.addStretch()
+
+        # Footer
+        build_dialog_footer(
+            outer_layout,
+            [
+                ("Close", "cacheDialogCloseButton", dialog.accept, True),
+            ],
         )
 
-        button_row = QHBoxLayout()
-        button_row.setContentsMargins(25, 15, 25, 15)
-        button_row.addStretch()
-        close_button = QPushButton("Close")
-        close_button.setObjectName("cacheDialogCloseButton")
-        close_button.clicked.connect(dialog.accept)
-        button_row.addWidget(close_button)
-        outer_layout.addLayout(button_row)
-
         self.parent._update_cache_dialog_labels()
-        dialog.setLayout(main_layout)
         dialog.exec()
         logger.info("Closed cache management dialog")
 
@@ -1236,27 +1212,27 @@ class DialogManager:
         dialog.setObjectName("deleteConfirmationDialog")
         dialog.setModal(True)
         dialog.setMinimumSize(600, 450)
-        # Frameless window for fancy UI
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
 
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(15, 15, 15, 15)
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        title = QLabel(message_text)
-        title.setObjectName("deleteDialogTitle")
-        layout.addWidget(title)
+        # Header
+        build_dialog_header(title_text, "🗑", outer)
 
-        info_label = QLabel("The following images will be moved to the system trash:")
+        # Content
+        body = QVBoxLayout()
+        body.setContentsMargins(20, 14, 20, 8)
+        body.setSpacing(10)
+
+        info_label = QLabel(message_text)
         info_label.setObjectName("deleteDialogInfo")
-        layout.addWidget(info_label)
+        info_label.setWordWrap(True)
+        body.addWidget(info_label)
 
-        # Scroll area for the list of images
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setObjectName("deleteDialogScrollArea")
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-
-        # Use QListWidget for thumbnails and filenames
+        # Thumbnail grid
         list_widget = QListWidget()
         list_widget.setObjectName("deleteDialogListWidget")
         list_widget.setIconSize(QSize(128, 128))
@@ -1266,12 +1242,10 @@ class DialogManager:
         list_widget.setWordWrap(True)
         list_widget.setSpacing(10)
 
-        # Populate the list
         for file_path in files:
-            # Get thumbnail with orientation correction
             thumbnail_pixmap = self.parent.image_pipeline.get_thumbnail_qpixmap(
                 file_path,
-                apply_orientation=True,  # Ensure orientation is applied
+                apply_orientation=True,
             )
             if thumbnail_pixmap:
                 icon = QIcon(thumbnail_pixmap)
@@ -1280,28 +1254,17 @@ class DialogManager:
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 list_widget.addItem(item)
 
-        scroll_area.setWidget(list_widget)
-        layout.addWidget(scroll_area)
+        body.addWidget(list_widget)
+        outer.addLayout(body)
 
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(15)  # Add spacing between buttons
-        button_layout.addStretch()
-
-        cancel_button = QPushButton("Cancel")
-        cancel_button.setObjectName("deleteDialogCancelButton")
-        cancel_button.setMinimumSize(120, 40)  # Make button larger
-        cancel_button.clicked.connect(dialog.reject)
-        button_layout.addWidget(cancel_button)
-
-        confirm_button = QPushButton("Confirm Move to Trash")
-        confirm_button.setObjectName("deleteDialogConfirmButton")
-        confirm_button.setMinimumSize(200, 40)  # Make button larger
-        confirm_button.setDefault(True)
-        confirm_button.clicked.connect(dialog.accept)
-        button_layout.addWidget(confirm_button)
-
-        layout.addLayout(button_layout)
+        # Footer
+        build_dialog_footer(
+            outer,
+            [
+                ("Cancel", "deleteDialogCancelButton", dialog.reject, False),
+                ("Move to Trash", "deleteDialogConfirmButton", dialog.accept, True),
+            ],
+        )
 
         result = dialog.exec()
         confirmed = result == QDialog.DialogCode.Accepted
@@ -1515,32 +1478,27 @@ class DialogManager:
         dialog.setObjectName(f"{object_name_prefix}Dialog")
         dialog.setModal(True)
         dialog.setMinimumSize(600, 450)
-        # Frameless window for fancy UI
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
 
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # Title
-        title = QLabel(dialog_title)
-        title.setObjectName(f"{object_name_prefix}Title")
-        title.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(title)
+        # Header
+        build_dialog_header(dialog_title, "⚠", outer)
 
-        # Message
+        # Content
+        body = QVBoxLayout()
+        body.setContentsMargins(20, 14, 20, 8)
+        body.setSpacing(10)
+
         message_label = QLabel(message)
         message_label.setObjectName(f"{object_name_prefix}Message")
         message_label.setWordWrap(True)
-        layout.addWidget(message_label)
+        body.addWidget(message_label)
 
-        # Scroll area for the list of images
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setObjectName(f"{object_name_prefix}ScrollArea")
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-
-        # Use QListWidget for thumbnails and filenames
+        # Thumbnail grid
         list_widget = QListWidget()
         list_widget.setObjectName(f"{object_name_prefix}ListWidget")
         list_widget.setIconSize(QSize(128, 128))
@@ -1550,17 +1508,14 @@ class DialogManager:
         list_widget.setWordWrap(True)
         list_widget.setSpacing(10)
 
-        # Populate the list
         for file_path in marked_files:
-            # Get thumbnail with orientation correction
             thumbnail_pixmap = self.parent.image_pipeline.get_thumbnail_qpixmap(
                 file_path,
-                apply_orientation=True,  # Ensure orientation is applied
+                apply_orientation=True,
             )
             if thumbnail_pixmap:
                 icon = QIcon(thumbnail_pixmap)
             else:
-                # Fallback to a generic icon if thumbnail generation fails
                 icon = self.parent.style().standardIcon(
                     QStyle.StandardPixmap.SP_FileIcon
                 )
@@ -1570,59 +1525,51 @@ class DialogManager:
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             list_widget.addItem(item)
 
-        scroll_area.setWidget(list_widget)
-        layout.addWidget(scroll_area)
+        body.addWidget(list_widget)
+        outer.addLayout(body)
 
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(15)
-        button_layout.addStretch()
+        # Footer with 3 buttons
+        footer = QFrame()
+        footer.setObjectName("dialogFooter")
+        f_layout = QHBoxLayout(footer)
+        f_layout.setContentsMargins(22, 10, 22, 14)
+        f_layout.setSpacing(10)
+        f_layout.addStretch()
 
-        # Cancel button (don't close)
         cancel_button = QPushButton("Cancel")
         cancel_button.setObjectName(f"{object_name_prefix}CancelButton")
-        cancel_button.setMinimumSize(120, 40)
         cancel_button.clicked.connect(dialog.reject)
-        button_layout.addWidget(cancel_button)
+        f_layout.addWidget(cancel_button)
 
-        # Ignore button (proceed without committing)
         ignore_button = QPushButton(ignore_button_text)
         ignore_button.setObjectName(f"{object_name_prefix}IgnoreButton")
-        ignore_button.setMinimumSize(160, 40)
-        ignore_button.clicked.connect(
-            lambda: dialog.done(1)
-        )  # Custom result code for "ignore"
-        button_layout.addWidget(ignore_button)
+        ignore_button.clicked.connect(lambda: dialog.done(1))
+        f_layout.addWidget(ignore_button)
 
-        # Commit button (commit and then proceed)
         commit_button = QPushButton(commit_button_text)
         commit_button.setObjectName(f"{object_name_prefix}CommitButton")
-        commit_button.setMinimumSize(180, 40)
-        commit_button.clicked.connect(
-            lambda: dialog.done(2)
-        )  # Custom result code for "commit"
+        commit_button.clicked.connect(lambda: dialog.done(2))
         commit_button.setDefault(True)
-        button_layout.addWidget(commit_button)
+        f_layout.addWidget(commit_button)
 
-        layout.addLayout(button_layout)
+        outer.addWidget(footer)
 
-        # Show the dialog and return the user's choice
         logger.info(
             f"Showing {log_context.lower()} dialog with {len(marked_files)} marked files"
         )
         result = dialog.exec()
 
-        if result == 1:  # Ignore
+        if result == 1:
             self.log_dialog_interaction(
                 log_context, ignore_button_text, f"{len(marked_files)} files"
             )
             return "ignore"
-        elif result == 2:  # Commit
+        elif result == 2:
             self.log_dialog_interaction(
                 log_context, commit_button_text, f"{len(marked_files)} files"
             )
             return "commit"
-        else:  # Cancel or closed
+        else:
             self.log_dialog_interaction(
                 log_context, "Cancel", f"{len(marked_files)} files"
             )

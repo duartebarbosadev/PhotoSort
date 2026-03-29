@@ -324,12 +324,29 @@ class MainWindow(QMainWindow):
     def _update_image_info_label(self, status_message_override: Optional[str] = None):
         if status_message_override:
             self.statusBar().showMessage(status_message_override)
+            if hasattr(self, "left_panel"):
+                folder_display = None
+                if self.app_state.current_folder_path:
+                    folder_display = os.path.basename(
+                        self.app_state.current_folder_path
+                    )
+                    if not folder_display:
+                        folder_display = self.app_state.current_folder_path
+                item_count = len(getattr(self.app_state, "image_files_data", []) or [])
+                self.left_panel.update_context(
+                    folder_display,
+                    item_count,
+                    status_message_override.replace("Folder: ", "", 1),
+                )
             return
 
         num_images = 0
         num_videos = 0
         total_size_mb = 0.0
         folder_name_display = "N/A"
+        sidebar_title = None
+        sidebar_subtitle = "Open a folder to start sorting your library."
+        sidebar_item_count = 0
         # Default text if no folder is loaded yet
         status_text = "No folder loaded. Open a folder to begin."
         scan_logically_active = False
@@ -338,6 +355,7 @@ class MainWindow(QMainWindow):
             folder_name_display = os.path.basename(self.app_state.current_folder_path)
             if not folder_name_display:  # Handles "C:/"
                 folder_name_display = self.app_state.current_folder_path
+            sidebar_title = folder_name_display
 
             # Determine if scan is considered "active" based on UI elements
             # open_folder_action is disabled during the scan process.
@@ -349,6 +367,10 @@ class MainWindow(QMainWindow):
                     self.app_state.image_files_data
                 )  # Current count during scan
                 status_text = f"Folder: {folder_name_display}  |  Scanning... ({num_files_found_so_far} files found)"
+                sidebar_item_count = num_files_found_so_far
+                sidebar_subtitle = (
+                    f"Scanning library • {num_files_found_so_far} files found"
+                )
             elif self.app_state.image_files_data:  # Scan is finished and there's data
                 num_images = len(self.app_state.image_files_data)
                 num_videos = sum(
@@ -381,10 +403,22 @@ class MainWindow(QMainWindow):
                     f"({total_size_mb:.2f} MB) | "
                     f"Preview Cache: {preview_cache_size_mb:.2f} MB"
                 )
+                sidebar_item_count = len(self.app_state.image_files_data)
+                sidebar_subtitle = (
+                    f"{num_images} images • {num_videos} videos • "
+                    f"{total_size_mb:.1f} MB"
+                )
             else:  # Folder path set, scan finished (or not started if folder just selected), no image data
                 status_text = f"Folder: {folder_name_display}  |  Files: 0 (0.00 MB)"
+                sidebar_subtitle = "No supported media files found yet."
 
         self.statusBar().showMessage(status_text)
+        if hasattr(self, "left_panel"):
+            self.left_panel.update_context(
+                sidebar_title,
+                sidebar_item_count,
+                sidebar_subtitle,
+            )
 
     # --- Helper for controllers ---
     def _determine_current_view_mode(self) -> str:
@@ -710,12 +744,14 @@ class MainWindow(QMainWindow):
         start_time = time.perf_counter()
         logger.debug("Creating layout...")
         central_widget = QWidget()
+        central_widget.setObjectName("appCentralWidget")
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_splitter.setObjectName("main_splitter")
+        main_splitter.setHandleWidth(8)
 
         main_splitter.addWidget(self.left_panel)
         main_splitter.addWidget(self.center_pane_container)
