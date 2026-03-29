@@ -60,7 +60,7 @@ class LeftPanel(QWidget):
     def _create_widgets(self):
         """Creates the widgets for the left panel."""
         self.header_card = QFrame()
-        self.header_card.setObjectName("sidebarHeaderCard")
+        self.header_card.setObjectName("sidebarHeaderSection")
 
         self.sidebar_eyebrow = QLabel("PhotoSort")
         self.sidebar_eyebrow.setObjectName("sidebarEyebrow")
@@ -135,9 +135,6 @@ class LeftPanel(QWidget):
         view_icons_layout.addWidget(self.view_rotation_icon)
         search_layout.addWidget(self.view_icons_container)
 
-        self.browser_card = QFrame()
-        self.browser_card.setObjectName("sidebarBrowserCard")
-
         self.browser_title = QLabel("Browser")
         self.browser_title.setObjectName("sidebarSectionLabel")
 
@@ -206,11 +203,11 @@ class LeftPanel(QWidget):
     def _create_layout(self):
         """Creates the layout for the left panel."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
 
         header_layout = QVBoxLayout(self.header_card)
-        header_layout.setContentsMargins(14, 12, 14, 12)
+        header_layout.setContentsMargins(10, 8, 10, 6)
         header_layout.setSpacing(6)
 
         meta_row = QHBoxLayout()
@@ -231,24 +228,18 @@ class LeftPanel(QWidget):
         header_layout.addWidget(self.sidebar_subtitle)
         header_layout.addWidget(self.search_container)
 
-        browser_layout = QVBoxLayout(self.browser_card)
-        browser_layout.setContentsMargins(10, 8, 10, 10)
-        browser_layout.setSpacing(8)
-
         browser_header = QHBoxLayout()
-        browser_header.setContentsMargins(2, 0, 2, 0)
+        browser_header.setContentsMargins(4, 0, 4, 0)
         browser_header.setSpacing(8)
         browser_header.addWidget(self.browser_title)
         browser_header.addStretch()
         browser_header.addWidget(self.browser_mode_label)
 
-        browser_layout.addLayout(browser_header)
-        browser_layout.addWidget(self.tree_display_view)
-        browser_layout.addWidget(self.grid_display_view)
-        browser_layout.addWidget(self.rotation_suggestions_view)
-
         layout.addWidget(self.header_card)
-        layout.addWidget(self.browser_card, 1)
+        layout.addLayout(browser_header)
+        layout.addWidget(self.tree_display_view, 1)
+        layout.addWidget(self.grid_display_view, 1)
+        layout.addWidget(self.rotation_suggestions_view, 1)
 
     def _create_delegates(self):
         """Creates and sets the item delegates for the views."""

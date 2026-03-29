@@ -582,6 +582,7 @@ class IndividualViewer(QWidget):
     def _create_rating_controls(self) -> QWidget:
         """Creates the star rating buttons widget."""
         widget = QWidget()
+        widget.setObjectName("ratingControls")
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
@@ -601,6 +602,7 @@ class IndividualViewer(QWidget):
 
     def _create_video_controls(self) -> QWidget:
         widget = QWidget()
+        widget.setObjectName("videoControls")
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)

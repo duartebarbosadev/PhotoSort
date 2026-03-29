@@ -166,7 +166,7 @@ QTreeView::branch {
 /* --- Center Pane (Image and its Controls) --- */
 QWidget#center_pane_container {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #2D2F31, stop: 1 #2B2B2B);
+        stop: 0 #282A2C, stop: 1 #242628);
     border: 1px solid #3C3F41;
     border-radius: 22px;
 }
@@ -269,11 +269,9 @@ QToolBar#view_toolbar QPushButton:pressed {
 }
 
 /* --- Search Container in Left Panel --- */
-QFrame#sidebarHeaderCard,
-QFrame#sidebarBrowserCard {
-    background-color: #313335;
-    border: 1px solid #3C3F41;
-    border-radius: 18px;
+QFrame#sidebarHeaderSection {
+    background-color: transparent;
+    border: none;
 }
 
 QFrame#search_container {
@@ -1295,6 +1293,13 @@ QFrame#imageActionControls {
     border-bottom-right-radius: 18px;
 }
 
+QWidget#ratingControls,
+QWidget#videoControls,
+QWidget#videoControls QLabel,
+QWidget#videoControls QSlider {
+    background-color: transparent;
+}
+
 QFrame#imageActionControls QPushButton {
     background-color: transparent;
     color: #808080;
@@ -1308,24 +1313,24 @@ QFrame#imageActionControls QPushButton:hover {
 }
 
 /* Star Buttons */
-QFrame#imageActionControls QWidget > QPushButton { /* Target star buttons */
+QWidget#ratingControls > QPushButton {
     font-size: 15pt;
     min-width: 26px;
     min-height: 26px;
 }
 
 /* Color Buttons */
-QFrame#imageActionControls QWidget > QPushButton[labelValue] {
+QWidget#ratingControls > QPushButton[labelValue] {
     min-width: 18px;
     min-height: 18px;
     border: 1px solid #33353a;
 }
-QFrame#imageActionControls QWidget > QPushButton[labelValue]:hover {
+QWidget#ratingControls > QPushButton[labelValue]:hover {
      border: 1px solid #777777;
 }
 
 /* Style for selected state (set via Python property) */
-QFrame#imageActionControls QWidget > QPushButton[selected="true"] {
+QWidget#ratingControls > QPushButton[selected="true"] {
     border: 2px solid #FFFFFF;
 }
 
