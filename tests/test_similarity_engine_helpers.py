@@ -93,7 +93,9 @@ def test_classify_orientation_uses_raw_dimensions_for_rotated_raw(monkeypatch):
     assert classify_orientation("/tmp/test.arw") == "portrait"
 
 
-def test_clear_embedding_cache_cleans_hf_cache_when_embedding_cache_is_missing(tmp_path, monkeypatch):
+def test_clear_embedding_cache_cleans_hf_cache_when_embedding_cache_is_missing(
+    tmp_path, monkeypatch
+):
     embedding_cache_dir = tmp_path / "missing-embeddings"
     hf_cache_dir = tmp_path / ".cache" / "photosort_hf"
     hf_cache_dir.mkdir(parents=True)
@@ -102,7 +104,9 @@ def test_clear_embedding_cache_cleans_hf_cache_when_embedding_cache_is_missing(t
     nested_dir.mkdir()
     (nested_dir / "weights.bin").write_text("y")
 
-    monkeypatch.setattr("core.similarity_engine.EMBEDDING_CACHE_DIR", str(embedding_cache_dir))
+    monkeypatch.setattr(
+        "core.similarity_engine.EMBEDDING_CACHE_DIR", str(embedding_cache_dir)
+    )
 
     original_expanduser = os.path.expanduser
     monkeypatch.setattr(
