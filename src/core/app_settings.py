@@ -124,6 +124,9 @@ METADATA_EMIT_BATCH_SIZE = 50  # Batch size for metadata emission
 LARGE_FOLDER_THRESHOLD = 500  # Items above this use chunked UI population
 UI_POPULATION_CHUNK_SIZE = 25  # Items to process before calling processEvents() - smaller for more frequent updates
 
+# Grouping Step Drag-and-Drop
+GROUPING_DROP_HIGHLIGHT_COLOR = (98, 196, 160, 80)  # RGBA teal with alpha
+
 # Thumbnail Lazy Loading Settings
 THUMBNAIL_PRELOAD_ENABLED = True  # Enable background thumbnail preloading
 THUMBNAIL_PRELOAD_BATCH_SIZE = 20  # Number of thumbnails to generate per batch

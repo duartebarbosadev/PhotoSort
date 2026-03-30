@@ -1,7 +1,12 @@
 from PyQt6.QtWidgets import QApplication, QMenu
 
 from src.core.grouping import GroupingGroup, GroupingPlan
-from src.ui.grouping_step_widget import GroupingStepWidget
+from src.ui.grouping_step_widget import (
+    DroppableGroupingTree,
+    GroupingStepWidget,
+    ITEM_GROUP,
+    ROLE_KIND,
+)
 
 
 _app = QApplication.instance() or QApplication([])
@@ -91,7 +96,9 @@ def test_grouping_step_widget_hides_leaf_only_context_actions(tmp_path):
         mode="location",
         total_items=3,
         supported_items=3,
-        groups=[GroupingGroup(group_id="1", group_label="Beach", source_paths=["a.jpg"])],
+        groups=[
+            GroupingGroup(group_id="1", group_label="Beach", source_paths=["a.jpg"])
+        ],
         unassigned_paths=["b.jpg"],
         skipped_paths=[],
     )
@@ -317,7 +324,9 @@ def test_grouping_step_widget_builds_confirmation_action_list(tmp_path):
             total_items=1,
             supported_items=1,
             groups=[
-                GroupingGroup(group_id="1", group_label="Trips/Beach", source_paths=[first])
+                GroupingGroup(
+                    group_id="1", group_label="Trips/Beach", source_paths=[first]
+                )
             ],
             unassigned_paths=[],
             skipped_paths=[],
@@ -428,7 +437,10 @@ def test_grouping_step_widget_selects_original_items_for_renamed_entries(tmp_pat
     widget._handle_preview_item_changed(renamed_file, 0)
 
     widget._handle_after_item_changed(widget._after_group_items_by_id["1"], None)
-    assert widget.before_tree.currentItem() is widget._before_dir_items_by_relative_path["Beach"]
+    assert (
+        widget.before_tree.currentItem()
+        is widget._before_dir_items_by_relative_path["Beach"]
+    )
 
     widget._handle_after_item_changed(widget._after_file_items_by_path[first], None)
     assert widget.before_tree.currentItem() is widget._before_file_items_by_path[first]
@@ -502,7 +514,9 @@ def test_grouping_step_widget_keeps_folder_preview_visible_after_rename(tmp_path
     assert widget.folder_preview_grid.count() == 1
 
 
-def test_grouping_step_widget_restores_selected_file_when_current_item_is_lost(tmp_path):
+def test_grouping_step_widget_restores_selected_file_when_current_item_is_lost(
+    tmp_path,
+):
     source_root = tmp_path / "demo"
     source_root.mkdir()
     first = str(source_root / "Beach" / "a.jpg")
@@ -541,7 +555,9 @@ def test_grouping_step_widget_restores_selected_file_when_current_item_is_lost(t
     assert widget.preview_pane_stack.currentWidget() is not widget.preview_hint_label
 
 
-def test_grouping_step_widget_restores_selected_group_when_current_item_is_lost(tmp_path):
+def test_grouping_step_widget_restores_selected_group_when_current_item_is_lost(
+    tmp_path,
+):
     source_root = tmp_path / "demo"
     source_root.mkdir()
     first = str(source_root / "Beach" / "a.jpg")
@@ -577,7 +593,7 @@ def test_grouping_step_widget_restores_selected_group_when_current_item_is_lost(
     assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
 
 
-def test_grouping_step_widget_drag_drop_moves_file_into_folder(tmp_path):
+def test_nest_group_under_target(tmp_path):
     source_root = tmp_path / "demo"
     source_root.mkdir()
     first = str(source_root / "Beach" / "a.jpg")
@@ -600,27 +616,46 @@ def test_grouping_step_widget_drag_drop_moves_file_into_folder(tmp_path):
         str(source_root),
     )
 
-    dragged_items = [widget._after_file_items_by_path[first]]
-    target_item = widget._after_group_items_by_id["2"]
-
-    assert widget._can_drop_preview_items(dragged_items, target_item)
-
-    widget._handle_preview_tree_drop(dragged_items, target_item)
-
+    widget._nest_group_under_target("1", "2")
     plan = widget.get_effective_plan()
-    trips_group = next(group for group in plan.groups if group.group_id == "2")
-    assert all(group.group_id != "1" for group in plan.groups)
-    assert trips_group.source_paths == [first, second]
-    assert widget.preview_tree.currentItem() is widget._after_group_items_by_id["2"]
-    assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
-    assert widget.folder_preview_grid.count() == 2
+
+    labels = {g.group_label for g in plan.groups}
+    assert "Trips/Beach" in labels
+    assert "Trips" in labels
 
 
-def test_grouping_step_widget_drag_drop_moves_folder_into_folder(tmp_path):
+def test_nest_group_prevents_self_nesting(tmp_path):
     source_root = tmp_path / "demo"
     source_root.mkdir()
-    first = str(source_root / "Trips" / "Beach" / "a.jpg")
-    second = str(source_root / "Trips" / "City" / "b.jpg")
+    first = str(source_root / "Beach" / "a.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first]),
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    widget._nest_group_under_target("1", "1")
+    plan = widget.get_effective_plan()
+
+    assert plan.groups[0].group_label == "Beach"
+
+
+def test_nest_group_prevents_circular_nesting(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "a.jpg")
+    second = str(source_root / "b.jpg")
 
     widget = GroupingStepWidget()
     widget.set_source_folder(str(source_root))
@@ -630,8 +665,10 @@ def test_grouping_step_widget_drag_drop_moves_folder_into_folder(tmp_path):
             total_items=2,
             supported_items=2,
             groups=[
-                GroupingGroup(group_id="1", group_label="Trips/Beach", source_paths=[first]),
-                GroupingGroup(group_id="2", group_label="Trips/City", source_paths=[second]),
+                GroupingGroup(
+                    group_id="1", group_label="Trips/Beach", source_paths=[first]
+                ),
+                GroupingGroup(group_id="2", group_label="Trips", source_paths=[second]),
             ],
             unassigned_paths=[],
             skipped_paths=[],
@@ -639,16 +676,124 @@ def test_grouping_step_widget_drag_drop_moves_folder_into_folder(tmp_path):
         str(source_root),
     )
 
-    dragged_items = [widget._after_group_items_by_id["1"]]
-    target_item = widget._after_group_items_by_id["2"]
-
-    assert widget._can_drop_preview_items(dragged_items, target_item)
-
-    widget._handle_preview_tree_drop(dragged_items, target_item)
-
+    widget._nest_group_under_target("2", "1")
     plan = widget.get_effective_plan()
-    moved_group = next(group for group in plan.groups if group.group_id == "1")
-    assert moved_group.group_label == "Trips/City/Beach"
-    assert widget.preview_tree.currentItem() is widget._after_group_items_by_id["2"]
-    assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
-    assert widget.folder_preview_grid.count() == 2
+
+    labels = {g.group_label for g in plan.groups}
+    assert "Trips" in labels
+    assert "Trips/Beach" in labels
+
+
+def test_unnest_group_to_root(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "a.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1", group_label="Trips/Beach", source_paths=[first]
+                ),
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    widget._unnest_group_to_root("1")
+    plan = widget.get_effective_plan()
+
+    assert plan.groups[0].group_label == "Beach"
+
+
+def test_move_files_to_directory(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first]),
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    widget._move_files_to_directory([first], "Vacation")
+    plan = widget.get_effective_plan()
+
+    labels = {g.group_label for g in plan.groups}
+    assert "Vacation" in labels
+    vacation_group = next(g for g in plan.groups if g.group_label == "Vacation")
+    assert first in vacation_group.source_paths
+
+
+def test_is_descendant_check():
+    from PyQt6.QtWidgets import QTreeWidgetItem
+
+    grandparent = QTreeWidgetItem(["grandparent"])
+    parent = QTreeWidgetItem(["parent"])
+    child = QTreeWidgetItem(["child"])
+    unrelated = QTreeWidgetItem(["unrelated"])
+
+    grandparent.addChild(parent)
+    parent.addChild(child)
+
+    assert DroppableGroupingTree._is_descendant(child, grandparent)
+    assert DroppableGroupingTree._is_descendant(child, parent)
+    assert not DroppableGroupingTree._is_descendant(child, unrelated)
+    assert not DroppableGroupingTree._is_descendant(grandparent, child)
+
+
+def test_droppable_tree_has_drag_enabled():
+    widget = GroupingStepWidget()
+    tree = widget.preview_tree
+
+    assert isinstance(tree, DroppableGroupingTree)
+    assert tree.dragEnabled()
+
+
+def test_group_items_have_drag_flag(tmp_path):
+    from PyQt6.QtCore import Qt
+
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first]),
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    group_item = widget._after_group_items_by_id["1"]
+    file_item = widget._after_file_items_by_path[first]
+
+    assert group_item.flags() & Qt.ItemFlag.ItemIsDragEnabled
+    assert file_item.flags() & Qt.ItemFlag.ItemIsDragEnabled
+    assert group_item.data(0, ROLE_KIND) == ITEM_GROUP
