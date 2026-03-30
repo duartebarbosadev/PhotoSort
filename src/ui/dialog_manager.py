@@ -1600,6 +1600,42 @@ class DialogManager:
             object_name_prefix="closeDialog",
         )
 
+    def show_grouping_close_confirmation_dialog(self, action_lines: List[str]) -> str:
+        preview_lines = action_lines[:20]
+        preview_text = "\n".join(preview_lines)
+        remaining = len(action_lines) - len(preview_lines)
+        if remaining > 0:
+            preview_text += f"\n… {remaining} more"
+
+        dialog = QMessageBox(self.parent)
+        dialog.setWindowTitle("Unsaved Grouping Changes")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setText(
+            "You have unapplied grouping changes.\n\n"
+            "Do you want to move files before closing?"
+        )
+        dialog.setInformativeText(preview_text)
+        dialog.setDetailedText("\n".join(action_lines))
+
+        move_button = dialog.addButton(
+            "Move Files and Close", QMessageBox.ButtonRole.AcceptRole
+        )
+        close_button = dialog.addButton(
+            "Close Without Moving", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_button = dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(move_button)
+        dialog.exec()
+
+        clicked = dialog.clickedButton()
+        if clicked == move_button:
+            return "save"
+        if clicked == close_button:
+            return "close"
+        if clicked == cancel_button:
+            return "cancel"
+        return "cancel"
+
     def show_folder_change_confirmation_dialog(self, marked_files: List[str]) -> str:
         """
         Shows a confirmation dialog when changing folders with marked files.

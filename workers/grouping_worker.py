@@ -72,6 +72,7 @@ class GroupingWorkflowWorker(QObject):
         source_root: str,
         output_root: Optional[str] = None,
         group_name_overrides: Optional[Dict[str, str]] = None,
+        prepared_plan=None,
         parent=None,
     ):
         super().__init__(parent)
@@ -80,6 +81,7 @@ class GroupingWorkflowWorker(QObject):
         self.source_root = source_root
         self.output_root = output_root or build_grouping_output_root(source_root, mode)
         self.group_name_overrides = dict(group_name_overrides or {})
+        self.prepared_plan = prepared_plan
         self._should_stop = False
 
     def stop(self):
@@ -90,12 +92,15 @@ class GroupingWorkflowWorker(QObject):
             if self._should_stop:
                 return
             self.progress_update.emit(5, "Analyzing grouping candidates...")
-            plan = build_grouping_plan(
-                self.items,
-                GroupingMode(self.mode),
-                progress_callback=self.progress_update.emit,
-                source_root=self.source_root,
-            )
+            if self.prepared_plan is not None:
+                plan = self.prepared_plan
+            else:
+                plan = build_grouping_plan(
+                    self.items,
+                    GroupingMode(self.mode),
+                    progress_callback=self.progress_update.emit,
+                    source_root=self.source_root,
+                )
             plan.apply_group_label_overrides(self.group_name_overrides)
             plan.output_root = self.output_root
             if self._should_stop:

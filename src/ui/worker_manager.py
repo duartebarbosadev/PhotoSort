@@ -632,6 +632,7 @@ class WorkerManager(QObject):
         source_root: str,
         output_root: Optional[str] = None,
         group_name_overrides: Optional[Dict[str, str]] = None,
+        prepared_plan=None,
     ):
         self.stop_grouping_workflow()
         self.grouping_workflow_thread = QThread()
@@ -641,6 +642,7 @@ class WorkerManager(QObject):
             source_root=source_root,
             output_root=output_root,
             group_name_overrides=group_name_overrides,
+            prepared_plan=prepared_plan,
         )
         self.grouping_workflow_worker.moveToThread(self.grouping_workflow_thread)
 

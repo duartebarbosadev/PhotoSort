@@ -58,6 +58,7 @@ class GroupingPlan:
     unassigned_paths: List[str]
     skipped_paths: List[str]
     output_root: str = ""
+    file_name_overrides: Dict[str, str] = field(default_factory=dict)
 
     def to_preview(self) -> GroupingPreview:
         return GroupingPreview(
@@ -80,6 +81,12 @@ class GroupingPlan:
             override = overrides.get(str(group.group_id))
             if override:
                 group.group_label = override.strip()
+
+    def filename_for_path(self, source_path: str) -> str:
+        override = self.file_name_overrides.get(source_path, "").strip()
+        if override:
+            return override
+        return os.path.basename(source_path)
 
 
 @dataclass
@@ -603,7 +610,7 @@ def execute_grouping_plan(
         )
         group.destination_folder = destination_dir
         for source_path in group.source_paths:
-            basename = os.path.basename(source_path)
+            basename = plan.filename_for_path(source_path)
             desired_destination_path = os.path.join(destination_dir, basename)
             if os.path.normcase(os.path.normpath(source_path)) == os.path.normcase(
                 os.path.normpath(desired_destination_path)
@@ -636,7 +643,7 @@ def execute_grouping_plan(
     if plan.unassigned_paths:
         unassigned_dir = os.path.join(output_root, "Unassigned")
         for source_path in plan.unassigned_paths:
-            basename = os.path.basename(source_path)
+            basename = plan.filename_for_path(source_path)
             destination_path = _resolve_collision_safe_destination(unassigned_dir, basename)
             shutil.move(source_path, destination_path)
             moved_count += 1
@@ -663,6 +670,8 @@ def execute_grouping_plan(
             )
         )
 
+    _remove_empty_directories(source_root)
+
     summary = GroupingRunSummary(
         mode=plan.mode,
         source_root=source_root,
@@ -676,3 +685,19 @@ def execute_grouping_plan(
     )
     summary.manifest_path = write_grouping_manifest(summary)
     return summary
+
+
+def _remove_empty_directories(root_path: str) -> None:
+    if not root_path or not os.path.isdir(root_path):
+        return
+    normalized_root = os.path.normcase(os.path.normpath(root_path))
+    for current_root, dirnames, _filenames in os.walk(root_path, topdown=False):
+        normalized_current = os.path.normcase(os.path.normpath(current_root))
+        if normalized_current == normalized_root:
+            continue
+        try:
+            if os.listdir(current_root):
+                continue
+            os.rmdir(current_root)
+        except OSError:
+            continue

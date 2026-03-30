@@ -257,3 +257,55 @@ def test_execute_grouping_plan_keeps_current_mode_files_in_place_when_already_gr
     assert image_path.exists()
     assert summary.entries[0].status == "unchanged"
     assert summary.entries[0].new_path == str(image_path)
+
+
+def test_execute_grouping_plan_removes_empty_source_directories(tmp_path):
+    source_root = tmp_path / "source"
+    old_dir = source_root / "old_folder"
+    new_dir = source_root / "new_folder"
+    old_dir.mkdir(parents=True)
+    new_dir.mkdir(parents=True)
+    image_path = old_dir / "a.jpg"
+    _create_solid_image(str(image_path), (220, 40, 40))
+
+    plan = build_grouping_plan(
+        [{"path": str(image_path)}],
+        GroupingMode.SIMILARITY,
+    )
+    plan.groups[0].group_label = "new_folder"
+
+    summary = execute_grouping_plan(
+        plan,
+        source_root=str(source_root),
+        output_root=str(source_root),
+    )
+
+    assert summary.moved_count == 1
+    assert not old_dir.exists()
+    assert (new_dir / "a.jpg").exists()
+
+
+def test_execute_grouping_plan_applies_file_name_overrides(tmp_path):
+    source_root = tmp_path / "source"
+    old_dir = source_root / "old_folder"
+    old_dir.mkdir(parents=True)
+    image_path = old_dir / "a.jpg"
+    _create_solid_image(str(image_path), (220, 40, 40))
+
+    plan = build_grouping_plan(
+        [{"path": str(image_path)}],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+    plan.file_name_overrides[str(image_path)] = "renamed.jpg"
+
+    summary = execute_grouping_plan(
+        plan,
+        source_root=str(source_root),
+        output_root=str(source_root),
+    )
+
+    assert summary.moved_count == 1
+    assert not image_path.exists()
+    assert (old_dir / "renamed.jpg").exists()
+    assert summary.entries[0].new_path == str(old_dir / "renamed.jpg")

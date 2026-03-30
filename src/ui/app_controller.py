@@ -458,7 +458,10 @@ class AppController(QObject):
         )
 
     def start_grouping_workflow(
-        self, mode: str, group_name_overrides: Optional[Dict[str, str]] = None
+        self,
+        mode: str,
+        group_name_overrides: Optional[Dict[str, str]] = None,
+        prepared_plan=None,
     ):
         if self.worker_manager.is_grouping_workflow_running():
             self.main_window.statusBar().showMessage(
@@ -487,6 +490,7 @@ class AppController(QObject):
             source_root,
             output_root,
             group_name_overrides=group_name_overrides,
+            prepared_plan=prepared_plan,
         )
 
     def skip_grouping_to_cull(self):
@@ -1075,6 +1079,7 @@ class AppController(QObject):
             )
             if skip_grouping_step_once:
                 self.app_state.skip_grouping_step_once = False
+                self.refresh_grouping_preview()
                 self.main_window.show_cull_step()
             else:
                 self.main_window.show_grouping_step()
@@ -1180,6 +1185,7 @@ class AppController(QObject):
             skip_grouping_step=True,
             record_as_source=False,
         )
+        self.main_window.finish_pending_close_after_grouping()
 
     def handle_grouping_workflow_error(self, message: str):
         self.main_window.set_grouping_busy(False)
@@ -1192,6 +1198,7 @@ class AppController(QObject):
             f"Grouping failed: {message}",
             5000,
         )
+        self.main_window.cancel_pending_close_after_grouping()
 
     def handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0

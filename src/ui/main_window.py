@@ -211,6 +211,7 @@ class MainWindow(QMainWindow):
         self._preview_preload_start_volume_bytes: Optional[int] = None
         self._filter_apply_count = 0
         self._last_filter_search_text: Optional[str] = None
+        self._close_after_grouping_save = False
 
         self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
@@ -1211,9 +1212,24 @@ class MainWindow(QMainWindow):
             )
         self.app_controller.refresh_grouping_preview()
 
-    def _handle_grouping_create_requested(self, mode: str, group_name_overrides: dict) -> None:
+    def _handle_grouping_create_requested(
+        self, mode: str, group_name_overrides: dict, prepared_plan=None
+    ) -> None:
         self.app_state.selected_grouping_mode = mode
-        self.app_controller.start_grouping_workflow(mode, group_name_overrides)
+        self.app_controller.start_grouping_workflow(
+            mode,
+            group_name_overrides,
+            prepared_plan=prepared_plan,
+        )
+
+    def finish_pending_close_after_grouping(self) -> None:
+        if not self._close_after_grouping_save:
+            return
+        self._close_after_grouping_save = False
+        QTimer.singleShot(0, self.close)
+
+    def cancel_pending_close_after_grouping(self) -> None:
+        self._close_after_grouping_save = False
 
     def _return_to_grouping_source(self) -> None:
         source_root = self.app_state.grouping_source_root
@@ -1773,6 +1789,28 @@ class MainWindow(QMainWindow):
         return QModelIndex()  # No visible image item found in this subtree
 
     def closeEvent(self, event):
+        grouping_action_lines = self.grouping_step_widget.pending_grouping_action_lines()
+        if (
+            self.grouping_step_widget.has_unsaved_grouping_edits()
+            and grouping_action_lines
+            and not self.worker_manager.is_grouping_workflow_running()
+        ):
+            choice = self.dialog_manager.show_grouping_close_confirmation_dialog(
+                grouping_action_lines
+            )
+            if choice == "save":
+                self._close_after_grouping_save = True
+                self._handle_grouping_create_requested(
+                    self.grouping_step_widget.current_mode(),
+                    self.grouping_step_widget.get_group_name_overrides(),
+                    self.grouping_step_widget.get_effective_plan(),
+                )
+                event.ignore()
+                return
+            if choice == "cancel":
+                event.ignore()
+                return
+
         # Check if there are any files marked for deletion
         marked_files = self.app_state.get_marked_files()
         if marked_files:
@@ -1801,6 +1839,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
+        self._close_after_grouping_save = False
         logger.info("Stopping all workers on application close.")
         self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
         event.accept()
