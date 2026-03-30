@@ -441,20 +441,12 @@ class GroupingStepWidget(QWidget):
 
         # ── After tree ────────────────────────────────────────────────
         self.preview_tree.clear()
-        root_display = output_root or plan.output_root or "PhotoSort Groups"
-        root_parts = [p for p in root_display.replace("\\", "/").split("/") if p]
-        if not root_parts:
-            root_parts = ["PhotoSort Groups"]
-
-        root_item = QTreeWidgetItem([f"📁  {root_parts[0]}"])
+        root_display = output_root or plan.output_root or "Selected folder"
+        root_name = os.path.basename(os.path.normpath(root_display)) or root_display
+        root_item = QTreeWidgetItem([f"📁  {root_name}"])
         root_item.setFlags(root_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self.preview_tree.addTopLevelItem(root_item)
         current_parent = root_item
-        for part in root_parts[1:]:
-            child = QTreeWidgetItem([f"📁  {part}"])
-            child.setFlags(child.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            current_parent.addChild(child)
-            current_parent = child
 
         for group in plan.groups:
             count = len(group.source_paths)

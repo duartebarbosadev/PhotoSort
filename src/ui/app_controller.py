@@ -442,10 +442,8 @@ class AppController(QObject):
         mode = self.app_state.selected_grouping_mode or "current"
         source_root = self.app_state.grouping_source_root or self.app_state.current_folder_path
         if source_root:
-            source_name = os.path.basename(source_root.rstrip(os.sep)) or source_root
             self.main_window.grouping_step_widget.set_output_root_text(
-                "Output root: "
-                + os.path.join(source_name, "PhotoSort Groups", mode)
+                "Output root: " + source_root
             )
         self.main_window.update_grouping_preview("Preparing grouping preview...")
         self.main_window.grouping_step_widget.set_loading_state(
@@ -1124,11 +1122,7 @@ class AppController(QObject):
     def handle_grouping_preview_ready(self, plan):
         mode_label = str(getattr(plan, "mode", "grouping")).title()
         source_root = self.app_state.grouping_source_root or self.app_state.current_folder_path
-        output_root = (
-            os.path.join("PhotoSort Groups", plan.mode)
-            if source_root
-            else "PhotoSort Groups"
-        )
+        output_root = source_root or ""
         self.main_window.update_grouping_preview(
             f"{mode_label}: {len(plan.groups)} folders ready."
         )
@@ -1178,7 +1172,7 @@ class AppController(QObject):
             "Grouping complete", False
         )
         self.main_window.statusBar().showMessage(
-            f"Created grouped folder set at {os.path.basename(summary.output_root)}.",
+            f"Grouping complete in {summary.output_root}.",
             5000,
         )
         self.load_folder(

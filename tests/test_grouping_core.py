@@ -222,3 +222,38 @@ def test_execute_grouping_plan_moves_files_handles_name_collisions_and_writes_ma
         manifest = json.load(fh)
     assert manifest["moved_count"] == 2
     assert len(manifest["entries"]) == 2
+
+
+def test_build_grouping_output_root_uses_source_root_directly(tmp_path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+
+    output_root = build_grouping_output_root(str(source_root), "similarity")
+
+    assert output_root == str(source_root)
+
+
+def test_execute_grouping_plan_keeps_current_mode_files_in_place_when_already_grouped(
+    tmp_path,
+):
+    source_root = tmp_path / "source"
+    day_one = source_root / "day_one"
+    day_one.mkdir(parents=True)
+    image_path = day_one / "a.jpg"
+    _create_solid_image(str(image_path), (220, 40, 40))
+
+    plan = build_grouping_plan(
+        [{"path": str(image_path)}],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+    summary = execute_grouping_plan(
+        plan,
+        source_root=str(source_root),
+        output_root=str(source_root),
+    )
+
+    assert summary.moved_count == 0
+    assert image_path.exists()
+    assert summary.entries[0].status == "unchanged"
+    assert summary.entries[0].new_path == str(image_path)

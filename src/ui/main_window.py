@@ -1175,14 +1175,8 @@ class MainWindow(QMainWindow):
             self.app_state.selected_grouping_mode or "current"
         )
         if self.app_state.grouping_source_root:
-            source_name = os.path.basename(self.app_state.grouping_source_root.rstrip(os.sep)) or self.app_state.grouping_source_root
             self.grouping_step_widget.set_output_root_text(
-                "Output root: "
-                + os.path.join(
-                    source_name,
-                    "PhotoSort Groups",
-                    self.app_state.selected_grouping_mode or "current",
-                )
+                "Output root: " + self.app_state.grouping_source_root
             )
         self.grouping_step_widget.set_back_visible(
             bool(self.app_state.grouping_source_root)
@@ -1212,14 +1206,8 @@ class MainWindow(QMainWindow):
     def _handle_grouping_mode_changed(self, mode: str) -> None:
         self.app_state.selected_grouping_mode = mode
         if self.app_state.grouping_source_root:
-            source_name = os.path.basename(self.app_state.grouping_source_root.rstrip(os.sep)) or self.app_state.grouping_source_root
             self.grouping_step_widget.set_output_root_text(
-                "Output root: "
-                + os.path.join(
-                    source_name,
-                    "PhotoSort Groups",
-                    mode,
-                )
+                "Output root: " + self.app_state.grouping_source_root
             )
         self.app_controller.refresh_grouping_preview()
 

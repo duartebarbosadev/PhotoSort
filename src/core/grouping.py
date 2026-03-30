@@ -106,8 +106,7 @@ class GroupingRunSummary:
 
 
 def build_grouping_output_root(source_root: str, mode: str) -> str:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return os.path.join(source_root, "PhotoSort Groups", mode, timestamp)
+    return source_root
 
 
 def write_grouping_manifest(summary: GroupingRunSummary) -> str:
@@ -605,6 +604,21 @@ def execute_grouping_plan(
         group.destination_folder = destination_dir
         for source_path in group.source_paths:
             basename = os.path.basename(source_path)
+            desired_destination_path = os.path.join(destination_dir, basename)
+            if os.path.normcase(os.path.normpath(source_path)) == os.path.normcase(
+                os.path.normpath(desired_destination_path)
+            ):
+                entries.append(
+                    GroupingManifestEntry(
+                        original_path=source_path,
+                        new_path=source_path,
+                        group_id=group.group_id,
+                        group_label=group.group_label,
+                        status="unchanged",
+                    )
+                )
+                report(f"Keeping {basename} in place...")
+                continue
             destination_path = _resolve_collision_safe_destination(destination_dir, basename)
             shutil.move(source_path, destination_path)
             moved_count += 1
