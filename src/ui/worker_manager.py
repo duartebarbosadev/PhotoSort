@@ -599,7 +599,9 @@ class WorkerManager(QObject):
         self.grouping_preview_worker.error.connect(self.grouping_preview_error)
         self.grouping_preview_worker.finished.connect(self.grouping_preview_thread.quit)
         self.grouping_preview_thread.started.connect(self.grouping_preview_worker.run)
-        self.grouping_preview_thread.finished.connect(self._cleanup_grouping_preview_refs)
+        self.grouping_preview_thread.finished.connect(
+            self._cleanup_grouping_preview_refs
+        )
         self.grouping_preview_thread.start()
         logger.info("Grouping preview thread started.")
 

@@ -624,7 +624,9 @@ class MenuManager:
         self.group_by_similarity_action.toggled.connect(
             main_win._toggle_group_by_similarity
         )
-        self.back_to_grouping_action.triggered.connect(main_win._return_to_grouping_source)
+        self.back_to_grouping_action.triggered.connect(
+            main_win._return_to_grouping_source
+        )
         self.toggle_thumbnails_action.toggled.connect(main_win._toggle_thumbnail_view)
         self.analyze_similarity_action.triggered.connect(
             main_win.app_controller.start_similarity_analysis

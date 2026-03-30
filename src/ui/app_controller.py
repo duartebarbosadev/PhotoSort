@@ -440,7 +440,9 @@ class AppController(QObject):
             self.main_window.update_grouping_preview("No files loaded for grouping.")
             return
         mode = self.app_state.selected_grouping_mode or "current"
-        source_root = self.app_state.grouping_source_root or self.app_state.current_folder_path
+        source_root = (
+            self.app_state.grouping_source_root or self.app_state.current_folder_path
+        )
         if source_root:
             self.main_window.grouping_step_widget.set_output_root_text(
                 "Output root: " + source_root
@@ -468,7 +470,9 @@ class AppController(QObject):
                 "Grouping is already running.", 3000
             )
             return
-        source_root = self.app_state.grouping_source_root or self.app_state.current_folder_path
+        source_root = (
+            self.app_state.grouping_source_root or self.app_state.current_folder_path
+        )
         if not source_root:
             self.main_window.statusBar().showMessage(
                 "No source folder available for grouping.", 3000
@@ -495,11 +499,11 @@ class AppController(QObject):
 
     def skip_grouping_to_cull(self):
         if not self.app_state.image_files_data:
-            self.main_window.statusBar().showMessage(
-                "Select a folder first.", 3000
-            )
+            self.main_window.statusBar().showMessage("Select a folder first.", 3000)
             return
-        self.main_window.grouping_step_widget.set_loading_state("Grouping skipped", False)
+        self.main_window.grouping_step_widget.set_loading_state(
+            "Grouping skipped", False
+        )
         self.main_window.show_cull_step()
 
     def start_blur_detection_analysis(self):
@@ -1126,15 +1130,15 @@ class AppController(QObject):
 
     def handle_grouping_preview_ready(self, plan):
         mode_label = str(getattr(plan, "mode", "grouping")).title()
-        source_root = self.app_state.grouping_source_root or self.app_state.current_folder_path
+        source_root = (
+            self.app_state.grouping_source_root or self.app_state.current_folder_path
+        )
         output_root = source_root or ""
         self.main_window.update_grouping_preview(
             f"{mode_label}: {len(plan.groups)} folders ready."
         )
         self.main_window.grouping_step_widget.set_preview_plan(plan, output_root)
-        self.main_window.grouping_step_widget.set_loading_state(
-            "Preview ready", False
-        )
+        self.main_window.grouping_step_widget.set_loading_state("Preview ready", False)
 
     def handle_grouping_preview_error(self, message: str):
         self.main_window.update_grouping_preview(f"Preview unavailable: {message}")

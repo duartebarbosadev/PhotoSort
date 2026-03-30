@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import shutil
+from functools import lru_cache
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -15,7 +16,12 @@ from PIL import Image
 from sklearn.cluster import DBSCAN
 
 from core.media_utils import is_video_extension
-from core.metadata_processor import MetadataProcessor
+from core.metadata_processor import (
+    DATE_TAGS_PREFERENCE,
+    MetadataProcessor,
+    _parse_exif_date,
+    _parse_date_from_filename,
+)
 from core.similarity_engine import SimilarityEngine
 
 logger = logging.getLogger(__name__)
@@ -172,9 +178,7 @@ def find_directory_rename_candidates(
 
     normalized_source_root = os.path.normpath(source_root)
     active_paths = [
-        path
-        for group in plan.groups
-        for path in group.source_paths
+        path for group in plan.groups for path in group.source_paths
     ] + list(plan.unassigned_paths)
     candidates: Dict[str, GroupingDirectoryRename] = {}
 
@@ -263,8 +267,136 @@ def _load_image_for_features(path: str) -> Optional[Image.Image]:
         with Image.open(path) as img:
             return img.convert("RGB")
     except Exception:
-        logger.debug("Unable to load image for grouping features: %s", path, exc_info=True)
+        logger.debug(
+            "Unable to load image for grouping features: %s",
+            path,
+            exc_info=True,
+        )
         return None
+
+
+@lru_cache(maxsize=1)
+def _load_opencv_face_cascades() -> Tuple[Any, ...]:
+    try:
+        import cv2  # type: ignore
+    except Exception:
+        logger.debug("OpenCV unavailable for face grouping", exc_info=True)
+        return ()
+
+    cascade_dir = getattr(getattr(cv2, "data", None), "haarcascades", "")
+    cascade_names = (
+        "haarcascade_frontalface_alt2.xml",
+        "haarcascade_frontalface_default.xml",
+        "haarcascade_profileface.xml",
+    )
+    cascades: List[Any] = []
+    for name in cascade_names:
+        cascade_path = os.path.join(cascade_dir, name)
+        if not os.path.exists(cascade_path):
+            continue
+        cascade = cv2.CascadeClassifier(cascade_path)
+        if getattr(cascade, "empty", lambda: True)():
+            continue
+        cascades.append(cascade)
+    return tuple(cascades)
+
+
+def _score_face_candidate(
+    bbox: Tuple[int, int, int, int],
+    *,
+    image_width: int,
+    image_height: int,
+) -> float:
+    x, y, w, h = bbox
+    area = float(w * h)
+    center_x = x + (w / 2.0)
+    center_y = y + (h / 2.0)
+    dx = abs(center_x - (image_width / 2.0)) / max(image_width / 2.0, 1.0)
+    dy = abs(center_y - (image_height / 2.2)) / max(image_height / 2.2, 1.0)
+    center_bonus = max(0.0, 1.0 - ((dx * 0.7) + (dy * 0.3)))
+    return area * (1.0 + center_bonus)
+
+
+def _detect_primary_face_bbox(
+    image: Image.Image,
+) -> Optional[Tuple[int, int, int, int]]:
+    cascades = _load_opencv_face_cascades()
+    if not cascades:
+        return None
+
+    try:
+        import cv2  # type: ignore
+    except Exception:
+        return None
+
+    gray = np.asarray(image.convert("L"), dtype=np.uint8)
+    equalized = cv2.equalizeHist(gray)
+    min_side = min(image.size)
+    min_face = max(24, int(min_side * 0.12))
+    candidates: List[Tuple[int, int, int, int]] = []
+    for cascade in cascades:
+        for source in (equalized, gray):
+            detected = cascade.detectMultiScale(
+                source,
+                scaleFactor=1.05,
+                minNeighbors=4,
+                minSize=(min_face, min_face),
+            )
+            if detected is None or len(detected) == 0:
+                continue
+            candidates.extend(tuple(int(v) for v in bbox) for bbox in detected)
+
+    if not candidates:
+        return None
+
+    width, height = image.size
+    return max(
+        candidates,
+        key=lambda bbox: _score_face_candidate(
+            bbox, image_width=width, image_height=height
+        ),
+    )
+
+
+def _expand_bbox(
+    bbox: Tuple[int, int, int, int],
+    *,
+    image_size: Tuple[int, int],
+    horizontal_pad: float = 0.22,
+    top_pad: float = 0.32,
+    bottom_pad: float = 0.18,
+) -> Tuple[int, int, int, int]:
+    x, y, w, h = bbox
+    image_width, image_height = image_size
+    left = max(0, int(round(x - (w * horizontal_pad))))
+    top = max(0, int(round(y - (h * top_pad))))
+    right = min(image_width, int(round(x + w + (w * horizontal_pad))))
+    bottom = min(image_height, int(round(y + h + (h * bottom_pad))))
+    return left, top, right, bottom
+
+
+def _compute_face_vector_from_crop(
+    crop: Image.Image,
+) -> Tuple[Optional[np.ndarray], bool]:
+    face_crop = crop.convert("L").resize((48, 48))
+    arr = np.asarray(face_crop, dtype=np.float32) / 255.0
+    variance = float(arr.var())
+    gx = float(np.abs(np.diff(arr, axis=1)).mean())
+    gy = float(np.abs(np.diff(arr, axis=0)).mean())
+    edge_strength = (gx + gy) / 2.0
+    has_face_like_signal = variance >= 0.0025 and edge_strength >= 0.02
+    if not has_face_like_signal:
+        return None, False
+
+    coarse = (
+        np.asarray(face_crop.resize((24, 24)), dtype=np.float32).reshape(-1) / 255.0
+    )
+    histogram, _ = np.histogram(arr, bins=16, range=(0.0, 1.0), density=True)
+    vector = np.concatenate([coarse, histogram.astype(np.float32)])
+    norm = np.linalg.norm(vector)
+    if norm <= 0:
+        return None, False
+    return vector / norm, True
 
 
 def _compute_face_vector(path: str) -> Tuple[Optional[np.ndarray], bool]:
@@ -274,26 +406,18 @@ def _compute_face_vector(path: str) -> Tuple[Optional[np.ndarray], bool]:
     width, height = image.size
     if width < 32 or height < 32:
         return None, False
-    crop_w = max(32, int(width * 0.55))
-    crop_h = max(32, int(height * 0.55))
+    detected_bbox = _detect_primary_face_bbox(image)
+    if detected_bbox is not None:
+        crop_bounds = _expand_bbox(detected_bbox, image_size=image.size)
+        return _compute_face_vector_from_crop(image.crop(crop_bounds))
+
+    crop_w = max(32, int(width * 0.62))
+    crop_h = max(32, int(height * 0.68))
     left = max(0, (width - crop_w) // 2)
-    top = max(0, (height - crop_h) // 3)
+    top = max(0, int((height - crop_h) * 0.18))
     right = min(width, left + crop_w)
     bottom = min(height, top + crop_h)
-    crop = image.crop((left, top, right, bottom)).convert("L").resize((24, 24))
-    arr = np.asarray(crop, dtype=np.float32) / 255.0
-    variance = float(arr.var())
-    gx = np.abs(np.diff(arr, axis=1)).mean()
-    gy = np.abs(np.diff(arr, axis=0)).mean()
-    edge_strength = float((gx + gy) / 2.0)
-    has_face_like_signal = variance >= 0.004 and edge_strength >= 0.035
-    if not has_face_like_signal:
-        return None, False
-    vector = arr.reshape(-1)
-    norm = np.linalg.norm(vector)
-    if norm <= 0:
-        return None, False
-    return vector / norm, True
+    return _compute_face_vector_from_crop(image.crop((left, top, right, bottom)))
 
 
 def _parse_gps_coordinate(raw_value: Any, ref_value: Any) -> Optional[float]:
@@ -425,7 +549,9 @@ def build_grouping_plan(
     source_root: Optional[str] = None,
 ) -> GroupingPlan:
     mode_value = GroupingMode(mode)
-    valid_items = [item for item in items if isinstance(item, dict) and item.get("path")]
+    valid_items = [
+        item for item in items if isinstance(item, dict) and item.get("path")
+    ]
     total_items = len(valid_items)
     image_paths = [
         item["path"] for item in valid_items if not is_video_extension(item["path"])
@@ -471,18 +597,8 @@ def _build_current_structure_plan(
     resolved_source_root = (
         os.path.normpath(source_root)
         if source_root
-        else (
-            os.path.commonpath(list(image_paths))
-            if image_paths
-            else ""
-        )
+        else (os.path.commonpath(list(image_paths)) if image_paths else "")
     )
-    root_label = (
-        os.path.basename(resolved_source_root.rstrip(os.sep))
-        if resolved_source_root
-        else "Root"
-    ) or "Root"
-
     for path in image_paths:
         parent_dir = os.path.dirname(path)
         if resolved_source_root:
@@ -492,7 +608,7 @@ def _build_current_structure_plan(
                 rel_dir = parent_dir
         else:
             rel_dir = parent_dir
-        label = root_label if rel_dir in {".", ""} else rel_dir
+        label = "" if rel_dir in {".", ""} else rel_dir
         groups_by_label.setdefault(label, []).append(path)
 
     groups: List[GroupingGroup] = []
@@ -553,7 +669,7 @@ def _build_face_plan(
             unassigned.append(path)
             continue
         vectors[path] = vector
-    assignments = _cluster_vectors(vectors, eps=0.10, min_samples=1)
+    assignments = _cluster_vectors(vectors, eps=0.16, min_samples=1)
     assigned_paths = set(assignments.keys())
     for path in vectors.keys():
         if path not in assigned_paths:
@@ -604,62 +720,104 @@ def _build_location_plan(
     )
 
 
+def _extract_date_label(path: str) -> Optional[str]:
+    """Extract a YYYY-MM-DD date label from EXIF, filename, or filesystem mtime."""
+    metadata = _load_comprehensive_metadata(path)
+    for tag in DATE_TAGS_PREFERENCE:
+        raw = metadata.get(tag)
+        if raw:
+            parsed = _parse_exif_date(str(raw))
+            if parsed:
+                return parsed.strftime("%Y-%m-%d")
+    filename = os.path.basename(path)
+    parsed = _parse_date_from_filename(filename)
+    if parsed:
+        return parsed.strftime("%Y-%m-%d")
+    try:
+        mtime = os.path.getmtime(path)
+        return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+    except OSError:
+        return None
+
+
 def _build_mixed_plan(
     total_items: int,
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
     progress_callback=None,
 ) -> GroupingPlan:
-    location_buckets: Dict[str, List[str]] = {}
-    unassigned: List[str] = []
+    date_buckets: Dict[str, List[str]] = {}
+    undated: List[str] = []
     for path in image_paths:
-        metadata = _load_comprehensive_metadata(path)
-        label = _location_label_from_metadata(metadata)
+        label = _extract_date_label(path)
         if not label:
-            unassigned.append(path)
+            undated.append(path)
             continue
-        location_buckets.setdefault(label, []).append(path)
+        date_buckets.setdefault(label, []).append(path)
 
     groups: List[GroupingGroup] = []
     group_counter = 1
     similarity_engine = SimilarityEngine()
-    for location_label in sorted(location_buckets.keys()):
+    for date_label in sorted(date_buckets.keys()):
+        bucket_paths = date_buckets[date_label]
+
         def _bucket_progress(percent: int, message: str):
             if progress_callback:
-                progress_callback(
-                    percent,
-                    f"{location_label}: {message}",
-                )
+                progress_callback(percent, f"{date_label}: {message}")
 
         assignments = _run_ml_similarity_pipeline(
-            location_buckets[location_label],
+            bucket_paths,
             progress_callback=_bucket_progress if progress_callback else None,
             shared_engine=similarity_engine,
         )
         grouped_by_cluster: Dict[int, List[str]] = {}
         for path, cluster_id in assignments.items():
             grouped_by_cluster.setdefault(cluster_id, []).append(path)
-        for path in location_buckets[location_label]:
-            if path not in assignments:
-                unassigned.append(path)
-        for local_cluster_id in sorted(grouped_by_cluster.keys()):
+
+        # Files not picked up by the similarity pipeline go to the date folder directly
+        standalone: List[str] = [p for p in bucket_paths if p not in assignments]
+
+        local_group_idx = 1
+        for cluster_id in sorted(grouped_by_cluster.keys()):
+            cluster_paths = grouped_by_cluster[cluster_id]
+            if len(cluster_paths) < 2:
+                standalone.extend(cluster_paths)
+                continue
             groups.append(
                 GroupingGroup(
                     group_id=str(group_counter),
-                    group_label=os.path.join(
-                        _sanitize_folder_component(location_label),
-                        f"Group {local_cluster_id:03d}",
-                    ),
-                    source_paths=sorted(grouped_by_cluster[local_cluster_id]),
+                    group_label=os.path.join(date_label, f"group-{local_group_idx}"),
+                    source_paths=sorted(cluster_paths),
                 )
             )
             group_counter += 1
+            local_group_idx += 1
+
+        if standalone:
+            groups.append(
+                GroupingGroup(
+                    group_id=str(group_counter),
+                    group_label=date_label,
+                    source_paths=sorted(standalone),
+                )
+            )
+            group_counter += 1
+
+    if undated:
+        groups.append(
+            GroupingGroup(
+                group_id=str(group_counter),
+                group_label="undated",
+                source_paths=sorted(undated),
+            )
+        )
+
     return GroupingPlan(
         mode=GroupingMode.MIXED.value,
         total_items=total_items,
         supported_items=len(image_paths),
         groups=groups,
-        unassigned_paths=sorted(set(unassigned)),
+        unassigned_paths=[],
         skipped_paths=list(skipped_paths),
     )
 
@@ -698,6 +856,7 @@ def execute_grouping_plan(
                 *[
                     _sanitize_folder_component(part)
                     for part in group.group_label.split(os.sep)
+                    if part
                 ],
             )
         )
@@ -752,7 +911,9 @@ def execute_grouping_plan(
                 )
                 report(f"Keeping {basename} in place...")
                 continue
-            destination_path = _resolve_collision_safe_destination(destination_dir, basename)
+            destination_path = _resolve_collision_safe_destination(
+                destination_dir, basename
+            )
             shutil.move(source_path, destination_path)
             moved_count += 1
             entries.append(
@@ -770,7 +931,9 @@ def execute_grouping_plan(
         unassigned_dir = os.path.join(output_root, "Unassigned")
         for source_path in plan.unassigned_paths:
             basename = plan.filename_for_path(source_path)
-            destination_path = _resolve_collision_safe_destination(unassigned_dir, basename)
+            destination_path = _resolve_collision_safe_destination(
+                unassigned_dir, basename
+            )
             shutil.move(source_path, destination_path)
             moved_count += 1
             entries.append(

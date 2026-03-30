@@ -43,7 +43,7 @@ class AppState:
         self.focused_image_path: Optional[str] = (
             None  # Path of the image in the single/focused viewer
         )
-        self.workflow_step: str = "group"
+        self.workflow_step: str = "organize"
         self.selected_grouping_mode: str = "current"
         self.grouping_output_root: Optional[str] = None
         self.grouping_run_summary: Optional[Dict[str, Any]] = None

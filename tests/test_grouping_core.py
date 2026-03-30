@@ -24,6 +24,37 @@ def _create_face_like_image(path: str, eye_offset: int = 0) -> None:
     image.save(path)
 
 
+def _create_offset_face_like_image(
+    path: str,
+    shift_x: int = 0,
+    shift_y: int = 0,
+) -> None:
+    image = Image.new("RGB", (240, 180), (245, 245, 245))
+    draw = ImageDraw.Draw(image)
+    face_left = 20 + shift_x
+    face_top = 20 + shift_y
+    draw.ellipse(
+        (face_left, face_top, face_left + 90, face_top + 110),
+        fill=(230, 210, 190),
+    )
+    draw.ellipse(
+        (face_left + 18, face_top + 28, face_left + 34, face_top + 44),
+        fill=(20, 20, 20),
+    )
+    draw.ellipse(
+        (face_left + 56, face_top + 28, face_left + 72, face_top + 44),
+        fill=(20, 20, 20),
+    )
+    draw.arc(
+        (face_left + 20, face_top + 56, face_left + 72, face_top + 90),
+        15,
+        165,
+        fill=(80, 20, 20),
+        width=4,
+    )
+    image.save(path)
+
+
 def test_similarity_grouping_plan_uses_ml_similarity_pipeline(tmp_path, monkeypatch):
     red_a = tmp_path / "red_a.jpg"
     red_b = tmp_path / "red_b.jpg"
@@ -81,6 +112,33 @@ def test_current_structure_grouping_plan_preserves_relative_folders(tmp_path):
     assert labels == ["day_one", "day_two"]
 
 
+def test_current_structure_grouping_plan_keeps_root_level_files_at_root(tmp_path):
+    source_root = tmp_path / "source"
+    source_root.mkdir(parents=True)
+    first = source_root / "a.jpg"
+    _create_solid_image(str(first), (220, 40, 40))
+
+    plan = build_grouping_plan(
+        [{"path": str(first)}],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+
+    assert len(plan.groups) == 1
+    assert plan.groups[0].group_label == ""
+
+    summary = execute_grouping_plan(
+        plan,
+        source_root=str(source_root),
+        output_root=str(source_root),
+    )
+
+    assert summary.moved_count == 0
+    assert first.exists()
+    assert summary.entries[0].status == "unchanged"
+    assert summary.entries[0].new_path == str(first)
+
+
 def test_face_grouping_plan_assigns_face_like_images_and_unassigns_flat_image(tmp_path):
     face_a = tmp_path / "face_a.jpg"
     face_b = tmp_path / "face_b.jpg"
@@ -96,6 +154,35 @@ def test_face_grouping_plan_assigns_face_like_images_and_unassigns_flat_image(tm
 
     assert len(plan.groups) == 1
     assert len(plan.groups[0].source_paths) == 2
+    assert str(blank) in plan.unassigned_paths
+
+
+def test_face_grouping_plan_uses_detected_face_region_for_offset_faces(
+    tmp_path, monkeypatch
+):
+    face_a = tmp_path / "offset_face_a.jpg"
+    face_b = tmp_path / "offset_face_b.jpg"
+    blank = tmp_path / "blank.jpg"
+    _create_offset_face_like_image(str(face_a), 0, 0)
+    _create_offset_face_like_image(str(face_b), 8, 6)
+    _create_solid_image(str(blank), (240, 240, 240))
+
+    bbox_by_size = {
+        (240, 180): (18, 18, 100, 120),
+    }
+
+    monkeypatch.setattr(
+        "src.core.grouping._detect_primary_face_bbox",
+        lambda image: bbox_by_size.get(image.size),
+    )
+
+    plan = build_grouping_plan(
+        [{"path": str(face_a)}, {"path": str(face_b)}, {"path": str(blank)}],
+        GroupingMode.FACE,
+    )
+
+    assert len(plan.groups) == 1
+    assert sorted(plan.groups[0].source_paths) == sorted([str(face_a), str(face_b)])
     assert str(blank) in plan.unassigned_paths
 
 
@@ -140,42 +227,27 @@ def test_location_grouping_plan_uses_metadata_and_marks_missing_items_unassigned
     assert plan.unassigned_paths == [str(c)]
 
 
-def test_mixed_grouping_partitions_by_location_then_similarity(tmp_path, monkeypatch):
-    a = tmp_path / "loc1_red.jpg"
-    b = tmp_path / "loc1_blue.jpg"
-    c = tmp_path / "loc2_red.jpg"
+def test_mixed_grouping_partitions_by_date_then_similarity(tmp_path, monkeypatch):
+    a = tmp_path / "day1_red.jpg"
+    b = tmp_path / "day1_blue.jpg"
+    c = tmp_path / "day2_red.jpg"
     _create_solid_image(str(a), (230, 20, 20))
     _create_solid_image(str(b), (20, 20, 230))
     _create_solid_image(str(c), (235, 25, 25))
 
-    metadata_by_path = {
-        str(a): {
-            "Exif.GPSInfo.GPSLatitude": "10",
-            "Exif.GPSInfo.GPSLatitudeRef": "N",
-            "Exif.GPSInfo.GPSLongitude": "20",
-            "Exif.GPSInfo.GPSLongitudeRef": "E",
-        },
-        str(b): {
-            "Exif.GPSInfo.GPSLatitude": "10",
-            "Exif.GPSInfo.GPSLatitudeRef": "N",
-            "Exif.GPSInfo.GPSLongitude": "20",
-            "Exif.GPSInfo.GPSLongitudeRef": "E",
-        },
-        str(c): {
-            "Exif.GPSInfo.GPSLatitude": "11",
-            "Exif.GPSInfo.GPSLatitudeRef": "N",
-            "Exif.GPSInfo.GPSLongitude": "21",
-            "Exif.GPSInfo.GPSLongitudeRef": "E",
-        },
+    date_by_path = {
+        str(a): "2025-03-15",
+        str(b): "2025-03-15",
+        str(c): "2025-03-16",
     }
     monkeypatch.setattr(
-        "src.core.grouping._load_comprehensive_metadata",
-        lambda path: metadata_by_path[str(path)],
+        "src.core.grouping._extract_date_label",
+        lambda path: date_by_path[str(path)],
     )
     monkeypatch.setattr(
         "src.core.grouping._run_ml_similarity_pipeline",
         lambda paths, progress_callback=None, shared_engine=None: (
-            {str(a): 1, str(b): 2} if set(paths) == {str(a), str(b)} else {str(c): 1}
+            {str(a): 1, str(b): 1} if set(paths) == {str(a), str(b)} else {str(c): 1}
         ),
     )
 
@@ -184,10 +256,15 @@ def test_mixed_grouping_partitions_by_location_then_similarity(tmp_path, monkeyp
         GroupingMode.MIXED,
     )
 
-    assert len(plan.groups) == 3
-    labels = sorted(group.group_label for group in plan.groups)
-    assert labels[0].startswith("Lat_10.00_Lon_20.00")
-    assert labels[-1].startswith("Lat_11.00_Lon_21.00")
+    # day1 has a cluster of 2 -> group-1, day2 has singleton -> date folder directly
+    cluster_groups = [g for g in plan.groups if "group-" in g.group_label]
+    date_groups = [g for g in plan.groups if g.group_label == "2025-03-16"]
+    assert len(cluster_groups) == 1
+    assert cluster_groups[0].group_label == os.path.join("2025-03-15", "group-1")
+    assert sorted(cluster_groups[0].source_paths) == sorted([str(a), str(b)])
+    assert len(date_groups) == 1
+    assert str(c) in date_groups[0].source_paths
+    assert plan.unassigned_paths == []
 
 
 def test_execute_grouping_plan_moves_files_handles_name_collisions_and_writes_manifest(
@@ -311,7 +388,9 @@ def test_execute_grouping_plan_applies_file_name_overrides(tmp_path):
     assert summary.entries[0].new_path == str(old_dir / "renamed.jpg")
 
 
-def test_execute_grouping_plan_renames_entire_folder_and_keeps_unmanaged_files(tmp_path):
+def test_execute_grouping_plan_renames_entire_folder_and_keeps_unmanaged_files(
+    tmp_path,
+):
     source_root = tmp_path / "source"
     old_dir = source_root / "old_folder"
     old_dir.mkdir(parents=True)

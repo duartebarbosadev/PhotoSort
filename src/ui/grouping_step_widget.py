@@ -1031,9 +1031,16 @@ class GroupingStepWidget(QWidget):
             else:
                 parent_rel = ""
                 leaf_name = "Unnamed"
-            parent_item = ensure_directory(parent_rel)
-            group_item = QTreeWidgetItem([leaf_name])
-            group_item.setIcon(0, self._folder_icon)
+            # Reuse an existing directory node if one was already created for this label
+            # (e.g. as a parent for a cluster subgroup). Prevents duplicate date folders.
+            if normalized_label in directory_items:
+                group_item = directory_items[normalized_label]
+                _reusing_existing = True
+            else:
+                parent_item = ensure_directory(parent_rel)
+                group_item = QTreeWidgetItem([leaf_name])
+                group_item.setIcon(0, self._folder_icon)
+                _reusing_existing = False
             self._set_item_metadata(
                 group_item,
                 kind=ITEM_GROUP,
@@ -1053,7 +1060,9 @@ class GroupingStepWidget(QWidget):
             group_item.setToolTip(
                 0, f"Double-click to rename · {len(group.source_paths)} photo(s)"
             )
-            parent_item.addChild(group_item)
+            if not _reusing_existing:
+                parent_item.addChild(group_item)
+                directory_items[normalized_label] = group_item
             self._after_group_items_by_id[str(group.group_id)] = group_item
             self._after_group_items_by_label[normalized_label] = group_item
             match_relative_path = self._item_match_relative_path(group_item)

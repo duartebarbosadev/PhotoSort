@@ -669,9 +669,9 @@ class MainWindow(QMainWindow):
         self.grouping_step_widget = GroupingStepWidget(self)
         self.workflow_nav = QWidget()
         self.workflow_nav.setObjectName("workflowNav")
-        self.step_group_button = QPushButton("1. Group")
-        self.step_group_button.setObjectName("workflowStepButton")
-        self.step_group_button.setCheckable(True)
+        self.step_organize_button = QPushButton("1. Organize")
+        self.step_organize_button.setObjectName("workflowStepButton")
+        self.step_organize_button.setCheckable(True)
         self.step_cull_button = QPushButton("2. Cull")
         self.step_cull_button.setObjectName("workflowStepButton")
         self.step_cull_button.setCheckable(True)
@@ -768,7 +768,7 @@ class MainWindow(QMainWindow):
         nav_layout = QHBoxLayout(self.workflow_nav)
         nav_layout.setContentsMargins(8, 8, 8, 8)
         nav_layout.setSpacing(8)
-        nav_layout.addWidget(self.step_group_button)
+        nav_layout.addWidget(self.step_organize_button)
         nav_layout.addWidget(self.step_cull_button)
         nav_layout.addStretch(1)
 
@@ -889,12 +889,14 @@ class MainWindow(QMainWindow):
         self.grouping_step_widget.create_requested.connect(
             self._handle_grouping_create_requested
         )
-        self.grouping_step_widget.back_requested.connect(self._return_to_grouping_source)
+        self.grouping_step_widget.back_requested.connect(
+            self._return_to_grouping_source
+        )
         self.grouping_step_widget.skip_requested.connect(self._skip_grouping_step)
         self.grouping_step_widget.select_folder_requested.connect(
             self._open_folder_dialog
         )
-        self.step_group_button.clicked.connect(self._go_to_grouping_step)
+        self.step_organize_button.clicked.connect(self._go_to_grouping_step)
         self.step_cull_button.clicked.connect(self._go_to_cull_step)
 
         # Connect MenuManager signals
@@ -1169,7 +1171,7 @@ class MainWindow(QMainWindow):
         self._rebuild_model_view()
 
     def show_grouping_step(self) -> None:
-        self.app_state.workflow_step = "group"
+        self.app_state.workflow_step = "organize"
         self.workflow_stack.setCurrentWidget(self.grouping_page)
         self.grouping_step_widget.set_source_folder(self.app_state.grouping_source_root)
         self.grouping_step_widget.set_current_mode(
@@ -1181,7 +1183,8 @@ class MainWindow(QMainWindow):
             )
         self.grouping_step_widget.set_back_visible(
             bool(self.app_state.grouping_source_root)
-            and self.app_state.current_folder_path != self.app_state.grouping_source_root
+            and self.app_state.current_folder_path
+            != self.app_state.grouping_source_root
         )
         self.update_workflow_navigation()
 
@@ -1191,11 +1194,13 @@ class MainWindow(QMainWindow):
         self.update_workflow_navigation()
 
     def update_workflow_navigation(self) -> None:
-        has_loaded_folder = bool(self.app_state.grouping_source_root or self.app_state.current_folder_path)
+        has_loaded_folder = bool(
+            self.app_state.grouping_source_root or self.app_state.current_folder_path
+        )
         has_cull_content = bool(self.app_state.image_files_data)
-        self.step_group_button.setEnabled(has_loaded_folder or not has_cull_content)
+        self.step_organize_button.setEnabled(has_loaded_folder or not has_cull_content)
         self.step_cull_button.setEnabled(has_cull_content)
-        self.step_group_button.setChecked(self.app_state.workflow_step == "group")
+        self.step_organize_button.setChecked(self.app_state.workflow_step == "organize")
         self.step_cull_button.setChecked(self.app_state.workflow_step == "cull")
 
     def update_grouping_preview(self, text: str) -> None:
@@ -1789,11 +1794,20 @@ class MainWindow(QMainWindow):
         return QModelIndex()  # No visible image item found in this subtree
 
     def closeEvent(self, event):
-        grouping_action_lines = self.grouping_step_widget.pending_grouping_action_lines()
+        if self.worker_manager.is_grouping_workflow_running():
+            event.ignore()
+            self.statusBar().showMessage(
+                "Grouping is still moving files. Wait for it to finish before closing.",
+                4000,
+            )
+            return
+
+        grouping_action_lines = (
+            self.grouping_step_widget.pending_grouping_action_lines()
+        )
         if (
             self.grouping_step_widget.has_unsaved_grouping_edits()
             and grouping_action_lines
-            and not self.worker_manager.is_grouping_workflow_running()
         ):
             choice = self.dialog_manager.show_grouping_close_confirmation_dialog(
                 grouping_action_lines
