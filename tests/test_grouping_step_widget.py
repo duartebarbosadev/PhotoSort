@@ -407,6 +407,47 @@ def test_grouping_step_widget_supports_file_rename_in_preview_plan(tmp_path):
     assert widget._projected_path_for_source(first).endswith("Beach/renamed.jpg")
 
 
+def test_grouping_step_widget_builds_collision_aware_action_list(tmp_path):
+    source_root = tmp_path / "demo"
+    first_dir = source_root / "A"
+    second_dir = source_root / "B"
+    first_dir.mkdir(parents=True)
+    second_dir.mkdir(parents=True)
+    first = str(first_dir / "same.jpg")
+    second = str(second_dir / "same.jpg")
+    (first_dir / "same.jpg").write_bytes(b"a")
+    (second_dir / "same.jpg").write_bytes(b"b")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=2,
+            supported_items=2,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Merged",
+                    source_paths=[first, second],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    action_lines = widget._build_action_lines(widget.get_effective_plan())
+
+    assert action_lines == [
+        "Move A/same.jpg -> Merged/same.jpg",
+        "Move B/same.jpg -> Merged/same_1.jpg",
+        "Remove empty folder B",
+        "Remove empty folder A",
+    ]
+
+
 def test_grouping_step_widget_selects_original_items_for_renamed_entries(tmp_path):
     source_root = tmp_path / "demo"
     source_root.mkdir()

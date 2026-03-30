@@ -285,6 +285,16 @@ class AppController(QObject):
         load_folder_start_time = time.perf_counter()
         logger.info("Loading folder: %s", folder_path)
 
+        if self.worker_manager.is_grouping_workflow_running():
+            logger.info(
+                "Folder load blocked while grouping workflow is still running."
+            )
+            self.main_window.statusBar().showMessage(
+                "Grouping is still moving files. Wait for it to finish before loading another folder.",
+                4000,
+            )
+            return
+
         marked_files = self.app_state.get_marked_files()
         if marked_files:
             choice = (

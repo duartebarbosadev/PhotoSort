@@ -362,6 +362,32 @@ def test_execute_grouping_plan_removes_empty_source_directories(tmp_path):
     assert (new_dir / "a.jpg").exists()
 
 
+def test_execute_grouping_plan_keeps_unrelated_empty_directories(tmp_path):
+    source_root = tmp_path / "source"
+    old_dir = source_root / "old_folder"
+    new_dir = source_root / "new_folder"
+    placeholder_dir = source_root / "placeholder"
+    old_dir.mkdir(parents=True)
+    new_dir.mkdir(parents=True)
+    placeholder_dir.mkdir(parents=True)
+    image_path = old_dir / "a.jpg"
+    _create_solid_image(str(image_path), (220, 40, 40))
+
+    plan = build_grouping_plan(
+        [{"path": str(image_path)}],
+        GroupingMode.SIMILARITY,
+    )
+    plan.groups[0].group_label = "new_folder"
+
+    execute_grouping_plan(
+        plan,
+        source_root=str(source_root),
+        output_root=str(source_root),
+    )
+
+    assert placeholder_dir.exists()
+
+
 def test_execute_grouping_plan_applies_file_name_overrides(tmp_path):
     source_root = tmp_path / "source"
     old_dir = source_root / "old_folder"

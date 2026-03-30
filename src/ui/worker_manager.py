@@ -186,7 +186,11 @@ class WorkerManager(QObject):
         self.update_check_worker: Optional[UpdateCheckWorker] = None
 
     def _terminate_thread(
-        self, thread: Optional[QThread], worker_stop_method: Optional[callable] = None
+        self,
+        thread: Optional[QThread],
+        worker_stop_method: Optional[callable] = None,
+        *,
+        allow_terminate: bool = True,
     ):
         if (
             thread is not None and thread.isRunning()
@@ -202,9 +206,18 @@ class WorkerManager(QObject):
                     )
             thread.quit()
             if not thread.wait(5000):  # Wait 5 seconds
-                logger.warning(f"Thread {thread} did not quit gracefully. Terminating.")
-                thread.terminate()
-                thread.wait()  # Wait for termination
+                if allow_terminate:
+                    logger.warning(
+                        f"Thread {thread} did not quit gracefully. Terminating."
+                    )
+                    thread.terminate()
+                    thread.wait()  # Wait for termination
+                else:
+                    logger.warning(
+                        "Thread %s did not quit gracefully and will be left running.",
+                        thread,
+                    )
+                    return thread, None
             logger.debug(f"Thread {thread} stopped.")
         # Even if not running, or None, ensure we return None for reassignment
         return None, None
@@ -670,7 +683,7 @@ class WorkerManager(QObject):
             else None
         )
         temp_thread, _ = self._terminate_thread(
-            self.grouping_workflow_thread, worker_stop
+            self.grouping_workflow_thread, worker_stop, allow_terminate=False
         )
         if temp_thread is None:
             self.grouping_workflow_thread = None

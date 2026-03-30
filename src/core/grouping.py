@@ -235,6 +235,39 @@ def _resolve_collision_safe_destination(destination_dir: str, basename: str) -> 
     return candidate
 
 
+def _iter_parent_directories(path: str, *, stop_at: str) -> Iterable[str]:
+    normalized_stop = os.path.normcase(os.path.normpath(stop_at))
+    current = os.path.normpath(path)
+    while current:
+        normalized_current = os.path.normcase(os.path.normpath(current))
+        if normalized_current == normalized_stop:
+            break
+        yield current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+
+
+def _empty_directory_candidates_from_entries(
+    entries: Sequence[GroupingManifestEntry],
+    *,
+    source_root: str,
+) -> List[str]:
+    candidates: Dict[str, str] = {}
+    for entry in entries:
+        if entry.status not in {"moved", "unassigned"}:
+            continue
+        original_path = (entry.original_path or "").strip()
+        if not original_path:
+            continue
+        original_dir = os.path.dirname(original_path)
+        for candidate in _iter_parent_directories(original_dir, stop_at=source_root):
+            normalized = os.path.normcase(os.path.normpath(candidate))
+            candidates[normalized] = candidate
+    return list(candidates.values())
+
+
 def _cluster_vectors(
     vectors_by_path: Dict[str, np.ndarray],
     *,
@@ -966,7 +999,13 @@ def execute_grouping_plan(
             )
         )
 
-    _remove_empty_directories(source_root)
+    _remove_empty_directories(
+        source_root,
+        candidate_dirs=_empty_directory_candidates_from_entries(
+            entries,
+            source_root=source_root,
+        ),
+    )
 
     summary = GroupingRunSummary(
         mode=plan.mode,
@@ -983,15 +1022,37 @@ def execute_grouping_plan(
     return summary
 
 
-def _remove_empty_directories(root_path: str) -> None:
+def _remove_empty_directories(
+    root_path: str,
+    *,
+    candidate_dirs: Optional[Sequence[str]] = None,
+) -> None:
     if not root_path or not os.path.isdir(root_path):
         return
     normalized_root = os.path.normcase(os.path.normpath(root_path))
-    for current_root, dirnames, _filenames in os.walk(root_path, topdown=False):
+    if candidate_dirs is None:
+        walk_roots = [
+            current_root for current_root, _dirnames, _filenames in os.walk(root_path)
+        ]
+    else:
+        walk_roots = sorted(
+            {
+                os.path.normpath(path)
+                for path in candidate_dirs
+                if path
+                and _is_path_within_dir(path, root_path)
+                and os.path.normcase(os.path.normpath(path)) != normalized_root
+            },
+            key=lambda path: path.count(os.sep),
+            reverse=True,
+        )
+    for current_root in walk_roots:
         normalized_current = os.path.normcase(os.path.normpath(current_root))
         if normalized_current == normalized_root:
             continue
         try:
+            if not os.path.isdir(current_root):
+                continue
             if os.listdir(current_root):
                 continue
             os.rmdir(current_root)

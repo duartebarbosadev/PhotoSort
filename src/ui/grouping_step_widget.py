@@ -2437,6 +2437,7 @@ class GroupingStepWidget(QWidget):
     def _build_action_lines(self, plan: GroupingPlan) -> List[str]:
         lines: List[str] = []
         moving_paths: List[str] = []
+        reserved_paths = self._occupied_paths_for_action_preview()
         directory_renames = find_directory_rename_candidates(
             plan,
             source_root=self._source_root or "",
@@ -2452,10 +2453,14 @@ class GroupingStepWidget(QWidget):
                 )
                 continue
             for source_path in group.source_paths:
-                destination_path = os.path.join(
-                    self._current_output_root or self._source_root or "",
-                    self._normalize_relative_path(group.group_label),
+                destination_path = self._preview_destination_path(
+                    source_path,
+                    os.path.join(
+                        self._current_output_root or self._source_root or "",
+                        self._normalize_relative_path(group.group_label),
+                    ),
                     plan.filename_for_path(source_path),
+                    reserved_paths,
                 )
                 if os.path.normcase(os.path.normpath(source_path)) == os.path.normcase(
                     os.path.normpath(destination_path)
@@ -2467,10 +2472,14 @@ class GroupingStepWidget(QWidget):
                     f"{os.path.relpath(destination_path, self._current_output_root or self._source_root or os.path.dirname(destination_path))}"
                 )
         for source_path in plan.unassigned_paths:
-            destination_path = os.path.join(
-                self._current_output_root or self._source_root or "",
-                "Unassigned",
+            destination_path = self._preview_destination_path(
+                source_path,
+                os.path.join(
+                    self._current_output_root or self._source_root or "",
+                    "Unassigned",
+                ),
                 plan.filename_for_path(source_path),
+                reserved_paths,
             )
             if os.path.normcase(os.path.normpath(source_path)) == os.path.normcase(
                 os.path.normpath(destination_path)
@@ -2486,6 +2495,41 @@ class GroupingStepWidget(QWidget):
                 f"Remove empty folder {self._relative_display_path(folder_path)}"
             )
         return lines
+
+    def _occupied_paths_for_action_preview(self) -> Set[str]:
+        root = self._current_output_root or self._source_root or ""
+        if not root or not os.path.isdir(root):
+            return set()
+        occupied: Set[str] = set()
+        for current_root, _dirnames, filenames in os.walk(root):
+            for filename in filenames:
+                occupied.add(
+                    os.path.normcase(os.path.normpath(os.path.join(current_root, filename)))
+                )
+        return occupied
+
+    def _preview_destination_path(
+        self,
+        source_path: str,
+        destination_dir: str,
+        basename: str,
+        reserved_paths: Set[str],
+    ) -> str:
+        desired_destination_path = os.path.join(destination_dir, basename)
+        normalized_source = os.path.normcase(os.path.normpath(source_path))
+        normalized_desired = os.path.normcase(os.path.normpath(desired_destination_path))
+        if normalized_source == normalized_desired:
+            return desired_destination_path
+
+        reserved_paths.discard(normalized_source)
+        candidate = desired_destination_path
+        stem, ext = os.path.splitext(basename)
+        suffix = 1
+        while os.path.normcase(os.path.normpath(candidate)) in reserved_paths:
+            candidate = os.path.join(destination_dir, f"{stem}_{suffix}{ext}")
+            suffix += 1
+        reserved_paths.add(os.path.normcase(os.path.normpath(candidate)))
+        return candidate
 
     def _empty_directories_after_move(self, moving_paths: Iterable[str]) -> List[str]:
         source_root = self._source_root or ""
