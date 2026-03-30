@@ -1601,39 +1601,78 @@ class DialogManager:
         )
 
     def show_grouping_close_confirmation_dialog(self, action_lines: List[str]) -> str:
-        preview_lines = action_lines[:20]
+        preview_lines = action_lines[:25]
         preview_text = "\n".join(preview_lines)
         remaining = len(action_lines) - len(preview_lines)
         if remaining > 0:
-            preview_text += f"\n… {remaining} more"
+            preview_text += f"\n… and {remaining} more"
 
-        dialog = QMessageBox(self.parent)
+        dialog = QDialog(self.parent)
         dialog.setWindowTitle("Unsaved Grouping Changes")
-        dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setText(
-            "You have unapplied grouping changes.\n\n"
+        dialog.setObjectName("groupingUnsavedDialog")
+        dialog.setModal(True)
+        dialog.setMinimumSize(580, 380)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
+
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        build_dialog_header("Unsaved Grouping Changes", "⚠", outer)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(22, 16, 22, 10)
+        body.setSpacing(12)
+
+        message = QLabel(
+            f"You have {len(action_lines)} unapplied grouping change(s).\n"
             "Do you want to move files before closing?"
         )
-        dialog.setInformativeText(preview_text)
-        dialog.setDetailedText("\n".join(action_lines))
+        message.setObjectName("groupingUnsavedMessage")
+        message.setWordWrap(True)
+        body.addWidget(message)
 
-        move_button = dialog.addButton(
-            "Move Files and Close", QMessageBox.ButtonRole.AcceptRole
-        )
-        close_button = dialog.addButton(
-            "Close Without Moving", QMessageBox.ButtonRole.DestructiveRole
-        )
-        cancel_button = dialog.addButton(QMessageBox.StandardButton.Cancel)
-        dialog.setDefaultButton(move_button)
-        dialog.exec()
+        action_list = QPlainTextEdit()
+        action_list.setObjectName("groupingUnsavedActionList")
+        action_list.setReadOnly(True)
+        action_list.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        action_list.setPlainText(preview_text)
+        body.addWidget(action_list, 1)
 
-        clicked = dialog.clickedButton()
-        if clicked == move_button:
+        outer.addLayout(body)
+
+        # 3-button footer
+        footer = QFrame()
+        footer.setObjectName("dialogFooter")
+        f_layout = QHBoxLayout(footer)
+        f_layout.setContentsMargins(22, 10, 22, 14)
+        f_layout.setSpacing(10)
+        f_layout.addStretch()
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("groupingUnsavedCancelButton")
+        cancel_button.clicked.connect(dialog.reject)
+        f_layout.addWidget(cancel_button)
+
+        discard_button = QPushButton("Close Without Moving")
+        discard_button.setObjectName("groupingUnsavedDiscardButton")
+        discard_button.clicked.connect(lambda: dialog.done(1))
+        f_layout.addWidget(discard_button)
+
+        save_button = QPushButton("Move Files and Close")
+        save_button.setObjectName("groupingUnsavedSaveButton")
+        save_button.clicked.connect(lambda: dialog.done(2))
+        save_button.setDefault(True)
+        f_layout.addWidget(save_button)
+
+        outer.addWidget(footer)
+
+        result = dialog.exec()
+        if result == 2:
             return "save"
-        if clicked == close_button:
+        if result == 1:
             return "close"
-        if clicked == cancel_button:
-            return "cancel"
         return "cancel"
 
     def show_folder_change_confirmation_dialog(self, marked_files: List[str]) -> str:

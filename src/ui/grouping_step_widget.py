@@ -22,7 +22,6 @@ from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QDialog,
-    QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -46,6 +45,11 @@ from PyQt6.QtWidgets import (
 
 from core.grouping import GroupingGroup, GroupingPlan, find_directory_rename_candidates
 from ui.advanced_image_viewer import ZoomableImageView
+from ui.dialog_components import (
+    build_dialog_footer,
+    build_dialog_header,
+    make_dialog_draggable,
+)
 
 
 GROUPING_MODE_OPTIONS = [
@@ -111,7 +115,7 @@ class DroppableGroupingTree(QTreeWidget):
                 event.ignore()
             return
 
-        target_item = self.itemAt(event.position().toPoint())
+        target_item = self._resolve_drop_target(self.itemAt(event.position().toPoint()))
         if target_item is not None and self._is_valid_drop_target(target_item):
             self._highlight_drop_target(target_item)
             event.acceptProposedAction()
@@ -130,7 +134,7 @@ class DroppableGroupingTree(QTreeWidget):
                 event.ignore()
             return
 
-        target_item = self.itemAt(event.position().toPoint())
+        target_item = self._resolve_drop_target(self.itemAt(event.position().toPoint()))
         if target_item is None or not self._is_valid_drop_target(target_item):
             self._clear_drop_highlight()
             event.ignore()
@@ -180,6 +184,18 @@ class DroppableGroupingTree(QTreeWidget):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _resolve_drop_target(
+        self, item: Optional[QTreeWidgetItem]
+    ) -> Optional[QTreeWidgetItem]:
+        """If hovering over a file, resolve to its parent folder/group instead."""
+        if item is None:
+            return None
+        kind = item.data(0, ROLE_KIND)
+        if kind == ITEM_FILE:
+            parent = item.parent()
+            return parent if parent is not None else None
+        return item
 
     def _is_valid_drop_target(self, target_item: QTreeWidgetItem) -> bool:
         target_kind = target_item.data(0, ROLE_KIND)
@@ -2352,47 +2368,60 @@ class GroupingStepWidget(QWidget):
             )
             return False
 
+        move_count = sum(1 for ln in action_lines if ln.startswith("Move "))
+        rename_count = sum(1 for ln in action_lines if ln.startswith("Rename folder "))
         remove_count = sum(
-            1 for line in action_lines if line.startswith("Remove empty folder ")
+            1 for ln in action_lines if ln.startswith("Remove empty folder ")
         )
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Confirm Grouping Actions")
+        dialog.setObjectName("groupingConfirmDialog")
         dialog.setModal(True)
-        dialog.setMinimumSize(1120, 700)
-        dialog.resize(1240, 760)
+        dialog.setMinimumSize(620, 420)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
 
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        headline = QLabel(f"Apply {len(action_lines)} action(s)?")
-        headline.setWordWrap(True)
-        layout.addWidget(headline)
+        build_dialog_header("Confirm File Operations", "📁", outer)
 
-        summary = QLabel(
-            "Review the staged grouping plan below before files are moved."
-        )
+        body = QVBoxLayout()
+        body.setContentsMargins(22, 16, 22, 10)
+        body.setSpacing(12)
+
+        parts: List[str] = []
+        if move_count:
+            parts.append(f"{move_count} file move(s)")
+        if rename_count:
+            parts.append(f"{rename_count} folder rename(s)")
         if remove_count:
-            summary.setText(
-                summary.text()
-                + f" Empty folders left behind will also be removed ({remove_count})."
-            )
+            parts.append(f"{remove_count} empty folder removal(s)")
+        summary_text = "This will apply " + ", ".join(parts) + "."
+
+        summary = QLabel(summary_text)
+        summary.setObjectName("groupingConfirmMessage")
         summary.setWordWrap(True)
-        layout.addWidget(summary)
+        body.addWidget(summary)
 
         action_list = QPlainTextEdit()
+        action_list.setObjectName("groupingConfirmActionList")
         action_list.setReadOnly(True)
         action_list.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         action_list.setPlainText("\n".join(action_lines))
-        layout.addWidget(action_list, 1)
+        body.addWidget(action_list, 1)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        outer.addLayout(body)
+
+        build_dialog_footer(
+            outer,
+            [
+                ("Cancel", "groupingConfirmCancelButton", dialog.reject, False),
+                ("Move Files", "groupingConfirmApplyButton", dialog.accept, True),
+            ],
         )
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
 
         return dialog.exec() == int(QDialog.DialogCode.Accepted)
 

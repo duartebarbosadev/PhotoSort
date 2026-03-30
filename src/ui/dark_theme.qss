@@ -1594,6 +1594,73 @@ QPushButton#folderChangeDialogCommitButton:hover {
     border-color: #4B6EAF;
 }
 
+/* --- Grouping Confirm / Unsaved Dialogs --- */
+QDialog#groupingConfirmDialog,
+QDialog#groupingUnsavedDialog {
+    background: #2B2B2B;
+    border: 1px solid #3C3F41;
+    border-radius: 12px;
+}
+
+QDialog#groupingConfirmDialog QLabel#groupingConfirmMessage,
+QDialog#groupingUnsavedDialog QLabel#groupingUnsavedMessage {
+    color: #A9B7C6;
+    font-size: 9.5pt;
+    line-height: 1.4;
+}
+
+QDialog#groupingConfirmDialog QPlainTextEdit#groupingConfirmActionList,
+QDialog#groupingUnsavedDialog QPlainTextEdit#groupingUnsavedActionList {
+    background: #1E1F22;
+    color: #A9B7C6;
+    border: 1px solid #3C3F41;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 8.5pt;
+    selection-background-color: #214283;
+}
+
+QPushButton#groupingConfirmCancelButton,
+QPushButton#groupingUnsavedCancelButton,
+QPushButton#groupingUnsavedDiscardButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #3C3F41, stop: 1 #353739);
+    color: #A9B7C6;
+    border: 1px solid #4A4D50;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 9pt;
+}
+
+QPushButton#groupingConfirmCancelButton:hover,
+QPushButton#groupingUnsavedCancelButton:hover,
+QPushButton#groupingUnsavedDiscardButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #45494A, stop: 1 #3C3F41);
+    color: #FFFFFF;
+    border-color: #5E6366;
+}
+
+QPushButton#groupingConfirmApplyButton,
+QPushButton#groupingUnsavedSaveButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #4B6EAF, stop: 1 #3D5A8A);
+    color: #FFFFFF;
+    border: 1px solid #3D5A8A;
+    border-radius: 6px;
+    font-weight: bold;
+    padding: 8px 16px;
+    font-size: 9pt;
+}
+
+QPushButton#groupingConfirmApplyButton:hover,
+QPushButton#groupingUnsavedSaveButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #5580BB, stop: 1 #4B6EAF);
+    border-color: #4B6EAF;
+}
+
 QLabel#lossyRotationMessageLabel {
     color: #A9B7C6;
     font-size: 10pt;
