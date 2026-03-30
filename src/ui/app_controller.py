@@ -12,6 +12,7 @@ from core.app_settings import (
 from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS, is_image_extension
 from core.image_file_ops import ImageFileOperations
 from core.pyexiv2_wrapper import PyExiv2Operations
+from core.grouping import build_grouping_output_root
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,17 @@ class WorkerManager:
 
 
 class AppController(QObject):
+    def _supports_grouping_workflow_ui(self) -> bool:
+        return all(
+            hasattr(self.main_window, attr)
+            for attr in (
+                "show_grouping_step",
+                "show_cull_step",
+                "grouping_step_widget",
+                "update_grouping_preview",
+            )
+        ) and hasattr(self.worker_manager, "start_grouping_preview")
+
     @staticmethod
     def clear_application_caches():
         """Clears all disk-backed caches without instantiating heavy pipelines."""
@@ -240,12 +252,36 @@ class AppController(QObject):
         self.worker_manager.ai_rating_complete.connect(self.handle_ai_rating_complete)
         self.worker_manager.ai_rating_error.connect(self.handle_ai_rating_error)
         self.worker_manager.ai_rating_warning.connect(self.handle_ai_rating_warning)
+        self.worker_manager.grouping_preview_progress.connect(
+            self.handle_grouping_preview_progress
+        )
+        self.worker_manager.grouping_preview_ready.connect(
+            self.handle_grouping_preview_ready
+        )
+        self.worker_manager.grouping_preview_error.connect(
+            self.handle_grouping_preview_error
+        )
+        self.worker_manager.grouping_workflow_progress.connect(
+            self.handle_grouping_workflow_progress
+        )
+        self.worker_manager.grouping_workflow_complete.connect(
+            self.handle_grouping_workflow_complete
+        )
+        self.worker_manager.grouping_workflow_error.connect(
+            self.handle_grouping_workflow_error
+        )
 
         self._ai_rating_warning_messages: list[str] = []
 
     # --- Public Methods (called from MainWindow) ---
 
-    def load_folder(self, folder_path: str):
+    def load_folder(
+        self,
+        folder_path: str,
+        *,
+        skip_grouping_step: bool = False,
+        record_as_source: bool = True,
+    ):
         load_folder_start_time = time.perf_counter()
         logger.info("Loading folder: %s", folder_path)
 
@@ -316,6 +352,11 @@ class AppController(QObject):
         self.app_state.clear_all_file_specific_data()
         self.main_window.invalidate_last_displayed_preview()
         self.app_state.current_folder_path = folder_path
+        self.app_state.skip_grouping_step_once = skip_grouping_step
+        if record_as_source:
+            self.app_state.grouping_source_root = folder_path
+        if skip_grouping_step:
+            self.app_state.grouping_output_root = folder_path
         folder_display_name = (
             os.path.basename(folder_path) if folder_path else "Selected Folder"
         )
@@ -338,6 +379,8 @@ class AppController(QObject):
 
         self.main_window.file_system_model.clear()
         self.main_window.file_system_model.setColumnCount(1)
+        self.main_window.update_grouping_preview("Preparing grouping preview...")
+        self.main_window.show_grouping_step()
 
         self.main_window.update_loading_text(
             f"Scanning folder: {os.path.basename(folder_path)}..."
@@ -391,6 +434,71 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.worker_manager.start_similarity_analysis(paths_for_similarity)
+
+    def refresh_grouping_preview(self):
+        if not self.app_state.image_files_data:
+            self.main_window.update_grouping_preview("No files loaded for grouping.")
+            return
+        mode = self.app_state.selected_grouping_mode or "current"
+        source_root = self.app_state.grouping_source_root or self.app_state.current_folder_path
+        if source_root:
+            source_name = os.path.basename(source_root.rstrip(os.sep)) or source_root
+            self.main_window.grouping_step_widget.set_output_root_text(
+                "Output root: "
+                + os.path.join(source_name, "PhotoSort Groups", mode)
+            )
+        self.main_window.update_grouping_preview("Preparing grouping preview...")
+        self.main_window.grouping_step_widget.set_loading_state(
+            f"Generating {mode} preview...",
+            True,
+            None,
+        )
+        self.worker_manager.start_grouping_preview(
+            list(self.app_state.image_files_data),
+            mode,
+            source_root,
+        )
+
+    def start_grouping_workflow(
+        self, mode: str, group_name_overrides: Optional[Dict[str, str]] = None
+    ):
+        if self.worker_manager.is_grouping_workflow_running():
+            self.main_window.statusBar().showMessage(
+                "Grouping is already running.", 3000
+            )
+            return
+        source_root = self.app_state.grouping_source_root or self.app_state.current_folder_path
+        if not source_root:
+            self.main_window.statusBar().showMessage(
+                "No source folder available for grouping.", 3000
+            )
+            return
+        output_root = build_grouping_output_root(source_root, mode)
+        self.app_state.selected_grouping_mode = mode
+        self.app_state.grouping_output_root = output_root
+        self.main_window.set_grouping_busy(True)
+        self.main_window.grouping_step_widget.set_loading_state(
+            f"Creating {mode} groups...",
+            True,
+            0,
+        )
+        self.main_window.show_loading_overlay("Grouping photos...")
+        self.worker_manager.start_grouping_workflow(
+            list(self.app_state.image_files_data),
+            mode,
+            source_root,
+            output_root,
+            group_name_overrides=group_name_overrides,
+        )
+
+    def skip_grouping_to_cull(self):
+        if not self.app_state.image_files_data:
+            self.main_window.statusBar().showMessage(
+                "Select a folder first.", 3000
+            )
+            return
+        self.main_window.grouping_step_widget.set_loading_state("Grouping skipped", False)
+        self.main_window.show_cull_step()
 
     def start_blur_detection_analysis(self):
         logger.info("Starting blur detection analysis.")
@@ -963,6 +1071,16 @@ class AppController(QObject):
 
         self._restore_analysis_state()
         self.main_window._rebuild_model_view()
+        if self._supports_grouping_workflow_ui():
+            skip_grouping_step_once = getattr(
+                self.app_state, "skip_grouping_step_once", False
+            )
+            if skip_grouping_step_once:
+                self.app_state.skip_grouping_step_once = False
+                self.main_window.show_cull_step()
+            else:
+                self.main_window.show_grouping_step()
+                self.refresh_grouping_preview()
 
         media_file_data = self._get_media_file_data()
         if media_file_data:
@@ -998,6 +1116,88 @@ class AppController(QObject):
 
         self.main_window.hide_loading_overlay()
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
+
+    def handle_grouping_preview_progress(self, _progress: int, message: str):
+        self.main_window.update_grouping_preview(message)
+        self.main_window.grouping_step_widget.set_loading_state(message, True, None)
+
+    def handle_grouping_preview_ready(self, plan):
+        mode_label = str(getattr(plan, "mode", "grouping")).title()
+        source_root = self.app_state.grouping_source_root or self.app_state.current_folder_path
+        output_root = (
+            os.path.join("PhotoSort Groups", plan.mode)
+            if source_root
+            else "PhotoSort Groups"
+        )
+        self.main_window.update_grouping_preview(
+            f"{mode_label}: {len(plan.groups)} folders ready."
+        )
+        self.main_window.grouping_step_widget.set_preview_plan(plan, output_root)
+        self.main_window.grouping_step_widget.set_loading_state(
+            "Preview ready", False
+        )
+
+    def handle_grouping_preview_error(self, message: str):
+        self.main_window.update_grouping_preview(f"Preview unavailable: {message}")
+        self.main_window.grouping_step_widget.set_loading_state(
+            f"Preview unavailable: {message}",
+            False,
+        )
+
+    def handle_grouping_workflow_progress(self, progress: int, message: str):
+        self.main_window.update_loading_text(message)
+        self.main_window.grouping_step_widget.set_loading_state(
+            message,
+            True,
+            progress,
+        )
+
+    def handle_grouping_workflow_complete(self, summary):
+        for entry in getattr(summary, "entries", []):
+            if getattr(entry, "new_path", None):
+                try:
+                    self.app_state.update_path(entry.original_path, entry.new_path)
+                except Exception:
+                    logger.debug(
+                        "Failed to update in-memory path cache for %s",
+                        entry.original_path,
+                        exc_info=True,
+                    )
+        self.app_state.grouping_run_summary = {
+            "mode": summary.mode,
+            "output_root": summary.output_root,
+            "manifest_path": summary.manifest_path,
+            "moved_count": summary.moved_count,
+            "unassigned_count": summary.unassigned_count,
+            "skipped_count": summary.skipped_count,
+        }
+        self.app_state.grouping_output_root = summary.output_root
+        self.main_window.set_grouping_busy(False)
+        self.main_window.hide_loading_overlay()
+        self.main_window.grouping_step_widget.set_loading_state(
+            "Grouping complete", False
+        )
+        self.main_window.statusBar().showMessage(
+            f"Created grouped folder set at {os.path.basename(summary.output_root)}.",
+            5000,
+        )
+        self.load_folder(
+            summary.output_root,
+            skip_grouping_step=True,
+            record_as_source=False,
+        )
+
+    def handle_grouping_workflow_error(self, message: str):
+        self.main_window.set_grouping_busy(False)
+        self.main_window.hide_loading_overlay()
+        self.main_window.grouping_step_widget.set_loading_state(
+            f"Grouping failed: {message}",
+            False,
+        )
+        self.main_window.statusBar().showMessage(
+            f"Grouping failed: {message}",
+            5000,
+        )
 
     def handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0

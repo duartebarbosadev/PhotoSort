@@ -43,6 +43,12 @@ class AppState:
         self.focused_image_path: Optional[str] = (
             None  # Path of the image in the single/focused viewer
         )
+        self.workflow_step: str = "group"
+        self.selected_grouping_mode: str = "current"
+        self.grouping_output_root: Optional[str] = None
+        self.grouping_run_summary: Optional[Dict[str, Any]] = None
+        self.grouping_source_root: Optional[str] = None
+        self.skip_grouping_step_once: bool = False
 
     def clear_all_file_specific_data(self, clear_disk_caches: bool = False):
         """Clears file/folder-scoped state and optionally disk caches."""
