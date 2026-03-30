@@ -9,6 +9,7 @@ _app = QApplication.instance() or QApplication([])
 
 def test_grouping_step_widget_tracks_mode_and_busy_state():
     widget = GroupingStepWidget()
+    assert widget.primary_button.text() == "Move files"
 
     widget.set_source_folder("/tmp/demo")
     widget.set_current_mode("location")
@@ -35,3 +36,4 @@ def test_grouping_step_widget_tracks_mode_and_busy_state():
 
     widget.set_busy(False)
     assert widget.primary_button.isEnabled()
+    assert widget.primary_button.text() == "Move files"

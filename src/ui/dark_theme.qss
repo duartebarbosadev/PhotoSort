@@ -2110,6 +2110,36 @@ QPushButton#groupingGhostButton:pressed {
     background-color: #2B3035;
 }
 
+QPushButton#groupingPrimaryButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #178B4A, stop: 1 #0F6D39);
+    color: #FFFFFF;
+    border: 1px solid #0D5E32;
+    border-radius: 8px;
+    padding: 6px 18px;
+    font-weight: 700;
+    font-size: 9pt;
+    min-height: 22px;
+}
+
+QPushButton#groupingPrimaryButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #1C9A53, stop: 1 #147B42);
+    border-color: #116B39;
+}
+
+QPushButton#groupingPrimaryButton:pressed {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0F6D39, stop: 1 #0B582E);
+}
+
+QPushButton#groupingPrimaryButton:disabled {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #146A3B, stop: 1 #0E532E);
+    color: #E3EFE8;
+    border-color: #0E532E;
+}
+
 QPushButton#groupingSecondaryButton {
     background-color: #363A3D;
     color: #C8D4DE;

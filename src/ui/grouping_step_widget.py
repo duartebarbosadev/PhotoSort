@@ -86,8 +86,9 @@ class GroupingStepWidget(QWidget):
         self.skip_button.setObjectName("groupingGhostButton")
         self.skip_button.setEnabled(False)
 
-        self.primary_button = QPushButton("Create Groups and Continue")
-        self.primary_button.setObjectName("acceptAllButton")
+        self.primary_button = QPushButton("Move files")
+        self.primary_button.setObjectName("groupingPrimaryButton")
+        self.primary_button.setMinimumHeight(34)
         self.primary_button.setEnabled(False)
 
         # Empty state page
@@ -390,7 +391,7 @@ class GroupingStepWidget(QWidget):
         self.folder_button.setEnabled(not busy)
         self.back_button.setEnabled(not busy)
         self.primary_button.setText(
-            "Grouping…" if busy else "Create Groups and Continue"
+            "Grouping…" if busy else "Move files"
         )
 
     def set_back_visible(self, visible: bool) -> None:
