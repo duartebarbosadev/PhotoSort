@@ -309,3 +309,31 @@ def test_execute_grouping_plan_applies_file_name_overrides(tmp_path):
     assert not image_path.exists()
     assert (old_dir / "renamed.jpg").exists()
     assert summary.entries[0].new_path == str(old_dir / "renamed.jpg")
+
+
+def test_execute_grouping_plan_renames_entire_folder_and_keeps_unmanaged_files(tmp_path):
+    source_root = tmp_path / "source"
+    old_dir = source_root / "old_folder"
+    old_dir.mkdir(parents=True)
+    image_path = old_dir / "a.jpg"
+    zip_path = old_dir / "archive.zip"
+    _create_solid_image(str(image_path), (220, 40, 40))
+    zip_path.write_bytes(b"zip-data")
+
+    plan = build_grouping_plan(
+        [{"path": str(image_path)}],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+    plan.groups[0].group_label = "renamed_folder"
+
+    summary = execute_grouping_plan(
+        plan,
+        source_root=str(source_root),
+        output_root=str(source_root),
+    )
+
+    assert summary.moved_count == 1
+    assert not old_dir.exists()
+    assert (source_root / "renamed_folder" / "a.jpg").exists()
+    assert (source_root / "renamed_folder" / "archive.zip").exists()

@@ -177,7 +177,7 @@ def test_grouping_step_widget_renders_all_group_files_in_after_tree(tmp_path):
     assert all(not group_item.child(i).text(0).startswith("…") for i in range(13))
 
 
-def test_grouping_step_widget_exclude_and_restore_are_preview_only(tmp_path):
+def test_grouping_step_widget_restore_returns_files_to_original_folder(tmp_path):
     source_root = tmp_path / "demo"
     source_root.mkdir()
     first = str(source_root / "Beach" / "a.jpg")
@@ -198,10 +198,10 @@ def test_grouping_step_widget_exclude_and_restore_are_preview_only(tmp_path):
         str(source_root),
     )
 
-    widget._exclude_paths([first])
-    excluded_plan = widget.get_effective_plan()
-    assert excluded_plan.groups == []
-    assert excluded_plan.skipped_paths == [first]
+    widget._move_paths_to_unassigned([first])
+    moved_plan = widget.get_effective_plan()
+    assert moved_plan.groups == []
+    assert moved_plan.unassigned_paths == [first]
 
     widget._restore_paths_to_original_location([first])
     restored_plan = widget.get_effective_plan()
@@ -328,8 +328,7 @@ def test_grouping_step_widget_builds_confirmation_action_list(tmp_path):
     action_lines = widget._build_action_lines(widget.get_effective_plan())
 
     assert action_lines == [
-        "Move Beach/a.jpg -> Trips/Beach/a.jpg",
-        "Remove empty folder Beach",
+        "Rename folder Beach -> Trips/Beach",
     ]
 
 
@@ -576,3 +575,80 @@ def test_grouping_step_widget_restores_selected_group_when_current_item_is_lost(
 
     assert widget.preview_tree.currentItem() is widget._after_group_items_by_id["1"]
     assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
+
+
+def test_grouping_step_widget_drag_drop_moves_file_into_folder(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+    second = str(source_root / "Trips" / "b.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=2,
+            supported_items=2,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first]),
+                GroupingGroup(group_id="2", group_label="Trips", source_paths=[second]),
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    dragged_items = [widget._after_file_items_by_path[first]]
+    target_item = widget._after_group_items_by_id["2"]
+
+    assert widget._can_drop_preview_items(dragged_items, target_item)
+
+    widget._handle_preview_tree_drop(dragged_items, target_item)
+
+    plan = widget.get_effective_plan()
+    trips_group = next(group for group in plan.groups if group.group_id == "2")
+    assert all(group.group_id != "1" for group in plan.groups)
+    assert trips_group.source_paths == [first, second]
+    assert widget.preview_tree.currentItem() is widget._after_group_items_by_id["2"]
+    assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
+    assert widget.folder_preview_grid.count() == 2
+
+
+def test_grouping_step_widget_drag_drop_moves_folder_into_folder(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Trips" / "Beach" / "a.jpg")
+    second = str(source_root / "Trips" / "City" / "b.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=2,
+            supported_items=2,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Trips/Beach", source_paths=[first]),
+                GroupingGroup(group_id="2", group_label="Trips/City", source_paths=[second]),
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    dragged_items = [widget._after_group_items_by_id["1"]]
+    target_item = widget._after_group_items_by_id["2"]
+
+    assert widget._can_drop_preview_items(dragged_items, target_item)
+
+    widget._handle_preview_tree_drop(dragged_items, target_item)
+
+    plan = widget.get_effective_plan()
+    moved_group = next(group for group in plan.groups if group.group_id == "1")
+    assert moved_group.group_label == "Trips/City/Beach"
+    assert widget.preview_tree.currentItem() is widget._after_group_items_by_id["2"]
+    assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
+    assert widget.folder_preview_grid.count() == 2

@@ -5,7 +5,7 @@ import subprocess
 from typing import Dict, Iterable, List, Optional, Set
 
 from PyQt6.QtCore import QPoint, QSize, Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QAction, QDesktopServices, QIcon, QPixmap
+from PyQt6.QtGui import QAction, QBrush, QColor, QDesktopServices, QDragEnterEvent, QDragMoveEvent, QDropEvent, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -26,13 +26,14 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStackedWidget,
+    QStyle,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from core.grouping import GroupingGroup, GroupingPlan
+from core.grouping import GroupingGroup, GroupingPlan, find_directory_rename_candidates
 from ui.advanced_image_viewer import ZoomableImageView
 
 
@@ -60,11 +61,113 @@ ITEM_GROUP = "group"
 ITEM_FILE = "file"
 ITEM_UNASSIGNED = "unassigned"
 ITEM_SKIPPED = "skipped"
-ITEM_EXCLUDED = "excluded"
 
 PREVIEW_PAGE_HINT = 0
 PREVIEW_PAGE_IMAGE = 1
 PREVIEW_PAGE_FOLDER = 2
+
+
+class GroupingPreviewTree(QTreeWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.drop_validator = None
+        self.drop_handler = None
+        self._highlighted_drop_target: Optional[QTreeWidgetItem] = None
+        self._drop_target_brushes: Dict[int, QBrush] = {}
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDragEnabled(True)
+        self.setDropIndicatorShown(True)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+
+    def _current_drag_items(self) -> List[QTreeWidgetItem]:
+        selected = self.selectedItems()
+        top_level: List[QTreeWidgetItem] = []
+        for item in selected:
+            ancestor = item.parent()
+            skip = False
+            while ancestor is not None:
+                if ancestor in selected:
+                    skip = True
+                    break
+                ancestor = ancestor.parent()
+            if not skip:
+                top_level.append(item)
+        return top_level
+
+    def _clear_drop_highlight(self) -> None:
+        if self._highlighted_drop_target is None:
+            return
+        try:
+            for column, brush in self._drop_target_brushes.items():
+                self._highlighted_drop_target.setBackground(column, brush)
+        except RuntimeError:
+            pass
+        self._highlighted_drop_target = None
+        self._drop_target_brushes = {}
+
+    def _highlight_drop_target(self, item: Optional[QTreeWidgetItem]) -> None:
+        if item is self._highlighted_drop_target:
+            return
+        self._clear_drop_highlight()
+        if item is None:
+            return
+        self._highlighted_drop_target = item
+        highlight_brush = QBrush(QColor("#285D8F"))
+        for column in range(self.columnCount()):
+            self._drop_target_brushes[column] = item.background(column)
+            item.setBackground(column, highlight_brush)
+
+    def dragEnterEvent(self, event: Optional[QDragEnterEvent]):
+        if event and self._current_drag_items():
+            event.acceptProposedAction()
+            return
+        if event:
+            self._clear_drop_highlight()
+            event.ignore()
+
+    def dragMoveEvent(self, event: Optional[QDragMoveEvent]):
+        if not event:
+            return
+        target_item = self.itemAt(event.position().toPoint())
+        dragged_items = self._current_drag_items()
+        if (
+            target_item is not None
+            and dragged_items
+            and callable(self.drop_validator)
+            and self.drop_validator(dragged_items, target_item)
+        ):
+            self._highlight_drop_target(target_item)
+            event.setDropAction(Qt.DropAction.MoveAction)
+            event.accept()
+            return
+        self._clear_drop_highlight()
+        event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._clear_drop_highlight()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: Optional[QDropEvent]):
+        if not event:
+            return
+        target_item = self.itemAt(event.position().toPoint())
+        dragged_items = self._current_drag_items()
+        if (
+            target_item is not None
+            and dragged_items
+            and callable(self.drop_validator)
+            and self.drop_validator(dragged_items, target_item)
+            and callable(self.drop_handler)
+        ):
+            self._clear_drop_highlight()
+            self.drop_handler(dragged_items, target_item)
+            event.setDropAction(Qt.DropAction.MoveAction)
+            event.accept()
+            return
+        self._clear_drop_highlight()
+        event.ignore()
 
 
 class GroupingStepWidget(QWidget):
@@ -83,7 +186,6 @@ class GroupingStepWidget(QWidget):
         self._editable_groups: List[GroupingGroup] = []
         self._editable_unassigned: List[str] = []
         self._editable_skipped: List[str] = []
-        self._excluded_paths: List[str] = []
         self._file_name_overrides: Dict[str, str] = {}
         self._original_group_labels_by_path: Dict[str, str] = {}
         self._original_group_labels_by_group_id: Dict[str, str] = {}
@@ -103,6 +205,7 @@ class GroupingStepWidget(QWidget):
         self._after_group_items_by_id: Dict[str, QTreeWidgetItem] = {}
         self._after_group_items_by_label: Dict[str, QTreeWidgetItem] = {}
         self._after_items_by_match_relative_path: Dict[str, QTreeWidgetItem] = {}
+        self._folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
 
         self._create_widgets()
         self._create_layout()
@@ -177,10 +280,11 @@ class GroupingStepWidget(QWidget):
         self.before_tree.setHeaderHidden(True)
         self.before_tree.setRootIsDecorated(True)
         self.before_tree.setAlternatingRowColors(False)
+        self.before_tree.setIndentation(14)
         self.before_tree.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
-        self.before_tree.setIconSize(self.before_tree.iconSize())
+        self.before_tree.setIconSize(QSize(22, 22))
         self.before_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
         self.after_panel = QFrame()
@@ -189,17 +293,20 @@ class GroupingStepWidget(QWidget):
         self.after_header.setObjectName("groupingTreeHeader")
         self.after_desc = QLabel("Double-click a folder or file name to rename it")
         self.after_desc.setObjectName("groupingTreeDesc")
-        self.preview_tree = QTreeWidget()
+        self.preview_tree = GroupingPreviewTree()
         self.preview_tree.setObjectName("groupingTree")
         self.preview_tree.setColumnCount(1)
         self.preview_tree.setHeaderHidden(True)
         self.preview_tree.setRootIsDecorated(True)
         self.preview_tree.setAlternatingRowColors(False)
+        self.preview_tree.setIndentation(14)
         self.preview_tree.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
-        self.preview_tree.setIconSize(self.preview_tree.iconSize())
+        self.preview_tree.setIconSize(QSize(22, 22))
         self.preview_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.preview_tree.drop_validator = self._can_drop_preview_items
+        self.preview_tree.drop_handler = self._handle_preview_tree_drop
 
         self.preview_panel = QFrame()
         self.preview_panel.setObjectName("groupingPreviewPanel")
@@ -510,7 +617,6 @@ class GroupingStepWidget(QWidget):
             self._editable_groups = []
             self._editable_unassigned = []
             self._editable_skipped = []
-            self._excluded_paths = []
             self._file_name_overrides = {}
             self._original_group_labels_by_path = {}
             self._original_group_labels_by_group_id = {}
@@ -542,7 +648,6 @@ class GroupingStepWidget(QWidget):
         ]
         self._editable_unassigned = list(getattr(plan, "unassigned_paths", []))
         self._editable_skipped = list(getattr(plan, "skipped_paths", []))
-        self._excluded_paths = []
         self._file_name_overrides = dict(
             getattr(plan, "file_name_overrides", {}) or {}
         )
@@ -577,14 +682,13 @@ class GroupingStepWidget(QWidget):
                     source_paths=list(group.source_paths),
                 )
             )
-        skipped_paths = list(dict.fromkeys(self._editable_skipped + self._excluded_paths))
         return GroupingPlan(
             mode=self.current_mode(),
             total_items=self._total_items,
             supported_items=self._supported_items,
             groups=effective_groups,
             unassigned_paths=list(self._editable_unassigned),
-            skipped_paths=skipped_paths,
+            skipped_paths=list(self._editable_skipped),
             output_root=self._current_output_root,
             file_name_overrides=dict(self._file_name_overrides),
         )
@@ -649,6 +753,8 @@ class GroupingStepWidget(QWidget):
         )
 
     def _refresh_preview_trees(self, preserve_selection: bool = True) -> None:
+        if isinstance(self.preview_tree, GroupingPreviewTree):
+            self.preview_tree._clear_drop_highlight()
         selection_state = self._capture_selection_state() if preserve_selection else None
         self._update_stats()
         self._clear_selected_preview()
@@ -661,7 +767,7 @@ class GroupingStepWidget(QWidget):
         self.stats_label.setText(
             f"{group_count} folders  ·  "
             f"{len(self._editable_unassigned)} unassigned  ·  "
-            f"{len(self._editable_skipped) + len(self._excluded_paths)} skipped"
+            f"{len(self._editable_skipped)} skipped"
         )
         self.stats_label.setVisible(True)
         self.loading_label.setText("Preview ready")
@@ -762,7 +868,8 @@ class GroupingStepWidget(QWidget):
 
         root_display = self._current_output_root or self._source_root or "Selected folder"
         root_name = os.path.basename(os.path.normpath(root_display)) or root_display
-        root_item = QTreeWidgetItem([f"📁  {root_name}"])
+        root_item = QTreeWidgetItem([root_name])
+        root_item.setIcon(0, self._folder_icon)
         self._set_item_metadata(
             root_item,
             kind=ITEM_ROOT,
@@ -786,7 +893,8 @@ class GroupingStepWidget(QWidget):
             if parent_rel == ".":
                 parent_rel = ""
             parent_item = ensure_directory(parent_rel)
-            item = QTreeWidgetItem([f"📁  {os.path.basename(normalized)}"])
+            item = QTreeWidgetItem([os.path.basename(normalized)])
+            item.setIcon(0, self._folder_icon)
             self._set_item_metadata(
                 item,
                 kind=ITEM_DIRECTORY,
@@ -820,7 +928,8 @@ class GroupingStepWidget(QWidget):
                 parent_rel = ""
                 leaf_name = "Unnamed"
             parent_item = ensure_directory(parent_rel)
-            group_item = QTreeWidgetItem([f"📁  {leaf_name}"])
+            group_item = QTreeWidgetItem([leaf_name])
+            group_item.setIcon(0, self._folder_icon)
             self._set_item_metadata(
                 group_item,
                 kind=ITEM_GROUP,
@@ -875,13 +984,6 @@ class GroupingStepWidget(QWidget):
         )
         self._add_bucket_item(
             root_item,
-            ITEM_EXCLUDED,
-            "📁  Excluded",
-            self._excluded_paths,
-            self._source_root or self._current_output_root,
-        )
-        self._add_bucket_item(
-            root_item,
             ITEM_SKIPPED,
             "📁  Skipped",
             self._editable_skipped,
@@ -902,7 +1004,8 @@ class GroupingStepWidget(QWidget):
     ) -> None:
         if not paths:
             return
-        bucket_item = QTreeWidgetItem([label])
+        bucket_item = QTreeWidgetItem([label.replace("📁  ", "").replace("📁 ", "").replace("📁", "").strip()])
+        bucket_item.setIcon(0, self._folder_icon)
         self._set_item_metadata(
             bucket_item,
             kind=bucket_kind,
@@ -947,7 +1050,8 @@ class GroupingStepWidget(QWidget):
 
         root_path = self._source_root or self._common_root_for_paths(all_paths)
         root_name = os.path.basename(os.path.normpath(root_path)) or root_path or "Source"
-        root_item = QTreeWidgetItem([f"📁  {root_name}"])
+        root_item = QTreeWidgetItem([root_name])
+        root_item.setIcon(0, self._folder_icon)
         self._set_item_metadata(
             root_item,
             kind=ITEM_ROOT,
@@ -971,7 +1075,8 @@ class GroupingStepWidget(QWidget):
             if parent_rel == ".":
                 parent_rel = ""
             parent_item = ensure_dir(parent_rel)
-            item = QTreeWidgetItem([f"📁  {os.path.basename(normalized)}"])
+            item = QTreeWidgetItem([os.path.basename(normalized)])
+            item.setIcon(0, self._folder_icon)
             actual_path = (
                 os.path.join(root_path, normalized)
                 if root_path and normalized
@@ -1167,7 +1272,6 @@ class GroupingStepWidget(QWidget):
             all_paths.extend(group.source_paths)
         all_paths.extend(self._editable_unassigned)
         all_paths.extend(self._editable_skipped)
-        all_paths.extend(self._excluded_paths)
         return list(dict.fromkeys(all_paths))
 
     def _common_relative_directory_for_paths(self, paths: List[str]) -> str:
@@ -1208,8 +1312,6 @@ class GroupingStepWidget(QWidget):
     def _bucket_for_path(self, source_path: str) -> Optional[str]:
         if source_path in self._editable_unassigned:
             return ITEM_UNASSIGNED
-        if source_path in self._excluded_paths:
-            return ITEM_EXCLUDED
         if source_path in self._editable_skipped:
             return ITEM_SKIPPED
         return None
@@ -1547,20 +1649,6 @@ class GroupingStepWidget(QWidget):
         if subtree_actions:
             sections.append(subtree_actions)
 
-        navigation_actions: List[QAction] = []
-        if self._has_matching_item(item, is_after=is_after):
-            match_action = QAction("Select matching item in other tree", self)
-            match_action.triggered.connect(
-                lambda: self._select_matching_item(item, is_after=is_after)
-            )
-            navigation_actions.append(match_action)
-        if source_path:
-            preview_action = QAction("Preview this file", self)
-            preview_action.triggered.connect(lambda: self._preview_path(source_path))
-            navigation_actions.append(preview_action)
-        if navigation_actions:
-            sections.append(navigation_actions)
-
         return self._append_menu_sections(menu, sections)
 
     def _populate_after_edit_actions(self, menu: QMenu, item: QTreeWidgetItem) -> bool:
@@ -1575,7 +1663,7 @@ class GroupingStepWidget(QWidget):
 
         structure_actions: List[QAction] = []
         if kind == ITEM_GROUP:
-            rename_group = QAction("Rename group", self)
+            rename_group = QAction("Rename folder", self)
             rename_group.triggered.connect(lambda: self._rename_group(item))
             structure_actions.append(rename_group)
         if kind == ITEM_FILE:
@@ -1586,7 +1674,7 @@ class GroupingStepWidget(QWidget):
             kind in {ITEM_ROOT, ITEM_DIRECTORY, ITEM_GROUP, ITEM_FILE}
             and self._item_bucket(item) != ITEM_SKIPPED
         ):
-            create_subgroup = QAction("Create subgroup", self)
+            create_subgroup = QAction("Create folder", self)
             create_subgroup.triggered.connect(
                 lambda: self._create_subgroup_from_item(item)
             )
@@ -1601,12 +1689,6 @@ class GroupingStepWidget(QWidget):
                 lambda: self._move_selected_preview_items_here(item)
             )
             structure_actions.append(move_here)
-        if self._merge_candidates(item):
-            merge_group = QAction("Merge into sibling group", self)
-            merge_group.triggered.connect(
-                lambda: self._merge_into_sibling_group(item)
-            )
-            structure_actions.append(merge_group)
         if structure_actions:
             sections.append(structure_actions)
 
@@ -1618,13 +1700,7 @@ class GroupingStepWidget(QWidget):
             )
             bucket_actions.append(send_unassigned)
 
-            exclude_action = QAction("Exclude from grouping", self)
-            exclude_action.triggered.connect(
-                lambda: self._exclude_paths(editable_candidate_paths)
-            )
-            bucket_actions.append(exclude_action)
-
-            restore_action = QAction("Restore original location", self)
+            restore_action = QAction("Put back in original folder", self)
             restore_action.triggered.connect(
                 lambda: self._restore_paths_to_original_location(
                     editable_candidate_paths
@@ -1635,12 +1711,6 @@ class GroupingStepWidget(QWidget):
             sections.append(bucket_actions)
 
         inspection_actions: List[QAction] = []
-        if candidate_paths:
-            affected_files = QAction("Show affected files", self)
-            affected_files.triggered.connect(
-                lambda: self._show_affected_files(candidate_paths)
-            )
-            inspection_actions.append(affected_files)
         if self._conflicts_for_item(item):
             conflicts_action = QAction("Show path conflicts/collisions", self)
             conflicts_action.triggered.connect(
@@ -1651,7 +1721,7 @@ class GroupingStepWidget(QWidget):
             sections.append(inspection_actions)
 
         if self._current_plan is not None:
-            run_action = QAction("Run grouping from current plan", self)
+            run_action = QAction("Move files now", self)
             run_action.triggered.connect(self._emit_create_requested)
             sections.append([run_action])
 
@@ -1736,8 +1806,6 @@ class GroupingStepWidget(QWidget):
             return list(group.source_paths) if group else []
         if kind == ITEM_UNASSIGNED:
             return list(self._editable_unassigned)
-        if kind == ITEM_EXCLUDED:
-            return list(self._excluded_paths)
         if kind == ITEM_SKIPPED:
             return list(self._editable_skipped)
         return []
@@ -1751,7 +1819,7 @@ class GroupingStepWidget(QWidget):
             return source_path
         if actual_path and os.path.exists(actual_path):
             return actual_path
-        if kind in {ITEM_GROUP, ITEM_UNASSIGNED, ITEM_EXCLUDED, ITEM_SKIPPED, ITEM_ROOT, ITEM_DIRECTORY}:
+        if kind in {ITEM_GROUP, ITEM_UNASSIGNED, ITEM_SKIPPED, ITEM_ROOT, ITEM_DIRECTORY}:
             source_root = self._source_root
             if source_root and os.path.exists(source_root):
                 return source_root
@@ -1912,8 +1980,8 @@ class GroupingStepWidget(QWidget):
 
         subgroup_name, accepted = QInputDialog.getText(
             self,
-            "Create Subgroup",
-            "Subgroup name:",
+            "Create Folder",
+            "Folder name:",
         )
         if not accepted:
             return
@@ -1944,49 +2012,224 @@ class GroupingStepWidget(QWidget):
             return
         self._move_paths(selected_paths, target_group_id, keep_empty_groups=False)
 
-    def _merge_candidates(self, item: QTreeWidgetItem) -> List[GroupingGroup]:
-        current_group = self._find_group(self._item_group_id(item))
-        current_paths = self._paths_for_action(item)
-        if not self._editable_groups:
-            return []
-        if current_group is not None and not current_paths:
-            return []
-        candidates: List[GroupingGroup] = []
-        for group in self._editable_groups:
-            if current_group is not None and str(group.group_id) == str(current_group.group_id):
-                continue
-            candidates.append(group)
-        return candidates
+    def _can_drop_preview_items(
+        self, dragged_items: List[QTreeWidgetItem], target_item: QTreeWidgetItem
+    ) -> bool:
+        target_kind = self._item_kind(target_item)
+        if target_kind not in {ITEM_ROOT, ITEM_DIRECTORY, ITEM_GROUP}:
+            return False
 
-    def _merge_into_sibling_group(self, item: QTreeWidgetItem) -> None:
-        candidates = self._merge_candidates(item)
-        if not candidates:
+        dragged_kinds = {
+            self._item_kind(dragged_item)
+            for dragged_item in dragged_items
+            if self._item_kind(dragged_item) is not None
+        }
+        if ITEM_FILE in dragged_kinds and len(dragged_kinds) > 1:
+            return False
+
+        target_group_id = self._item_group_id(target_item)
+        target_base_relative = self._drop_target_relative_path(target_item)
+        if target_base_relative is None:
+            return False
+
+        for dragged_item in dragged_items:
+            if dragged_item is target_item or self._is_item_ancestor_of(
+                dragged_item, target_item
+            ):
+                return False
+
+            dragged_kind = self._item_kind(dragged_item)
+            if dragged_kind == ITEM_FILE:
+                if target_kind != ITEM_GROUP:
+                    return False
+                source_path = self._item_source_path(dragged_item)
+                if not source_path or self._all_paths_in_group(
+                    [source_path], target_group_id
+                ):
+                    return False
+                continue
+
+            if dragged_kind == ITEM_GROUP:
+                group = self._find_group(self._item_group_id(dragged_item))
+                if group is None:
+                    return False
+                leaf_name = os.path.basename(
+                    self._normalize_relative_path(group.group_label)
+                )
+                new_label = (
+                    os.path.join(target_base_relative, leaf_name)
+                    if target_base_relative
+                    else leaf_name
+                )
+                if self._normalize_relative_path(new_label) == self._normalize_relative_path(
+                    group.group_label
+                ):
+                    return False
+                continue
+
+            if dragged_kind == ITEM_DIRECTORY:
+                source_relative = self._normalize_relative_path(
+                    self._item_relative_path(dragged_item)
+                )
+                if not source_relative:
+                    return False
+                if target_base_relative and self._relative_path_is_within(
+                    target_base_relative, source_relative
+                ):
+                    return False
+                if not self._groups_within_directory(source_relative):
+                    return False
+                continue
+
+            return False
+
+        return True
+
+    def _handle_preview_tree_drop(
+        self, dragged_items: List[QTreeWidgetItem], target_item: QTreeWidgetItem
+    ) -> None:
+        if not self._can_drop_preview_items(dragged_items, target_item):
             return
-        option_labels = [group.group_label for group in candidates]
-        target_label, accepted = QInputDialog.getItem(
-            self,
-            "Merge Into Group",
-            "Target group:",
-            option_labels,
-            0,
-            False,
+
+        target_group_id = self._item_group_id(target_item)
+        target_base_relative = self._drop_target_relative_path(target_item)
+        target_relative_path = self._normalize_relative_path(
+            self._item_relative_path(target_item)
         )
-        if not accepted or not target_label:
+        target_label = self._display_label_for_item(target_item)
+        if target_base_relative is None:
             return
-        target_group = next((g for g in candidates if g.group_label == target_label), None)
-        if target_group is None:
+
+        file_paths_to_move: List[str] = []
+        changed = False
+        for dragged_item in dragged_items:
+            dragged_kind = self._item_kind(dragged_item)
+            if dragged_kind == ITEM_FILE:
+                source_path = self._item_source_path(dragged_item)
+                if source_path and target_group_id is not None:
+                    file_paths_to_move.append(source_path)
+                continue
+
+            if dragged_kind == ITEM_GROUP:
+                group = self._find_group(self._item_group_id(dragged_item))
+                if group is None:
+                    continue
+                leaf_name = os.path.basename(
+                    self._normalize_relative_path(group.group_label)
+                )
+                group.group_label = (
+                    os.path.join(target_base_relative, leaf_name)
+                    if target_base_relative
+                    else leaf_name
+                )
+                changed = True
+                continue
+
+            if dragged_kind == ITEM_DIRECTORY:
+                source_relative = self._normalize_relative_path(
+                    self._item_relative_path(dragged_item)
+                )
+                source_leaf = os.path.basename(source_relative)
+                new_directory_root = (
+                    os.path.join(target_base_relative, source_leaf)
+                    if target_base_relative
+                    else source_leaf
+                )
+                for group in self._groups_within_directory(source_relative):
+                    suffix = os.path.relpath(group.group_label, source_relative)
+                    group.group_label = (
+                        new_directory_root
+                        if suffix in {".", ""}
+                        else os.path.join(new_directory_root, suffix)
+                    )
+                changed = True
+
+        if file_paths_to_move and target_group_id is not None:
+            self._move_paths(
+                file_paths_to_move, target_group_id, keep_empty_groups=False
+            )
+            self._select_preview_drop_target(
+                group_id=target_group_id,
+                relative_path=target_relative_path,
+            )
+            self._show_status_message(
+                f"Moved {len(file_paths_to_move)} item(s) into {target_label}.",
+                2500,
+            )
             return
-        current_group = self._find_group(self._item_group_id(item))
-        candidate_paths = self._paths_for_action(item)
-        self._move_paths(candidate_paths, target_group.group_id, keep_empty_groups=False)
-        if current_group and not current_group.source_paths:
-            self._editable_groups = [
-                group
-                for group in self._editable_groups
-                if str(group.group_id) != str(current_group.group_id)
-            ]
-            self._sticky_empty_group_ids.discard(str(current_group.group_id))
+        if changed:
+            self._prune_empty_groups()
             self._refresh_preview_trees()
+            self._select_preview_drop_target(relative_path=target_relative_path)
+            self._show_status_message(
+                f"Moved into {target_label}.",
+                2500,
+            )
+
+    def _select_preview_drop_target(
+        self, *, group_id: Optional[str] = None, relative_path: str = ""
+    ) -> None:
+        target_item = None
+        if group_id:
+            target_item = self._after_group_items_by_id.get(str(group_id))
+        if target_item is None and relative_path:
+            normalized_relative = self._normalize_relative_path(relative_path)
+            target_item = self._after_group_items_by_label.get(
+                normalized_relative
+            ) or self._after_dir_items_by_relative_path.get(normalized_relative)
+        if target_item is None and self._after_root_item is not None:
+            target_item = self._after_root_item
+        if target_item is None:
+            return
+        self.preview_tree.clearSelection()
+        self.preview_tree.setCurrentItem(target_item)
+        target_item.setSelected(True)
+        self.preview_tree.scrollToItem(target_item)
+        if self._item_source_path(target_item):
+            self._update_selected_preview(self._item_source_path(target_item) or "")
+        else:
+            self._update_folder_preview(target_item)
+
+    def _drop_target_relative_path(self, item: QTreeWidgetItem) -> Optional[str]:
+        kind = self._item_kind(item)
+        if kind == ITEM_ROOT:
+            return ""
+        if kind in {ITEM_DIRECTORY, ITEM_GROUP}:
+            return self._normalize_relative_path(self._item_relative_path(item))
+        return None
+
+    def _is_item_ancestor_of(
+        self, candidate_ancestor: QTreeWidgetItem, item: QTreeWidgetItem
+    ) -> bool:
+        parent = item.parent()
+        while parent is not None:
+            if parent is candidate_ancestor:
+                return True
+            parent = parent.parent()
+        return False
+
+    def _relative_path_is_within(self, candidate: str, ancestor: str) -> bool:
+        normalized_candidate = self._normalize_relative_path(candidate)
+        normalized_ancestor = self._normalize_relative_path(ancestor)
+        if not normalized_candidate or not normalized_ancestor:
+            return False
+        try:
+            return self._normalize_relative_path(
+                os.path.commonpath([normalized_candidate, normalized_ancestor])
+            ) == normalized_ancestor
+        except Exception:
+            return False
+
+    def _groups_within_directory(self, relative_path: str) -> List[GroupingGroup]:
+        normalized_relative = self._normalize_relative_path(relative_path)
+        groups: List[GroupingGroup] = []
+        for group in self._editable_groups:
+            group_label = self._normalize_relative_path(group.group_label)
+            if group_label == normalized_relative or self._relative_path_is_within(
+                group_label, normalized_relative
+            ):
+                groups.append(group)
+        return groups
 
     def _remove_paths_from_all_buckets(self, paths: Iterable[str]) -> None:
         path_set = set(paths)
@@ -1995,7 +2238,6 @@ class GroupingStepWidget(QWidget):
         self._editable_unassigned = [
             path for path in self._editable_unassigned if path not in path_set
         ]
-        self._excluded_paths = [path for path in self._excluded_paths if path not in path_set]
 
     def _move_paths(
         self, paths: Iterable[str], target_group_id: str, *, keep_empty_groups: bool
@@ -2024,18 +2266,6 @@ class GroupingStepWidget(QWidget):
             if path not in self._editable_unassigned:
                 self._editable_unassigned.append(path)
         self._editable_unassigned.sort()
-        self._prune_empty_groups()
-        self._refresh_preview_trees()
-
-    def _exclude_paths(self, paths: Iterable[str]) -> None:
-        path_list = [path for path in dict.fromkeys(paths) if path not in self._editable_skipped]
-        if not path_list:
-            return
-        self._remove_paths_from_all_buckets(path_list)
-        for path in path_list:
-            if path not in self._excluded_paths:
-                self._excluded_paths.append(path)
-        self._excluded_paths.sort()
         self._prune_empty_groups()
         self._refresh_preview_trees()
 
@@ -2081,19 +2311,6 @@ class GroupingStepWidget(QWidget):
             return False
         group_paths = set(group.source_paths)
         return all(path in group_paths for path in paths)
-
-    def _show_affected_files(self, paths: Iterable[str]) -> None:
-        path_list = list(dict.fromkeys(paths))
-        if not path_list:
-            return
-        preview = "\n".join(path_list[:25])
-        if len(path_list) > 25:
-            preview += f"\n… {len(path_list) - 25} more"
-        QMessageBox.information(
-            self,
-            "Affected Files",
-            f"{len(path_list)} file(s):\n\n{preview}",
-        )
 
     def _conflicts_for_item(self, item: QTreeWidgetItem) -> List[str]:
         relevant_paths = self._paths_for_action(item)
@@ -2187,7 +2404,20 @@ class GroupingStepWidget(QWidget):
     def _build_action_lines(self, plan: GroupingPlan) -> List[str]:
         lines: List[str] = []
         moving_paths: List[str] = []
+        directory_renames = find_directory_rename_candidates(
+            plan,
+            source_root=self._source_root or "",
+            output_root=self._current_output_root or self._source_root or "",
+        )
         for group in plan.groups:
+            directory_rename = directory_renames.get(str(group.group_id))
+            if directory_rename is not None:
+                lines.append(
+                    "Rename folder "
+                    f"{self._relative_display_path(directory_rename.source_dir)} -> "
+                    f"{self._relative_display_path(directory_rename.target_dir)}"
+                )
+                continue
             for source_path in group.source_paths:
                 destination_path = os.path.join(
                     self._current_output_root or self._source_root or "",

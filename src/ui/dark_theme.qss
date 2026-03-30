@@ -2263,14 +2263,14 @@ QSplitter#groupingMainSplitter::handle {
 QTreeWidget#groupingTree {
     background-color: transparent;
     border: none;
-    padding: 4px 8px;
+    padding: 2px 4px;
     outline: 0;
     font-size: 9pt;
     show-decoration-selected: 1;
 }
 
 QTreeWidget#groupingTree::item {
-    padding: 5px 6px;
+    padding: 3px 4px;
     border-radius: 6px;
     color: #B8C8D4;
 }

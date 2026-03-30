@@ -112,6 +112,13 @@ class GroupingRunSummary:
     entries: List[GroupingManifestEntry]
 
 
+@dataclass(frozen=True)
+class GroupingDirectoryRename:
+    group_id: str
+    source_dir: str
+    target_dir: str
+
+
 def build_grouping_output_root(source_root: str, mode: str) -> str:
     return source_root
 
@@ -139,6 +146,78 @@ def _sanitize_folder_component(value: str) -> str:
     cleaned = re.sub(r"[\\/:*?\"<>|]+", "_", (value or "").strip())
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
     return cleaned or "Unnamed"
+
+
+def _is_same_path(left: str, right: str) -> bool:
+    return os.path.normcase(os.path.normpath(left)) == os.path.normcase(
+        os.path.normpath(right)
+    )
+
+
+def _is_path_within_dir(path: str, directory: str) -> bool:
+    try:
+        return _is_same_path(os.path.commonpath([path, directory]), directory)
+    except Exception:
+        return False
+
+
+def find_directory_rename_candidates(
+    plan: GroupingPlan,
+    *,
+    source_root: str,
+    output_root: str,
+) -> Dict[str, GroupingDirectoryRename]:
+    if str(plan.mode) != GroupingMode.CURRENT.value:
+        return {}
+
+    normalized_source_root = os.path.normpath(source_root)
+    active_paths = [
+        path
+        for group in plan.groups
+        for path in group.source_paths
+    ] + list(plan.unassigned_paths)
+    candidates: Dict[str, GroupingDirectoryRename] = {}
+
+    for group in plan.groups:
+        if not group.source_paths:
+            continue
+        if any(path in plan.file_name_overrides for path in group.source_paths):
+            continue
+
+        source_dirs = {os.path.dirname(path) for path in group.source_paths}
+        if len(source_dirs) != 1:
+            continue
+        source_dir = next(iter(source_dirs))
+        if _is_same_path(source_dir, normalized_source_root):
+            continue
+
+        source_dir_paths = set(group.source_paths)
+        if any(
+            path not in source_dir_paths and _is_path_within_dir(path, source_dir)
+            for path in active_paths
+        ):
+            continue
+
+        target_dir = os.path.join(
+            output_root,
+            *[
+                _sanitize_folder_component(part)
+                for part in group.group_label.split(os.sep)
+                if part
+            ],
+        )
+        if not target_dir or _is_same_path(source_dir, target_dir):
+            continue
+        if os.path.exists(target_dir):
+            continue
+
+        candidates[str(group.group_id)] = GroupingDirectoryRename(
+            group_id=str(group.group_id),
+            source_dir=source_dir,
+            target_dir=target_dir,
+        )
+
+    return candidates
 
 
 def _resolve_collision_safe_destination(destination_dir: str, basename: str) -> str:
@@ -594,6 +673,11 @@ def execute_grouping_plan(
 ) -> GroupingRunSummary:
     os.makedirs(output_root, exist_ok=True)
     entries: List[GroupingManifestEntry] = []
+    directory_renames = find_directory_rename_candidates(
+        plan,
+        source_root=source_root,
+        output_root=output_root,
+    )
     total_moves = sum(len(group.source_paths) for group in plan.groups) + len(
         plan.unassigned_paths
     )
@@ -605,10 +689,52 @@ def execute_grouping_plan(
             progress_callback(percent, message)
 
     for group in plan.groups:
-        destination_dir = os.path.join(
-            output_root, *[_sanitize_folder_component(part) for part in group.group_label.split(os.sep)]
+        directory_rename = directory_renames.get(str(group.group_id))
+        destination_dir = (
+            directory_rename.target_dir
+            if directory_rename is not None
+            else os.path.join(
+                output_root,
+                *[
+                    _sanitize_folder_component(part)
+                    for part in group.group_label.split(os.sep)
+                ],
+            )
         )
         group.destination_folder = destination_dir
+        if directory_rename is not None:
+            os.makedirs(os.path.dirname(destination_dir), exist_ok=True)
+            shutil.move(directory_rename.source_dir, destination_dir)
+            for source_path in group.source_paths:
+                basename = plan.filename_for_path(source_path)
+                destination_path = os.path.join(destination_dir, basename)
+                moved_count += 1
+                entries.append(
+                    GroupingManifestEntry(
+                        original_path=source_path,
+                        new_path=destination_path,
+                        group_id=group.group_id,
+                        group_label=group.group_label,
+                        status="moved",
+                    )
+                )
+                report(f"Renaming folder for {basename}...")
+            for skipped_path in plan.skipped_paths:
+                if _is_path_within_dir(skipped_path, directory_rename.source_dir):
+                    skipped_rel_path = os.path.relpath(
+                        skipped_path, directory_rename.source_dir
+                    )
+                    entries.append(
+                        GroupingManifestEntry(
+                            original_path=skipped_path,
+                            new_path=os.path.join(destination_dir, skipped_rel_path),
+                            group_id=None,
+                            group_label=None,
+                            status="skipped",
+                            reason="unsupported media",
+                        )
+                    )
+            continue
         for source_path in group.source_paths:
             basename = plan.filename_for_path(source_path)
             desired_destination_path = os.path.join(destination_dir, basename)
@@ -658,7 +784,14 @@ def execute_grouping_plan(
             )
             report(f"Moving unassigned {basename}...")
 
+    renamed_skipped_paths = {
+        entry.original_path
+        for entry in entries
+        if entry.status == "skipped" and entry.new_path is not None
+    }
     for source_path in plan.skipped_paths:
+        if source_path in renamed_skipped_paths:
+            continue
         entries.append(
             GroupingManifestEntry(
                 original_path=source_path,
