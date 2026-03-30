@@ -773,7 +773,7 @@ class MainWindow(QMainWindow):
 
         self.grouping_page = QWidget()
         grouping_page_layout = QVBoxLayout(self.grouping_page)
-        grouping_page_layout.setContentsMargins(18, 14, 18, 10)
+        grouping_page_layout.setContentsMargins(0, 0, 0, 0)
         grouping_page_layout.setSpacing(0)
         grouping_page_layout.addWidget(self.grouping_step_widget)
 
