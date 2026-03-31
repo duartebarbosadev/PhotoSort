@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 from PyQt6.QtCore import QSettings
+from core.runtime_paths import resolve_user_cache_dir
 
 
 class PerformanceMode(Enum):
@@ -66,7 +67,7 @@ BEST_SHOT_BATCH_SIZE_KEY = "AI/BestShotBatchSize"
 
 # Cache directories
 SENTENCE_TRANSFORMERS_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "photosort_hf", "sentence-transformers"
+    resolve_user_cache_dir(os.path.join("photosort_hf", "sentence-transformers"))
 )
 
 # Default values

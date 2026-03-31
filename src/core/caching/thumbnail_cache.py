@@ -8,12 +8,13 @@ from core.app_settings import (
     DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES,
     THUMBNAIL_MIN_FILE_SIZE,
 )
+from core.runtime_paths import resolve_user_cache_dir
 
 logger = logging.getLogger(__name__)
 
 # Default path for the thumbnail cache
 DEFAULT_THUMBNAIL_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "photosort_thumbnails"
+    resolve_user_cache_dir("photosort_thumbnails")
 )
 
 
@@ -28,6 +29,7 @@ class ThumbnailCache:
         size_limit: int = DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES,
     ):  # Default 1GB limit
         init_start_time = time.perf_counter()
+        self._cache = None
         logger.info(
             f"Initializing Thumbnail cache: {cache_dir} (Size Limit: {size_limit / (1024 * 1024):.2f} MB)"
         )
@@ -178,7 +180,8 @@ class ThumbnailCache:
     def close(self) -> None:
         """Closes the cache."""
         try:
-            self._cache.close()
+            if self._cache is not None:
+                self._cache.close()
             logger.debug("Thumbnail cache closed.")
         except Exception:
             logger.error("Error closing Thumbnail cache.", exc_info=True)

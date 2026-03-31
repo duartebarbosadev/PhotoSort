@@ -4,6 +4,7 @@ import logging
 import time
 from PIL import Image
 from typing import Optional, Tuple
+from core.runtime_paths import resolve_user_cache_dir
 
 # Import the settings function to get the cache size limit
 from core.app_settings import (
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Default path for the preview PIL image cache
 DEFAULT_PREVIEW_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "photosort_preview_pil_images"
+    resolve_user_cache_dir("photosort_preview_pil_images")
 )
 
 
@@ -27,6 +28,7 @@ class PreviewCache:
 
     def __init__(self, cache_dir: str = DEFAULT_PREVIEW_CACHE_DIR):
         init_start_time = time.perf_counter()
+        self._cache = None
         logger.info(f"Initializing Preview cache: {cache_dir}")
         """
         Initializes the preview PIL image cache.
@@ -242,7 +244,8 @@ class PreviewCache:
     def close(self) -> None:
         """Closes the cache."""
         try:
-            self._cache.close()
+            if self._cache is not None:
+                self._cache.close()
             logger.debug("Preview cache closed.")
         except Exception:
             logger.error("Error closing Preview cache.", exc_info=True)

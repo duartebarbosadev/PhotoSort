@@ -181,6 +181,7 @@ def find_directory_rename_candidates(
         path for group in plan.groups for path in group.source_paths
     ] + list(plan.unassigned_paths)
     candidates: Dict[str, GroupingDirectoryRename] = {}
+    reserved_target_dirs: set[str] = set()
 
     for group in plan.groups:
         if not group.source_paths:
@@ -212,6 +213,9 @@ def find_directory_rename_candidates(
         )
         if not target_dir or _is_same_path(source_dir, target_dir):
             continue
+        normalized_target_dir = os.path.normcase(os.path.normpath(target_dir))
+        if normalized_target_dir in reserved_target_dirs:
+            continue
         if os.path.exists(target_dir):
             continue
 
@@ -220,6 +224,7 @@ def find_directory_rename_candidates(
             source_dir=source_dir,
             target_dir=target_dir,
         )
+        reserved_target_dirs.add(normalized_target_dir)
 
     return candidates
 
@@ -790,7 +795,6 @@ def _build_mixed_plan(
 
     groups: List[GroupingGroup] = []
     group_counter = 1
-    similarity_engine = SimilarityEngine()
     for date_label in sorted(date_buckets.keys()):
         bucket_paths = date_buckets[date_label]
 
@@ -801,7 +805,6 @@ def _build_mixed_plan(
         assignments = _run_ml_similarity_pipeline(
             bucket_paths,
             progress_callback=_bucket_progress if progress_callback else None,
-            shared_engine=similarity_engine,
         )
         grouped_by_cluster: Dict[int, List[str]] = {}
         for path, cluster_id in assignments.items():

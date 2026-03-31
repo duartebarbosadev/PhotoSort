@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.image_file_ops import ImageFileOperations
 from core.grouping import GroupingGroup, GroupingPlan, find_directory_rename_candidates
 from ui.advanced_image_viewer import ZoomableImageView
 from ui.dialog_components import (
@@ -54,10 +55,10 @@ from ui.dialog_components import (
 
 GROUPING_MODE_OPTIONS = [
     ("Current", "current"),
+    ("Mixed", "mixed"),
     ("Similarity", "similarity"),
     ("Face", "face"),
     ("Location", "location"),
-    ("Mixed", "mixed"),
 ]
 
 ROLE_KIND = int(Qt.ItemDataRole.UserRole)
@@ -212,8 +213,13 @@ class DroppableGroupingTree(QTreeWidget):
             item_kind = item.data(0, ROLE_KIND)
             if item_kind not in _DRAGGABLE_KINDS:
                 continue
-            if item_kind == ITEM_GROUP and self._is_descendant(target_item, item):
-                return False
+            if item_kind == ITEM_GROUP:
+                if self._is_descendant(target_item, item):
+                    return False
+                source_rel = item.data(0, ROLE_RELATIVE_PATH) or ""
+                target_rel = target_item.data(0, ROLE_RELATIVE_PATH) or ""
+                if self._is_relative_path_descendant(target_rel, source_rel):
+                    return False
 
         return True
 
@@ -263,6 +269,14 @@ class DroppableGroupingTree(QTreeWidget):
             current = current.parent()
         return False
 
+    @staticmethod
+    def _is_relative_path_descendant(candidate: str, ancestor: str) -> bool:
+        normalized_candidate = os.path.normpath(candidate or "").strip(os.sep)
+        normalized_ancestor = os.path.normpath(ancestor or "").strip(os.sep)
+        if not normalized_candidate or not normalized_ancestor:
+            return False
+        return normalized_candidate.startswith(normalized_ancestor + os.sep)
+
 
 class GroupingStepWidget(QWidget):
     mode_changed = pyqtSignal(str)
@@ -300,6 +314,7 @@ class GroupingStepWidget(QWidget):
         self._after_group_items_by_label: Dict[str, QTreeWidgetItem] = {}
         self._after_items_by_match_relative_path: Dict[str, QTreeWidgetItem] = {}
         self._folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        self._file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
 
         self._create_widgets()
         self._create_layout()
@@ -852,8 +867,8 @@ class GroupingStepWidget(QWidget):
             self._capture_selection_state() if preserve_selection else None
         )
         self._update_stats()
-        self._render_after_tree(selection_state)
         self._render_before_tree()
+        self._render_after_tree(selection_state)
         self.same_badge.setVisible(self._plan_has_no_effective_changes())
 
     def _update_stats(self) -> None:
@@ -999,16 +1014,20 @@ class GroupingStepWidget(QWidget):
             parent_item = ensure_directory(parent_rel)
             item = QTreeWidgetItem([os.path.basename(normalized)])
             item.setIcon(0, self._folder_icon)
+            match_relative_path = self._match_relative_path_for_after_directory(
+                normalized
+            )
+            actual_path = self._filesystem_path_for_relative(
+                match_relative_path or normalized
+            )
             self._set_item_metadata(
                 item,
                 kind=ITEM_DIRECTORY,
                 relative_path=normalized,
                 projected_path=self._projected_directory_path(normalized),
-                actual_path=self._source_root,
+                actual_path=actual_path,
                 parent_relative_path=parent_rel,
-                match_relative_path=self._match_relative_path_for_after_directory(
-                    normalized
-                ),
+                match_relative_path=match_relative_path,
             )
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             parent_item.addChild(item)
@@ -1047,7 +1066,9 @@ class GroupingStepWidget(QWidget):
                 group_id=str(group.group_id),
                 relative_path=normalized_label,
                 projected_path=self._projected_directory_path(normalized_label),
-                actual_path=self._source_root,
+                actual_path=self._filesystem_path_for_relative(
+                    self._match_relative_path_for_group(group)
+                ),
                 parent_relative_path=parent_rel,
                 match_relative_path=self._match_relative_path_for_group(group),
             )
@@ -1174,11 +1195,15 @@ class GroupingStepWidget(QWidget):
         self._before_file_items_by_path = {}
         self._before_dir_items_by_relative_path = {}
 
-        all_paths = self._all_source_paths()
+        tracked_paths = self._all_source_paths()
+        root_path = self._source_root or self._common_root_for_paths(tracked_paths)
+        all_paths = self._merge_paths_preserving_order(
+            tracked_paths,
+            self._filesystem_file_paths_under_root(root_path),
+        )
         if not all_paths:
             return
 
-        root_path = self._source_root or self._common_root_for_paths(all_paths)
         root_name = (
             os.path.basename(os.path.normpath(root_path)) or root_path or "Source"
         )
@@ -1248,7 +1273,7 @@ class GroupingStepWidget(QWidget):
                 match_relative_path=rel_file,
             )
             file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self._set_preview_icon(file_item, source_path)
+            self._set_tree_item_icon(file_item, source_path)
             parent_item.addChild(file_item)
             self._before_file_items_by_path[source_path] = file_item
 
@@ -1467,6 +1492,43 @@ class GroupingStepWidget(QWidget):
             )
         return source_path
 
+    def _filesystem_path_for_relative(self, relative_path: str) -> str:
+        source_root = self._source_root or ""
+        normalized = self._normalize_relative_path(relative_path)
+        if source_root and normalized:
+            return os.path.join(source_root, normalized)
+        return source_root
+
+    def _filesystem_file_paths_under_root(self, root_path: str) -> List[str]:
+        if not root_path or not os.path.isdir(root_path):
+            return []
+        discovered: List[str] = []
+        for current_root, _dirnames, filenames in os.walk(root_path):
+            for filename in sorted(filenames):
+                discovered.append(os.path.join(current_root, filename))
+        return discovered
+
+    def _merge_paths_preserving_order(self, *path_lists: Iterable[str]) -> List[str]:
+        merged: List[str] = []
+        seen: Set[str] = set()
+        for path_list in path_lists:
+            for path in path_list:
+                normalized = os.path.normcase(os.path.normpath(path))
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                merged.append(path)
+        return merged
+
+    def _set_tree_item_icon(self, item: QTreeWidgetItem, source_path: str) -> None:
+        extension = os.path.splitext(source_path)[1].lower()
+        if extension in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".webp", ".heic", ".heif", ".raw", ".arw", ".cr2", ".nef", ".dng"}:
+            self._set_preview_icon(item, source_path)
+            if item.icon(0).isNull():
+                item.setIcon(0, self._file_icon)
+            return
+        item.setIcon(0, self._file_icon)
+
     def _set_preview_icon(self, item: QTreeWidgetItem, source_path: str) -> None:
         image_pipeline = getattr(self._parent_window, "image_pipeline", None)
         if image_pipeline is None:
@@ -1545,7 +1607,7 @@ class GroupingStepWidget(QWidget):
         self.preview_selection_meta.setVisible(True)
 
     def _update_folder_preview(self, item: QTreeWidgetItem) -> None:
-        preview_paths = self._preview_paths_for_item(item)
+        preview_paths = self._folder_preview_paths_for_item(item)
         if not preview_paths:
             self._clear_selected_preview()
             return
@@ -1558,18 +1620,31 @@ class GroupingStepWidget(QWidget):
             icon = self._thumbnail_icon_for_path(source_path)
             if icon is not None:
                 list_item.setIcon(icon)
+            else:
+                list_item.setIcon(self._file_icon)
             self.folder_preview_grid.addItem(list_item)
 
         item_label = self._display_label_for_item(item)
         self.folder_preview_title.setText(item_label)
         self.folder_preview_meta.setText(
-            f"{len(preview_paths)} image(s)\n{self._display_path_for_item(item)}"
+            f"{len(preview_paths)} item(s)\n{self._display_path_for_item(item)}"
         )
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_FOLDER)
         self.preview_selection_label.setText(item_label)
         self.preview_selection_label.setVisible(True)
-        self.preview_selection_meta.setText(f"{len(preview_paths)} image(s)")
+        self.preview_selection_meta.setText(f"{len(preview_paths)} item(s)")
         self.preview_selection_meta.setVisible(True)
+
+    def _folder_preview_paths_for_item(self, item: Optional[QTreeWidgetItem]) -> List[str]:
+        if item is None:
+            return []
+        actual_path = self._item_actual_path(item)
+        if actual_path and os.path.isdir(actual_path):
+            return self._merge_paths_preserving_order(
+                self._preview_paths_for_item(item),
+                self._filesystem_file_paths_under_root(actual_path),
+            )
+        return self._preview_paths_for_item(item)
 
     def _preview_paths_for_item(self, item: Optional[QTreeWidgetItem]) -> List[str]:
         if item is None:
@@ -1832,6 +1907,15 @@ class GroupingStepWidget(QWidget):
             )
             structure_actions.append(create_subgroup)
         if (
+            kind in {ITEM_DIRECTORY, ITEM_GROUP}
+            and self._item_bucket(item) != ITEM_SKIPPED
+        ):
+            create_parent = QAction("Create parent folder", self)
+            create_parent.triggered.connect(
+                lambda: self._create_parent_directory_for_item(item)
+            )
+            structure_actions.append(create_parent)
+        if (
             kind == ITEM_GROUP
             and selected_paths
             and not self._all_paths_in_group(selected_paths, group_id)
@@ -1841,6 +1925,13 @@ class GroupingStepWidget(QWidget):
                 lambda: self._move_selected_preview_items_here(item)
             )
             structure_actions.append(move_here)
+        delete_directory_path = self._directory_path_for_item(item)
+        if delete_directory_path and os.path.isdir(delete_directory_path):
+            delete_directory = QAction("Delete directory (and contents)", self)
+            delete_directory.triggered.connect(
+                lambda: self._delete_directory_for_item(item)
+            )
+            structure_actions.append(delete_directory)
         if structure_actions:
             sections.append(structure_actions)
 
@@ -2132,6 +2223,12 @@ class GroupingStepWidget(QWidget):
             return
         self.preview_tree.editItem(item, 0)
 
+    def _prompt_for_folder_name(self, *, title: str, label: str) -> str:
+        folder_name, accepted = QInputDialog.getText(self, title, label)
+        if not accepted:
+            return ""
+        return self._normalize_leaf_name(folder_name)
+
     def _create_subgroup_from_item(self, item: QTreeWidgetItem) -> None:
         base_relative = ""
         kind = self._item_kind(item)
@@ -2143,15 +2240,10 @@ class GroupingStepWidget(QWidget):
         elif kind == ITEM_ROOT:
             base_relative = ""
 
-        subgroup_name, accepted = QInputDialog.getText(
-            self,
-            "Create Folder",
-            "Folder name:",
+        leaf_name = self._prompt_for_folder_name(
+            title="Create Folder",
+            label="Folder name:",
         )
-        if not accepted:
-            return
-
-        leaf_name = self._normalize_leaf_name(subgroup_name)
         if not leaf_name:
             return
         new_group_label = (
@@ -2170,6 +2262,39 @@ class GroupingStepWidget(QWidget):
             )
         else:
             self._sticky_empty_group_ids.add(str(new_group.group_id))
+            self._refresh_preview_trees()
+
+    def _create_parent_directory_for_item(self, item: QTreeWidgetItem) -> None:
+        subtree_root = self._normalize_relative_path(self._item_relative_path(item))
+        if not subtree_root:
+            return
+
+        parent_name = self._prompt_for_folder_name(
+            title="Create Parent Folder",
+            label="Parent folder name:",
+        )
+        if not parent_name:
+            return
+
+        parent_rel = os.path.dirname(subtree_root)
+        if parent_rel == ".":
+            parent_rel = ""
+        subtree_leaf = os.path.basename(subtree_root)
+        new_root = os.path.join(parent_rel, parent_name, subtree_leaf)
+        subtree_prefix = subtree_root + os.sep
+
+        updated = False
+        for group in self._editable_groups:
+            normalized_label = self._normalize_relative_path(group.group_label)
+            if normalized_label == subtree_root:
+                group.group_label = new_root
+                updated = True
+                continue
+            if normalized_label.startswith(subtree_prefix):
+                suffix = normalized_label[len(subtree_prefix) :]
+                group.group_label = os.path.join(new_root, suffix)
+                updated = True
+        if updated:
             self._refresh_preview_trees()
 
     def _move_selected_preview_items_here(self, item: QTreeWidgetItem) -> None:
@@ -2245,10 +2370,16 @@ class GroupingStepWidget(QWidget):
         source = self._find_group(source_group_id)
         if source is None:
             return
+        current_label = self._normalize_relative_path(source.group_label)
+        normalized_target = self._normalize_relative_path(target_relative_path)
+        if normalized_target == current_label or (
+            current_label and normalized_target.startswith(current_label + os.sep)
+        ):
+            return
         source_leaf = os.path.basename(source.group_label) or source.group_label
         new_label = (
-            os.path.join(target_relative_path, source_leaf)
-            if target_relative_path
+            os.path.join(normalized_target, source_leaf)
+            if normalized_target
             else source_leaf
         )
         if new_label == source.group_label:
@@ -2282,6 +2413,128 @@ class GroupingStepWidget(QWidget):
             self._editable_groups.append(group)
         self._move_paths(paths, group.group_id, keep_empty_groups=False)
 
+    def _directory_path_for_item(
+        self, item: Optional[QTreeWidgetItem]
+    ) -> Optional[str]:
+        if item is None:
+            return None
+        if self._item_kind(item) not in {ITEM_DIRECTORY, ITEM_GROUP}:
+            return None
+        relative_path = (
+            self._item_match_relative_path(item) or self._item_relative_path(item)
+        )
+        normalized = self._normalize_relative_path(relative_path)
+        source_root = self._source_root or ""
+        if not source_root:
+            return None
+        if not normalized:
+            return source_root
+        return os.path.join(source_root, normalized)
+
+    def _tracked_paths_for_directory(self, directory_path: str) -> List[str]:
+        normalized_dir = os.path.normcase(os.path.normpath(directory_path))
+        tracked: List[str] = []
+        for path in self._all_source_paths():
+            normalized_path = os.path.normcase(os.path.normpath(path))
+            try:
+                if os.path.commonpath([normalized_path, normalized_dir]) == normalized_dir:
+                    tracked.append(path)
+            except Exception:
+                continue
+        return list(dict.fromkeys(tracked))
+
+    def _remove_deleted_paths_from_state(self, paths: Iterable[str]) -> None:
+        path_set = set(paths)
+        if not path_set:
+            return
+
+        self._editable_groups = [
+            GroupingGroup(
+                group_id=str(group.group_id),
+                group_label=group.group_label,
+                source_paths=[p for p in group.source_paths if p not in path_set],
+            )
+            for group in self._editable_groups
+        ]
+        self._editable_unassigned = [
+            path for path in self._editable_unassigned if path not in path_set
+        ]
+        self._editable_skipped = [
+            path for path in self._editable_skipped if path not in path_set
+        ]
+        self._file_name_overrides = {
+            path: name
+            for path, name in self._file_name_overrides.items()
+            if path not in path_set
+        }
+        self._original_group_labels_by_path = {
+            path: label
+            for path, label in self._original_group_labels_by_path.items()
+            if path not in path_set
+        }
+        if self._current_plan is not None:
+            self._current_plan.groups = [
+                GroupingGroup(
+                    group_id=str(group.group_id),
+                    group_label=group.group_label,
+                    source_paths=[p for p in group.source_paths if p not in path_set],
+                )
+                for group in self._current_plan.groups
+            ]
+            self._current_plan.unassigned_paths = [
+                path
+                for path in self._current_plan.unassigned_paths
+                if path not in path_set
+            ]
+            self._current_plan.skipped_paths = [
+                path
+                for path in self._current_plan.skipped_paths
+                if path not in path_set
+            ]
+            self._current_plan.file_name_overrides = {
+                path: name
+                for path, name in self._current_plan.file_name_overrides.items()
+                if path not in path_set
+            }
+        self._prune_empty_groups()
+        self._refresh_preview_trees()
+
+    def _delete_directory_for_item(self, item: QTreeWidgetItem) -> None:
+        directory_path = self._directory_path_for_item(item)
+        if not directory_path or not os.path.isdir(directory_path):
+            return
+
+        tracked_paths = self._tracked_paths_for_directory(directory_path)
+        prompt = (
+            f"Move '{self._relative_display_path(directory_path)}' and all of its contents to the trash?"
+        )
+        if tracked_paths:
+            prompt += f"\n\nThis will remove {len(tracked_paths)} tracked item(s) from the grouping plan."
+        choice = QMessageBox.question(
+            self,
+            "Delete Directory",
+            prompt,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            return
+
+        success, message = ImageFileOperations.move_to_trash(directory_path)
+        if not success:
+            QMessageBox.warning(
+                self,
+                "Delete Directory",
+                message or f"Failed to delete {directory_path}.",
+            )
+            return
+
+        self._remove_deleted_paths_from_state(tracked_paths)
+        self._show_status_message(
+            f"Moved {self._relative_display_path(directory_path)} to trash.",
+            3000,
+        )
+
     def _restore_paths_to_original_location(self, paths: Iterable[str]) -> None:
         path_list = [
             path for path in dict.fromkeys(paths) if path not in self._editable_skipped
@@ -2290,9 +2543,10 @@ class GroupingStepWidget(QWidget):
             return
         self._remove_paths_from_all_buckets(path_list)
         for path in path_list:
-            target_label = self._original_group_labels_by_path.get(
-                path
-            ) or self._relative_dir_label_for_source(path)
+            if path in self._original_group_labels_by_path:
+                target_label = self._original_group_labels_by_path[path]
+            else:
+                target_label = self._relative_dir_label_for_source(path)
             group = next(
                 (
                     candidate

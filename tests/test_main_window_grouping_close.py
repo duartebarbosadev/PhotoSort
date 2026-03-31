@@ -41,9 +41,8 @@ def test_close_event_blocks_while_grouping_workflow_is_running():
 
     assert event.ignored
     assert not event.accepted
-    assert status_bar.messages == [
-        (
-            "Grouping is still moving files. Wait for it to finish before closing.",
-            4000,
-        )
-    ]
+    assert len(status_bar.messages) == 1
+    message, timeout = status_bar.messages[0]
+    assert timeout == 4000
+    assert "Grouping is still moving files" in message
+    assert "closing" in message

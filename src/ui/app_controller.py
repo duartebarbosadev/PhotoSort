@@ -3,7 +3,7 @@ import re
 import time
 import logging
 from typing import List, Dict, Any, Tuple, Optional
-from PyQt6.QtCore import QObject
+from PyQt6.QtCore import QObject, QTimer
 from core.app_settings import (
     add_recent_folder,
     get_preview_cache_size_bytes,
@@ -1194,6 +1194,14 @@ class AppController(QObject):
             f"Grouping complete in {summary.output_root}.",
             5000,
         )
+        self._finalize_grouping_workflow_completion(summary)
+
+    def _finalize_grouping_workflow_completion(self, summary):
+        if self.worker_manager.is_grouping_workflow_running():
+            QTimer.singleShot(
+                25, lambda: self._finalize_grouping_workflow_completion(summary)
+            )
+            return
         self.load_folder(
             summary.output_root,
             skip_grouping_step=True,

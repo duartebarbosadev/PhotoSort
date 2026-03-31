@@ -4,6 +4,7 @@ import logging
 import time
 import threading
 from typing import Optional, Dict, Any
+from core.runtime_paths import resolve_user_cache_dir
 
 # Import the settings functions to get the cache size limit
 from core.app_settings import (
@@ -17,7 +18,7 @@ ARW_CACHE_LOG_INTERVAL = 250
 
 # Default path for the EXIF metadata cache
 DEFAULT_EXIF_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "photosort_exif_data"
+    resolve_user_cache_dir("photosort_exif_data")
 )
 # DEFAULT_EXIF_CACHE_SIZE_LIMIT_MB is now managed by app_settings
 
@@ -30,6 +31,7 @@ class ExifCache:
 
     def __init__(self, cache_dir: str = DEFAULT_EXIF_CACHE_DIR):
         init_start_time = time.perf_counter()
+        self._cache = None
         # size_limit_mb is now fetched from app_settings
         self._size_limit_mb = get_exif_cache_size_mb()
         logger.info(
@@ -184,7 +186,8 @@ class ExifCache:
     def close(self) -> None:
         """Closes the cache."""
         try:
-            self._cache.close()
+            if self._cache is not None:
+                self._cache.close()
             logger.debug("EXIF cache closed.")
         except Exception:
             logger.error("Error closing EXIF cache.", exc_info=True)

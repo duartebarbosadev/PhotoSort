@@ -1,10 +1,13 @@
 import json
 import os
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 from src.core.grouping import (
     GroupingMode,
+    GroupingGroup,
+    GroupingPlan,
     build_grouping_output_root,
     build_grouping_plan,
     execute_grouping_plan,
@@ -175,6 +178,14 @@ def test_face_grouping_plan_uses_detected_face_region_for_offset_faces(
         "src.core.grouping._detect_primary_face_bbox",
         lambda image: bbox_by_size.get(image.size),
     )
+    monkeypatch.setattr(
+        "src.core.grouping._compute_face_vector_from_crop",
+        lambda crop: (
+            (np.array([1.0, 0.0], dtype=np.float32), True)
+            if crop.size == (140, 160)
+            else (None, False)
+        ),
+    )
 
     plan = build_grouping_plan(
         [{"path": str(face_a)}, {"path": str(face_b)}, {"path": str(blank)}],
@@ -280,9 +291,19 @@ def test_execute_grouping_plan_moves_files_handles_name_collisions_and_writes_ma
     _create_solid_image(str(first), (220, 50, 50))
     _create_solid_image(str(second), (225, 55, 55))
 
-    plan = build_grouping_plan(
-        [{"path": str(first)}, {"path": str(second)}],
-        GroupingMode.SIMILARITY,
+    plan = GroupingPlan(
+        mode=GroupingMode.SIMILARITY.value,
+        total_items=2,
+        supported_items=2,
+        groups=[
+            GroupingGroup(
+                group_id="1",
+                group_label="Group 001",
+                source_paths=[str(first), str(second)],
+            )
+        ],
+        unassigned_paths=[],
+        skipped_paths=[],
     )
     output_root = build_grouping_output_root(str(source_root), "similarity")
     summary = execute_grouping_plan(
@@ -345,11 +366,20 @@ def test_execute_grouping_plan_removes_empty_source_directories(tmp_path):
     image_path = old_dir / "a.jpg"
     _create_solid_image(str(image_path), (220, 40, 40))
 
-    plan = build_grouping_plan(
-        [{"path": str(image_path)}],
-        GroupingMode.SIMILARITY,
+    plan = GroupingPlan(
+        mode=GroupingMode.SIMILARITY.value,
+        total_items=1,
+        supported_items=1,
+        groups=[
+            GroupingGroup(
+                group_id="1",
+                group_label="new_folder",
+                source_paths=[str(image_path)],
+            )
+        ],
+        unassigned_paths=[],
+        skipped_paths=[],
     )
-    plan.groups[0].group_label = "new_folder"
 
     summary = execute_grouping_plan(
         plan,
@@ -373,11 +403,20 @@ def test_execute_grouping_plan_keeps_unrelated_empty_directories(tmp_path):
     image_path = old_dir / "a.jpg"
     _create_solid_image(str(image_path), (220, 40, 40))
 
-    plan = build_grouping_plan(
-        [{"path": str(image_path)}],
-        GroupingMode.SIMILARITY,
+    plan = GroupingPlan(
+        mode=GroupingMode.SIMILARITY.value,
+        total_items=1,
+        supported_items=1,
+        groups=[
+            GroupingGroup(
+                group_id="1",
+                group_label="new_folder",
+                source_paths=[str(image_path)],
+            )
+        ],
+        unassigned_paths=[],
+        skipped_paths=[],
     )
-    plan.groups[0].group_label = "new_folder"
 
     execute_grouping_plan(
         plan,
@@ -442,3 +481,72 @@ def test_execute_grouping_plan_renames_entire_folder_and_keeps_unmanaged_files(
     assert not old_dir.exists()
     assert (source_root / "renamed_folder" / "a.jpg").exists()
     assert (source_root / "renamed_folder" / "archive.zip").exists()
+
+
+def test_execute_grouping_plan_falls_back_to_file_moves_for_duplicate_rename_targets(
+    tmp_path,
+):
+    source_root = tmp_path / "source"
+    dir_a = source_root / "A"
+    dir_b = source_root / "B"
+    dir_a.mkdir(parents=True)
+    dir_b.mkdir(parents=True)
+    first = dir_a / "a.jpg"
+    second = dir_b / "b.jpg"
+    _create_solid_image(str(first), (220, 40, 40))
+    _create_solid_image(str(second), (40, 40, 220))
+
+    plan = build_grouping_plan(
+        [{"path": str(first)}, {"path": str(second)}],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+    for group in plan.groups:
+        group.group_label = "Merged"
+
+    summary = execute_grouping_plan(
+        plan,
+        source_root=str(source_root),
+        output_root=str(source_root),
+    )
+
+    assert summary.moved_count == 2
+    assert (source_root / "Merged" / "a.jpg").exists()
+    assert (source_root / "Merged" / "b.jpg").exists()
+    assert not (source_root / "Merged" / "B").exists()
+
+
+def test_execute_grouping_plan_merges_duplicate_rename_targets_with_name_collisions(
+    tmp_path,
+):
+    source_root = tmp_path / "source"
+    dir_a = source_root / "A"
+    dir_b = source_root / "B"
+    dir_a.mkdir(parents=True)
+    dir_b.mkdir(parents=True)
+    first = dir_a / "same.jpg"
+    second = dir_b / "same.jpg"
+    _create_solid_image(str(first), (220, 40, 40))
+    _create_solid_image(str(second), (40, 40, 220))
+
+    plan = build_grouping_plan(
+        [{"path": str(first)}, {"path": str(second)}],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+    for group in plan.groups:
+        group.group_label = "Merged"
+
+    summary = execute_grouping_plan(
+        plan,
+        source_root=str(source_root),
+        output_root=str(source_root),
+    )
+
+    moved_paths = sorted(entry.new_path for entry in summary.entries if entry.new_path)
+    assert summary.moved_count == 2
+    assert moved_paths == [
+        str(source_root / "Merged" / "same.jpg"),
+        str(source_root / "Merged" / "same_1.jpg"),
+    ]
+    assert not (source_root / "Merged" / "B").exists()
