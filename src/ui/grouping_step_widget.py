@@ -1953,14 +1953,17 @@ class GroupingStepWidget(QWidget):
             sections.append(copy_actions)
 
         delete_actions: List[QAction] = []
-        delete_target_path = self._deletable_path_for_item(item)
-        if delete_target_path:
-            label = (
-                "Delete folder" if os.path.isdir(delete_target_path) else "Delete file"
-            )
-            delete_action = QAction(label, self)
-            delete_action.triggered.connect(lambda: self._delete_item(item))
-            delete_actions.append(delete_action)
+        if is_after:
+            delete_target_path = self._deletable_path_for_item(item)
+            if delete_target_path:
+                label = (
+                    "Delete folder"
+                    if os.path.isdir(delete_target_path)
+                    else "Delete file"
+                )
+                delete_action = QAction(label, self)
+                delete_action.triggered.connect(lambda: self._delete_item(item))
+                delete_actions.append(delete_action)
         if delete_actions:
             sections.append(delete_actions)
 
