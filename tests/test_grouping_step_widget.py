@@ -23,12 +23,8 @@ class _CacheOnlyPipeline:
     def __init__(self, *, cached_preview: QPixmap | None = None):
         self.get_cached_thumbnail_qpixmap = Mock(return_value=None)
         self.get_cached_preview_qpixmap = Mock(return_value=cached_preview)
-        self.get_thumbnail_qpixmap = Mock(
-            side_effect=AssertionError("synchronous thumbnail generation is forbidden")
-        )
-        self.get_preview_qpixmap = Mock(
-            side_effect=AssertionError("synchronous preview generation is forbidden")
-        )
+        self.get_thumbnail_qpixmap = Mock(return_value=None)
+        self.get_preview_qpixmap = Mock(return_value=cached_preview)
 
 
 def test_grouping_step_widget_tracks_mode_and_busy_state():
@@ -142,31 +138,49 @@ def test_grouping_step_widget_set_preview_plan_uses_cached_thumbnails_only(tmp_p
     assert pipeline.get_cached_thumbnail_qpixmap.call_count >= 4
 
 
-def test_grouping_step_widget_selected_preview_queues_async_when_cache_is_cold(
-    tmp_path, monkeypatch
-):
+def test_grouping_step_widget_selected_preview_loads_immediately_on_cache_miss(tmp_path):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
     first = str(beach_dir / "a.jpg")
     beach_dir.joinpath("a.jpg").write_bytes(b"preview")
 
+    preview = QPixmap(10, 10)
+    preview.fill()
     pipeline = _CacheOnlyPipeline()
+    pipeline.get_preview_qpixmap.return_value = preview
     widget = GroupingStepWidget()
     widget._parent_window = SimpleNamespace(image_pipeline=pipeline)
-    queued = []
-    monkeypatch.setattr(
-        widget,
-        "_queue_selected_preview_load",
-        lambda path: queued.append(path),
-    )
 
     widget._update_selected_preview(first)
 
-    assert queued == [first]
-    assert pipeline.get_preview_qpixmap.call_count == 0
+    assert pipeline.get_preview_qpixmap.call_count == 1
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     assert widget.large_preview_name.text() == "a.jpg"
+    assert widget.large_preview_view.current_pixmap() is not None
+
+
+def test_grouping_step_widget_selected_preview_falls_back_to_thumbnail(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+
+    thumbnail = QPixmap(12, 12)
+    thumbnail.fill()
+    pipeline = _CacheOnlyPipeline()
+    pipeline.get_preview_qpixmap.return_value = None
+    pipeline.get_thumbnail_qpixmap.return_value = thumbnail
+
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(image_pipeline=pipeline)
+
+    widget._update_selected_preview(first)
+
+    assert pipeline.get_preview_qpixmap.call_count == 1
+    assert pipeline.get_thumbnail_qpixmap.call_count == 1
+    assert widget.large_preview_view.current_pixmap() is not None
 
 
 def test_grouping_step_widget_folder_preview_uses_cached_thumbnails_only(tmp_path):
@@ -207,21 +221,6 @@ def test_grouping_step_widget_folder_preview_uses_cached_thumbnails_only(tmp_pat
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     assert pipeline.get_preview_qpixmap.call_count == 0
     assert pipeline.get_cached_thumbnail_qpixmap.call_count == 2
-
-
-def test_grouping_step_widget_ignores_stale_selected_preview_results():
-    current_pixmap = QPixmap(10, 10)
-    current_pixmap.fill()
-    pipeline = _CacheOnlyPipeline(cached_preview=current_pixmap)
-    widget = GroupingStepWidget()
-    widget._parent_window = SimpleNamespace(image_pipeline=pipeline)
-    widget.large_preview_view.set_image = Mock()
-    widget._current_preview_source_path = "/tmp/current.jpg"
-    widget._queued_selected_preview_path = None
-
-    widget._handle_selected_preview_loaded("/tmp/old.jpg", True)
-
-    widget.large_preview_view.set_image.assert_not_called()
 
 
 def test_grouping_step_widget_filesystem_walk_filters_non_media(tmp_path):

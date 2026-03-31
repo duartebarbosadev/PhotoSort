@@ -6,7 +6,7 @@ import time
 import subprocess
 from typing import Dict, Iterable, List, Optional, Set
 
-from PyQt6.QtCore import QObject, QPoint, QSize, Qt, QThread, QUrl, pyqtSignal
+from PyQt6.QtCore import QPoint, QSize, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QBrush,
@@ -93,38 +93,6 @@ _DROP_TARGET_KINDS = {ITEM_GROUP, ITEM_DIRECTORY, ITEM_ROOT, ITEM_UNASSIGNED}
 _DRAGGABLE_KINDS = {ITEM_FILE, ITEM_GROUP}
 
 logger = logging.getLogger(__name__)
-
-
-class SelectedPreviewLoaderWorker(QObject):
-    finished = pyqtSignal(str, bool)
-
-    def __init__(
-        self,
-        image_pipeline,
-        image_path: str,
-        display_max_size=SELECTED_PREVIEW_DISPLAY_SIZE,
-        parent: Optional[QObject] = None,
-    ):
-        super().__init__(parent)
-        self.image_pipeline = image_pipeline
-        self._image_path = image_path
-        self._display_max_size = display_max_size
-
-    def run(self) -> None:
-        success = False
-        try:
-            preview = self.image_pipeline.get_preview_image(
-                self._image_path,
-                display_max_size=self._display_max_size,
-            )
-            success = preview is not None
-        except Exception:
-            logger.error(
-                "Failed to generate selected preview for %s",
-                os.path.basename(self._image_path),
-                exc_info=True,
-            )
-        self.finished.emit(self._image_path, success)
 
 
 class DroppableGroupingTree(QTreeWidget):
@@ -346,10 +314,6 @@ class GroupingStepWidget(QWidget):
         self._ignore_preview_item_change = False
         self._syncing_tree_selection = False
         self._current_preview_source_path: Optional[str] = None
-        self._selected_preview_thread: Optional[QThread] = None
-        self._selected_preview_worker: Optional[SelectedPreviewLoaderWorker] = None
-        self._active_selected_preview_path: Optional[str] = None
-        self._queued_selected_preview_path: Optional[str] = None
 
         self._before_root_item: Optional[QTreeWidgetItem] = None
         self._after_root_item: Optional[QTreeWidgetItem] = None
@@ -763,7 +727,6 @@ class GroupingStepWidget(QWidget):
         self.primary_button.setEnabled(has_folder and self._current_plan is not None)
         if not has_folder:
             self._current_preview_source_path = None
-            self._queued_selected_preview_path = None
             self.before_tree.clear()
             self.preview_tree.clear()
             self._current_plan = None
@@ -1931,25 +1894,17 @@ class GroupingStepWidget(QWidget):
             return
         image_pipeline = getattr(self._parent_window, "image_pipeline", None)
         pixmap: Optional[QPixmap] = None
-        has_cached_preview = False
         if image_pipeline:
-            pixmap = image_pipeline.get_cached_preview_qpixmap(
+            pixmap = image_pipeline.get_preview_qpixmap(
                 source_path,
                 display_max_size=SELECTED_PREVIEW_DISPLAY_SIZE,
             )
             if pixmap is None or pixmap.isNull():
-                pixmap = image_pipeline.get_cached_thumbnail_qpixmap(source_path)
-            else:
-                has_cached_preview = True
+                pixmap = image_pipeline.get_thumbnail_qpixmap(source_path)
         if pixmap and not pixmap.isNull():
             self.large_preview_view.set_image(pixmap)
-            if has_cached_preview:
-                self._queued_selected_preview_path = None
-            else:
-                self._queue_selected_preview_load(source_path)
         else:
             self.large_preview_view.clear()
-            self._queue_selected_preview_load(source_path)
         self.large_preview_name.setText(os.path.basename(source_path))
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
         self.preview_selection_label.setText(os.path.basename(source_path))
@@ -1960,10 +1915,9 @@ class GroupingStepWidget(QWidget):
             "Organize selected preview updated in %.3fs (path=%s cached_preview=%s pixmap=%s queued=%s)",
             time.perf_counter() - start_time,
             source_path,
-            has_cached_preview,
+            False,
             bool(pixmap and not pixmap.isNull()),
-            self._queued_selected_preview_path == source_path
-            or self._active_selected_preview_path == source_path,
+            False,
         )
 
     def _update_folder_preview(self, item: QTreeWidgetItem) -> None:
@@ -2116,67 +2070,6 @@ class GroupingStepWidget(QWidget):
             icon = self._cached_thumbnail_icon_for_path(str(source_path))
             if icon is not None:
                 item.setIcon(icon)
-
-    def _queue_selected_preview_load(self, source_path: str) -> None:
-        image_pipeline = getattr(self._parent_window, "image_pipeline", None)
-        if image_pipeline is None or not source_path:
-            return
-        if source_path == self._active_selected_preview_path:
-            return
-        if source_path == self._queued_selected_preview_path:
-            return
-        if (
-            self._selected_preview_thread is not None
-            and self._selected_preview_thread.isRunning()
-        ):
-            self._queued_selected_preview_path = source_path
-            return
-        self._start_selected_preview_load(source_path)
-
-    def _start_selected_preview_load(self, source_path: str) -> None:
-        image_pipeline = getattr(self._parent_window, "image_pipeline", None)
-        if image_pipeline is None:
-            return
-
-        self._queued_selected_preview_path = None
-        self._active_selected_preview_path = source_path
-        self._selected_preview_thread = QThread()
-        self._selected_preview_worker = SelectedPreviewLoaderWorker(
-            image_pipeline=image_pipeline,
-            image_path=source_path,
-            display_max_size=SELECTED_PREVIEW_DISPLAY_SIZE,
-        )
-        self._selected_preview_worker.moveToThread(self._selected_preview_thread)
-        self._selected_preview_thread.started.connect(self._selected_preview_worker.run)
-        self._selected_preview_worker.finished.connect(
-            self._handle_selected_preview_loaded
-        )
-        self._selected_preview_worker.finished.connect(
-            self._selected_preview_thread.quit
-        )
-        self._selected_preview_thread.finished.connect(
-            self._cleanup_selected_preview_worker
-        )
-        self._selected_preview_thread.start()
-
-    def _handle_selected_preview_loaded(self, source_path: str, _success: bool) -> None:
-        if self._current_preview_source_path == source_path:
-            self.refresh_cached_previews()
-
-        self._active_selected_preview_path = None
-        if self._queued_selected_preview_path == source_path:
-            self._queued_selected_preview_path = None
-
-    def _cleanup_selected_preview_worker(self) -> None:
-        if self._selected_preview_worker is not None:
-            self._selected_preview_worker.deleteLater()
-            self._selected_preview_worker = None
-        if self._selected_preview_thread is not None:
-            self._selected_preview_thread.deleteLater()
-            self._selected_preview_thread = None
-        queued_path = self._queued_selected_preview_path
-        if queued_path and queued_path != self._active_selected_preview_path:
-            self._start_selected_preview_load(queued_path)
 
     def _display_label_for_item(self, item: QTreeWidgetItem) -> str:
         text = item.text(0).strip()
