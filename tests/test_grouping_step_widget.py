@@ -1,3 +1,10 @@
+import os
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox
 
 from src.core.grouping import GroupingGroup, GroupingPlan
@@ -10,6 +17,18 @@ from src.ui.grouping_step_widget import (
 
 
 _app = QApplication.instance() or QApplication([])
+
+
+class _CacheOnlyPipeline:
+    def __init__(self, *, cached_preview: QPixmap | None = None):
+        self.get_cached_thumbnail_qpixmap = Mock(return_value=None)
+        self.get_cached_preview_qpixmap = Mock(return_value=cached_preview)
+        self.get_thumbnail_qpixmap = Mock(
+            side_effect=AssertionError("synchronous thumbnail generation is forbidden")
+        )
+        self.get_preview_qpixmap = Mock(
+            side_effect=AssertionError("synchronous preview generation is forbidden")
+        )
 
 
 def test_grouping_step_widget_tracks_mode_and_busy_state():
@@ -85,6 +104,141 @@ def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
     assert widget.pending_grouping_action_lines() == [
         "Move Beach/a.jpg -> Beach/renamed.jpg"
     ]
+
+
+def test_grouping_step_widget_set_preview_plan_uses_cached_thumbnails_only(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    second = str(beach_dir / "b.jpg")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+    beach_dir.joinpath("b.jpg").write_bytes(b"preview")
+
+    pipeline = _CacheOnlyPipeline()
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(image_pipeline=pipeline)
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=2,
+            supported_items=2,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[first, second],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    assert pipeline.get_thumbnail_qpixmap.call_count == 0
+    assert pipeline.get_preview_qpixmap.call_count == 0
+    assert pipeline.get_cached_thumbnail_qpixmap.call_count >= 4
+
+
+def test_grouping_step_widget_selected_preview_queues_async_when_cache_is_cold(
+    tmp_path, monkeypatch
+):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+
+    pipeline = _CacheOnlyPipeline()
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(image_pipeline=pipeline)
+    queued = []
+    monkeypatch.setattr(
+        widget,
+        "_queue_selected_preview_load",
+        lambda path: queued.append(path),
+    )
+
+    widget._update_selected_preview(first)
+
+    assert queued == [first]
+    assert pipeline.get_preview_qpixmap.call_count == 0
+    assert pipeline.get_thumbnail_qpixmap.call_count == 0
+    assert widget.large_preview_name.text() == "a.jpg"
+
+
+def test_grouping_step_widget_folder_preview_uses_cached_thumbnails_only(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    second = str(beach_dir / "b.jpg")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+    beach_dir.joinpath("b.jpg").write_bytes(b"preview")
+
+    pipeline = _CacheOnlyPipeline()
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(image_pipeline=pipeline)
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=2,
+            supported_items=2,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[first, second],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    pipeline.get_cached_thumbnail_qpixmap.reset_mock()
+    widget._update_folder_preview(widget._after_group_items_by_id["1"])
+
+    assert widget.folder_preview_grid.count() == 2
+    assert pipeline.get_thumbnail_qpixmap.call_count == 0
+    assert pipeline.get_preview_qpixmap.call_count == 0
+    assert pipeline.get_cached_thumbnail_qpixmap.call_count == 2
+
+
+def test_grouping_step_widget_ignores_stale_selected_preview_results():
+    current_pixmap = QPixmap(10, 10)
+    current_pixmap.fill()
+    pipeline = _CacheOnlyPipeline(cached_preview=current_pixmap)
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(image_pipeline=pipeline)
+    widget.large_preview_view.set_image = Mock()
+    widget._current_preview_source_path = "/tmp/current.jpg"
+    widget._queued_selected_preview_path = None
+
+    widget._handle_selected_preview_loaded("/tmp/old.jpg", True)
+
+    widget.large_preview_view.set_image.assert_not_called()
+
+
+def test_grouping_step_widget_filesystem_walk_filters_non_media(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    media_path = beach_dir / "a.jpg"
+    text_path = beach_dir / "notes.txt"
+    media_path.write_bytes(b"preview")
+    text_path.write_text("ignore me")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+
+    discovered = widget._filesystem_file_paths_under_root(str(source_root))
+
+    assert discovered == [str(media_path)]
 
 
 def test_grouping_step_widget_hides_leaf_only_context_actions(tmp_path):
@@ -427,6 +581,35 @@ def test_grouping_step_widget_can_match_before_and_after_items(tmp_path):
 
     assert widget._find_matching_item(before_item, is_after=False) is after_item
     assert widget._find_matching_item(after_item, is_after=True) is before_item
+
+
+def test_grouping_step_widget_ignores_deleted_items_during_selection_sync(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    stale_item = widget._after_file_items_by_path[first]
+    widget.preview_tree.clear()
+
+    widget._sync_selection_to_other_tree(stale_item, from_after=True)
 
 
 def test_grouping_step_widget_syncs_selection_between_trees(tmp_path):

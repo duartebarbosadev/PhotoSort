@@ -10,6 +10,7 @@ import inspect
 from unittest.mock import Mock, patch
 from src.core.image_pipeline import ImagePipeline
 from src.core.image_processing.raw_image_processor import is_raw_extension
+from PIL import Image
 
 
 class TestAutomaticRawProcessing:
@@ -232,3 +233,74 @@ class TestRawProcessingIntegration:
             pipeline.preload_thumbnails(["nonexistent1.jpg", "nonexistent2.arw"])
         except Exception:
             pass  # Expected to fail due to missing files
+
+
+def test_get_cached_thumbnail_qpixmap_does_not_generate_on_cache_miss(tmp_path):
+    image_path = tmp_path / "a.jpg"
+    image_path.write_bytes(b"preview")
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+    pipeline.thumbnail_cache.get = Mock(return_value=None)
+
+    with patch.object(
+        pipeline,
+        "_get_pil_thumbnail",
+        side_effect=AssertionError("cache-only thumbnail helper must not generate"),
+    ):
+        pixmap = pipeline.get_cached_thumbnail_qpixmap(str(image_path))
+
+    assert pixmap is None
+
+
+def test_get_cached_preview_qpixmap_does_not_generate_on_cache_miss(tmp_path):
+    image_path = tmp_path / "a.jpg"
+    image_path.write_bytes(b"preview")
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+    pipeline.preview_cache.get = Mock(return_value=None)
+
+    with patch.object(
+        pipeline,
+        "_generate_pil_preview_for_display",
+        side_effect=AssertionError("cache-only preview helper must not generate"),
+    ):
+        pixmap = pipeline.get_cached_preview_qpixmap(
+            str(image_path), display_max_size=(800, 600)
+        )
+
+    assert pixmap is None
+
+
+def test_get_cached_preview_qpixmap_uses_high_res_cache_without_generation(tmp_path):
+    image_path = tmp_path / "a.jpg"
+    image_path.write_bytes(b"preview")
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+
+    cached_preview = Image.new("RGB", (1600, 1200), color="red")
+
+    def cache_get(key):
+        if key[1] == (800, 600):
+            return None
+        return cached_preview
+
+    pipeline.preview_cache.get = Mock(side_effect=cache_get)
+    pipeline.preview_cache.set = Mock()
+
+    with patch.object(
+        pipeline,
+        "_generate_pil_preview_for_display",
+        side_effect=AssertionError("cache-only preview helper must not generate"),
+    ):
+        pixmap = pipeline.get_cached_preview_qpixmap(
+            str(image_path), display_max_size=(800, 600)
+        )
+
+    assert pixmap is not None
+    pipeline.preview_cache.set.assert_called_once()

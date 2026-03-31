@@ -1279,6 +1279,8 @@ class AppController(QObject):
     def handle_preview_finished(self):
         self.main_window.statusBar().showMessage("Previews regenerated.", 5000)
         self.main_window.hide_loading_overlay()
+        if self._supports_grouping_workflow_ui():
+            self.main_window.grouping_step_widget.refresh_cached_previews()
 
         if self.app_state.current_folder_path:
             total_image_size_bytes = self._calculate_folder_image_size(
@@ -1947,6 +1949,8 @@ class AppController(QObject):
         logger.info("Thumbnail preloading completed - updating tree view icons")
         # Update all tree view items with the cached thumbnails
         self.main_window._update_thumbnails_from_cache()
+        if self._supports_grouping_workflow_ui():
+            self.main_window.grouping_step_widget.refresh_cached_thumbnails()
 
     def handle_thumbnail_preload_error(self, error_message: str):
         """Handle errors from thumbnail preload worker."""

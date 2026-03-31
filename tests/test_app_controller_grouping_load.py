@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from src.ui.app_controller import AppController
 
@@ -88,3 +89,24 @@ def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch
 
     assert load_calls == [("/tmp/demo", True, False)]
     assert close_calls == [True]
+
+
+def test_handle_thumbnail_preload_complete_refreshes_grouping_widget():
+    refresh_cached_thumbnails = Mock()
+    update_thumbnails_from_cache = Mock()
+    controller = SimpleNamespace(
+        _last_thumbnail_preload_logged=5,
+        _supports_grouping_workflow_ui=lambda: True,
+        main_window=SimpleNamespace(
+            _update_thumbnails_from_cache=update_thumbnails_from_cache,
+            grouping_step_widget=SimpleNamespace(
+                refresh_cached_thumbnails=refresh_cached_thumbnails
+            ),
+        ),
+    )
+
+    AppController.handle_thumbnail_preload_complete(controller)
+
+    assert controller._last_thumbnail_preload_logged == 0
+    update_thumbnails_from_cache.assert_called_once_with()
+    refresh_cached_thumbnails.assert_called_once_with()
