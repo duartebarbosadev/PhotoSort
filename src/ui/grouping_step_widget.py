@@ -82,6 +82,8 @@ PREVIEW_PAGE_HINT = 0
 PREVIEW_PAGE_IMAGE = 1
 PREVIEW_PAGE_FOLDER = 2
 
+ROOT_LEVEL_GROUP_LABEL = "Root files"
+
 _DROP_TARGET_KINDS = {ITEM_GROUP, ITEM_DIRECTORY, ITEM_ROOT, ITEM_UNASSIGNED}
 _DRAGGABLE_KINDS = {ITEM_FILE, ITEM_GROUP}
 
@@ -420,9 +422,6 @@ class GroupingStepWidget(QWidget):
         self.preview_panel.setObjectName("groupingPreviewPanel")
         self.preview_panel_header = QLabel("Preview")
         self.preview_panel_header.setObjectName("groupingTreeHeader")
-        self.same_badge = QLabel("≡  No changes")
-        self.same_badge.setObjectName("groupingSameBadge")
-        self.same_badge.setVisible(False)
         self.preview_pane_stack = QStackedWidget()
         self.preview_hint_label = QLabel("Select a photo or folder to preview")
         self.preview_hint_label.setObjectName("groupingPreviewHint")
@@ -571,7 +570,6 @@ class GroupingStepWidget(QWidget):
         pvh.setSpacing(8)
         pvh.addWidget(self.preview_panel_header)
         pvh.addStretch(1)
-        pvh.addWidget(self.same_badge)
         pv.addLayout(pvh)
         self._add_hsep(pv, "groupingPanelSep")
 
@@ -943,18 +941,14 @@ class GroupingStepWidget(QWidget):
         self._update_stats()
         self._render_before_tree()
         self._render_after_tree(selection_state)
-        self.same_badge.setVisible(self._plan_has_no_effective_changes())
 
     def _update_stats(self) -> None:
         group_count = len(self._editable_groups)
         self.stats_label.setText(
-            f"{group_count} folders  ·  "
-            f"{len(self._editable_unassigned)} unassigned  ·  "
-            f"{len(self._editable_skipped)} skipped  ·  "
-            f"{len(self._editable_deleted)} deleted"
+            f"{group_count} folders  ·  {len(self._editable_deleted)} deleted"
         )
         self.stats_label.setVisible(True)
-        self.loading_label.setText("Preview ready")
+        self.loading_label.clear()
         self.loading_bar.setVisible(False)
         self.primary_button.setEnabled(
             self.has_source_folder() and self._current_plan is not None
@@ -1124,7 +1118,7 @@ class GroupingStepWidget(QWidget):
                 leaf_name = os.path.basename(normalized_label)
             else:
                 parent_rel = ""
-                leaf_name = "Unnamed"
+                leaf_name = ROOT_LEVEL_GROUP_LABEL
             # Reuse an existing directory node if one was already created for this label
             # (e.g. as a parent for a cluster subgroup). Prevents duplicate date folders.
             if normalized_label in directory_items:
@@ -1848,24 +1842,6 @@ class GroupingStepWidget(QWidget):
             self.before_tree.setCurrentItem(before_item)
             before_item.setSelected(True)
             self.before_tree.scrollToItem(before_item)
-
-    def _plan_has_no_effective_changes(self) -> bool:
-        effective_plan = self.get_effective_plan()
-        any_files = False
-        for group in effective_plan.groups:
-            for path in group.source_paths:
-                any_files = True
-                if os.path.normcase(os.path.normpath(path)) != os.path.normcase(
-                    os.path.normpath(self._projected_path_for_source(path))
-                ):
-                    return False
-        for path in effective_plan.unassigned_paths:
-            any_files = True
-            if os.path.normcase(os.path.normpath(path)) != os.path.normcase(
-                os.path.normpath(self._projected_path_for_source(path))
-            ):
-                return False
-        return any_files
 
     def _show_before_context_menu(self, position: QPoint) -> None:
         item = self.before_tree.itemAt(position)

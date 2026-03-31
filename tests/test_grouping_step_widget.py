@@ -258,6 +258,31 @@ def test_grouping_step_widget_restore_keeps_root_level_files_at_root(tmp_path):
     assert restored_plan.groups[0].source_paths == [first]
 
 
+def test_grouping_step_widget_labels_root_level_group_as_root_files(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "a.jpg")
+    source_root.joinpath("a.jpg").write_bytes(b"preview")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[GroupingGroup(group_id="1", group_label="", source_paths=[first])],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    root_group_item = widget._after_group_items_by_id["1"]
+
+    assert root_group_item.text(0) == "Root files"
+
+
 def test_grouping_step_widget_can_create_parent_directory(tmp_path, monkeypatch):
     source_root = tmp_path / "demo"
     source_root.mkdir()
@@ -569,7 +594,6 @@ def test_grouping_step_widget_folder_preview_includes_unmanaged_files(tmp_path):
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
     first = str(beach_dir / "a.jpg")
-    sidecar = str(beach_dir / "a.json")
     beach_dir.joinpath("a.jpg").write_bytes(b"preview")
     beach_dir.joinpath("a.json").write_text("{}", encoding="utf-8")
 
