@@ -11,9 +11,7 @@ from core.runtime_paths import resolve_user_cache_dir
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ANALYSIS_CACHE_DIR = os.path.join(
-    resolve_user_cache_dir("photosort_analysis")
-)
+DEFAULT_ANALYSIS_CACHE_DIR = os.path.join(resolve_user_cache_dir("photosort_analysis"))
 
 CACHE_VERSION = 1
 

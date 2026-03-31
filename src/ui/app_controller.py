@@ -286,9 +286,7 @@ class AppController(QObject):
         logger.info("Loading folder: %s", folder_path)
 
         if self.worker_manager.is_grouping_workflow_running():
-            logger.info(
-                "Folder load blocked while grouping workflow is still running."
-            )
+            logger.info("Folder load blocked while grouping workflow is still running.")
             self.main_window.statusBar().showMessage(
                 "Grouping is still moving files. Wait for it to finish before loading another folder.",
                 4000,
@@ -1181,6 +1179,7 @@ class AppController(QObject):
             "output_root": summary.output_root,
             "manifest_path": summary.manifest_path,
             "moved_count": summary.moved_count,
+            "deleted_count": getattr(summary, "deleted_count", 0),
             "unassigned_count": summary.unassigned_count,
             "skipped_count": summary.skipped_count,
         }

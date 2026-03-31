@@ -61,14 +61,12 @@ def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch
         finish_pending_close_after_grouping=lambda: close_calls.append(True),
     )
     controller.load_folder = (
-        lambda folder_path, skip_grouping_step=False, record_as_source=True: load_calls.append(
-            (folder_path, skip_grouping_step, record_as_source)
+        lambda folder_path, skip_grouping_step=False, record_as_source=True: (
+            load_calls.append((folder_path, skip_grouping_step, record_as_source))
         )
     )
-    controller._finalize_grouping_workflow_completion = (
-        lambda summary: AppController._finalize_grouping_workflow_completion(
-            controller, summary
-        )
+    controller._finalize_grouping_workflow_completion = lambda summary: (
+        AppController._finalize_grouping_workflow_completion(controller, summary)
     )
 
     monkeypatch.setattr(

@@ -453,6 +453,48 @@ def test_execute_grouping_plan_applies_file_name_overrides(tmp_path):
     assert summary.entries[0].new_path == str(old_dir / "renamed.jpg")
 
 
+def test_execute_grouping_plan_applies_pending_deletions(tmp_path, monkeypatch):
+    source_root = tmp_path / "source"
+    delete_dir = source_root / "delete_me"
+    keep_dir = source_root / "keep"
+    delete_dir.mkdir(parents=True)
+    keep_dir.mkdir(parents=True)
+    image_path = delete_dir / "a.jpg"
+    keep_path = keep_dir / "b.jpg"
+    _create_solid_image(str(image_path), (220, 40, 40))
+    _create_solid_image(str(keep_path), (40, 40, 220))
+
+    trashed_paths = []
+    monkeypatch.setattr(
+        "src.core.grouping.ImageFileOperations.move_to_trash",
+        lambda path: (trashed_paths.append(path) or True, "Moved to trash."),
+    )
+
+    plan = GroupingPlan(
+        mode=GroupingMode.CURRENT.value,
+        total_items=2,
+        supported_items=2,
+        groups=[
+            GroupingGroup(
+                group_id="1", group_label="keep", source_paths=[str(keep_path)]
+            )
+        ],
+        unassigned_paths=[],
+        skipped_paths=[],
+        deleted_paths=[str(delete_dir)],
+    )
+
+    summary = execute_grouping_plan(
+        plan,
+        source_root=str(source_root),
+        output_root=str(source_root),
+    )
+
+    assert trashed_paths == [str(delete_dir)]
+    assert summary.deleted_count == 1
+    assert any(entry.status == "deleted" for entry in summary.entries)
+
+
 def test_execute_grouping_plan_renames_entire_folder_and_keeps_unmanaged_files(
     tmp_path,
 ):

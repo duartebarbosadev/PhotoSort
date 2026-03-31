@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image
 from sklearn.cluster import DBSCAN
 
+from core.image_file_ops import ImageFileOperations
 from core.media_utils import is_video_extension
 from core.metadata_processor import (
     DATE_TAGS_PREFERENCE,
@@ -65,6 +66,7 @@ class GroupingPlan:
     skipped_paths: List[str]
     output_root: str = ""
     file_name_overrides: Dict[str, str] = field(default_factory=dict)
+    deleted_paths: List[str] = field(default_factory=list)
 
     def to_preview(self) -> GroupingPreview:
         return GroupingPreview(
@@ -112,6 +114,7 @@ class GroupingRunSummary:
     output_root: str
     manifest_path: str
     moved_count: int
+    deleted_count: int
     unassigned_count: int
     skipped_count: int
     groups: List[GroupingGroup]
@@ -136,6 +139,7 @@ def write_grouping_manifest(summary: GroupingRunSummary) -> str:
         "source_root": summary.source_root,
         "output_root": summary.output_root,
         "moved_count": summary.moved_count,
+        "deleted_count": summary.deleted_count,
         "unassigned_count": summary.unassigned_count,
         "skipped_count": summary.skipped_count,
         "generated_at": datetime.now().isoformat(),
@@ -261,7 +265,7 @@ def _empty_directory_candidates_from_entries(
 ) -> List[str]:
     candidates: Dict[str, str] = {}
     for entry in entries:
-        if entry.status not in {"moved", "unassigned"}:
+        if entry.status not in {"moved", "unassigned", "deleted"}:
             continue
         original_path = (entry.original_path or "").strip()
         if not original_path:
@@ -271,6 +275,37 @@ def _empty_directory_candidates_from_entries(
             normalized = os.path.normcase(os.path.normpath(candidate))
             candidates[normalized] = candidate
     return list(candidates.values())
+
+
+def _prepare_delete_targets(paths: Sequence[str]) -> List[str]:
+    unique_paths: List[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        normalized = os.path.normcase(os.path.normpath(path))
+        if not path or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_paths.append(path)
+
+    directory_targets = [path for path in unique_paths if os.path.isdir(path)]
+    filtered_paths: List[str] = []
+    for path in unique_paths:
+        if any(
+            not _is_same_path(path, directory_path)
+            and _is_path_within_dir(path, directory_path)
+            for directory_path in directory_targets
+        ):
+            continue
+        filtered_paths.append(path)
+
+    return sorted(
+        filtered_paths,
+        key=lambda path: (
+            0 if os.path.isdir(path) else 1,
+            -path.count(os.sep),
+            path,
+        ),
+    )
 
 
 def _cluster_vectors(
@@ -872,10 +907,14 @@ def execute_grouping_plan(
         source_root=source_root,
         output_root=output_root,
     )
-    total_moves = sum(len(group.source_paths) for group in plan.groups) + len(
-        plan.unassigned_paths
+    delete_targets = _prepare_delete_targets(getattr(plan, "deleted_paths", []) or [])
+    total_moves = (
+        sum(len(group.source_paths) for group in plan.groups)
+        + len(plan.unassigned_paths)
+        + len(delete_targets)
     )
     moved_count = 0
+    deleted_count = 0
 
     def report(message: str) -> None:
         if progress_callback:
@@ -983,6 +1022,23 @@ def execute_grouping_plan(
             )
             report(f"Moving unassigned {basename}...")
 
+    for target_path in delete_targets:
+        basename = os.path.basename(target_path.rstrip(os.sep)) or target_path
+        success, message = ImageFileOperations.move_to_trash(target_path)
+        if not success:
+            raise RuntimeError(message or f"Failed to delete {target_path}.")
+        deleted_count += 1
+        entries.append(
+            GroupingManifestEntry(
+                original_path=target_path,
+                new_path=None,
+                group_id=None,
+                group_label=None,
+                status="deleted",
+            )
+        )
+        report(f"Deleting {basename}...")
+
     renamed_skipped_paths = {
         entry.original_path
         for entry in entries
@@ -1016,6 +1072,7 @@ def execute_grouping_plan(
         output_root=output_root,
         manifest_path="",
         moved_count=moved_count,
+        deleted_count=deleted_count,
         unassigned_count=len(plan.unassigned_paths),
         skipped_count=len(plan.skipped_paths),
         groups=plan.groups,

@@ -35,17 +35,20 @@ def test_grouping_step_widget_tracks_mode_and_busy_state():
     )
 
     assert widget.primary_button.isEnabled()
+    assert widget.primary_button.text() == "Apply Changes"
     assert widget.folder_button.isEnabled()
     assert all(btn.isEnabled() for btn in widget._mode_buttons.values())
 
     widget.set_busy(True)
     assert not widget.primary_button.isEnabled()
+    assert widget.primary_button.text() == "Applying…"
     assert not widget.folder_button.isEnabled()
     assert not widget.back_button.isEnabled()
     assert not any(btn.isEnabled() for btn in widget._mode_buttons.values())
 
     widget.set_busy(False)
     assert widget.primary_button.isEnabled()
+    assert widget.primary_button.text() == "Apply Changes"
     assert widget.folder_button.isEnabled()
     assert widget.back_button.isEnabled()
     assert all(btn.isEnabled() for btn in widget._mode_buttons.values())
@@ -86,8 +89,10 @@ def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
 
 def test_grouping_step_widget_hides_leaf_only_context_actions(tmp_path):
     source_root = tmp_path / "demo"
-    source_root.mkdir()
-    first = str(source_root / "Beach" / "a.jpg")
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
 
     widget = GroupingStepWidget()
     widget.set_source_folder(str(source_root))
@@ -117,7 +122,10 @@ def test_grouping_step_widget_hides_leaf_only_context_actions(tmp_path):
     assert "Collapse subtree" not in action_texts
     assert "Expand all children" not in action_texts
     assert "Collapse all children" not in action_texts
-    assert "Preview this file" in action_texts
+    assert "Preview this file" not in action_texts
+    assert "Delete file" in action_texts
+    assert "Move files now" not in action_texts
+    assert "Send to Unassigned" not in action_texts
 
 
 def test_grouping_step_widget_disables_no_op_subtree_actions(tmp_path):
@@ -281,7 +289,7 @@ def test_grouping_step_widget_can_create_parent_directory(tmp_path, monkeypatch)
     assert widget.get_effective_plan().groups[0].group_label == "Trips/Beach"
 
 
-def test_grouping_step_widget_can_delete_directory_and_contents(tmp_path, monkeypatch):
+def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path, monkeypatch):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
@@ -304,6 +312,49 @@ def test_grouping_step_widget_can_delete_directory_and_contents(tmp_path, monkey
         str(source_root),
     )
 
+    monkeypatch.setattr(
+        "src.ui.grouping_step_widget.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    widget._delete_item(widget._after_group_items_by_id["1"])
+
+    assert widget.get_effective_plan().groups == []
+    assert widget.get_effective_plan().deleted_paths == [str(beach_dir)]
+    assert widget.pending_grouping_action_lines() == ["Delete folder Beach"]
+
+
+def test_grouping_step_widget_can_delete_file_from_context(tmp_path, monkeypatch):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    menu = QMenu()
+    file_item = widget._after_file_items_by_path[first]
+    widget._populate_common_context_actions(
+        menu, file_item, widget.preview_tree, is_after=True
+    )
+    actions_by_text = {
+        action.text(): action for action in menu.actions() if action.text()
+    }
+
     deleted_paths = []
     monkeypatch.setattr(
         "src.ui.grouping_step_widget.QMessageBox.question",
@@ -314,10 +365,15 @@ def test_grouping_step_widget_can_delete_directory_and_contents(tmp_path, monkey
         lambda path: (deleted_paths.append(path) or True, "Moved to trash."),
     )
 
-    widget._delete_directory_for_item(widget._after_group_items_by_id["1"])
+    actions_by_text["Delete file"].trigger()
 
-    assert deleted_paths == [str(beach_dir)]
+    assert deleted_paths == []
     assert widget.get_effective_plan().groups == []
+    assert widget.get_effective_plan().deleted_paths == [first]
+    assert widget.pending_grouping_action_lines() == [
+        "Delete file Beach/a.jpg",
+        "Remove empty folder Beach",
+    ]
 
 
 def test_grouping_step_widget_can_match_before_and_after_items(tmp_path):
@@ -542,6 +598,78 @@ def test_grouping_step_widget_folder_preview_includes_unmanaged_files(tmp_path):
     }
 
     assert names == {"a.jpg", "a.json"}
+
+
+def test_grouping_step_widget_after_tree_includes_unmanaged_files(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    sidecar = str(beach_dir / "notes.sdaldjsa")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+    beach_dir.joinpath("notes.sdaldjsa").write_text("meta", encoding="utf-8")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Trips", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    assert sidecar in widget._after_file_items_by_path
+    assert widget._after_file_items_by_path[sidecar].text(0) == "notes.sdaldjsa"
+    sidecar_group = widget._find_group(
+        widget._item_group_id(widget._after_file_items_by_path[sidecar])
+    )
+    assert sidecar_group is not None
+    assert sidecar_group.group_label == "Beach"
+
+
+def test_grouping_step_widget_group_rename_moves_unmanaged_files_too(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    sidecar = str(beach_dir / "a.xmp")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+    beach_dir.joinpath("a.xmp").write_text("sidecar", encoding="utf-8")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    group_item = widget._after_group_items_by_id["1"]
+    group_item.setText(0, "Holiday")
+    widget._handle_preview_item_changed(group_item, 0)
+
+    effective_plan = widget.get_effective_plan()
+    holiday_group = next(
+        group for group in effective_plan.groups if group.group_label == "Holiday"
+    )
+
+    assert first in holiday_group.source_paths
+    assert sidecar in holiday_group.source_paths
 
 
 def test_grouping_step_widget_supports_file_rename_in_preview_plan(tmp_path):

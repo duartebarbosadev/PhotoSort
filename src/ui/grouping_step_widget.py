@@ -294,6 +294,7 @@ class GroupingStepWidget(QWidget):
         self._editable_groups: List[GroupingGroup] = []
         self._editable_unassigned: List[str] = []
         self._editable_skipped: List[str] = []
+        self._editable_deleted: List[str] = []
         self._file_name_overrides: Dict[str, str] = {}
         self._original_group_labels_by_path: Dict[str, str] = {}
         self._original_group_labels_by_group_id: Dict[str, str] = {}
@@ -354,7 +355,7 @@ class GroupingStepWidget(QWidget):
         self.skip_button.setObjectName("groupingGhostButton")
         self.skip_button.setEnabled(False)
 
-        self.primary_button = QPushButton("Move files")
+        self.primary_button = QPushButton("Apply Changes")
         self.primary_button.setObjectName("groupingPrimaryButton")
         self.primary_button.setMinimumHeight(34)
         self.primary_button.setEnabled(False)
@@ -691,7 +692,7 @@ class GroupingStepWidget(QWidget):
         self.skip_button.setEnabled(not busy and self.has_source_folder())
         self.folder_button.setEnabled(not busy)
         self.back_button.setEnabled(not busy)
-        self.primary_button.setText("Grouping…" if busy else "Move files")
+        self.primary_button.setText("Applying…" if busy else "Apply Changes")
 
     def set_back_visible(self, visible: bool) -> None:
         self.back_button.setVisible(visible)
@@ -724,6 +725,7 @@ class GroupingStepWidget(QWidget):
             self._editable_groups = []
             self._editable_unassigned = []
             self._editable_skipped = []
+            self._editable_deleted = []
             self._file_name_overrides = {}
             self._original_group_labels_by_path = {}
             self._original_group_labels_by_group_id = {}
@@ -755,9 +757,11 @@ class GroupingStepWidget(QWidget):
         ]
         self._editable_unassigned = list(getattr(plan, "unassigned_paths", []))
         self._editable_skipped = list(getattr(plan, "skipped_paths", []))
+        self._editable_deleted = list(getattr(plan, "deleted_paths", []) or [])
         self._file_name_overrides = dict(getattr(plan, "file_name_overrides", {}) or {})
         self._sticky_empty_group_ids.clear()
         self._group_id_counter = self._compute_group_id_counter()
+        self._inject_filesystem_only_paths_into_plan_state()
         self._original_group_labels_by_path = {}
         self._original_group_labels_by_group_id = {}
         for group in self._editable_groups:
@@ -767,6 +771,74 @@ class GroupingStepWidget(QWidget):
             for source_path in group.source_paths:
                 self._original_group_labels_by_path[source_path] = group.group_label
         self._refresh_preview_trees(preserve_selection=False)
+
+    def _inject_filesystem_only_paths_into_plan_state(self) -> None:
+        source_root = self._source_root or ""
+        if not source_root or not os.path.isdir(source_root):
+            return
+
+        filesystem_paths = self._filesystem_file_paths_under_root(source_root)
+        planned_paths = set(
+            os.path.normcase(os.path.normpath(path))
+            for path in self._all_source_paths()
+        )
+        extra_paths = [
+            path
+            for path in filesystem_paths
+            if os.path.normcase(os.path.normpath(path)) not in planned_paths
+        ]
+        if not extra_paths:
+            return
+
+        current_plan_groups = None
+        if self._current_plan is not None:
+            current_plan_groups = self._current_plan.groups
+
+        for source_path in extra_paths:
+            target_label = self._current_relative_directory_for_source(source_path)
+            editable_group = next(
+                (
+                    candidate
+                    for candidate in self._editable_groups
+                    if self._normalize_relative_path(candidate.group_label)
+                    == target_label
+                ),
+                None,
+            )
+            if editable_group is None:
+                group_id = self._next_group_id()
+                editable_group = GroupingGroup(
+                    group_id=group_id,
+                    group_label=target_label,
+                    source_paths=[],
+                )
+                self._editable_groups.append(editable_group)
+                if current_plan_groups is not None:
+                    current_plan_groups.append(
+                        GroupingGroup(
+                            group_id=group_id,
+                            group_label=target_label,
+                            source_paths=[],
+                        )
+                    )
+            if source_path not in editable_group.source_paths:
+                editable_group.source_paths.append(source_path)
+                editable_group.source_paths.sort()
+            if current_plan_groups is not None:
+                current_group = next(
+                    (
+                        candidate
+                        for candidate in current_plan_groups
+                        if str(candidate.group_id) == str(editable_group.group_id)
+                    ),
+                    None,
+                )
+                if (
+                    current_group is not None
+                    and source_path not in current_group.source_paths
+                ):
+                    current_group.source_paths.append(source_path)
+                    current_group.source_paths.sort()
 
     def get_group_name_overrides(self) -> Dict[str, str]:
         return {
@@ -796,6 +868,7 @@ class GroupingStepWidget(QWidget):
             skipped_paths=list(self._editable_skipped),
             output_root=self._current_output_root,
             file_name_overrides=dict(self._file_name_overrides),
+            deleted_paths=list(self._editable_deleted),
         )
 
     def has_unsaved_grouping_edits(self) -> bool:
@@ -854,6 +927,7 @@ class GroupingStepWidget(QWidget):
             groups,
             tuple(sorted(plan.unassigned_paths)),
             tuple(sorted(plan.skipped_paths)),
+            tuple(sorted(getattr(plan, "deleted_paths", []) or [])),
             tuple(
                 sorted(
                     (str(path), str(name))
@@ -876,7 +950,8 @@ class GroupingStepWidget(QWidget):
         self.stats_label.setText(
             f"{group_count} folders  ·  "
             f"{len(self._editable_unassigned)} unassigned  ·  "
-            f"{len(self._editable_skipped)} skipped"
+            f"{len(self._editable_skipped)} skipped  ·  "
+            f"{len(self._editable_deleted)} deleted"
         )
         self.stats_label.setVisible(True)
         self.loading_label.setText("Preview ready")
@@ -1115,7 +1190,7 @@ class GroupingStepWidget(QWidget):
                     Qt.ItemDataRole.EditRole,
                     self._display_name_for_source(source_path),
                 )
-                self._set_preview_icon(file_item, source_path)
+                self._set_tree_item_icon(file_item, source_path)
                 group_item.addChild(file_item)
                 self._after_file_items_by_path[source_path] = file_item
 
@@ -1185,7 +1260,7 @@ class GroupingStepWidget(QWidget):
                 Qt.ItemDataRole.EditRole,
                 self._display_name_for_source(source_path),
             )
-            self._set_preview_icon(file_item, source_path)
+            self._set_tree_item_icon(file_item, source_path)
             bucket_item.addChild(file_item)
             self._after_file_items_by_path[source_path] = file_item
 
@@ -1418,6 +1493,13 @@ class GroupingStepWidget(QWidget):
                 pass
         return source_path
 
+    def _current_relative_directory_for_source(self, source_path: str) -> str:
+        rel_path = self._relative_path_for_source(source_path)
+        rel_dir = os.path.dirname(rel_path)
+        if rel_dir in {"", "."}:
+            return ""
+        return self._normalize_relative_path(rel_dir)
+
     def _relative_dir_label_for_source(self, source_path: str) -> str:
         rel_path = self._relative_path_for_source(source_path)
         rel_dir = os.path.dirname(rel_path)
@@ -1505,8 +1587,27 @@ class GroupingStepWidget(QWidget):
         discovered: List[str] = []
         for current_root, _dirnames, filenames in os.walk(root_path):
             for filename in sorted(filenames):
-                discovered.append(os.path.join(current_root, filename))
+                file_path = os.path.join(current_root, filename)
+                if self._is_path_pending_deletion(file_path):
+                    continue
+                discovered.append(file_path)
         return discovered
+
+    def _is_path_pending_deletion(self, path: str) -> bool:
+        normalized_path = os.path.normcase(os.path.normpath(path))
+        for deleted_path in self._editable_deleted:
+            normalized_deleted = os.path.normcase(os.path.normpath(deleted_path))
+            if normalized_path == normalized_deleted:
+                return True
+            try:
+                if (
+                    os.path.commonpath([normalized_path, normalized_deleted])
+                    == normalized_deleted
+                ):
+                    return True
+            except Exception:
+                continue
+        return False
 
     def _merge_paths_preserving_order(self, *path_lists: Iterable[str]) -> List[str]:
         merged: List[str] = []
@@ -1522,7 +1623,23 @@ class GroupingStepWidget(QWidget):
 
     def _set_tree_item_icon(self, item: QTreeWidgetItem, source_path: str) -> None:
         extension = os.path.splitext(source_path)[1].lower()
-        if extension in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".webp", ".heic", ".heif", ".raw", ".arw", ".cr2", ".nef", ".dng"}:
+        if extension in {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".bmp",
+            ".tiff",
+            ".tif",
+            ".webp",
+            ".heic",
+            ".heif",
+            ".raw",
+            ".arw",
+            ".cr2",
+            ".nef",
+            ".dng",
+        }:
             self._set_preview_icon(item, source_path)
             if item.icon(0).isNull():
                 item.setIcon(0, self._file_icon)
@@ -1635,7 +1752,9 @@ class GroupingStepWidget(QWidget):
         self.preview_selection_meta.setText(f"{len(preview_paths)} item(s)")
         self.preview_selection_meta.setVisible(True)
 
-    def _folder_preview_paths_for_item(self, item: Optional[QTreeWidgetItem]) -> List[str]:
+    def _folder_preview_paths_for_item(
+        self, item: Optional[QTreeWidgetItem]
+    ) -> List[str]:
         if item is None:
             return []
         actual_path = self._item_actual_path(item)
@@ -1792,12 +1911,6 @@ class GroupingStepWidget(QWidget):
         sections: List[List[QAction]] = []
 
         open_actions: List[QAction] = []
-        if is_after and source_path:
-            preview_action = QAction("Preview this file", self)
-            preview_action.triggered.connect(
-                lambda: self._update_selected_preview(source_path)
-            )
-            open_actions.append(preview_action)
         if actual_path:
             open_action = QAction("Open", self)
             open_action.triggered.connect(lambda: self._open_item(actual_path))
@@ -1838,6 +1951,18 @@ class GroupingStepWidget(QWidget):
             copy_actions.append(open_terminal)
         if copy_actions:
             sections.append(copy_actions)
+
+        delete_actions: List[QAction] = []
+        delete_target_path = self._deletable_path_for_item(item)
+        if delete_target_path:
+            label = (
+                "Delete folder" if os.path.isdir(delete_target_path) else "Delete file"
+            )
+            delete_action = QAction(label, self)
+            delete_action.triggered.connect(lambda: self._delete_item(item))
+            delete_actions.append(delete_action)
+        if delete_actions:
+            sections.append(delete_actions)
 
         subtree_actions: List[QAction] = []
         if item.childCount() > 0:
@@ -1925,24 +2050,11 @@ class GroupingStepWidget(QWidget):
                 lambda: self._move_selected_preview_items_here(item)
             )
             structure_actions.append(move_here)
-        delete_directory_path = self._directory_path_for_item(item)
-        if delete_directory_path and os.path.isdir(delete_directory_path):
-            delete_directory = QAction("Delete directory (and contents)", self)
-            delete_directory.triggered.connect(
-                lambda: self._delete_directory_for_item(item)
-            )
-            structure_actions.append(delete_directory)
         if structure_actions:
             sections.append(structure_actions)
 
         bucket_actions: List[QAction] = []
         if editable_candidate_paths:
-            send_unassigned = QAction("Send to Unassigned", self)
-            send_unassigned.triggered.connect(
-                lambda: self._move_paths_to_unassigned(editable_candidate_paths)
-            )
-            bucket_actions.append(send_unassigned)
-
             restore_action = QAction("Put back in original folder", self)
             restore_action.triggered.connect(
                 lambda: self._restore_paths_to_original_location(
@@ -1962,11 +2074,6 @@ class GroupingStepWidget(QWidget):
             inspection_actions.append(conflicts_action)
         if inspection_actions:
             sections.append(inspection_actions)
-
-        if self._current_plan is not None:
-            run_action = QAction("Move files now", self)
-            run_action.triggered.connect(self._emit_create_requested)
-            sections.append([run_action])
 
         return self._append_menu_sections(menu, sections)
 
@@ -2420,9 +2527,9 @@ class GroupingStepWidget(QWidget):
             return None
         if self._item_kind(item) not in {ITEM_DIRECTORY, ITEM_GROUP}:
             return None
-        relative_path = (
-            self._item_match_relative_path(item) or self._item_relative_path(item)
-        )
+        relative_path = self._item_match_relative_path(
+            item
+        ) or self._item_relative_path(item)
         normalized = self._normalize_relative_path(relative_path)
         source_root = self._source_root or ""
         if not source_root:
@@ -2431,16 +2538,48 @@ class GroupingStepWidget(QWidget):
             return source_root
         return os.path.join(source_root, normalized)
 
+    def _deletable_path_for_item(
+        self, item: Optional[QTreeWidgetItem]
+    ) -> Optional[str]:
+        if item is None:
+            return None
+
+        kind = self._item_kind(item)
+        if kind == ITEM_FILE:
+            source_path = self._item_source_path(item)
+            if source_path and os.path.isfile(source_path):
+                return source_path
+            return None
+
+        if kind in {ITEM_DIRECTORY, ITEM_GROUP}:
+            directory_path = self._directory_path_for_item(item)
+            if directory_path and os.path.isdir(directory_path):
+                return directory_path
+
+        return None
+
     def _tracked_paths_for_directory(self, directory_path: str) -> List[str]:
         normalized_dir = os.path.normcase(os.path.normpath(directory_path))
         tracked: List[str] = []
         for path in self._all_source_paths():
             normalized_path = os.path.normcase(os.path.normpath(path))
             try:
-                if os.path.commonpath([normalized_path, normalized_dir]) == normalized_dir:
+                if (
+                    os.path.commonpath([normalized_path, normalized_dir])
+                    == normalized_dir
+                ):
                     tracked.append(path)
             except Exception:
                 continue
+        return list(dict.fromkeys(tracked))
+
+    def _tracked_paths_for_file(self, file_path: str) -> List[str]:
+        normalized_target = os.path.normcase(os.path.normpath(file_path))
+        tracked = [
+            path
+            for path in self._all_source_paths()
+            if os.path.normcase(os.path.normpath(path)) == normalized_target
+        ]
         return list(dict.fromkeys(tracked))
 
     def _remove_deleted_paths_from_state(self, paths: Iterable[str]) -> None:
@@ -2503,16 +2642,30 @@ class GroupingStepWidget(QWidget):
         directory_path = self._directory_path_for_item(item)
         if not directory_path or not os.path.isdir(directory_path):
             return
-
-        tracked_paths = self._tracked_paths_for_directory(directory_path)
-        prompt = (
-            f"Move '{self._relative_display_path(directory_path)}' and all of its contents to the trash?"
+        self._delete_existing_path(
+            directory_path,
+            tracked_paths=self._tracked_paths_for_directory(directory_path),
+            is_directory=True,
         )
-        if tracked_paths:
-            prompt += f"\n\nThis will remove {len(tracked_paths)} tracked item(s) from the grouping plan."
+
+    def _delete_item(self, item: Optional[QTreeWidgetItem]) -> None:
+        target_path = self._deletable_path_for_item(item)
+        if not target_path:
+            return
+
+        is_directory = os.path.isdir(target_path)
+        target_label = self._relative_display_path(target_path)
+        noun = "folder" if is_directory else "file"
+        prompt = (
+            f"Remove '{target_label}' and all of its contents from the preview? "
+            "It will be moved to trash when you apply changes."
+            if is_directory
+            else f"Remove '{target_label}' from the preview? "
+            "It will be moved to trash when you apply changes."
+        )
         choice = QMessageBox.question(
             self,
-            "Delete Directory",
+            f"Delete {noun.title()}",
             prompt,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
@@ -2520,20 +2673,79 @@ class GroupingStepWidget(QWidget):
         if choice != QMessageBox.StandardButton.Yes:
             return
 
-        success, message = ImageFileOperations.move_to_trash(directory_path)
+        self._mark_path_for_deletion(target_path, is_directory=is_directory)
+        self._show_status_message(f"Marked {target_label} for deletion.", 3000)
+
+    def _delete_existing_path(
+        self, target_path: str, *, tracked_paths: List[str], is_directory: bool
+    ) -> None:
+        target_label = self._relative_display_path(target_path)
+        noun = "Folder" if is_directory else "File"
+        prompt = (
+            f"Move '{target_label}' and all of its contents to the trash?"
+            if is_directory
+            else f"Move '{target_label}' to the trash?"
+        )
+        if tracked_paths:
+            suffix = "item" if len(tracked_paths) == 1 else "items"
+            prompt += (
+                f"\n\nThis will remove {len(tracked_paths)} tracked {suffix} "
+                "from the grouping plan."
+            )
+
+        choice = QMessageBox.question(
+            self,
+            f"Delete {noun}",
+            prompt,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            return
+
+        success, message = ImageFileOperations.move_to_trash(target_path)
         if not success:
             QMessageBox.warning(
                 self,
-                "Delete Directory",
-                message or f"Failed to delete {directory_path}.",
+                f"Delete {noun}",
+                message or f"Failed to delete {target_path}.",
             )
             return
 
-        self._remove_deleted_paths_from_state(tracked_paths)
-        self._show_status_message(
-            f"Moved {self._relative_display_path(directory_path)} to trash.",
-            3000,
+        if tracked_paths:
+            self._remove_deleted_paths_from_state(tracked_paths)
+        else:
+            self._refresh_preview_trees()
+        self._show_status_message(f"Moved {target_label} to trash.", 3000)
+
+    def _mark_path_for_deletion(self, target_path: str, *, is_directory: bool) -> None:
+        tracked_paths = (
+            self._tracked_paths_for_directory(target_path)
+            if is_directory
+            else self._tracked_paths_for_file(target_path)
         )
+        normalized_target = os.path.normcase(os.path.normpath(target_path))
+        retained_deleted: List[str] = []
+        for existing_path in self._editable_deleted:
+            normalized_existing = os.path.normcase(os.path.normpath(existing_path))
+            if normalized_existing == normalized_target:
+                continue
+            try:
+                if (
+                    os.path.commonpath([normalized_existing, normalized_target])
+                    == normalized_target
+                ):
+                    continue
+            except Exception:
+                pass
+            retained_deleted.append(existing_path)
+        retained_deleted.append(target_path)
+        self._editable_deleted = retained_deleted
+
+        if tracked_paths:
+            self._remove_deleted_paths_from_state(tracked_paths)
+        else:
+            self._refresh_preview_trees()
 
     def _restore_paths_to_original_location(self, paths: Iterable[str]) -> None:
         path_list = [
@@ -2626,13 +2838,14 @@ class GroupingStepWidget(QWidget):
         if not action_lines:
             QMessageBox.information(
                 self,
-                "No Actions To Apply",
-                "There are no file moves to apply in the current grouping plan.",
+                "No Changes To Apply",
+                "There are no changes to apply in the current grouping plan.",
             )
             return False
 
         move_count = sum(1 for ln in action_lines if ln.startswith("Move "))
         rename_count = sum(1 for ln in action_lines if ln.startswith("Rename folder "))
+        delete_count = sum(1 for ln in action_lines if ln.startswith("Delete "))
         remove_count = sum(
             1 for ln in action_lines if ln.startswith("Remove empty folder ")
         )
@@ -2649,7 +2862,7 @@ class GroupingStepWidget(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        build_dialog_header("Confirm File Operations", "📁", outer)
+        build_dialog_header("Confirm Changes", "📁", outer)
 
         body = QVBoxLayout()
         body.setContentsMargins(22, 16, 22, 10)
@@ -2660,6 +2873,8 @@ class GroupingStepWidget(QWidget):
             parts.append(f"{move_count} file move(s)")
         if rename_count:
             parts.append(f"{rename_count} folder rename(s)")
+        if delete_count:
+            parts.append(f"{delete_count} deletion(s)")
         if remove_count:
             parts.append(f"{remove_count} empty folder removal(s)")
         summary_text = "This will apply " + ", ".join(parts) + "."
@@ -2682,7 +2897,7 @@ class GroupingStepWidget(QWidget):
             outer,
             [
                 ("Cancel", "groupingConfirmCancelButton", dialog.reject, False),
-                ("Move Files", "groupingConfirmApplyButton", dialog.accept, True),
+                ("Apply Changes", "groupingConfirmApplyButton", dialog.accept, True),
             ],
         )
 
@@ -2744,7 +2959,18 @@ class GroupingStepWidget(QWidget):
                 f"Move {self._relative_path_for_source(source_path)} -> "
                 f"{os.path.relpath(destination_path, self._current_output_root or self._source_root or os.path.dirname(destination_path))}"
             )
-        for folder_path in self._empty_directories_after_move(moving_paths):
+        deleted_file_paths: List[str] = []
+        for deleted_path in getattr(plan, "deleted_paths", []) or []:
+            if os.path.isdir(deleted_path):
+                lines.append(
+                    f"Delete folder {self._relative_display_path(deleted_path)}"
+                )
+                continue
+            deleted_file_paths.append(deleted_path)
+            lines.append(f"Delete file {self._relative_display_path(deleted_path)}")
+        for folder_path in self._empty_directories_after_move(
+            list(moving_paths) + deleted_file_paths
+        ):
             lines.append(
                 f"Remove empty folder {self._relative_display_path(folder_path)}"
             )
@@ -2758,7 +2984,9 @@ class GroupingStepWidget(QWidget):
         for current_root, _dirnames, filenames in os.walk(root):
             for filename in filenames:
                 occupied.add(
-                    os.path.normcase(os.path.normpath(os.path.join(current_root, filename)))
+                    os.path.normcase(
+                        os.path.normpath(os.path.join(current_root, filename))
+                    )
                 )
         return occupied
 
@@ -2771,7 +2999,9 @@ class GroupingStepWidget(QWidget):
     ) -> str:
         desired_destination_path = os.path.join(destination_dir, basename)
         normalized_source = os.path.normcase(os.path.normpath(source_path))
-        normalized_desired = os.path.normcase(os.path.normpath(desired_destination_path))
+        normalized_desired = os.path.normcase(
+            os.path.normpath(desired_destination_path)
+        )
         if normalized_source == normalized_desired:
             return desired_destination_path
 

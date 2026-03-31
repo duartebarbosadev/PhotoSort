@@ -17,9 +17,7 @@ logger = logging.getLogger(__name__)
 ARW_CACHE_LOG_INTERVAL = 250
 
 # Default path for the EXIF metadata cache
-DEFAULT_EXIF_CACHE_DIR = os.path.join(
-    resolve_user_cache_dir("photosort_exif_data")
-)
+DEFAULT_EXIF_CACHE_DIR = os.path.join(resolve_user_cache_dir("photosort_exif_data"))
 # DEFAULT_EXIF_CACHE_SIZE_LIMIT_MB is now managed by app_settings
 
 
