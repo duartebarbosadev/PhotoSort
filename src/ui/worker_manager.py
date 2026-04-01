@@ -22,6 +22,7 @@ from workers.rating_writer_worker import RatingWriterWorker
 from workers.rotation_application_worker import RotationApplicationWorker
 from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 from workers.best_shot_worker import BestShotWorker
+from workers.pick_best_worker import PickBestWorker
 from workers.ai_rating_worker import AiRatingWorker
 from workers.grouping_worker import GroupingPreviewWorker, GroupingWorkflowWorker
 from core.image_pipeline import ImagePipeline
@@ -138,6 +139,11 @@ class WorkerManager(QObject):
     grouping_workflow_complete = pyqtSignal(object)
     grouping_workflow_error = pyqtSignal(str)
 
+    # Pick Best signals
+    pick_best_progress = pyqtSignal(int, str)
+    pick_best_complete = pyqtSignal(dict)
+    pick_best_error = pyqtSignal(str)
+
     def __init__(
         self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None
     ):
@@ -178,6 +184,9 @@ class WorkerManager(QObject):
         self.grouping_preview_worker: Optional[GroupingPreviewWorker] = None
         self.grouping_workflow_thread: Optional[QThread] = None
         self.grouping_workflow_worker: Optional[GroupingWorkflowWorker] = None
+
+        self.pick_best_thread: Optional[QThread] = None
+        self.pick_best_worker: Optional[PickBestWorker] = None
 
         self.cuda_detection_thread: Optional[QThread] = None
         self.cuda_detection_worker: Optional[CudaDetectionWorker] = None
@@ -707,6 +716,7 @@ class WorkerManager(QObject):
         self.stop_ai_rating()
         self.stop_grouping_preview()
         self.stop_grouping_workflow()
+        self.stop_pick_best_analysis()
         logger.info("All workers stop requested.")
 
     def is_file_scanner_running(self) -> bool:
@@ -762,6 +772,9 @@ class WorkerManager(QObject):
             self.grouping_workflow_thread is not None
             and self.grouping_workflow_thread.isRunning()
         )
+
+    def is_pick_best_running(self) -> bool:
+        return self.pick_best_thread is not None and self.pick_best_thread.isRunning()
 
     def start_update_check(self, current_version: str):
         """Start checking for updates in a background thread."""
@@ -1051,6 +1064,53 @@ class WorkerManager(QObject):
             self.ai_rating_thread.deleteLater()
             self.ai_rating_thread = None
         logger.info("AI rating thread and worker cleaned up.")
+
+    def start_pick_best_analysis(self, cluster_map: Dict[int, List[str]]) -> None:
+        """Start the pick-best scoring worker."""
+        self.stop_pick_best_analysis()
+        if not cluster_map:
+            self.pick_best_complete.emit({})
+            return
+
+        self.pick_best_thread = QThread()
+        self.pick_best_worker = PickBestWorker(
+            cluster_map=cluster_map,
+            image_pipeline=self.image_pipeline,
+        )
+        self.pick_best_worker.moveToThread(self.pick_best_thread)
+
+        self.pick_best_worker.progress_update.connect(self.pick_best_progress.emit)
+        self.pick_best_worker.completed.connect(self.pick_best_complete.emit)
+        self.pick_best_worker.error.connect(self.pick_best_error.emit)
+        self.pick_best_worker.finished.connect(self.pick_best_thread.quit)
+        self.pick_best_worker.finished.connect(self.pick_best_worker.deleteLater)
+        self.pick_best_thread.finished.connect(self._cleanup_pick_best_worker)
+        self.pick_best_thread.started.connect(self.pick_best_worker.run)
+
+        self.pick_best_thread.start()
+        logger.info("Pick best analysis thread started.")
+
+    def stop_pick_best_analysis(self) -> None:
+        worker_stop = self.pick_best_worker.stop if self.pick_best_worker else None
+        temp_thread, _ = self._terminate_thread(self.pick_best_thread, worker_stop)
+        if temp_thread is None:
+            self.pick_best_thread = None
+            self.pick_best_worker = None
+        else:
+            self.pick_best_thread = temp_thread
+
+    def _cleanup_pick_best_worker(self) -> None:
+        if self.pick_best_worker:
+            try:
+                if not sip.isdeleted(self.pick_best_worker):
+                    self.pick_best_worker.deleteLater()
+            except Exception:
+                logger.debug("Pick best worker already deleted.", exc_info=True)
+            self.pick_best_worker = None
+        if self.pick_best_thread:
+            self.pick_best_thread.deleteLater()
+            self.pick_best_thread = None
+        logger.info("Pick best thread and worker cleaned up.")
 
     def start_best_shot_analysis(
         self,

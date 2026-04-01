@@ -37,6 +37,10 @@ class AppState:
         self.best_shot_scores_by_path: Dict[str, Dict[str, Any]] = {}
         self.best_shot_winners: Dict[int, Dict[str, Any]] = {}
         self.ai_rating_results: Dict[str, Dict[str, Any]] = {}
+        self.pick_best_results: Dict[
+            int, Dict[str, Any]
+        ] = {}  # cluster_id -> {winner_path, ranked, failed, all_paths}
+        self.pick_best_winners_by_path: Dict[str, bool] = {}  # path -> True if winner
 
         # Could also hold current folder path, filter states, etc. if desired.
         self.current_folder_path: Optional[str] = None
@@ -67,6 +71,7 @@ class AppState:
             self.analysis_cache.clear_folder(folder_path)
         self.focused_image_path = None
         self.clear_best_shot_results()
+        self.clear_pick_best_results()
         self.ai_rating_results.clear()
         # self.current_folder_path = None # Optionally reset current folder path
 
@@ -211,6 +216,11 @@ class AppState:
         self.best_shot_rankings.clear()
         self.best_shot_scores_by_path.clear()
         self.best_shot_winners.clear()
+
+    def clear_pick_best_results(self):
+        """Resets pick-best step results."""
+        self.pick_best_results.clear()
+        self.pick_best_winners_by_path.clear()
 
     def merge_best_shot_results(
         self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]

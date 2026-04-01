@@ -271,7 +271,13 @@ class AppController(QObject):
             self.handle_grouping_workflow_error
         )
 
+        # Pick Best Worker
+        self.worker_manager.pick_best_progress.connect(self.handle_pick_best_progress)
+        self.worker_manager.pick_best_complete.connect(self.handle_pick_best_complete)
+        self.worker_manager.pick_best_error.connect(self.handle_pick_best_error)
+
         self._ai_rating_warning_messages: list[str] = []
+        self._pick_best_pending_after_similarity: bool = False
 
     # --- Public Methods (called from MainWindow) ---
 
@@ -1221,6 +1227,66 @@ class AppController(QObject):
         )
         self.main_window.cancel_pending_close_after_grouping()
 
+    def start_pick_best_workflow(self) -> None:
+        """Start the Pick Best workflow — auto-runs similarity if not yet done."""
+        if not self.app_state.image_files_data:
+            self.main_window.statusBar().showMessage("No images loaded.", 3000)
+            return
+
+        if self.worker_manager.is_pick_best_running() or self._pick_best_pending_after_similarity:
+            return
+
+        if self.app_state.pick_best_results:
+            return
+
+        widget = self.main_window.pick_best_step_widget
+
+        if self.app_state.cluster_results:
+            # Similarity already done — go straight to scoring
+            self._start_pick_best_scoring()
+        else:
+            # Need to run similarity first
+            logger.info("Pick Best: no cluster results yet, running similarity first.")
+            self._pick_best_pending_after_similarity = True
+            widget.show_loading("Step 1/2: Computing similarity clusters…", 0)
+            self.start_similarity_analysis()
+
+    def _start_pick_best_scoring(self) -> None:
+        cluster_map = self._build_cluster_path_map()
+        widget = self.main_window.pick_best_step_widget
+        total_clusters = len(cluster_map)
+        scorable = sum(1 for paths in cluster_map.values() if len(paths) >= 2)
+        if scorable == 0:
+            logger.info("Pick Best: no clusters with 2+ images.")
+            widget.show_loading(
+                f"No comparable clusters found ({total_clusters} singleton cluster(s)).\n"
+                "Click 'Done' to continue to Cull."
+            )
+            return
+        widget.show_loading(f"Step 2/2: Scoring {scorable} cluster(s)…", 0)
+        self.worker_manager.start_pick_best_analysis(cluster_map)
+
+    def handle_pick_best_progress(self, percent: int, message: str) -> None:
+        self.main_window.pick_best_step_widget.show_loading(
+            f"Scoring images… {message}", percent
+        )
+
+    def handle_pick_best_complete(self, results: dict) -> None:
+        logger.info(f"Pick Best complete: {len(results)} clusters scored.")
+        self.app_state.pick_best_results = results
+        # Build quick path→is_winner lookup
+        self.app_state.pick_best_winners_by_path.clear()
+        for cluster_data in results.values():
+            winner = cluster_data.get("winner_path")
+            if winner:
+                self.app_state.pick_best_winners_by_path[winner] = True
+        self.main_window.pick_best_step_widget.show_results(results)
+
+    def handle_pick_best_error(self, message: str) -> None:
+        logger.error(f"Pick Best error: {message}", exc_info=False)
+        self.main_window.pick_best_step_widget.show_error(message)
+        self.main_window.statusBar().showMessage(f"Pick Best error: {message}", 6000)
+
     def handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0
         self.main_window.update_loading_text(
@@ -1331,6 +1397,7 @@ class AppController(QObject):
     def handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
         self.app_state.cluster_results = cluster_results_dict
         self.app_state.clear_best_shot_results()
+        self.app_state.clear_pick_best_results()
 
         # Apply saved manual overrides on top of auto-clustering results
         if self.app_state.current_folder_path:
@@ -1375,10 +1442,18 @@ class AppController(QObject):
         self.main_window.refresh_navigation_shortcut_actions()
         if self.main_window.group_by_similarity_mode:
             self.main_window._rebuild_model_view()
-        self.main_window.hide_loading_overlay()
+
+        if self._pick_best_pending_after_similarity:
+            self._pick_best_pending_after_similarity = False
+            self._start_pick_best_scoring()
+        else:
+            self.main_window.hide_loading_overlay()
 
     def handle_similarity_error(self, message):
         logger.error(f"Similarity analysis failed: {message}", exc_info=True)
+        if self._pick_best_pending_after_similarity:
+            self._pick_best_pending_after_similarity = False
+            self.main_window.pick_best_step_widget.show_error(message)
         self.main_window.statusBar().showMessage(f"Similarity Error: {message}", 8000)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self._get_image_file_data())

@@ -74,6 +74,7 @@ from ui.left_panel import LeftPanel
 from ui.app_controller import AppController
 from ui.menu_manager import MenuManager
 from ui.grouping_step_widget import GroupingStepWidget
+from ui.pick_best_step_widget import PickBestStepWidget
 from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
 from ui.helpers.index_lookup_utils import find_proxy_index_for_path
@@ -667,12 +668,16 @@ class MainWindow(QMainWindow):
         logger.debug("Creating widgets...")
         self.workflow_stack = QStackedWidget()
         self.grouping_step_widget = GroupingStepWidget(self)
+        self.pick_best_step_widget = PickBestStepWidget(self)
         self.workflow_nav = QWidget()
         self.workflow_nav.setObjectName("workflowNav")
         self.step_organize_button = QPushButton("1. Organize")
         self.step_organize_button.setObjectName("workflowStepButton")
         self.step_organize_button.setCheckable(True)
-        self.step_cull_button = QPushButton("2. Cull")
+        self.step_pick_best_button = QPushButton("2. Pick Best")
+        self.step_pick_best_button.setObjectName("workflowStepButton")
+        self.step_pick_best_button.setCheckable(True)
+        self.step_cull_button = QPushButton("3. Cull")
         self.step_cull_button.setObjectName("workflowStepButton")
         self.step_cull_button.setCheckable(True)
 
@@ -769,6 +774,7 @@ class MainWindow(QMainWindow):
         nav_layout.setContentsMargins(8, 8, 8, 8)
         nav_layout.setSpacing(8)
         nav_layout.addWidget(self.step_organize_button)
+        nav_layout.addWidget(self.step_pick_best_button)
         nav_layout.addWidget(self.step_cull_button)
         nav_layout.addStretch(1)
 
@@ -777,6 +783,12 @@ class MainWindow(QMainWindow):
         grouping_page_layout.setContentsMargins(0, 0, 0, 0)
         grouping_page_layout.setSpacing(0)
         grouping_page_layout.addWidget(self.grouping_step_widget)
+
+        self.pick_best_page = QWidget()
+        pick_best_page_layout = QVBoxLayout(self.pick_best_page)
+        pick_best_page_layout.setContentsMargins(0, 0, 0, 0)
+        pick_best_page_layout.setSpacing(0)
+        pick_best_page_layout.addWidget(self.pick_best_step_widget)
 
         self.cull_page = QWidget()
         cull_page_layout = QVBoxLayout(self.cull_page)
@@ -806,6 +818,7 @@ class MainWindow(QMainWindow):
 
         cull_page_layout.addWidget(main_splitter)
         self.workflow_stack.addWidget(self.grouping_page)
+        self.workflow_stack.addWidget(self.pick_best_page)
         self.workflow_stack.addWidget(self.cull_page)
         main_layout.addWidget(self.workflow_stack)
 
@@ -897,7 +910,20 @@ class MainWindow(QMainWindow):
             self._open_folder_dialog
         )
         self.step_organize_button.clicked.connect(self._go_to_grouping_step)
+        self.step_pick_best_button.clicked.connect(self._go_to_pick_best_step)
         self.step_cull_button.clicked.connect(self._go_to_cull_step)
+
+        # Pick Best step widget signals
+        self.pick_best_step_widget.skip_requested.connect(self.show_cull_step)
+        self.pick_best_step_widget.proceed_to_cull_requested.connect(
+            self.show_cull_step
+        )
+        self.pick_best_step_widget.mark_for_deletion_requested.connect(
+            self._mark_paths_for_deletion
+        )
+        self.pick_best_step_widget.unmark_for_deletion_requested.connect(
+            self._unmark_paths_for_deletion
+        )
 
         # Connect MenuManager signals
         self.menu_manager.connect_signals()
@@ -940,6 +966,13 @@ class MainWindow(QMainWindow):
 
     def _go_to_grouping_step(self) -> None:
         self.show_grouping_step()
+
+    def _go_to_pick_best_step(self) -> None:
+        if not self.app_state.image_files_data:
+            self.statusBar().showMessage("Load a folder first.", 3000)
+            self.update_workflow_navigation()
+            return
+        self.show_pick_best_step()
 
     def _go_to_cull_step(self) -> None:
         if not self.app_state.image_files_data:
@@ -1193,15 +1226,45 @@ class MainWindow(QMainWindow):
         self.workflow_stack.setCurrentWidget(self.cull_page)
         self.update_workflow_navigation()
 
+    def show_pick_best_step(self) -> None:
+        self.app_state.workflow_step = "pick_best"
+        self.workflow_stack.setCurrentWidget(self.pick_best_page)
+        self.update_workflow_navigation()
+        if self.app_state.pick_best_results:
+            return
+        self.app_controller.start_pick_best_workflow()
+
     def update_workflow_navigation(self) -> None:
         has_loaded_folder = bool(
             self.app_state.grouping_source_root or self.app_state.current_folder_path
         )
         has_cull_content = bool(self.app_state.image_files_data)
         self.step_organize_button.setEnabled(has_loaded_folder or not has_cull_content)
+        self.step_pick_best_button.setEnabled(has_cull_content)
         self.step_cull_button.setEnabled(has_cull_content)
         self.step_organize_button.setChecked(self.app_state.workflow_step == "organize")
+        self.step_pick_best_button.setChecked(
+            self.app_state.workflow_step == "pick_best"
+        )
         self.step_cull_button.setChecked(self.app_state.workflow_step == "cull")
+
+    def _mark_paths_for_deletion(self, paths: list) -> None:
+        self.deletion_controller.mark_paths(
+            paths,
+            self._find_proxy_index_for_path,
+            self.file_system_model,
+            self.proxy_model,
+        )
+        self.proxy_model.invalidate()
+
+    def _unmark_paths_for_deletion(self, paths: list) -> None:
+        self.deletion_controller.unmark_paths(
+            paths,
+            self._find_proxy_index_for_path,
+            self.file_system_model,
+            self.proxy_model,
+        )
+        self.proxy_model.invalidate()
 
     def update_grouping_preview(self, text: str) -> None:
         self.grouping_step_widget.set_preview_text(text)
