@@ -669,6 +669,12 @@ class MainWindow(QMainWindow):
         self.workflow_stack = QStackedWidget()
         self.grouping_step_widget = GroupingStepWidget(self)
         self.pick_best_step_widget = PickBestStepWidget(self)
+        self.pick_best_step_widget.set_is_marked_func(
+            self.app_state.is_marked_for_deletion
+        )
+        self.pick_best_step_widget.set_has_any_marked_func(
+            lambda: bool(self.app_state.marked_for_deletion)
+        )
         self.workflow_nav = QWidget()
         self.workflow_nav.setObjectName("workflowNav")
         self.step_organize_button = QPushButton("1. Organize")

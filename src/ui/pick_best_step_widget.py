@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List, Optional
+from fractions import Fraction
+from typing import Callable, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QImage, QKeyEvent, QPixmap
+from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
+from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -13,108 +15,165 @@ from PyQt6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
-    QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from core.metadata_processor import MetadataProcessor
+from ui.advanced_image_viewer import SynchronizedImageViewer
+
 logger = logging.getLogger(__name__)
 
-THUMB_SIZE = 180
-CARDS_PER_ROW = 4
 WINNER_BORDER_COLOR = "#F5B700"
 MARKED_BORDER_COLOR = "#E53935"
-NEUTRAL_BORDER_COLOR = "#555555"
+KEEP_BORDER_COLOR = "#66BB6A"
 FOCUSED_BORDER_COLOR = "#4FC3F7"
+CARD_BG = "#20252C"
+CARD_BG_WINNER = "#2C2616"
 
 
-def _load_pixmap(path: str, size: int = THUMB_SIZE) -> Optional[QPixmap]:
-    try:
-        from PIL import Image, ImageOps
+def _first_present(metadata: dict, *keys: str):
+    for key in keys:
+        value = metadata.get(key)
+        if value not in (None, "", "None"):
+            return value
+    return None
 
-        img = Image.open(path)
-        img = ImageOps.exif_transpose(img)
-        img = img.convert("RGB")
-        img.thumbnail((size, size), Image.Resampling.LANCZOS)
-        w, h = img.size
-        data = img.tobytes("raw", "RGB")
-        qimg = QImage(data, w, h, w * 3, QImage.Format.Format_RGB888)
-        return QPixmap.fromImage(qimg)
-    except Exception as exc:
-        logger.debug(f"Could not load thumbnail for {path}: {exc}")
+
+def _fraction_text(value: object) -> Optional[str]:
+    if value in (None, ""):
         return None
+    text = str(value).strip()
+    try:
+        if "/" in text:
+            frac = Fraction(text)
+            if frac >= 1:
+                return f"{float(frac):.1f}s"
+            return f"1/{round(1 / float(frac))}s"
+        numeric = float(text)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return text
+    if numeric >= 1:
+        return f"{numeric:.1f}s"
+    if numeric <= 0:
+        return text
+    return f"1/{round(1 / numeric)}s"
 
 
-class ThumbnailCard(QFrame):
-    """A clickable thumbnail card showing one image in the cluster."""
+def _float_text(
+    value: object, prefix: str = "", suffix: str = "", digits: int = 1
+) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    try:
+        return f"{prefix}{float(value):.{digits}f}{suffix}"
+    except (TypeError, ValueError):
+        return f"{prefix}{value}{suffix}"
 
-    toggled = pyqtSignal(str, bool)  # path, is_marked
 
-    def __init__(
-        self,
-        path: str,
-        is_winner: bool,
-        score: Optional[float],
-        pixmap: Optional[QPixmap] = None,
-        parent: Optional[QWidget] = None,
-    ) -> None:
+class CompareCard(QFrame):
+    toggled = pyqtSignal(str, bool)
+
+    def __init__(self, slot_number: int, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.path = path
-        self.is_winner = is_winner
+        self.path: str = ""
+        self.is_winner = False
         self._marked = False
         self._focused = False
+        self._slot_number = slot_number
 
-        self.setFixedSize(THUMB_SIZE + 16, THUMB_SIZE + 44)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setCursor(
-            Qt.CursorShape.PointingHandCursor
-            if not is_winner
-            else Qt.CursorShape.ArrowCursor
-        )
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(2)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
 
-        # Image area
-        self._img_label = QLabel()
-        self._img_label.setFixedSize(THUMB_SIZE, THUMB_SIZE)
-        self._img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._img_label.setStyleSheet("background-color: #1a1a1a;")
-        layout.addWidget(self._img_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(8)
 
-        # Filename + score row
-        basename = os.path.basename(path)
-        score_str = f"  ({score:.2f})" if score is not None else ""
-        name_label = QLabel(basename + score_str)
-        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        name_label.setWordWrap(False)
-        name_label.setStyleSheet("font-size: 10px; color: #cccccc;")
-        name_label.setMaximumWidth(THUMB_SIZE + 8)
-        layout.addWidget(name_label)
+        self._slot_label = QLabel(f"{slot_number}")
+        self._slot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._slot_label.setFixedSize(22, 22)
+        self._slot_label.setStyleSheet(
+            "border-radius: 11px; background: #11161C; color: #B8C2CC; font-weight: bold;"
+        )
+        top_row.addWidget(self._slot_label, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        # Badge label (winner / marked)
-        self._badge_label = QLabel()
-        self._badge_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._badge_label.setFixedHeight(16)
-        layout.addWidget(self._badge_label)
+        self._state_label = QLabel()
+        self._state_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        top_row.addWidget(self._state_label, stretch=1)
+        layout.addLayout(top_row)
+
+        self._name_label = QLabel("")
+        self._name_label.setWordWrap(False)
+        self._name_label.setStyleSheet("font-size: 12px; font-weight: 600; color: #F5F7FA;")
+        layout.addWidget(self._name_label)
+
+        self._score_label = QLabel("")
+        self._score_label.setStyleSheet("font-size: 11px; color: #AAB4BE;")
+        layout.addWidget(self._score_label)
+
+        self._meta_grid = QGridLayout()
+        self._meta_grid.setContentsMargins(0, 0, 0, 0)
+        self._meta_grid.setHorizontalSpacing(10)
+        self._meta_grid.setVerticalSpacing(4)
+        layout.addLayout(self._meta_grid)
+
+        self._meta_rows: list[tuple[QLabel, QLabel]] = []
+        for row in range(5):
+            key = QLabel("")
+            key.setStyleSheet("font-size: 10px; color: #7D8792;")
+            value = QLabel("")
+            value.setStyleSheet("font-size: 10px; color: #D5DBE1;")
+            self._meta_grid.addWidget(key, row, 0)
+            self._meta_grid.addWidget(value, row, 1)
+            self._meta_rows.append((key, value))
+
+        self._hint_label = QLabel("Click image/card or press number key")
+        self._hint_label.setStyleSheet("font-size: 10px; color: #6D7782;")
+        layout.addWidget(self._hint_label)
 
         self._update_style()
 
-        # Load thumbnail in-place (fast enough for review step)
-        if pixmap is not None:
-            self._img_label.setPixmap(pixmap)
+    def configure(
+        self,
+        *,
+        path: str,
+        is_winner: bool,
+        marked: bool,
+        score: Optional[float],
+        metadata_rows: list[tuple[str, str]],
+    ) -> None:
+        self.path = path
+        self.is_winner = is_winner
+        self._marked = marked
+        self._name_label.setText(os.path.basename(path))
+        if score is None:
+            self._score_label.setText("Score unavailable")
         else:
-            fallback_pixmap = _load_pixmap(path, THUMB_SIZE)
-            if fallback_pixmap is not None:
-                self._img_label.setPixmap(fallback_pixmap)
+            self._score_label.setText(f"Final score {score:.3f}")
+
+        for idx, (key_label, value_label) in enumerate(self._meta_rows):
+            if idx < len(metadata_rows):
+                key_text, value_text = metadata_rows[idx]
+                key_label.setText(key_text)
+                value_label.setText(value_text)
+                key_label.show()
+                value_label.show()
             else:
-                self._img_label.setText("?")
+                key_label.hide()
+                value_label.hide()
+
+        self._update_style()
 
     def set_marked(self, marked: bool) -> None:
-        if self.is_winner:
-            return
         self._marked = marked
         self._update_style()
 
@@ -122,69 +181,81 @@ class ThumbnailCard(QFrame):
         self._focused = focused
         self._update_style()
 
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.path:
+            self._toggle()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def _toggle(self) -> None:
+        if not self.path:
+            return
+        self._marked = not self._marked
+        self._update_style()
+        self.toggled.emit(self.path, self._marked)
+
     def _update_style(self) -> None:
         if self.is_winner:
             border_color = WINNER_BORDER_COLOR
-            self._badge_label.setText("★ BEST")
-            self._badge_label.setStyleSheet(
-                f"color: {WINNER_BORDER_COLOR}; font-weight: bold; font-size: 11px;"
+            bg = CARD_BG_WINNER
+            status = "BEST DELETE" if self._marked else "BEST KEEP"
+            color = MARKED_BORDER_COLOR if self._marked else WINNER_BORDER_COLOR
+            self._state_label.setText(status)
+            self._state_label.setStyleSheet(
+                f"font-size: 11px; font-weight: bold; color: {color};"
             )
-        elif self._marked:
-            border_color = MARKED_BORDER_COLOR
-            self._badge_label.setText("✗ DELETE")
-            self._badge_label.setStyleSheet(
-                f"color: {MARKED_BORDER_COLOR}; font-weight: bold; font-size: 11px;"
+            self._hint_label.setText(
+                f"Best candidate on the right. Click or press {self._slot_number} to toggle"
             )
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
         else:
-            border_color = (
-                FOCUSED_BORDER_COLOR if self._focused else NEUTRAL_BORDER_COLOR
+            border_color = MARKED_BORDER_COLOR if self._marked else KEEP_BORDER_COLOR
+            if self._focused:
+                border_color = FOCUSED_BORDER_COLOR
+            bg = CARD_BG
+            status = "DELETE" if self._marked else "KEEP"
+            color = MARKED_BORDER_COLOR if self._marked else KEEP_BORDER_COLOR
+            self._state_label.setText(status)
+            self._state_label.setStyleSheet(
+                f"font-size: 11px; font-weight: bold; color: {color};"
             )
-            self._badge_label.setText("✓ KEEP")
-            self._badge_label.setStyleSheet(
-                "color: #66BB6A; font-weight: bold; font-size: 11px;"
-                if not self._focused
-                else "color: #4FC3F7; font-weight: bold; font-size: 11px;"
+            self._hint_label.setText(
+                f"Click image/card or press {self._slot_number} to toggle"
             )
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.setStyleSheet(
-            f"ThumbnailCard {{ border: 2px solid {border_color}; border-radius: 6px; "
-            f"background-color: #2a2a2a; }}"
+            f"CompareCard {{"
+            f"border: 2px solid {border_color};"
+            f"border-radius: 10px;"
+            f"background: {bg};"
+            f"}}"
         )
-
-    def mousePressEvent(self, event) -> None:
-        if not self.is_winner:
-            self._marked = not self._marked
-            self._update_style()
-            self.toggled.emit(self.path, self._marked)
-        super().mousePressEvent(event)
 
 
 class PickBestStepWidget(QWidget):
-    """
-    Step 2: Pick Best Photos.
-
-    Shows similarity clusters with the AI-scored winner highlighted.
-    Non-winners are pre-marked for deletion. User un-marks the ones to keep.
-    Emits signals to integrate with app_controller.
-    """
-
     skip_requested = pyqtSignal()
     proceed_to_cull_requested = pyqtSignal()
-    mark_for_deletion_requested = pyqtSignal(list)  # list[str] paths
-    unmark_for_deletion_requested = pyqtSignal(list)  # list[str] paths
+    mark_for_deletion_requested = pyqtSignal(list)
+    unmark_for_deletion_requested = pyqtSignal(list)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._clusters: List[Dict] = []  # list of cluster result dicts
-        self._cluster_index: int = 0
-        self._cards: List[ThumbnailCard] = []
-        self._focused_card_index: int = 0
+        self._clusters: List[Dict] = []
+        self._cluster_index = 0
+        self._subset_index = 0
+        self._subset_paths: List[str] = []
+        self._compare_cards: List[CompareCard] = []
+        self._focused_slot_index = 0
+        self._current_winner_path = ""
+        self._current_all_paths: List[str] = []
+        self._cluster_ordered_paths: List[str] = []
+        self._cluster_mark_state: Dict[str, bool] = {}
+        self._metadata_cache: Dict[str, list[tuple[str, str]]] = {}
         self._create_widgets()
         self._connect_signals()
-
-    # ------------------------------------------------------------------ #
-    # Public API                                                           #
-    # ------------------------------------------------------------------ #
+        self._create_shortcuts()
 
     def show_loading(self, message: str = "Analysing…", percent: int = 0) -> None:
         self._stack.setCurrentWidget(self._page_loading)
@@ -197,19 +268,17 @@ class PickBestStepWidget(QWidget):
         self._progress_bar.setValue(0)
 
     def show_results(self, results: Dict[int, dict]) -> None:
-        """
-        Populate the review page.
-
-        ``results`` maps cluster_id → {'winner_path', 'ranked', 'failed', 'all_paths'}.
-        Only clusters with a winner_path (i.e. ≥2 scored images) are shown.
-        """
         self._clusters = [r for r in results.values() if r.get("winner_path")]
+        self._metadata_cache.clear()
         if not self._clusters:
             self.show_loading(
                 "No comparable clusters found.\nClick 'Done' to continue to Cull."
             )
             self._skip_btn_loading.setText("Done: Go to Cull →")
-            self._skip_btn_loading.clicked.disconnect()
+            try:
+                self._skip_btn_loading.clicked.disconnect()
+            except TypeError:
+                pass
             self._skip_btn_loading.clicked.connect(self.proceed_to_cull_requested)
             return
 
@@ -217,9 +286,11 @@ class PickBestStepWidget(QWidget):
         self._load_cluster(0)
         self._stack.setCurrentWidget(self._page_review)
 
-    # ------------------------------------------------------------------ #
-    # Private — widget construction                                        #
-    # ------------------------------------------------------------------ #
+    def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
+        self._sync_viewer.set_is_marked_for_deletion_func(func)
+
+    def set_has_any_marked_func(self, func: Callable[[], bool]) -> None:
+        self._sync_viewer.set_has_any_marked_for_deletion_func(func)
 
     def _create_widgets(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -229,7 +300,6 @@ class PickBestStepWidget(QWidget):
         self._stack = QStackedWidget()
         main_layout.addWidget(self._stack)
 
-        # -- Loading page -- #
         self._page_loading = QWidget()
         loading_layout = QVBoxLayout(self._page_loading)
         loading_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -262,80 +332,77 @@ class PickBestStepWidget(QWidget):
         loading_layout.addWidget(
             self._skip_btn_loading, alignment=Qt.AlignmentFlag.AlignCenter
         )
-
         self._stack.addWidget(self._page_loading)
 
-        # -- Review page -- #
         self._page_review = QWidget()
         review_layout = QVBoxLayout(self._page_review)
-        review_layout.setContentsMargins(12, 8, 12, 8)
+        review_layout.setContentsMargins(10, 8, 10, 8)
         review_layout.setSpacing(8)
 
-        # Header bar
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
 
-        self._prev_btn = QPushButton("◀ Prev")
-        self._prev_btn.setFixedWidth(80)
-        header_layout.addWidget(self._prev_btn)
+        self._prev_cluster_btn = QPushButton("◀ Prev Cluster")
+        self._prev_cluster_btn.setFixedWidth(110)
+        header_layout.addWidget(self._prev_cluster_btn)
 
         self._cluster_info_label = QLabel()
         self._cluster_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._cluster_info_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         header_layout.addWidget(self._cluster_info_label, stretch=1)
 
-        self._next_btn = QPushButton("Next ▶")
-        self._next_btn.setFixedWidth(80)
-        header_layout.addWidget(self._next_btn)
-
+        self._next_cluster_btn = QPushButton("Next Cluster ▶")
+        self._next_cluster_btn.setFixedWidth(110)
+        header_layout.addWidget(self._next_cluster_btn)
         review_layout.addWidget(header)
 
-        # Keyboard hint
+        self._subset_info_label = QLabel()
+        self._subset_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._subset_info_label.setStyleSheet("font-size: 11px; color: #92A0AD;")
+        review_layout.addWidget(self._subset_info_label)
+
         hint = QLabel(
-            "Click or D = toggle keep/delete  ·  ← → = navigate  ·  N = next cluster  ·  Ctrl+↵ = commit & next"
+            "Up to 3 images per round. Winner stays on the right. Click an image/card or press 1, 2, 3 to toggle keep/delete."
         )
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
         hint.setStyleSheet("font-size: 11px; color: #888888;")
         review_layout.addWidget(hint)
 
-        # Thumbnail scroll area
-        self._scroll_area = QScrollArea()
-        self._scroll_area.setWidgetResizable(True)
-        self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll_area.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-        self._scroll_area.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        self._sync_viewer = SynchronizedImageViewer()
+        self._sync_viewer.controls_frame.hide()
+        review_layout.addWidget(self._sync_viewer, stretch=1)
 
-        self._thumbs_container = QWidget()
-        self._thumbs_grid = QGridLayout(self._thumbs_container)
-        self._thumbs_grid.setContentsMargins(4, 4, 4, 4)
-        self._thumbs_grid.setSpacing(8)
-        self._scroll_area.setWidget(self._thumbs_container)
-        review_layout.addWidget(self._scroll_area, stretch=1)
+        self._cards_row = QWidget()
+        self._cards_layout = QHBoxLayout(self._cards_row)
+        self._cards_layout.setContentsMargins(0, 0, 0, 0)
+        self._cards_layout.setSpacing(10)
+        for slot in range(3):
+            card = CompareCard(slot + 1, self._cards_row)
+            self._cards_layout.addWidget(card)
+            self._compare_cards.append(card)
+        review_layout.addWidget(self._cards_row)
 
-        # Action bar
         action_bar = QWidget()
         action_layout = QHBoxLayout(action_bar)
-        action_layout.setContentsMargins(0, 4, 0, 4)
+        action_layout.setContentsMargins(0, 2, 0, 2)
+        action_layout.setSpacing(8)
 
-        self._keep_all_btn = QPushButton("Keep All")
-        self._keep_all_btn.setToolTip("Unmark all images in this cluster")
+        self._prev_set_btn = QPushButton("◀ Prev Set")
+        action_layout.addWidget(self._prev_set_btn)
+
+        self._keep_all_btn = QPushButton("Keep Visible")
+        self._keep_all_btn.setToolTip("Unmark the visible non-winners")
         action_layout.addWidget(self._keep_all_btn)
 
-        self._mark_rest_btn = QPushButton("Mark Non-Winners for Deletion")
-        self._mark_rest_btn.setToolTip("Re-mark all non-winners for deletion")
+        self._mark_rest_btn = QPushButton("Delete Visible")
+        self._mark_rest_btn.setToolTip("Mark the visible non-winners for deletion")
         action_layout.addWidget(self._mark_rest_btn)
 
-        self._delete_marked_btn = QPushButton("✗ Apply Deletions in Cluster")
-        self._delete_marked_btn.setToolTip(
-            "Commit marked deletions for this cluster and continue"
-        )
-        self._delete_marked_btn.setStyleSheet("color: #E53935; font-weight: bold;")
-        action_layout.addWidget(self._delete_marked_btn)
+        self._next_set_btn = QPushButton("Next Set ▶")
+        action_layout.addWidget(self._next_set_btn)
 
         action_layout.addStretch()
 
@@ -347,25 +414,50 @@ class PickBestStepWidget(QWidget):
         action_layout.addWidget(self._done_btn)
 
         review_layout.addWidget(action_bar)
-
         self._stack.addWidget(self._page_review)
-
-        # Start in loading state
         self._stack.setCurrentWidget(self._page_loading)
 
     def _connect_signals(self) -> None:
         self._skip_btn_loading.clicked.connect(self.skip_requested)
         self._skip_btn_review.clicked.connect(self.skip_requested)
         self._done_btn.clicked.connect(self._on_done)
-        self._prev_btn.clicked.connect(self._prev_cluster)
-        self._next_btn.clicked.connect(self._next_cluster)
-        self._keep_all_btn.clicked.connect(self._keep_all)
-        self._mark_rest_btn.clicked.connect(self._mark_non_winners)
-        self._delete_marked_btn.clicked.connect(self._apply_and_next)
+        self._prev_cluster_btn.clicked.connect(self._prev_cluster)
+        self._next_cluster_btn.clicked.connect(self._next_cluster)
+        self._prev_set_btn.clicked.connect(self._prev_subset)
+        self._next_set_btn.clicked.connect(self._next_subset)
+        self._keep_all_btn.clicked.connect(self._keep_visible)
+        self._mark_rest_btn.clicked.connect(self._delete_visible)
 
-    # ------------------------------------------------------------------ #
-    # Private — cluster review logic                                       #
-    # ------------------------------------------------------------------ #
+        self._sync_viewer.markAsDeletedRequested.connect(self._on_viewer_mark)
+        self._sync_viewer.unmarkAsDeletedRequested.connect(self._on_viewer_unmark)
+        self._sync_viewer.markOthersAsDeletedRequested.connect(self._on_viewer_mark_others)
+        self._sync_viewer.unmarkOthersAsDeletedRequested.connect(
+            self._on_viewer_unmark_others
+        )
+        self._sync_viewer.imageClicked.connect(self._on_viewer_clicked)
+        self._sync_viewer.installEventFilter(self)
+
+        for card in self._compare_cards:
+            card.toggled.connect(self._on_card_toggled)
+    
+    def _create_shortcuts(self) -> None:
+        self._shortcuts: List[QShortcut] = []
+        bindings = [
+            ("1", lambda: self._activate_slot_shortcut(0)),
+            ("2", lambda: self._activate_slot_shortcut(1)),
+            ("3", lambda: self._activate_slot_shortcut(2)),
+            ("Left", lambda: self._move_focus(-1)),
+            ("Right", lambda: self._move_focus(1)),
+            ("N", self._next_subset),
+            ("P", self._prev_subset),
+            ("]", self._next_cluster),
+            ("[", self._prev_cluster),
+        ]
+        for key_text, handler in bindings:
+            shortcut = QShortcut(QKeySequence(key_text), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(handler)
+            self._shortcuts.append(shortcut)
 
     def _load_cluster(self, index: int) -> None:
         if not self._clusters:
@@ -377,169 +469,399 @@ class PickBestStepWidget(QWidget):
         all_paths: List[str] = cluster.get("all_paths", [])
         ranked: List[dict] = cluster.get("ranked", [])
 
-        # Build score lookup
+        self._current_winner_path = winner_path
+        self._current_all_paths = list(all_paths)
+
         score_by_path: Dict[str, Optional[float]] = {
-            r["path"]: r.get("final_score") for r in ranked
+            entry["path"]: entry.get("final_score") for entry in ranked
         }
 
-        # Sort: winner first, then by score desc, then unsupported at end
-        def _sort_key(p: str):
-            if p == winner_path:
-                return (0, -(score_by_path.get(p) or 0.0))
-            score = score_by_path.get(p)
-            if score is not None:
-                return (1, -score)
-            return (2, 0.0)
+        non_winners = [path for path in all_paths if path != winner_path]
+        non_winners.sort(
+            key=lambda path: (
+                score_by_path.get(path) is None,
+                -(score_by_path.get(path) or 0.0),
+                os.path.basename(path).lower(),
+            )
+        )
+        self._cluster_ordered_paths = non_winners + (
+            [winner_path] if winner_path else []
+        )
+        saved_mark_state = cluster.get("_mark_state")
+        if isinstance(saved_mark_state, dict):
+            self._cluster_mark_state = {
+                path: bool(saved_mark_state.get(path, path != winner_path))
+                for path in self._cluster_ordered_paths
+            }
+        else:
+            self._cluster_mark_state = {
+                path: path != winner_path for path in self._cluster_ordered_paths
+            }
+        self._subset_index = 0
+        self._update_cluster_ui(score_by_path)
 
-        sorted_paths = sorted(all_paths, key=_sort_key)
+    def _update_cluster_ui(self, score_by_path: Dict[str, Optional[float]]) -> None:
+        self._show_subset(score_by_path)
+        total_clusters = len(self._clusters)
+        total_sets = self._subset_count()
+        visible_kept = sum(
+            1
+            for path, marked in self._cluster_mark_state.items()
+            if path != self._current_winner_path and not marked
+        )
+        visible_deleted = sum(
+            1
+            for path, marked in self._cluster_mark_state.items()
+            if path != self._current_winner_path and marked
+        )
+        self._cluster_info_label.setText(
+            f"Cluster {self._cluster_index + 1} / {total_clusters}  •  {len(self._current_all_paths)} photos  •  {visible_kept} keep / {visible_deleted} delete"
+        )
+        self._subset_info_label.setText(
+            f"Set {self._subset_index + 1} / {total_sets}  •  top challengers on the left, winner locked on the right"
+        )
+        self._prev_cluster_btn.setEnabled(self._cluster_index > 0)
+        self._next_cluster_btn.setEnabled(self._cluster_index < total_clusters - 1)
+        self._prev_set_btn.setEnabled(self._subset_index > 0)
+        self._next_set_btn.setEnabled(self._subset_index < total_sets - 1)
 
-        # Clear old grid
-        self._cards.clear()
-        while self._thumbs_grid.count():
-            item = self._thumbs_grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+    def _show_subset(self, score_by_path: Dict[str, Optional[float]]) -> None:
+        non_winners = [
+            path
+            for path in self._cluster_ordered_paths
+            if path != self._current_winner_path
+        ]
+        start = self._subset_index * 2
+        subset_non_winners = non_winners[start : start + 2]
+        subset_paths = list(subset_non_winners)
+        if self._current_winner_path:
+            subset_paths.append(self._current_winner_path)
+        self._subset_paths = subset_paths
 
-        # Populate grid
-        for i, path in enumerate(sorted_paths):
-            is_winner = path == winner_path
-            score = score_by_path.get(path)
+        image_pipeline = getattr(self.window(), "image_pipeline", None)
+        images_data = []
+        for path in subset_paths:
             pixmap = None
-            image_pipeline = getattr(self.window(), "image_pipeline", None)
             if image_pipeline is not None:
                 try:
-                    pixmap = image_pipeline.get_thumbnail_qpixmap(
-                        path, apply_orientation=True
-                    )
+                    pixmap = image_pipeline.get_cached_preview_qpixmap(path)
+                    if pixmap is None:
+                        pixmap = image_pipeline.get_preview_qpixmap(
+                            path, display_max_size=None
+                        )
+                    if pixmap is None:
+                        pixmap = image_pipeline.get_thumbnail_qpixmap(
+                            path, apply_orientation=True
+                        )
                 except Exception as exc:
-                    logger.debug("Could not load thumbnail via image pipeline for %s: %s", path, exc)
-            card = ThumbnailCard(
-                path,
-                is_winner=is_winner,
-                score=score,
-                pixmap=pixmap,
-                parent=self._thumbs_container,
-            )
-            # Pre-mark non-winners for deletion
-            if not is_winner:
-                card.set_marked(True)
-            card.toggled.connect(self._on_card_toggled)
-            row, col = divmod(i, CARDS_PER_ROW)
-            self._thumbs_grid.addWidget(card, row, col)
-            self._cards.append(card)
+                    logger.debug("Could not load preview for %s: %s", path, exc)
+            images_data.append({"path": path, "pixmap": pixmap, "rating": 0})
 
-        # Update header
-        total_clusters = len(self._clusters)
-        n_images = len(all_paths)
-        self._cluster_info_label.setText(
-            f"Cluster {index + 1} / {total_clusters}  •  {n_images} photos"
+        self._sync_viewer.set_images_data(images_data)
+        for viewer in self._sync_viewer.image_viewers:
+            viewer.control_bar.hide()
+
+        for index, card in enumerate(self._compare_cards):
+            if index < len(subset_paths):
+                path = subset_paths[index]
+                card.show()
+                card.configure(
+                    path=path,
+                    is_winner=path == self._current_winner_path,
+                    marked=self._cluster_mark_state.get(path, False),
+                    score=score_by_path.get(path),
+                    metadata_rows=self._metadata_rows_for_path(path),
+                )
+            else:
+                card.hide()
+
+        self._focused_slot_index = min(
+            self._focused_slot_index, max(0, len(subset_paths) - 1)
         )
-        self._prev_btn.setEnabled(index > 0)
-        self._next_btn.setEnabled(index < total_clusters - 1)
-
-        # Set keyboard focus
-        self._focused_card_index = 0
-        self._update_focus()
+        self._update_focus_state()
         self.setFocus()
 
-    def _update_focus(self) -> None:
-        for i, card in enumerate(self._cards):
-            card.set_focused(i == self._focused_card_index)
+    def _metadata_rows_for_path(self, path: str) -> list[tuple[str, str]]:
+        if path in self._metadata_cache:
+            return self._metadata_cache[path]
 
-    def _on_card_toggled(self, path: str, is_marked: bool) -> None:
-        """Called when a card is clicked."""
-        if is_marked:
-            self.mark_for_deletion_requested.emit([path])
-        else:
-            self.unmark_for_deletion_requested.emit([path])
+        rows: list[tuple[str, str]] = []
+        metadata = None
+        app_state = getattr(self.window(), "app_state", None)
+        cache = getattr(app_state, "exif_disk_cache", None) if app_state else None
+        try:
+            metadata = MetadataProcessor.get_detailed_metadata(path, cache)
+        except Exception:
+            logger.debug("EXIF lookup failed for %s", path, exc_info=True)
 
-    def _keep_all(self) -> None:
-        paths_to_unmark = []
-        for card in self._cards:
-            if not card.is_winner and card._marked:
-                paths_to_unmark.append(card.path)
-                card.set_marked(False)
-        if paths_to_unmark:
-            self.unmark_for_deletion_requested.emit(paths_to_unmark)
+        if isinstance(metadata, dict):
+            camera_make = _first_present(
+                metadata, "Exif.Image.Make", "Xmp.tiff.Make", "Make"
+            )
+            camera_model = _first_present(
+                metadata, "Exif.Image.Model", "Xmp.tiff.Model", "Model"
+            )
+            if camera_make or camera_model:
+                camera_text = " ".join(
+                    str(part).strip() for part in (camera_make, camera_model) if part
+                )
+                rows.append(("Camera", camera_text))
 
-    def _mark_non_winners(self) -> None:
-        paths_to_mark = []
-        for card in self._cards:
-            if not card.is_winner and not card._marked:
-                paths_to_mark.append(card.path)
-                card.set_marked(True)
-        if paths_to_mark:
-            self.mark_for_deletion_requested.emit(paths_to_mark)
+            lens = _first_present(
+                metadata,
+                "Exif.Photo.LensModel",
+                "Xmp.aux.Lens",
+                "LensModel",
+                "LensInfo",
+            )
+            if lens:
+                rows.append(("Lens", str(lens)))
+
+            focal = _float_text(
+                _first_present(metadata, "Exif.Photo.FocalLength", "FocalLength"),
+                suffix=" mm",
+                digits=0,
+            )
+            aperture = _float_text(
+                _first_present(
+                    metadata,
+                    "Exif.Photo.FNumber",
+                    "Exif.Photo.ApertureValue",
+                    "FNumber",
+                ),
+                prefix="f/",
+                digits=1,
+            )
+            if focal or aperture:
+                rows.append(("Lens", "  ".join(part for part in (focal, aperture) if part)))
+
+            shutter = _fraction_text(
+                _first_present(
+                    metadata,
+                    "Exif.Photo.ExposureTime",
+                    "ExposureTime",
+                    "Exif.Photo.ShutterSpeedValue",
+                )
+            )
+            iso = _first_present(
+                metadata,
+                "Exif.Photo.ISOSpeedRatings",
+                "ISO",
+                "EXIF:ISO",
+                "EXIF:ISOSpeedRatings",
+            )
+            if shutter or iso:
+                iso_text = f"ISO {iso}" if iso not in (None, "") else None
+                rows.append(
+                    ("Exposure", "  ".join(part for part in (shutter, iso_text) if part))
+                )
+
+            width = _first_present(
+                metadata,
+                "pixel_width",
+                "Exif.Photo.PixelXDimension",
+                "Exif.Image.ImageWidth",
+            )
+            height = _first_present(
+                metadata,
+                "pixel_height",
+                "Exif.Photo.PixelYDimension",
+                "Exif.Image.ImageLength",
+            )
+            if width and height:
+                rows.append(("Size", f"{width} × {height}"))
+
+        if not rows:
+            rows.append(("Metadata", "No EXIF details available"))
+
+        self._metadata_cache[path] = rows[:5]
+        return self._metadata_cache[path]
+
+    def _update_focus_state(self) -> None:
+        for index, card in enumerate(self._compare_cards):
+            if card.isVisible():
+                card.set_focused(index == self._focused_slot_index)
+
+    def _set_path_marked(self, path: str, marked: bool) -> None:
+        if not path:
+            return
+        self._cluster_mark_state[path] = marked
+        for card in self._compare_cards:
+            if card.isVisible() and card.path == path:
+                card.set_marked(marked)
+        self._update_cluster_header_only()
+
+    def _update_cluster_header_only(self) -> None:
+        total_clusters = len(self._clusters)
+        kept = sum(
+            1
+            for path, marked in self._cluster_mark_state.items()
+            if path != self._current_winner_path and not marked
+        )
+        deleted = sum(
+            1
+            for path, marked in self._cluster_mark_state.items()
+            if path != self._current_winner_path and marked
+        )
+        self._cluster_info_label.setText(
+            f"Cluster {self._cluster_index + 1} / {total_clusters}  •  {len(self._current_all_paths)} photos  •  {kept} keep / {deleted} delete"
+        )
+
+    def _subset_count(self) -> int:
+        non_winner_count = len(
+            [path for path in self._cluster_ordered_paths if path != self._current_winner_path]
+        )
+        return max(1, (non_winner_count + 1) // 2)
+
+    def _visible_paths(self) -> List[str]:
+        return [path for path in self._subset_paths if path]
 
     def _commit_current_cluster_marks(self) -> None:
-        """Emit mark signals for the current state of all cards."""
-        to_mark = [c.path for c in self._cards if not c.is_winner and c._marked]
-        to_unmark = [c.path for c in self._cards if not c.is_winner and not c._marked]
+        if 0 <= self._cluster_index < len(self._clusters):
+            self._clusters[self._cluster_index]["_mark_state"] = dict(
+                self._cluster_mark_state
+            )
+        to_mark = [
+            path
+            for path, marked in self._cluster_mark_state.items()
+            if marked
+        ]
+        to_unmark = [
+            path
+            for path, marked in self._cluster_mark_state.items()
+            if not marked
+        ]
         if to_mark:
             self.mark_for_deletion_requested.emit(to_mark)
         if to_unmark:
             self.unmark_for_deletion_requested.emit(to_unmark)
 
-    def _apply_and_next(self) -> None:
-        self._commit_current_cluster_marks()
-        self._next_cluster()
-
     def _next_cluster(self) -> None:
         if self._cluster_index < len(self._clusters) - 1:
+            self._commit_current_cluster_marks()
             self._load_cluster(self._cluster_index + 1)
-        # If on the last cluster, do nothing (user presses Done)
 
     def _prev_cluster(self) -> None:
         if self._cluster_index > 0:
+            self._commit_current_cluster_marks()
             self._load_cluster(self._cluster_index - 1)
+
+    def _next_subset(self) -> None:
+        max_subset = self._subset_count() - 1
+        if self._subset_index < max_subset:
+            self._subset_index += 1
+            ranked = self._clusters[self._cluster_index].get("ranked", [])
+            score_by_path = {
+                entry["path"]: entry.get("final_score") for entry in ranked
+            }
+            self._update_cluster_ui(score_by_path)
+
+    def _prev_subset(self) -> None:
+        if self._subset_index > 0:
+            self._subset_index -= 1
+            ranked = self._clusters[self._cluster_index].get("ranked", [])
+            score_by_path = {
+                entry["path"]: entry.get("final_score") for entry in ranked
+            }
+            self._update_cluster_ui(score_by_path)
+
+    def _keep_visible(self) -> None:
+        paths = self._visible_paths()
+        for path in paths:
+            self._set_path_marked(path, False)
+        if paths:
+            self.unmark_for_deletion_requested.emit(paths)
+
+    def _delete_visible(self) -> None:
+        paths = self._visible_paths()
+        for path in paths:
+            self._set_path_marked(path, True)
+        if paths:
+            self.mark_for_deletion_requested.emit(paths)
+
+    def _toggle_slot(self, slot_index: int) -> None:
+        if not (0 <= slot_index < len(self._subset_paths)):
+            return
+        path = self._subset_paths[slot_index]
+        if not path:
+            return
+        new_marked = not self._cluster_mark_state.get(path, True)
+        self._set_path_marked(path, new_marked)
+        if new_marked:
+            self.mark_for_deletion_requested.emit([path])
+        else:
+            self.unmark_for_deletion_requested.emit([path])
+
+    def _on_card_toggled(self, path: str, is_marked: bool) -> None:
+        self._set_path_marked(path, is_marked)
+        if is_marked:
+            self.mark_for_deletion_requested.emit([path])
+        else:
+            self.unmark_for_deletion_requested.emit([path])
+
+    def _on_viewer_clicked(self, slot_index: int, _path: str) -> None:
+        self._focused_slot_index = slot_index
+        self._update_focus_state()
+        self._toggle_slot(slot_index)
+
+    def _on_viewer_mark(self, path: str) -> None:
+        self._set_path_marked(path, True)
+        self.mark_for_deletion_requested.emit([path])
+
+    def _on_viewer_unmark(self, path: str) -> None:
+        self._set_path_marked(path, False)
+        self.unmark_for_deletion_requested.emit([path])
+
+    def _on_viewer_mark_others(self, keeper_path: str) -> None:
+        paths = [path for path in self._visible_paths() if path != keeper_path]
+        for path in paths:
+            self._set_path_marked(path, True)
+        if paths:
+            self.mark_for_deletion_requested.emit(paths)
+
+    def _on_viewer_unmark_others(self, keeper_path: str) -> None:
+        paths = [path for path in self._visible_paths() if path != keeper_path]
+        for path in paths:
+            self._set_path_marked(path, False)
+        if paths:
+            self.unmark_for_deletion_requested.emit(paths)
 
     def _on_done(self) -> None:
         self._commit_current_cluster_marks()
         self.proceed_to_cull_requested.emit()
 
-    # ------------------------------------------------------------------ #
-    # Keyboard handling                                                    #
-    # ------------------------------------------------------------------ #
-
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()
-        modifiers = event.modifiers()
 
-        if key == Qt.Key.Key_D or key == Qt.Key.Key_Space:
-            self._toggle_focused_card()
-        elif key == Qt.Key.Key_Right or key == Qt.Key.Key_Tab:
-            if key == Qt.Key.Key_Tab and modifiers & Qt.KeyboardModifier.ShiftModifier:
-                self._move_focus(-1)
-            else:
-                self._move_focus(1)
-        elif key == Qt.Key.Key_Left or key == Qt.Key.Key_Backtab:
+        if key in (Qt.Key.Key_1, Qt.Key.Key_2, Qt.Key.Key_3):
+            self._focused_slot_index = key - Qt.Key.Key_1
+            self._update_focus_state()
+            self._toggle_slot(self._focused_slot_index)
+        elif key == Qt.Key.Key_Left:
             self._move_focus(-1)
+        elif key == Qt.Key.Key_Right:
+            self._move_focus(1)
         elif key == Qt.Key.Key_N:
-            self._next_cluster()
+            self._next_subset()
         elif key == Qt.Key.Key_P:
+            self._prev_subset()
+        elif key == Qt.Key.Key_BracketRight:
+            self._next_cluster()
+        elif key == Qt.Key.Key_BracketLeft:
             self._prev_cluster()
-        elif (
-            key == Qt.Key.Key_Return and modifiers & Qt.KeyboardModifier.ControlModifier
-        ):
-            self._apply_and_next()
         else:
             super().keyPressEvent(event)
 
-    def _toggle_focused_card(self) -> None:
-        if 0 <= self._focused_card_index < len(self._cards):
-            card = self._cards[self._focused_card_index]
-            if not card.is_winner:
-                new_marked = not card._marked
-                card.set_marked(new_marked)
-                if new_marked:
-                    self.mark_for_deletion_requested.emit([card.path])
-                else:
-                    self.unmark_for_deletion_requested.emit([card.path])
+    def _activate_slot_shortcut(self, slot_index: int) -> None:
+        self._focused_slot_index = slot_index
+        self._update_focus_state()
+        self._toggle_slot(slot_index)
 
     def _move_focus(self, delta: int) -> None:
-        if not self._cards:
+        visible_count = len(self._subset_paths)
+        if visible_count <= 0:
             return
-        new_index = max(0, min(len(self._cards) - 1, self._focused_card_index + delta))
-        if new_index != self._focused_card_index:
-            self._focused_card_index = new_index
-            self._update_focus()
+        self._focused_slot_index = max(
+            0, min(visible_count - 1, self._focused_slot_index + delta)
+        )
+        self._update_focus_state()
