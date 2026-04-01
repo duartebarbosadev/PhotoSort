@@ -25,6 +25,7 @@ from .app_settings import (
     DEFAULT_SIMILARITY_BATCH_SIZE,
     get_sentence_transformers_cache_dir,
 )  # Import from app_settings
+from .runtime_paths import get_app_cache_root, resolve_user_cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +37,6 @@ if TYPE_CHECKING:
 # Check PyTorch CUDA availability for SentenceTransformer
 _module_init_start_time = time.time()
 logger.debug("Initializing SimilarityEngine module...")
-
-# Define constants for model and cache
-# DEFAULT_CLIP_MODEL = 'clip-ViT-B-32' # Moved to app_settings
-EMBEDDING_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "photosort_embeddings"
-)
-os.makedirs(EMBEDDING_CACHE_DIR, exist_ok=True)
 
 
 class SimilarityEngine(QObject):
@@ -66,7 +60,8 @@ class SimilarityEngine(QObject):
         )
         self._is_running = False
         self._cache_filename = f"embeddings_{self.model_name.replace('/', '_')}.pkl"
-        self._cache_path = os.path.join(EMBEDDING_CACHE_DIR, self._cache_filename)
+        embedding_cache_dir = resolve_user_cache_dir("embeddings")
+        self._cache_path = os.path.join(embedding_cache_dir, self._cache_filename)
 
         ip_instantiation_start_time = time.perf_counter()
         self.image_pipeline = ImagePipeline()  # Instantiate ImagePipeline
@@ -645,11 +640,13 @@ class SimilarityEngine(QObject):
 
     @staticmethod
     def clear_embedding_cache():
-        logger.info(f"Clearing embedding cache directory: {EMBEDDING_CACHE_DIR}")
+        app_cache_root = get_app_cache_root()
+        embedding_cache_dir = os.path.join(app_cache_root, "embeddings")
+        logger.info(f"Clearing embedding cache directory: {embedding_cache_dir}")
         try:
-            if os.path.exists(EMBEDDING_CACHE_DIR):
-                for item in os.listdir(EMBEDDING_CACHE_DIR):
-                    item_path = os.path.join(EMBEDDING_CACHE_DIR, item)
+            if os.path.exists(embedding_cache_dir):
+                for item in os.listdir(embedding_cache_dir):
+                    item_path = os.path.join(embedding_cache_dir, item)
                     try:
                         if os.path.isfile(item_path) or os.path.islink(item_path):
                             os.unlink(item_path)
@@ -662,13 +659,11 @@ class SimilarityEngine(QObject):
                 logger.info("Embedding cache cleared.")
             else:
                 logger.warning(
-                    f"Embedding cache directory not found: {EMBEDDING_CACHE_DIR}"
+                    f"Embedding cache directory not found: {embedding_cache_dir}"
                 )
 
-            # Also clear Hugging Face cache directory
-            hf_cache_dir = os.path.join(
-                os.path.expanduser("~"), ".cache", "photosort_hf"
-            )
+            # Also clear Hugging Face model cache directory
+            hf_cache_dir = os.path.join(app_cache_root, "hf")
             if os.path.exists(hf_cache_dir):
                 logger.info(f"Clearing Hugging Face cache directory: {hf_cache_dir}")
                 for item in os.listdir(hf_cache_dir):
@@ -689,6 +684,6 @@ class SimilarityEngine(QObject):
 
         except Exception as e:
             logger.error(
-                f"Error clearing embedding cache directory '{EMBEDDING_CACHE_DIR}': {e}",
+                f"Error clearing embedding cache directory '{embedding_cache_dir}': {e}",
                 exc_info=True,
             )

@@ -26,7 +26,7 @@ class AnalysisCache:
 
     def __init__(self, cache_dir: Optional[str] = None):
         if cache_dir is None:
-            cache_dir = resolve_user_cache_dir("photosort_analysis")
+            cache_dir = resolve_user_cache_dir("analysis")
         os.makedirs(cache_dir, exist_ok=True)
         self._cache = diskcache.Cache(directory=cache_dir, disk_min_file_size=0)
 

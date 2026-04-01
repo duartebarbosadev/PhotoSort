@@ -20,7 +20,7 @@ class RatingCache:
         size_limit_mb: int = DEFAULT_RATING_CACHE_SIZE_LIMIT_MB,
     ):
         if cache_dir is None:
-            cache_dir = resolve_user_cache_dir("photosort_ratings")
+            cache_dir = resolve_user_cache_dir("ratings")
         init_start_time = time.perf_counter()
         self._cache = None
         logger.info(

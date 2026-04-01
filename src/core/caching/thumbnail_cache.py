@@ -24,9 +24,7 @@ class ThumbnailCache:
         size_limit: int = DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES,
     ):
         if cache_dir is None:
-            cache_dir = resolve_user_cache_dir(
-                "photosort_thumbnails"
-            )  # Default 1GB limit
+            cache_dir = resolve_user_cache_dir("thumbnails")  # Default 1GB limit
         init_start_time = time.perf_counter()
         self._cache = None
         logger.info(

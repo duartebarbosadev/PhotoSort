@@ -49,11 +49,11 @@ def test_cache_classes_resolve_default_dirs_lazily(monkeypatch, tmp_path):
     preview = preview_cache.PreviewCache()
     analysis = analysis_cache.AnalysisCache()
 
-    assert any(path.endswith("photosort_thumbnails") for path in created_paths)
-    assert any(path.endswith("photosort_ratings") for path in created_paths)
-    assert any(path.endswith("photosort_exif_data") for path in created_paths)
-    assert any(path.endswith("photosort_preview_pil_images") for path in created_paths)
-    assert any(path.endswith("photosort_analysis") for path in created_paths)
+    assert any(path.endswith("thumbnails") for path in created_paths)
+    assert any(path.endswith("ratings") for path in created_paths)
+    assert any(path.endswith("exif_data") for path in created_paths)
+    assert any(path.endswith("previews") for path in created_paths)
+    assert any(path.endswith("analysis") for path in created_paths)
 
     thumb.close()
     rating.close()
@@ -70,4 +70,4 @@ def test_sentence_transformers_cache_dir_is_resolved_lazily(monkeypatch, tmp_pat
     cache_dir = app_settings.get_sentence_transformers_cache_dir()
 
     assert cache_dir == str(tmp_path / "sentence-transformers")
-    resolver.assert_called_once_with("photosort_hf/sentence-transformers")
+    resolver.assert_called_once_with("hf/sentence-transformers")

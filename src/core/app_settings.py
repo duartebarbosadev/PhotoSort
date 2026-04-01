@@ -69,7 +69,7 @@ BEST_SHOT_BATCH_SIZE_KEY = "AI/BestShotBatchSize"
 # Cache directories
 def get_sentence_transformers_cache_dir() -> str:
     """Return the sentence-transformers cache directory, resolved lazily on first call."""
-    return resolve_user_cache_dir("photosort_hf/sentence-transformers")
+    return resolve_user_cache_dir("hf/sentence-transformers")
 
 
 # Default values
