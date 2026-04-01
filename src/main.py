@@ -390,9 +390,7 @@ def main():
     want_file_logging = enable_file_logging_env.lower() == "true" or sys.stderr is None
     if want_file_logging:
         try:
-            log_file_path = os.path.join(
-                get_app_log_dir(), "photosort_app.log"
-            )
+            log_file_path = os.path.join(get_app_log_dir(), "photosort_app.log")
             os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
             file_handler = logging.FileHandler(log_file_path, mode="a")  # Append mode
             file_handler.setFormatter(formatter)

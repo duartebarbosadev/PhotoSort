@@ -1182,12 +1182,19 @@ class DialogManager:
             cache_root = get_app_cache_root()
             os.makedirs(cache_root, exist_ok=True)
             if not QDesktopServices.openUrl(QUrl.fromLocalFile(cache_root)):
-                logger.warning("QDesktopServices failed to open cache folder: %s", cache_root)
+                logger.warning(
+                    "QDesktopServices failed to open cache folder: %s", cache_root
+                )
 
         build_dialog_footer(
             outer_layout,
             [
-                ("Open Cache Folder", "cacheDialogOpenFolderButton", _open_cache_folder, False),
+                (
+                    "Open Cache Folder",
+                    "cacheDialogOpenFolderButton",
+                    _open_cache_folder,
+                    False,
+                ),
                 ("Close", "cacheDialogCloseButton", dialog.accept, True),
             ],
         )

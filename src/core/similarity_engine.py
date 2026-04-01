@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 _module_init_start_time = time.time()
 logger.debug("Initializing SimilarityEngine module...")
 
+
 class SimilarityEngine(QObject):
     """
     Handles image feature extraction (embeddings) using CLIP models
