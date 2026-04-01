@@ -14,11 +14,6 @@ from core.app_settings import (
 
 logger = logging.getLogger(__name__)
 
-# Default path for the preview PIL image cache
-DEFAULT_PREVIEW_CACHE_DIR = os.path.join(
-    resolve_user_cache_dir("photosort_preview_pil_images")
-)
-
 
 class PreviewCache:
     """
@@ -26,7 +21,9 @@ class PreviewCache:
     The cache size is configurable via app_settings.
     """
 
-    def __init__(self, cache_dir: str = DEFAULT_PREVIEW_CACHE_DIR):
+    def __init__(self, cache_dir: Optional[str] = None):
+        if cache_dir is None:
+            cache_dir = resolve_user_cache_dir("photosort_preview_pil_images")
         init_start_time = time.perf_counter()
         self._cache = None
         logger.info(f"Initializing Preview cache: {cache_dir}")

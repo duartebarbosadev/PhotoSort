@@ -211,7 +211,7 @@ def find_directory_rename_candidates(
             output_root,
             *[
                 _sanitize_folder_component(part)
-                for part in group.group_label.split(os.sep)
+                for part in re.split(r"[\\/]+", group.group_label)
                 if part
             ],
         )
@@ -930,7 +930,7 @@ def execute_grouping_plan(
                 output_root,
                 *[
                     _sanitize_folder_component(part)
-                    for part in group.group_label.split(os.sep)
+                    for part in re.split(r"[\\/]+", group.group_label)
                     if part
                 ],
             )

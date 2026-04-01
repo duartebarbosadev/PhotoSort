@@ -16,10 +16,6 @@ from core.app_settings import (
 logger = logging.getLogger(__name__)
 ARW_CACHE_LOG_INTERVAL = 250
 
-# Default path for the EXIF metadata cache
-DEFAULT_EXIF_CACHE_DIR = os.path.join(resolve_user_cache_dir("photosort_exif_data"))
-# DEFAULT_EXIF_CACHE_SIZE_LIMIT_MB is now managed by app_settings
-
 
 class ExifCache:
     """
@@ -27,7 +23,9 @@ class ExifCache:
     The cache size is configurable via app_settings.
     """
 
-    def __init__(self, cache_dir: str = DEFAULT_EXIF_CACHE_DIR):
+    def __init__(self, cache_dir: Optional[str] = None):
+        if cache_dir is None:
+            cache_dir = resolve_user_cache_dir("photosort_exif_data")
         init_start_time = time.perf_counter()
         self._cache = None
         # size_limit_mb is now fetched from app_settings

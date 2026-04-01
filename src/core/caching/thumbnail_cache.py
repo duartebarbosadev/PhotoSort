@@ -12,11 +12,6 @@ from core.runtime_paths import resolve_user_cache_dir
 
 logger = logging.getLogger(__name__)
 
-# Default path for the thumbnail cache
-DEFAULT_THUMBNAIL_CACHE_DIR = os.path.join(
-    resolve_user_cache_dir("photosort_thumbnails")
-)
-
 
 class ThumbnailCache:
     """
@@ -25,9 +20,13 @@ class ThumbnailCache:
 
     def __init__(
         self,
-        cache_dir: str = DEFAULT_THUMBNAIL_CACHE_DIR,
+        cache_dir: Optional[str] = None,
         size_limit: int = DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES,
-    ):  # Default 1GB limit
+    ):
+        if cache_dir is None:
+            cache_dir = resolve_user_cache_dir(
+                "photosort_thumbnails"
+            )  # Default 1GB limit
         init_start_time = time.perf_counter()
         self._cache = None
         logger.info(

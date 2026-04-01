@@ -3,15 +3,13 @@ import json
 import logging
 import os
 import time
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 import diskcache
 from core.runtime_paths import resolve_user_cache_dir
 
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_ANALYSIS_CACHE_DIR = os.path.join(resolve_user_cache_dir("photosort_analysis"))
 
 CACHE_VERSION = 1
 
@@ -26,7 +24,9 @@ class AnalysisCache:
     long-running AI computations can be resumed across application sessions.
     """
 
-    def __init__(self, cache_dir: str = DEFAULT_ANALYSIS_CACHE_DIR):
+    def __init__(self, cache_dir: Optional[str] = None):
+        if cache_dir is None:
+            cache_dir = resolve_user_cache_dir("photosort_analysis")
         os.makedirs(cache_dir, exist_ok=True)
         self._cache = diskcache.Cache(directory=cache_dir, disk_min_file_size=0)
 

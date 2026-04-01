@@ -23,7 +23,7 @@ from .app_settings import (
     DBSCAN_EPS,
     DBSCAN_MIN_SAMPLES,
     DEFAULT_SIMILARITY_BATCH_SIZE,
-    SENTENCE_TRANSFORMERS_CACHE_DIR,
+    get_sentence_transformers_cache_dir,
 )  # Import from app_settings
 
 logger = logging.getLogger(__name__)
@@ -157,7 +157,7 @@ class SimilarityEngine(QObject):
                 self.model = SentenceTransformer(
                     self.model_name,
                     device=model_device,
-                    cache_folder=SENTENCE_TRANSFORMERS_CACHE_DIR,
+                    cache_folder=get_sentence_transformers_cache_dir(),
                 )
 
                 # Log actual device model is on

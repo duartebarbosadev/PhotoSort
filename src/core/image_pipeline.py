@@ -443,6 +443,10 @@ class ImagePipeline:
         """
         Returns a preview QPixmap only if a suitable preview already exists in cache.
         Never generates a new preview on cache miss.
+
+        ``force_default_brightness`` is accepted for API compatibility with
+        :meth:`get_preview_qpixmap` but is ignored here; brightness is baked in
+        when previews are generated and stored in the cache.
         """
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):

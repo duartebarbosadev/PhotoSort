@@ -65,10 +65,12 @@ OPENAI_BEST_SHOT_PROMPT_KEY = "AI/BestShotPrompt"
 OPENAI_RATING_PROMPT_KEY = "AI/RatingPrompt"
 BEST_SHOT_BATCH_SIZE_KEY = "AI/BestShotBatchSize"
 
+
 # Cache directories
-SENTENCE_TRANSFORMERS_CACHE_DIR = os.path.join(
-    resolve_user_cache_dir(os.path.join("photosort_hf", "sentence-transformers"))
-)
+def get_sentence_transformers_cache_dir() -> str:
+    """Return the sentence-transformers cache directory, resolved lazily on first call."""
+    return resolve_user_cache_dir("photosort_hf/sentence-transformers")
+
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
