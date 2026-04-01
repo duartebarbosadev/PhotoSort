@@ -5,7 +5,7 @@
   <img src="assets/main-window-screenshot.png" alt="PhotoSort Main Window" />
 </div>
 
-PhotoSort is a powerful desktop application focused on speed designed to streamline the management of large photo libraries, making it easier than ever to sort, cull, and organize your images.
+PhotoSort is a fast, powerful desktop application for managing large photo libraries, making it easier than ever to sort, cull, and organize your photos.
 
 **Use this at your personal risk. Always use backups.**
 
@@ -22,8 +22,6 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
   * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed.
   * **AI Best-Shot Ranking**: Send stacks to an OpenAI-compatible vision model (e.g. Qwen3-VL) to pick the keeper frame automatically.
   * **AI Star Ratings**: Ask the configured AI engine to score individual photos with 1–5 stars.
-
-- **Update Notifications**: Automatically checks for new releases and notifies users when updates are available, with direct download links.
 - **Performance Modes**: Configurable threading system (Settings → Preferences, `F10`) to balance between system responsiveness (Balanced) and maximum processing speed (Performance).
 - **Metadata Display**: Shows EXIF information (camera model, exposure settings, etc.).
 
@@ -31,8 +29,13 @@ PhotoSort is a powerful desktop application focused on speed designed to streaml
 
 ### Installation & Running
 
-If you prefer a ready-to-run binary, pre-built executables are published on the project's GitHub Releases page. Download the release, then run the downloaded executable directly — no Python virtual environment required. You can find releases here:
-https://github.com/duartebarbosadev/photosort/releases
+You can download the latest prebuilt binaries from the [Releases page](https://github.com/duartebarbosadev/photosort/releases):
+
+- **Windows**: Download the `.exe` file and run it directly (no separate installer required).
+- **macOS**: Download the `.dmg`, open it, then drag **PhotoSort** to your **Applications** folder.
+- **Windows**: Download the `.exe` file and run it directly (no separate installer required).
+- **macOS**: Download the `.dmg`, open it, then drag **PhotoSort** to your **Applications** folder.
+If you prefer to build from source or want to contribute:
 
 1. **Clone the repository:**
 
@@ -153,14 +156,6 @@ Logs will be saved to `~/.photosort_logs/photosort_app.log`.
 
 > **Note:** For the "Focus on image (1-9)" actions, if multiple images are highlighted, pressing `1` will show the first highlighted image, `2` the second, and so on.
 
-## Future Enhancements (Ideas)
-
-* **Enhanced Search Capabilities**:
-  * Search by EXIF metadata (camera model, settings, date ranges)
-* **Advanced AI Object/Scene Detections & Grouping**:
-  * **Car Model Recognition**: Identify and allow grouping by specific car models in photos.
-  * **Face Recognition/Clustering**: Detect faces and group photos by the people present.
-* **Side by Side** Select Multiple images and see them side by side, with zoom lock etc.
 
 ## Contributing
 
