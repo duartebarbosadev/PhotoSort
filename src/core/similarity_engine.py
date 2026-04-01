@@ -23,7 +23,7 @@ from .app_settings import (
     DBSCAN_EPS,
     DBSCAN_MIN_SAMPLES,
     DEFAULT_SIMILARITY_BATCH_SIZE,
-    SENTENCE_TRANSFORMERS_CACHE_DIR,
+    get_sentence_transformers_cache_dir,
 )  # Import from app_settings
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,65 @@ class SimilarityEngine(QObject):
         logger.info("Stop request received.")
         self._is_running = False
 
+    def run_analysis_sync(
+        self,
+        file_paths: List[str],
+        progress_callback=None,
+    ) -> tuple[Dict[str, List[float]], Dict[str, str]]:
+        """Run the existing similarity pipeline synchronously and return its results.
+
+        This wraps the signal-based workflow so non-Qt callers can reuse the
+        exact same embedding + clustering implementation as the UI action.
+        """
+        embeddings_result: Dict[str, List[float]] = {}
+        cluster_results: Dict[str, str] = {}
+        errors: List[str] = []
+
+        def _on_progress(percent: int, message: str):
+            if progress_callback:
+                progress_callback(percent, message)
+
+        def _on_embeddings(data):
+            nonlocal embeddings_result
+            embeddings_result = dict(data or {})
+
+        def _on_complete(data):
+            nonlocal cluster_results
+            cluster_results = dict(data or {})
+
+        def _on_error(message: str):
+            if message:
+                errors.append(message)
+
+        self.progress_update.connect(_on_progress)
+        self.embeddings_generated.connect(_on_embeddings)
+        self.clustering_complete.connect(_on_complete)
+        self.error.connect(_on_error)
+
+        try:
+            self.generate_embeddings_for_files(file_paths)
+        finally:
+            try:
+                self.progress_update.disconnect(_on_progress)
+            except Exception:
+                pass
+            try:
+                self.embeddings_generated.disconnect(_on_embeddings)
+            except Exception:
+                pass
+            try:
+                self.clustering_complete.disconnect(_on_complete)
+            except Exception:
+                pass
+            try:
+                self.error.disconnect(_on_error)
+            except Exception:
+                pass
+
+        if errors and not cluster_results:
+            raise RuntimeError(errors[-1])
+        return embeddings_result, cluster_results
+
     def _load_model(self):
         if self.model is None:
             try:
@@ -98,7 +157,7 @@ class SimilarityEngine(QObject):
                 self.model = SentenceTransformer(
                     self.model_name,
                     device=model_device,
-                    cache_folder=SENTENCE_TRANSFORMERS_CACHE_DIR,
+                    cache_folder=get_sentence_transformers_cache_dir(),
                 )
 
                 # Log actual device model is on

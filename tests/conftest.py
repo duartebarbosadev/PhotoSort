@@ -4,6 +4,8 @@ import pyexiv2  # noqa: F401  # Must be imported first to avoid Windows crashes
 import sys
 import os
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(ROOT, os.pardir))
 if PROJECT_ROOT not in sys.path:

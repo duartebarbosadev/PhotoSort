@@ -4,13 +4,9 @@ import logging
 import time
 from typing import Optional
 from core.app_settings import DEFAULT_RATING_CACHE_SIZE_LIMIT_MB
+from core.runtime_paths import resolve_user_cache_dir
 
 logger = logging.getLogger(__name__)
-
-# Default path for the rating cache
-DEFAULT_RATING_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "photosort_ratings"
-)
 
 
 class RatingCache:
@@ -20,10 +16,13 @@ class RatingCache:
 
     def __init__(
         self,
-        cache_dir: str = DEFAULT_RATING_CACHE_DIR,
+        cache_dir: Optional[str] = None,
         size_limit_mb: int = DEFAULT_RATING_CACHE_SIZE_LIMIT_MB,
     ):
+        if cache_dir is None:
+            cache_dir = resolve_user_cache_dir("photosort_ratings")
         init_start_time = time.perf_counter()
+        self._cache = None
         logger.info(
             f"Initializing Rating cache: {cache_dir} (Size Limit: {size_limit_mb:.2f} MB)"
         )
@@ -134,7 +133,8 @@ class RatingCache:
     def close(self) -> None:
         """Closes the cache."""
         try:
-            self._cache.close()
+            if self._cache is not None:
+                self._cache.close()
             logger.debug("Rating cache closed.")
         except Exception:
             logger.error("Error closing Rating cache.", exc_info=True)

@@ -25,6 +25,37 @@ QWidget#appCentralWidget {
     background: transparent;
 }
 
+QWidget#workflowNav {
+    background-color: #31363A;
+    border: 1px solid #495056;
+    border-radius: 12px;
+}
+
+QPushButton#workflowStepButton {
+    background-color: transparent;
+    color: #A9B7C6;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-weight: 600;
+    min-height: 20px;
+}
+
+QPushButton#workflowStepButton:hover {
+    background-color: #383D40;
+    color: #FFFFFF;
+}
+
+QPushButton#workflowStepButton:checked {
+    background-color: #214283;
+    color: #FFFFFF;
+    border-color: #2D5B9C;
+}
+
+QPushButton#workflowStepButton:disabled {
+    color: #6E7A84;
+}
+
 /* Menu Bar */
 QMenuBar {
     background-color: #3C3F41;
@@ -51,9 +82,17 @@ QMenu::item {
     padding: 7px 20px 7px 20px;
     border-radius: 6px;
 }
+QMenu::item:disabled {
+    color: #66707A;
+    background-color: transparent;
+}
 QMenu::item:selected {
     background-color: #4B6EAF;
     color: #FFFFFF;
+}
+QMenu::item:selected:disabled {
+    background-color: #353739;
+    color: #66707A;
 }
 QMenu::separator {
     height: 1px;
@@ -98,7 +137,7 @@ QStatusBar {
     background-color: #3C3F41;
     color: #808080;
     border-top: 1px solid #515151;
-    padding: 5px 10px;
+    padding: 4px 8px;
     font-size: 8.25pt;
 }
 QStatusBar QLabel {
@@ -1555,6 +1594,73 @@ QPushButton#folderChangeDialogCommitButton:hover {
     border-color: #4B6EAF;
 }
 
+/* --- Grouping Confirm / Unsaved Dialogs --- */
+QDialog#groupingConfirmDialog,
+QDialog#groupingUnsavedDialog {
+    background: #2B2B2B;
+    border: 1px solid #3C3F41;
+    border-radius: 12px;
+}
+
+QDialog#groupingConfirmDialog QLabel#groupingConfirmMessage,
+QDialog#groupingUnsavedDialog QLabel#groupingUnsavedMessage {
+    color: #A9B7C6;
+    font-size: 9.5pt;
+    line-height: 1.4;
+}
+
+QDialog#groupingConfirmDialog QPlainTextEdit#groupingConfirmActionList,
+QDialog#groupingUnsavedDialog QPlainTextEdit#groupingUnsavedActionList {
+    background: #1E1F22;
+    color: #A9B7C6;
+    border: 1px solid #3C3F41;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 8.5pt;
+    selection-background-color: #214283;
+}
+
+QPushButton#groupingConfirmCancelButton,
+QPushButton#groupingUnsavedCancelButton,
+QPushButton#groupingUnsavedDiscardButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #3C3F41, stop: 1 #353739);
+    color: #A9B7C6;
+    border: 1px solid #4A4D50;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 9pt;
+}
+
+QPushButton#groupingConfirmCancelButton:hover,
+QPushButton#groupingUnsavedCancelButton:hover,
+QPushButton#groupingUnsavedDiscardButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #45494A, stop: 1 #3C3F41);
+    color: #FFFFFF;
+    border-color: #5E6366;
+}
+
+QPushButton#groupingConfirmApplyButton,
+QPushButton#groupingUnsavedSaveButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #4B6EAF, stop: 1 #3D5A8A);
+    color: #FFFFFF;
+    border: 1px solid #3D5A8A;
+    border-radius: 6px;
+    font-weight: bold;
+    padding: 8px 16px;
+    font-size: 9pt;
+}
+
+QPushButton#groupingConfirmApplyButton:hover,
+QPushButton#groupingUnsavedSaveButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #5580BB, stop: 1 #4B6EAF);
+    border-color: #4B6EAF;
+}
+
 QLabel#lossyRotationMessageLabel {
     color: #A9B7C6;
     font-size: 10pt;
@@ -1963,4 +2069,388 @@ QPushButton#refuseButton:pressed,
 QPushButton#refuseAllButton:pressed {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
         stop: 0 #8C2E35, stop: 1 #74252B);
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Step 1 — Group Photos (new two-tree layout)
+   ───────────────────────────────────────────────────────────────── */
+
+/* Top bar */
+QFrame#groupingTopBar {
+    background-color: #2C3035;
+    border: none;
+    min-height: 52px;
+    max-height: 52px;
+}
+
+QFrame#groupingTopBarSep {
+    background-color: #3D4347;
+    max-width: 1px;
+    min-width: 1px;
+    margin: 10px 4px;
+}
+
+/* Folder button */
+QPushButton#groupingFolderButton {
+    background-color: #363B3F;
+    color: #C8D4DE;
+    border: 1px solid #4A5257;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-weight: 600;
+    font-size: 9pt;
+}
+
+QPushButton#groupingFolderButton:hover {
+    background-color: #3E464C;
+    border-color: #627079;
+    color: #FFFFFF;
+}
+
+QPushButton#groupingFolderButton:pressed {
+    background-color: #2D3338;
+}
+
+/* Folder path label */
+QLabel#groupingFolderPath {
+    color: #7E9BAD;
+    font-size: 8.5pt;
+    background: transparent;
+    padding: 0 4px;
+}
+
+/* Mode pill toggle buttons */
+QPushButton#groupingModePill {
+    background-color: #353A3D;
+    color: #8FA4B2;
+    border: 1px solid #434B50;
+    border-radius: 20px;
+    padding: 5px 13px;
+    font-size: 8.5pt;
+    font-weight: 600;
+    min-width: 0px;
+}
+
+QPushButton#groupingModePill:hover {
+    background-color: #3D4549;
+    border-color: #5D6B72;
+    color: #CDD9E2;
+}
+
+QPushButton#groupingModePill:checked {
+    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 #1A4070, stop: 1 #214E90);
+    color: #FFFFFF;
+    border-color: #3A6BAF;
+}
+
+QPushButton#groupingModePill:checked:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 #1F4A80, stop: 1 #265898);
+}
+
+QPushButton#groupingModePill:pressed {
+    background: #1C3A60;
+}
+
+/* Stats badge */
+QLabel#groupingSummaryBadge {
+    background-color: #1A3D30;
+    color: #7ED8B4;
+    border: 1px solid #245E48;
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 8pt;
+    font-weight: 700;
+}
+
+/* Action buttons in top bar */
+QPushButton#groupingGhostButton {
+    background-color: transparent;
+    color: #8FA4B2;
+    border: 1px solid #3D4347;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-weight: 600;
+    font-size: 9pt;
+}
+
+QPushButton#groupingGhostButton:hover {
+    background-color: #353B40;
+    border-color: #586269;
+    color: #C8D4DE;
+}
+
+QPushButton#groupingGhostButton:pressed {
+    background-color: #2B3035;
+}
+
+QPushButton#groupingPrimaryButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #178B4A, stop: 1 #0F6D39);
+    color: #FFFFFF;
+    border: 1px solid #0D5E32;
+    border-radius: 8px;
+    padding: 6px 18px;
+    font-weight: 700;
+    font-size: 9pt;
+    min-height: 22px;
+}
+
+QPushButton#groupingPrimaryButton:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #1C9A53, stop: 1 #147B42);
+    border-color: #116B39;
+}
+
+QPushButton#groupingPrimaryButton:pressed {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0F6D39, stop: 1 #0B582E);
+}
+
+QPushButton#groupingPrimaryButton:disabled {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #146A3B, stop: 1 #0E532E);
+    color: #E3EFE8;
+    border-color: #0E532E;
+}
+
+QPushButton#groupingSecondaryButton {
+    background-color: #363A3D;
+    color: #C8D4DE;
+    border: 1px solid #4A5054;
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-weight: 600;
+    font-size: 8.5pt;
+}
+
+QPushButton#groupingSecondaryButton:hover {
+    background-color: #404548;
+    border-color: #636B71;
+    color: #FFFFFF;
+}
+
+QPushButton#groupingSecondaryButton:pressed {
+    background-color: #2D3033;
+}
+
+/* Separator lines */
+QFrame#groupingBarSep {
+    background-color: #333A3E;
+    max-height: 1px;
+    min-height: 1px;
+    border: none;
+}
+
+QFrame#groupingPanelSep {
+    background-color: #303538;
+    max-height: 1px;
+    min-height: 1px;
+    border: none;
+}
+
+/* Before/After tree panels */
+QFrame#groupingBeforePanel {
+    background-color: #242729;
+    border: none;
+    border-right: 1px solid #333A3E;
+}
+
+QFrame#groupingAfterPanel {
+    background-color: #232628;
+    border: none;
+    border-right: 1px solid #333A3E;
+}
+
+/* Preview panel (3rd column) */
+QFrame#groupingPreviewPanel {
+    background-color: #1E2326;
+    border: none;
+}
+
+QFrame#groupingPreviewPanel QLabel#groupingTreeHeader {
+    color: #8FA4B2;
+}
+
+QLabel#groupingPreviewHint {
+    color: #3D4B54;
+    font-size: 9pt;
+    background: transparent;
+}
+
+QLabel#groupingLargePreview,
+QGraphicsView#groupingLargePreview {
+    background-color: #1A1D20;
+    border: none;
+}
+
+/* "No changes" equality badge */
+QLabel#groupingSameBadge {
+    color: #62C4A0;
+    font-size: 8pt;
+    font-weight: 600;
+    background-color: #1A3328;
+    border: 1px solid #2A5A46;
+    border-radius: 8px;
+    padding: 2px 10px;
+}
+
+/* Panel header labels */
+QLabel#groupingTreeHeader {
+    color: #E0E8F0;
+    font-size: 10pt;
+    font-weight: 700;
+    background: transparent;
+}
+
+QLabel#groupingTreeDesc {
+    color: #5F7280;
+    font-size: 8pt;
+    background: transparent;
+}
+
+/* The before panel header gets an amber left accent */
+QFrame#groupingBeforePanel QLabel#groupingTreeHeader {
+    color: #D4A76A;
+}
+
+/* The after panel header gets a teal left accent */
+QFrame#groupingAfterPanel QLabel#groupingTreeHeader {
+    color: #62C4A0;
+}
+
+/* Splitter handle */
+QSplitter#groupingMainSplitter::handle {
+    background-color: #333A3E;
+    width: 1px;
+}
+
+/* Trees */
+QTreeWidget#groupingTree {
+    background-color: transparent;
+    border: none;
+    padding: 2px 4px;
+    outline: 0;
+    font-size: 9pt;
+    show-decoration-selected: 1;
+}
+
+QTreeWidget#groupingTree::item {
+    padding: 3px 4px;
+    border-radius: 6px;
+    color: #B8C8D4;
+}
+
+QTreeWidget#groupingTree::item:selected {
+    background-color: #1E3F62;
+    color: #FFFFFF;
+}
+
+QTreeWidget#groupingTree::item:hover:!selected {
+    background-color: #2C3438;
+    color: #D8E4EC;
+}
+
+QTreeWidget#groupingTree::branch {
+    background: transparent;
+}
+
+/* Bottom status bar */
+QFrame#groupingBottomBar {
+    background-color: #242729;
+    border: none;
+    min-height: 52px;
+    max-height: 68px;
+}
+
+/* Thumbnail in bottom bar */
+QLabel#groupingThumb {
+    background-color: #1A1E20;
+    border: 1px solid #343A3E;
+    border-radius: 6px;
+}
+
+/* File name in bottom bar */
+QLabel#groupingSelectionName {
+    color: #D8E4EC;
+    font-size: 8.5pt;
+    font-weight: 600;
+    background: transparent;
+}
+
+/* Path in bottom bar */
+QLabel#groupingPathValue {
+    color: #5F7280;
+    font-size: 8pt;
+    background: transparent;
+}
+
+/* Loading label */
+QLabel#groupingLoadingLabel {
+    color: #8FA4B2;
+    font-size: 8.5pt;
+    font-weight: 500;
+    background: transparent;
+}
+
+/* Progress bar */
+QProgressBar#groupingLoadingBar {
+    background-color: #1E2326;
+    border: 1px solid #333A3E;
+    border-radius: 999px;
+    min-height: 6px;
+    max-height: 6px;
+    min-width: 160px;
+}
+
+QProgressBar#groupingLoadingBar::chunk {
+    border-radius: 999px;
+    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 #1E5C42, stop: 1 #3DA07A);
+}
+
+/* Empty state */
+QFrame#groupingEmptyState {
+    background: transparent;
+}
+
+QLabel#groupingEmptyIcon {
+    font-size: 52pt;
+    background: transparent;
+    color: #3D4B54;
+    padding-bottom: 6px;
+}
+
+QLabel#groupingEmptyTitle {
+    color: #8FA4B2;
+    font-size: 13pt;
+    font-weight: 700;
+    background: transparent;
+}
+
+QLabel#groupingEmptySubtitle {
+    color: #506070;
+    font-size: 9.5pt;
+    background: transparent;
+}
+
+QPushButton#groupingEmptyCTA {
+    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 #1A4070, stop: 1 #214E90);
+    color: #FFFFFF;
+    border: 1px solid #3A6BAF;
+    border-radius: 10px;
+    padding: 10px 28px;
+    font-size: 10pt;
+    font-weight: 700;
+}
+
+QPushButton#groupingEmptyCTA:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 #1F4A80, stop: 1 #265898);
+}
+
+QPushButton#groupingEmptyCTA:pressed {
+    background: #1C3A60;
 }

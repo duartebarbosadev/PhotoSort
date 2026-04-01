@@ -38,6 +38,7 @@ class MenuManager:
         # View Menu
         self.toggle_folder_view_action: QAction
         self.group_by_similarity_action: QAction
+        self.back_to_grouping_action: QAction
         self.toggle_thumbnails_action: QAction
         self.analyze_similarity_action: QAction
         self.analyze_best_shots_action: QAction
@@ -278,6 +279,10 @@ class MenuManager:
         self.group_by_similarity_action.setEnabled(False)
         self.group_by_similarity_action.setShortcut(QKeySequence("S"))
         view_menu.addAction(self.group_by_similarity_action)
+
+        self.back_to_grouping_action = QAction("Back to Grouping", main_win)
+        self.back_to_grouping_action.setShortcut(QKeySequence("Ctrl+1"))
+        view_menu.addAction(self.back_to_grouping_action)
 
         self.toggle_thumbnails_action = QAction("Show Thumbnails", main_win)
         self.toggle_thumbnails_action.setCheckable(True)
@@ -618,6 +623,9 @@ class MenuManager:
         )
         self.group_by_similarity_action.toggled.connect(
             main_win._toggle_group_by_similarity
+        )
+        self.back_to_grouping_action.triggered.connect(
+            main_win._return_to_grouping_source
         )
         self.toggle_thumbnails_action.toggled.connect(main_win._toggle_thumbnail_view)
         self.analyze_similarity_action.triggered.connect(

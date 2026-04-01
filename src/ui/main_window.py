@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QStyle,  # For standard icons
     QAbstractItemView,
     QApplication,  # For selection and edit triggersor dialogs
+    QStackedWidget,
 )
 import os
 from datetime import datetime as datetime_obj, date as date_obj
@@ -72,6 +73,7 @@ from ui.dialog_manager import DialogManager
 from ui.left_panel import LeftPanel
 from ui.app_controller import AppController
 from ui.menu_manager import MenuManager
+from ui.grouping_step_widget import GroupingStepWidget
 from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
 from ui.helpers.index_lookup_utils import find_proxy_index_for_path
@@ -209,6 +211,7 @@ class MainWindow(QMainWindow):
         self._preview_preload_start_volume_bytes: Optional[int] = None
         self._filter_apply_count = 0
         self._last_filter_search_text: Optional[str] = None
+        self._close_after_grouping_save = False
 
         self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
@@ -294,6 +297,7 @@ class MainWindow(QMainWindow):
         self._create_loading_overlay()
         self.left_panel.thumbnail_delegate = self.thumbnail_delegate
         self._connect_signals()
+        self.show_grouping_step()
         self._update_image_info_label()
         logger.debug("UI components and signals initialized.")
 
@@ -661,6 +665,17 @@ class MainWindow(QMainWindow):
         """Create the UI widgets."""
         start_time = time.perf_counter()
         logger.debug("Creating widgets...")
+        self.workflow_stack = QStackedWidget()
+        self.grouping_step_widget = GroupingStepWidget(self)
+        self.workflow_nav = QWidget()
+        self.workflow_nav.setObjectName("workflowNav")
+        self.step_organize_button = QPushButton("1. Organize")
+        self.step_organize_button.setObjectName("workflowStepButton")
+        self.step_organize_button.setCheckable(True)
+        self.step_cull_button = QPushButton("2. Cull")
+        self.step_cull_button.setObjectName("workflowStepButton")
+        self.step_cull_button.setCheckable(True)
+
         # Models
         self.file_system_model = QStandardItemModel()  # Model for file system
         self.proxy_model = CustomFilterProxyModel(self)
@@ -737,6 +752,7 @@ class MainWindow(QMainWindow):
         # No bottom bar - image info will be shown in status bar only
 
         self.statusBar().showMessage("Ready")
+        self.statusBar().addPermanentWidget(self.workflow_nav, 0)
         logger.debug(f"Widgets created in {time.perf_counter() - start_time:.4f}s.")
 
     def _create_layout(self):
@@ -748,6 +764,24 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+
+        nav_layout = QHBoxLayout(self.workflow_nav)
+        nav_layout.setContentsMargins(8, 8, 8, 8)
+        nav_layout.setSpacing(8)
+        nav_layout.addWidget(self.step_organize_button)
+        nav_layout.addWidget(self.step_cull_button)
+        nav_layout.addStretch(1)
+
+        self.grouping_page = QWidget()
+        grouping_page_layout = QVBoxLayout(self.grouping_page)
+        grouping_page_layout.setContentsMargins(0, 0, 0, 0)
+        grouping_page_layout.setSpacing(0)
+        grouping_page_layout.addWidget(self.grouping_step_widget)
+
+        self.cull_page = QWidget()
+        cull_page_layout = QVBoxLayout(self.cull_page)
+        cull_page_layout.setContentsMargins(0, 0, 0, 0)
+        cull_page_layout.setSpacing(0)
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_splitter.setObjectName("main_splitter")
@@ -770,7 +804,10 @@ class MainWindow(QMainWindow):
         main_splitter.setSizes([350, 850, 0])
         self.main_splitter = main_splitter  # Store reference for sidebar toggling
 
-        main_layout.addWidget(main_splitter)
+        cull_page_layout.addWidget(main_splitter)
+        self.workflow_stack.addWidget(self.grouping_page)
+        self.workflow_stack.addWidget(self.cull_page)
+        main_layout.addWidget(self.workflow_stack)
 
         self.setCentralWidget(central_widget)
         logger.debug(f"Layout created in {time.perf_counter() - start_time:.4f}s.")
@@ -846,6 +883,21 @@ class MainWindow(QMainWindow):
         self.left_panel.search_input.editingFinished.connect(self._apply_filter)
         self.left_panel.tree_display_view.collapsed.connect(self._handle_item_collapsed)
         self.left_panel.connect_signals()
+        self.grouping_step_widget.mode_changed.connect(
+            self._handle_grouping_mode_changed
+        )
+        self.grouping_step_widget.create_requested.connect(
+            self._handle_grouping_create_requested
+        )
+        self.grouping_step_widget.back_requested.connect(
+            self._return_to_grouping_source
+        )
+        self.grouping_step_widget.skip_requested.connect(self._skip_grouping_step)
+        self.grouping_step_widget.select_folder_requested.connect(
+            self._open_folder_dialog
+        )
+        self.step_organize_button.clicked.connect(self._go_to_grouping_step)
+        self.step_cull_button.clicked.connect(self._go_to_cull_step)
 
         # Connect MenuManager signals
         self.menu_manager.connect_signals()
@@ -882,6 +934,19 @@ class MainWindow(QMainWindow):
             self.app_controller.load_folder(folder_path)
         else:
             self.statusBar().showMessage("Folder selection cancelled.")
+
+    def _skip_grouping_step(self) -> None:
+        self.app_controller.skip_grouping_to_cull()
+
+    def _go_to_grouping_step(self) -> None:
+        self.show_grouping_step()
+
+    def _go_to_cull_step(self) -> None:
+        if not self.app_state.image_files_data:
+            self.statusBar().showMessage("Load a folder first.", 3000)
+            self.update_workflow_navigation()
+            return
+        self.show_cull_step()
 
     def _toggle_thumbnail_view(self, checked):
         self._rebuild_model_view()
@@ -1104,6 +1169,81 @@ class MainWindow(QMainWindow):
 
     def rebuild_model_view(self) -> None:
         self._rebuild_model_view()
+
+    def show_grouping_step(self) -> None:
+        self.app_state.workflow_step = "organize"
+        self.workflow_stack.setCurrentWidget(self.grouping_page)
+        self.grouping_step_widget.set_source_folder(self.app_state.grouping_source_root)
+        self.grouping_step_widget.set_current_mode(
+            self.app_state.selected_grouping_mode or "current"
+        )
+        if self.app_state.grouping_source_root:
+            self.grouping_step_widget.set_output_root_text(
+                "Output root: " + self.app_state.grouping_source_root
+            )
+        self.grouping_step_widget.set_back_visible(
+            bool(self.app_state.grouping_source_root)
+            and self.app_state.current_folder_path
+            != self.app_state.grouping_source_root
+        )
+        self.update_workflow_navigation()
+
+    def show_cull_step(self) -> None:
+        self.app_state.workflow_step = "cull"
+        self.workflow_stack.setCurrentWidget(self.cull_page)
+        self.update_workflow_navigation()
+
+    def update_workflow_navigation(self) -> None:
+        has_loaded_folder = bool(
+            self.app_state.grouping_source_root or self.app_state.current_folder_path
+        )
+        has_cull_content = bool(self.app_state.image_files_data)
+        self.step_organize_button.setEnabled(has_loaded_folder or not has_cull_content)
+        self.step_cull_button.setEnabled(has_cull_content)
+        self.step_organize_button.setChecked(self.app_state.workflow_step == "organize")
+        self.step_cull_button.setChecked(self.app_state.workflow_step == "cull")
+
+    def update_grouping_preview(self, text: str) -> None:
+        self.grouping_step_widget.set_preview_text(text)
+
+    def set_grouping_busy(self, busy: bool) -> None:
+        self.grouping_step_widget.set_busy(busy)
+
+    def _handle_grouping_mode_changed(self, mode: str) -> None:
+        self.app_state.selected_grouping_mode = mode
+        if self.app_state.grouping_source_root:
+            self.grouping_step_widget.set_output_root_text(
+                "Output root: " + self.app_state.grouping_source_root
+            )
+        self.app_controller.refresh_grouping_preview()
+
+    def _handle_grouping_create_requested(
+        self, mode: str, group_name_overrides: dict, prepared_plan=None
+    ) -> None:
+        self.app_state.selected_grouping_mode = mode
+        self.app_controller.start_grouping_workflow(
+            mode,
+            group_name_overrides,
+            prepared_plan=prepared_plan,
+        )
+
+    def finish_pending_close_after_grouping(self) -> None:
+        if not self._close_after_grouping_save:
+            return
+        self._close_after_grouping_save = False
+        QTimer.singleShot(0, self.close)
+
+    def cancel_pending_close_after_grouping(self) -> None:
+        self._close_after_grouping_save = False
+
+    def _return_to_grouping_source(self) -> None:
+        source_root = self.app_state.grouping_source_root
+        if source_root and os.path.isdir(source_root):
+            self.app_controller.load_folder(
+                source_root,
+                skip_grouping_step=False,
+                record_as_source=False,
+            )
 
     def enable_group_by_similarity(self, enabled: bool) -> None:
         self.menu_manager.group_by_similarity_action.setEnabled(enabled)
@@ -1654,6 +1794,37 @@ class MainWindow(QMainWindow):
         return QModelIndex()  # No visible image item found in this subtree
 
     def closeEvent(self, event):
+        if self.worker_manager.is_grouping_workflow_running():
+            event.ignore()
+            self.statusBar().showMessage(
+                "Grouping is still moving files. Wait for it to finish before closing.",
+                4000,
+            )
+            return
+
+        grouping_action_lines = (
+            self.grouping_step_widget.pending_grouping_action_lines()
+        )
+        if (
+            self.grouping_step_widget.has_unsaved_grouping_edits()
+            and grouping_action_lines
+        ):
+            choice = self.dialog_manager.show_grouping_close_confirmation_dialog(
+                grouping_action_lines
+            )
+            if choice == "save":
+                self._close_after_grouping_save = True
+                self._handle_grouping_create_requested(
+                    self.grouping_step_widget.current_mode(),
+                    self.grouping_step_widget.get_group_name_overrides(),
+                    self.grouping_step_widget.get_effective_plan(),
+                )
+                event.ignore()
+                return
+            if choice == "cancel":
+                event.ignore()
+                return
+
         # Check if there are any files marked for deletion
         marked_files = self.app_state.get_marked_files()
         if marked_files:
@@ -1682,6 +1853,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
+        self._close_after_grouping_save = False
         logger.info("Stopping all workers on application close.")
         self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
         event.accept()
