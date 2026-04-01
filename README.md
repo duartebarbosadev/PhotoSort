@@ -29,8 +29,10 @@ PhotoSort is a fast, powerful desktop application for managing large photo libra
 
 ### Installation & Running
 
-You can download and install the program on the Releases page: https://github.com/duartebarbosadev/photosort/releases
+You can download the latest prebuilt binaries from the [Releases page](https://github.com/duartebarbosadev/photosort/releases):
 
+- **Windows**: Download the `.exe` file and run it directly (no separate installer required).
+- **macOS**: Download the `.dmg`, open it, then drag **PhotoSort** to your **Applications** folder.
 If you prefer to build from source or want to contribute:
 
 1. **Clone the repository:**
