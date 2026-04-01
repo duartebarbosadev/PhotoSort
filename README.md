@@ -5,7 +5,7 @@
   <img src="assets/main-window-screenshot.png" alt="PhotoSort Main Window" />
 </div>
 
-PhotoSort is a powerful and fast desktop application focused on speed designed to streamline the management of large photo libraries, making it easier than ever to sort, cull, and organize your libraries.
+PhotoSort is a fast, powerful desktop application for managing large photo libraries, making it easier than ever to sort, cull, and organize your photos.
 
 **Use this at your personal risk. Always use backups.**
 
