@@ -138,7 +138,9 @@ def test_grouping_step_widget_set_preview_plan_uses_cached_thumbnails_only(tmp_p
     assert pipeline.get_cached_thumbnail_qpixmap.call_count >= 4
 
 
-def test_grouping_step_widget_selected_preview_loads_immediately_on_cache_miss(tmp_path):
+def test_grouping_step_widget_selected_preview_loads_immediately_on_cache_miss(
+    tmp_path,
+):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
