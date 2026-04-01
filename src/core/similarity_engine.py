@@ -23,8 +23,9 @@ from .app_settings import (
     DBSCAN_EPS,
     DBSCAN_MIN_SAMPLES,
     DEFAULT_SIMILARITY_BATCH_SIZE,
-    SENTENCE_TRANSFORMERS_CACHE_DIR,
+    get_sentence_transformers_cache_dir,
 )  # Import from app_settings
+from .runtime_paths import get_app_cache_root, resolve_user_cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +37,6 @@ if TYPE_CHECKING:
 # Check PyTorch CUDA availability for SentenceTransformer
 _module_init_start_time = time.time()
 logger.debug("Initializing SimilarityEngine module...")
-
-# Define constants for model and cache
-# DEFAULT_CLIP_MODEL = 'clip-ViT-B-32' # Moved to app_settings
-EMBEDDING_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "photosort_embeddings"
-)
-os.makedirs(EMBEDDING_CACHE_DIR, exist_ok=True)
 
 
 class SimilarityEngine(QObject):
@@ -66,7 +60,8 @@ class SimilarityEngine(QObject):
         )
         self._is_running = False
         self._cache_filename = f"embeddings_{self.model_name.replace('/', '_')}.pkl"
-        self._cache_path = os.path.join(EMBEDDING_CACHE_DIR, self._cache_filename)
+        embedding_cache_dir = resolve_user_cache_dir("embeddings")
+        self._cache_path = os.path.join(embedding_cache_dir, self._cache_filename)
 
         ip_instantiation_start_time = time.perf_counter()
         self.image_pipeline = ImagePipeline()  # Instantiate ImagePipeline
@@ -80,6 +75,65 @@ class SimilarityEngine(QObject):
     def stop(self):
         logger.info("Stop request received.")
         self._is_running = False
+
+    def run_analysis_sync(
+        self,
+        file_paths: List[str],
+        progress_callback=None,
+    ) -> tuple[Dict[str, List[float]], Dict[str, str]]:
+        """Run the existing similarity pipeline synchronously and return its results.
+
+        This wraps the signal-based workflow so non-Qt callers can reuse the
+        exact same embedding + clustering implementation as the UI action.
+        """
+        embeddings_result: Dict[str, List[float]] = {}
+        cluster_results: Dict[str, str] = {}
+        errors: List[str] = []
+
+        def _on_progress(percent: int, message: str):
+            if progress_callback:
+                progress_callback(percent, message)
+
+        def _on_embeddings(data):
+            nonlocal embeddings_result
+            embeddings_result = dict(data or {})
+
+        def _on_complete(data):
+            nonlocal cluster_results
+            cluster_results = dict(data or {})
+
+        def _on_error(message: str):
+            if message:
+                errors.append(message)
+
+        self.progress_update.connect(_on_progress)
+        self.embeddings_generated.connect(_on_embeddings)
+        self.clustering_complete.connect(_on_complete)
+        self.error.connect(_on_error)
+
+        try:
+            self.generate_embeddings_for_files(file_paths)
+        finally:
+            try:
+                self.progress_update.disconnect(_on_progress)
+            except Exception:
+                pass
+            try:
+                self.embeddings_generated.disconnect(_on_embeddings)
+            except Exception:
+                pass
+            try:
+                self.clustering_complete.disconnect(_on_complete)
+            except Exception:
+                pass
+            try:
+                self.error.disconnect(_on_error)
+            except Exception:
+                pass
+
+        if errors and not cluster_results:
+            raise RuntimeError(errors[-1])
+        return embeddings_result, cluster_results
 
     def _load_model(self):
         if self.model is None:
@@ -98,7 +152,7 @@ class SimilarityEngine(QObject):
                 self.model = SentenceTransformer(
                     self.model_name,
                     device=model_device,
-                    cache_folder=SENTENCE_TRANSFORMERS_CACHE_DIR,
+                    cache_folder=get_sentence_transformers_cache_dir(),
                 )
 
                 # Log actual device model is on
@@ -586,11 +640,13 @@ class SimilarityEngine(QObject):
 
     @staticmethod
     def clear_embedding_cache():
-        logger.info(f"Clearing embedding cache directory: {EMBEDDING_CACHE_DIR}")
+        app_cache_root = get_app_cache_root()
+        embedding_cache_dir = os.path.join(app_cache_root, "embeddings")
+        logger.info(f"Clearing embedding cache directory: {embedding_cache_dir}")
         try:
-            if os.path.exists(EMBEDDING_CACHE_DIR):
-                for item in os.listdir(EMBEDDING_CACHE_DIR):
-                    item_path = os.path.join(EMBEDDING_CACHE_DIR, item)
+            if os.path.exists(embedding_cache_dir):
+                for item in os.listdir(embedding_cache_dir):
+                    item_path = os.path.join(embedding_cache_dir, item)
                     try:
                         if os.path.isfile(item_path) or os.path.islink(item_path):
                             os.unlink(item_path)
@@ -603,13 +659,11 @@ class SimilarityEngine(QObject):
                 logger.info("Embedding cache cleared.")
             else:
                 logger.warning(
-                    f"Embedding cache directory not found: {EMBEDDING_CACHE_DIR}"
+                    f"Embedding cache directory not found: {embedding_cache_dir}"
                 )
 
-            # Also clear Hugging Face cache directory
-            hf_cache_dir = os.path.join(
-                os.path.expanduser("~"), ".cache", "photosort_hf"
-            )
+            # Also clear Hugging Face model cache directory
+            hf_cache_dir = os.path.join(app_cache_root, "hf")
             if os.path.exists(hf_cache_dir):
                 logger.info(f"Clearing Hugging Face cache directory: {hf_cache_dir}")
                 for item in os.listdir(hf_cache_dir):
@@ -630,6 +684,6 @@ class SimilarityEngine(QObject):
 
         except Exception as e:
             logger.error(
-                f"Error clearing embedding cache directory '{EMBEDDING_CACHE_DIR}': {e}",
+                f"Error clearing embedding cache directory '{embedding_cache_dir}': {e}",
                 exc_info=True,
             )

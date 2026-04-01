@@ -23,6 +23,7 @@ from workers.rotation_application_worker import RotationApplicationWorker
 from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 from workers.best_shot_worker import BestShotWorker
 from workers.ai_rating_worker import AiRatingWorker
+from workers.grouping_worker import GroupingPreviewWorker, GroupingWorkflowWorker
 from core.image_pipeline import ImagePipeline
 from workers.rating_loader_worker import (
     RatingLoaderWorker,
@@ -129,6 +130,14 @@ class WorkerManager(QObject):
     ai_rating_error = pyqtSignal(str)
     ai_rating_warning = pyqtSignal(str)
 
+    # Grouping workflow signals
+    grouping_preview_progress = pyqtSignal(int, str)
+    grouping_preview_ready = pyqtSignal(object)
+    grouping_preview_error = pyqtSignal(str)
+    grouping_workflow_progress = pyqtSignal(int, str)
+    grouping_workflow_complete = pyqtSignal(object)
+    grouping_workflow_error = pyqtSignal(str)
+
     def __init__(
         self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None
     ):
@@ -165,6 +174,10 @@ class WorkerManager(QObject):
         self.best_shot_worker: Optional[BestShotWorker] = None
         self.ai_rating_thread: Optional[QThread] = None
         self.ai_rating_worker: Optional[AiRatingWorker] = None
+        self.grouping_preview_thread: Optional[QThread] = None
+        self.grouping_preview_worker: Optional[GroupingPreviewWorker] = None
+        self.grouping_workflow_thread: Optional[QThread] = None
+        self.grouping_workflow_worker: Optional[GroupingWorkflowWorker] = None
 
         self.cuda_detection_thread: Optional[QThread] = None
         self.cuda_detection_worker: Optional[CudaDetectionWorker] = None
@@ -173,7 +186,11 @@ class WorkerManager(QObject):
         self.update_check_worker: Optional[UpdateCheckWorker] = None
 
     def _terminate_thread(
-        self, thread: Optional[QThread], worker_stop_method: Optional[callable] = None
+        self,
+        thread: Optional[QThread],
+        worker_stop_method: Optional[callable] = None,
+        *,
+        allow_terminate: bool = True,
     ):
         if (
             thread is not None and thread.isRunning()
@@ -189,9 +206,18 @@ class WorkerManager(QObject):
                     )
             thread.quit()
             if not thread.wait(5000):  # Wait 5 seconds
-                logger.warning(f"Thread {thread} did not quit gracefully. Terminating.")
-                thread.terminate()
-                thread.wait()  # Wait for termination
+                if allow_terminate:
+                    logger.warning(
+                        f"Thread {thread} did not quit gracefully. Terminating."
+                    )
+                    thread.terminate()
+                    thread.wait()  # Wait for termination
+                else:
+                    logger.warning(
+                        "Thread %s did not quit gracefully and will be left running.",
+                        thread,
+                    )
+                    return thread, None
             logger.debug(f"Thread {thread} stopped.")
         # Even if not running, or None, ensure we return None for reassignment
         return None, None
@@ -559,6 +585,112 @@ class WorkerManager(QObject):
         else:
             self.cuda_detection_thread = temp_thread
 
+    def _cleanup_grouping_preview_refs(self):
+        if self.grouping_preview_worker:
+            self.grouping_preview_worker.deleteLater()
+            self.grouping_preview_worker = None
+        if self.grouping_preview_thread:
+            self.grouping_preview_thread.deleteLater()
+            self.grouping_preview_thread = None
+        logger.info("Grouping preview thread and worker cleaned up.")
+
+    def start_grouping_preview(
+        self,
+        items: List[Dict[str, Any]],
+        mode: str,
+        source_root: Optional[str] = None,
+    ):
+        self.stop_grouping_preview()
+        self.grouping_preview_thread = QThread()
+        self.grouping_preview_worker = GroupingPreviewWorker(items, mode, source_root)
+        self.grouping_preview_worker.moveToThread(self.grouping_preview_thread)
+
+        self.grouping_preview_worker.progress_update.connect(
+            self.grouping_preview_progress
+        )
+        self.grouping_preview_worker.preview_ready.connect(self.grouping_preview_ready)
+        self.grouping_preview_worker.error.connect(self.grouping_preview_error)
+        self.grouping_preview_worker.finished.connect(self.grouping_preview_thread.quit)
+        self.grouping_preview_thread.started.connect(self.grouping_preview_worker.run)
+        self.grouping_preview_thread.finished.connect(
+            self._cleanup_grouping_preview_refs
+        )
+        self.grouping_preview_thread.start()
+        logger.info("Grouping preview thread started.")
+
+    def stop_grouping_preview(self):
+        worker_stop = (
+            self.grouping_preview_worker.stop if self.grouping_preview_worker else None
+        )
+        temp_thread, _ = self._terminate_thread(
+            self.grouping_preview_thread, worker_stop
+        )
+        if temp_thread is None:
+            self.grouping_preview_thread = None
+            self.grouping_preview_worker = None
+        else:
+            self.grouping_preview_thread = temp_thread
+
+    def _cleanup_grouping_workflow_refs(self):
+        if self.grouping_workflow_worker:
+            self.grouping_workflow_worker.deleteLater()
+            self.grouping_workflow_worker = None
+        if self.grouping_workflow_thread:
+            self.grouping_workflow_thread.deleteLater()
+            self.grouping_workflow_thread = None
+        logger.info("Grouping workflow thread and worker cleaned up.")
+
+    def start_grouping_workflow(
+        self,
+        items: List[Dict[str, Any]],
+        mode: str,
+        source_root: str,
+        output_root: Optional[str] = None,
+        group_name_overrides: Optional[Dict[str, str]] = None,
+        prepared_plan=None,
+    ):
+        self.stop_grouping_workflow()
+        self.grouping_workflow_thread = QThread()
+        self.grouping_workflow_worker = GroupingWorkflowWorker(
+            items=items,
+            mode=mode,
+            source_root=source_root,
+            output_root=output_root,
+            group_name_overrides=group_name_overrides,
+            prepared_plan=prepared_plan,
+        )
+        self.grouping_workflow_worker.moveToThread(self.grouping_workflow_thread)
+
+        self.grouping_workflow_worker.progress_update.connect(
+            self.grouping_workflow_progress
+        )
+        self.grouping_workflow_worker.completed.connect(self.grouping_workflow_complete)
+        self.grouping_workflow_worker.error.connect(self.grouping_workflow_error)
+        self.grouping_workflow_worker.finished.connect(
+            self.grouping_workflow_thread.quit
+        )
+        self.grouping_workflow_thread.started.connect(self.grouping_workflow_worker.run)
+        self.grouping_workflow_thread.finished.connect(
+            self._cleanup_grouping_workflow_refs
+        )
+        self.grouping_workflow_thread.start()
+        logger.info("Grouping workflow thread started.")
+
+    def stop_grouping_workflow(self):
+        worker_stop = (
+            self.grouping_workflow_worker.stop
+            if self.grouping_workflow_worker
+            else None
+        )
+        temp_thread, _ = self._terminate_thread(
+            self.grouping_workflow_thread, worker_stop, allow_terminate=False
+        )
+        if temp_thread is None:
+            self.grouping_workflow_thread = None
+            self.grouping_workflow_worker = None
+        else:
+            self.grouping_workflow_thread = temp_thread
+
     def stop_all_workers(self):
         logger.info("Stopping all workers...")
         self.stop_file_scan()
@@ -573,6 +705,8 @@ class WorkerManager(QObject):
         self.stop_cuda_detection()
         self.stop_best_shot_analysis()
         self.stop_ai_rating()
+        self.stop_grouping_preview()
+        self.stop_grouping_workflow()
         logger.info("All workers stop requested.")
 
     def is_file_scanner_running(self) -> bool:
@@ -616,6 +750,18 @@ class WorkerManager(QObject):
 
     def is_ai_rating_running(self) -> bool:
         return self.ai_rating_thread is not None and self.ai_rating_thread.isRunning()
+
+    def is_grouping_preview_running(self) -> bool:
+        return (
+            self.grouping_preview_thread is not None
+            and self.grouping_preview_thread.isRunning()
+        )
+
+    def is_grouping_workflow_running(self) -> bool:
+        return (
+            self.grouping_workflow_thread is not None
+            and self.grouping_workflow_thread.isRunning()
+        )
 
     def start_update_check(self, current_version: str):
         """Start checking for updates in a background thread."""
@@ -672,6 +818,8 @@ class WorkerManager(QObject):
             or self.is_rating_writer_running()
             or self.is_rotation_application_running()
             or self.is_thumbnail_preload_running()
+            or self.is_grouping_preview_running()
+            or self.is_grouping_workflow_running()
         )
 
     # --- Rating Writer Management ---

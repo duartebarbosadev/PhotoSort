@@ -1,4 +1,3 @@
-import os
 import sys
 import numpy as np
 import pytest
@@ -96,22 +95,17 @@ def test_classify_orientation_uses_raw_dimensions_for_rotated_raw(monkeypatch):
 def test_clear_embedding_cache_cleans_hf_cache_when_embedding_cache_is_missing(
     tmp_path, monkeypatch
 ):
-    embedding_cache_dir = tmp_path / "missing-embeddings"
-    hf_cache_dir = tmp_path / ".cache" / "photosort_hf"
+    # Set up the new-style cache layout: PhotoSort/hf/...
+    hf_cache_dir = tmp_path / "hf"
     hf_cache_dir.mkdir(parents=True)
     (hf_cache_dir / "token").write_text("x")
     nested_dir = hf_cache_dir / "models"
     nested_dir.mkdir()
     (nested_dir / "weights.bin").write_text("y")
 
+    # embedding dir intentionally absent (testing the "missing" branch)
     monkeypatch.setattr(
-        "core.similarity_engine.EMBEDDING_CACHE_DIR", str(embedding_cache_dir)
-    )
-
-    original_expanduser = os.path.expanduser
-    monkeypatch.setattr(
-        "core.similarity_engine.os.path.expanduser",
-        lambda value: str(tmp_path) if value == "~" else original_expanduser(value),
+        "core.similarity_engine.get_app_cache_root", lambda: str(tmp_path)
     )
 
     SimilarityEngine.clear_embedding_cache()

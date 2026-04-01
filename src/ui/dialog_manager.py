@@ -34,6 +34,7 @@ from core.app_settings import (
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
 )
+from core.runtime_paths import get_app_cache_root, get_app_log_dir
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
@@ -266,7 +267,7 @@ class DialogManager:
     def _open_logs_folder(self):
         """Open the application's logs directory in the system file browser."""
         try:
-            logs_dir = os.path.join(os.path.expanduser("~"), ".photosort_logs")
+            logs_dir = get_app_log_dir()
             os.makedirs(logs_dir, exist_ok=True)
             url = QUrl.fromLocalFile(logs_dir)
             opened = QDesktopServices.openUrl(url)
@@ -1177,9 +1178,23 @@ class DialogManager:
         main_layout.addStretch()
 
         # Footer
+        def _open_cache_folder():
+            cache_root = get_app_cache_root()
+            os.makedirs(cache_root, exist_ok=True)
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(cache_root)):
+                logger.warning(
+                    "QDesktopServices failed to open cache folder: %s", cache_root
+                )
+
         build_dialog_footer(
             outer_layout,
             [
+                (
+                    "Open Cache Folder",
+                    "cacheDialogOpenFolderButton",
+                    _open_cache_folder,
+                    False,
+                ),
                 ("Close", "cacheDialogCloseButton", dialog.accept, True),
             ],
         )
@@ -1599,6 +1614,81 @@ class DialogManager:
             log_context="Close Confirmation",
             object_name_prefix="closeDialog",
         )
+
+    def show_grouping_close_confirmation_dialog(self, action_lines: List[str]) -> str:
+        preview_lines = action_lines[:25]
+        preview_text = "\n".join(preview_lines)
+        remaining = len(action_lines) - len(preview_lines)
+        if remaining > 0:
+            preview_text += f"\n… and {remaining} more"
+
+        dialog = QDialog(self.parent)
+        dialog.setWindowTitle("Unsaved Grouping Changes")
+        dialog.setObjectName("groupingUnsavedDialog")
+        dialog.setModal(True)
+        dialog.setMinimumSize(580, 380)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
+
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        build_dialog_header("Unsaved Grouping Changes", "⚠", outer)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(22, 16, 22, 10)
+        body.setSpacing(12)
+
+        message = QLabel(
+            f"You have {len(action_lines)} unapplied grouping change(s).\n"
+            "Do you want to move files before closing?"
+        )
+        message.setObjectName("groupingUnsavedMessage")
+        message.setWordWrap(True)
+        body.addWidget(message)
+
+        action_list = QPlainTextEdit()
+        action_list.setObjectName("groupingUnsavedActionList")
+        action_list.setReadOnly(True)
+        action_list.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        action_list.setPlainText(preview_text)
+        body.addWidget(action_list, 1)
+
+        outer.addLayout(body)
+
+        # 3-button footer
+        footer = QFrame()
+        footer.setObjectName("dialogFooter")
+        f_layout = QHBoxLayout(footer)
+        f_layout.setContentsMargins(22, 10, 22, 14)
+        f_layout.setSpacing(10)
+        f_layout.addStretch()
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("groupingUnsavedCancelButton")
+        cancel_button.clicked.connect(dialog.reject)
+        f_layout.addWidget(cancel_button)
+
+        discard_button = QPushButton("Close Without Moving")
+        discard_button.setObjectName("groupingUnsavedDiscardButton")
+        discard_button.clicked.connect(lambda: dialog.done(1))
+        f_layout.addWidget(discard_button)
+
+        save_button = QPushButton("Move Files and Close")
+        save_button.setObjectName("groupingUnsavedSaveButton")
+        save_button.clicked.connect(lambda: dialog.done(2))
+        save_button.setDefault(True)
+        f_layout.addWidget(save_button)
+
+        outer.addWidget(footer)
+
+        result = dialog.exec()
+        if result == 2:
+            return "save"
+        if result == 1:
+            return "close"
+        return "cancel"
 
     def show_folder_change_confirmation_dialog(self, marked_files: List[str]) -> str:
         """

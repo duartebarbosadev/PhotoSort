@@ -155,6 +155,37 @@ class ImagePipeline:
             self.thumbnail_cache.set(cache_key, pil_img)
         return pil_img
 
+    def get_cached_thumbnail_qpixmap(
+        self,
+        image_path: str,
+        apply_orientation: bool = False,
+    ) -> Optional[QPixmap]:
+        """
+        Returns a thumbnail QPixmap only if it is already cached.
+        Never generates a new thumbnail on cache miss.
+        """
+        normalized_path = os.path.normpath(image_path)
+        if not os.path.isfile(normalized_path):
+            logger.error(f"File does not exist: {normalized_path}")
+            return None
+
+        ext = os.path.splitext(normalized_path)[1].lower()
+        apply_auto_edits = is_raw_extension(ext)
+        cache_key = (normalized_path, apply_auto_edits, apply_orientation)
+        cached_img = self.thumbnail_cache.get(cache_key)
+        if cached_img is None:
+            return None
+
+        try:
+            return QPixmap.fromImage(ImageQt(cached_img))
+        except Exception:
+            logger.error(
+                "Error converting cached PIL thumbnail to QPixmap for %s",
+                os.path.basename(normalized_path),
+                exc_info=True,
+            )
+            return None
+
     def _extract_video_thumbnail_with_overlay(
         self,
         video_path: str,
@@ -402,6 +433,64 @@ class ImagePipeline:
             exc_info=True,
         )
         return None
+
+    def get_cached_preview_qpixmap(
+        self,
+        image_path: str,
+        display_max_size: Optional[Tuple[int, int]] = None,
+        force_default_brightness: bool = False,
+    ) -> Optional[QPixmap]:
+        """
+        Returns a preview QPixmap only if a suitable preview already exists in cache.
+        Never generates a new preview on cache miss.
+
+        ``force_default_brightness`` is accepted for API compatibility with
+        :meth:`get_preview_qpixmap` but is ignored here; brightness is baked in
+        when previews are generated and stored in the cache.
+        """
+        normalized_path = os.path.normpath(image_path)
+        if not os.path.isfile(normalized_path):
+            logger.error(f"File does not exist: {normalized_path}")
+            return None
+
+        ext = os.path.splitext(normalized_path)[1].lower()
+        apply_auto_edits = is_raw_extension(ext)
+        key_display_size = (
+            display_max_size if display_max_size is not None else PRELOAD_MAX_RESOLUTION
+        )
+        display_cache_key = (normalized_path, key_display_size, apply_auto_edits)
+
+        cached_display_pil = self.preview_cache.get(display_cache_key)
+        if cached_display_pil is not None:
+            try:
+                return QPixmap.fromImage(ImageQt(cached_display_pil))
+            except Exception:
+                logger.error(
+                    "Error converting cached display preview to QPixmap for %s",
+                    os.path.basename(normalized_path),
+                    exc_info=True,
+                )
+                return None
+
+        preload_cache_key = (normalized_path, PRELOAD_MAX_RESOLUTION, apply_auto_edits)
+        cached_high_res_pil = self.preview_cache.get(preload_cache_key)
+        if cached_high_res_pil is None:
+            return None
+
+        display_pil_img = cached_high_res_pil.copy()
+        if display_max_size:
+            display_pil_img.thumbnail(display_max_size, Image.Resampling.LANCZOS)
+
+        self.preview_cache.set(display_cache_key, display_pil_img.copy())
+        try:
+            return QPixmap.fromImage(ImageQt(display_pil_img))
+        except Exception:
+            logger.error(
+                "Error converting cached high-res preview to QPixmap for %s",
+                os.path.basename(normalized_path),
+                exc_info=True,
+            )
+            return None
 
     def get_preview_qpixmap(
         self,
