@@ -34,6 +34,7 @@ from core.app_settings import (
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
 )
+from core.runtime_paths import get_app_cache_root, get_app_log_dir
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
@@ -266,7 +267,7 @@ class DialogManager:
     def _open_logs_folder(self):
         """Open the application's logs directory in the system file browser."""
         try:
-            logs_dir = os.path.join(os.path.expanduser("~"), ".photosort_logs")
+            logs_dir = get_app_log_dir()
             os.makedirs(logs_dir, exist_ok=True)
             url = QUrl.fromLocalFile(logs_dir)
             opened = QDesktopServices.openUrl(url)
@@ -1177,9 +1178,16 @@ class DialogManager:
         main_layout.addStretch()
 
         # Footer
+        def _open_cache_folder():
+            cache_root = get_app_cache_root()
+            os.makedirs(cache_root, exist_ok=True)
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(cache_root)):
+                logger.warning("QDesktopServices failed to open cache folder: %s", cache_root)
+
         build_dialog_footer(
             outer_layout,
             [
+                ("Open Cache Folder", "cacheDialogOpenFolderButton", _open_cache_folder, False),
                 ("Close", "cacheDialogCloseButton", dialog.accept, True),
             ],
         )

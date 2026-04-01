@@ -25,7 +25,7 @@ class ExifCache:
 
     def __init__(self, cache_dir: Optional[str] = None):
         if cache_dir is None:
-            cache_dir = resolve_user_cache_dir("photosort_exif_data")
+            cache_dir = resolve_user_cache_dir("exif_data")
         init_start_time = time.perf_counter()
         self._cache = None
         # size_limit_mb is now fetched from app_settings

@@ -16,6 +16,7 @@ if PROJECT_ROOT not in sys.path:
 from core.runtime_paths import (  # noqa: E402
     iter_bundle_roots,
     resolve_runtime_root,
+    get_app_log_dir,
 )
 
 
@@ -319,7 +320,7 @@ def main():
             faulthandler.enable()
         else:
             try:
-                crash_dir = os.path.join(os.path.expanduser("~"), ".photosort_logs")
+                crash_dir = get_app_log_dir()
                 os.makedirs(crash_dir, exist_ok=True)
                 crash_log_path = os.path.join(crash_dir, "photosort_crash.log")
                 # Keep a global reference to avoid GC closing the file
@@ -390,7 +391,7 @@ def main():
     if want_file_logging:
         try:
             log_file_path = os.path.join(
-                os.path.expanduser("~"), ".photosort_logs", "photosort_app.log"
+                get_app_log_dir(), "photosort_app.log"
             )
             os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
             file_handler = logging.FileHandler(log_file_path, mode="a")  # Append mode

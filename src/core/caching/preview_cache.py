@@ -23,7 +23,7 @@ class PreviewCache:
 
     def __init__(self, cache_dir: Optional[str] = None):
         if cache_dir is None:
-            cache_dir = resolve_user_cache_dir("photosort_preview_pil_images")
+            cache_dir = resolve_user_cache_dir("previews")
         init_start_time = time.perf_counter()
         self._cache = None
         logger.info(f"Initializing Preview cache: {cache_dir}")
