@@ -116,9 +116,10 @@ class ImagePipeline:
         cache_key = (normalized_path, apply_auto_edits, apply_orientation)
 
         cached_img = self.thumbnail_cache.get(cache_key)
-        if cached_img:
+        # If cache wasn't found, generate the thumbnail and cache it
+        if cached_img is None:
             logger.debug(
-                f"Thumbnail cache HIT for: {os.path.basename(normalized_path)} (Auto-Edits: {apply_auto_edits}, Orientation: {apply_orientation})"
+                f"Thumbnail cache MISS for {os.path.basename(normalized_path)} (Orientation applied: {apply_orientation})"
             )
             return cached_img
 
@@ -370,7 +371,6 @@ class ImagePipeline:
         force_default_brightness: bool = False,
     ) -> Optional[Image.Image]:
         """Return a PIL image suitable for analysis/display, leveraging preview cache."""
-        logger.debug(f"Obtaining preview PIL image called for: {image_path}")
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):
             logger.error(f"File does not exist: {normalized_path}")
@@ -386,9 +386,6 @@ class ImagePipeline:
         if not force_regenerate:
             cached_display_pil = self.preview_cache.get(display_cache_key)
             if cached_display_pil:
-                logger.debug(
-                    f"Display cache HIT (PIL): {os.path.basename(normalized_path)} (Size: {key_display_size})"
-                )
                 result_image = cached_display_pil.copy()
                 if result_image.mode != "RGB":
                     result_image = result_image.convert("RGB")
@@ -529,9 +526,6 @@ class ImagePipeline:
         if not force_regenerate:
             cached_display_pil = self.preview_cache.get(display_cache_key)
             if cached_display_pil:
-                logger.debug(
-                    f"Display cache HIT: {os.path.basename(normalized_path)} (Size: {key_display_size})"
-                )
                 return QPixmap.fromImage(ImageQt(cached_display_pil))
             else:
                 logger.debug(

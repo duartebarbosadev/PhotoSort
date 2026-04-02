@@ -12,3 +12,12 @@ class NoSupportedImagesError(SelectionError):
 
 class NoScorableImagesError(SelectionError):
     """Raised when no images can be scored successfully."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failures: list[tuple[str, str]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failures = failures or []

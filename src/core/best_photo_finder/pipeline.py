@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from functools import cmp_to_key
+import os
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
@@ -50,6 +51,29 @@ def _image_score_from_metrics(path: Path, metrics: TechnicalMetrics) -> ImageSco
         image_height=metrics.image_height,
         issues=metrics.issues,
     )
+
+
+def _failure_details(images: Sequence[ImageScore]) -> list[tuple[str, str]]:
+    details: list[tuple[str, str]] = []
+    for image in images:
+        reason = (image.failure_reason or "").strip()
+        if not reason:
+            continue
+        details.append((image.path, reason))
+    return details
+
+
+def _format_failure_summary(failures: Sequence[tuple[str, str]], *, limit: int = 3) -> str:
+    if not failures:
+        return ""
+
+    preview = [
+        f"{os.path.basename(path)}: {reason}" for path, reason in failures[:limit]
+    ]
+    remaining = len(failures) - len(preview)
+    if remaining > 0:
+        preview.append(f"+{remaining} more")
+    return " Failures: " + "; ".join(preview)
 
 
 def _sort_comparator(tie_threshold: float):
@@ -126,7 +150,12 @@ class PhotoSelector:
             path_lookup[path] = image_score
 
         if not scored:
-            raise NoScorableImagesError("No images could be scored successfully.")
+            failures = _failure_details(failed)
+            raise NoScorableImagesError(
+                "No images could be scored successfully."
+                + _format_failure_summary(failures),
+                failures=failures,
+            )
 
         if preview_images:
             preview_batch = {
@@ -160,7 +189,12 @@ class PhotoSelector:
             rankable.append(image_score)
 
         if not rankable:
-            raise NoScorableImagesError("Aesthetic scoring failed for every image.")
+            failures = _failure_details(failed)
+            raise NoScorableImagesError(
+                "Aesthetic scoring failed for every image."
+                + _format_failure_summary(failures),
+                failures=failures,
+            )
 
         ranked = sorted(
             rankable, key=cmp_to_key(_sort_comparator(config.tie_threshold))

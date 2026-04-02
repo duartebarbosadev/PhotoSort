@@ -5,7 +5,7 @@ import os
 from fractions import Fraction
 from typing import Callable, Dict, List, Optional
 
-from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
@@ -149,6 +149,7 @@ class CompareCard(QFrame):
         is_winner: bool,
         marked: bool,
         score: Optional[float],
+        failure_reason: Optional[str],
         metadata_rows: list[tuple[str, str]],
     ) -> None:
         self.path = path
@@ -157,8 +158,10 @@ class CompareCard(QFrame):
         self._name_label.setText(os.path.basename(path))
         if score is None:
             self._score_label.setText("Score unavailable")
+            self._score_label.setToolTip(failure_reason or "")
         else:
             self._score_label.setText(f"Final score {score:.3f}")
+            self._score_label.setToolTip("")
 
         for idx, (key_label, value_label) in enumerate(self._meta_rows):
             if idx < len(metadata_rows):
@@ -446,12 +449,8 @@ class PickBestStepWidget(QWidget):
             ("1", lambda: self._activate_slot_shortcut(0)),
             ("2", lambda: self._activate_slot_shortcut(1)),
             ("3", lambda: self._activate_slot_shortcut(2)),
-            ("Left", lambda: self._move_focus(-1)),
-            ("Right", lambda: self._move_focus(1)),
-            ("N", self._next_subset),
-            ("P", self._prev_subset),
-            ("]", self._next_cluster),
-            ("[", self._prev_cluster),
+            ("Left", self._prev_cluster),
+            ("Right", self._next_cluster),
         ]
         for key_text, handler in bindings:
             shortcut = QShortcut(QKeySequence(key_text), self)
@@ -472,9 +471,7 @@ class PickBestStepWidget(QWidget):
         self._current_winner_path = winner_path
         self._current_all_paths = list(all_paths)
 
-        score_by_path: Dict[str, Optional[float]] = {
-            entry["path"]: entry.get("final_score") for entry in ranked
-        }
+        score_by_path, failure_reason_by_path = self._cluster_score_maps(cluster)
 
         non_winners = [path for path in all_paths if path != winner_path]
         non_winners.sort(
@@ -498,10 +495,14 @@ class PickBestStepWidget(QWidget):
                 path: path != winner_path for path in self._cluster_ordered_paths
             }
         self._subset_index = 0
-        self._update_cluster_ui(score_by_path)
+        self._update_cluster_ui(score_by_path, failure_reason_by_path)
 
-    def _update_cluster_ui(self, score_by_path: Dict[str, Optional[float]]) -> None:
-        self._show_subset(score_by_path)
+    def _update_cluster_ui(
+        self,
+        score_by_path: Dict[str, Optional[float]],
+        failure_reason_by_path: Dict[str, str],
+    ) -> None:
+        self._show_subset(score_by_path, failure_reason_by_path)
         total_clusters = len(self._clusters)
         total_sets = self._subset_count()
         visible_kept = sum(
@@ -525,7 +526,11 @@ class PickBestStepWidget(QWidget):
         self._prev_set_btn.setEnabled(self._subset_index > 0)
         self._next_set_btn.setEnabled(self._subset_index < total_sets - 1)
 
-    def _show_subset(self, score_by_path: Dict[str, Optional[float]]) -> None:
+    def _show_subset(
+        self,
+        score_by_path: Dict[str, Optional[float]],
+        failure_reason_by_path: Dict[str, str],
+    ) -> None:
         non_winners = [
             path
             for path in self._cluster_ordered_paths
@@ -570,7 +575,10 @@ class PickBestStepWidget(QWidget):
                     is_winner=path == self._current_winner_path,
                     marked=self._cluster_mark_state.get(path, False),
                     score=score_by_path.get(path),
-                    metadata_rows=self._metadata_rows_for_path(path),
+                    failure_reason=failure_reason_by_path.get(path),
+                    metadata_rows=self._metadata_rows_for_path(
+                        path, failure_reason=failure_reason_by_path.get(path)
+                    ),
                 )
             else:
                 card.hide()
@@ -581,10 +589,18 @@ class PickBestStepWidget(QWidget):
         self._update_focus_state()
         self.setFocus()
 
-    def _metadata_rows_for_path(self, path: str) -> list[tuple[str, str]]:
-        if path in self._metadata_cache:
-            return self._metadata_cache[path]
+    def _metadata_rows_for_path(
+        self, path: str, *, failure_reason: Optional[str] = None
+    ) -> list[tuple[str, str]]:
+        if path not in self._metadata_cache:
+            self._metadata_cache[path] = self._build_metadata_rows(path)
 
+        rows = list(self._metadata_cache[path])
+        if failure_reason:
+            rows.insert(0, ("Scoring", failure_reason))
+        return rows[:5]
+
+    def _build_metadata_rows(self, path: str) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
         metadata = None
         app_state = getattr(self.window(), "app_state", None)
@@ -677,6 +693,22 @@ class PickBestStepWidget(QWidget):
         self._metadata_cache[path] = rows[:5]
         return self._metadata_cache[path]
 
+    def _cluster_score_maps(
+        self, cluster: Dict
+    ) -> tuple[Dict[str, Optional[float]], Dict[str, str]]:
+        ranked: List[dict] = cluster.get("ranked", [])
+        failed: List[dict] = cluster.get("failed", [])
+        score_by_path: Dict[str, Optional[float]] = {
+            entry["path"]: entry.get("final_score") for entry in ranked
+        }
+        failure_reason_by_path: Dict[str, str] = {}
+        for entry in failed:
+            path = entry.get("path")
+            reason = entry.get("failure_reason")
+            if path and reason:
+                failure_reason_by_path[path] = str(reason)
+        return score_by_path, failure_reason_by_path
+
     def _update_focus_state(self) -> None:
         for index, card in enumerate(self._compare_cards):
             if card.isVisible():
@@ -750,20 +782,16 @@ class PickBestStepWidget(QWidget):
         max_subset = self._subset_count() - 1
         if self._subset_index < max_subset:
             self._subset_index += 1
-            ranked = self._clusters[self._cluster_index].get("ranked", [])
-            score_by_path = {
-                entry["path"]: entry.get("final_score") for entry in ranked
-            }
-            self._update_cluster_ui(score_by_path)
+            cluster = self._clusters[self._cluster_index]
+            score_by_path, failure_reason_by_path = self._cluster_score_maps(cluster)
+            self._update_cluster_ui(score_by_path, failure_reason_by_path)
 
     def _prev_subset(self) -> None:
         if self._subset_index > 0:
             self._subset_index -= 1
-            ranked = self._clusters[self._cluster_index].get("ranked", [])
-            score_by_path = {
-                entry["path"]: entry.get("final_score") for entry in ranked
-            }
-            self._update_cluster_ui(score_by_path)
+            cluster = self._clusters[self._cluster_index]
+            score_by_path, failure_reason_by_path = self._cluster_score_maps(cluster)
+            self._update_cluster_ui(score_by_path, failure_reason_by_path)
 
     def _keep_visible(self) -> None:
         paths = self._visible_paths()
@@ -838,17 +866,9 @@ class PickBestStepWidget(QWidget):
             self._update_focus_state()
             self._toggle_slot(self._focused_slot_index)
         elif key == Qt.Key.Key_Left:
-            self._move_focus(-1)
-        elif key == Qt.Key.Key_Right:
-            self._move_focus(1)
-        elif key == Qt.Key.Key_N:
-            self._next_subset()
-        elif key == Qt.Key.Key_P:
-            self._prev_subset()
-        elif key == Qt.Key.Key_BracketRight:
-            self._next_cluster()
-        elif key == Qt.Key.Key_BracketLeft:
             self._prev_cluster()
+        elif key == Qt.Key.Key_Right:
+            self._next_cluster()
         else:
             super().keyPressEvent(event)
 
@@ -856,12 +876,3 @@ class PickBestStepWidget(QWidget):
         self._focused_slot_index = slot_index
         self._update_focus_state()
         self._toggle_slot(slot_index)
-
-    def _move_focus(self, delta: int) -> None:
-        visible_count = len(self._subset_paths)
-        if visible_count <= 0:
-            return
-        self._focused_slot_index = max(
-            0, min(visible_count - 1, self._focused_slot_index + delta)
-        )
-        self._update_focus_state()

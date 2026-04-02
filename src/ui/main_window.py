@@ -1211,6 +1211,8 @@ class MainWindow(QMainWindow):
 
     def show_grouping_step(self) -> None:
         self.app_state.workflow_step = "organize"
+        for action in self.menu_manager.image_focus_actions.values():
+            action.setEnabled(True)
         self.workflow_stack.setCurrentWidget(self.grouping_page)
         self.grouping_step_widget.set_source_folder(self.app_state.grouping_source_root)
         self.grouping_step_widget.set_current_mode(
@@ -1229,12 +1231,17 @@ class MainWindow(QMainWindow):
 
     def show_cull_step(self) -> None:
         self.app_state.workflow_step = "cull"
+        for action in self.menu_manager.image_focus_actions.values():
+            action.setEnabled(True)
         self.workflow_stack.setCurrentWidget(self.cull_page)
         self.update_workflow_navigation()
 
     def show_pick_best_step(self) -> None:
         self.app_state.workflow_step = "pick_best"
         self.workflow_stack.setCurrentWidget(self.pick_best_page)
+        # Disable application-wide 1-9 shortcuts so PickBestStepWidget can handle them
+        for action in self.menu_manager.image_focus_actions.values():
+            action.setEnabled(False)
         self.update_workflow_navigation()
         if self.app_state.pick_best_results:
             return
@@ -1715,7 +1722,7 @@ class MainWindow(QMainWindow):
         else:
             has_special = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
         skip_deleted = not has_special  # Holding Ctrl/Cmd includes deleted
-        if self.hotkey_controller.handle_key(key, skip_deleted=skip_deleted):
+        if self.app_state.workflow_step != "pick_best" and self.hotkey_controller.handle_key(key, skip_deleted=skip_deleted):
             event.accept()
             return
 

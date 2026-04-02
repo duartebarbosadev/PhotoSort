@@ -14,6 +14,30 @@ from core.media_utils import is_video_extension
 logger = logging.getLogger(__name__)
 
 
+def _failed_entry(path: str, reason: str) -> dict:
+    return {
+        "path": path,
+        "status": "failed",
+        "failure_reason": reason,
+    }
+
+
+def _summarize_failed_images(failed_images: List[dict], *, limit: int = 3) -> str:
+    if not failed_images:
+        return ""
+
+    preview = []
+    for entry in failed_images[:limit]:
+        path = entry.get("path", "")
+        reason = entry.get("failure_reason", "Unknown failure")
+        preview.append(f"{os.path.basename(path)}: {reason}")
+
+    remaining = len(failed_images) - len(preview)
+    if remaining > 0:
+        preview.append(f"+{remaining} more")
+    return "; ".join(preview)
+
+
 class PickBestWorker(QObject):
     """Background worker that scores similarity clusters and identifies the best image."""
 
@@ -104,7 +128,19 @@ class PickBestWorker(QObject):
                     logger.debug(
                         f"Cluster {cluster_id}: winner={os.path.basename(selection.winner.path)}"
                     )
+                    if cluster_result["failed"]:
+                        logger.warning(
+                            "Cluster %s: %d image(s) could not be scored — %s",
+                            cluster_id,
+                            len(cluster_result["failed"]),
+                            _summarize_failed_images(cluster_result["failed"]),
+                        )
                 except (NoSupportedImagesError, NoScorableImagesError) as exc:
+                    if isinstance(exc, NoScorableImagesError):
+                        cluster_result["failed"] = [
+                            _failed_entry(path, reason)
+                            for path, reason in exc.failures
+                        ]
                     logger.warning(f"Cluster {cluster_id}: skipped — {exc}")
                     # No winner; treat whole cluster as unscored
                 except Exception as exc:
