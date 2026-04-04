@@ -198,6 +198,13 @@ class CompareCard(QFrame):
         self._update_style()
         self.toggled.emit(self.path, self._marked)
 
+    def set_info_visible(self, visible: bool) -> None:
+        self._score_label.setVisible(visible)
+        self._hint_label.setVisible(visible)
+        for key_label, value_label in self._meta_rows:
+            key_label.setVisible(visible)
+            value_label.setVisible(visible)
+
     def _update_style(self) -> None:
         if self.is_winner:
             border_color = WINNER_BORDER_COLOR
@@ -256,6 +263,9 @@ class PickBestStepWidget(QWidget):
         self._cluster_ordered_paths: List[str] = []
         self._cluster_mark_state: Dict[str, bool] = {}
         self._metadata_cache: Dict[str, list[tuple[str, str]]] = {}
+        self._focus_mode = False
+        self._current_images_data: List[Dict] = []
+        self._info_visible = True
         self._create_widgets()
         self._connect_signals()
         self._create_shortcuts()
@@ -366,13 +376,14 @@ class PickBestStepWidget(QWidget):
         self._subset_info_label.setStyleSheet("font-size: 11px; color: #92A0AD;")
         review_layout.addWidget(self._subset_info_label)
 
-        hint = QLabel(
-            "Up to 3 images per round. Winner stays on the right. Click an image/card or press 1, 2, 3 to toggle keep/delete."
+        self._hint_label = QLabel(
+            "Up to 3 images per round. Winner stays on the right."
+            " Press 1, 2, 3 to toggle keep/delete — C to focus an image, i to hide/show info."
         )
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setWordWrap(True)
-        hint.setStyleSheet("font-size: 11px; color: #888888;")
-        review_layout.addWidget(hint)
+        self._hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hint_label.setWordWrap(True)
+        self._hint_label.setStyleSheet("font-size: 11px; color: #888888;")
+        review_layout.addWidget(self._hint_label)
 
         self._sync_viewer = SynchronizedImageViewer()
         self._sync_viewer.controls_frame.hide()
@@ -451,6 +462,8 @@ class PickBestStepWidget(QWidget):
             ("3", lambda: self._activate_slot_shortcut(2)),
             ("Left", self._prev_cluster),
             ("Right", self._next_cluster),
+            ("C", self._toggle_focus_mode),
+            ("i", self._toggle_info),
         ]
         for key_text, handler in bindings:
             shortcut = QShortcut(QKeySequence(key_text), self)
@@ -562,6 +575,7 @@ class PickBestStepWidget(QWidget):
                     logger.debug("Could not load preview for %s: %s", path, exc)
             images_data.append({"path": path, "pixmap": pixmap, "rating": 0})
 
+        self._current_images_data = images_data
         self._sync_viewer.set_images_data(images_data)
         for viewer in self._sync_viewer.image_viewers:
             viewer.control_bar.hide()
@@ -583,10 +597,17 @@ class PickBestStepWidget(QWidget):
             else:
                 card.hide()
 
+        if not self._info_visible:
+            for card in self._compare_cards:
+                if card.isVisible():
+                    card.set_info_visible(False)
+
         self._focused_slot_index = min(
             self._focused_slot_index, max(0, len(subset_paths) - 1)
         )
         self._update_focus_state()
+        if self._focus_mode:
+            self._sync_viewer.set_focused_viewer(self._focused_slot_index)
         self.setFocus()
 
     def _metadata_rows_for_path(
@@ -770,11 +791,13 @@ class PickBestStepWidget(QWidget):
 
     def _next_cluster(self) -> None:
         if self._cluster_index < len(self._clusters) - 1:
+            self._exit_focus_mode()
             self._commit_current_cluster_marks()
             self._load_cluster(self._cluster_index + 1)
 
     def _prev_cluster(self) -> None:
         if self._cluster_index > 0:
+            self._exit_focus_mode()
             self._commit_current_cluster_marks()
             self._load_cluster(self._cluster_index - 1)
 
@@ -862,17 +885,59 @@ class PickBestStepWidget(QWidget):
         key = event.key()
 
         if key in (Qt.Key.Key_1, Qt.Key.Key_2, Qt.Key.Key_3):
-            self._focused_slot_index = key - Qt.Key.Key_1
+            slot = key - Qt.Key.Key_1
+            self._focused_slot_index = slot
             self._update_focus_state()
-            self._toggle_slot(self._focused_slot_index)
+            if self._focus_mode:
+                self._sync_viewer.set_focused_viewer(slot)
+            else:
+                self._toggle_slot(slot)
         elif key == Qt.Key.Key_Left:
             self._prev_cluster()
         elif key == Qt.Key.Key_Right:
             self._next_cluster()
+        elif key == Qt.Key.Key_C:
+            self._toggle_focus_mode()
+        elif key == Qt.Key.Key_I:
+            self._toggle_info()
         else:
             super().keyPressEvent(event)
 
     def _activate_slot_shortcut(self, slot_index: int) -> None:
         self._focused_slot_index = slot_index
         self._update_focus_state()
-        self._toggle_slot(slot_index)
+        if self._focus_mode:
+            self._sync_viewer.set_focused_viewer(slot_index)
+        else:
+            self._toggle_slot(slot_index)
+
+    def _exit_focus_mode(self) -> None:
+        """Reset to compare mode (flag + hint). No-op if already in compare mode."""
+        if not self._focus_mode:
+            return
+        self._focus_mode = False
+        self._hint_label.setText(
+            "Up to 3 images per round. Winner stays on the right."
+            " Press 1, 2, 3 to toggle keep/delete — C to focus an image, i to hide/show info."
+        )
+
+    def _toggle_focus_mode(self) -> None:
+        if not self._focus_mode:
+            self._focus_mode = True
+            slot = min(self._focused_slot_index, max(0, len(self._subset_paths) - 1))
+            self._sync_viewer.set_focused_viewer(slot)
+            self._hint_label.setText(
+                "Focus mode: press 1, 2, 3 to switch between images."
+                " Press C to return to side-by-side compare."
+            )
+        else:
+            self._exit_focus_mode()
+            self._sync_viewer.set_images_data(self._current_images_data)
+            for viewer in self._sync_viewer.image_viewers:
+                viewer.control_bar.hide()
+
+    def _toggle_info(self) -> None:
+        self._info_visible = not self._info_visible
+        for card in self._compare_cards:
+            if card.isVisible():
+                card.set_info_visible(self._info_visible)
