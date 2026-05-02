@@ -133,3 +133,35 @@ def test_pick_best_widget_shows_failure_reason_for_unscored_image(monkeypatch):
         failed_card._meta_rows[0][1].text()
         == "Aesthetic model did not return a score for this image."
     )
+
+
+def test_pick_best_widget_shows_capture_date_in_metadata(monkeypatch):
+    monkeypatch.setattr(
+        "ui.pick_best_step_widget.MetadataProcessor.get_detailed_metadata",
+        lambda path, cache: {
+            "Exif.Photo.DateTimeOriginal": "2024:01:02 03:04:05",
+            "Exif.Image.Make": "SONY",
+            "Exif.Image.Model": "A7 III",
+        },
+    )
+
+    widget = PickBestStepWidget()
+    widget.show_results(
+        {
+            1: {
+                "winner_path": "/tmp/winner.jpg",
+                "ranked": [
+                    {"path": "/tmp/winner.jpg", "final_score": 0.91},
+                    {"path": "/tmp/challenger.jpg", "final_score": 0.72},
+                ],
+                "failed": [],
+                "all_paths": ["/tmp/challenger.jpg", "/tmp/winner.jpg"],
+                "unsupported_paths": [],
+            }
+        }
+    )
+
+    challenger_card = widget._compare_cards[0]
+    assert challenger_card.path == "/tmp/challenger.jpg"
+    assert challenger_card._meta_rows[0][0].text() == "Date"
+    assert challenger_card._meta_rows[0][1].text() == "2024-01-02 03:04"

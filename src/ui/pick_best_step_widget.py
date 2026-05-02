@@ -21,7 +21,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core.metadata_processor import MetadataProcessor
+from core.metadata_processor import (
+    DATE_TAGS_PREFERENCE,
+    MetadataProcessor,
+    _parse_exif_date,
+)
 from ui.advanced_image_viewer import SynchronizedImageViewer
 
 logger = logging.getLogger(__name__)
@@ -71,6 +75,20 @@ def _float_text(
         return f"{prefix}{float(value):.{digits}f}{suffix}"
     except (TypeError, ValueError):
         return f"{prefix}{value}{suffix}"
+
+
+def _format_capture_date(metadata: dict) -> Optional[str]:
+    for key in DATE_TAGS_PREFERENCE:
+        raw_value = metadata.get(key)
+        if raw_value in (None, "", "None"):
+            continue
+        parsed = _parse_exif_date(str(raw_value))
+        if parsed is not None:
+            if parsed.hour == 0 and parsed.minute == 0 and parsed.second == 0:
+                return parsed.strftime("%Y-%m-%d")
+            return parsed.strftime("%Y-%m-%d %H:%M")
+        return str(raw_value)
+    return None
 
 
 class CompareCard(QFrame):
@@ -127,7 +145,7 @@ class CompareCard(QFrame):
         layout.addLayout(self._meta_grid)
 
         self._meta_rows: list[tuple[QLabel, QLabel]] = []
-        for row in range(5):
+        for row in range(6):
             key = QLabel("")
             key.setStyleSheet("font-size: 10px; color: #7D8792;")
             value = QLabel("")
@@ -619,7 +637,7 @@ class PickBestStepWidget(QWidget):
         rows = list(self._metadata_cache[path])
         if failure_reason:
             rows.insert(0, ("Scoring", failure_reason))
-        return rows[:5]
+        return rows[:6]
 
     def _build_metadata_rows(self, path: str) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
@@ -632,6 +650,10 @@ class PickBestStepWidget(QWidget):
             logger.debug("EXIF lookup failed for %s", path, exc_info=True)
 
         if isinstance(metadata, dict):
+            capture_date = _format_capture_date(metadata)
+            if capture_date:
+                rows.append(("Date", capture_date))
+
             camera_make = _first_present(
                 metadata, "Exif.Image.Make", "Xmp.tiff.Make", "Make"
             )
@@ -711,7 +733,7 @@ class PickBestStepWidget(QWidget):
         if not rows:
             rows.append(("Metadata", "No EXIF details available"))
 
-        self._metadata_cache[path] = rows[:5]
+        self._metadata_cache[path] = rows[:6]
         return self._metadata_cache[path]
 
     def _cluster_score_maps(

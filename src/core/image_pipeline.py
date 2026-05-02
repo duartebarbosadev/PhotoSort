@@ -116,12 +116,14 @@ class ImagePipeline:
         cache_key = (normalized_path, apply_auto_edits, apply_orientation)
 
         cached_img = self.thumbnail_cache.get(cache_key)
-        # If cache wasn't found, generate the thumbnail and cache it
-        if cached_img is None:
-            logger.debug(
-                f"Thumbnail cache MISS for {os.path.basename(normalized_path)} (Orientation applied: {apply_orientation})"
-            )
+        # If cache hit, return immediately
+        if cached_img is not None:
             return cached_img
+        
+        # Cache miss - generate the thumbnail and cache it
+        logger.debug(
+            f"Thumbnail cache MISS for {os.path.basename(normalized_path)} (Orientation applied: {apply_orientation})"
+        )
 
         pil_img: Optional[Image.Image] = None
 

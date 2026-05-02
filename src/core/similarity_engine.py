@@ -19,7 +19,7 @@ from core.similarity_utils import (
 )
 from .app_settings import (
     DEFAULT_CLIP_MODEL,
-    is_pytorch_cuda_available,
+    get_preferred_torch_device,
     DBSCAN_EPS,
     DBSCAN_MIN_SAMPLES,
     DEFAULT_SIMILARITY_BATCH_SIZE,
@@ -144,16 +144,15 @@ class SimilarityEngine(QObject):
                 logger.info(f"Loading model: {self.model_name}")
                 self.progress_update.emit(0, f"Loading model: {self.model_name}...")
 
-                # Let SentenceTransformer auto-select device based on PyTorch's CUDA availability
-                model_device = (
-                    "cuda" if is_pytorch_cuda_available() else "cpu"
-                )  # Use imported function
+                model_device = get_preferred_torch_device()
                 logger.info(f"Attempting to load model on device: '{model_device}'")
+                logger.debug("Instantiating SentenceTransformer (this may take a while; weight-loading has no progress)...")
                 self.model = SentenceTransformer(
                     self.model_name,
                     device=model_device,
                     cache_folder=get_sentence_transformers_cache_dir(),
                 )
+                logger.debug("SentenceTransformer constructor returned successfully.")
 
                 # Log actual device model is on
                 actual_device_str = "Unknown"

@@ -1,4 +1,6 @@
 import logging
+import os
+import subprocess
 from typing import Optional, List, Dict, Any
 from PyQt6.QtCore import (
     Qt,
@@ -906,6 +908,12 @@ class IndividualViewer(QWidget):
         # Add separator
         menu.addSeparator()
 
+        show_in_explorer_action = QAction("Show in Explorer", self)
+        show_in_explorer_action.triggered.connect(self._show_in_explorer)
+        menu.addAction(show_in_explorer_action)
+
+        menu.addSeparator()
+
         # Toggle Mark for Deletion action
         is_marked = self._is_marked_for_deletion()
         mark_toggle_action = QAction(
@@ -951,6 +959,29 @@ class IndividualViewer(QWidget):
 
         # Show menu at the cursor position
         menu.exec(self.mapToGlobal(position))
+
+    def _show_in_explorer(self) -> None:
+        """Reveal the current file in the platform file manager."""
+        if not self._file_path:
+            return
+
+        normalized_path = os.path.normpath(self._file_path)
+        try:
+            if os.name == "nt":
+                subprocess.run(["explorer", "/select,", normalized_path], check=False)
+            elif os.name == "posix":
+                if os.uname().sysname == "Darwin":
+                    subprocess.run(["open", "-R", normalized_path], check=False)
+                else:
+                    subprocess.run(
+                        ["xdg-open", os.path.dirname(normalized_path)], check=False
+                    )
+        except Exception:
+            logger.error(
+                "Failed to reveal '%s' in the file manager.",
+                normalized_path,
+                exc_info=True,
+            )
 
 
 class SynchronizedImageViewer(QWidget):
