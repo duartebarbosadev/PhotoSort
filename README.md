@@ -130,7 +130,7 @@ The application will automatically detect and load the newest matching `orientat
 
 The following local models are downloaded or installed on first use:
 
-- `facebook/dinov2-small` or `facebook/dinov2-base` for similarity embeddings. PhotoSort asks before downloading the selected model, then reuses the local Hugging Face cache for offline runs. Preferences also include a similarity grouping threshold; higher values produce broader clusters, while lower values keep clusters closer to near-duplicates. Clustering also uses large overlapping region embeddings so partial occlusions, such as a finger over part of the lens, do not dominate the whole-image match.
+- `facebook/dinov2-small` or `facebook/dinov2-base` for similarity embeddings. PhotoSort asks before downloading the selected model, then reuses the local Hugging Face cache for offline runs. Preferences also include a similarity grouping threshold.
 - `cafeai/cafe_aesthetic` for Pick Best local aesthetic scoring
 
 If you are running offline, warm these models once while online first so they are present in your local Hugging Face cache.
