@@ -578,11 +578,55 @@ def _parse_fraction(value: str) -> float:
 
 _geocoder_lock = threading.Lock()
 _geocoder_last_call: float = 0.0
+_reverse_geocode_available: bool | None = None
+
+
+def _ensure_reverse_geocode() -> bool:
+    global _reverse_geocode_available
+    if _reverse_geocode_available is None:
+        try:
+            import reverse_geocode as _rg  # noqa: F401
+
+            _reverse_geocode_available = True
+        except ImportError:
+            _reverse_geocode_available = False
+    return _reverse_geocode_available
 
 
 @lru_cache(maxsize=512)
 def _reverse_geocode_parts(lat_bucket: float, lon_bucket: float) -> tuple:
-    """Returns (country, city, suburb) strings or None for missing levels."""
+    """Returns (country, state, city) strings or None for missing levels."""
+    if _ensure_reverse_geocode():
+        return _reverse_geocode_offline(lat_bucket, lon_bucket)
+    return _reverse_geocode_geopy(lat_bucket, lon_bucket)
+
+
+def _reverse_geocode_offline(lat_bucket: float, lon_bucket: float) -> tuple:
+    try:
+        import reverse_geocode as rg
+
+        r = rg.get((lat_bucket, lon_bucket))
+        if not r:
+            return (None, None, None)
+        country = r.get("country") or None
+        state = r.get("state") or None
+        city = r.get("city") or None
+        return (
+            _sanitize_folder_component(country) if country else None,
+            _sanitize_folder_component(state) if state else None,
+            _sanitize_folder_component(city) if city else None,
+        )
+    except Exception:
+        logger.debug(
+            "Reverse geocode failed for %.2f, %.2f, falling back to geopy",
+            lat_bucket,
+            lon_bucket,
+            exc_info=True,
+        )
+        return _reverse_geocode_geopy(lat_bucket, lon_bucket)
+
+
+def _reverse_geocode_geopy(lat_bucket: float, lon_bucket: float) -> tuple:
     global _geocoder_last_call
     try:
         from geopy.geocoders import Nominatim  # noqa: PLC0415
@@ -601,34 +645,40 @@ def _reverse_geocode_parts(lat_bucket: float, lon_bucket: float) -> tuple:
             return (None, None, None)
         addr = loc.raw.get("address", {})
         country = addr.get("country")
+        state = (
+            addr.get("state")
+            or addr.get("region")
+            or addr.get("province")
+            or addr.get("county")
+            or addr.get("state_district")
+        )
         city = (
             addr.get("city")
             or addr.get("town")
             or addr.get("village")
             or addr.get("municipality")
         )
-        suburb = (
-            addr.get("suburb")
-            or addr.get("neighbourhood")
-            or addr.get("quarter")
-            or addr.get("hamlet")
-        )
         return (
             _sanitize_folder_component(country) if country else None,
+            _sanitize_folder_component(state) if state else None,
             _sanitize_folder_component(city) if city else None,
-            _sanitize_folder_component(suburb) if suburb else None,
         )
     except ImportError:
         logger.debug("geopy not installed, using coordinate labels")
         return (None, None, None)
     except Exception:
         logger.debug(
-            "Reverse geocode failed for %.2f, %.2f", lat_bucket, lon_bucket, exc_info=True
+            "Reverse geocode failed for %.2f, %.2f",
+            lat_bucket,
+            lon_bucket,
+            exc_info=True,
         )
         return (None, None, None)
 
 
-def _location_label_from_metadata(metadata: Dict[str, Any], depth: int = 3) -> Optional[str]:
+def _location_label_from_metadata(
+    metadata: Dict[str, Any], depth: int = 3
+) -> Optional[str]:
     lat = _parse_gps_coordinate(
         metadata.get("Exif.GPSInfo.GPSLatitude"),
         metadata.get("Exif.GPSInfo.GPSLatitudeRef"),
@@ -642,8 +692,9 @@ def _location_label_from_metadata(metadata: Dict[str, Any], depth: int = 3) -> O
     lat_bucket = round(lat, 2)
     lon_bucket = round(lon, 2)
 
-    country, city, suburb = _reverse_geocode_parts(lat_bucket, lon_bucket)
-    available = [p for p in [country, city, suburb] if p]
+    country, state, city = _reverse_geocode_parts(lat_bucket, lon_bucket)
+    parts = [country, city] if depth == 2 else [country, state, city]
+    available = [p for p in parts if p]
     if available:
         selected = available[:depth] if depth < len(available) else available
         return "/".join(selected)
@@ -743,7 +794,9 @@ def build_grouping_plan(
             source_root=source_root,
         )
     if mode_value == GroupingMode.LOCATION:
-        return _build_location_plan(total_items, image_paths, skipped_paths, location_depth)
+        return _build_location_plan(
+            total_items, image_paths, skipped_paths, location_depth
+        )
     if mode_value == GroupingMode.FACE:
         return _build_face_plan(total_items, image_paths, skipped_paths)
     if mode_value == GroupingMode.MIXED:

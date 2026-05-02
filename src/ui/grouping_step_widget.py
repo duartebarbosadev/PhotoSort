@@ -384,13 +384,11 @@ class GroupingStepWidget(QWidget):
         self._location_depth_group.setExclusive(True)
         self._location_depth_buttons: Dict[int, QPushButton] = {}
         _depth_tips = {
-            1: "Country only (e.g. Australia)",
-            2: "Country + city (e.g. Australia/Brisbane)",
-            3: "Country + city + suburb (e.g. Australia/Brisbane/Windsor)",
-            4: "4 levels",
-            5: "5 levels",
+            1: "Country only (e.g. Japan)",
+            2: "Country + city (e.g. Japan/Fuji)",
+            3: "Country + state + city (e.g. Japan/Shizuoka/Fuji)",
         }
-        for depth_val in range(1, 6):
+        for depth_val in range(1, 4):
             btn = QPushButton(str(depth_val))
             btn.setObjectName("groupingModePill")
             btn.setCheckable(True)
@@ -713,7 +711,9 @@ class GroupingStepWidget(QWidget):
         self.folder_preview_grid.itemClicked.connect(
             self._handle_folder_preview_item_activated
         )
-        self._location_depth_group.buttonClicked.connect(self._on_location_depth_changed)
+        self._location_depth_group.buttonClicked.connect(
+            self._on_location_depth_changed
+        )
         self._depth_debounce.timeout.connect(self._fire_depth_change)
 
     def _on_location_depth_changed(self) -> None:
@@ -740,7 +740,9 @@ class GroupingStepWidget(QWidget):
         if not self._confirm_grouping_actions(effective_plan):
             return
         all_source_paths = [
-            p for g in (effective_plan.groups if effective_plan else []) for p in g.source_paths
+            p
+            for g in (effective_plan.groups if effective_plan else [])
+            for p in g.source_paths
         ] + (effective_plan.unassigned_paths if effective_plan else [])
         self._check_and_handle_companion_preference(all_source_paths)
         self.create_requested.emit(
@@ -2172,7 +2174,9 @@ class GroupingStepWidget(QWidget):
         return None
 
     def refresh_cached_thumbnails(self) -> None:
-        logger.debug("Refreshing organize thumbnails for all tree items and folder grid")
+        logger.debug(
+            "Refreshing organize thumbnails for all tree items and folder grid"
+        )
         self._refresh_all_tree_icons_from_cache()
         self._refresh_folder_preview_icons_from_cache()
 
@@ -2202,8 +2206,10 @@ class GroupingStepWidget(QWidget):
                     if top_item is not None:
                         self._recursive_refresh_icons(top_item)
         except RuntimeError:
-            logger.debug("Organize tree items deleted during thumbnail refresh; "
-                          "tree rebuild will populate icons from cache")
+            logger.debug(
+                "Organize tree items deleted during thumbnail refresh; "
+                "tree rebuild will populate icons from cache"
+            )
 
     def _recursive_refresh_icons(self, item: QTreeWidgetItem) -> None:
         source_path = self._item_source_path(item)

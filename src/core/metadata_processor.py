@@ -250,9 +250,6 @@ class MetadataProcessor:
             try:
                 if os.path.isfile(p_variant):
                     operational_path_found = p_variant
-                    logger.debug(
-                        f"Found operational path: '{p_variant}' (from original '{original_path}')"
-                    )
                     break
             except Exception as e:
                 logger.debug(f"Error checking path variant '{p_variant}': {e}")

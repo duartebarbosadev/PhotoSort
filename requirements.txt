@@ -1,5 +1,6 @@
 diskcache
 geopy
+reverse-geocode
 mediapipe<0.10.30
 numpy
 onnxruntime

@@ -613,11 +613,11 @@ def set_openai_config(
 
 def get_location_grouping_depth() -> int:
     settings = _get_settings()
-    return int(settings.value(LOCATION_GROUPING_DEPTH_KEY, 3, type=int))
+    return max(1, min(3, int(settings.value(LOCATION_GROUPING_DEPTH_KEY, 3, type=int))))
 
 
 def set_location_grouping_depth(depth: int) -> None:
-    _get_settings().setValue(LOCATION_GROUPING_DEPTH_KEY, max(1, min(5, depth)))
+    _get_settings().setValue(LOCATION_GROUPING_DEPTH_KEY, max(1, min(3, depth)))
 
 
 def get_companion_files_preference() -> str:
