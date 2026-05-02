@@ -116,12 +116,50 @@ class DroppableGroupingTree(QTreeWidget):
         self.viewport().setAcceptDrops(True)
         self.setDropIndicatorShown(False)
 
+    def _is_drop_noop(
+        self,
+        dragged_files: List[str],
+        dragged_group_ids: List[str],
+        target_item: QTreeWidgetItem,
+    ) -> bool:
+        """Check if all dragged items are already in the target location."""
+        if not dragged_files and not dragged_group_ids:
+            return False
+        gw = self._grouping_widget
+        target_kind = target_item.data(0, ROLE_KIND)
+
+        if target_kind == ITEM_GROUP:
+            target_group_id = target_item.data(0, ROLE_GROUP_ID)
+            target_group = gw._find_group(target_group_id)
+            if target_group:
+                files_in_target = all(
+                    f in target_group.source_paths for f in dragged_files
+                )
+                groups_already_there = all(
+                    gid == target_group_id for gid in dragged_group_ids
+                )
+                return files_in_target and groups_already_there
+        elif target_kind == ITEM_DIRECTORY:
+            target_rel = target_item.data(0, ROLE_RELATIVE_PATH) or ""
+            for g in gw._editable_groups:
+                if g.group_label == target_rel:
+                    files_in_target = all(f in g.source_paths for f in dragged_files)
+                    groups_already_there = all(
+                        (found := gw._find_group(gid)) is not None
+                        and found.group_label == target_rel
+                        for gid in dragged_group_ids
+                    )
+                    return files_in_target and groups_already_there
+
+        return False
+
     # ------------------------------------------------------------------
     # Drag event overrides
     # ------------------------------------------------------------------
 
     def dragEnterEvent(self, event: Optional[QDragEnterEvent]) -> None:
         if event and event.source() is self:
+            self._grouping_widget._drag_in_progress = True
             event.acceptProposedAction()
         elif event:
             event.ignore()
@@ -142,6 +180,7 @@ class DroppableGroupingTree(QTreeWidget):
 
     def dragLeaveEvent(self, event: Optional[QDragLeaveEvent]) -> None:
         self._clear_drop_highlight()
+        self._grouping_widget._drag_in_progress = False
         if event:
             super().dragLeaveEvent(event)
 
@@ -154,14 +193,20 @@ class DroppableGroupingTree(QTreeWidget):
         target_item = self._resolve_drop_target(self.itemAt(event.position().toPoint()))
         if target_item is None or not self._is_valid_drop_target(target_item):
             self._clear_drop_highlight()
+            self._grouping_widget._drag_in_progress = False
             event.ignore()
             return
 
         self._clear_drop_highlight()
+        self._grouping_widget._drag_in_progress = False
         dragged_files, dragged_group_ids = self._get_selected_drag_data()
 
         if not dragged_files and not dragged_group_ids:
             event.ignore()
+            return
+
+        if self._is_drop_noop(dragged_files, dragged_group_ids, target_item):
+            event.acceptProposedAction()
             return
 
         if dragged_files:
@@ -323,6 +368,7 @@ class GroupingStepWidget(QWidget):
         self._supported_items: int = 0
         self._ignore_preview_item_change = False
         self._syncing_tree_selection = False
+        self._drag_in_progress = False
         self._current_preview_source_path: Optional[str] = None
 
         self._before_root_item: Optional[QTreeWidgetItem] = None
@@ -1593,7 +1639,7 @@ class GroupingStepWidget(QWidget):
         )
 
     def _handle_preview_item_changed(self, item: QTreeWidgetItem, _column: int) -> None:
-        if self._ignore_preview_item_change:
+        if self._ignore_preview_item_change or self._drag_in_progress:
             return
         try:
             kind = self._item_kind(item)
@@ -2038,9 +2084,10 @@ class GroupingStepWidget(QWidget):
                 source_path,
             )
             return
+        ext = os.path.splitext(source_path)[1].lower()
         image_pipeline = getattr(self._parent_window, "image_pipeline", None)
         pixmap: Optional[QPixmap] = None
-        if image_pipeline:
+        if image_pipeline and ext in SUPPORTED_MEDIA_EXTENSIONS:
             pixmap = image_pipeline.get_preview_qpixmap(
                 source_path,
                 display_max_size=SELECTED_PREVIEW_DISPLAY_SIZE,
