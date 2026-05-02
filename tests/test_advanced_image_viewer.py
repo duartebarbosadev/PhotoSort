@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
 
-from src.ui.advanced_image_viewer import SynchronizedImageViewer
+from src.ui.advanced_image_viewer import IndividualViewer, SynchronizedImageViewer
 
 
 # Ensure a QApplication exists for widget tests.
@@ -45,5 +45,24 @@ def test_viewer_pool_matches_multi_selection_size():
 
     viewer.set_image_data(reduced_images[0])
     assert len(viewer.image_viewers) == 1
+
+    viewer.deleteLater()
+
+
+def test_individual_viewer_context_menu_includes_show_in_explorer(monkeypatch):
+    viewer = IndividualViewer()
+    viewer._file_path = "/tmp/example.jpg"
+
+    captured_actions = []
+
+    def fake_exec(menu, *_args, **_kwargs):
+        captured_actions.extend(action.text() for action in menu.actions())
+        return None
+
+    monkeypatch.setattr("src.ui.advanced_image_viewer.QMenu.exec", fake_exec)
+
+    viewer._show_context_menu(viewer.rect().center())
+
+    assert "Show in Explorer" in captured_actions
 
     viewer.deleteLater()

@@ -307,7 +307,27 @@ def is_pytorch_cuda_available() -> bool:
 
 
 def get_preferred_torch_device() -> str:
-    """Return the fastest available torch.device string (cuda, mps, or cpu)."""
+    """Return the fastest available torch.device string (cuda, mps, or cpu).
+
+    Set PHOTOSORT_TORCH_DEVICE env var to override (e.g. 'cpu', 'mps', 'cuda').
+    Set PHOTOSORT_FORCE_CPU=1 to force CPU regardless of hardware.
+    """
+    import os
+
+    env_device = os.environ.get("PHOTOSORT_TORCH_DEVICE", "").strip().lower()
+    if env_device in ("cpu", "mps", "cuda"):
+        import logging
+
+        logging.getLogger(__name__).info(
+            f"PHOTOSORT_TORCH_DEVICE={env_device} → forcing device '{env_device}'"
+        )
+        return env_device
+
+    if os.environ.get("PHOTOSORT_FORCE_CPU", "").strip() == "1":
+        import logging
+
+        logging.getLogger(__name__).info("PHOTOSORT_FORCE_CPU=1 → using CPU")
+        return "cpu"
 
     try:
         import torch
@@ -323,7 +343,6 @@ def get_preferred_torch_device() -> str:
             if mps_backend.is_available():  # type: ignore[attr-defined]
                 return "mps"
         except Exception:
-            # Ignore transient failures when probing MPS; fall back to CPU instead.
             pass
 
     return "cpu"

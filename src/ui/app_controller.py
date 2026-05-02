@@ -3,6 +3,9 @@ import re
 import time
 import logging
 from typing import List, Dict, Any, Tuple, Optional
+
+import numpy as np
+from sklearn.cluster import DBSCAN
 from PyQt6.QtCore import QObject, QTimer
 from core.app_settings import (
     add_recent_folder,
@@ -13,11 +16,14 @@ from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS, is_image_extension
 from core.image_file_ops import ImageFileOperations
 from core.pyexiv2_wrapper import PyExiv2Operations
 from core.grouping import build_grouping_output_root
+from core.similarity_utils import adaptive_dbscan_eps, l2_normalize_rows
 
 logger = logging.getLogger(__name__)
 
 AD_HOC_SELECTION_CLUSTER_ID = -1
 THUMBNAIL_PRELOAD_PROGRESS_LOG_INTERVAL = 100
+PICK_BEST_REFINEMENT_EPS = 0.04
+PICK_BEST_REFINEMENT_MIN_SAMPLES = 2
 
 
 # Forward declarations for type hinting to avoid circular imports.
@@ -271,7 +277,13 @@ class AppController(QObject):
             self.handle_grouping_workflow_error
         )
 
+        # Pick Best Worker
+        self.worker_manager.pick_best_progress.connect(self.handle_pick_best_progress)
+        self.worker_manager.pick_best_complete.connect(self.handle_pick_best_complete)
+        self.worker_manager.pick_best_error.connect(self.handle_pick_best_error)
+
         self._ai_rating_warning_messages: list[str] = []
+        self._pick_best_pending_after_similarity: bool = False
 
     # --- Public Methods (called from MainWindow) ---
 
@@ -597,6 +609,82 @@ class AppController(QObject):
                 continue
             cluster_map.setdefault(cluster_id, []).append(path)
         return cluster_map
+
+    def _build_pick_best_cluster_map(self) -> Dict[int, List[str]]:
+        base_cluster_map = self._build_cluster_path_map()
+        embeddings = getattr(self.app_state, "embeddings_cache", {}) or {}
+        if not base_cluster_map or not embeddings:
+            return base_cluster_map
+
+        refined_map: Dict[int, List[str]] = {}
+        next_cluster_id = 1
+
+        for _cluster_id, paths in sorted(base_cluster_map.items()):
+            if len(paths) < 2:
+                refined_map[next_cluster_id] = list(paths)
+                next_cluster_id += 1
+                continue
+
+            embedded_paths = [path for path in paths if path in embeddings]
+            missing_paths = [path for path in paths if path not in embeddings]
+
+            if len(embedded_paths) < 2:
+                refined_map[next_cluster_id] = list(paths)
+                next_cluster_id += 1
+                continue
+
+            embedding_matrix = np.array(
+                [embeddings[path] for path in embedded_paths], dtype=np.float32
+            )
+            embedding_matrix = l2_normalize_rows(embedding_matrix)
+            if not embedding_matrix.flags["C_CONTIGUOUS"]:
+                embedding_matrix = np.ascontiguousarray(embedding_matrix)
+
+            strict_eps = min(
+                adaptive_dbscan_eps(
+                    embedding_matrix,
+                    PICK_BEST_REFINEMENT_EPS,
+                    PICK_BEST_REFINEMENT_MIN_SAMPLES,
+                ),
+                PICK_BEST_REFINEMENT_EPS,
+            )
+            dbscan = DBSCAN(
+                eps=strict_eps,
+                min_samples=PICK_BEST_REFINEMENT_MIN_SAMPLES,
+                metric="cosine",
+            )
+            labels = dbscan.fit_predict(embedding_matrix)
+
+            grouped: Dict[int, List[str]] = {}
+            next_noise_label = 0
+            for path, label in zip(embedded_paths, labels, strict=True):
+                if label == -1:
+                    grouped[-1000000 - next_noise_label] = [path]
+                    next_noise_label += 1
+                else:
+                    grouped.setdefault(int(label), []).append(path)
+
+            for path in missing_paths:
+                grouped[-1000000 - next_noise_label] = [path]
+                next_noise_label += 1
+
+            ordered_groups = sorted(
+                grouped.values(),
+                key=lambda group: (
+                    -len(group),
+                    min(paths.index(path) for path in group if path in paths),
+                ),
+            )
+            for group_paths in ordered_groups:
+                refined_map[next_cluster_id] = list(group_paths)
+                next_cluster_id += 1
+
+        logger.info(
+            "Pick Best refinement split %d similarity cluster(s) into %d tighter cluster(s).",
+            len(base_cluster_map),
+            len(refined_map),
+        )
+        return refined_map
 
     def _restore_analysis_state(self):
         folder_path = self.app_state.current_folder_path
@@ -1221,6 +1309,66 @@ class AppController(QObject):
         )
         self.main_window.cancel_pending_close_after_grouping()
 
+    def start_pick_best_workflow(self) -> None:
+        """Start the Pick Best workflow — auto-runs similarity if not yet done."""
+        if not self.app_state.image_files_data:
+            self.main_window.statusBar().showMessage("No images loaded.", 3000)
+            return
+
+        if self.worker_manager.is_pick_best_running() or self._pick_best_pending_after_similarity:
+            return
+
+        if self.app_state.pick_best_results:
+            return
+
+        widget = self.main_window.pick_best_step_widget
+
+        if self.app_state.cluster_results:
+            # Similarity already done — go straight to scoring
+            self._start_pick_best_scoring()
+        else:
+            # Need to run similarity first
+            logger.info("Pick Best: no cluster results yet, running similarity first.")
+            self._pick_best_pending_after_similarity = True
+            widget.show_loading("Step 1/2: Computing similarity clusters…", 0)
+            self.start_similarity_analysis()
+
+    def _start_pick_best_scoring(self) -> None:
+        cluster_map = self._build_pick_best_cluster_map()
+        widget = self.main_window.pick_best_step_widget
+        total_clusters = len(cluster_map)
+        scorable = sum(1 for paths in cluster_map.values() if len(paths) >= 2)
+        if scorable == 0:
+            logger.info("Pick Best: no clusters with 2+ images.")
+            widget.show_loading(
+                f"No comparable clusters found ({total_clusters} singleton cluster(s)).\n"
+                "Click 'Done' to continue to Cull."
+            )
+            return
+        widget.show_loading(f"Step 2/2: Scoring {scorable} cluster(s)…", 0)
+        self.worker_manager.start_pick_best_analysis(cluster_map)
+
+    def handle_pick_best_progress(self, percent: int, message: str) -> None:
+        self.main_window.pick_best_step_widget.show_loading(
+            f"Scoring images… {message}", percent
+        )
+
+    def handle_pick_best_complete(self, results: dict) -> None:
+        logger.info(f"Pick Best complete: {len(results)} clusters scored.")
+        self.app_state.pick_best_results = results
+        # Build quick path→is_winner lookup
+        self.app_state.pick_best_winners_by_path.clear()
+        for cluster_data in results.values():
+            winner = cluster_data.get("winner_path")
+            if winner:
+                self.app_state.pick_best_winners_by_path[winner] = True
+        self.main_window.pick_best_step_widget.show_results(results)
+
+    def handle_pick_best_error(self, message: str) -> None:
+        logger.error(f"Pick Best error: {message}", exc_info=False)
+        self.main_window.pick_best_step_widget.show_error(message)
+        self.main_window.statusBar().showMessage(f"Pick Best error: {message}", 6000)
+
     def handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0
         self.main_window.update_loading_text(
@@ -1331,6 +1479,7 @@ class AppController(QObject):
     def handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
         self.app_state.cluster_results = cluster_results_dict
         self.app_state.clear_best_shot_results()
+        self.app_state.clear_pick_best_results()
 
         # Apply saved manual overrides on top of auto-clustering results
         if self.app_state.current_folder_path:
@@ -1375,10 +1524,18 @@ class AppController(QObject):
         self.main_window.refresh_navigation_shortcut_actions()
         if self.main_window.group_by_similarity_mode:
             self.main_window._rebuild_model_view()
-        self.main_window.hide_loading_overlay()
+
+        if self._pick_best_pending_after_similarity:
+            self._pick_best_pending_after_similarity = False
+            self._start_pick_best_scoring()
+        else:
+            self.main_window.hide_loading_overlay()
 
     def handle_similarity_error(self, message):
         logger.error(f"Similarity analysis failed: {message}", exc_info=True)
+        if self._pick_best_pending_after_similarity:
+            self._pick_best_pending_after_similarity = False
+            self.main_window.pick_best_step_widget.show_error(message)
         self.main_window.statusBar().showMessage(f"Similarity Error: {message}", 8000)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self._get_image_file_data())

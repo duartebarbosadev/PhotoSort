@@ -2028,10 +2028,8 @@ class GroupingStepWidget(QWidget):
         return None
 
     def refresh_cached_thumbnails(self) -> None:
-        logger.debug(
-            "Refreshing organize thumbnails for current selection and folder grid"
-        )
-        self._refresh_current_selection_icons_from_cache()
+        logger.debug("Refreshing organize thumbnails for all tree items and folder grid")
+        self._refresh_all_tree_icons_from_cache()
         self._refresh_folder_preview_icons_from_cache()
 
     def refresh_cached_previews(self) -> None:
@@ -2052,12 +2050,25 @@ class GroupingStepWidget(QWidget):
         self.large_preview_view.set_image(pixmap)
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
 
-    def _refresh_current_selection_icons_from_cache(self) -> None:
-        for tree in (self.before_tree, self.preview_tree):
-            item = tree.currentItem()
-            source_path = self._item_source_path(item)
-            if item is not None and source_path:
-                self._set_preview_icon(item, source_path)
+    def _refresh_all_tree_icons_from_cache(self) -> None:
+        try:
+            for tree in (self.before_tree, self.preview_tree):
+                for i in range(tree.topLevelItemCount()):
+                    top_item = tree.topLevelItem(i)
+                    if top_item is not None:
+                        self._recursive_refresh_icons(top_item)
+        except RuntimeError:
+            logger.debug("Organize tree items deleted during thumbnail refresh; "
+                          "tree rebuild will populate icons from cache")
+
+    def _recursive_refresh_icons(self, item: QTreeWidgetItem) -> None:
+        source_path = self._item_source_path(item)
+        if self._item_kind(item) == ITEM_FILE and source_path:
+            self._set_preview_icon(item, source_path)
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child is not None:
+                self._recursive_refresh_icons(child)
 
     def _refresh_folder_preview_icons_from_cache(self) -> None:
         for index in range(self.folder_preview_grid.count()):

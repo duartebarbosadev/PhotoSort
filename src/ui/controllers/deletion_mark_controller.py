@@ -143,6 +143,42 @@ class DeletionMarkController:
             count += 1
         return count
 
+    def mark_paths(
+        self,
+        paths: Iterable[str],
+        find_proxy_index: Callable[[str], object],
+        file_system_model,
+        proxy_model,
+    ) -> int:
+        count = 0
+        for p in paths:
+            if not self._is_marked_func(p):
+                self.app_state.mark_for_deletion(p)
+                count += 1
+            item, is_blurred = self._resolve_item(
+                p, find_proxy_index, file_system_model, proxy_model
+            )
+            self._update_item_presentation(item, p, is_blurred)
+        return count
+
+    def unmark_paths(
+        self,
+        paths: Iterable[str],
+        find_proxy_index: Callable[[str], object],
+        file_system_model,
+        proxy_model,
+    ) -> int:
+        count = 0
+        for p in paths:
+            if self._is_marked_func(p):
+                self.app_state.unmark_for_deletion(p)
+                count += 1
+            item, is_blurred = self._resolve_item(
+                p, find_proxy_index, file_system_model, proxy_model
+            )
+            self._update_item_presentation(item, p, is_blurred)
+        return count
+
     def mark_others_in_collection(
         self,
         keep_path: str,

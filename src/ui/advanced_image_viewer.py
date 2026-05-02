@@ -1,4 +1,6 @@
 import logging
+import os
+import subprocess
 from typing import Optional, List, Dict, Any
 from PyQt6.QtCore import (
     Qt,
@@ -485,6 +487,7 @@ class IndividualViewer(QWidget):
     markOthersAsDeletedRequested = pyqtSignal(str)  # file_path of the image to keep
     unmarkAsDeletedRequested = pyqtSignal(str)  # file_path
     unmarkOthersAsDeletedRequested = pyqtSignal(str)  # file_path of the image to keep
+    clicked = pyqtSignal(str)  # file_path
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -870,6 +873,13 @@ class IndividualViewer(QWidget):
         """Handle mouse press events to show context menu on right-click."""
         if event.button() == Qt.MouseButton.RightButton and self._file_path is not None:
             self._show_context_menu(event.pos())
+        elif (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._file_path is not None
+            and self._media_type != "video"
+        ):
+            self.clicked.emit(self._file_path)
+            super().mousePressEvent(event)
         else:
             super().mousePressEvent(event)
 
@@ -896,6 +906,12 @@ class IndividualViewer(QWidget):
             menu.addAction(delete_others_action)
 
         # Add separator
+        menu.addSeparator()
+
+        show_in_explorer_action = QAction("Show in Explorer", self)
+        show_in_explorer_action.triggered.connect(self._show_in_explorer)
+        menu.addAction(show_in_explorer_action)
+
         menu.addSeparator()
 
         # Toggle Mark for Deletion action
@@ -944,6 +960,29 @@ class IndividualViewer(QWidget):
         # Show menu at the cursor position
         menu.exec(self.mapToGlobal(position))
 
+    def _show_in_explorer(self) -> None:
+        """Reveal the current file in the platform file manager."""
+        if not self._file_path:
+            return
+
+        normalized_path = os.path.normpath(self._file_path)
+        try:
+            if os.name == "nt":
+                subprocess.run(["explorer", "/select,", normalized_path], check=False)
+            elif os.name == "posix":
+                if os.uname().sysname == "Darwin":
+                    subprocess.run(["open", "-R", normalized_path], check=False)
+                else:
+                    subprocess.run(
+                        ["xdg-open", os.path.dirname(normalized_path)], check=False
+                    )
+        except Exception:
+            logger.error(
+                "Failed to reveal '%s' in the file manager.",
+                normalized_path,
+                exc_info=True,
+            )
+
 
 class SynchronizedImageViewer(QWidget):
     """
@@ -959,6 +998,7 @@ class SynchronizedImageViewer(QWidget):
     markOthersAsDeletedRequested = pyqtSignal(str)  # file_path of the image to keep
     unmarkAsDeletedRequested = pyqtSignal(str)  # file_path
     unmarkOthersAsDeletedRequested = pyqtSignal(str)  # file_path of the image to keep
+    imageClicked = pyqtSignal(int, str)  # visible slot index, file_path
     focused_image_changed = pyqtSignal(int, str)  # index, file_path
     side_by_side_availability_changed = pyqtSignal(bool)
     cleared = pyqtSignal()
@@ -1166,6 +1206,11 @@ class SynchronizedImageViewer(QWidget):
         viewer.unmarkAsDeletedRequested.connect(self.unmarkAsDeletedRequested)
         viewer.unmarkOthersAsDeletedRequested.connect(
             self.unmarkOthersAsDeletedRequested
+        )
+        viewer.clicked.connect(
+            lambda file_path, current_viewer=viewer: self.imageClicked.emit(
+                self.image_viewers.index(current_viewer), file_path
+            )
         )
         self.image_viewers.append(viewer)
         self.viewer_splitter.addWidget(viewer)
