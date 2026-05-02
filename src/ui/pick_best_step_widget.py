@@ -131,7 +131,9 @@ class CompareCard(QFrame):
 
         self._name_label = QLabel("")
         self._name_label.setWordWrap(False)
-        self._name_label.setStyleSheet("font-size: 12px; font-weight: 600; color: #F5F7FA;")
+        self._name_label.setStyleSheet(
+            "font-size: 12px; font-weight: 600; color: #F5F7FA;"
+        )
         layout.addWidget(self._name_label)
 
         self._score_label = QLabel("")
@@ -291,7 +293,11 @@ class PickBestStepWidget(QWidget):
     def show_loading(self, message: str = "Analysing…", percent: int = 0) -> None:
         self._stack.setCurrentWidget(self._page_loading)
         self._loading_label.setText(message)
-        self._progress_bar.setValue(percent)
+        if percent is None or percent < 0:
+            self._progress_bar.setRange(0, 0)
+        else:
+            self._progress_bar.setRange(0, 100)
+            self._progress_bar.setValue(percent)
 
     def show_error(self, message: str) -> None:
         self._stack.setCurrentWidget(self._page_loading)
@@ -462,7 +468,9 @@ class PickBestStepWidget(QWidget):
 
         self._sync_viewer.markAsDeletedRequested.connect(self._on_viewer_mark)
         self._sync_viewer.unmarkAsDeletedRequested.connect(self._on_viewer_unmark)
-        self._sync_viewer.markOthersAsDeletedRequested.connect(self._on_viewer_mark_others)
+        self._sync_viewer.markOthersAsDeletedRequested.connect(
+            self._on_viewer_mark_others
+        )
         self._sync_viewer.unmarkOthersAsDeletedRequested.connect(
             self._on_viewer_unmark_others
         )
@@ -471,7 +479,7 @@ class PickBestStepWidget(QWidget):
 
         for card in self._compare_cards:
             card.toggled.connect(self._on_card_toggled)
-    
+
     def _create_shortcuts(self) -> None:
         self._shortcuts: List[QShortcut] = []
         bindings = [
@@ -497,7 +505,6 @@ class PickBestStepWidget(QWidget):
         cluster = self._clusters[index]
         winner_path = cluster.get("winner_path", "")
         all_paths: List[str] = cluster.get("all_paths", [])
-        ranked: List[dict] = cluster.get("ranked", [])
 
         self._current_winner_path = winner_path
         self._current_all_paths = list(all_paths)
@@ -692,7 +699,9 @@ class PickBestStepWidget(QWidget):
                 digits=1,
             )
             if focal or aperture:
-                rows.append(("Lens", "  ".join(part for part in (focal, aperture) if part)))
+                rows.append(
+                    ("Lens", "  ".join(part for part in (focal, aperture) if part))
+                )
 
             shutter = _fraction_text(
                 _first_present(
@@ -712,7 +721,10 @@ class PickBestStepWidget(QWidget):
             if shutter or iso:
                 iso_text = f"ISO {iso}" if iso not in (None, "") else None
                 rows.append(
-                    ("Exposure", "  ".join(part for part in (shutter, iso_text) if part))
+                    (
+                        "Exposure",
+                        "  ".join(part for part in (shutter, iso_text) if part),
+                    )
                 )
 
             width = _first_present(
@@ -784,7 +796,11 @@ class PickBestStepWidget(QWidget):
 
     def _subset_count(self) -> int:
         non_winner_count = len(
-            [path for path in self._cluster_ordered_paths if path != self._current_winner_path]
+            [
+                path
+                for path in self._cluster_ordered_paths
+                if path != self._current_winner_path
+            ]
         )
         return max(1, (non_winner_count + 1) // 2)
 
@@ -796,15 +812,9 @@ class PickBestStepWidget(QWidget):
             self._clusters[self._cluster_index]["_mark_state"] = dict(
                 self._cluster_mark_state
             )
-        to_mark = [
-            path
-            for path, marked in self._cluster_mark_state.items()
-            if marked
-        ]
+        to_mark = [path for path, marked in self._cluster_mark_state.items() if marked]
         to_unmark = [
-            path
-            for path, marked in self._cluster_mark_state.items()
-            if not marked
+            path for path, marked in self._cluster_mark_state.items() if not marked
         ]
         if to_mark:
             self.mark_for_deletion_requested.emit(to_mark)

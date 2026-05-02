@@ -296,7 +296,7 @@ This project ships native desktop binaries via PyInstaller and GitHub Actions. K
 - Windows (EXE): `--onefile -w -n PhotoSort` with `--paths src`.
 - macOS (.app): `-w --name PhotoSort` with `--paths src`.
 - Resources: add-data includes `models` dir and `dark_theme.qss` to the top-level.
-- Hidden imports cover: `PyQt6.QtCore/Gui/Widgets`, `rawpy`, `pyexiv2`, `cv2`, `onnxruntime`, `torchvision`, `torch`, `sklearn`, `sentence_transformers`.
+- Hidden imports cover: `PyQt6.QtCore/Gui/Widgets`, `rawpy`, `pyexiv2`, `cv2`, `onnxruntime`, `torchvision`, `torch`, `sklearn`, `transformers`, `huggingface_hub`.
 
 ### 10.5 CI builds, artifacts, and checksums
 - Matrix builds target:

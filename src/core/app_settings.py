@@ -47,6 +47,8 @@ RECENT_FOLDERS_KEY = "UI/RecentFolders"  # Key for recent folders list
 ORIENTATION_MODEL_NAME_KEY = (
     "Models/OrientationModelName"  # Key for the orientation model file name
 )
+SIMILARITY_EMBEDDING_MODEL_KEY = "Models/SimilarityEmbeddingModel"
+SIMILARITY_CLUSTERING_EPS_KEY = "Models/SimilarityClusteringEps"
 UPDATE_CHECK_ENABLED_KEY = "Updates/CheckEnabled"  # Enable automatic update checks
 UPDATE_LAST_CHECK_KEY = "Updates/LastCheckTime"  # Last time updates were checked
 PERFORMANCE_MODE_KEY = (
@@ -67,9 +69,9 @@ BEST_SHOT_BATCH_SIZE_KEY = "AI/BestShotBatchSize"
 
 
 # Cache directories
-def get_sentence_transformers_cache_dir() -> str:
-    """Return the sentence-transformers cache directory, resolved lazily on first call."""
-    return resolve_user_cache_dir("hf/sentence-transformers")
+def get_huggingface_cache_dir() -> str:
+    """Return the Hugging Face cache directory, resolved lazily on first call."""
+    return resolve_user_cache_dir("hf")
 
 
 # Default values
@@ -150,6 +152,9 @@ DBSCAN_EPS = (
 )
 DBSCAN_MIN_SAMPLES = 2  # Minimum number of images to form a dense region (cluster)
 DEFAULT_SIMILARITY_BATCH_SIZE = 16  # Default batch size for similarity processing
+MIN_SIMILARITY_CLUSTERING_EPS = 0.02
+MAX_SIMILARITY_CLUSTERING_EPS = 0.20
+DEFAULT_SIMILARITY_CLUSTERING_EPS = DBSCAN_EPS
 
 # RAW image processing
 RAW_AUTO_EDIT_BRIGHTNESS_STANDARD = (
@@ -161,6 +166,11 @@ RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED = (
 
 # Model settings
 ROTATION_MODEL_IMAGE_SIZE = 384  # Image size for rotation detection model
+SUPPORTED_SIMILARITY_EMBEDDING_MODELS = (
+    "facebook/dinov2-small",
+    "facebook/dinov2-base",
+)
+DEFAULT_SIMILARITY_EMBEDDING_MODEL = "facebook/dinov2-small"
 
 # --- Cache Constants ---
 # Thumbnail cache
@@ -185,11 +195,6 @@ DEFAULT_RATING_CACHE_SIZE_LIMIT_MB = 256  # Default 256MB limit for rating cache
 THUMBNAIL_MAX_SIZE = (256, 256)  # Maximum size for thumbnails
 PRELOAD_MAX_RESOLUTION = (1920, 1200)  # Fixed high resolution for preloading
 BLUR_DETECTION_PREVIEW_SIZE = (640, 480)  # Size for image used in blur detection
-
-# --- Model Settings ---
-DEFAULT_CLIP_MODEL = (
-    "sentence-transformers/clip-ViT-B-32"  # Common default, adjust if different
-)
 
 # --- Update Check Constants ---
 UPDATE_CHECK_INTERVAL_HOURS = 24  # Check for updates every 24 hours
@@ -361,6 +366,58 @@ def set_orientation_model_name(model_name: str):
     """Sets the orientation model name in settings."""
     settings = _get_settings()
     settings.setValue(ORIENTATION_MODEL_NAME_KEY, model_name)
+
+
+def get_similarity_embedding_model_name() -> str:
+    """Gets the configured visual embedding model for similarity analysis."""
+    settings = _get_settings()
+    model_name = settings.value(
+        SIMILARITY_EMBEDDING_MODEL_KEY,
+        DEFAULT_SIMILARITY_EMBEDDING_MODEL,
+        type=str,
+    )
+    if model_name not in SUPPORTED_SIMILARITY_EMBEDDING_MODELS:
+        return DEFAULT_SIMILARITY_EMBEDDING_MODEL
+    return model_name
+
+
+def set_similarity_embedding_model_name(model_name: str):
+    """Sets the visual embedding model for similarity analysis."""
+    if model_name not in SUPPORTED_SIMILARITY_EMBEDDING_MODELS:
+        raise ValueError(f"Unsupported similarity embedding model: {model_name}")
+    settings = _get_settings()
+    settings.setValue(SIMILARITY_EMBEDDING_MODEL_KEY, model_name)
+
+
+def get_similarity_clustering_eps() -> float:
+    """Gets the DBSCAN cosine-distance threshold used for similarity clustering."""
+    settings = _get_settings()
+    eps = settings.value(
+        SIMILARITY_CLUSTERING_EPS_KEY,
+        DEFAULT_SIMILARITY_CLUSTERING_EPS,
+        type=float,
+    )
+    try:
+        eps = float(eps)
+    except (TypeError, ValueError):
+        return DEFAULT_SIMILARITY_CLUSTERING_EPS
+    return max(
+        MIN_SIMILARITY_CLUSTERING_EPS,
+        min(MAX_SIMILARITY_CLUSTERING_EPS, eps),
+    )
+
+
+def set_similarity_clustering_eps(eps: float):
+    """Sets the DBSCAN cosine-distance threshold used for similarity clustering."""
+    eps = float(eps)
+    if not MIN_SIMILARITY_CLUSTERING_EPS <= eps <= MAX_SIMILARITY_CLUSTERING_EPS:
+        raise ValueError(
+            "Similarity clustering threshold must be between "
+            f"{MIN_SIMILARITY_CLUSTERING_EPS:.3f} and "
+            f"{MAX_SIMILARITY_CLUSTERING_EPS:.3f}"
+        )
+    settings = _get_settings()
+    settings.setValue(SIMILARITY_CLUSTERING_EPS_KEY, eps)
 
 
 # --- Update Check Settings ---

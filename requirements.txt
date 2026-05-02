@@ -12,6 +12,7 @@ PyQt6
 rawpy
 scikit-learn
 send2trash
-sentence-transformers
+huggingface_hub
 torch
 torchvision
+transformers

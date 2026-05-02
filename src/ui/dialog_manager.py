@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QSpinBox,
+    QDoubleSpinBox,
 )
 from PyQt6.QtCore import Qt, QSize, QUrl, QEventLoop, QThread
 from PyQt6.QtGui import QIcon, QDesktopServices
@@ -414,6 +415,14 @@ class DialogManager:
             DEFAULT_OPENAI_MAX_TOKENS,
             DEFAULT_OPENAI_TIMEOUT,
             DEFAULT_OPENAI_MAX_WORKERS,
+            SUPPORTED_SIMILARITY_EMBEDDING_MODELS,
+            DEFAULT_SIMILARITY_CLUSTERING_EPS,
+            MAX_SIMILARITY_CLUSTERING_EPS,
+            MIN_SIMILARITY_CLUSTERING_EPS,
+            get_similarity_clustering_eps,
+            get_similarity_embedding_model_name,
+            set_similarity_clustering_eps,
+            set_similarity_embedding_model_name,
         )
         from core.ai.best_shot_pipeline import (
             DEFAULT_BEST_SHOT_PROMPT,
@@ -535,6 +544,63 @@ class DialogManager:
         perf_layout.addWidget(note_label)
 
         content_layout.addWidget(perf_card)
+
+        # --- Similarity Model Card ---
+        similarity_card, similarity_layout = build_card("dialogCard")
+        similarity_title = QLabel("Similarity Model")
+        similarity_title.setObjectName("cardSectionTitle")
+        similarity_layout.addWidget(similarity_title)
+
+        sep_similarity = QFrame()
+        sep_similarity.setObjectName("cardSeparator")
+        sep_similarity.setFrameShape(QFrame.Shape.HLine)
+        sep_similarity.setFixedHeight(1)
+        similarity_layout.addWidget(sep_similarity)
+
+        similarity_desc = QLabel(
+            "Choose the local DINOv2 model used for visual similarity clustering."
+        )
+        similarity_desc.setObjectName("cardDescription")
+        similarity_desc.setWordWrap(True)
+        similarity_layout.addWidget(similarity_desc)
+
+        similarity_form = QGridLayout()
+        similarity_form.setHorizontalSpacing(12)
+        similarity_form.setVerticalSpacing(12)
+        similarity_model_label = QLabel("Model")
+        similarity_model_combo = QComboBox()
+        similarity_model_combo.setObjectName("similarityModelCombo")
+        similarity_model_combo.addItems(list(SUPPORTED_SIMILARITY_EMBEDDING_MODELS))
+        similarity_model_combo.setCurrentText(get_similarity_embedding_model_name())
+        similarity_form.addWidget(similarity_model_label, 0, 0)
+        similarity_form.addWidget(similarity_model_combo, 0, 1)
+
+        similarity_threshold_label = QLabel("Grouping Threshold")
+        similarity_threshold_spin = QDoubleSpinBox()
+        similarity_threshold_spin.setObjectName("similarityThresholdSpin")
+        similarity_threshold_spin.setRange(
+            MIN_SIMILARITY_CLUSTERING_EPS, MAX_SIMILARITY_CLUSTERING_EPS
+        )
+        similarity_threshold_spin.setDecimals(3)
+        similarity_threshold_spin.setSingleStep(0.005)
+        similarity_threshold_spin.setValue(get_similarity_clustering_eps())
+        similarity_threshold_spin.setToolTip(
+            "Higher values create looser similarity groups. Default: "
+            f"{DEFAULT_SIMILARITY_CLUSTERING_EPS:.3f}."
+        )
+        similarity_form.addWidget(similarity_threshold_label, 1, 0)
+        similarity_form.addWidget(similarity_threshold_spin, 1, 1)
+        similarity_layout.addLayout(similarity_form)
+
+        similarity_note = QLabel(
+            "Changing the model starts a new embedding cache and may require a one-time download. "
+            "Higher grouping thresholds find broader visual matches; lower thresholds only group near-duplicates."
+        )
+        similarity_note.setObjectName("cardNote")
+        similarity_note.setWordWrap(True)
+        similarity_layout.addWidget(similarity_note)
+
+        content_layout.addWidget(similarity_card)
 
         # --- AI Engine Card ---
         ai_card, ai_layout = build_card("dialogCard")
@@ -933,10 +999,17 @@ class DialogManager:
             if best_shot_batch_value != get_best_shot_batch_size():
                 set_best_shot_batch_size(best_shot_batch_value)
 
+            set_similarity_embedding_model_name(
+                similarity_model_combo.currentText().strip()
+            )
+            set_similarity_clustering_eps(similarity_threshold_spin.value())
+
             logger.info(
-                "Preferences saved: mode=%s, custom_threads=%s",
+                "Preferences saved: mode=%s, custom_threads=%s, similarity_model=%s, similarity_eps=%.3f",
                 get_performance_mode().value,
                 get_custom_thread_count(),
+                get_similarity_embedding_model_name(),
+                get_similarity_clustering_eps(),
             )
             dialog.accept()
 
@@ -1761,3 +1834,26 @@ class DialogManager:
 
         dialog.exec()
         logger.info("Closed model not found dialog")
+
+    def confirm_similarity_model_download(self, model_name: str) -> bool:
+        """Ask whether PhotoSort may download the selected similarity model."""
+        dialog = QMessageBox(self.parent)
+        dialog.setWindowTitle("Download Similarity Model?")
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        dialog.setText("Download similarity model?")
+        dialog.setInformativeText(
+            "PhotoSort needs the visual similarity model before it can group similar photos.\n\n"
+            f"Model: {model_name}\n\n"
+            "This is a one-time download. After it is installed, similarity analysis loads it from the local PhotoSort cache and can run offline."
+        )
+        download_button = dialog.addButton(
+            "Download", QMessageBox.ButtonRole.AcceptRole
+        )
+        cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(download_button)
+        dialog.exec()
+        return (
+            dialog.clickedButton() == download_button
+            and dialog.clickedButton() != cancel_button
+        )

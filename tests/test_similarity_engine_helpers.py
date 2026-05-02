@@ -63,6 +63,60 @@ def test_adaptive_eps_respects_min_samples_neighbor():
     assert eps < 0.2
 
 
+def test_similarity_engine_uses_configured_clustering_eps(monkeypatch):
+    seen = {}
+
+    def fake_adaptive_eps(embedding_matrix, base_eps, min_samples):
+        seen["base_eps"] = base_eps
+        seen["min_samples"] = min_samples
+        return base_eps
+
+    monkeypatch.setattr(
+        "core.similarity_engine.get_similarity_clustering_eps", lambda: 0.11
+    )
+    monkeypatch.setattr("core.similarity_engine.adaptive_dbscan_eps", fake_adaptive_eps)
+
+    embeddings = {
+        "/tmp/a.jpg": [1.0, 0.0, 0.0],
+        "/tmp/b.jpg": [0.995, 0.1, 0.0],
+    }
+
+    SimilarityEngine._run_dbscan_on_subset(
+        object(), embeddings, list(embeddings), start_cluster_id=1
+    )
+
+    assert seen == {"base_eps": 0.11, "min_samples": 2}
+
+
+def test_regional_clustering_can_match_when_global_embeddings_differ(monkeypatch):
+    monkeypatch.setattr(
+        "core.similarity_engine.get_similarity_clustering_eps", lambda: 0.05
+    )
+    engine = SimilarityEngine.__new__(SimilarityEngine)
+    embeddings = {
+        "/tmp/clear.jpg": [1.0, 0.0, 0.0],
+        "/tmp/occluded.jpg": [0.0, 1.0, 0.0],
+    }
+    regional_embeddings = {
+        "/tmp/clear.jpg": [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        "/tmp/occluded.jpg": [
+            [0.0, 1.0, 0.0],
+        ],
+    }
+
+    clusters, _next_id = engine._run_dbscan_on_subset(
+        embeddings,
+        list(embeddings),
+        start_cluster_id=1,
+        regional_embeddings=regional_embeddings,
+    )
+
+    assert clusters["/tmp/clear.jpg"] == clusters["/tmp/occluded.jpg"]
+
+
 def test_classify_orientation_uses_raw_dimensions_for_rotated_raw(monkeypatch):
     class _FakeSizes:
         width = 6000
@@ -92,7 +146,7 @@ def test_classify_orientation_uses_raw_dimensions_for_rotated_raw(monkeypatch):
     assert classify_orientation("/tmp/test.arw") == "portrait"
 
 
-def test_clear_embedding_cache_cleans_hf_cache_when_embedding_cache_is_missing(
+def test_clear_embedding_cache_leaves_hf_model_cache_when_embedding_cache_is_missing(
     tmp_path, monkeypatch
 ):
     # Set up the new-style cache layout: PhotoSort/hf/...
@@ -110,4 +164,5 @@ def test_clear_embedding_cache_cleans_hf_cache_when_embedding_cache_is_missing(
 
     SimilarityEngine.clear_embedding_cache()
 
-    assert list(hf_cache_dir.iterdir()) == []
+    assert (hf_cache_dir / "token").exists()
+    assert (nested_dir / "weights.bin").exists()

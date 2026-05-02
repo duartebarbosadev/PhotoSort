@@ -3,45 +3,42 @@ import time
 import pickle  # For caching embeddings
 import logging
 import shutil
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import List, Dict, Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 import numpy as np  # Import numpy for array manipulation
 from sklearn.cluster import DBSCAN
 from core.utils.time_utils import format_eta
 
 from core.image_pipeline import ImagePipeline
+from core.similarity_embedding_model import (
+    SimilarityEmbeddingModel,
+    SimilarityModelDownloadError,
+    SimilarityModelNotInstalledError,
+)
 from core.similarity_utils import (
     adaptive_dbscan_eps,
     build_orientation_map,
-    l2_normalize_rows,
     normalize_embedding_dict,
+    l2_normalize_rows,
     Orientation,
 )
 from .app_settings import (
-    DEFAULT_CLIP_MODEL,
-    get_preferred_torch_device,
-    DBSCAN_EPS,
     DBSCAN_MIN_SAMPLES,
     DEFAULT_SIMILARITY_BATCH_SIZE,
-    get_sentence_transformers_cache_dir,
+    get_similarity_clustering_eps,
+    get_similarity_embedding_model_name,
 )  # Import from app_settings
 from .runtime_paths import get_app_cache_root, resolve_user_cache_dir
 
 logger = logging.getLogger(__name__)
 
-if TYPE_CHECKING:
-    from sentence_transformers import (
-        SentenceTransformer as _SentenceTransformerType,
-    )  # Use an alias for type hint
-
-# Check PyTorch CUDA availability for SentenceTransformer
 _module_init_start_time = time.time()
 logger.debug("Initializing SimilarityEngine module...")
 
 
 class SimilarityEngine(QObject):
     """
-    Handles image feature extraction (embeddings) using CLIP models
+    Handles image feature extraction (embeddings) using visual foundation models
     and potentially clustering similar images. Designed for background execution.
     """
 
@@ -50,18 +47,30 @@ class SimilarityEngine(QObject):
     clustering_complete = pyqtSignal(dict)
     error = pyqtSignal(str)
 
-    def __init__(self, model_name: str = DEFAULT_CLIP_MODEL, parent=None):
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        *,
+        allow_model_download: bool = False,
+        parent=None,
+    ):
         super().__init__(parent)
         init_start_time = time.perf_counter()
         logger.info("Initializing SimilarityEngine...")
-        self.model_name = model_name
-        self.model: Optional["_SentenceTransformerType"] = (
-            None  # Use string literal with alias
+        self.model_name = model_name or get_similarity_embedding_model_name()
+        self.model = SimilarityEmbeddingModel(
+            self.model_name,
+            allow_download=allow_model_download,
+            progress_callback=self._handle_model_progress,
         )
         self._is_running = False
-        self._cache_filename = f"embeddings_{self.model_name.replace('/', '_')}.pkl"
+        self._cache_filename = f"embeddings_{self.model.cache_key}.pkl"
+        self._region_cache_filename = f"embeddings_{self.model.region_cache_key}.pkl"
         embedding_cache_dir = resolve_user_cache_dir("embeddings")
         self._cache_path = os.path.join(embedding_cache_dir, self._cache_filename)
+        self._region_cache_path = os.path.join(
+            embedding_cache_dir, self._region_cache_filename
+        )
 
         ip_instantiation_start_time = time.perf_counter()
         self.image_pipeline = ImagePipeline()  # Instantiate ImagePipeline
@@ -75,6 +84,9 @@ class SimilarityEngine(QObject):
     def stop(self):
         logger.info("Stop request received.")
         self._is_running = False
+
+    def _handle_model_progress(self, percent: int, message: str) -> None:
+        self.progress_update.emit(percent, message)
 
     def run_analysis_sync(
         self,
@@ -136,52 +148,28 @@ class SimilarityEngine(QObject):
         return embeddings_result, cluster_results
 
     def _load_model(self):
-        if self.model is None:
-            try:
-                from sentence_transformers import SentenceTransformer  # Local import
-
-                model_load_start_time = time.perf_counter()
-                logger.info(f"Loading model: {self.model_name}")
-                self.progress_update.emit(0, f"Loading model: {self.model_name}...")
-
-                model_device = get_preferred_torch_device()
-                logger.info(f"Attempting to load model on device: '{model_device}'")
-                logger.debug("Instantiating SentenceTransformer (this may take a while; weight-loading has no progress)...")
-                self.model = SentenceTransformer(
-                    self.model_name,
-                    device=model_device,
-                    cache_folder=get_sentence_transformers_cache_dir(),
-                )
-                logger.debug("SentenceTransformer constructor returned successfully.")
-
-                # Log actual device model is on
-                actual_device_str = "Unknown"
-                if (
-                    hasattr(self.model, "_target_device")
-                    and self.model._target_device is not None
-                ):  # Newer sentence-transformers
-                    actual_device_str = str(self.model._target_device)
-                elif (
-                    hasattr(self.model, "device") and self.model.device is not None
-                ):  # Older sentence-transformers
-                    actual_device_str = str(self.model.device)
-                logger.info(
-                    f"Model '{self.model_name}' loaded on device: {actual_device_str}"
-                )
-
-                # Attempt to set use_fast=True (this part is optional, might not apply to all CLIP models)
-                self.progress_update.emit(0, "Model loaded.")
-                logger.info(
-                    f"Model loading complete in {time.perf_counter() - model_load_start_time:.4f}s"
-                )
-            except Exception as e:
-                error_msg = (
-                    f"Error loading SentenceTransformer model '{self.model_name}': {e}"
-                )
-                logger.error(error_msg, exc_info=True)
-                self.error.emit(error_msg)
-                self.model = None
-        return self.model is not None
+        try:
+            model_load_start_time = time.perf_counter()
+            logger.info("Loading similarity model: %s", self.model_name)
+            self.progress_update.emit(0, f"Loading model: {self.model_name}...")
+            self.model.load()
+            self.progress_update.emit(0, "Model loaded.")
+            logger.info(
+                "Similarity model loading complete in %.4fs",
+                time.perf_counter() - model_load_start_time,
+            )
+            return True
+        except SimilarityModelNotInstalledError as e:
+            logger.warning("Similarity model is not installed: %s", e)
+            self.error.emit(str(e))
+        except SimilarityModelDownloadError as e:
+            logger.error("Similarity model download/load failed: %s", e, exc_info=True)
+            self.error.emit(str(e))
+        except Exception as e:
+            error_msg = f"Error loading similarity model '{self.model_name}': {e}"
+            logger.error(error_msg, exc_info=True)
+            self.error.emit(error_msg)
+        return False
 
     def _load_cached_embeddings(self) -> Dict[str, List[float]]:
         if os.path.exists(self._cache_path):
@@ -225,21 +213,78 @@ class SimilarityEngine(QObject):
             )
             self.error.emit(f"Could not save embeddings cache: {e}")
 
+    def _load_cached_regional_embeddings(self) -> Dict[str, List[List[float]]]:
+        if os.path.exists(self._region_cache_path):
+            try:
+                cache_load_start_time = time.perf_counter()
+                with open(self._region_cache_path, "rb") as f:
+                    cache_data = pickle.load(f)
+                if isinstance(cache_data, dict):
+                    normalized_cache: Dict[str, List[List[float]]] = {}
+                    for path, region_vectors in cache_data.items():
+                        try:
+                            region_matrix = l2_normalize_rows(
+                                np.asarray(region_vectors, dtype=np.float32)
+                            )
+                        except (TypeError, ValueError):
+                            continue
+                        if region_matrix.ndim == 2 and region_matrix.shape[0] > 0:
+                            normalized_cache[path] = region_matrix.tolist()
+                    logger.info(
+                        "Loaded %d regional embedding sets from cache in %.4fs",
+                        len(normalized_cache),
+                        time.perf_counter() - cache_load_start_time,
+                    )
+                    return normalized_cache
+            except Exception as e:
+                logger.warning(
+                    "Failed to load regional embedding cache '%s': %s. A new cache will be created.",
+                    self._region_cache_path,
+                    e,
+                )
+        return {}
+
+    def _save_regional_embeddings_to_cache(
+        self, regional_embeddings: Dict[str, List[List[float]]]
+    ):
+        try:
+            cache_save_start_time = time.perf_counter()
+            logger.info(
+                "Saving %d regional embedding sets to cache: %s",
+                len(regional_embeddings),
+                self._region_cache_path,
+            )
+            with open(self._region_cache_path, "wb") as f:
+                pickle.dump(regional_embeddings, f)
+            logger.info(
+                "Regional embeddings saved in %.4fs",
+                time.perf_counter() - cache_save_start_time,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to save regional embedding cache '%s': %s",
+                self._region_cache_path,
+                e,
+                exc_info=True,
+            )
+            self.error.emit(f"Could not save regional embeddings cache: {e}")
+
     def generate_embeddings_for_files(self, file_paths: List[str]):
         self._is_running = True
         logger.info(f"Starting embedding generation for {len(file_paths)} files.")
 
         if not self._load_model():
-            # self.finished.emit() # QObject has no 'finished' signal by default, use appropriate signal if defined
-            self.error.emit("Model could not be loaded. Cannot generate embeddings.")
             return
 
         cached_embeddings = self._load_cached_embeddings()
+        cached_regional_embeddings = self._load_cached_regional_embeddings()
         all_embeddings = cached_embeddings.copy()
+        all_regional_embeddings = cached_regional_embeddings.copy()
         files_to_process = [
             path
             for path in file_paths
-            if path not in all_embeddings and self._is_running
+            if (path not in all_embeddings or path not in all_regional_embeddings)
+            and self._is_running
         ]
 
         total_to_process = len(files_to_process)
@@ -253,6 +298,7 @@ class SimilarityEngine(QObject):
 
         processed_count = 0
         new_embeddings = {}
+        new_regional_embeddings = {}
         batch_size = DEFAULT_SIMILARITY_BATCH_SIZE
         start_time = time.perf_counter()
 
@@ -265,7 +311,7 @@ class SimilarityEngine(QObject):
             batch_images = []
             valid_paths_in_batch = []
 
-            for path in batch_paths:
+            for batch_offset, path in enumerate(batch_paths, start=1):
                 # Use ImagePipeline to get a suitable PIL image for processing
                 logger.debug(
                     f"Getting PIL image for '{os.path.basename(path)}' (preloaded: True)"
@@ -289,6 +335,13 @@ class SimilarityEngine(QObject):
                     # This is handled later by `processed_count += len(valid_paths_in_batch)` and how total_to_process is calculated.
                     # If a file is skipped here, it won't be in valid_paths_in_batch.
 
+                loaded_count = min(i + batch_offset, total_to_process)
+                if total_to_process > 0:
+                    self.progress_update.emit(
+                        int((loaded_count / total_to_process) * 100),
+                        f"Preparing images ({loaded_count}/{total_to_process})",
+                    )
+
             if not batch_images:
                 # This means all paths in the current batch_paths failed to load a preview.
                 logger.warning(
@@ -300,18 +353,17 @@ class SimilarityEngine(QObject):
                 logger.debug(
                     f"Encoding batch {i // batch_size + 1}/{(total_to_process + batch_size - 1) // batch_size}..."
                 )
-                # SentenceTransformer will use its configured device (GPU if available)
-                # Ensure model is not None for type checker
-                if self.model is None:
-                    raise RuntimeError("SentenceTransformer model is not loaded.")
-                batch_embeds = self.model.encode(
-                    batch_images, show_progress_bar=False, convert_to_numpy=True
+                batch_embeds, batch_region_embeds = self.model.encode_with_regions(
+                    batch_images
                 )
                 batch_embeds = np.asarray(batch_embeds, dtype=np.float32)
                 batch_embeds = l2_normalize_rows(batch_embeds)
 
                 for path_idx, path in enumerate(valid_paths_in_batch):
                     new_embeddings[path] = batch_embeds[path_idx].tolist()
+                    new_regional_embeddings[path] = batch_region_embeds[
+                        path_idx
+                    ].tolist()
 
                 processed_count += len(valid_paths_in_batch)
                 progress = (
@@ -338,11 +390,19 @@ class SimilarityEngine(QObject):
 
         logger.info("Finished processing new files.")
         all_embeddings.update(new_embeddings)
+        all_regional_embeddings.update(new_regional_embeddings)
         if new_embeddings:
             self._save_embeddings_to_cache(all_embeddings)
+        if new_regional_embeddings:
+            self._save_regional_embeddings_to_cache(all_regional_embeddings)
 
         final_embeddings_for_requested_files = {
             path: all_embeddings[path] for path in file_paths if path in all_embeddings
+        }
+        final_regional_embeddings_for_requested_files = {
+            path: all_regional_embeddings[path]
+            for path in file_paths
+            if path in all_regional_embeddings
         }
         self.embeddings_generated.emit(final_embeddings_for_requested_files)
         logger.info(
@@ -354,17 +414,48 @@ class SimilarityEngine(QObject):
             logger.info("Building orientation map for %d files...", len(file_paths))
             orientation_map = build_orientation_map(file_paths)
             self.cluster_embeddings(
-                final_embeddings_for_requested_files, orientation_map
+                final_embeddings_for_requested_files,
+                orientation_map,
+                final_regional_embeddings_for_requested_files,
             )
         else:
             logger.info("Skipping clustering as stop was requested.")
             self.clustering_complete.emit({})  # Emit empty if stopped before clustering
+
+    def _build_regional_distance_matrix(
+        self,
+        embeddings: Dict[str, List[float]],
+        regional_embeddings: Dict[str, List[List[float]]],
+        subset_paths: List[str],
+    ) -> np.ndarray:
+        """Build a distance matrix using the best matching large region pair."""
+        region_sets: List[np.ndarray] = []
+        for path in subset_paths:
+            region_vectors = regional_embeddings.get(path)
+            if region_vectors:
+                region_matrix = np.asarray(region_vectors, dtype=np.float32)
+            else:
+                region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
+            if region_matrix.ndim != 2 or region_matrix.shape[0] == 0:
+                region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
+            region_sets.append(l2_normalize_rows(region_matrix))
+
+        count = len(subset_paths)
+        distances = np.zeros((count, count), dtype=np.float32)
+        for i in range(count):
+            for j in range(i + 1, count):
+                similarity = float(np.max(region_sets[i] @ region_sets[j].T))
+                distance = max(0.0, min(2.0, 1.0 - similarity))
+                distances[i, j] = distance
+                distances[j, i] = distance
+        return distances
 
     def _run_dbscan_on_subset(
         self,
         embeddings: Dict[str, List[float]],
         subset_paths: List[str],
         start_cluster_id: int,
+        regional_embeddings: Optional[Dict[str, List[List[float]]]] = None,
     ) -> tuple[Dict[str, int], int]:
         """
         Run DBSCAN on a subset of embeddings.
@@ -387,14 +478,26 @@ class SimilarityEngine(QObject):
         if not embedding_matrix.flags["C_CONTIGUOUS"]:
             embedding_matrix = np.ascontiguousarray(embedding_matrix)
 
-        adaptive_eps = adaptive_dbscan_eps(
-            embedding_matrix, DBSCAN_EPS, DBSCAN_MIN_SAMPLES
-        )
-
-        dbscan = DBSCAN(
-            eps=adaptive_eps, min_samples=DBSCAN_MIN_SAMPLES, metric="cosine"
-        )
-        dbscan_labels = dbscan.fit_predict(embedding_matrix)
+        base_eps = get_similarity_clustering_eps()
+        if regional_embeddings:
+            distance_matrix = self._build_regional_distance_matrix(
+                embeddings, regional_embeddings, subset_paths
+            )
+            adaptive_eps = base_eps
+            dbscan = DBSCAN(
+                eps=adaptive_eps,
+                min_samples=DBSCAN_MIN_SAMPLES,
+                metric="precomputed",
+            )
+            dbscan_labels = dbscan.fit_predict(distance_matrix)
+        else:
+            adaptive_eps = adaptive_dbscan_eps(
+                embedding_matrix, base_eps, DBSCAN_MIN_SAMPLES
+            )
+            dbscan = DBSCAN(
+                eps=adaptive_eps, min_samples=DBSCAN_MIN_SAMPLES, metric="cosine"
+            )
+            dbscan_labels = dbscan.fit_predict(embedding_matrix)
 
         # Map DBSCAN labels to our cluster IDs
         label_map: Dict[int, int] = {}
@@ -424,6 +527,7 @@ class SimilarityEngine(QObject):
         self,
         embeddings: Dict[str, List[float]],
         orientation_map: Optional[Dict[str, Orientation]] = None,
+        regional_embeddings: Optional[Dict[str, List[List[float]]]] = None,
     ):
         if not self._is_running:
             logger.info("Clustering skipped (stop requested).")
@@ -460,7 +564,10 @@ class SimilarityEngine(QObject):
                 # Cluster portrait images first (IDs start at 1)
                 if portrait_paths:
                     portrait_clusters, next_id = self._run_dbscan_on_subset(
-                        embeddings, portrait_paths, start_cluster_id=1
+                        embeddings,
+                        portrait_paths,
+                        start_cluster_id=1,
+                        regional_embeddings=regional_embeddings,
                     )
                     path_to_cluster.update(portrait_clusters)
                     logger.info(
@@ -473,7 +580,10 @@ class SimilarityEngine(QObject):
                 # Cluster landscape images (IDs continue from portrait)
                 if landscape_paths:
                     landscape_clusters, _ = self._run_dbscan_on_subset(
-                        embeddings, landscape_paths, start_cluster_id=next_id
+                        embeddings,
+                        landscape_paths,
+                        start_cluster_id=next_id,
+                        regional_embeddings=regional_embeddings,
                     )
                     path_to_cluster.update(landscape_clusters)
                     logger.info(
@@ -502,8 +612,18 @@ class SimilarityEngine(QObject):
             embedding_matrix = l2_normalize_rows(embedding_matrix)
 
             labels = None
-            adaptive_eps = adaptive_dbscan_eps(
-                embedding_matrix, DBSCAN_EPS, DBSCAN_MIN_SAMPLES
+            base_eps = get_similarity_clustering_eps()
+            regional_distance_matrix = (
+                self._build_regional_distance_matrix(
+                    embeddings, regional_embeddings, filepaths
+                )
+                if regional_embeddings
+                else None
+            )
+            adaptive_eps = (
+                base_eps
+                if regional_distance_matrix is not None
+                else adaptive_dbscan_eps(embedding_matrix, base_eps, DBSCAN_MIN_SAMPLES)
             )
             try:
                 logger.info(
@@ -515,10 +635,20 @@ class SimilarityEngine(QObject):
                 if not embedding_matrix.flags["C_CONTIGUOUS"]:
                     embedding_matrix = np.ascontiguousarray(embedding_matrix)
 
-                dbscan = DBSCAN(
-                    eps=adaptive_eps, min_samples=DBSCAN_MIN_SAMPLES, metric="cosine"
-                )
-                dbscan_labels = dbscan.fit_predict(embedding_matrix)
+                if regional_distance_matrix is not None:
+                    dbscan = DBSCAN(
+                        eps=adaptive_eps,
+                        min_samples=DBSCAN_MIN_SAMPLES,
+                        metric="precomputed",
+                    )
+                    dbscan_labels = dbscan.fit_predict(regional_distance_matrix)
+                else:
+                    dbscan = DBSCAN(
+                        eps=adaptive_eps,
+                        min_samples=DBSCAN_MIN_SAMPLES,
+                        metric="cosine",
+                    )
+                    dbscan_labels = dbscan.fit_predict(embedding_matrix)
 
                 final_labels = np.zeros_like(dbscan_labels, dtype=int)
                 unique_dbscan_labels = set(dbscan_labels)
@@ -660,26 +790,6 @@ class SimilarityEngine(QObject):
                 logger.warning(
                     f"Embedding cache directory not found: {embedding_cache_dir}"
                 )
-
-            # Also clear Hugging Face model cache directory
-            hf_cache_dir = os.path.join(app_cache_root, "hf")
-            if os.path.exists(hf_cache_dir):
-                logger.info(f"Clearing Hugging Face cache directory: {hf_cache_dir}")
-                for item in os.listdir(hf_cache_dir):
-                    item_path = os.path.join(hf_cache_dir, item)
-                    try:
-                        if os.path.isfile(item_path) or os.path.islink(item_path):
-                            os.unlink(item_path)
-                        elif os.path.isdir(item_path):
-                            shutil.rmtree(item_path)
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to delete HF cache item {item_path}: {e}",
-                            exc_info=True,
-                        )
-                logger.info("Hugging Face cache cleared.")
-            else:
-                logger.info(f"Hugging Face cache directory not found: {hf_cache_dir}")
 
         except Exception as e:
             logger.error(

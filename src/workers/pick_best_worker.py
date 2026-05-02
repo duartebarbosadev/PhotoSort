@@ -7,6 +7,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.best_photo_finder.errors import NoScorableImagesError, NoSupportedImagesError
 from core.best_photo_finder.pipeline import PhotoSelector
+from core.best_photo_finder.scorers import HuggingFaceAestheticScorer
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.image_processing.standard_image_processor import SUPPORTED_STANDARD_EXTENSIONS
 from core.media_utils import is_video_extension
@@ -81,7 +82,12 @@ class PickBestWorker(QObject):
         logger.info(f"PickBestWorker: scoring {total} clusters.")
 
         # Share one PhotoSelector instance so the aesthetic model loads once
-        selector = PhotoSelector(preview_loader=self._load_preview_image)
+        selector = PhotoSelector(
+            aesthetic_scorer=HuggingFaceAestheticScorer(
+                progress_callback=self._handle_model_progress
+            ),
+            preview_loader=self._load_preview_image,
+        )
         results: Dict[int, dict] = {}
         processed = 0
 
@@ -109,9 +115,7 @@ class PickBestWorker(QObject):
                 "failed": [],
                 "all_paths": all_paths,
                 "unsupported_paths": [
-                    p
-                    for p in all_paths
-                    if not self._is_supported_path(p)
+                    p for p in all_paths if not self._is_supported_path(p)
                 ],
             }
 
@@ -138,8 +142,7 @@ class PickBestWorker(QObject):
                 except (NoSupportedImagesError, NoScorableImagesError) as exc:
                     if isinstance(exc, NoScorableImagesError):
                         cluster_result["failed"] = [
-                            _failed_entry(path, reason)
-                            for path, reason in exc.failures
+                            _failed_entry(path, reason) for path, reason in exc.failures
                         ]
                     logger.warning(f"Cluster {cluster_id}: skipped — {exc}")
                     # No winner; treat whole cluster as unscored
@@ -166,6 +169,9 @@ class PickBestWorker(QObject):
         return (
             ext in SUPPORTED_STANDARD_EXTENSIONS or is_raw_extension(ext)
         ) and not is_video_extension(ext)
+
+    def _handle_model_progress(self, percent: int, message: str) -> None:
+        self.progress_update.emit(percent, message)
 
     def _load_preview_image(self, path: Path):
         if self.image_pipeline is None:

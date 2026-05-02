@@ -11,7 +11,9 @@ from core.app_settings import (
     add_recent_folder,
     get_preview_cache_size_bytes,
     PREVIEW_ESTIMATED_SIZE_FACTOR,
+    get_similarity_embedding_model_name,
 )
+from core.similarity_embedding_model import is_similarity_model_installed
 from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS, is_image_extension
 from core.image_file_ops import ImageFileOperations
 from core.pyexiv2_wrapper import PyExiv2Operations
@@ -142,6 +144,8 @@ class AppController(QObject):
         self._pending_rotated_paths: List[str] = []
         # Cache volume at preview-preload start, used for per-run diagnostics.
         self._preview_preload_start_volume_bytes: Optional[int] = None
+        self._ai_rating_warning_messages: list[str] = []
+        self._pick_best_pending_after_similarity: bool = False
 
     def connect_signals(self):
         """Connects signals from the WorkerManager to the controller's slots."""
@@ -281,9 +285,6 @@ class AppController(QObject):
         self.worker_manager.pick_best_progress.connect(self.handle_pick_best_progress)
         self.worker_manager.pick_best_complete.connect(self.handle_pick_best_complete)
         self.worker_manager.pick_best_error.connect(self.handle_pick_best_error)
-
-        self._ai_rating_warning_messages: list[str] = []
-        self._pick_best_pending_after_similarity: bool = False
 
     # --- Public Methods (called from MainWindow) ---
 
@@ -450,10 +451,39 @@ class AppController(QObject):
                 4000,
             )
 
-        self.main_window.show_loading_overlay("Starting similarity analysis...")
+        model_name = get_similarity_embedding_model_name()
+        allow_model_download = False
+        if not is_similarity_model_installed(model_name):
+            if not self.main_window.dialog_manager.confirm_similarity_model_download(
+                model_name
+            ):
+                logger.info("Similarity model download declined by user.")
+                self.main_window.hide_loading_overlay()
+                self.main_window.statusBar().showMessage(
+                    "Similarity analysis canceled. Model download was not approved.",
+                    5000,
+                )
+                if self._pick_best_pending_after_similarity:
+                    self._pick_best_pending_after_similarity = False
+                    self.main_window.pick_best_step_widget.show_error(
+                        "Similarity analysis canceled. Model download was not approved."
+                    )
+                return
+            allow_model_download = True
+
+        if self._pick_best_pending_after_similarity:
+            self.main_window.hide_loading_overlay()
+            self.main_window.pick_best_step_widget.show_loading(
+                "Step 1/2: Starting similarity analysis...", 0
+            )
+        else:
+            self.main_window.show_loading_overlay("Starting similarity analysis...")
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
         self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
-        self.worker_manager.start_similarity_analysis(paths_for_similarity)
+        self.worker_manager.start_similarity_analysis(
+            paths_for_similarity,
+            allow_model_download=allow_model_download,
+        )
 
     def refresh_grouping_preview(self):
         if not self.app_state.image_files_data:
@@ -1315,7 +1345,10 @@ class AppController(QObject):
             self.main_window.statusBar().showMessage("No images loaded.", 3000)
             return
 
-        if self.worker_manager.is_pick_best_running() or self._pick_best_pending_after_similarity:
+        if (
+            self.worker_manager.is_pick_best_running()
+            or self._pick_best_pending_after_similarity
+        ):
             return
 
         if self.app_state.pick_best_results:
@@ -1470,10 +1503,23 @@ class AppController(QObject):
         self.main_window.hide_loading_overlay()
 
     def handle_similarity_progress(self, percentage, message):
-        self.main_window.update_loading_text(f"Similarity: {message} ({percentage}%)")
+        suffix = (
+            f" ({percentage}%)" if percentage is not None and percentage >= 0 else ""
+        )
+        if self._pick_best_pending_after_similarity:
+            self.main_window.pick_best_step_widget.show_loading(
+                f"Step 1/2: {message}", percentage
+            )
+            return
+        self.main_window.update_loading_text(f"Similarity: {message}{suffix}")
 
     def handle_embeddings_generated(self, embeddings_dict):
         self.app_state.embeddings_cache = embeddings_dict
+        if self._pick_best_pending_after_similarity:
+            self.main_window.pick_best_step_widget.show_loading(
+                "Step 1/2: Embeddings generated. Clustering...", -1
+            )
+            return
         self.main_window.update_loading_text("Embeddings generated. Clustering...")
 
     def handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
@@ -1502,9 +1548,21 @@ class AppController(QObject):
             self.main_window.statusBar().showMessage(
                 "Clustering did not produce results.", 3000
             )
+            if self._pick_best_pending_after_similarity:
+                self._pick_best_pending_after_similarity = False
+                self.main_window.pick_best_step_widget.show_error(
+                    "Clustering did not produce results."
+                )
             return
 
-        self.main_window.update_loading_text("Clustering complete. Updating view...")
+        if self._pick_best_pending_after_similarity:
+            self.main_window.pick_best_step_widget.show_loading(
+                "Step 1/2: Clustering complete. Updating view...", -1
+            )
+        else:
+            self.main_window.update_loading_text(
+                "Clustering complete. Updating view..."
+            )
         cluster_ids = sorted(list(set(self.app_state.cluster_results.values())))
         self.main_window.cluster_filter_combo.clear()
         self.main_window.cluster_filter_combo.addItems(

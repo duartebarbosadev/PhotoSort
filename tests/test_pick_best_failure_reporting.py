@@ -59,7 +59,7 @@ def test_selector_includes_per_image_failures_in_no_scorable_error():
 
 def test_pick_best_worker_keeps_failure_reasons_when_cluster_is_skipped(monkeypatch):
     class _FakeSelector:
-        def __init__(self, preview_loader=None):
+        def __init__(self, preview_loader=None, **_kwargs):
             self.preview_loader = preview_loader
 
         def select(self, paths):

@@ -602,9 +602,12 @@ class SimilarityWorker(QObject):
     error = pyqtSignal(str)
     finished = pyqtSignal()
 
-    def __init__(self, file_paths: List[str], parent=None):
+    def __init__(
+        self, file_paths: List[str], allow_model_download: bool = False, parent=None
+    ):
         super().__init__(parent)
         self.file_paths = file_paths
+        self.allow_model_download = allow_model_download
         self._is_running = True
         self.similarity_engine = None
 
@@ -630,7 +633,9 @@ class SimilarityWorker(QObject):
             from core.similarity_engine import SimilarityEngine
 
             # 1. Instantiate the engine inside the worker thread
-            self.similarity_engine = SimilarityEngine()
+            self.similarity_engine = SimilarityEngine(
+                allow_model_download=self.allow_model_download
+            )
 
             # 2. Connect its signals to this worker's signals
             self.similarity_engine.progress_update.connect(self.progress_update)

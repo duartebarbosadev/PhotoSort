@@ -30,7 +30,7 @@ PhotoSort is a fast, powerful desktop application for managing large photo libra
 
 PhotoSort uses a mix of local models and configurable external AI endpoints:
 
-- **Similarity analysis**: [`sentence-transformers/clip-ViT-B-32`](https://huggingface.co/sentence-transformers/clip-ViT-B-32) for image embeddings and similarity clustering.
+- **Similarity analysis**: [`facebook/dinov2-small`](https://huggingface.co/facebook/dinov2-small) by default, with `facebook/dinov2-base` and a configurable grouping threshold available in Preferences, for visual image embeddings and crop-aware similarity clustering.
 - **Pick Best local aesthetic scoring**: [`cafeai/cafe_aesthetic`](https://huggingface.co/cafeai/cafe_aesthetic) via `transformers`.
 - **Pick Best local technical scoring**: OpenCV face/eye cascades plus MediaPipe Face Mesh for blur / eye-state / face-quality heuristics.
 - **Auto-rotation**: the local ONNX orientation classifier from [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection), a fine-tuned EfficientNetV2 model that predicts whether an image should stay at `0°` or be corrected by `90°`, `180°`, or `270°`. PhotoSort loads `orientation_model*.onnx` files from the project `models/` directory.
@@ -128,9 +128,9 @@ The application will automatically detect and load the newest matching `orientat
 
 #### Local Model Downloads
 
-The following local models are downloaded automatically on first use:
+The following local models are downloaded or installed on first use:
 
-- `sentence-transformers/clip-ViT-B-32` for similarity embeddings
+- `facebook/dinov2-small` or `facebook/dinov2-base` for similarity embeddings. PhotoSort asks before downloading the selected model, then reuses the local Hugging Face cache for offline runs. Preferences also include a similarity grouping threshold; higher values produce broader clusters, while lower values keep clusters closer to near-duplicates. Clustering also uses large overlapping region embeddings so partial occlusions, such as a finger over part of the lens, do not dominate the whole-image match.
 - `cafeai/cafe_aesthetic` for Pick Best local aesthetic scoring
 
 If you are running offline, warm these models once while online first so they are present in your local Hugging Face cache.

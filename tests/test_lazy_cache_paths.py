@@ -2,6 +2,8 @@ import importlib
 import sys
 from unittest.mock import Mock
 
+import pytest
+
 
 def _reload_module(module_name: str):
     sys.modules.pop(module_name, None)
@@ -62,12 +64,44 @@ def test_cache_classes_resolve_default_dirs_lazily(monkeypatch, tmp_path):
     analysis.close()
 
 
-def test_sentence_transformers_cache_dir_is_resolved_lazily(monkeypatch, tmp_path):
+def test_huggingface_cache_dir_is_resolved_lazily(monkeypatch, tmp_path):
     app_settings = _reload_module("core.app_settings")
-    resolver = Mock(return_value=str(tmp_path / "sentence-transformers"))
+    resolver = Mock(return_value=str(tmp_path / "hf"))
     monkeypatch.setattr(app_settings, "resolve_user_cache_dir", resolver)
 
-    cache_dir = app_settings.get_sentence_transformers_cache_dir()
+    cache_dir = app_settings.get_huggingface_cache_dir()
 
-    assert cache_dir == str(tmp_path / "sentence-transformers")
-    resolver.assert_called_once_with("hf/sentence-transformers")
+    assert cache_dir == str(tmp_path / "hf")
+    resolver.assert_called_once_with("hf")
+
+
+def test_similarity_clustering_eps_setting_clamps_and_validates(monkeypatch):
+    app_settings = _reload_module("core.app_settings")
+
+    class FakeSettings:
+        def __init__(self):
+            self.values = {}
+
+        def value(self, key, default=None, type=None):
+            value = self.values.get(key, default)
+            return type(value) if type is not None else value
+
+        def setValue(self, key, value):
+            self.values[key] = value
+
+    fake_settings = FakeSettings()
+    monkeypatch.setattr(app_settings, "_get_settings", lambda: fake_settings)
+
+    assert app_settings.get_similarity_clustering_eps() == 0.055
+
+    app_settings.set_similarity_clustering_eps(0.12)
+    assert app_settings.get_similarity_clustering_eps() == 0.12
+
+    fake_settings.values[app_settings.SIMILARITY_CLUSTERING_EPS_KEY] = 1.0
+    assert (
+        app_settings.get_similarity_clustering_eps()
+        == app_settings.MAX_SIMILARITY_CLUSTERING_EPS
+    )
+
+    with pytest.raises(ValueError):
+        app_settings.set_similarity_clustering_eps(0.5)

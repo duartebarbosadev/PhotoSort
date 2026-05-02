@@ -4,12 +4,14 @@ from dataclasses import dataclass, field
 import importlib
 from math import dist
 from pathlib import Path
-from typing import Iterable, Mapping, Protocol, Sequence
+from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
 from core.best_photo_finder.config import SelectorConfig
 from core.best_photo_finder.devices import ResolvedDevice, resolve_device
 from core.best_photo_finder.errors import MissingDependencyError, SelectionError
 from core.best_photo_finder.models import TechnicalMetrics
+from core.app_settings import get_huggingface_cache_dir
+from core.huggingface_progress import build_hf_tqdm_class
 
 LEFT_EYE_INDICES = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_INDICES = (362, 385, 387, 263, 373, 380)
@@ -19,7 +21,9 @@ class TechnicalScorer(Protocol):
     def score(self, path: Path, config: SelectorConfig) -> TechnicalMetrics:
         """Compute blur and face-aware metrics for a single image."""
 
-    def score_image(self, path: Path, image, config: SelectorConfig) -> TechnicalMetrics:
+    def score_image(
+        self, path: Path, image, config: SelectorConfig
+    ) -> TechnicalMetrics:
         """Compute blur and face-aware metrics for a preloaded image."""
 
 
@@ -281,7 +285,9 @@ class OpenCvMediapipeTechnicalScorer:
             raise SelectionError(f"Could not read image: {path}")
         return self._score_loaded_image(path, image, config, cv2)
 
-    def score_image(self, path: Path, image, config: SelectorConfig) -> TechnicalMetrics:
+    def score_image(
+        self, path: Path, image, config: SelectorConfig
+    ) -> TechnicalMetrics:
         cv2 = _require_module("cv2")
         try:
             import numpy as np
@@ -299,7 +305,9 @@ class OpenCvMediapipeTechnicalScorer:
             raise SelectionError(f"Could not read image: {path}")
         return self._score_loaded_image(path, loaded_image, config, cv2)
 
-    def _score_loaded_image(self, path: Path, image, config: SelectorConfig, cv2) -> TechnicalMetrics:
+    def _score_loaded_image(
+        self, path: Path, image, config: SelectorConfig, cv2
+    ) -> TechnicalMetrics:
         if image is None:
             raise SelectionError(f"Could not read image: {path}")
 
@@ -352,6 +360,7 @@ class OpenCvMediapipeTechnicalScorer:
 @dataclass(slots=True)
 class HuggingFaceAestheticScorer:
     model_name: str = "cafeai/cafe_aesthetic"
+    progress_callback: Callable[[int, str], None] | None = None
     _model: object | None = field(default=None, init=False, repr=False)
     _aesthetic_label_index: int | None = field(default=None, init=False, repr=False)
     _resolved_device: ResolvedDevice | None = field(
@@ -396,7 +405,16 @@ class HuggingFaceAestheticScorer:
                 torch, self._resolved_device.torch_dtype_name
             )
 
-        model_path = snapshot_download(self.model_name)
+        model_path = snapshot_download(
+            self.model_name,
+            cache_dir=get_huggingface_cache_dir(),
+            tqdm_class=build_hf_tqdm_class(
+                self.progress_callback,
+                label=f"Downloading {self.model_name}",
+            ),
+        )
+        if self.progress_callback:
+            self.progress_callback(-1, f"Loading {self.model_name}")
         model = AutoModelForImageClassification.from_pretrained(
             model_path, local_files_only=True, **model_kwargs
         )
@@ -539,7 +557,9 @@ class HuggingFaceAestheticScorer:
                 logits = model(pixel_values=pixel_values).logits
                 probabilities = torch.softmax(logits, dim=-1)[:, aesthetic_label_index]
 
-            for (path, _image), probability in zip(batch_items, probabilities, strict=True):
+            for (path, _image), probability in zip(
+                batch_items, probabilities, strict=True
+            ):
                 scores[path] = _clamp(
                     float(probability.detach().cpu().item()), 0.0, 1.0
                 )

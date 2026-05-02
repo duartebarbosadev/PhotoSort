@@ -301,10 +301,14 @@ class WorkerManager(QObject):
         logger.info("Similarity engine thread and worker cleaned up.")
 
     # --- Similarity Engine Management ---
-    def start_similarity_analysis(self, file_paths: List[str]):
+    def start_similarity_analysis(
+        self, file_paths: List[str], allow_model_download: bool = False
+    ):
         self.stop_similarity_analysis()
         self.similarity_thread = QThread()
-        self.similarity_worker = SimilarityWorker(file_paths)
+        self.similarity_worker = SimilarityWorker(
+            file_paths, allow_model_download=allow_model_download
+        )
         self.similarity_worker.moveToThread(self.similarity_thread)
 
         # Connect signals from the new worker to the manager's signals
