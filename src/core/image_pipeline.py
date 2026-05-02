@@ -119,11 +119,6 @@ class ImagePipeline:
         # If cache hit, return immediately
         if cached_img is not None:
             return cached_img
-        
-        # Cache miss - generate the thumbnail and cache it
-        logger.debug(
-            f"Thumbnail cache MISS for {os.path.basename(normalized_path)} (Orientation applied: {apply_orientation})"
-        )
 
         pil_img: Optional[Image.Image] = None
 

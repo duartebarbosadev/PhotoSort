@@ -5,8 +5,6 @@ import logging
 import os
 import re
 import shutil
-import threading
-import time as _time_module
 from functools import lru_cache
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -576,9 +574,9 @@ def _parse_fraction(value: str) -> float:
     return float(value)
 
 
-_geocoder_lock = threading.Lock()
-_geocoder_last_call: float = 0.0
 _reverse_geocode_available: bool | None = None
+_reverse_geocode_resolved_count: int = 0
+_REVERSE_GEOCODE_LOG_INTERVAL: int = 10
 
 
 def _ensure_reverse_geocode() -> bool:
@@ -590,15 +588,25 @@ def _ensure_reverse_geocode() -> bool:
             _reverse_geocode_available = True
         except ImportError:
             _reverse_geocode_available = False
+            logger.warning("reverse-geocode not installed — location names unavailable")
     return _reverse_geocode_available
 
 
 @lru_cache(maxsize=512)
 def _reverse_geocode_parts(lat_bucket: float, lon_bucket: float) -> tuple:
     """Returns (country, state, city) strings or None for missing levels."""
-    if _ensure_reverse_geocode():
-        return _reverse_geocode_offline(lat_bucket, lon_bucket)
-    return _reverse_geocode_geopy(lat_bucket, lon_bucket)
+    global _reverse_geocode_resolved_count
+    if not _ensure_reverse_geocode():
+        return (None, None, None)
+
+    result = _reverse_geocode_offline(lat_bucket, lon_bucket)
+    _reverse_geocode_resolved_count += 1
+    if _reverse_geocode_resolved_count % _REVERSE_GEOCODE_LOG_INTERVAL == 0:
+        logger.info(
+            "Resolved %d unique locations",
+            _reverse_geocode_resolved_count,
+        )
+    return result
 
 
 def _reverse_geocode_offline(lat_bucket: float, lon_bucket: float) -> tuple:
@@ -616,56 +624,6 @@ def _reverse_geocode_offline(lat_bucket: float, lon_bucket: float) -> tuple:
             _sanitize_folder_component(state) if state else None,
             _sanitize_folder_component(city) if city else None,
         )
-    except Exception:
-        logger.debug(
-            "Reverse geocode failed for %.2f, %.2f, falling back to geopy",
-            lat_bucket,
-            lon_bucket,
-            exc_info=True,
-        )
-        return _reverse_geocode_geopy(lat_bucket, lon_bucket)
-
-
-def _reverse_geocode_geopy(lat_bucket: float, lon_bucket: float) -> tuple:
-    global _geocoder_last_call
-    try:
-        from geopy.geocoders import Nominatim  # noqa: PLC0415
-
-        with _geocoder_lock:
-            elapsed = _time_module.monotonic() - _geocoder_last_call
-            if elapsed < 1.1:
-                _time_module.sleep(1.1 - elapsed)
-            _geocoder_last_call = _time_module.monotonic()
-            geolocator = Nominatim(user_agent="photosort-geocoder/1.0", timeout=5)
-            loc = geolocator.reverse(
-                f"{lat_bucket},{lon_bucket}", language="en", exactly_one=True
-            )
-
-        if not loc or not loc.raw:
-            return (None, None, None)
-        addr = loc.raw.get("address", {})
-        country = addr.get("country")
-        state = (
-            addr.get("state")
-            or addr.get("region")
-            or addr.get("province")
-            or addr.get("county")
-            or addr.get("state_district")
-        )
-        city = (
-            addr.get("city")
-            or addr.get("town")
-            or addr.get("village")
-            or addr.get("municipality")
-        )
-        return (
-            _sanitize_folder_component(country) if country else None,
-            _sanitize_folder_component(state) if state else None,
-            _sanitize_folder_component(city) if city else None,
-        )
-    except ImportError:
-        logger.debug("geopy not installed, using coordinate labels")
-        return (None, None, None)
     except Exception:
         logger.debug(
             "Reverse geocode failed for %.2f, %.2f",

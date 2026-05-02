@@ -290,6 +290,10 @@ class MetadataProcessor:
             # Ensure required keys exist for tests and callers
             return {"rating": 0, "label": None, "date": None, "raw_metadata": None}
 
+        cache_hits = 0
+        cache_misses = 0
+        video_count = 0
+
         for image_path_input in image_paths:
             resolved = MetadataProcessor._resolve_path_forms(image_path_input)
 
@@ -326,13 +330,10 @@ class MetadataProcessor:
                 cached_metadata = exif_disk_cache.get(cache_key_path)
 
             if cached_metadata:
-                logger.debug(f"ExifCache HIT for: {os.path.basename(operational_path)}")
+                cache_hits += 1
                 results[cache_key_path]["raw_metadata"] = cached_metadata
             elif is_video_file:
-                logger.debug(
-                    "Skipping pyexiv2 extraction for video: %s",
-                    os.path.basename(operational_path),
-                )
+                video_count += 1
                 video_metadata = _build_basic_video_metadata(operational_path)
                 if isinstance(video_metadata, dict):
                     if (
@@ -347,11 +348,18 @@ class MetadataProcessor:
                 if exif_disk_cache:
                     exif_disk_cache.set(cache_key_path, video_metadata)
             else:
-                logger.debug(
-                    f"ExifCache MISS for: {os.path.basename(operational_path)}"
-                )
+                cache_misses += 1
                 paths_for_pyexiv2_extraction.append(operational_path)
                 operational_to_cache_key_map[operational_path] = cache_key_path
+
+        if cache_misses > 0 or video_count > 0:
+            logger.info(
+                "Cache: %d hits, %d misses, %d videos — extracting metadata for %d files",
+                cache_hits,
+                cache_misses,
+                video_count,
+                cache_misses,
+            )
 
         CHUNK_SIZE = METADATA_PROCESSING_CHUNK_SIZE
         # Concurrency tuning: use performance mode for I/O-bound metadata operations
