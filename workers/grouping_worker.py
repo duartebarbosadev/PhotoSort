@@ -26,12 +26,14 @@ class GroupingPreviewWorker(QObject):
         items: List[Dict[str, Any]],
         mode: str,
         source_root: Optional[str] = None,
+        location_depth: int = 3,
         parent=None,
     ):
         super().__init__(parent)
         self.items = items
         self.mode = mode
         self.source_root = source_root
+        self.location_depth = location_depth
         self._should_stop = False
 
     def stop(self):
@@ -47,6 +49,7 @@ class GroupingPreviewWorker(QObject):
                 GroupingMode(self.mode),
                 progress_callback=self.progress_update.emit,
                 source_root=self.source_root,
+                location_depth=self.location_depth,
             )
             if self._should_stop:
                 return
@@ -73,6 +76,8 @@ class GroupingWorkflowWorker(QObject):
         output_root: Optional[str] = None,
         group_name_overrides: Optional[Dict[str, str]] = None,
         prepared_plan=None,
+        location_depth: int = 3,
+        move_companions: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -82,6 +87,8 @@ class GroupingWorkflowWorker(QObject):
         self.output_root = output_root or build_grouping_output_root(source_root, mode)
         self.group_name_overrides = dict(group_name_overrides or {})
         self.prepared_plan = prepared_plan
+        self.location_depth = location_depth
+        self.move_companions = move_companions
         self._should_stop = False
 
     def stop(self):
@@ -100,6 +107,7 @@ class GroupingWorkflowWorker(QObject):
                     GroupingMode(self.mode),
                     progress_callback=self.progress_update.emit,
                     source_root=self.source_root,
+                    location_depth=self.location_depth,
                 )
             plan.apply_group_label_overrides(self.group_name_overrides)
             plan.output_root = self.output_root
@@ -111,6 +119,7 @@ class GroupingWorkflowWorker(QObject):
                 source_root=self.source_root,
                 output_root=self.output_root,
                 progress_callback=self.progress_update.emit,
+                move_companions=self.move_companions,
             )
             if self._should_stop:
                 return

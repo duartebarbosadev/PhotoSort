@@ -12,6 +12,7 @@ from core.app_settings import (
     get_preview_cache_size_bytes,
     PREVIEW_ESTIMATED_SIZE_FACTOR,
     get_similarity_embedding_model_name,
+    get_companion_files_preference,
 )
 from core.similarity_embedding_model import is_similarity_model_installed
 from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS, is_image_extension
@@ -507,6 +508,7 @@ class AppController(QObject):
             list(self.app_state.image_files_data),
             mode,
             source_root,
+            location_depth=self.main_window.grouping_step_widget.get_location_depth(),
         )
 
     def start_grouping_workflow(
@@ -545,6 +547,8 @@ class AppController(QObject):
             output_root,
             group_name_overrides=group_name_overrides,
             prepared_plan=prepared_plan,
+            location_depth=self.main_window.grouping_step_widget.get_location_depth(),
+            move_companions=get_companion_files_preference() == "always",
         )
 
     def skip_grouping_to_cull(self):

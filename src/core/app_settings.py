@@ -66,6 +66,8 @@ OPENAI_MAX_WORKERS_KEY = "AI/OpenAIMaxWorkers"
 OPENAI_BEST_SHOT_PROMPT_KEY = "AI/BestShotPrompt"
 OPENAI_RATING_PROMPT_KEY = "AI/RatingPrompt"
 BEST_SHOT_BATCH_SIZE_KEY = "AI/BestShotBatchSize"
+LOCATION_GROUPING_DEPTH_KEY = "Grouping/LocationDepth"
+COMPANION_FILES_PREFERENCE_KEY = "Grouping/CompanionFilesPreference"
 
 
 # Cache directories
@@ -607,3 +609,25 @@ def set_openai_config(
         _set_or_clear(OPENAI_BEST_SHOT_PROMPT_KEY, best_shot_prompt)
     if rating_prompt is not None:
         _set_or_clear(OPENAI_RATING_PROMPT_KEY, rating_prompt)
+
+
+def get_location_grouping_depth() -> int:
+    settings = _get_settings()
+    return int(settings.value(LOCATION_GROUPING_DEPTH_KEY, 3, type=int))
+
+
+def set_location_grouping_depth(depth: int) -> None:
+    _get_settings().setValue(LOCATION_GROUPING_DEPTH_KEY, max(1, min(5, depth)))
+
+
+def get_companion_files_preference() -> str:
+    """Returns 'always', 'never', or 'ask' (default)."""
+    settings = _get_settings()
+    val = settings.value(COMPANION_FILES_PREFERENCE_KEY, "ask", type=str)
+    return val if val in ("always", "never") else "ask"
+
+
+def set_companion_files_preference(pref: str) -> None:
+    """pref must be 'always' or 'never'."""
+    if pref in ("always", "never"):
+        _get_settings().setValue(COMPANION_FILES_PREFERENCE_KEY, pref)

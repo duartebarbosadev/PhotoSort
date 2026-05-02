@@ -5,7 +5,7 @@ import os
 from fractions import Fraction
 from typing import Callable, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
@@ -489,7 +489,6 @@ class PickBestStepWidget(QWidget):
             ("Left", self._prev_cluster),
             ("Right", self._next_cluster),
             ("C", self._toggle_focus_mode),
-            ("i", self._toggle_info),
         ]
         for key_text, handler in bindings:
             shortcut = QShortcut(QKeySequence(key_text), self)
@@ -912,6 +911,14 @@ class PickBestStepWidget(QWidget):
     def _on_done(self) -> None:
         self._commit_current_cluster_marks()
         self.proceed_to_cull_requested.emit()
+
+    def event(self, event):
+        if event.type() == QEvent.Type.ShortcutOverride:
+            key_event = event
+            if key_event.key() == Qt.Key.Key_I and key_event.modifiers() == Qt.KeyboardModifier.NoModifier:
+                event.accept()
+                return True
+        return super().event(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()

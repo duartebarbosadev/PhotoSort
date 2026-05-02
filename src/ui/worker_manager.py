@@ -612,10 +612,13 @@ class WorkerManager(QObject):
         items: List[Dict[str, Any]],
         mode: str,
         source_root: Optional[str] = None,
+        location_depth: int = 3,
     ):
         self.stop_grouping_preview()
         self.grouping_preview_thread = QThread()
-        self.grouping_preview_worker = GroupingPreviewWorker(items, mode, source_root)
+        self.grouping_preview_worker = GroupingPreviewWorker(
+            items, mode, source_root, location_depth
+        )
         self.grouping_preview_worker.moveToThread(self.grouping_preview_thread)
 
         self.grouping_preview_worker.progress_update.connect(
@@ -661,6 +664,8 @@ class WorkerManager(QObject):
         output_root: Optional[str] = None,
         group_name_overrides: Optional[Dict[str, str]] = None,
         prepared_plan=None,
+        location_depth: int = 3,
+        move_companions: bool = False,
     ):
         self.stop_grouping_workflow()
         self.grouping_workflow_thread = QThread()
@@ -671,6 +676,8 @@ class WorkerManager(QObject):
             output_root=output_root,
             group_name_overrides=group_name_overrides,
             prepared_plan=prepared_plan,
+            location_depth=location_depth,
+            move_companions=move_companions,
         )
         self.grouping_workflow_worker.moveToThread(self.grouping_workflow_thread)
 

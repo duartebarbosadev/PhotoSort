@@ -6,7 +6,7 @@ import time
 import subprocess
 from typing import Dict, Iterable, List, Optional, Set
 
-from PyQt6.QtCore import QPoint, QSize, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QPoint, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QBrush,
@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -48,6 +49,12 @@ from PyQt6.QtWidgets import (
 from core.image_file_ops import ImageFileOperations
 from core.grouping import GroupingGroup, GroupingPlan, find_directory_rename_candidates
 from core.media_utils import SUPPORTED_MEDIA_EXTENSIONS
+from core.app_settings import (
+    get_location_grouping_depth,
+    set_location_grouping_depth,
+    get_companion_files_preference,
+    set_companion_files_preference,
+)
 from ui.advanced_image_viewer import ZoomableImageView
 from ui.dialog_components import (
     build_dialog_footer,
@@ -156,6 +163,9 @@ class DroppableGroupingTree(QTreeWidget):
         if not dragged_files and not dragged_group_ids:
             event.ignore()
             return
+
+        if dragged_files:
+            self._grouping_widget._check_and_handle_companion_preference(dragged_files)
 
         target_kind = target_item.data(0, ROLE_KIND)
         gw = self._grouping_widget
@@ -357,6 +367,47 @@ class GroupingStepWidget(QWidget):
             self._mode_buttons[value] = btn
         self._mode_buttons["current"].setChecked(True)
 
+        self._location_depth_widget = QWidget()
+        self._location_depth_widget.setObjectName("locationDepthWidget")
+        _ldw_layout = QHBoxLayout(self._location_depth_widget)
+        _ldw_layout.setContentsMargins(0, 0, 0, 0)
+        _ldw_layout.setSpacing(2)
+        _ldw_sep = QFrame()
+        _ldw_sep.setObjectName("groupingTopBarSep")
+        _ldw_sep.setFrameShape(QFrame.Shape.VLine)
+        _ldw_layout.addWidget(_ldw_sep)
+        _ldw_label = QLabel("Levels")
+        _ldw_label.setObjectName("locationDepthLabel")
+        _ldw_layout.addWidget(_ldw_label)
+        _ldw_layout.addSpacing(2)
+        self._location_depth_group = QButtonGroup(self)
+        self._location_depth_group.setExclusive(True)
+        self._location_depth_buttons: Dict[int, QPushButton] = {}
+        _depth_tips = {
+            1: "Country only (e.g. Australia)",
+            2: "Country + city (e.g. Australia/Brisbane)",
+            3: "Country + city + suburb (e.g. Australia/Brisbane/Windsor)",
+            4: "4 levels",
+            5: "5 levels",
+        }
+        for depth_val in range(1, 6):
+            btn = QPushButton(str(depth_val))
+            btn.setObjectName("groupingModePill")
+            btn.setCheckable(True)
+            btn.setFixedSize(30, 26)
+            btn.setToolTip(_depth_tips.get(depth_val, ""))
+            self._location_depth_group.addButton(btn)
+            self._location_depth_buttons[depth_val] = btn
+            _ldw_layout.addWidget(btn)
+        saved_depth = get_location_grouping_depth()
+        self._location_depth_buttons.get(
+            saved_depth, self._location_depth_buttons[3]
+        ).setChecked(True)
+        self._location_depth_widget.setVisible(False)
+
+        self._depth_debounce = QTimer(self)
+        self._depth_debounce.setSingleShot(True)
+
         self.stats_label = QLabel()
         self.stats_label.setObjectName("groupingSummaryBadge")
         self.stats_label.setVisible(False)
@@ -522,6 +573,7 @@ class GroupingStepWidget(QWidget):
         tb.addWidget(sep)
         for _, value in GROUPING_MODE_OPTIONS:
             tb.addWidget(self._mode_buttons[value])
+        tb.addWidget(self._location_depth_widget)
         tb.addSpacing(10)
         tb.addWidget(self.stats_label)
         tb.addStretch(1)
@@ -661,19 +713,109 @@ class GroupingStepWidget(QWidget):
         self.folder_preview_grid.itemClicked.connect(
             self._handle_folder_preview_item_activated
         )
+        self._location_depth_group.buttonClicked.connect(self._on_location_depth_changed)
+        self._depth_debounce.timeout.connect(self._fire_depth_change)
+
+    def _on_location_depth_changed(self) -> None:
+        self._depth_debounce.start(600)
+
+    def _fire_depth_change(self) -> None:
+        depth = self.get_location_depth()
+        set_location_grouping_depth(depth)
+        self.mode_changed.emit(self.current_mode())
 
     def _emit_mode_changed(self) -> None:
-        self.mode_changed.emit(self.current_mode())
+        mode = self.current_mode()
+        self._location_depth_widget.setVisible(mode == "location")
+        self.mode_changed.emit(mode)
+
+    def get_location_depth(self) -> int:
+        for val, btn in self._location_depth_buttons.items():
+            if btn.isChecked():
+                return val
+        return 3
 
     def _emit_create_requested(self) -> None:
         effective_plan = self.get_effective_plan()
         if not self._confirm_grouping_actions(effective_plan):
             return
+        all_source_paths = [
+            p for g in (effective_plan.groups if effective_plan else []) for p in g.source_paths
+        ] + (effective_plan.unassigned_paths if effective_plan else [])
+        self._check_and_handle_companion_preference(all_source_paths)
         self.create_requested.emit(
             self.current_mode(),
             self.get_group_name_overrides(),
             effective_plan,
         )
+
+    def _check_and_handle_companion_preference(self, source_paths) -> None:
+        """Show dialog if companion files (.xmp / same-stem images) exist and preference not set."""
+        if get_companion_files_preference() != "ask":
+            return
+
+        from core.grouping import _find_companion_files  # noqa: PLC0415
+
+        found: List[str] = []
+        for path in source_paths:
+            for comp in _find_companion_files(path):
+                name = os.path.basename(comp)
+                if name not in found:
+                    found.append(name)
+            if len(found) >= 5:
+                break
+
+        if not found:
+            return
+
+        sample = found[:3]
+        more = len(found) - len(sample)
+        sample_text = ", ".join(sample) + (f" (+{more} more)" if more else "")
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Companion files found")
+        dlg.setMinimumWidth(440)
+        vlay = QVBoxLayout(dlg)
+        vlay.setSpacing(12)
+        vlay.setContentsMargins(20, 20, 20, 16)
+
+        lbl = QLabel(
+            f"Found companion files alongside your photos:\n{sample_text}\n\n"
+            "These may be .xmp sidecars or same-name files in another format (e.g. RAW + JPEG).\n"
+            "Move them to the same destination folder as their photos?"
+        )
+        lbl.setWordWrap(True)
+        vlay.addWidget(lbl)
+
+        remember_cb = QCheckBox("Remember my choice for all future operations")
+        vlay.addWidget(remember_cb)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        no_btn = QPushButton("No, skip companions")
+        yes_btn = QPushButton("Yes, move companions")
+        yes_btn.setDefault(True)
+        btn_row.addWidget(no_btn)
+        btn_row.addWidget(yes_btn)
+        vlay.addLayout(btn_row)
+
+        choice = [False]
+
+        def _accept():
+            choice[0] = True
+            dlg.accept()
+
+        def _reject():
+            choice[0] = False
+            dlg.accept()
+
+        yes_btn.clicked.connect(_accept)
+        no_btn.clicked.connect(_reject)
+
+        dlg.exec()
+
+        if remember_cb.isChecked():
+            set_companion_files_preference("always" if choice[0] else "never")
 
     def current_mode(self) -> str:
         for value, btn in self._mode_buttons.items():
@@ -696,6 +838,8 @@ class GroupingStepWidget(QWidget):
     def set_busy(self, busy: bool) -> None:
         self.primary_button.setEnabled(not busy and self._current_plan is not None)
         for btn in self._mode_buttons.values():
+            btn.setEnabled(not busy and self.has_source_folder())
+        for btn in self._location_depth_buttons.values():
             btn.setEnabled(not busy and self.has_source_folder())
         self.skip_button.setEnabled(not busy and self.has_source_folder())
         self.folder_button.setEnabled(not busy)
