@@ -75,6 +75,7 @@ from ui.app_controller import AppController
 from ui.menu_manager import MenuManager
 from ui.grouping_step_widget import GroupingStepWidget
 from ui.pick_best_step_widget import PickBestStepWidget
+from ui.easy_delete_step_widget import EasyDeleteStepWidget
 from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
 from ui.helpers.index_lookup_utils import find_proxy_index_for_path
@@ -668,6 +669,13 @@ class MainWindow(QMainWindow):
         logger.debug("Creating widgets...")
         self.workflow_stack = QStackedWidget()
         self.grouping_step_widget = GroupingStepWidget(self)
+        self.easy_delete_step_widget = EasyDeleteStepWidget(self)
+        self.easy_delete_step_widget.set_is_marked_func(
+            self.app_state.is_marked_for_deletion
+        )
+        self.easy_delete_step_widget.set_has_any_marked_func(
+            lambda: bool(self.app_state.marked_for_deletion)
+        )
         self.pick_best_step_widget = PickBestStepWidget(self)
         self.pick_best_step_widget.set_is_marked_func(
             self.app_state.is_marked_for_deletion
@@ -680,10 +688,13 @@ class MainWindow(QMainWindow):
         self.step_organize_button = QPushButton("1. Organize")
         self.step_organize_button.setObjectName("workflowStepButton")
         self.step_organize_button.setCheckable(True)
-        self.step_pick_best_button = QPushButton("2. Pick Best")
+        self.step_easy_delete_button = QPushButton("2. Easy Delete")
+        self.step_easy_delete_button.setObjectName("workflowStepButton")
+        self.step_easy_delete_button.setCheckable(True)
+        self.step_pick_best_button = QPushButton("3. Pick Best")
         self.step_pick_best_button.setObjectName("workflowStepButton")
         self.step_pick_best_button.setCheckable(True)
-        self.step_cull_button = QPushButton("3. Cull")
+        self.step_cull_button = QPushButton("4. Cull")
         self.step_cull_button.setObjectName("workflowStepButton")
         self.step_cull_button.setCheckable(True)
 
@@ -780,6 +791,7 @@ class MainWindow(QMainWindow):
         nav_layout.setContentsMargins(8, 8, 8, 8)
         nav_layout.setSpacing(8)
         nav_layout.addWidget(self.step_organize_button)
+        nav_layout.addWidget(self.step_easy_delete_button)
         nav_layout.addWidget(self.step_pick_best_button)
         nav_layout.addWidget(self.step_cull_button)
         nav_layout.addStretch(1)
@@ -789,6 +801,12 @@ class MainWindow(QMainWindow):
         grouping_page_layout.setContentsMargins(0, 0, 0, 0)
         grouping_page_layout.setSpacing(0)
         grouping_page_layout.addWidget(self.grouping_step_widget)
+
+        self.easy_delete_page = QWidget()
+        easy_delete_page_layout = QVBoxLayout(self.easy_delete_page)
+        easy_delete_page_layout.setContentsMargins(0, 0, 0, 0)
+        easy_delete_page_layout.setSpacing(0)
+        easy_delete_page_layout.addWidget(self.easy_delete_step_widget)
 
         self.pick_best_page = QWidget()
         pick_best_page_layout = QVBoxLayout(self.pick_best_page)
@@ -824,6 +842,7 @@ class MainWindow(QMainWindow):
 
         cull_page_layout.addWidget(main_splitter)
         self.workflow_stack.addWidget(self.grouping_page)
+        self.workflow_stack.addWidget(self.easy_delete_page)
         self.workflow_stack.addWidget(self.pick_best_page)
         self.workflow_stack.addWidget(self.cull_page)
         main_layout.addWidget(self.workflow_stack)
@@ -916,8 +935,21 @@ class MainWindow(QMainWindow):
             self._open_folder_dialog
         )
         self.step_organize_button.clicked.connect(self._go_to_grouping_step)
+        self.step_easy_delete_button.clicked.connect(self._go_to_easy_delete_step)
         self.step_pick_best_button.clicked.connect(self._go_to_pick_best_step)
         self.step_cull_button.clicked.connect(self._go_to_cull_step)
+
+        # Easy Delete step widget signals
+        self.easy_delete_step_widget.skip_requested.connect(self.show_pick_best_step)
+        self.easy_delete_step_widget.proceed_to_pick_best_requested.connect(
+            self.show_pick_best_step
+        )
+        self.easy_delete_step_widget.mark_for_deletion_requested.connect(
+            self._mark_paths_for_deletion
+        )
+        self.easy_delete_step_widget.unmark_for_deletion_requested.connect(
+            self._unmark_paths_for_deletion
+        )
 
         # Pick Best step widget signals
         self.pick_best_step_widget.skip_requested.connect(self.show_cull_step)
@@ -972,6 +1004,13 @@ class MainWindow(QMainWindow):
 
     def _go_to_grouping_step(self) -> None:
         self.show_grouping_step()
+
+    def _go_to_easy_delete_step(self) -> None:
+        if not self.app_state.image_files_data:
+            self.statusBar().showMessage("Load a folder first.", 3000)
+            self.update_workflow_navigation()
+            return
+        self.show_easy_delete_step()
 
     def _go_to_pick_best_step(self) -> None:
         if not self.app_state.image_files_data:
@@ -1236,6 +1275,18 @@ class MainWindow(QMainWindow):
         self.workflow_stack.setCurrentWidget(self.cull_page)
         self.update_workflow_navigation()
 
+    def show_easy_delete_step(self) -> None:
+        self.app_state.workflow_step = "easy_delete"
+        for action in self.menu_manager.image_focus_actions.values():
+            action.setEnabled(False)
+        self.easy_delete_step_widget.set_image_pipeline(self.image_pipeline)
+        self.workflow_stack.setCurrentWidget(self.easy_delete_page)
+        self.update_workflow_navigation()
+        if self.app_state.easy_delete_results:
+            self.easy_delete_step_widget.show_results(self.app_state.easy_delete_results)
+            return
+        self.app_controller.start_easy_delete_workflow()
+
     def show_pick_best_step(self) -> None:
         self.app_state.workflow_step = "pick_best"
         self.workflow_stack.setCurrentWidget(self.pick_best_page)
@@ -1253,9 +1304,13 @@ class MainWindow(QMainWindow):
         )
         has_cull_content = bool(self.app_state.image_files_data)
         self.step_organize_button.setEnabled(has_loaded_folder or not has_cull_content)
+        self.step_easy_delete_button.setEnabled(has_cull_content)
         self.step_pick_best_button.setEnabled(has_cull_content)
         self.step_cull_button.setEnabled(has_cull_content)
         self.step_organize_button.setChecked(self.app_state.workflow_step == "organize")
+        self.step_easy_delete_button.setChecked(
+            self.app_state.workflow_step == "easy_delete"
+        )
         self.step_pick_best_button.setChecked(
             self.app_state.workflow_step == "pick_best"
         )

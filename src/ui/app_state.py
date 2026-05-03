@@ -41,6 +41,7 @@ class AppState:
             int, Dict[str, Any]
         ] = {}  # cluster_id -> {winner_path, ranked, failed, all_paths}
         self.pick_best_winners_by_path: Dict[str, bool] = {}  # path -> True if winner
+        self.easy_delete_results: Dict[str, Dict[str, Any]] = {}  # path -> detection entry
 
         # Could also hold current folder path, filter states, etc. if desired.
         self.current_folder_path: Optional[str] = None
@@ -73,6 +74,7 @@ class AppState:
         self.clear_best_shot_results()
         self.clear_pick_best_results()
         self.ai_rating_results.clear()
+        self.easy_delete_results.clear()
         # self.current_folder_path = None # Optionally reset current folder path
 
     def remove_data_for_path(self, file_path: str):

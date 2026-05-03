@@ -23,6 +23,7 @@ from workers.rotation_application_worker import RotationApplicationWorker
 from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 from workers.best_shot_worker import BestShotWorker
 from workers.pick_best_worker import PickBestWorker
+from workers.easy_delete_worker import EasyDeleteWorker
 from workers.ai_rating_worker import AiRatingWorker
 from workers.grouping_worker import GroupingPreviewWorker, GroupingWorkflowWorker
 from core.image_pipeline import ImagePipeline
@@ -144,6 +145,11 @@ class WorkerManager(QObject):
     pick_best_complete = pyqtSignal(dict)
     pick_best_error = pyqtSignal(str)
 
+    # Easy Delete signals
+    easy_delete_progress = pyqtSignal(int, str)
+    easy_delete_complete = pyqtSignal(dict)
+    easy_delete_error = pyqtSignal(str)
+
     def __init__(
         self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None
     ):
@@ -187,6 +193,9 @@ class WorkerManager(QObject):
 
         self.pick_best_thread: Optional[QThread] = None
         self.pick_best_worker: Optional[PickBestWorker] = None
+
+        self.easy_delete_thread: Optional[QThread] = None
+        self.easy_delete_worker: Optional[EasyDeleteWorker] = None
 
         self.cuda_detection_thread: Optional[QThread] = None
         self.cuda_detection_worker: Optional[CudaDetectionWorker] = None
@@ -1122,6 +1131,63 @@ class WorkerManager(QObject):
             self.pick_best_thread.deleteLater()
             self.pick_best_thread = None
         logger.info("Pick best thread and worker cleaned up.")
+
+    def start_easy_delete_analysis(
+        self,
+        image_paths: List[str],
+        cluster_map: Optional[Dict[int, List[str]]] = None,
+        embeddings_cache: Optional[Dict] = None,
+        exif_disk_cache=None,
+    ) -> None:
+        self.stop_easy_delete_analysis()
+        if not image_paths:
+            self.easy_delete_complete.emit({})
+            return
+
+        self.easy_delete_thread = QThread()
+        self.easy_delete_worker = EasyDeleteWorker(
+            image_paths=image_paths,
+            cluster_map=cluster_map,
+            embeddings_cache=embeddings_cache,
+            exif_disk_cache=exif_disk_cache,
+        )
+        self.easy_delete_worker.moveToThread(self.easy_delete_thread)
+
+        self.easy_delete_worker.progress_update.connect(self.easy_delete_progress.emit)
+        self.easy_delete_worker.completed.connect(self.easy_delete_complete.emit)
+        self.easy_delete_worker.error.connect(self.easy_delete_error.emit)
+        self.easy_delete_worker.finished.connect(self.easy_delete_thread.quit)
+        self.easy_delete_worker.finished.connect(self.easy_delete_worker.deleteLater)
+        self.easy_delete_thread.finished.connect(self._cleanup_easy_delete_worker)
+        self.easy_delete_thread.started.connect(self.easy_delete_worker.run)
+
+        self.easy_delete_thread.start()
+        logger.info("Easy delete analysis thread started.")
+
+    def stop_easy_delete_analysis(self) -> None:
+        worker_stop = self.easy_delete_worker.stop if self.easy_delete_worker else None
+        temp_thread, _ = self._terminate_thread(self.easy_delete_thread, worker_stop)
+        if temp_thread is None:
+            self.easy_delete_thread = None
+            self.easy_delete_worker = None
+        else:
+            self.easy_delete_thread = temp_thread
+
+    def is_easy_delete_running(self) -> bool:
+        return self.easy_delete_thread is not None and self.easy_delete_thread.isRunning()
+
+    def _cleanup_easy_delete_worker(self) -> None:
+        if self.easy_delete_worker:
+            try:
+                if not sip.isdeleted(self.easy_delete_worker):
+                    self.easy_delete_worker.deleteLater()
+            except Exception:
+                logger.debug("Easy delete worker already deleted.", exc_info=True)
+            self.easy_delete_worker = None
+        if self.easy_delete_thread:
+            self.easy_delete_thread.deleteLater()
+            self.easy_delete_thread = None
+        logger.info("Easy delete thread and worker cleaned up.")
 
     def start_best_shot_analysis(
         self,

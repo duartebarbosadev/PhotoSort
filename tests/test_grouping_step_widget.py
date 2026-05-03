@@ -748,9 +748,9 @@ def test_grouping_step_widget_before_tree_includes_unmanaged_files(tmp_path):
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
     first = str(beach_dir / "a.jpg")
-    sidecar = str(beach_dir / "a.xmp")
+    extra = str(beach_dir / "a.json")
     beach_dir.joinpath("a.jpg").write_bytes(b"preview")
-    beach_dir.joinpath("a.xmp").write_text("sidecar", encoding="utf-8")
+    beach_dir.joinpath("a.json").write_text("{}", encoding="utf-8")
 
     widget = GroupingStepWidget()
     widget.set_source_folder(str(source_root))
@@ -769,8 +769,8 @@ def test_grouping_step_widget_before_tree_includes_unmanaged_files(tmp_path):
     )
 
     assert first in widget._before_file_items_by_path
-    assert sidecar in widget._before_file_items_by_path
-    assert widget._before_file_items_by_path[sidecar].text(0) == "a.xmp"
+    assert extra in widget._before_file_items_by_path
+    assert widget._before_file_items_by_path[extra].text(0) == "a.json"
 
 
 def test_grouping_step_widget_folder_preview_includes_unmanaged_files(tmp_path):
@@ -847,9 +847,9 @@ def test_grouping_step_widget_group_rename_moves_unmanaged_files_too(tmp_path):
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
     first = str(beach_dir / "a.jpg")
-    sidecar = str(beach_dir / "a.xmp")
+    extra = str(beach_dir / "a.json")
     beach_dir.joinpath("a.jpg").write_bytes(b"preview")
-    beach_dir.joinpath("a.xmp").write_text("sidecar", encoding="utf-8")
+    beach_dir.joinpath("a.json").write_text("{}", encoding="utf-8")
 
     widget = GroupingStepWidget()
     widget.set_source_folder(str(source_root))
@@ -877,7 +877,7 @@ def test_grouping_step_widget_group_rename_moves_unmanaged_files_too(tmp_path):
     )
 
     assert first in holiday_group.source_paths
-    assert sidecar in holiday_group.source_paths
+    assert extra in holiday_group.source_paths
 
 
 def test_grouping_step_widget_supports_file_rename_in_preview_plan(tmp_path):

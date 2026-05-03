@@ -1936,6 +1936,8 @@ class GroupingStepWidget(QWidget):
                         not in SUPPORTED_MEDIA_EXTENSIONS
                     ):
                         continue
+                    if os.path.splitext(filename)[1].lower() == ".xmp":
+                        continue
                     if self._is_path_pending_deletion(file_path):
                         continue
                     discovered.append(file_path)

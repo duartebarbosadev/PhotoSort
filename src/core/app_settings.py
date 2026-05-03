@@ -119,6 +119,12 @@ RIGHT_PANEL_STRETCH = 1  # Right panel stretch factor
 # Blur detection
 DEFAULT_BLUR_DETECTION_THRESHOLD = 100.0  # Default threshold for blur detection
 
+# Easy Delete step detection thresholds
+EASY_DELETE_BLUR_THRESHOLD = 100.0
+EASY_DELETE_DARK_MEAN_THRESHOLD = 15.0   # 0-255 mean brightness; below = near-black
+EASY_DELETE_WHITE_MEAN_THRESHOLD = 248.0  # 0-255 mean brightness; above = overexposed
+EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01  # cosine distance; below = near-identical
+
 # Iteration limits for safety
 DEFAULT_MAX_ITERATIONS = 5000  # Default maximum iterations for various loops
 DEFAULT_SAFETY_ITERATION_MULTIPLIER = 2  # Multiplier for safety iteration limits
