@@ -21,7 +21,11 @@ def _homebrew_runtime_libraries():
     if not IS_MACOS:
         return []
     patterns_by_formula = {
-        "brotli": ("libbrotlicommon*.dylib", "libbrotlidec*.dylib", "libbrotlienc*.dylib"),
+        "brotli": (
+            "libbrotlicommon*.dylib",
+            "libbrotlidec*.dylib",
+            "libbrotlienc*.dylib",
+        ),
         "inih": ("libinih*.dylib", "libINIReader*.dylib"),
         "gettext": ("libintl*.dylib",),
     }
@@ -29,9 +33,7 @@ def _homebrew_runtime_libraries():
     seen = set()
     for formula, patterns in patterns_by_formula.items():
         prefix = Path(
-            subprocess.check_output(
-                ["brew", "--prefix", formula], text=True
-            ).strip()
+            subprocess.check_output(["brew", "--prefix", formula], text=True).strip()
         )
         for pattern in patterns:
             for library in sorted((prefix / "lib").glob(pattern)):
@@ -119,6 +121,10 @@ a = Analysis(
         "flax",
         "jax",
         "pyiqa",
+        # MediaPipe declares SentencePiece, but PhotoSort only uses Face Mesh.
+        # Excluding the unused native tokenizer also avoids a Windows CUDA
+        # PyInstaller dependency-scan crash inside sentencepiece.dll.
+        "sentencepiece",
         "sentence_transformers",
         "tensorflow",
         "tf_keras",

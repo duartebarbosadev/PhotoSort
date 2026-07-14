@@ -69,3 +69,8 @@ def test_packaging_contract_covers_every_lazy_workflow():
         "workers.best_shot_worker",
         "workers.grouping_worker",
     } <= required
+
+
+def test_packaging_excludes_unused_native_sentencepiece_extension():
+    spec = (PROJECT_ROOT / "PhotoSort.spec").read_text(encoding="utf-8")
+    assert '"sentencepiece"' in spec

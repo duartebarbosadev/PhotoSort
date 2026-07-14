@@ -56,10 +56,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
 
@@ -78,7 +78,7 @@ jobs:
           PY
 
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-${{ matrix.requirements_file }}-pip-${{ hashFiles('requirements*.txt') }}
@@ -152,7 +152,7 @@ jobs:
 
       - name: Upload PyInstaller diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pyinstaller-diagnostics-${{ matrix.artifact_name }}
           path: |
@@ -315,7 +315,7 @@ jobs:
           shasum -a 256 "${{ matrix.artifact_name }}.dmg" > "${{ matrix.artifact_name }}.dmg.sha256"
 
       - name: Archive release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: |
@@ -332,7 +332,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 

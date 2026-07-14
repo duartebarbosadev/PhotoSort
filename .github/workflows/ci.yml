@@ -25,10 +25,10 @@ jobs:
       PIP_PROGRESS_BAR: 'off'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -43,7 +43,7 @@ jobs:
           sudo apt-get install -y libjpeg-turbo-progs
 
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/requirements-dev.txt') }}
@@ -81,7 +81,7 @@ jobs:
           timeout 20s python src/main.py --smoke-test --smoke-delay-ms 1500
 
       - name: Upload coverage XML
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: success() || failure()
         with:
           name: coverage-xml
@@ -89,7 +89,7 @@ jobs:
           retention-days: 5
 
       - name: Upload pytest cache & reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: success() || failure()
         with:
           name: pytest-artifacts
@@ -105,12 +105,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-test]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -126,7 +126,7 @@ jobs:
         run: |
           pip-audit -r requirements.txt -f json -o pip-audit.json || true
       - name: Upload pip-audit report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pip-audit-report
           path: pip-audit.json
@@ -142,20 +142,22 @@ jobs:
       pull-requests: write
     steps:
       - name: Download coverage artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: coverage-artifacts
       - name: Summarize Coverage
         run: |
-          echo '### Coverage Summary' >> $GITHUB_STEP_SUMMARY
+          echo '### Coverage Summary' >> "$GITHUB_STEP_SUMMARY"
           if [ -f coverage-artifacts/coverage-xml/coverage.xml ]; then
             TOTAL=$(grep -o 'line-rate="[0-9.]*"' coverage-artifacts/coverage-xml/coverage.xml | head -1 | cut -d '"' -f2)
-            echo "* Line-rate: ${TOTAL}" >> $GITHUB_STEP_SUMMARY
+            echo "* Line-rate: ${TOTAL}" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo '* Coverage XML not found' >> $GITHUB_STEP_SUMMARY
+            echo '* Coverage XML not found' >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Generate Summary
         run: |
-          echo '### CI Results' >> $GITHUB_STEP_SUMMARY
-          echo '* Build/Test: ${{ needs.build-test.result }}' >> $GITHUB_STEP_SUMMARY
-          echo '* Security: ${{ needs.security.result }}' >> $GITHUB_STEP_SUMMARY
+          {
+            echo '### CI Results'
+            echo '* Build/Test: ${{ needs.build-test.result }}'
+            echo '* Security: ${{ needs.security.result }}'
+          } >> "$GITHUB_STEP_SUMMARY"
