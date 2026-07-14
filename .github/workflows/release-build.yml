@@ -44,7 +44,16 @@ jobs:
       PIP_PROGRESS_BAR: 'off'
       QT_QPA_PLATFORM: offscreen
       PHOTOSORT_ENABLE_FILE_LOGGING: 'false'
+
+      # CI-only regression guard: fail the packaging job if the frozen app takes
+      # more than 30 seconds to start. This does not affect production users or
+      # impose a runtime timeout inside PhotoSort.
       PHOTOSORT_STARTUP_BUDGET_SECONDS: '30'
+
+      # Optional trusted code signing. Leave these secrets unset to publish
+      # unsigned ZIP/DMG artifacts at no cost; the guarded signing/notarization
+      # steps below will be skipped automatically. Self-signed certificates do
+      # not remove public Windows/macOS trust warnings, so they are not required.
       WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
       MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
