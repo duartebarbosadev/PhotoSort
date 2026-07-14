@@ -35,7 +35,7 @@ class TestFileScannerParallelBlur:
             scanner.scan_directory(str(tmp_path), perform_blur_detection=False)
 
             # Should find files
-            assert files_found_mock.call_count >= 3
+            assert files_found_mock.call_count == 1
 
             # All is_blurred should be None
             for call in files_found_mock.call_args_list:
@@ -225,7 +225,7 @@ class TestFileScannerParallelBlur:
             scanner.scan_directory(str(tmp_path), perform_blur_detection=True)
 
             # Files should be emitted with is_blurred=None initially
-            assert files_found_mock.call_count >= 3
+            assert files_found_mock.call_count == 1
 
             # First emissions should have None blur status
             first_call_file_info = files_found_mock.call_args_list[0][0][0][0]
@@ -259,6 +259,20 @@ class TestFileScannerParallelBlur:
         assert emitted_file_info is not final_file_info
         assert emitted_file_info["is_blurred"] is None
         assert final_file_info["is_blurred"] is True
+
+    def test_discovery_batches_files_and_captures_stat_data(self, tmp_path):
+        for i in range(70):
+            (tmp_path / f"test_{i}.jpg").write_bytes(b"image")
+
+        scanner = FileScanner(Mock())
+        emitted_batches = []
+        scanner.files_found.connect(emitted_batches.append)
+
+        scanner.scan_directory(str(tmp_path))
+
+        assert [len(batch) for batch in emitted_batches] == [64, 6]
+        assert all(item["file_size"] == 5 for batch in emitted_batches for item in batch)
+        assert all(item["mtime_ns"] > 0 for batch in emitted_batches for item in batch)
 
     @patch("core.file_scanner.BlurDetector")
     def test_empty_directory_scan(self, mock_blur_detector, tmp_path):

@@ -64,6 +64,7 @@ from core.app_settings import (
     LEFT_PANEL_STRETCH,
     CENTER_PANEL_STRETCH,
     RIGHT_PANEL_STRETCH,
+    DISPLAY_MAX_RESOLUTION,
 )
 from ui.app_state import AppState
 from ui.ui_components import LoadingOverlay
@@ -152,9 +153,6 @@ class CustomFilterProxyModel(QSortFilterProxyModel):
             return False
 
         file_path = item_user_data["path"]
-        if not os.path.exists(file_path):
-            return False
-
         search_text = self.filterRegularExpression().pattern().lower()
         search_match = search_text in item_text.lower()
         if not search_match:
@@ -386,18 +384,10 @@ class MainWindow(QMainWindow):
                     if file_data.get("media_type") == "video"
                 )
                 num_images -= num_videos
-                current_files_size_bytes = 0
-                for file_data in self.app_state.image_files_data:
-                    try:
-                        if "path" in file_data and os.path.exists(file_data["path"]):
-                            current_files_size_bytes += os.path.getsize(
-                                file_data["path"]
-                            )
-                    except OSError as e:
-                        # Log lightly, this can be noisy if many files are temporarily unavailable
-                        logger.warning(
-                            f"Could not get size for '{file_data.get('path', 'Unknown')}' for info label: {e}"
-                        )
+                current_files_size_bytes = sum(
+                    int(file_data.get("file_size") or 0)
+                    for file_data in self.app_state.image_files_data
+                )
                 total_size_mb = current_files_size_bytes / (1024 * 1024)
 
                 # Add cache size information to the status text
@@ -2598,7 +2588,7 @@ class MainWindow(QMainWindow):
         if not reuse_preview:
             logger.debug(f"Getting preview pixmap for {file_path}")
             pixmap = self.image_pipeline.get_preview_qpixmap(
-                file_path, display_max_size=(8000, 8000)
+                file_path, display_max_size=DISPLAY_MAX_RESOLUTION
             )
 
             if not pixmap or pixmap.isNull():
@@ -2703,7 +2693,7 @@ class MainWindow(QMainWindow):
             return
 
         pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path, display_max_size=(8000, 8000)
+            file_path, display_max_size=DISPLAY_MAX_RESOLUTION
         )
 
         if not pixmap or pixmap.isNull():
@@ -2779,7 +2769,7 @@ class MainWindow(QMainWindow):
                 continue
 
             pixmap = self.image_pipeline.get_preview_qpixmap(
-                path, display_max_size=(8000, 8000)
+                path, display_max_size=DISPLAY_MAX_RESOLUTION
             )
             if not pixmap or pixmap.isNull():
                 pixmap = self.image_pipeline.get_thumbnail_qpixmap(path)
@@ -4173,7 +4163,7 @@ class MainWindow(QMainWindow):
             # Single image mode
             pixmap = self.image_pipeline.get_preview_qpixmap(
                 selected_paths[0],
-                display_max_size=(8000, 8000),  # High resolution for zoom
+                display_max_size=DISPLAY_MAX_RESOLUTION,
             )
             if pixmap:
                 self.sync_viewer.set_image(pixmap, 0)
@@ -4182,7 +4172,7 @@ class MainWindow(QMainWindow):
             pixmaps = []
             for path in selected_paths[:2]:  # Max 2 images
                 pixmap = self.image_pipeline.get_preview_qpixmap(
-                    path, display_max_size=(8000, 8000)
+                    path, display_max_size=DISPLAY_MAX_RESOLUTION
                 )
                 if pixmap:
                     pixmaps.append(pixmap)
@@ -4341,7 +4331,7 @@ class MainWindow(QMainWindow):
             # Pre-cache the correctly generated preview before the selection handler runs
             self.image_pipeline.get_preview_qpixmap(
                 file_path,
-                display_max_size=(8000, 8000),
+                display_max_size=DISPLAY_MAX_RESOLUTION,
                 force_regenerate=True,
                 force_default_brightness=True,  # This is the key change
             )
@@ -4991,7 +4981,7 @@ class MainWindow(QMainWindow):
         # Load ONE base pixmap, respecting the user's current auto-edit setting.
         # This represents the "current" view of the image.
         current_pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path, (8000, 8000)
+            file_path, DISPLAY_MAX_RESOLUTION
         )
         t2 = time.perf_counter()
         logger.info(f"SBS_COMP: get_preview_qpixmap (base) took: {t2 - t1:.4f}s")

@@ -73,7 +73,7 @@ class AppState:
             self.rating_disk_cache.clear()
         if clear_disk_caches and self.exif_disk_cache:
             self.exif_disk_cache.clear()
-        if folder_path and self.analysis_cache:
+        if clear_disk_caches and folder_path and self.analysis_cache:
             self.analysis_cache.clear_folder(folder_path)
         self.focused_image_path = None
         self.clear_best_shot_results()

@@ -12,6 +12,7 @@ from .media_utils import (
     SUPPORTED_IMAGE_EXTENSIONS,
     is_video_extension,
 )
+from .app_settings import FILE_SCAN_EMIT_BATCH_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,7 @@ class FileScanner(QObject):
         """
         self._is_running = True
         all_file_data: List[Dict[str, Any]] = []
+        discovery_batch: List[Dict[str, Any]] = []
         image_paths_for_blur: List[str] = []
 
         try:
@@ -141,11 +143,10 @@ class FileScanner(QObject):
                     if ext in SUPPORTED_MEDIA_EXTENSIONS:
                         full_path = os.path.normpath(os.path.join(root, filename))
 
-                        # Hard existence check to avoid downstream missing-file errors
-                        if not os.path.isfile(full_path):
-                            logger.info(
-                                f"Skipping missing file during scan: {full_path}"
-                            )
+                        try:
+                            stat_result = os.stat(full_path)
+                        except OSError:
+                            logger.info("Skipping inaccessible file during scan: %s", full_path)
                             continue
 
                         media_type = "video" if is_video_extension(ext) else "image"
@@ -153,14 +154,21 @@ class FileScanner(QObject):
                             "path": full_path,
                             "is_blurred": None,
                             "media_type": media_type,
+                            "file_size": stat_result.st_size,
+                            "mtime_ns": stat_result.st_mtime_ns,
                         }
                         all_file_data.append(file_info)
                         if media_type == "image":
                             image_paths_for_blur.append(full_path)
 
-                        # Emit found file immediately (with no blur status yet)
-                        self.files_found.emit([dict(file_info)])
+                        discovery_batch.append(dict(file_info))
+                        if len(discovery_batch) >= FILE_SCAN_EMIT_BATCH_SIZE:
+                            self.files_found.emit(discovery_batch)
+                            discovery_batch = []
                         logger.debug(f"Found: {os.path.basename(full_path)}")
+
+            if discovery_batch:
+                self.files_found.emit(discovery_batch)
 
             if not self._is_running:
                 self.error.emit("Scan cancelled after file discovery.")
