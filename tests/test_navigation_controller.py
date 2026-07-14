@@ -55,6 +55,7 @@ class Ctx:
         self.paths = list(paths)
         self.deleted = set(deleted or [])
         self.last_selected = None
+        self.prefetched = []
         self.view = DummyView(self)
 
     # Protocol methods
@@ -104,6 +105,9 @@ class Ctx:
         row = proxy_index.row()
         if 0 <= row < len(self.paths):
             self.last_selected = self.paths[row]
+
+    def prefetch_navigation_previews(self, image_paths):
+        self.prefetched = list(image_paths)
 
 
 def test_navigation_group_cyclic_with_deleted_items():
@@ -166,6 +170,16 @@ def test_navigation_linear_includes_deleted_when_skip_false():
     ctx.find_proxy_index_for_path("a")
     nav.navigate_linear("down", skip_deleted=False)  # should land on deleted 'b'
     assert ctx.last_selected == "b"
+
+
+def test_navigation_prefetches_a_small_directional_window_and_skips_deleted():
+    ctx = Ctx(["a", "b", "c", "d", "e", "f"], deleted=["d"])
+    nav = NavigationController(ctx)
+    ctx.find_proxy_index_for_path("a")
+
+    nav.navigate_linear("down", skip_deleted=True)
+
+    assert ctx.prefetched == ["b", "c", "e", "f"]
 
 
 def test_navigation_group_includes_deleted_when_skip_false():

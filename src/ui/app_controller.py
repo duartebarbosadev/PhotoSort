@@ -356,6 +356,7 @@ class AppController(QObject):
 
         self.app_state.clear_all_file_specific_data()
         self.main_window.reset_thumbnail_requests()
+        self.main_window.reset_preview_requests()
         self.main_window.invalidate_last_displayed_preview()
         self.app_state.current_folder_path = folder_path
         self.app_state.skip_grouping_step_once = skip_grouping_step
