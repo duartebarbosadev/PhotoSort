@@ -119,11 +119,6 @@ class ImagePipeline:
         # If cache hit, return immediately
         if cached_img is not None:
             return cached_img
-        
-        # Cache miss - generate the thumbnail and cache it
-        logger.debug(
-            f"Thumbnail cache MISS for {os.path.basename(normalized_path)} (Orientation applied: {apply_orientation})"
-        )
 
         pil_img: Optional[Image.Image] = None
 
@@ -507,7 +502,6 @@ class ImagePipeline:
         2. Checks cache for high-resolution preloaded PIL image, then resizes.
         3. Generates fresh PIL image for display size, caches it, then converts.
         """
-        logger.debug(f"Obtaining preview QPixmap called for: {image_path}")
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):
             logger.error(f"File does not exist: {normalized_path}")

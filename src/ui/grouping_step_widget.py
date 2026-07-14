@@ -6,7 +6,7 @@ import time
 import subprocess
 from typing import Dict, Iterable, List, Optional, Set
 
-from PyQt6.QtCore import QPoint, QSize, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QPoint, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QBrush,
@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -48,6 +49,12 @@ from PyQt6.QtWidgets import (
 from core.image_file_ops import ImageFileOperations
 from core.grouping import GroupingGroup, GroupingPlan, find_directory_rename_candidates
 from core.media_utils import SUPPORTED_MEDIA_EXTENSIONS
+from core.app_settings import (
+    get_location_grouping_depth,
+    set_location_grouping_depth,
+    get_companion_files_preference,
+    set_companion_files_preference,
+)
 from ui.advanced_image_viewer import ZoomableImageView
 from ui.dialog_components import (
     build_dialog_footer,
@@ -109,12 +116,50 @@ class DroppableGroupingTree(QTreeWidget):
         self.viewport().setAcceptDrops(True)
         self.setDropIndicatorShown(False)
 
+    def _is_drop_noop(
+        self,
+        dragged_files: List[str],
+        dragged_group_ids: List[str],
+        target_item: QTreeWidgetItem,
+    ) -> bool:
+        """Check if all dragged items are already in the target location."""
+        if not dragged_files and not dragged_group_ids:
+            return False
+        gw = self._grouping_widget
+        target_kind = target_item.data(0, ROLE_KIND)
+
+        if target_kind == ITEM_GROUP:
+            target_group_id = target_item.data(0, ROLE_GROUP_ID)
+            target_group = gw._find_group(target_group_id)
+            if target_group:
+                files_in_target = all(
+                    f in target_group.source_paths for f in dragged_files
+                )
+                groups_already_there = all(
+                    gid == target_group_id for gid in dragged_group_ids
+                )
+                return files_in_target and groups_already_there
+        elif target_kind == ITEM_DIRECTORY:
+            target_rel = target_item.data(0, ROLE_RELATIVE_PATH) or ""
+            for g in gw._editable_groups:
+                if g.group_label == target_rel:
+                    files_in_target = all(f in g.source_paths for f in dragged_files)
+                    groups_already_there = all(
+                        (found := gw._find_group(gid)) is not None
+                        and found.group_label == target_rel
+                        for gid in dragged_group_ids
+                    )
+                    return files_in_target and groups_already_there
+
+        return False
+
     # ------------------------------------------------------------------
     # Drag event overrides
     # ------------------------------------------------------------------
 
     def dragEnterEvent(self, event: Optional[QDragEnterEvent]) -> None:
         if event and event.source() is self:
+            self._grouping_widget._drag_in_progress = True
             event.acceptProposedAction()
         elif event:
             event.ignore()
@@ -135,6 +180,7 @@ class DroppableGroupingTree(QTreeWidget):
 
     def dragLeaveEvent(self, event: Optional[QDragLeaveEvent]) -> None:
         self._clear_drop_highlight()
+        self._grouping_widget._drag_in_progress = False
         if event:
             super().dragLeaveEvent(event)
 
@@ -147,15 +193,24 @@ class DroppableGroupingTree(QTreeWidget):
         target_item = self._resolve_drop_target(self.itemAt(event.position().toPoint()))
         if target_item is None or not self._is_valid_drop_target(target_item):
             self._clear_drop_highlight()
+            self._grouping_widget._drag_in_progress = False
             event.ignore()
             return
 
         self._clear_drop_highlight()
+        self._grouping_widget._drag_in_progress = False
         dragged_files, dragged_group_ids = self._get_selected_drag_data()
 
         if not dragged_files and not dragged_group_ids:
             event.ignore()
             return
+
+        if self._is_drop_noop(dragged_files, dragged_group_ids, target_item):
+            event.acceptProposedAction()
+            return
+
+        if dragged_files:
+            self._grouping_widget._check_and_handle_companion_preference(dragged_files)
 
         target_kind = target_item.data(0, ROLE_KIND)
         gw = self._grouping_widget
@@ -313,6 +368,7 @@ class GroupingStepWidget(QWidget):
         self._supported_items: int = 0
         self._ignore_preview_item_change = False
         self._syncing_tree_selection = False
+        self._drag_in_progress = False
         self._current_preview_source_path: Optional[str] = None
 
         self._before_root_item: Optional[QTreeWidgetItem] = None
@@ -356,6 +412,45 @@ class GroupingStepWidget(QWidget):
             self._mode_button_group.addButton(btn)
             self._mode_buttons[value] = btn
         self._mode_buttons["current"].setChecked(True)
+
+        self._location_depth_widget = QWidget()
+        self._location_depth_widget.setObjectName("locationDepthWidget")
+        _ldw_layout = QHBoxLayout(self._location_depth_widget)
+        _ldw_layout.setContentsMargins(0, 0, 0, 0)
+        _ldw_layout.setSpacing(2)
+        _ldw_sep = QFrame()
+        _ldw_sep.setObjectName("groupingTopBarSep")
+        _ldw_sep.setFrameShape(QFrame.Shape.VLine)
+        _ldw_layout.addWidget(_ldw_sep)
+        _ldw_label = QLabel("Levels")
+        _ldw_label.setObjectName("locationDepthLabel")
+        _ldw_layout.addWidget(_ldw_label)
+        _ldw_layout.addSpacing(2)
+        self._location_depth_group = QButtonGroup(self)
+        self._location_depth_group.setExclusive(True)
+        self._location_depth_buttons: Dict[int, QPushButton] = {}
+        _depth_tips = {
+            1: "Country only (e.g. Japan)",
+            2: "Country + city (e.g. Japan/Fuji)",
+            3: "Country + state + city (e.g. Japan/Shizuoka/Fuji)",
+        }
+        for depth_val in range(1, 4):
+            btn = QPushButton(str(depth_val))
+            btn.setObjectName("groupingModePill")
+            btn.setCheckable(True)
+            btn.setFixedSize(30, 26)
+            btn.setToolTip(_depth_tips.get(depth_val, ""))
+            self._location_depth_group.addButton(btn)
+            self._location_depth_buttons[depth_val] = btn
+            _ldw_layout.addWidget(btn)
+        saved_depth = get_location_grouping_depth()
+        self._location_depth_buttons.get(
+            saved_depth, self._location_depth_buttons[3]
+        ).setChecked(True)
+        self._location_depth_widget.setVisible(False)
+
+        self._depth_debounce = QTimer(self)
+        self._depth_debounce.setSingleShot(True)
 
         self.stats_label = QLabel()
         self.stats_label.setObjectName("groupingSummaryBadge")
@@ -522,6 +617,7 @@ class GroupingStepWidget(QWidget):
         tb.addWidget(sep)
         for _, value in GROUPING_MODE_OPTIONS:
             tb.addWidget(self._mode_buttons[value])
+        tb.addWidget(self._location_depth_widget)
         tb.addSpacing(10)
         tb.addWidget(self.stats_label)
         tb.addStretch(1)
@@ -661,19 +757,113 @@ class GroupingStepWidget(QWidget):
         self.folder_preview_grid.itemClicked.connect(
             self._handle_folder_preview_item_activated
         )
+        self._location_depth_group.buttonClicked.connect(
+            self._on_location_depth_changed
+        )
+        self._depth_debounce.timeout.connect(self._fire_depth_change)
+
+    def _on_location_depth_changed(self) -> None:
+        self._depth_debounce.start(600)
+
+    def _fire_depth_change(self) -> None:
+        depth = self.get_location_depth()
+        set_location_grouping_depth(depth)
+        self.mode_changed.emit(self.current_mode())
 
     def _emit_mode_changed(self) -> None:
-        self.mode_changed.emit(self.current_mode())
+        mode = self.current_mode()
+        self._location_depth_widget.setVisible(mode == "location")
+        self.mode_changed.emit(mode)
+
+    def get_location_depth(self) -> int:
+        for val, btn in self._location_depth_buttons.items():
+            if btn.isChecked():
+                return val
+        return 3
 
     def _emit_create_requested(self) -> None:
         effective_plan = self.get_effective_plan()
         if not self._confirm_grouping_actions(effective_plan):
             return
+        all_source_paths = [
+            p
+            for g in (effective_plan.groups if effective_plan else [])
+            for p in g.source_paths
+        ] + (effective_plan.unassigned_paths if effective_plan else [])
+        self._check_and_handle_companion_preference(all_source_paths)
         self.create_requested.emit(
             self.current_mode(),
             self.get_group_name_overrides(),
             effective_plan,
         )
+
+    def _check_and_handle_companion_preference(self, source_paths) -> None:
+        """Show dialog if companion files (.xmp / same-stem images) exist and preference not set."""
+        if get_companion_files_preference() != "ask":
+            return
+
+        from core.grouping import _find_companion_files  # noqa: PLC0415
+
+        found: List[str] = []
+        for path in source_paths:
+            for comp in _find_companion_files(path):
+                name = os.path.basename(comp)
+                if name not in found:
+                    found.append(name)
+            if len(found) >= 5:
+                break
+
+        if not found:
+            return
+
+        sample = found[:3]
+        more = len(found) - len(sample)
+        sample_text = ", ".join(sample) + (f" (+{more} more)" if more else "")
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Companion files found")
+        dlg.setMinimumWidth(440)
+        vlay = QVBoxLayout(dlg)
+        vlay.setSpacing(12)
+        vlay.setContentsMargins(20, 20, 20, 16)
+
+        lbl = QLabel(
+            f"Found companion files alongside your photos:\n{sample_text}\n\n"
+            "These may be .xmp sidecars or same-name files in another format (e.g. RAW + JPEG).\n"
+            "Move them to the same destination folder as their photos?"
+        )
+        lbl.setWordWrap(True)
+        vlay.addWidget(lbl)
+
+        remember_cb = QCheckBox("Remember my choice for all future operations")
+        vlay.addWidget(remember_cb)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        no_btn = QPushButton("No, skip companions")
+        yes_btn = QPushButton("Yes, move companions")
+        yes_btn.setDefault(True)
+        btn_row.addWidget(no_btn)
+        btn_row.addWidget(yes_btn)
+        vlay.addLayout(btn_row)
+
+        choice = [False]
+
+        def _accept():
+            choice[0] = True
+            dlg.accept()
+
+        def _reject():
+            choice[0] = False
+            dlg.accept()
+
+        yes_btn.clicked.connect(_accept)
+        no_btn.clicked.connect(_reject)
+
+        dlg.exec()
+
+        if remember_cb.isChecked():
+            set_companion_files_preference("always" if choice[0] else "never")
 
     def current_mode(self) -> str:
         for value, btn in self._mode_buttons.items():
@@ -696,6 +886,8 @@ class GroupingStepWidget(QWidget):
     def set_busy(self, busy: bool) -> None:
         self.primary_button.setEnabled(not busy and self._current_plan is not None)
         for btn in self._mode_buttons.values():
+            btn.setEnabled(not busy and self.has_source_folder())
+        for btn in self._location_depth_buttons.values():
             btn.setEnabled(not busy and self.has_source_folder())
         self.skip_button.setEnabled(not busy and self.has_source_folder())
         self.folder_button.setEnabled(not busy)
@@ -1447,7 +1639,7 @@ class GroupingStepWidget(QWidget):
         )
 
     def _handle_preview_item_changed(self, item: QTreeWidgetItem, _column: int) -> None:
-        if self._ignore_preview_item_change:
+        if self._ignore_preview_item_change or self._drag_in_progress:
             return
         try:
             kind = self._item_kind(item)
@@ -1744,6 +1936,8 @@ class GroupingStepWidget(QWidget):
                         not in SUPPORTED_MEDIA_EXTENSIONS
                     ):
                         continue
+                    if os.path.splitext(filename)[1].lower() == ".xmp":
+                        continue
                     if self._is_path_pending_deletion(file_path):
                         continue
                     discovered.append(file_path)
@@ -1892,9 +2086,10 @@ class GroupingStepWidget(QWidget):
                 source_path,
             )
             return
+        ext = os.path.splitext(source_path)[1].lower()
         image_pipeline = getattr(self._parent_window, "image_pipeline", None)
         pixmap: Optional[QPixmap] = None
-        if image_pipeline:
+        if image_pipeline and ext in SUPPORTED_MEDIA_EXTENSIONS:
             pixmap = image_pipeline.get_preview_qpixmap(
                 source_path,
                 display_max_size=SELECTED_PREVIEW_DISPLAY_SIZE,
@@ -2028,7 +2223,9 @@ class GroupingStepWidget(QWidget):
         return None
 
     def refresh_cached_thumbnails(self) -> None:
-        logger.debug("Refreshing organize thumbnails for all tree items and folder grid")
+        logger.debug(
+            "Refreshing organize thumbnails for all tree items and folder grid"
+        )
         self._refresh_all_tree_icons_from_cache()
         self._refresh_folder_preview_icons_from_cache()
 
@@ -2058,8 +2255,10 @@ class GroupingStepWidget(QWidget):
                     if top_item is not None:
                         self._recursive_refresh_icons(top_item)
         except RuntimeError:
-            logger.debug("Organize tree items deleted during thumbnail refresh; "
-                          "tree rebuild will populate icons from cache")
+            logger.debug(
+                "Organize tree items deleted during thumbnail refresh; "
+                "tree rebuild will populate icons from cache"
+            )
 
     def _recursive_refresh_icons(self, item: QTreeWidgetItem) -> None:
         source_path = self._item_source_path(item)

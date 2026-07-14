@@ -63,7 +63,9 @@ def _failure_details(images: Sequence[ImageScore]) -> list[tuple[str, str]]:
     return details
 
 
-def _format_failure_summary(failures: Sequence[tuple[str, str]], *, limit: int = 3) -> str:
+def _format_failure_summary(
+    failures: Sequence[tuple[str, str]], *, limit: int = 3
+) -> str:
     if not failures:
         return ""
 

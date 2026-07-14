@@ -66,6 +66,12 @@ OPENAI_MAX_WORKERS_KEY = "AI/OpenAIMaxWorkers"
 OPENAI_BEST_SHOT_PROMPT_KEY = "AI/BestShotPrompt"
 OPENAI_RATING_PROMPT_KEY = "AI/RatingPrompt"
 BEST_SHOT_BATCH_SIZE_KEY = "AI/BestShotBatchSize"
+LOCATION_GROUPING_DEPTH_KEY = "Grouping/LocationDepth"
+COMPANION_FILES_PREFERENCE_KEY = "Grouping/CompanionFilesPreference"
+EASY_DELETE_BLUR_THRESHOLD_KEY = "EasyDelete/BlurThreshold"
+EASY_DELETE_DARK_THRESHOLD_KEY = "EasyDelete/DarkThreshold"
+EASY_DELETE_WHITE_THRESHOLD_KEY = "EasyDelete/WhiteThreshold"
+EASY_DELETE_DUPLICATE_DISTANCE_KEY = "EasyDelete/DuplicateCosineDistance"
 
 
 # Cache directories
@@ -116,6 +122,30 @@ RIGHT_PANEL_STRETCH = 1  # Right panel stretch factor
 # --- Processing Constants ---
 # Blur detection
 DEFAULT_BLUR_DETECTION_THRESHOLD = 100.0  # Default threshold for blur detection
+
+# Easy Delete step detection thresholds
+EASY_DELETE_BLUR_THRESHOLD = (
+    100.0  # min acceptable peak local tile sharpness; below = blurry
+)
+EASY_DELETE_BLUR_TILE_GRID = 4  # NxN grid; blur score = max per-tile Laplacian variance
+EASY_DELETE_DARK_CLIP_FRACTION = (
+    0.85  # fraction of pixels below dark cutoff; above = near-black
+)
+EASY_DELETE_DARK_CLIP_VALUE = 10  # 0-255; pixels at/below this count as "dark"
+EASY_DELETE_WHITE_CLIP_FRACTION = (
+    0.85  # fraction of pixels above white cutoff; above = overexposed
+)
+EASY_DELETE_WHITE_CLIP_VALUE = 245  # 0-255; pixels at/above this count as "white"
+EASY_DELETE_DARK_MEAN_THRESHOLD = (
+    15.0  # 0-255 mean brightness; below = near-black (legacy default)
+)
+EASY_DELETE_WHITE_MEAN_THRESHOLD = (
+    248.0  # 0-255 mean brightness; above = overexposed (legacy default)
+)
+EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01  # cosine distance; below = near-identical
+
+# Fix Rotation step
+FIX_ROTATION_MIN_CONFIDENCE = 0.70  # model confidence; below = skip suggestion
 
 # Iteration limits for safety
 DEFAULT_MAX_ITERATIONS = 5000  # Default maximum iterations for various loops
@@ -260,6 +290,65 @@ def set_rotation_confirm_lossy(confirm: bool):
     """Set whether to confirm lossy rotations."""
     settings = _get_settings()
     settings.setValue(ROTATION_CONFIRM_LOSSY_KEY, confirm)
+
+
+# --- Easy Delete Detection Thresholds ---
+def get_easy_delete_blur_threshold() -> float:
+    """Min acceptable peak local tile sharpness; below this an image is flagged blurry."""
+    settings = _get_settings()
+    return settings.value(
+        EASY_DELETE_BLUR_THRESHOLD_KEY, EASY_DELETE_BLUR_THRESHOLD, type=float
+    )
+
+
+def set_easy_delete_blur_threshold(value: float):
+    """Set the Easy Delete blur sharpness threshold."""
+    settings = _get_settings()
+    settings.setValue(EASY_DELETE_BLUR_THRESHOLD_KEY, float(value))
+
+
+def get_easy_delete_dark_threshold() -> float:
+    """Mean-brightness cutoff (0-255); images darker than this are flagged near-black."""
+    settings = _get_settings()
+    return settings.value(
+        EASY_DELETE_DARK_THRESHOLD_KEY, EASY_DELETE_DARK_MEAN_THRESHOLD, type=float
+    )
+
+
+def set_easy_delete_dark_threshold(value: float):
+    """Set the Easy Delete near-black brightness threshold."""
+    settings = _get_settings()
+    settings.setValue(EASY_DELETE_DARK_THRESHOLD_KEY, float(value))
+
+
+def get_easy_delete_white_threshold() -> float:
+    """Mean-brightness cutoff (0-255); images brighter than this are flagged overexposed."""
+    settings = _get_settings()
+    return settings.value(
+        EASY_DELETE_WHITE_THRESHOLD_KEY, EASY_DELETE_WHITE_MEAN_THRESHOLD, type=float
+    )
+
+
+def set_easy_delete_white_threshold(value: float):
+    """Set the Easy Delete overexposed brightness threshold."""
+    settings = _get_settings()
+    settings.setValue(EASY_DELETE_WHITE_THRESHOLD_KEY, float(value))
+
+
+def get_easy_delete_duplicate_distance() -> float:
+    """Cosine-distance cutoff; pairs closer than this are flagged near-duplicates."""
+    settings = _get_settings()
+    return settings.value(
+        EASY_DELETE_DUPLICATE_DISTANCE_KEY,
+        EASY_DELETE_DUPLICATE_COSINE_DISTANCE,
+        type=float,
+    )
+
+
+def set_easy_delete_duplicate_distance(value: float):
+    """Set the Easy Delete near-duplicate cosine-distance threshold."""
+    settings = _get_settings()
+    settings.setValue(EASY_DELETE_DUPLICATE_DISTANCE_KEY, float(value))
 
 
 # --- Recent Folders ---
@@ -607,3 +696,25 @@ def set_openai_config(
         _set_or_clear(OPENAI_BEST_SHOT_PROMPT_KEY, best_shot_prompt)
     if rating_prompt is not None:
         _set_or_clear(OPENAI_RATING_PROMPT_KEY, rating_prompt)
+
+
+def get_location_grouping_depth() -> int:
+    settings = _get_settings()
+    return max(1, min(3, int(settings.value(LOCATION_GROUPING_DEPTH_KEY, 3, type=int))))
+
+
+def set_location_grouping_depth(depth: int) -> None:
+    _get_settings().setValue(LOCATION_GROUPING_DEPTH_KEY, max(1, min(3, depth)))
+
+
+def get_companion_files_preference() -> str:
+    """Returns 'always', 'never', or 'ask' (default)."""
+    settings = _get_settings()
+    val = settings.value(COMPANION_FILES_PREFERENCE_KEY, "ask", type=str)
+    return val if val in ("always", "never") else "ask"
+
+
+def set_companion_files_preference(pref: str) -> None:
+    """pref must be 'always' or 'never'."""
+    if pref in ("always", "never"):
+        _get_settings().setValue(COMPANION_FILES_PREFERENCE_KEY, pref)

@@ -244,6 +244,46 @@ def _resolve_collision_safe_destination(destination_dir: str, basename: str) -> 
     return candidate
 
 
+def _find_companion_files(photo_path: str) -> List[str]:
+    """Find companion files with same stem: .xmp sidecars and same-stem images in other formats."""
+    from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS  # noqa: PLC0415
+
+    stem, src_ext = os.path.splitext(photo_path)
+    src_ext_lower = src_ext.lower()
+    companions: List[str] = []
+    seen_norm: set = set()
+
+    for xmp_ext in (".xmp", ".XMP"):
+        c = stem + xmp_ext
+        norm = os.path.normcase(c)
+        if norm not in seen_norm and os.path.isfile(c):
+            companions.append(c)
+            seen_norm.add(norm)
+            break
+
+    for ext in SUPPORTED_IMAGE_EXTENSIONS:
+        if ext == src_ext_lower:
+            continue
+        for candidate in (stem + ext, stem + ext.upper()):
+            norm = os.path.normcase(candidate)
+            if norm in seen_norm:
+                continue
+            if os.path.isfile(candidate):
+                companions.append(candidate)
+                seen_norm.add(norm)
+                break
+
+    return companions
+
+
+def _move_companion_files_if_present(source_path: str, destination_dir: str) -> None:
+    for companion in _find_companion_files(source_path):
+        dest = _resolve_collision_safe_destination(
+            destination_dir, os.path.basename(companion)
+        )
+        shutil.move(companion, dest)
+
+
 def _iter_parent_directories(path: str, *, stop_at: str) -> Iterable[str]:
     normalized_stop = os.path.normcase(os.path.normpath(stop_at))
     current = os.path.normpath(path)
@@ -534,7 +574,69 @@ def _parse_fraction(value: str) -> float:
     return float(value)
 
 
-def _location_label_from_metadata(metadata: Dict[str, Any]) -> Optional[str]:
+_reverse_geocode_available: bool | None = None
+_reverse_geocode_resolved_count: int = 0
+_REVERSE_GEOCODE_LOG_INTERVAL: int = 10
+
+
+def _ensure_reverse_geocode() -> bool:
+    global _reverse_geocode_available
+    if _reverse_geocode_available is None:
+        try:
+            import reverse_geocode as _rg  # noqa: F401
+
+            _reverse_geocode_available = True
+        except ImportError:
+            _reverse_geocode_available = False
+            logger.warning("reverse-geocode not installed — location names unavailable")
+    return _reverse_geocode_available
+
+
+@lru_cache(maxsize=512)
+def _reverse_geocode_parts(lat_bucket: float, lon_bucket: float) -> tuple:
+    """Returns (country, state, city) strings or None for missing levels."""
+    global _reverse_geocode_resolved_count
+    if not _ensure_reverse_geocode():
+        return (None, None, None)
+
+    result = _reverse_geocode_offline(lat_bucket, lon_bucket)
+    _reverse_geocode_resolved_count += 1
+    if _reverse_geocode_resolved_count % _REVERSE_GEOCODE_LOG_INTERVAL == 0:
+        logger.info(
+            "Resolved %d unique locations",
+            _reverse_geocode_resolved_count,
+        )
+    return result
+
+
+def _reverse_geocode_offline(lat_bucket: float, lon_bucket: float) -> tuple:
+    try:
+        import reverse_geocode as rg
+
+        r = rg.get((lat_bucket, lon_bucket))
+        if not r:
+            return (None, None, None)
+        country = r.get("country") or None
+        state = r.get("state") or None
+        city = r.get("city") or None
+        return (
+            _sanitize_folder_component(country) if country else None,
+            _sanitize_folder_component(state) if state else None,
+            _sanitize_folder_component(city) if city else None,
+        )
+    except Exception:
+        logger.debug(
+            "Reverse geocode failed for %.2f, %.2f",
+            lat_bucket,
+            lon_bucket,
+            exc_info=True,
+        )
+        return (None, None, None)
+
+
+def _location_label_from_metadata(
+    metadata: Dict[str, Any], depth: int = 3
+) -> Optional[str]:
     lat = _parse_gps_coordinate(
         metadata.get("Exif.GPSInfo.GPSLatitude"),
         metadata.get("Exif.GPSInfo.GPSLatitudeRef"),
@@ -547,6 +649,14 @@ def _location_label_from_metadata(metadata: Dict[str, Any]) -> Optional[str]:
         return None
     lat_bucket = round(lat, 2)
     lon_bucket = round(lon, 2)
+
+    country, state, city = _reverse_geocode_parts(lat_bucket, lon_bucket)
+    parts = [country, city] if depth == 2 else [country, state, city]
+    available = [p for p in parts if p]
+    if available:
+        selected = available[:depth] if depth < len(available) else available
+        return "/".join(selected)
+
     return f"Lat_{lat_bucket:.2f}_Lon_{lon_bucket:.2f}"
 
 
@@ -620,6 +730,7 @@ def build_grouping_plan(
     mode: GroupingMode | str,
     progress_callback=None,
     source_root: Optional[str] = None,
+    location_depth: int = 3,
 ) -> GroupingPlan:
     mode_value = GroupingMode(mode)
     valid_items = [
@@ -641,7 +752,9 @@ def build_grouping_plan(
             source_root=source_root,
         )
     if mode_value == GroupingMode.LOCATION:
-        return _build_location_plan(total_items, image_paths, skipped_paths)
+        return _build_location_plan(
+            total_items, image_paths, skipped_paths, location_depth
+        )
     if mode_value == GroupingMode.FACE:
         return _build_face_plan(total_items, image_paths, skipped_paths)
     if mode_value == GroupingMode.MIXED:
@@ -764,12 +877,13 @@ def _build_location_plan(
     total_items: int,
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
+    location_depth: int = 3,
 ) -> GroupingPlan:
     buckets: Dict[str, List[str]] = {}
     unassigned: List[str] = []
     for path in image_paths:
         metadata = _load_comprehensive_metadata(path)
-        label = _location_label_from_metadata(metadata)
+        label = _location_label_from_metadata(metadata, depth=location_depth)
         if not label:
             unassigned.append(path)
             continue
@@ -899,6 +1013,7 @@ def execute_grouping_plan(
     source_root: str,
     output_root: str,
     progress_callback=None,
+    move_companions: bool = False,
 ) -> GroupingRunSummary:
     os.makedirs(output_root, exist_ok=True)
     entries: List[GroupingManifestEntry] = []
@@ -990,6 +1105,8 @@ def execute_grouping_plan(
                 destination_dir, basename
             )
             shutil.move(source_path, destination_path)
+            if move_companions:
+                _move_companion_files_if_present(source_path, destination_dir)
             moved_count += 1
             entries.append(
                 GroupingManifestEntry(
@@ -1010,6 +1127,8 @@ def execute_grouping_plan(
                 unassigned_dir, basename
             )
             shutil.move(source_path, destination_path)
+            if move_companions:
+                _move_companion_files_if_present(source_path, unassigned_dir)
             moved_count += 1
             entries.append(
                 GroupingManifestEntry(

@@ -23,6 +23,8 @@ from workers.rotation_application_worker import RotationApplicationWorker
 from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 from workers.best_shot_worker import BestShotWorker
 from workers.pick_best_worker import PickBestWorker
+from workers.easy_delete_worker import EasyDeleteWorker
+from workers.rotation_detection_step_worker import RotationDetectionStepWorker
 from workers.ai_rating_worker import AiRatingWorker
 from workers.grouping_worker import GroupingPreviewWorker, GroupingWorkflowWorker
 from core.image_pipeline import ImagePipeline
@@ -144,6 +146,19 @@ class WorkerManager(QObject):
     pick_best_complete = pyqtSignal(dict)
     pick_best_error = pyqtSignal(str)
 
+    # Easy Delete signals
+    easy_delete_progress = pyqtSignal(int, str)
+    easy_delete_complete = pyqtSignal(dict)
+    easy_delete_error = pyqtSignal(str)
+
+    # Fix Rotation Detection signals
+    fix_rotation_progress = pyqtSignal(int, str)
+    fix_rotation_complete = pyqtSignal(dict)  # {path: angle}
+    fix_rotation_model_not_found = pyqtSignal(str)
+    fix_rotation_error = pyqtSignal(str)
+
+    # Fix Rotation Apply signals (reuse rotation_application_* signals)
+
     def __init__(
         self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None
     ):
@@ -187,6 +202,12 @@ class WorkerManager(QObject):
 
         self.pick_best_thread: Optional[QThread] = None
         self.pick_best_worker: Optional[PickBestWorker] = None
+
+        self.easy_delete_thread: Optional[QThread] = None
+        self.easy_delete_worker: Optional[EasyDeleteWorker] = None
+
+        self.fix_rotation_detect_thread: Optional[QThread] = None
+        self.fix_rotation_detect_worker: Optional[RotationDetectionStepWorker] = None
 
         self.cuda_detection_thread: Optional[QThread] = None
         self.cuda_detection_worker: Optional[CudaDetectionWorker] = None
@@ -612,10 +633,13 @@ class WorkerManager(QObject):
         items: List[Dict[str, Any]],
         mode: str,
         source_root: Optional[str] = None,
+        location_depth: int = 3,
     ):
         self.stop_grouping_preview()
         self.grouping_preview_thread = QThread()
-        self.grouping_preview_worker = GroupingPreviewWorker(items, mode, source_root)
+        self.grouping_preview_worker = GroupingPreviewWorker(
+            items, mode, source_root, location_depth
+        )
         self.grouping_preview_worker.moveToThread(self.grouping_preview_thread)
 
         self.grouping_preview_worker.progress_update.connect(
@@ -661,6 +685,8 @@ class WorkerManager(QObject):
         output_root: Optional[str] = None,
         group_name_overrides: Optional[Dict[str, str]] = None,
         prepared_plan=None,
+        location_depth: int = 3,
+        move_companions: bool = False,
     ):
         self.stop_grouping_workflow()
         self.grouping_workflow_thread = QThread()
@@ -671,6 +697,8 @@ class WorkerManager(QObject):
             output_root=output_root,
             group_name_overrides=group_name_overrides,
             prepared_plan=prepared_plan,
+            location_depth=location_depth,
+            move_companions=move_companions,
         )
         self.grouping_workflow_worker.moveToThread(self.grouping_workflow_thread)
 
@@ -721,6 +749,8 @@ class WorkerManager(QObject):
         self.stop_grouping_preview()
         self.stop_grouping_workflow()
         self.stop_pick_best_analysis()
+        self.stop_easy_delete_analysis()
+        self.stop_fix_rotation_detection()
         logger.info("All workers stop requested.")
 
     def is_file_scanner_running(self) -> bool:
@@ -1115,6 +1145,152 @@ class WorkerManager(QObject):
             self.pick_best_thread.deleteLater()
             self.pick_best_thread = None
         logger.info("Pick best thread and worker cleaned up.")
+
+    def start_easy_delete_analysis(
+        self,
+        image_paths: List[str],
+        cluster_map: Optional[Dict[int, List[str]]] = None,
+        embeddings_cache: Optional[Dict] = None,
+        exif_disk_cache=None,
+    ) -> None:
+        self.stop_easy_delete_analysis()
+        if not image_paths:
+            self.easy_delete_complete.emit({})
+            return
+
+        self.easy_delete_thread = QThread()
+        self.easy_delete_worker = EasyDeleteWorker(
+            image_paths=image_paths,
+            cluster_map=cluster_map,
+            embeddings_cache=embeddings_cache,
+            exif_disk_cache=exif_disk_cache,
+        )
+        self.easy_delete_worker.moveToThread(self.easy_delete_thread)
+
+        self.easy_delete_worker.progress_update.connect(self.easy_delete_progress.emit)
+        self.easy_delete_worker.completed.connect(self.easy_delete_complete.emit)
+        self.easy_delete_worker.error.connect(self.easy_delete_error.emit)
+        self.easy_delete_worker.finished.connect(self.easy_delete_thread.quit)
+        self.easy_delete_worker.finished.connect(self.easy_delete_worker.deleteLater)
+        self.easy_delete_thread.finished.connect(self._cleanup_easy_delete_worker)
+        self.easy_delete_thread.started.connect(self.easy_delete_worker.run)
+
+        self.easy_delete_thread.start()
+        logger.info("Easy delete analysis thread started.")
+
+    def stop_easy_delete_analysis(self) -> None:
+        worker_stop = self.easy_delete_worker.stop if self.easy_delete_worker else None
+        temp_thread, _ = self._terminate_thread(self.easy_delete_thread, worker_stop)
+        if temp_thread is None:
+            self.easy_delete_thread = None
+            self.easy_delete_worker = None
+        else:
+            self.easy_delete_thread = temp_thread
+
+    def is_easy_delete_running(self) -> bool:
+        return (
+            self.easy_delete_thread is not None and self.easy_delete_thread.isRunning()
+        )
+
+    def _cleanup_easy_delete_worker(self) -> None:
+        if self.easy_delete_worker:
+            try:
+                if not sip.isdeleted(self.easy_delete_worker):
+                    self.easy_delete_worker.deleteLater()
+            except Exception:
+                logger.debug("Easy delete worker already deleted.", exc_info=True)
+            self.easy_delete_worker = None
+        if self.easy_delete_thread:
+            self.easy_delete_thread.deleteLater()
+            self.easy_delete_thread = None
+        logger.info("Easy delete thread and worker cleaned up.")
+
+    # ------------------------------------------------------------------
+    # Fix Rotation Detection
+    # ------------------------------------------------------------------
+
+    def start_fix_rotation_detection(self, image_paths: List[str]) -> None:
+        self.stop_fix_rotation_detection()
+        if not image_paths:
+            self.fix_rotation_complete.emit({})
+            return
+
+        from core.image_features.rotation_detector import RotationDetector
+        from core.caching.exif_cache import ExifCache
+
+        rotation_detector = RotationDetector(
+            image_pipeline=self.image_pipeline,
+            exif_cache=ExifCache(),
+        )
+
+        self.fix_rotation_detect_thread = QThread()
+        self.fix_rotation_detect_worker = RotationDetectionStepWorker(
+            image_paths=image_paths,
+            rotation_detector=rotation_detector,
+        )
+        self.fix_rotation_detect_worker.moveToThread(self.fix_rotation_detect_thread)
+
+        self.fix_rotation_detect_worker.progress_update.connect(
+            self.fix_rotation_progress.emit
+        )
+        self.fix_rotation_detect_worker.completed.connect(
+            self.fix_rotation_complete.emit
+        )
+        self.fix_rotation_detect_worker.model_not_found.connect(
+            self.fix_rotation_model_not_found.emit
+        )
+        self.fix_rotation_detect_worker.error.connect(self.fix_rotation_error.emit)
+        self.fix_rotation_detect_worker.finished.connect(
+            self.fix_rotation_detect_thread.quit
+        )
+        self.fix_rotation_detect_worker.finished.connect(
+            self.fix_rotation_detect_worker.deleteLater
+        )
+        self.fix_rotation_detect_thread.finished.connect(
+            self._cleanup_fix_rotation_detect_worker
+        )
+        self.fix_rotation_detect_thread.started.connect(
+            self.fix_rotation_detect_worker.run
+        )
+
+        self.fix_rotation_detect_thread.start()
+        logger.info("Fix rotation detection thread started.")
+
+    def stop_fix_rotation_detection(self) -> None:
+        worker_stop = (
+            self.fix_rotation_detect_worker.stop
+            if self.fix_rotation_detect_worker
+            else None
+        )
+        temp_thread, _ = self._terminate_thread(
+            self.fix_rotation_detect_thread, worker_stop
+        )
+        if temp_thread is None:
+            self.fix_rotation_detect_thread = None
+            self.fix_rotation_detect_worker = None
+        else:
+            self.fix_rotation_detect_thread = temp_thread
+
+    def is_fix_rotation_running(self) -> bool:
+        return (
+            self.fix_rotation_detect_thread is not None
+            and self.fix_rotation_detect_thread.isRunning()
+        )
+
+    def _cleanup_fix_rotation_detect_worker(self) -> None:
+        if self.fix_rotation_detect_worker:
+            try:
+                if not sip.isdeleted(self.fix_rotation_detect_worker):
+                    self.fix_rotation_detect_worker.deleteLater()
+            except Exception:
+                logger.debug(
+                    "Fix rotation detect worker already deleted.", exc_info=True
+                )
+            self.fix_rotation_detect_worker = None
+        if self.fix_rotation_detect_thread:
+            self.fix_rotation_detect_thread.deleteLater()
+            self.fix_rotation_detect_thread = None
+        logger.info("Fix rotation detect thread and worker cleaned up.")
 
     def start_best_shot_analysis(
         self,

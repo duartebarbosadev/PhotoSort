@@ -12,6 +12,7 @@ from core.app_settings import (
     get_preview_cache_size_bytes,
     PREVIEW_ESTIMATED_SIZE_FACTOR,
     get_similarity_embedding_model_name,
+    get_companion_files_preference,
 )
 from core.similarity_embedding_model import is_similarity_model_installed
 from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS, is_image_extension
@@ -146,6 +147,7 @@ class AppController(QObject):
         self._preview_preload_start_volume_bytes: Optional[int] = None
         self._ai_rating_warning_messages: list[str] = []
         self._pick_best_pending_after_similarity: bool = False
+        self._easy_delete_pending_after_similarity: bool = False
 
     def connect_signals(self):
         """Connects signals from the WorkerManager to the controller's slots."""
@@ -285,6 +287,34 @@ class AppController(QObject):
         self.worker_manager.pick_best_progress.connect(self.handle_pick_best_progress)
         self.worker_manager.pick_best_complete.connect(self.handle_pick_best_complete)
         self.worker_manager.pick_best_error.connect(self.handle_pick_best_error)
+
+        # Easy Delete Worker
+        self.worker_manager.easy_delete_progress.connect(
+            self.handle_easy_delete_progress
+        )
+        self.worker_manager.easy_delete_complete.connect(
+            self.handle_easy_delete_complete
+        )
+        self.worker_manager.easy_delete_error.connect(self.handle_easy_delete_error)
+
+        # Fix Rotation Worker
+        self.worker_manager.fix_rotation_progress.connect(
+            self.handle_fix_rotation_progress
+        )
+        self.worker_manager.fix_rotation_complete.connect(
+            self.handle_fix_rotation_complete
+        )
+        self.worker_manager.fix_rotation_model_not_found.connect(
+            self.handle_fix_rotation_model_not_found
+        )
+        self.worker_manager.fix_rotation_error.connect(self.handle_fix_rotation_error)
+        # Rotation application signals are already wired in the cull-step path; reuse them for apply feedback
+        self.worker_manager.rotation_application_progress.connect(
+            self._on_fix_rotation_apply_progress
+        )
+        self.worker_manager.rotation_application_finished.connect(
+            self._on_fix_rotation_apply_finished
+        )
 
     # --- Public Methods (called from MainWindow) ---
 
@@ -468,12 +498,22 @@ class AppController(QObject):
                     self.main_window.pick_best_step_widget.show_error(
                         "Similarity analysis canceled. Model download was not approved."
                     )
+                if self._easy_delete_pending_after_similarity:
+                    self._easy_delete_pending_after_similarity = False
+                    self.main_window.easy_delete_step_widget.show_error(
+                        "Similarity analysis canceled. Model download was not approved."
+                    )
                 return
             allow_model_download = True
 
         if self._pick_best_pending_after_similarity:
             self.main_window.hide_loading_overlay()
             self.main_window.pick_best_step_widget.show_loading(
+                "Step 1/2: Starting similarity analysis...", 0
+            )
+        elif self._easy_delete_pending_after_similarity:
+            self.main_window.hide_loading_overlay()
+            self.main_window.easy_delete_step_widget.show_loading(
                 "Step 1/2: Starting similarity analysis...", 0
             )
         else:
@@ -507,6 +547,7 @@ class AppController(QObject):
             list(self.app_state.image_files_data),
             mode,
             source_root,
+            location_depth=self.main_window.grouping_step_widget.get_location_depth(),
         )
 
     def start_grouping_workflow(
@@ -545,6 +586,8 @@ class AppController(QObject):
             output_root,
             group_name_overrides=group_name_overrides,
             prepared_plan=prepared_plan,
+            location_depth=self.main_window.grouping_step_widget.get_location_depth(),
+            move_companions=get_companion_files_preference() == "always",
         )
 
     def skip_grouping_to_cull(self):
@@ -641,7 +684,20 @@ class AppController(QObject):
         return cluster_map
 
     def _build_pick_best_cluster_map(self) -> Dict[int, List[str]]:
-        base_cluster_map = self._build_cluster_path_map()
+        raw_cluster_map = self._build_cluster_path_map()
+
+        # Exclude images already marked for deletion (e.g. from Easy Delete step)
+        marked = self.app_state.marked_for_deletion
+        if marked:
+            raw_cluster_map = {
+                cid: [p for p in paths if p not in marked]
+                for cid, paths in raw_cluster_map.items()
+            }
+            raw_cluster_map = {
+                cid: paths for cid, paths in raw_cluster_map.items() if paths
+            }
+
+        base_cluster_map = raw_cluster_map
         embeddings = getattr(self.app_state, "embeddings_cache", {}) or {}
         if not base_cluster_map or not embeddings:
             return base_cluster_map
@@ -1402,6 +1458,143 @@ class AppController(QObject):
         self.main_window.pick_best_step_widget.show_error(message)
         self.main_window.statusBar().showMessage(f"Pick Best error: {message}", 6000)
 
+    # ------------------------------------------------------------------
+    # Easy Delete workflow
+    # ------------------------------------------------------------------
+
+    def start_easy_delete_workflow(self) -> None:
+        if not self.app_state.image_files_data:
+            self.main_window.statusBar().showMessage("No images loaded.", 3000)
+            return
+
+        if (
+            self.worker_manager.is_easy_delete_running()
+            or self._easy_delete_pending_after_similarity
+        ):
+            return
+
+        if self.app_state.easy_delete_results:
+            self.main_window.easy_delete_step_widget.show_results(
+                self.app_state.easy_delete_results
+            )
+            return
+
+        if self.app_state.cluster_results:
+            self._start_easy_delete_detection()
+        else:
+            logger.info(
+                "Easy Delete: no cluster results yet, running similarity first."
+            )
+            self._easy_delete_pending_after_similarity = True
+            self.main_window.easy_delete_step_widget.show_loading(
+                "Step 1/2: Computing similarity clusters…", 0
+            )
+            self.start_similarity_analysis()
+
+    def _start_easy_delete_detection(self) -> None:
+        image_paths = self._get_image_paths()
+        cluster_map = self._build_cluster_path_map()
+        embeddings = getattr(self.app_state, "embeddings_cache", {}) or {}
+        exif_cache = self.app_state.exif_disk_cache
+
+        self.main_window.easy_delete_step_widget.show_loading(
+            "Step 2/2: Detecting blurry, dark, overexposed, and duplicate images…", 0
+        )
+        self.worker_manager.start_easy_delete_analysis(
+            image_paths=image_paths,
+            cluster_map=cluster_map,
+            embeddings_cache=embeddings,
+            exif_disk_cache=exif_cache,
+        )
+
+    def handle_easy_delete_progress(self, percent: int, message: str) -> None:
+        self.main_window.easy_delete_step_widget.show_loading(message, percent)
+
+    def handle_easy_delete_complete(self, results: dict) -> None:
+        logger.info(f"Easy Delete complete: {len(results)} images flagged.")
+        self.app_state.easy_delete_results = results
+        self.main_window.easy_delete_step_widget.show_results(results)
+
+    def handle_easy_delete_error(self, message: str) -> None:
+        logger.error(f"Easy Delete error: {message}", exc_info=False)
+        self.main_window.easy_delete_step_widget.show_error(message)
+        self.main_window.statusBar().showMessage(f"Easy Delete error: {message}", 6000)
+
+    # ------------------------------------------------------------------
+    # Fix Rotation workflow
+    # ------------------------------------------------------------------
+
+    def start_fix_rotation_workflow(self) -> None:
+        if not self.app_state.image_files_data:
+            self.main_window.statusBar().showMessage("No images loaded.", 3000)
+            return
+
+        if self.worker_manager.is_fix_rotation_running():
+            return
+
+        if (
+            self.app_state.fix_rotation_results is not None
+            and self.app_state.fix_rotation_results != {}
+        ):
+            self.main_window.fix_rotation_step_widget.show_results(
+                self.app_state.fix_rotation_results
+            )
+            return
+
+        image_paths = [
+            fd["path"] for fd in self.app_state.image_files_data if fd.get("path")
+        ]
+        if not image_paths:
+            self.main_window.fix_rotation_step_widget.show_results({})
+            return
+
+        self.main_window.fix_rotation_step_widget.show_loading(
+            "Starting rotation analysis…", 0
+        )
+        self.worker_manager.start_fix_rotation_detection(image_paths)
+
+    def handle_fix_rotation_progress(self, percent: int, message: str) -> None:
+        self.main_window.fix_rotation_step_widget.show_loading(message, percent)
+
+    def handle_fix_rotation_complete(self, results: dict) -> None:
+        logger.info(
+            f"Fix Rotation detection complete: {len(results)} images need rotation."
+        )
+        self.app_state.fix_rotation_results = results
+        self.main_window.fix_rotation_step_widget.show_results(results)
+
+    def handle_fix_rotation_model_not_found(self, message: str) -> None:
+        logger.warning(f"Fix Rotation model not found: {message}")
+        self.main_window.fix_rotation_step_widget.show_model_not_found(message)
+
+    def handle_fix_rotation_error(self, message: str) -> None:
+        logger.error(f"Fix Rotation error: {message}", exc_info=False)
+        self.main_window.fix_rotation_step_widget.show_error(message)
+        self.main_window.statusBar().showMessage(f"Fix Rotation error: {message}", 6000)
+
+    def start_fix_rotation_apply(self, rotations: dict) -> None:
+        """Apply the approved rotations dict {path: angle} using the rotation application worker."""
+        if not rotations:
+            return
+        self.worker_manager.start_rotation_application(rotations)
+
+    def _on_fix_rotation_apply_progress(
+        self, current: int, total: int, filename: str
+    ) -> None:
+        if self.app_state.workflow_step == "fix_rotation":
+            self.main_window.fix_rotation_step_widget.show_applying(
+                current, total, filename
+            )
+
+    def _on_fix_rotation_apply_finished(self, successful: int, failed: int) -> None:
+        if self.app_state.workflow_step == "fix_rotation":
+            self.main_window.fix_rotation_step_widget.show_apply_complete(
+                successful, failed
+            )
+            self.main_window.statusBar().showMessage(
+                f"Rotation applied: {successful} OK, {failed} failed.", 5000
+            )
+
     def handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0
         self.main_window.update_loading_text(
@@ -1511,12 +1704,22 @@ class AppController(QObject):
                 f"Step 1/2: {message}", percentage
             )
             return
+        if self._easy_delete_pending_after_similarity:
+            self.main_window.easy_delete_step_widget.show_loading(
+                f"Step 1/2: {message}", percentage
+            )
+            return
         self.main_window.update_loading_text(f"Similarity: {message}{suffix}")
 
     def handle_embeddings_generated(self, embeddings_dict):
         self.app_state.embeddings_cache = embeddings_dict
         if self._pick_best_pending_after_similarity:
             self.main_window.pick_best_step_widget.show_loading(
+                "Step 1/2: Embeddings generated. Clustering...", -1
+            )
+            return
+        if self._easy_delete_pending_after_similarity:
+            self.main_window.easy_delete_step_widget.show_loading(
                 "Step 1/2: Embeddings generated. Clustering...", -1
             )
             return
@@ -1553,10 +1756,19 @@ class AppController(QObject):
                 self.main_window.pick_best_step_widget.show_error(
                     "Clustering did not produce results."
                 )
+            if self._easy_delete_pending_after_similarity:
+                self._easy_delete_pending_after_similarity = False
+                self.main_window.easy_delete_step_widget.show_error(
+                    "Clustering did not produce results."
+                )
             return
 
         if self._pick_best_pending_after_similarity:
             self.main_window.pick_best_step_widget.show_loading(
+                "Step 1/2: Clustering complete. Updating view...", -1
+            )
+        elif self._easy_delete_pending_after_similarity:
+            self.main_window.easy_delete_step_widget.show_loading(
                 "Step 1/2: Clustering complete. Updating view...", -1
             )
         else:
@@ -1586,6 +1798,9 @@ class AppController(QObject):
         if self._pick_best_pending_after_similarity:
             self._pick_best_pending_after_similarity = False
             self._start_pick_best_scoring()
+        elif self._easy_delete_pending_after_similarity:
+            self._easy_delete_pending_after_similarity = False
+            self._start_easy_delete_detection()
         else:
             self.main_window.hide_loading_overlay()
 
@@ -1594,6 +1809,9 @@ class AppController(QObject):
         if self._pick_best_pending_after_similarity:
             self._pick_best_pending_after_similarity = False
             self.main_window.pick_best_step_widget.show_error(message)
+        if self._easy_delete_pending_after_similarity:
+            self._easy_delete_pending_after_similarity = False
+            self.main_window.easy_delete_step_widget.show_error(message)
         self.main_window.statusBar().showMessage(f"Similarity Error: {message}", 8000)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self._get_image_file_data())
