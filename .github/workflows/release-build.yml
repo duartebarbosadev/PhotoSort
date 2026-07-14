@@ -50,10 +50,11 @@ jobs:
       # impose a runtime timeout inside PhotoSort.
       PHOTOSORT_STARTUP_BUDGET_SECONDS: '30'
 
-      # Optional trusted code signing. Leave these secrets unset to publish
-      # unsigned ZIP/DMG artifacts at no cost; the guarded signing/notarization
-      # steps below will be skipped automatically. Self-signed certificates do
-      # not remove public Windows/macOS trust warnings, so they are not required.
+      # I currently publish unsigned ZIP/DMG artifacts and intentionally leave
+      # these secrets unset. The conditional signing and notarization steps are
+      # skipped automatically. I can configure trusted signing here later if the
+      # project requires it; self-signed certificates would not remove public
+      # Windows or macOS trust warnings.
       WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
       MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
