@@ -35,6 +35,7 @@ from PyQt6.QtCore import (
     QItemSelectionModel,
     QEvent,
     QItemSelection,
+    QPoint,
 )
 from PyQt6.QtGui import (
     QColor,
@@ -46,7 +47,6 @@ from PyQt6.QtGui import (
     QResizeEvent,
     QPixmap,
 )
-from sklearn.metrics.pairwise import cosine_similarity
 import sys
 
 from core.image_pipeline import ImagePipeline
@@ -55,7 +55,6 @@ from core.image_processing.raw_image_processor import is_raw_extension
 
 from core.metadata_processor import MetadataProcessor  # New metadata processor
 from core.media_utils import is_video_extension
-from core.video_metadata import get_basic_video_metadata
 from core.app_settings import (
     get_preview_cache_size_gb,
     set_preview_cache_size_gb,
@@ -65,19 +64,17 @@ from core.app_settings import (
     CENTER_PANEL_STRETCH,
     RIGHT_PANEL_STRETCH,
     DISPLAY_MAX_RESOLUTION,
+    THUMBNAIL_PRELOAD_BATCH_SIZE,
+    THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
 )
 from ui.app_state import AppState
 from ui.ui_components import LoadingOverlay
 from ui.worker_manager import WorkerManager
-from ui.metadata_sidebar import MetadataSidebar
 from ui.dialog_manager import DialogManager
 from ui.left_panel import LeftPanel
 from ui.app_controller import AppController
 from ui.menu_manager import MenuManager
 from ui.grouping_step_widget import GroupingStepWidget
-from ui.pick_best_step_widget import PickBestStepWidget
-from ui.easy_delete_step_widget import EasyDeleteStepWidget
-from ui.fix_rotation_step_widget import FixRotationStepWidget
 from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
 from ui.helpers.index_lookup_utils import find_proxy_index_for_path
@@ -235,6 +232,8 @@ class MainWindow(QMainWindow):
         self.metadata_sidebar = None
         self.sidebar_visible = False
         self.thumbnail_delegate = None
+        self._thumbnail_requested_paths: set[str] = set()
+        self._thumbnail_load_scheduled = False
         self.show_folders_mode = False
         self.group_by_similarity_mode = False
         self.navigation_skip_singleton_clusters = False
@@ -660,21 +659,9 @@ class MainWindow(QMainWindow):
         logger.debug("Creating widgets...")
         self.workflow_stack = QStackedWidget()
         self.grouping_step_widget = GroupingStepWidget(self)
-        self.easy_delete_step_widget = EasyDeleteStepWidget(self)
-        self.easy_delete_step_widget.set_is_marked_func(
-            self.app_state.is_marked_for_deletion
-        )
-        self.easy_delete_step_widget.set_has_any_marked_func(
-            lambda: bool(self.app_state.marked_for_deletion)
-        )
-        self.fix_rotation_step_widget = FixRotationStepWidget(self)
-        self.pick_best_step_widget = PickBestStepWidget(self)
-        self.pick_best_step_widget.set_is_marked_func(
-            self.app_state.is_marked_for_deletion
-        )
-        self.pick_best_step_widget.set_has_any_marked_func(
-            lambda: bool(self.app_state.marked_for_deletion)
-        )
+        self.easy_delete_step_widget = None
+        self.fix_rotation_step_widget = None
+        self.pick_best_step_widget = None
         self.workflow_nav = QWidget()
         self.workflow_nav.setObjectName("workflowNav")
         self.step_organize_button = QPushButton("1. Organize")
@@ -799,22 +786,19 @@ class MainWindow(QMainWindow):
         grouping_page_layout.addWidget(self.grouping_step_widget)
 
         self.easy_delete_page = QWidget()
-        easy_delete_page_layout = QVBoxLayout(self.easy_delete_page)
-        easy_delete_page_layout.setContentsMargins(0, 0, 0, 0)
-        easy_delete_page_layout.setSpacing(0)
-        easy_delete_page_layout.addWidget(self.easy_delete_step_widget)
+        self.easy_delete_page_layout = QVBoxLayout(self.easy_delete_page)
+        self.easy_delete_page_layout.setContentsMargins(0, 0, 0, 0)
+        self.easy_delete_page_layout.setSpacing(0)
 
         self.fix_rotation_page = QWidget()
-        fix_rotation_page_layout = QVBoxLayout(self.fix_rotation_page)
-        fix_rotation_page_layout.setContentsMargins(0, 0, 0, 0)
-        fix_rotation_page_layout.setSpacing(0)
-        fix_rotation_page_layout.addWidget(self.fix_rotation_step_widget)
+        self.fix_rotation_page_layout = QVBoxLayout(self.fix_rotation_page)
+        self.fix_rotation_page_layout.setContentsMargins(0, 0, 0, 0)
+        self.fix_rotation_page_layout.setSpacing(0)
 
         self.pick_best_page = QWidget()
-        pick_best_page_layout = QVBoxLayout(self.pick_best_page)
-        pick_best_page_layout.setContentsMargins(0, 0, 0, 0)
-        pick_best_page_layout.setSpacing(0)
-        pick_best_page_layout.addWidget(self.pick_best_step_widget)
+        self.pick_best_page_layout = QVBoxLayout(self.pick_best_page)
+        self.pick_best_page_layout.setContentsMargins(0, 0, 0, 0)
+        self.pick_best_page_layout.setSpacing(0)
 
         self.cull_page = QWidget()
         cull_page_layout = QVBoxLayout(self.cull_page)
@@ -828,18 +812,10 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(self.left_panel)
         main_splitter.addWidget(self.center_pane_container)
 
-        # Create metadata sidebar and add to splitter
-        self.metadata_sidebar = MetadataSidebar(self)
-        self.metadata_sidebar.hide_requested.connect(self._hide_metadata_sidebar)
-        main_splitter.addWidget(self.metadata_sidebar)
-
-        # Set stretch factors: left=1, center=3, right=1 (when visible)
+        # The metadata sidebar is inserted on first use.
         main_splitter.setStretchFactor(0, LEFT_PANEL_STRETCH)  # Left pane
         main_splitter.setStretchFactor(1, CENTER_PANEL_STRETCH)  # Center pane
-        main_splitter.setStretchFactor(2, RIGHT_PANEL_STRETCH)  # Right pane (sidebar)
-
-        # Initially hide the sidebar by setting its size to 0
-        main_splitter.setSizes([350, 850, 0])
+        main_splitter.setSizes([350, 850])
         self.main_splitter = main_splitter  # Store reference for sidebar toggling
 
         cull_page_layout.addWidget(main_splitter)
@@ -923,6 +899,10 @@ class MainWindow(QMainWindow):
         self.left_panel.search_input.returnPressed.connect(self._apply_filter)
         self.left_panel.search_input.editingFinished.connect(self._apply_filter)
         self.left_panel.tree_display_view.collapsed.connect(self._handle_item_collapsed)
+        for view in self._left_panel_views:
+            view.verticalScrollBar().valueChanged.connect(
+                self.schedule_visible_thumbnail_load
+            )
         self.left_panel.connect_signals()
         self.grouping_step_widget.mode_changed.connect(
             self._handle_grouping_mode_changed
@@ -942,39 +922,6 @@ class MainWindow(QMainWindow):
         self.step_fix_rotation_button.clicked.connect(self._go_to_fix_rotation_step)
         self.step_pick_best_button.clicked.connect(self._go_to_pick_best_step)
         self.step_cull_button.clicked.connect(self._go_to_cull_step)
-
-        # Easy Delete step widget signals
-        self.easy_delete_step_widget.skip_requested.connect(self.show_fix_rotation_step)
-        self.easy_delete_step_widget.proceed_to_pick_best_requested.connect(
-            self.show_fix_rotation_step
-        )
-        self.easy_delete_step_widget.mark_for_deletion_requested.connect(
-            self._mark_paths_for_deletion
-        )
-        self.easy_delete_step_widget.unmark_for_deletion_requested.connect(
-            self._unmark_paths_for_deletion
-        )
-
-        # Fix Rotation step widget signals
-        self.fix_rotation_step_widget.skip_requested.connect(self.show_pick_best_step)
-        self.fix_rotation_step_widget.proceed_requested.connect(
-            self.show_pick_best_step
-        )
-        self.fix_rotation_step_widget.apply_rotations_requested.connect(
-            self.app_controller.start_fix_rotation_apply
-        )
-
-        # Pick Best step widget signals
-        self.pick_best_step_widget.skip_requested.connect(self.show_cull_step)
-        self.pick_best_step_widget.proceed_to_cull_requested.connect(
-            self.show_cull_step
-        )
-        self.pick_best_step_widget.mark_for_deletion_requested.connect(
-            self._mark_paths_for_deletion
-        )
-        self.pick_best_step_widget.unmark_for_deletion_requested.connect(
-            self._unmark_paths_for_deletion
-        )
 
         # Connect MenuManager signals
         self.menu_manager.connect_signals()
@@ -1048,6 +995,84 @@ class MainWindow(QMainWindow):
 
     def _toggle_thumbnail_view(self, checked):
         self._rebuild_model_view()
+        if checked:
+            self.schedule_visible_thumbnail_load()
+
+    def reset_thumbnail_requests(self) -> None:
+        self._thumbnail_requested_paths.clear()
+
+    def schedule_visible_thumbnail_load(self, *_args) -> None:
+        if self._thumbnail_load_scheduled:
+            return
+        self._thumbnail_load_scheduled = True
+        QTimer.singleShot(0, self._load_visible_thumbnail_batch)
+
+    def _visible_thumbnail_paths(self) -> List[str]:
+        view = self._get_active_file_view()
+        if view is None:
+            return []
+
+        paths: List[str] = []
+        index = view.indexAt(QPoint(1, 1))
+        if isinstance(view, QTreeView):
+            if not index.isValid():
+                index = view.model().index(0, 0)
+            for _ in range(THUMBNAIL_PRELOAD_VISIBLE_MARGIN):
+                previous = view.indexAbove(index)
+                if not previous.isValid():
+                    break
+                index = previous
+            limit = THUMBNAIL_PRELOAD_BATCH_SIZE + (
+                THUMBNAIL_PRELOAD_VISIBLE_MARGIN * 2
+            )
+            for _ in range(limit):
+                if not index.isValid():
+                    break
+                item_data = index.data(Qt.ItemDataRole.UserRole)
+                if isinstance(item_data, dict) and item_data.get("path"):
+                    paths.append(item_data["path"])
+                index = view.indexBelow(index)
+        else:
+            model = view.model()
+            start_row = max(
+                0,
+                (index.row() if index.isValid() else 0)
+                - THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
+            )
+            limit = THUMBNAIL_PRELOAD_BATCH_SIZE + (
+                THUMBNAIL_PRELOAD_VISIBLE_MARGIN * 2
+            )
+            for row in range(start_row, min(model.rowCount(), start_row + limit)):
+                item_data = model.index(row, 0).data(Qt.ItemDataRole.UserRole)
+                if isinstance(item_data, dict) and item_data.get("path"):
+                    paths.append(item_data["path"])
+        return paths
+
+    def _load_visible_thumbnail_batch(self) -> None:
+        self._thumbnail_load_scheduled = False
+        if not self.menu_manager.toggle_thumbnails_action.isChecked():
+            return
+        if self.worker_manager.is_thumbnail_preload_running():
+            return
+
+        candidates = self._visible_thumbnail_paths()
+        if not candidates:
+            candidates = [
+                item.get("path")
+                for item in self.app_state.image_files_data[
+                    :THUMBNAIL_PRELOAD_BATCH_SIZE
+                ]
+                if item.get("path")
+            ]
+        pending = [
+            path
+            for path in candidates
+            if path not in self._thumbnail_requested_paths
+        ]
+        if not pending:
+            return
+        self._thumbnail_requested_paths.update(pending)
+        self.worker_manager.start_thumbnail_preload(pending)
 
     def _rebuild_model_view(
         self,
@@ -1295,30 +1320,89 @@ class MainWindow(QMainWindow):
         self.workflow_stack.setCurrentWidget(self.cull_page)
         self.update_workflow_navigation()
 
+    def _ensure_easy_delete_widget(self):
+        if self.easy_delete_step_widget is None:
+            from ui.easy_delete_step_widget import EasyDeleteStepWidget
+
+            widget = EasyDeleteStepWidget(self)
+            widget.set_is_marked_func(self.app_state.is_marked_for_deletion)
+            widget.set_has_any_marked_func(
+                lambda: bool(self.app_state.marked_for_deletion)
+            )
+            widget.skip_requested.connect(self.show_fix_rotation_step)
+            widget.proceed_to_pick_best_requested.connect(
+                self.show_fix_rotation_step
+            )
+            widget.mark_for_deletion_requested.connect(
+                self._mark_paths_for_deletion
+            )
+            widget.unmark_for_deletion_requested.connect(
+                self._unmark_paths_for_deletion
+            )
+            self.easy_delete_page_layout.addWidget(widget)
+            self.easy_delete_step_widget = widget
+        return self.easy_delete_step_widget
+
+    def _ensure_fix_rotation_widget(self):
+        if self.fix_rotation_step_widget is None:
+            from ui.fix_rotation_step_widget import FixRotationStepWidget
+
+            widget = FixRotationStepWidget(self)
+            widget.skip_requested.connect(self.show_pick_best_step)
+            widget.proceed_requested.connect(self.show_pick_best_step)
+            widget.apply_rotations_requested.connect(
+                self.app_controller.start_fix_rotation_apply
+            )
+            self.fix_rotation_page_layout.addWidget(widget)
+            self.fix_rotation_step_widget = widget
+        return self.fix_rotation_step_widget
+
+    def _ensure_pick_best_widget(self):
+        if self.pick_best_step_widget is None:
+            from ui.pick_best_step_widget import PickBestStepWidget
+
+            widget = PickBestStepWidget(self)
+            widget.set_is_marked_func(self.app_state.is_marked_for_deletion)
+            widget.set_has_any_marked_func(
+                lambda: bool(self.app_state.marked_for_deletion)
+            )
+            widget.skip_requested.connect(self.show_cull_step)
+            widget.proceed_to_cull_requested.connect(self.show_cull_step)
+            widget.mark_for_deletion_requested.connect(
+                self._mark_paths_for_deletion
+            )
+            widget.unmark_for_deletion_requested.connect(
+                self._unmark_paths_for_deletion
+            )
+            self.pick_best_page_layout.addWidget(widget)
+            self.pick_best_step_widget = widget
+        return self.pick_best_step_widget
+
     def show_easy_delete_step(self) -> None:
+        widget = self._ensure_easy_delete_widget()
         self.app_state.workflow_step = "easy_delete"
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(False)
-        self.easy_delete_step_widget.set_image_pipeline(self.image_pipeline)
+        widget.set_image_pipeline(self.image_pipeline)
         self.workflow_stack.setCurrentWidget(self.easy_delete_page)
         self.update_workflow_navigation()
         if self.app_state.easy_delete_results:
-            self.easy_delete_step_widget.show_results(
-                self.app_state.easy_delete_results
-            )
+            widget.show_results(self.app_state.easy_delete_results)
             return
         self.app_controller.start_easy_delete_workflow()
 
     def show_fix_rotation_step(self) -> None:
+        widget = self._ensure_fix_rotation_widget()
         self.app_state.workflow_step = "fix_rotation"
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(False)
-        self.fix_rotation_step_widget.set_image_pipeline(self.image_pipeline)
+        widget.set_image_pipeline(self.image_pipeline)
         self.workflow_stack.setCurrentWidget(self.fix_rotation_page)
         self.update_workflow_navigation()
         self.app_controller.start_fix_rotation_workflow()
 
     def show_pick_best_step(self) -> None:
+        self._ensure_pick_best_widget()
         self.app_state.workflow_step = "pick_best"
         self.workflow_stack.setCurrentWidget(self.pick_best_page)
         # Disable application-wide 1-9 shortcuts so PickBestStepWidget can handle them
@@ -1444,8 +1528,18 @@ class MainWindow(QMainWindow):
     def ensure_metadata_sidebar(self) -> None:
         if not self.metadata_sidebar:
             try:
+                from ui.metadata_sidebar import MetadataSidebar
+
                 self.metadata_sidebar = MetadataSidebar(self)
+                self.metadata_sidebar.hide_requested.connect(
+                    self._hide_metadata_sidebar
+                )
+                self.main_splitter.addWidget(self.metadata_sidebar)
+                self.main_splitter.setStretchFactor(2, RIGHT_PANEL_STRETCH)
+                self.main_splitter.setSizes([350, 850, 0])
             except Exception:
+                logger.exception("Could not create metadata sidebar")
+                self.metadata_sidebar = None
                 return
 
     # --- NavigationContext adapter wrappers ---
@@ -2827,7 +2921,16 @@ class MainWindow(QMainWindow):
                 )
                 if emb1 is not None and emb2 is not None:
                     try:
-                        similarity = cosine_similarity([emb1], [emb2])[0][0]
+                        import numpy as np
+
+                        first = np.asarray(emb1, dtype=np.float32)
+                        second = np.asarray(emb2, dtype=np.float32)
+                        denominator = np.linalg.norm(first) * np.linalg.norm(second)
+                        similarity = (
+                            float(np.dot(first, second) / denominator)
+                            if denominator
+                            else 0.0
+                        )
                         self.statusBar().showMessage(
                             f"Comparing {len(images_data_for_viewer)} images. Similarity (first 2): {similarity:.4f}"
                         )
@@ -4053,6 +4156,7 @@ class MainWindow(QMainWindow):
 
     def _show_metadata_sidebar(self):
         """Show the metadata sidebar, ensuring it reflects the current selection state."""
+        self.ensure_metadata_sidebar()
         if not self.metadata_sidebar:
             return
 
@@ -4228,6 +4332,8 @@ class MainWindow(QMainWindow):
         )
 
         if is_video_extension(file_path):
+            from core.video_metadata import get_basic_video_metadata
+
             raw_exif = get_basic_video_metadata(file_path)
             logger.info(
                 "_update_sidebar_with_current_selection: Loaded %d video metadata field(s) for %s",

@@ -99,6 +99,7 @@ def test_handle_thumbnail_preload_complete_refreshes_grouping_widget():
         _supports_grouping_workflow_ui=lambda: True,
         main_window=SimpleNamespace(
             _update_thumbnails_from_cache=update_thumbnails_from_cache,
+            schedule_visible_thumbnail_load=Mock(),
             grouping_step_widget=SimpleNamespace(
                 refresh_cached_thumbnails=refresh_cached_thumbnails
             ),

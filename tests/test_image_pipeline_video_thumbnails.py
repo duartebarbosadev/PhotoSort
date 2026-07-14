@@ -35,7 +35,7 @@ def test_video_thumbnail_generates_first_frame_with_overlay(tmp_path):
     fake_capture = _FakeCapture(opened=True, frame=frame)
 
     with patch(
-        "src.core.image_pipeline.cv2.VideoCapture", return_value=fake_capture
+        "cv2.VideoCapture", return_value=fake_capture
     ) as mock_capture:
         thumbnail = pipeline._get_pil_thumbnail("/tmp/video.mp4")
 
@@ -58,7 +58,7 @@ def test_video_thumbnail_falls_back_when_frame_unavailable(tmp_path):
     pipeline.thumbnail_cache.set = Mock()
 
     fake_capture = _FakeCapture(opened=False, frame=None)
-    with patch("src.core.image_pipeline.cv2.VideoCapture", return_value=fake_capture):
+    with patch("cv2.VideoCapture", return_value=fake_capture):
         thumbnail = pipeline._get_pil_thumbnail("/tmp/video.mp4")
 
     assert thumbnail is None

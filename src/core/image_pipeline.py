@@ -4,7 +4,6 @@ import logging
 import threading
 from typing import Optional, List, Dict, Tuple, Callable
 from PIL import Image, ImageDraw
-import cv2
 
 try:  # Optional; some minimal Pillow builds may omit ImageQt
     from PIL.ImageQt import ImageQt  # type: ignore
@@ -293,6 +292,8 @@ class ImagePipeline:
         video_path: str,
     ) -> Optional[Image.Image]:
         """Extract first decodable frame and apply a play badge overlay."""
+        import cv2
+
         capture = cv2.VideoCapture(video_path)
         if not capture.isOpened():
             logger.debug(

@@ -20,13 +20,9 @@ from typing import List, Optional
 import os
 
 from core.image_pipeline import ImagePipeline
-from core.image_features.blur_detector import (
-    BlurDetector,
-)
 from core.caching.exif_cache import ExifCache
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.media_utils import is_image_extension
-from ui.helpers.cluster_utils import ClusterUtils
 import logging
 
 logger = logging.getLogger(__name__)
@@ -145,6 +141,8 @@ class DroppableTreeView(QTreeView):
 
     def _parse_cluster_id(self, value) -> Optional[int]:
         """Delegate to the shared parser used elsewhere in the UI."""
+        from ui.helpers.cluster_utils import ClusterUtils
+
         return ClusterUtils.parse_cluster_id(value)
 
     def _move_dragged_items_to_cluster(self, target_cluster_id: int):
@@ -499,6 +497,8 @@ class BlurDetectionWorker(QObject):
     def run_detection(self):
         self._is_running = True
         try:
+            from core.image_features.blur_detector import BlurDetector
+
             BlurDetector.detect_blur_in_batch(
                 image_paths=self._image_paths,
                 threshold=self._blur_threshold,

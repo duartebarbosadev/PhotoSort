@@ -92,7 +92,9 @@ def test_similarity_grouping_reuses_the_shared_pipeline():
     engine = Mock()
     engine.run_analysis_sync.return_value = ({}, {"source.jpg": 2})
 
-    with patch("core.grouping.SimilarityEngine", return_value=engine) as engine_cls:
+    with patch(
+        "core.similarity_engine.SimilarityEngine", return_value=engine
+    ) as engine_cls:
         result = _run_ml_similarity_pipeline(
             ["source.jpg"], image_pipeline=shared_pipeline
         )

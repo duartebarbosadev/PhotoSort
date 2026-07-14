@@ -4,7 +4,6 @@ from datetime import datetime as datetime_obj
 from typing import Dict, List, Optional, Any
 
 import numpy as np
-from sklearn.decomposition import PCA
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +203,8 @@ class ClusterUtils:
             try:
                 n_components = 1 if centroid_matrix.shape[0] > 1 else 0
                 if n_components > 0:
+                    from sklearn.decomposition import PCA
+
                     pca = PCA(n_components=n_components)
                     transformed = pca.fit_transform(centroid_matrix)
                     for i, cid in enumerate(valid_cluster_ids_for_pca):

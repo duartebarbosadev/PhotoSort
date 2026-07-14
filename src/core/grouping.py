@@ -9,11 +9,10 @@ from functools import lru_cache
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from PIL import Image
-from sklearn.cluster import DBSCAN
 
 from core.image_file_ops import ImageFileOperations
 from core.media_utils import is_video_extension
@@ -23,8 +22,10 @@ from core.metadata_processor import (
     _parse_exif_date,
     _parse_date_from_filename,
 )
-from core.similarity_engine import SimilarityEngine
-from core.image_pipeline import ImagePipeline
+
+if TYPE_CHECKING:
+    from core.image_pipeline import ImagePipeline
+    from core.similarity_engine import SimilarityEngine
 
 logger = logging.getLogger(__name__)
 
@@ -355,6 +356,8 @@ def _cluster_vectors(
     eps: float,
     min_samples: int = 1,
 ) -> Dict[str, int]:
+    from sklearn.cluster import DBSCAN
+
     if not vectors_by_path:
         return {}
     paths = list(vectors_by_path.keys())
@@ -714,7 +717,12 @@ def _run_ml_similarity_pipeline(
 ) -> Dict[str, int]:
     if not image_paths:
         return {}
-    engine = shared_engine or SimilarityEngine(image_pipeline=image_pipeline)
+    if shared_engine is None:
+        from core.similarity_engine import SimilarityEngine
+
+        engine = SimilarityEngine(image_pipeline=image_pipeline)
+    else:
+        engine = shared_engine
     _embeddings, cluster_results = engine.run_analysis_sync(
         list(image_paths),
         progress_callback=progress_callback,

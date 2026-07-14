@@ -7,7 +7,6 @@ from typing import Dict, List, Literal, Tuple
 import numpy as np
 from PIL import Image
 from PIL.ImageOps import exif_transpose
-from sklearn.neighbors import NearestNeighbors
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +154,8 @@ def adaptive_dbscan_eps(
         max(min_samples + 1, min_samples * 3), sample_count
     )  # ensure > min_samples
     try:
+        from sklearn.neighbors import NearestNeighbors
+
         nn = NearestNeighbors(metric="cosine", n_neighbors=neighbor_count)
         nn.fit(embedding_matrix)
         distances, _ = nn.kneighbors(embedding_matrix)

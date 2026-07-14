@@ -5,7 +5,6 @@ import logging
 from typing import List, Dict, Any, Tuple, Optional
 
 import numpy as np
-from sklearn.cluster import DBSCAN
 from PyQt6.QtCore import QObject, QTimer
 from core.app_settings import (
     add_recent_folder,
@@ -366,6 +365,7 @@ class AppController(QObject):
         self.worker_manager.stop_all_workers()
 
         self.app_state.clear_all_file_specific_data()
+        self.main_window.reset_thumbnail_requests()
         self.main_window.invalidate_last_displayed_preview()
         self.app_state.current_folder_path = folder_path
         self.app_state.skip_grouping_step_once = skip_grouping_step
@@ -699,6 +699,8 @@ class AppController(QObject):
                 ),
                 PICK_BEST_REFINEMENT_EPS,
             )
+            from sklearn.cluster import DBSCAN
+
             dbscan = DBSCAN(
                 eps=strict_eps,
                 min_samples=PICK_BEST_REFINEMENT_MIN_SAMPLES,
@@ -1224,10 +1226,7 @@ class AppController(QObject):
 
         media_file_data = self._get_media_file_data()
         if media_file_data:
-            # Start thumbnail preload in background (non-blocking)
-            media_paths = self._get_media_paths(media_file_data)
-            if media_paths:
-                self.worker_manager.start_thumbnail_preload(media_paths)
+            self.main_window.schedule_visible_thumbnail_load()
 
             self.worker_manager.start_rating_load(
                 media_file_data.copy(),
@@ -2291,6 +2290,7 @@ class AppController(QObject):
         self.main_window._update_thumbnails_from_cache()
         if self._supports_grouping_workflow_ui():
             self.main_window.grouping_step_widget.refresh_cached_thumbnails()
+        self.main_window.schedule_visible_thumbnail_load()
 
     def handle_thumbnail_preload_error(self, error_message: str):
         """Handle errors from thumbnail preload worker."""
