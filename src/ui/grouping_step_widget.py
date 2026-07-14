@@ -1006,10 +1006,10 @@ class GroupingStepWidget(QWidget):
             media_only=False,
             candidate_directories=self._planned_source_directories(),
         )
-        planned_paths = set(
+        planned_paths = {
             os.path.normcase(os.path.normpath(path))
             for path in self._all_source_paths()
-        )
+        }
         extra_paths = [
             path
             for path in filesystem_paths

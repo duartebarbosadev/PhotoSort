@@ -155,14 +155,14 @@ class FileDeletionController:
             is_eligible = False
             user_data = parent_item_candidate.data(0x0100)
             if isinstance(user_data, str):
-                if user_data.startswith("cluster_header_") or user_data.startswith(
-                    "date_header_"
-                ):
-                    is_eligible = True
-                elif (
-                    self.ctx.show_folders_mode
-                    and not self.ctx.group_by_similarity_mode
-                    and os.path.isdir(user_data)
+                if (
+                    user_data.startswith("cluster_header_")
+                    or user_data.startswith("date_header_")
+                    or (
+                        self.ctx.show_folders_mode
+                        and not self.ctx.group_by_similarity_mode
+                        and os.path.isdir(user_data)
+                    )
                 ):
                     is_eligible = True
             if is_eligible and parent_item_candidate.rowCount() == 0:

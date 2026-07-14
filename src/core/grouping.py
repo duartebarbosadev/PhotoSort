@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import re
-import shutil
 from functools import lru_cache
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -283,7 +282,9 @@ def _move_companion_files_if_present(source_path: str, destination_dir: str) -> 
         dest = _resolve_collision_safe_destination(
             destination_dir, os.path.basename(companion)
         )
-        shutil.move(companion, dest)
+        success, message = ImageFileOperations.move_path(companion, dest)
+        if not success:
+            raise RuntimeError(message)
 
 
 def _iter_parent_directories(path: str, *, stop_at: str) -> Iterable[str]:
@@ -683,16 +684,14 @@ def _build_groups_from_assignments(
     grouped: Dict[int, List[str]] = {}
     for path, cluster_id in assignments.items():
         grouped.setdefault(cluster_id, []).append(path)
-    groups: List[GroupingGroup] = []
-    for cluster_id in sorted(grouped.keys()):
-        groups.append(
-            GroupingGroup(
-                group_id=str(cluster_id),
-                group_label=label_builder(cluster_id),
-                source_paths=sorted(grouped[cluster_id]),
-            )
+    return [
+        GroupingGroup(
+            group_id=str(cluster_id),
+            group_label=label_builder(cluster_id),
+            source_paths=sorted(grouped[cluster_id]),
         )
-    return groups
+        for cluster_id in sorted(grouped)
+    ]
 
 
 def _parse_cluster_id(value: Any) -> Optional[int]:
@@ -871,10 +870,8 @@ def _build_face_plan(
             continue
         vectors[path] = vector
     assignments = _cluster_vectors(vectors, eps=0.16, min_samples=1)
-    assigned_paths = set(assignments.keys())
-    for path in vectors.keys():
-        if path not in assigned_paths:
-            unassigned.append(path)
+    assigned_paths = set(assignments)
+    unassigned.extend(path for path in vectors if path not in assigned_paths)
     groups = _build_groups_from_assignments(
         assignments, lambda cluster_id: f"Person {cluster_id:03d}"
     )
@@ -963,9 +960,11 @@ def _build_mixed_plan(
     for date_label in sorted(date_buckets.keys()):
         bucket_paths = date_buckets[date_label]
 
-        def _bucket_progress(percent: int, message: str):
+        def _bucket_progress(
+            percent: int, message: str, bucket_label: str = date_label
+        ):
             if progress_callback:
-                progress_callback(percent, f"{date_label}: {message}")
+                progress_callback(percent, f"{bucket_label}: {message}")
 
         assignments = _run_ml_similarity_pipeline(
             bucket_paths,
@@ -1069,8 +1068,11 @@ def execute_grouping_plan(
         )
         group.destination_folder = destination_dir
         if directory_rename is not None:
-            os.makedirs(os.path.dirname(destination_dir), exist_ok=True)
-            shutil.move(directory_rename.source_dir, destination_dir)
+            success, message = ImageFileOperations.move_path(
+                directory_rename.source_dir, destination_dir
+            )
+            if not success:
+                raise RuntimeError(message)
             for source_path in group.source_paths:
                 basename = plan.filename_for_path(source_path)
                 destination_path = os.path.join(destination_dir, basename)
@@ -1121,7 +1123,11 @@ def execute_grouping_plan(
             destination_path = _resolve_collision_safe_destination(
                 destination_dir, basename
             )
-            shutil.move(source_path, destination_path)
+            success, message = ImageFileOperations.move_path(
+                source_path, destination_path
+            )
+            if not success:
+                raise RuntimeError(message)
             if move_companions:
                 _move_companion_files_if_present(source_path, destination_dir)
             moved_count += 1
@@ -1143,7 +1149,11 @@ def execute_grouping_plan(
             destination_path = _resolve_collision_safe_destination(
                 unassigned_dir, basename
             )
-            shutil.move(source_path, destination_path)
+            success, message = ImageFileOperations.move_path(
+                source_path, destination_path
+            )
+            if not success:
+                raise RuntimeError(message)
             if move_companions:
                 _move_companion_files_if_present(source_path, unassigned_dir)
             moved_count += 1
@@ -1251,6 +1261,6 @@ def _remove_empty_directories(
                 continue
             if os.listdir(current_root):
                 continue
-            os.rmdir(current_root)
+            ImageFileOperations.remove_empty_directory(current_root)
         except OSError:
             continue

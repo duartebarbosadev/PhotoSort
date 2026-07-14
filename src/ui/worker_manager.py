@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
-from typing import List, Dict, Any, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 # Import worker classes
 from core.file_scanner import FileScanner
@@ -206,7 +206,7 @@ class WorkerManager(QObject):
     def _terminate_thread(
         self,
         thread: Optional[QThread],
-        worker_stop_method: Optional[callable] = None,
+        worker_stop_method: Optional[Callable[[], Any]] = None,
         *,
         allow_terminate: bool = True,
     ):
@@ -240,14 +240,75 @@ class WorkerManager(QObject):
         # Even if not running, or None, ensure we return None for reassignment
         return None, None
 
+    def _cleanup_worker_refs(
+        self,
+        thread_attribute: str,
+        worker_attribute: str,
+        label: str,
+    ) -> None:
+        """Release one worker/thread pair after its thread has finished."""
+
+        worker = getattr(self, worker_attribute)
+        if worker is not None:
+            try:
+                if not sip.isdeleted(worker):
+                    worker.deleteLater()
+            except Exception:
+                logger.debug("%s worker was already deleted.", label, exc_info=True)
+            setattr(self, worker_attribute, None)
+
+        thread = getattr(self, thread_attribute)
+        if thread is not None:
+            try:
+                if not sip.isdeleted(thread):
+                    thread.deleteLater()
+            except Exception:
+                logger.debug("%s thread was already deleted.", label, exc_info=True)
+            setattr(self, thread_attribute, None)
+        logger.info("%s thread and worker cleaned up.", label)
+
+    def _stop_worker(
+        self,
+        thread_attribute: str,
+        worker_attribute: str,
+        *,
+        allow_terminate: bool = True,
+        before_stop: Optional[Callable[[Any], None]] = None,
+    ) -> None:
+        """Request cooperative cancellation for one managed worker slot."""
+
+        worker = getattr(self, worker_attribute)
+        if worker is not None and before_stop is not None:
+            try:
+                before_stop(worker)
+            except Exception:
+                logger.debug("Worker pre-stop hook failed.", exc_info=True)
+        stop_method = getattr(worker, "stop", None) if worker is not None else None
+        remaining_thread, _ = self._terminate_thread(
+            getattr(self, thread_attribute),
+            stop_method,
+            allow_terminate=allow_terminate,
+        )
+        setattr(self, thread_attribute, remaining_thread)
+        if remaining_thread is None:
+            setattr(self, worker_attribute, None)
+
+    def _finish_worker_slot(
+        self,
+        thread_attribute: str,
+        worker_attribute: str,
+        label: str,
+    ) -> None:
+        """Quit a completed worker's event loop, then release its references."""
+
+        thread = getattr(self, thread_attribute)
+        if thread is not None and thread.isRunning():
+            thread.quit()
+            thread.wait()
+        self._cleanup_worker_refs(thread_attribute, worker_attribute, label)
+
     def _cleanup_scanner_refs(self):
-        if self.file_scanner:
-            self.file_scanner.deleteLater()
-            self.file_scanner = None
-        if self.scanner_thread:
-            self.scanner_thread.deleteLater()
-            self.scanner_thread = None
-        logger.debug("File scanner thread and worker cleaned up.")
+        self._cleanup_worker_refs("scanner_thread", "file_scanner", "File scanner")
 
     # --- File Scanner Management ---
     def start_file_scan(
@@ -288,26 +349,12 @@ class WorkerManager(QObject):
         logger.info("File scanner thread started.")
 
     def stop_file_scan(self):
-        worker_stop = self.file_scanner.stop if self.file_scanner else None
-        # _terminate_thread will set self.scanner_thread and self.file_scanner to None if they were cleaned up
-        # However, the explicit cleanup is better.
-        temp_thread, _ = self._terminate_thread(self.scanner_thread, worker_stop)
-        if (
-            temp_thread is None
-        ):  # if _terminate_thread returned None, it means it handled it or was already None
-            self.scanner_thread = None
-            self.file_scanner = None  # Worker should also be considered gone
-        else:  # This case should ideally not be hit if cleanup is proper
-            self.scanner_thread = temp_thread
+        self._stop_worker("scanner_thread", "file_scanner")
 
     def _cleanup_similarity_refs(self):
-        if self.similarity_worker:
-            self.similarity_worker.deleteLater()
-            self.similarity_worker = None
-        if self.similarity_thread:
-            self.similarity_thread.deleteLater()
-            self.similarity_thread = None
-        logger.info("Similarity engine thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "similarity_thread", "similarity_worker", "Similarity analysis"
+        )
 
     # --- Similarity Engine Management ---
     def start_similarity_analysis(
@@ -342,22 +389,12 @@ class WorkerManager(QObject):
         logger.info("Similarity engine thread started.")
 
     def stop_similarity_analysis(self):
-        worker_stop = self.similarity_worker.stop if self.similarity_worker else None
-        temp_thread, _ = self._terminate_thread(self.similarity_thread, worker_stop)
-        if temp_thread is None:
-            self.similarity_thread = None
-            self.similarity_worker = None
-        else:
-            self.similarity_thread = temp_thread
+        self._stop_worker("similarity_thread", "similarity_worker")
 
     def _cleanup_blur_detection_refs(self):
-        if self.blur_detection_worker:
-            self.blur_detection_worker.deleteLater()
-            self.blur_detection_worker = None
-        if self.blur_detection_thread:
-            self.blur_detection_thread.deleteLater()
-            self.blur_detection_thread = None
-        logger.info("Blur detection thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "blur_detection_thread", "blur_detection_worker", "Blur detection"
+        )
 
     # --- Blur Detection Management ---
     def start_blur_detection(
@@ -400,24 +437,12 @@ class WorkerManager(QObject):
         logger.info("Blur detection thread started.")
 
     def stop_blur_detection(self):
-        worker_stop = (
-            self.blur_detection_worker.stop if self.blur_detection_worker else None
-        )
-        temp_thread, _ = self._terminate_thread(self.blur_detection_thread, worker_stop)
-        if temp_thread is None:
-            self.blur_detection_thread = None
-            self.blur_detection_worker = None
-        else:
-            self.blur_detection_thread = temp_thread
+        self._stop_worker("blur_detection_thread", "blur_detection_worker")
 
     def _cleanup_rating_loader_refs(self):
-        if self.rating_loader_worker:
-            self.rating_loader_worker.deleteLater()
-            self.rating_loader_worker = None
-        if self.rating_loader_thread:
-            self.rating_loader_thread.deleteLater()
-            self.rating_loader_thread = None
-        logger.info("Rating loader thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "rating_loader_thread", "rating_loader_worker", "Rating loader"
+        )
 
     # --- Rating Loader Management ---
     def start_rating_load(
@@ -454,30 +479,18 @@ class WorkerManager(QObject):
         logger.info("Rating loader thread started.")
 
     def stop_rating_load(self):
-        if self.rating_loader_worker:
-            # Prevent further signal emissions during teardown
-            try:
-                self.rating_loader_worker.disable_emits()
-            except Exception:
-                logger.debug("disable_emits not available or failed", exc_info=True)
-        worker_stop = (
-            self.rating_loader_worker.stop if self.rating_loader_worker else None
+        self._stop_worker(
+            "rating_loader_thread",
+            "rating_loader_worker",
+            before_stop=lambda worker: worker.disable_emits(),
         )
-        temp_thread, _ = self._terminate_thread(self.rating_loader_thread, worker_stop)
-        if temp_thread is None:
-            self.rating_loader_thread = None
-            self.rating_loader_worker = None
-        else:
-            self.rating_loader_thread = temp_thread
 
     def _cleanup_rotation_detection_refs(self):
-        if self.rotation_detection_worker:
-            self.rotation_detection_worker.deleteLater()
-            self.rotation_detection_worker = None
-        if self.rotation_detection_thread:
-            self.rotation_detection_thread.deleteLater()
-            self.rotation_detection_thread = None
-        logger.info("Rotation detection thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "rotation_detection_thread",
+            "rotation_detection_worker",
+            "Rotation detection",
+        )
 
     # --- Rotation Detection Management ---
     def start_rotation_detection(self, image_paths: List[str], exif_cache: "ExifCache"):
@@ -519,28 +532,12 @@ class WorkerManager(QObject):
         logger.info("Rotation detection thread started.")
 
     def stop_rotation_detection(self):
-        worker_stop = (
-            self.rotation_detection_worker.stop
-            if self.rotation_detection_worker
-            else None
-        )
-        temp_thread, _ = self._terminate_thread(
-            self.rotation_detection_thread, worker_stop
-        )
-        if temp_thread is None:
-            self.rotation_detection_thread = None
-            self.rotation_detection_worker = None
-        else:
-            self.rotation_detection_thread = temp_thread
+        self._stop_worker("rotation_detection_thread", "rotation_detection_worker")
 
     def _cleanup_cuda_detection_refs(self):
-        if self.cuda_detection_worker:
-            self.cuda_detection_worker.deleteLater()
-            self.cuda_detection_worker = None
-        if self.cuda_detection_thread:
-            self.cuda_detection_thread.deleteLater()
-            self.cuda_detection_thread = None
-        logger.info("CUDA detection thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "cuda_detection_thread", "cuda_detection_worker", "CUDA detection"
+        )
 
     # --- CUDA Detection Management ---
     def start_cuda_detection(self):
@@ -560,21 +557,12 @@ class WorkerManager(QObject):
         logger.info("CUDA detection thread and worker started.")
 
     def stop_cuda_detection(self):
-        temp_thread, _ = self._terminate_thread(self.cuda_detection_thread, None)
-        if temp_thread is None:
-            self.cuda_detection_thread = None
-            self.cuda_detection_worker = None
-        else:
-            self.cuda_detection_thread = temp_thread
+        self._stop_worker("cuda_detection_thread", "cuda_detection_worker")
 
     def _cleanup_grouping_preview_refs(self):
-        if self.grouping_preview_worker:
-            self.grouping_preview_worker.deleteLater()
-            self.grouping_preview_worker = None
-        if self.grouping_preview_thread:
-            self.grouping_preview_thread.deleteLater()
-            self.grouping_preview_thread = None
-        logger.info("Grouping preview thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "grouping_preview_thread", "grouping_preview_worker", "Grouping preview"
+        )
 
     def start_grouping_preview(
         self,
@@ -610,26 +598,14 @@ class WorkerManager(QObject):
         logger.info("Grouping preview thread started.")
 
     def stop_grouping_preview(self):
-        worker_stop = (
-            self.grouping_preview_worker.stop if self.grouping_preview_worker else None
-        )
-        temp_thread, _ = self._terminate_thread(
-            self.grouping_preview_thread, worker_stop
-        )
-        if temp_thread is None:
-            self.grouping_preview_thread = None
-            self.grouping_preview_worker = None
-        else:
-            self.grouping_preview_thread = temp_thread
+        self._stop_worker("grouping_preview_thread", "grouping_preview_worker")
 
     def _cleanup_grouping_workflow_refs(self):
-        if self.grouping_workflow_worker:
-            self.grouping_workflow_worker.deleteLater()
-            self.grouping_workflow_worker = None
-        if self.grouping_workflow_thread:
-            self.grouping_workflow_thread.deleteLater()
-            self.grouping_workflow_thread = None
-        logger.info("Grouping workflow thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "grouping_workflow_thread",
+            "grouping_workflow_worker",
+            "Grouping workflow",
+        )
 
     def start_grouping_workflow(
         self,
@@ -675,19 +651,11 @@ class WorkerManager(QObject):
         logger.info("Grouping workflow thread started.")
 
     def stop_grouping_workflow(self):
-        worker_stop = (
-            self.grouping_workflow_worker.stop
-            if self.grouping_workflow_worker
-            else None
+        self._stop_worker(
+            "grouping_workflow_thread",
+            "grouping_workflow_worker",
+            allow_terminate=False,
         )
-        temp_thread, _ = self._terminate_thread(
-            self.grouping_workflow_thread, worker_stop, allow_terminate=False
-        )
-        if temp_thread is None:
-            self.grouping_workflow_thread = None
-            self.grouping_workflow_worker = None
-        else:
-            self.grouping_workflow_thread = temp_thread
 
     def stop_all_workers(self):
         logger.info("Stopping all workers...")
@@ -700,6 +668,7 @@ class WorkerManager(QObject):
         self.stop_rotation_application()
         self.stop_thumbnail_preload()
         self.stop_cuda_detection()
+        self.stop_update_check()
         self.stop_best_shot_analysis()
         self.stop_ai_rating()
         self.stop_grouping_preview()
@@ -792,17 +761,20 @@ class WorkerManager(QObject):
 
     def _cleanup_update_check_worker(self):
         """Clean up the update check worker and thread."""
-        if self.update_check_thread is not None:
-            self.update_check_thread.quit()
-            self.update_check_thread.wait()
-            self.update_check_thread = None
-        self.update_check_worker = None
+        self._finish_worker_slot(
+            "update_check_thread", "update_check_worker", "Update check"
+        )
 
     def is_update_check_running(self) -> bool:
         return (
             self.update_check_thread is not None
             and self.update_check_thread.isRunning()
         )
+
+    def stop_update_check(self) -> None:
+        """Stop an in-flight update check during application shutdown."""
+
+        self._stop_worker("update_check_thread", "update_check_worker")
 
     def is_any_worker_running(self) -> bool:
         return (
@@ -818,6 +790,11 @@ class WorkerManager(QObject):
             or self.is_thumbnail_preload_running()
             or self.is_grouping_preview_running()
             or self.is_grouping_workflow_running()
+            or self.is_best_shot_worker_running()
+            or self.is_ai_rating_running()
+            or self.is_pick_best_running()
+            or self.is_easy_delete_running()
+            or self.is_fix_rotation_running()
         )
 
     # --- Rating Writer Management ---
@@ -861,11 +838,9 @@ class WorkerManager(QObject):
 
     def _cleanup_rating_writer_worker(self):
         """Clean up the rating writer worker and thread."""
-        if self.rating_writer_thread is not None:
-            self.rating_writer_thread.quit()
-            self.rating_writer_thread.wait()
-            self.rating_writer_thread = None
-        self.rating_writer_worker = None
+        self._finish_worker_slot(
+            "rating_writer_thread", "rating_writer_worker", "Rating writer"
+        )
 
     def is_rating_writer_running(self) -> bool:
         return (
@@ -875,15 +850,7 @@ class WorkerManager(QObject):
 
     def stop_rating_writer(self):
         """Stop the rating writer thread."""
-        worker_stop = (
-            self.rating_writer_worker.stop if self.rating_writer_worker else None
-        )
-        temp_thread, _ = self._terminate_thread(self.rating_writer_thread, worker_stop)
-        if temp_thread is None:
-            self.rating_writer_thread = None
-            self.rating_writer_worker = None
-        else:
-            self.rating_writer_thread = temp_thread
+        self._stop_worker("rating_writer_thread", "rating_writer_worker")
 
     # --- Rotation Application Management ---
     def start_rotation_application(
@@ -935,11 +902,11 @@ class WorkerManager(QObject):
 
     def _cleanup_rotation_application_worker(self):
         """Clean up the rotation application worker and thread."""
-        if self.rotation_application_thread is not None:
-            self.rotation_application_thread.quit()
-            self.rotation_application_thread.wait()
-            self.rotation_application_thread = None
-        self.rotation_application_worker = None
+        self._finish_worker_slot(
+            "rotation_application_thread",
+            "rotation_application_worker",
+            "Rotation application",
+        )
 
     def is_rotation_application_running(self) -> bool:
         return (
@@ -949,19 +916,7 @@ class WorkerManager(QObject):
 
     def stop_rotation_application(self):
         """Stop the rotation application thread."""
-        worker_stop = (
-            self.rotation_application_worker.stop
-            if self.rotation_application_worker
-            else None
-        )
-        temp_thread, _ = self._terminate_thread(
-            self.rotation_application_thread, worker_stop
-        )
-        if temp_thread is None:
-            self.rotation_application_thread = None
-            self.rotation_application_worker = None
-        else:
-            self.rotation_application_thread = temp_thread
+        self._stop_worker("rotation_application_thread", "rotation_application_worker")
 
     # --- Thumbnail Preload Management ---
     def start_thumbnail_preload(self, image_paths: List[str]):
@@ -1002,11 +957,11 @@ class WorkerManager(QObject):
 
     def _cleanup_thumbnail_preload_worker(self):
         """Clean up the thumbnail preload worker and thread."""
-        if self.thumbnail_preload_thread is not None:
-            self.thumbnail_preload_thread.quit()
-            self.thumbnail_preload_thread.wait()
-            self.thumbnail_preload_thread = None
-        self.thumbnail_preload_worker = None
+        self._finish_worker_slot(
+            "thumbnail_preload_thread",
+            "thumbnail_preload_worker",
+            "Thumbnail preload",
+        )
 
     def is_thumbnail_preload_running(self) -> bool:
         return (
@@ -1016,45 +971,15 @@ class WorkerManager(QObject):
 
     def stop_thumbnail_preload(self):
         """Stop the thumbnail preload thread."""
-        worker_stop = (
-            self.thumbnail_preload_worker.stop
-            if self.thumbnail_preload_worker
-            else None
-        )
-        temp_thread, _ = self._terminate_thread(
-            self.thumbnail_preload_thread, worker_stop
-        )
-        if temp_thread is None:
-            self.thumbnail_preload_thread = None
-            self.thumbnail_preload_worker = None
-        else:
-            self.thumbnail_preload_thread = temp_thread
+        self._stop_worker("thumbnail_preload_thread", "thumbnail_preload_worker")
 
     def _cleanup_best_shot_worker(self):
-        if self.best_shot_worker:
-            try:
-                if not sip.isdeleted(self.best_shot_worker):
-                    self.best_shot_worker.deleteLater()
-            except Exception:
-                logger.debug("Best shot worker already deleted.", exc_info=True)
-            self.best_shot_worker = None
-        if self.best_shot_thread:
-            self.best_shot_thread.deleteLater()
-            self.best_shot_thread = None
-        logger.info("Best shot analysis thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "best_shot_thread", "best_shot_worker", "Best shot analysis"
+        )
 
     def _cleanup_ai_rating_worker(self):
-        if self.ai_rating_worker:
-            try:
-                if not sip.isdeleted(self.ai_rating_worker):
-                    self.ai_rating_worker.deleteLater()
-            except Exception:
-                logger.debug("AI rating worker already deleted.", exc_info=True)
-            self.ai_rating_worker = None
-        if self.ai_rating_thread:
-            self.ai_rating_thread.deleteLater()
-            self.ai_rating_thread = None
-        logger.info("AI rating thread and worker cleaned up.")
+        self._cleanup_worker_refs("ai_rating_thread", "ai_rating_worker", "AI rating")
 
     def start_pick_best_analysis(self, cluster_map: Dict[int, List[str]]) -> None:
         """Start the pick-best scoring worker."""
@@ -1084,26 +1009,12 @@ class WorkerManager(QObject):
         logger.info("Pick best analysis thread started.")
 
     def stop_pick_best_analysis(self) -> None:
-        worker_stop = self.pick_best_worker.stop if self.pick_best_worker else None
-        temp_thread, _ = self._terminate_thread(self.pick_best_thread, worker_stop)
-        if temp_thread is None:
-            self.pick_best_thread = None
-            self.pick_best_worker = None
-        else:
-            self.pick_best_thread = temp_thread
+        self._stop_worker("pick_best_thread", "pick_best_worker")
 
     def _cleanup_pick_best_worker(self) -> None:
-        if self.pick_best_worker:
-            try:
-                if not sip.isdeleted(self.pick_best_worker):
-                    self.pick_best_worker.deleteLater()
-            except Exception:
-                logger.debug("Pick best worker already deleted.", exc_info=True)
-            self.pick_best_worker = None
-        if self.pick_best_thread:
-            self.pick_best_thread.deleteLater()
-            self.pick_best_thread = None
-        logger.info("Pick best thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "pick_best_thread", "pick_best_worker", "Pick best analysis"
+        )
 
     def start_easy_delete_analysis(
         self,
@@ -1140,13 +1051,7 @@ class WorkerManager(QObject):
         logger.info("Easy delete analysis thread started.")
 
     def stop_easy_delete_analysis(self) -> None:
-        worker_stop = self.easy_delete_worker.stop if self.easy_delete_worker else None
-        temp_thread, _ = self._terminate_thread(self.easy_delete_thread, worker_stop)
-        if temp_thread is None:
-            self.easy_delete_thread = None
-            self.easy_delete_worker = None
-        else:
-            self.easy_delete_thread = temp_thread
+        self._stop_worker("easy_delete_thread", "easy_delete_worker")
 
     def is_easy_delete_running(self) -> bool:
         return (
@@ -1154,17 +1059,9 @@ class WorkerManager(QObject):
         )
 
     def _cleanup_easy_delete_worker(self) -> None:
-        if self.easy_delete_worker:
-            try:
-                if not sip.isdeleted(self.easy_delete_worker):
-                    self.easy_delete_worker.deleteLater()
-            except Exception:
-                logger.debug("Easy delete worker already deleted.", exc_info=True)
-            self.easy_delete_worker = None
-        if self.easy_delete_thread:
-            self.easy_delete_thread.deleteLater()
-            self.easy_delete_thread = None
-        logger.info("Easy delete thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "easy_delete_thread", "easy_delete_worker", "Easy delete analysis"
+        )
 
     # ------------------------------------------------------------------
     # Fix Rotation Detection
@@ -1220,19 +1117,7 @@ class WorkerManager(QObject):
         logger.info("Fix rotation detection thread started.")
 
     def stop_fix_rotation_detection(self) -> None:
-        worker_stop = (
-            self.fix_rotation_detect_worker.stop
-            if self.fix_rotation_detect_worker
-            else None
-        )
-        temp_thread, _ = self._terminate_thread(
-            self.fix_rotation_detect_thread, worker_stop
-        )
-        if temp_thread is None:
-            self.fix_rotation_detect_thread = None
-            self.fix_rotation_detect_worker = None
-        else:
-            self.fix_rotation_detect_thread = temp_thread
+        self._stop_worker("fix_rotation_detect_thread", "fix_rotation_detect_worker")
 
     def is_fix_rotation_running(self) -> bool:
         return (
@@ -1241,19 +1126,11 @@ class WorkerManager(QObject):
         )
 
     def _cleanup_fix_rotation_detect_worker(self) -> None:
-        if self.fix_rotation_detect_worker:
-            try:
-                if not sip.isdeleted(self.fix_rotation_detect_worker):
-                    self.fix_rotation_detect_worker.deleteLater()
-            except Exception:
-                logger.debug(
-                    "Fix rotation detect worker already deleted.", exc_info=True
-                )
-            self.fix_rotation_detect_worker = None
-        if self.fix_rotation_detect_thread:
-            self.fix_rotation_detect_thread.deleteLater()
-            self.fix_rotation_detect_thread = None
-        logger.info("Fix rotation detect thread and worker cleaned up.")
+        self._cleanup_worker_refs(
+            "fix_rotation_detect_thread",
+            "fix_rotation_detect_worker",
+            "Fix rotation detection",
+        )
 
     def start_best_shot_analysis(
         self,
@@ -1292,13 +1169,7 @@ class WorkerManager(QObject):
         logger.info("Best shot analysis thread started.")
 
     def stop_best_shot_analysis(self):
-        worker_stop = self.best_shot_worker.stop if self.best_shot_worker else None
-        temp_thread, _ = self._terminate_thread(self.best_shot_thread, worker_stop)
-        if temp_thread is None:
-            self.best_shot_thread = None
-            self.best_shot_worker = None
-        else:
-            self.best_shot_thread = temp_thread
+        self._stop_worker("best_shot_thread", "best_shot_worker")
 
     def start_ai_rating(
         self,
@@ -1332,10 +1203,4 @@ class WorkerManager(QObject):
         logger.info("AI rating thread started.")
 
     def stop_ai_rating(self) -> None:
-        worker_stop = self.ai_rating_worker.stop if self.ai_rating_worker else None
-        temp_thread, _ = self._terminate_thread(self.ai_rating_thread, worker_stop)
-        if temp_thread is None:
-            self.ai_rating_thread = None
-            self.ai_rating_worker = None
-        else:
-            self.ai_rating_thread = temp_thread
+        self._stop_worker("ai_rating_thread", "ai_rating_worker")

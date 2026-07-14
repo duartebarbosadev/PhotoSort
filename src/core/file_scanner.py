@@ -146,7 +146,9 @@ class FileScanner(QObject):
                         try:
                             stat_result = os.stat(full_path)
                         except OSError:
-                            logger.info("Skipping inaccessible file during scan: %s", full_path)
+                            logger.info(
+                                "Skipping inaccessible file during scan: %s", full_path
+                            )
                             continue
 
                         media_type = "video" if is_video_extension(ext) else "image"

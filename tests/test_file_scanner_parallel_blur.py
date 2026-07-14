@@ -271,7 +271,9 @@ class TestFileScannerParallelBlur:
         scanner.scan_directory(str(tmp_path))
 
         assert [len(batch) for batch in emitted_batches] == [64, 6]
-        assert all(item["file_size"] == 5 for batch in emitted_batches for item in batch)
+        assert all(
+            item["file_size"] == 5 for batch in emitted_batches for item in batch
+        )
         assert all(item["mtime_ns"] > 0 for batch in emitted_batches for item in batch)
 
     @patch("core.file_scanner.BlurDetector")

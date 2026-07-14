@@ -14,7 +14,9 @@ def _context(item_count=100):
         menu_manager=SimpleNamespace(toggle_thumbnails_action=action),
         worker_manager=worker_manager,
         app_state=SimpleNamespace(
-            image_files_data=[{"path": f"image-{index}.jpg"} for index in range(item_count)]
+            image_files_data=[
+                {"path": f"image-{index}.jpg"} for index in range(item_count)
+            ]
         ),
     )
 
@@ -27,9 +29,7 @@ def test_fallback_thumbnail_load_is_bounded_and_deduplicated():
     loader._load_visible_batch()
     loader._load_visible_batch()
 
-    expected = [
-        f"image-{index}.jpg" for index in range(THUMBNAIL_PRELOAD_BATCH_SIZE)
-    ]
+    expected = [f"image-{index}.jpg" for index in range(THUMBNAIL_PRELOAD_BATCH_SIZE)]
     context.worker_manager.start_thumbnail_preload.assert_called_once_with(expected)
 
 

@@ -38,9 +38,7 @@ class ViewportThumbnailLoader(QObject):
 
         paths: List[str] = []
         index = view.indexAt(QPoint(1, 1))
-        limit = THUMBNAIL_PRELOAD_BATCH_SIZE + (
-            THUMBNAIL_PRELOAD_VISIBLE_MARGIN * 2
-        )
+        limit = THUMBNAIL_PRELOAD_BATCH_SIZE + (THUMBNAIL_PRELOAD_VISIBLE_MARGIN * 2)
         if isinstance(view, QTreeView):
             if not index.isValid():
                 index = view.model().index(0, 0)
@@ -61,8 +59,7 @@ class ViewportThumbnailLoader(QObject):
         model = view.model()
         start_row = max(
             0,
-            (index.row() if index.isValid() else 0)
-            - THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
+            (index.row() if index.isValid() else 0) - THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
         )
         for row in range(start_row, min(model.rowCount(), start_row + limit)):
             item_data = model.index(row, 0).data(Qt.ItemDataRole.UserRole)
@@ -87,9 +84,7 @@ class ViewportThumbnailLoader(QObject):
                 ]
                 if item.get("path")
             ]
-        pending = [
-            path for path in candidates if path not in self._requested_paths
-        ]
+        pending = [path for path in candidates if path not in self._requested_paths]
         if not pending:
             return
         self._requested_paths.update(pending)

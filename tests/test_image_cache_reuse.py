@@ -84,7 +84,9 @@ def test_concurrent_thumbnail_requests_generate_once(tmp_path):
     ) as processor:
         with ThreadPoolExecutor(max_workers=4) as executor:
             images = list(
-                executor.map(lambda _: pipeline._get_pil_thumbnail(str(source)), range(4))
+                executor.map(
+                    lambda _: pipeline._get_pil_thumbnail(str(source)), range(4)
+                )
             )
 
     assert all(image is not None for image in images)

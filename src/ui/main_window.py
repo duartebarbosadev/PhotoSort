@@ -50,14 +50,9 @@ import sys
 
 from core.image_pipeline import ImagePipeline
 from core.image_file_ops import ImageFileOperations
-from core.image_processing.raw_image_processor import is_raw_extension
-
 from core.metadata_processor import MetadataProcessor  # New metadata processor
 from core.media_utils import is_video_extension
 from core.app_settings import (
-    get_preview_cache_size_gb,
-    set_preview_cache_size_gb,
-    set_exif_cache_size_mb,
     DEFAULT_BLUR_DETECTION_THRESHOLD,
     LEFT_PANEL_STRETCH,
     CENTER_PANEL_STRETCH,
@@ -90,105 +85,16 @@ from ui.controllers.navigation_controller import NavigationController
 from ui.controllers.selection_controller import SelectionController
 from ui.controllers.similarity_controller import SimilarityController
 from ui.controllers.metadata_controller import MetadataController
+from ui.controllers.cache_controller import CacheController
+from ui.controllers.status_controller import StatusController
 from ui.thumbnail_load_coordinator import ViewportThumbnailLoader
+from ui.models.media_filter_proxy import (
+    CustomFilterProxyModel,
+    RATING_FILTER_OPTIONS,
+)
 
 logger = logging.getLogger(__name__)
 FILTER_LOG_INTERVAL = 100
-
-RATING_FILTER_DEFINITIONS = [
-    ("Show All", ("all", 0)),
-    ("Unrated (0)", ("eq", 0)),
-    ("Exactly 1 Star", ("eq", 1)),
-    ("1 Star +", ("ge", 1)),
-    ("Exactly 2 Stars", ("eq", 2)),
-    ("2 Stars +", ("ge", 2)),
-    ("Exactly 3 Stars", ("eq", 3)),
-    ("3 Stars +", ("ge", 3)),
-    ("Exactly 4 Stars", ("eq", 4)),
-    ("4 Stars +", ("ge", 4)),
-    ("5 Stars", ("eq", 5)),
-]
-
-RATING_FILTER_RULES = {label: rule for label, rule in RATING_FILTER_DEFINITIONS}
-RATING_FILTER_OPTIONS = [label for label, _ in RATING_FILTER_DEFINITIONS]
-
-
-def rating_matches_filter(filter_label: str, current_rating: int) -> bool:
-    rule = RATING_FILTER_RULES.get(filter_label)
-    if not rule:
-        return True
-    mode, threshold = rule
-    if mode == "all":
-        return True
-    if mode == "eq":
-        return current_rating == threshold
-    if mode == "ge":
-        return current_rating >= threshold
-    return True
-
-
-# --- Custom Proxy Model for Filtering ---
-class CustomFilterProxyModel(QSortFilterProxyModel):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.current_rating_filter = "Show All"
-        self.current_cluster_filter_id = -1
-        self.app_state_ref: Optional[AppState] = None
-        self.show_folders_mode_ref = False
-        self.current_view_mode_ref = "list"
-
-    def _check_item_passes_filter(self, item: QStandardItem) -> bool:
-        item_user_data = item.data(Qt.ItemDataRole.UserRole)
-        item_text = item.text()
-
-        is_image_item = isinstance(item_user_data, dict) and "path" in item_user_data
-
-        if not is_image_item:
-            return False
-
-        file_path = item_user_data["path"]
-        search_text = self.filterRegularExpression().pattern().lower()
-        search_match = search_text in item_text.lower()
-        if not search_match:
-            return False
-
-        if not self.app_state_ref:
-            return True
-
-        current_rating = self.app_state_ref.rating_cache.get(
-            file_path, 0
-        )  # Uses in-memory cache, populated by RatingLoaderWorker
-        rating_filter = self.current_rating_filter
-        rating_passes = rating_matches_filter(rating_filter, current_rating)
-        if not rating_passes:
-            return False
-
-        cluster_filter_id = self.current_cluster_filter_id
-        cluster_passes = cluster_filter_id == -1 or (
-            self.app_state_ref.cluster_results.get(file_path) == cluster_filter_id
-        )
-        if not cluster_passes:
-            return False
-        return True
-
-    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
-        source_model = self.sourceModel()
-        source_index = source_model.index(source_row, 0, source_parent)
-        if not source_index.isValid():
-            return False
-
-        item = source_model.itemFromIndex(source_index)
-        if not item:
-            return False
-
-        if self._check_item_passes_filter(item):
-            return True
-
-        if item.hasChildren():
-            for i in range(item.rowCount()):
-                if self.filterAcceptsRow(i, source_index):
-                    return True
-        return False
 
 
 class MainWindow(QMainWindow):
@@ -252,6 +158,8 @@ class MainWindow(QMainWindow):
         self.filter_controller = FilterController(self)
         self.similarity_controller = SimilarityController(self)
         self.metadata_controller = MetadataController(self)
+        self.cache_controller = CacheController(self)
+        self.status_controller = StatusController(self)
 
         # Hotkey controller wraps navigation key handling
         self.hotkey_controller = HotkeyController(self)
@@ -311,104 +219,9 @@ class MainWindow(QMainWindow):
         # Start automatic update check after a short delay
         QTimer.singleShot(2000, self.app_controller.automatic_check_for_updates)
 
-    def _should_apply_raw_processing(self, file_path: str) -> bool:
-        """Determine if RAW processing should be applied to the given file."""
-        if not file_path:
-            return False
-        ext = os.path.splitext(file_path)[1].lower()
-        return is_raw_extension(ext)
-
     # Helper method to update the image information in status bar
     def _update_image_info_label(self, status_message_override: Optional[str] = None):
-        if status_message_override:
-            self.statusBar().showMessage(status_message_override)
-            if hasattr(self, "left_panel"):
-                folder_display = None
-                if self.app_state.current_folder_path:
-                    folder_display = os.path.basename(
-                        self.app_state.current_folder_path
-                    )
-                    if not folder_display:
-                        folder_display = self.app_state.current_folder_path
-                item_count = len(getattr(self.app_state, "image_files_data", []) or [])
-                self.left_panel.update_context(
-                    folder_display,
-                    item_count,
-                    status_message_override.replace("Folder: ", "", 1),
-                )
-            return
-
-        num_images = 0
-        num_videos = 0
-        total_size_mb = 0.0
-        folder_name_display = "N/A"
-        sidebar_title = None
-        sidebar_subtitle = "Open a folder to start sorting your library."
-        sidebar_item_count = 0
-        # Default text if no folder is loaded yet
-        status_text = "No folder loaded. Open a folder to begin."
-        scan_logically_active = False
-
-        if self.app_state.current_folder_path:
-            folder_name_display = os.path.basename(self.app_state.current_folder_path)
-            if not folder_name_display:  # Handles "C:/"
-                folder_name_display = self.app_state.current_folder_path
-            sidebar_title = folder_name_display
-
-            # Determine if scan is considered "active" based on UI elements
-            # open_folder_action is disabled during the scan process.
-            scan_logically_active = not self.menu_manager.open_folder_action.isEnabled()
-
-            if scan_logically_active:
-                # Scan is in progress
-                num_files_found_so_far = len(
-                    self.app_state.image_files_data
-                )  # Current count during scan
-                status_text = f"Folder: {folder_name_display}  |  Scanning... ({num_files_found_so_far} files found)"
-                sidebar_item_count = num_files_found_so_far
-                sidebar_subtitle = (
-                    f"Scanning library • {num_files_found_so_far} files found"
-                )
-            elif self.app_state.image_files_data:  # Scan is finished and there's data
-                num_images = len(self.app_state.image_files_data)
-                num_videos = sum(
-                    1
-                    for file_data in self.app_state.image_files_data
-                    if file_data.get("media_type") == "video"
-                )
-                num_images -= num_videos
-                current_files_size_bytes = sum(
-                    int(file_data.get("file_size") or 0)
-                    for file_data in self.app_state.image_files_data
-                )
-                total_size_mb = current_files_size_bytes / (1024 * 1024)
-
-                # Add cache size information to the status text
-                preview_cache_size_bytes = self.image_pipeline.preview_cache.volume()
-                preview_cache_size_mb = preview_cache_size_bytes / (1024 * 1024)
-
-                status_text = (
-                    f"Folder: {folder_name_display} | "
-                    f"Images: {num_images} | Videos: {num_videos} "
-                    f"({total_size_mb:.2f} MB) | "
-                    f"Preview Cache: {preview_cache_size_mb:.2f} MB"
-                )
-                sidebar_item_count = len(self.app_state.image_files_data)
-                sidebar_subtitle = (
-                    f"{num_images} images • {num_videos} videos • "
-                    f"{total_size_mb:.1f} MB"
-                )
-            else:  # Folder path set, scan finished (or not started if folder just selected), no image data
-                status_text = f"Folder: {folder_name_display}  |  Files: 0 (0.00 MB)"
-                sidebar_subtitle = "No supported media files found yet."
-
-        self.statusBar().showMessage(status_text)
-        if hasattr(self, "left_panel"):
-            self.left_panel.update_context(
-                sidebar_title,
-                sidebar_item_count,
-                sidebar_subtitle,
-            )
+        self.status_controller.update(status_message_override)
 
     # --- Helper for controllers ---
     def _determine_current_view_mode(self) -> str:
@@ -481,161 +294,25 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
 
     def _update_cache_dialog_labels(self):
-        thumb_usage_bytes = self.image_pipeline.thumbnail_cache.volume()
-        self.thumb_cache_usage_label.setText(
-            f"{thumb_usage_bytes / (1024 * 1024):.2f} MB"
-        )
-
-        configured_gb = get_preview_cache_size_gb()
-        self.preview_cache_configured_limit_label.setText(f"{configured_gb:.2f} GB")
-
-        preview_usage_bytes = self.image_pipeline.preview_cache.volume()
-        self.preview_cache_usage_label.setText(
-            f"{preview_usage_bytes / (1024 * 1024):.2f} MB"
-        )
-
-        # Update EXIF cache labels
-        if hasattr(self, "app_state") and self.app_state.exif_disk_cache:
-            exif_configured_mb = (
-                self.app_state.exif_disk_cache.get_current_size_limit_mb()
-            )
-            self.exif_cache_configured_limit_label.setText(f"{exif_configured_mb} MB")
-            exif_usage_bytes = self.app_state.exif_disk_cache.volume()
-            self.exif_cache_usage_label.setText(
-                f"{exif_usage_bytes / (1024 * 1024):.2f} MB"
-            )
-        else:  # Fallback if app_state or exif_disk_cache is not yet fully initialized
-            self.exif_cache_configured_limit_label.setText("N/A")
-            self.exif_cache_usage_label.setText("N/A")
-
-        if hasattr(self, "analysis_cache_usage_label"):
-            usage_text = "N/A"
-            analysis_cache = getattr(self.app_state, "analysis_cache", None)
-            if analysis_cache:
-                try:
-                    volume_bytes = analysis_cache.volume()
-                    usage_text = f"{volume_bytes / (1024 * 1024):.2f} MB"
-                except Exception:
-                    usage_text = "Error"
-            self.analysis_cache_usage_label.setText(usage_text)
+        self.cache_controller.update_labels()
 
     def _clear_thumbnail_cache_action(self):
-        self.image_pipeline.thumbnail_cache.clear()
-        self.statusBar().showMessage("Thumbnail cache cleared.", 5000)
-        self._update_cache_dialog_labels()
-        self._refresh_visible_items_icons()
+        self.cache_controller.clear_thumbnail_cache()
 
     def _clear_preview_cache_action(self):
-        self.image_pipeline.preview_cache.clear()
-        self.statusBar().showMessage(
-            "Preview cache cleared. Previews will regenerate.", 5000
-        )
-        self._update_cache_dialog_labels()
-        self._refresh_current_selection_preview()
+        self.cache_controller.clear_preview_cache()
 
     def _clear_analysis_cache_action(self):
-        analysis_cache = getattr(self.app_state, "analysis_cache", None)
-        if not analysis_cache:
-            self.statusBar().showMessage("Analysis cache is not available.", 3000)
-            return
-        try:
-            analysis_cache.clear_all()
-            self.statusBar().showMessage("Analysis cache cleared.", 5000)
-        except Exception:
-            logger.error("Failed to clear analysis cache.", exc_info=True)
-            self.statusBar().showMessage("Failed to clear analysis cache.", 5000)
-        finally:
-            self.group_by_similarity_mode = False
-            self.app_state.cluster_results.clear()
-            self.app_state.clear_best_shot_results()
-            self.cluster_filter_combo.clear()
-            self.cluster_filter_combo.addItem("All Clusters")
-            self.cluster_filter_combo.setEnabled(False)
-            self.menu_manager.group_by_similarity_action.setChecked(False)
-            self.menu_manager.group_by_similarity_action.setEnabled(
-                bool(self.app_state.image_files_data)
-            )
-            self.menu_manager.set_cluster_sort_menu_visible(False)
-            self.menu_manager.set_cluster_sort_menu_enabled(False)
-            self.cluster_sort_combo.setEnabled(False)
-            self.menu_manager.analyze_best_shots_action.setEnabled(False)
-            self.menu_manager.stop_best_shots_action.setEnabled(False)
-            if hasattr(self.menu_manager, "analyze_best_shots_selected_action"):
-                self.menu_manager.analyze_best_shots_selected_action.setEnabled(
-                    bool(self.app_state.image_files_data)
-                )
-            if hasattr(self.menu_manager, "analyze_similarity_action"):
-                self.menu_manager.analyze_similarity_action.setEnabled(
-                    bool(self.app_state.image_files_data)
-                )
-            self.refresh_navigation_shortcut_actions()
-            self._rebuild_model_view()
-            self._update_cache_dialog_labels()
+        self.cache_controller.clear_analysis_cache()
 
     def _apply_preview_cache_limit_action(self):
-        selected_index = self.preview_cache_size_combo.currentIndex()
-        new_size_gb = 0
-        if self.preview_cache_size_combo.itemText(selected_index).endswith("(Custom)"):
-            new_size_gb = float(
-                self.preview_cache_size_combo.itemText(selected_index).split(" ")[0]
-            )
-        elif 0 <= selected_index < len(self.preview_cache_size_options_gb):
-            new_size_gb = self.preview_cache_size_options_gb[selected_index]
-        else:
-            self.statusBar().showMessage("Invalid selection for cache size.", 3000)
-            return
-
-        current_size_gb = get_preview_cache_size_gb()
-        if new_size_gb != current_size_gb:
-            set_preview_cache_size_gb(new_size_gb)
-            self.image_pipeline.reinitialize_preview_cache_from_settings()
-            self.statusBar().showMessage(
-                f"Preview cache limit set to {new_size_gb:.2f} GB. Cache reinitialized.",
-                5000,
-            )
-        else:
-            self.statusBar().showMessage(
-                f"Preview cache limit is already {new_size_gb:.2f} GB.", 3000
-            )
-        self._update_cache_dialog_labels()
+        self.cache_controller.apply_preview_cache_limit()
 
     def _clear_exif_cache_action(self):
-        if self.app_state.exif_disk_cache:
-            self.app_state.exif_disk_cache.clear()
-            self.app_state.rating_disk_cache.clear()
-            self.statusBar().showMessage("EXIF and rating caches cleared.", 5000)
-            self._update_cache_dialog_labels()
-            # No direct visual refresh needed for EXIF data itself in list/grid,
-            # but metadata display for current image might need update
-            self._refresh_current_selection_preview()
+        self.cache_controller.clear_exif_cache()
 
     def _apply_exif_cache_limit_action(self):
-        selected_index = self.exif_cache_size_combo.currentIndex()
-        new_size_mb = 0
-        if self.exif_cache_size_combo.itemText(selected_index).endswith("(Custom)"):
-            new_size_mb = int(
-                self.exif_cache_size_combo.itemText(selected_index).split(" ")[0]
-            )
-        elif 0 <= selected_index < len(self.exif_cache_size_options_mb):
-            new_size_mb = self.exif_cache_size_options_mb[selected_index]
-        else:
-            self.statusBar().showMessage("Invalid selection for EXIF cache size.", 3000)
-            return
-
-        if self.app_state.exif_disk_cache:
-            current_size_mb = self.app_state.exif_disk_cache.get_current_size_limit_mb()
-            if new_size_mb != current_size_mb:
-                set_exif_cache_size_mb(new_size_mb)  # Update app_settings
-                self.app_state.exif_disk_cache.reinitialize_from_settings()  # Reinitialize ExifCache
-                self.statusBar().showMessage(
-                    f"EXIF cache limit set to {new_size_mb} MB. Cache reinitialized.",
-                    5000,
-                )
-            else:
-                self.statusBar().showMessage(
-                    f"EXIF cache limit is already {new_size_mb} MB.", 3000
-                )
-        self._update_cache_dialog_labels()
+        self.cache_controller.apply_exif_cache_limit()
 
     def _refresh_visible_items_icons(self):
         active_view = self._get_active_file_view()
@@ -1254,12 +931,8 @@ class MainWindow(QMainWindow):
                 lambda: bool(self.app_state.marked_for_deletion)
             )
             widget.skip_requested.connect(self.show_fix_rotation_step)
-            widget.proceed_to_pick_best_requested.connect(
-                self.show_fix_rotation_step
-            )
-            widget.mark_for_deletion_requested.connect(
-                self._mark_paths_for_deletion
-            )
+            widget.proceed_to_pick_best_requested.connect(self.show_fix_rotation_step)
+            widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
             )
@@ -1292,9 +965,7 @@ class MainWindow(QMainWindow):
             )
             widget.skip_requested.connect(self.show_cull_step)
             widget.proceed_to_cull_requested.connect(self.show_cull_step)
-            widget.mark_for_deletion_requested.connect(
-                self._mark_paths_for_deletion
-            )
+            widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
             )
@@ -1562,7 +1233,7 @@ class MainWindow(QMainWindow):
             root_item.appendRow(item)
 
     def _populate_model_standard(
-        self, parent_item: QStandardItem, image_data_list: List[Dict[str, any]]
+        self, parent_item: QStandardItem, image_data_list: List[Dict[str, Any]]
     ):
         if not image_data_list:
             return
@@ -1574,7 +1245,7 @@ class MainWindow(QMainWindow):
         processed_count = 0
 
         if self.show_folders_mode and not self.group_by_similarity_mode:
-            files_by_folder: Dict[str, List[Dict[str, any]]] = {}
+            files_by_folder: Dict[str, List[Dict[str, Any]]] = {}
             for file_data in image_data_list:
                 f_path = file_data["path"]
                 folder = os.path.dirname(f_path)
@@ -1918,14 +1589,14 @@ class MainWindow(QMainWindow):
         user_data = item.data(Qt.ItemDataRole.UserRole)
         is_group = False
         if isinstance(user_data, str):
-            if user_data.startswith("cluster_header_") or user_data.startswith(
-                "date_header_"
-            ):
-                is_group = True
-            elif (
-                self.show_folders_mode
-                and not self.group_by_similarity_mode
-                and os.path.isdir(user_data)
+            if (
+                user_data.startswith("cluster_header_")
+                or user_data.startswith("date_header_")
+                or (
+                    self.show_folders_mode
+                    and not self.group_by_similarity_mode
+                    and os.path.isdir(user_data)
+                )
             ):
                 is_group = True
 
@@ -3144,12 +2815,12 @@ class MainWindow(QMainWindow):
         self.refresh_navigation_shortcut_actions()
 
     def _populate_model_by_date(
-        self, parent_item: QStandardItem, image_data_list: List[Dict[str, any]]
+        self, parent_item: QStandardItem, image_data_list: List[Dict[str, Any]]
     ):
         if not image_data_list:
             return
 
-        images_by_year_month: Dict[any, Dict[int, List[Dict[str, any]]]] = {}
+        images_by_year_month: Dict[Any, Dict[int, List[Dict[str, Any]]]] = {}
         unknown_date_key = "Unknown Date"
 
         for file_data in image_data_list:
@@ -3206,7 +2877,7 @@ class MainWindow(QMainWindow):
                     image_item = self._create_standard_item(file_data)
                     parent_for_images.appendRow(image_item)
 
-    def _create_standard_item(self, file_data: Dict[str, any]):
+    def _create_standard_item(self, file_data: Dict[str, Any]):
         file_path = file_data["path"]
         is_blurred = file_data.get("is_blurred")
         media_type = file_data.get("media_type", "image")
@@ -3256,10 +2927,7 @@ class MainWindow(QMainWindow):
         cluster_id = app_state.cluster_results.get(file_path)
         if cluster_id is None:
             cluster_id = best_info.get("cluster_id")
-        if cluster_id is None:
-            cluster_label = "Selection"
-        else:
-            cluster_label = f"Cluster {cluster_id}"
+        cluster_label = "Selection" if cluster_id is None else f"Cluster {cluster_id}"
 
         metrics = best_info.get("metrics", {}) or {}
         tooltip_lines = [
@@ -4101,9 +3769,7 @@ class MainWindow(QMainWindow):
             return
 
         # Build approved_rotations dict: {path: degrees}
-        approved_rotations = {
-            path: rotation_degrees for path in rotation_supported_paths
-        }
+        approved_rotations = dict.fromkeys(rotation_supported_paths, rotation_degrees)
 
         # Use the app_controller to start the worker (same as auto-rotate)
         self.app_controller._apply_approved_rotations(approved_rotations)
@@ -4508,7 +4174,7 @@ class MainWindow(QMainWindow):
                     first_proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible
                 )
 
-        final_selection_paths = [path for path in marked_files]
+        final_selection_paths = list(marked_files)
         self._handle_file_selection_changed(
             override_selected_paths=final_selection_paths
         )

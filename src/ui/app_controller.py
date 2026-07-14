@@ -162,7 +162,6 @@ class AppController(QObject):
         )
         self.worker_manager.similarity_error.connect(self.handle_similarity_error)
 
-
         # Blur Detection Worker
         self.worker_manager.blur_detection_progress.connect(
             self.handle_blur_detection_progress
@@ -1153,8 +1152,8 @@ class AppController(QObject):
 
     # --- Slots for WorkerManager Signals ---
 
-    def handle_files_found(self, batch_of_file_data: List[Dict[str, any]]):
-        self.app_state.image_files_data.extend(batch_of_file_data)
+    def handle_files_found(self, batch_of_file_data: List[Dict[str, Any]]):
+        self.app_state.extend_file_data(batch_of_file_data)
         self.main_window.update_loading_text(
             f"Scanning... {len(self.app_state.image_files_data)} files found"
         )
@@ -1634,7 +1633,7 @@ class AppController(QObject):
             self.main_window.update_loading_text(
                 "Clustering complete. Updating view..."
             )
-        cluster_ids = sorted(list(set(self.app_state.cluster_results.values())))
+        cluster_ids = sorted(set(self.app_state.cluster_results.values()))
         self.main_window.cluster_filter_combo.clear()
         self.main_window.cluster_filter_combo.addItems(
             ["All Clusters"] + [f"Cluster {cid}" for cid in cluster_ids]

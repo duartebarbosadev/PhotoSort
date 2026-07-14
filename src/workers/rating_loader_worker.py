@@ -2,18 +2,28 @@ import os
 import time
 import logging
 from PyQt6.QtCore import QObject, pyqtSignal
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Protocol
 
 from core.metadata_processor import MetadataProcessor
 from core.caching.rating_cache import RatingCache
-from core.app_settings import METADATA_EMIT_BATCH_SIZE
-from ui.app_state import AppState
+from core.app_settings import (
+    METADATA_EMIT_BATCH_SIZE,
+    METADATA_PROGRESS_EMIT_INTERVAL,
+)
 
 logger = logging.getLogger(__name__)
 
 # DEFAULT_METADATA_WORKERS is no longer needed as batching is handled by MetadataProcessor
 PROGRESS_LOG_INTERVAL = 100
 BATCH_LOG_INTERVAL = 10
+
+
+class MetadataState(Protocol):
+    """Application-state fields the metadata worker is allowed to update."""
+
+    exif_disk_cache: Any
+    rating_cache: Dict[str, int]
+    date_cache: Dict[str, Any]
 
 
 class RatingLoaderWorker(QObject):
@@ -34,7 +44,7 @@ class RatingLoaderWorker(QObject):
         self,
         image_data_list: List[Dict[str, Any]],  # Expects list of dicts with 'path'
         rating_disk_cache: RatingCache,
-        app_state: AppState,
+        app_state: MetadataState,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
@@ -42,13 +52,11 @@ class RatingLoaderWorker(QObject):
         self._rating_disk_cache = rating_disk_cache
         self._app_state = app_state
         self._is_running = True
+        self._allow_emits = True
 
     def stop(self):
         self._is_running = False
         logger.info("Stop requested.")
-
-    # Emission control flag: when False, all emits are skipped (orderly shutdown)
-    _allow_emits: bool = True
 
     def disable_emits(self):
         self._allow_emits = False
@@ -97,11 +105,6 @@ class RatingLoaderWorker(QObject):
                 self._app_state.exif_disk_cache,
             )
 
-            # Use centralized batch size constant
-            PROGRESS_EMIT_INTERVAL = (
-                20  # Emit progress every 20 files, or if it's the last one
-            )
-
             metadata_batch_to_emit = []
             emitted_batch_count = 0
 
@@ -138,29 +141,28 @@ class RatingLoaderWorker(QObject):
                 if current_metadata_tuple:
                     metadata_batch_to_emit.append(current_metadata_tuple)
 
-                if (
+                if metadata_batch_to_emit and (
                     len(metadata_batch_to_emit) >= METADATA_EMIT_BATCH_SIZE
                     or processed_count == total_files
                 ):
-                    if metadata_batch_to_emit:
-                        emitted_batch_count += 1
-                        if (
-                            emitted_batch_count == 1
-                            or emitted_batch_count % BATCH_LOG_INTERVAL == 0
-                            or processed_count == total_files
-                        ):
-                            logger.debug(
-                                "Emitting metadata batch #%d with %d items.",
-                                emitted_batch_count,
-                                len(metadata_batch_to_emit),
-                            )
-                        self._emit(
-                            self.metadata_batch_loaded, list(metadata_batch_to_emit)
-                        )  # Emit a copy
-                        metadata_batch_to_emit.clear()
+                    emitted_batch_count += 1
+                    if (
+                        emitted_batch_count == 1
+                        or emitted_batch_count % BATCH_LOG_INTERVAL == 0
+                        or processed_count == total_files
+                    ):
+                        logger.debug(
+                            "Emitting metadata batch #%d with %d items.",
+                            emitted_batch_count,
+                            len(metadata_batch_to_emit),
+                        )
+                    self._emit(
+                        self.metadata_batch_loaded, list(metadata_batch_to_emit)
+                    )  # Emit a copy
+                    metadata_batch_to_emit.clear()
 
                 if (
-                    processed_count % PROGRESS_EMIT_INTERVAL == 0
+                    processed_count % METADATA_PROGRESS_EMIT_INTERVAL == 0
                     or processed_count == total_files
                     or processed_count == 1
                 ):

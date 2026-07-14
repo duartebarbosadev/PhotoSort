@@ -438,7 +438,7 @@ class ZoomableImageView(QGraphicsView):
         from PyQt6.QtGui import QFont
 
         text_item = QGraphicsTextItem(text)
-        setattr(text_item, "_is_text_item", True)
+        text_item._is_text_item = True
 
         # Style the text with better contrast
         font = QFont()

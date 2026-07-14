@@ -154,6 +154,7 @@ DEFAULT_SAFETY_ITERATION_MULTIPLIER = 2  # Multiplier for safety iteration limit
 # Batch processing
 METADATA_PROCESSING_CHUNK_SIZE = 25  # Chunk size for metadata processing
 METADATA_EMIT_BATCH_SIZE = 50  # Batch size for metadata emission
+METADATA_PROGRESS_EMIT_INTERVAL = 20  # Limit cross-thread progress signals
 FILE_SCAN_EMIT_BATCH_SIZE = 64  # Reduce cross-thread/UI work during discovery
 
 # UI Population Settings (for large folders)
@@ -576,7 +577,9 @@ def set_custom_thread_count(count: int):
     settings.setValue(CUSTOM_THREAD_COUNT_KEY, count)
 
 
-def calculate_max_workers(min_workers: int = 1, max_workers: int = None) -> int:
+def calculate_max_workers(
+    min_workers: int = 1, max_workers: Optional[int] = None
+) -> int:
     """
     Calculate the optimal number of worker threads based on the current performance mode.
 

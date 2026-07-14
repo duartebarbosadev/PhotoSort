@@ -144,9 +144,7 @@ class ImagePipeline:
             apply_orientation,
         )
 
-    def preview_cache_key(
-        self, image_path: str, resolution: Tuple[int, int]
-    ) -> tuple:
+    def preview_cache_key(self, image_path: str, resolution: Tuple[int, int]) -> tuple:
         normalized_path = os.path.normpath(image_path)
         file_size, mtime_ns = self._file_fingerprint(normalized_path)
         apply_auto_edits = is_raw_extension(
@@ -672,9 +670,7 @@ class ImagePipeline:
             if display_max_size:
                 display_pil_img.thumbnail(display_max_size, Image.Resampling.LANCZOS)
 
-            self._cache_set(
-                self.preview_cache, display_cache_key, display_pil_img
-            )
+            self._cache_set(self.preview_cache, display_cache_key, display_pil_img)
             return QPixmap.fromImage(ImageQt(display_pil_img))
 
         # 3. Generate fresh for display size, then cache

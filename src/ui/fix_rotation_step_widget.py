@@ -126,7 +126,7 @@ class FixRotationStepWidget(QWidget):
     def show_results(self, suggestions: Dict[str, int]) -> None:
         self._suggestions = dict(suggestions)
         # Pre-mark all suggestions for rotation
-        self._marked = {p: True for p in suggestions}
+        self._marked = dict.fromkeys(suggestions, True)
         self._ordered_paths = sorted(suggestions.keys(), key=os.path.basename)
         self._current_index = -1
 

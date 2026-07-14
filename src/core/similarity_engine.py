@@ -2,7 +2,6 @@ import os
 import time
 import pickle  # For caching embeddings
 import logging
-import shutil
 from typing import List, Dict, Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 import numpy as np  # Import numpy for array manipulation
@@ -10,6 +9,7 @@ from sklearn.cluster import DBSCAN
 from core.utils.time_utils import format_eta
 
 from core.image_pipeline import ImagePipeline
+from core.image_file_ops import ImageFileOperations
 from core.similarity_embedding_model import (
     SimilarityEmbeddingModel,
     SimilarityModelDownloadError,
@@ -769,27 +769,16 @@ class SimilarityEngine(QObject):
         app_cache_root = get_app_cache_root()
         embedding_cache_dir = os.path.join(app_cache_root, "embeddings")
         logger.info(f"Clearing embedding cache directory: {embedding_cache_dir}")
-        try:
-            if os.path.exists(embedding_cache_dir):
-                for item in os.listdir(embedding_cache_dir):
-                    item_path = os.path.join(embedding_cache_dir, item)
-                    try:
-                        if os.path.isfile(item_path) or os.path.islink(item_path):
-                            os.unlink(item_path)
-                        elif os.path.isdir(item_path):
-                            shutil.rmtree(item_path)
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to delete {item_path}: {e}", exc_info=True
-                        )
-                logger.info("Embedding cache cleared.")
-            else:
-                logger.warning(
-                    f"Embedding cache directory not found: {embedding_cache_dir}"
-                )
-
-        except Exception as e:
-            logger.error(
-                f"Error clearing embedding cache directory '{embedding_cache_dir}': {e}",
-                exc_info=True,
+        if not os.path.isdir(embedding_cache_dir):
+            logger.warning(
+                "Embedding cache directory not found: %s", embedding_cache_dir
             )
+            return
+
+        success, message = ImageFileOperations.clear_directory_contents(
+            embedding_cache_dir
+        )
+        if success:
+            logger.info("Embedding cache cleared.")
+        else:
+            logger.error(message)

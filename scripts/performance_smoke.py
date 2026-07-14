@@ -14,7 +14,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
-sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SRC_ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -51,6 +50,9 @@ def main() -> int:
 
     process_started = time.perf_counter()
     import pyexiv2  # noqa: F401  # Must precede Qt on Windows
+    from core.pyexiv2_init import ensure_pyexiv2_initialized
+
+    ensure_pyexiv2_initialized()
 
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QApplication

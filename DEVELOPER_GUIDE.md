@@ -30,7 +30,8 @@ The application is structured into two main packages: `core` and `ui`.
     - **`main_window.py`**: The main application window (the "View"). It should contain minimal business logic and delegate user actions to the `AppController`.
     - **`app_controller.py`**: The controller that mediates between the UI and the `core` logic. It handles user actions, calls the appropriate `core` services, and updates the UI.
     - **`app_state.py`**: Holds the application's runtime state, including caches and loaded data. This object is shared across the application.
-    - **`worker_manager.py`**: Manages all background threads and workers, decoupling the UI from long-running tasks.
+    - **`models/`**: Qt item/proxy models. Filename, rating, and cluster filtering lives in `media_filter_proxy.py`, not in the window.
+    - **`worker_manager.py`**: Manages all background threads and workers through shared cleanup/cancellation primitives, decoupling the UI from long-running tasks.
     - **`update_dialog.py`**: UI dialogs for displaying update notifications and manual update check results.
     - **Controller Layer (Encapsulation Refactor)**: Non-trivial UI behaviors previously embedded in `MainWindow` have been extracted into focused controllers under `src/ui/controllers/`:
         - `navigation_controller.py`: Linear & group-aware navigation (honors skip-deleted logic, smart up/down traversal). Consumes a minimal protocol for selection & model interrogation.
@@ -42,6 +43,8 @@ The application is structured into two main packages: `core` and `ui`.
         - `selection_controller.py`: Shared selection operations & multi-select semantics.
         - `deletion_mark_controller.py`: Non-destructive mark/unmark & presentation (text color/blur). Distinguished from actual deletion for clarity & test isolation.
         - `file_deletion_controller.py`: Destructive operations (move to trash), reverse-order removal, prunes empty headers, restores deterministic selection.
+        - `cache_controller.py`: Cache limits, clearing, usage labels, and the associated view refreshes.
+        - `status_controller.py`: Status-bar and left-panel library summaries built from indexed application state.
 
       Extension Pattern:
         1. Identify a cohesive behavior cluster in `MainWindow` (heuristics, branching logic, side-effect orchestration).
@@ -74,10 +77,11 @@ The application is structured into two main packages: `core` and `ui`.
 2. **Workers Directory (`src/workers`):**
    - Contains background worker classes for core business logic and application-level operations
    - **`update_worker.py`**: Background worker for checking application updates without blocking the UI
-   - **`rating_loader_worker.py`**: Background worker for loading metadata and ratings for images
+  - **`rating_loader_worker.py`**: Background worker for loading metadata and ratings for images
    - **`rotation_application_worker.py`**: Background worker for applying batch image rotations with parallel processing support
    - Workers should inherit from QObject and use Qt signals for communication
-   - Managed by the `WorkerManager` in the UI layer
+  - Managed by the `WorkerManager` in the UI layer
+  - Workers depend on narrow state protocols and core services; they must not import the UI package.
    - UI-specific workers (like preview preloading, blur detection) remain in `src/ui/ui_components.py` due to tight coupling with UI operations
 
 3. **Create new files when necessary:**
@@ -126,6 +130,8 @@ The application is structured into two main packages: `core` and `ui`.
 - **Code Comments**: Write meaningful comments that explain the intent or the "why" behind a piece of code, especially for complex algorithms or non-obvious design choices. The code itself should explain the "how". Avoid comments that merely restate what the code does.
 - **Separation of Concerns**: Keep UI logic separate from business logic. The `core` package should not depend on the `ui` package. The `ui` package, specifically `MainWindow`, should be as "dumb" as possible, delegating all logic to the `AppController`.
 - **File Operations**: All file system operations (move, rename, delete) MUST be handled by the `ImageFileOperations` class in `src/core/image_file_ops.py`. This ensures that file manipulations are centralized and handled consistently.
+
+- **Loaded Media State**: Add scan results through `AppState.extend_file_data()`. It maintains the path index and media summary incrementally; bypassing it with a direct list mutation makes these performance indexes stale.
 - **Threading**: All long-running tasks MUST be executed in a background thread using the `WorkerManager`. This ensures the UI remains responsive. Workers should communicate with the main thread via Qt signals.
   - **Parallel Processing**: Workers that process multiple items can use `ThreadPoolExecutor` for parallel execution. The number of workers should be determined by `calculate_max_workers()` from `app_settings.py`, which respects the user's performance mode preference (Balanced/Performance/Custom).
   - **Example**: `RotationApplicationWorker` uses parallel processing for batch rotation operations when `max_workers > 1` and multiple images are being rotated. Single-image operations always use sequential processing to avoid overhead.

@@ -105,7 +105,7 @@ class AnalysisCache:
         if not isinstance(rankings_map, dict):
             return set()
         completed: Set[int] = set()
-        for key in rankings_map.keys():
+        for key in rankings_map:
             try:
                 completed.add(int(key))
             except (TypeError, ValueError):

@@ -166,14 +166,12 @@ def _parse_date_from_filename(filename: str) -> Optional[dt_parser]:
             pass
         return False
 
-    if match1 and validate_and_assign(
-        match1.group(1), match1.group(2), match1.group(3)
-    ):
-        pass
-    elif match2 and validate_and_assign(
-        match2.group(1), match2.group(2), match2.group(3)
-    ):
-        pass
+    matched = bool(
+        match1
+        and validate_and_assign(match1.group(1), match1.group(2), match1.group(3))
+    )
+    if not matched and match2:
+        validate_and_assign(match2.group(1), match2.group(2), match2.group(3))
 
     if year and month and day:
         try:
