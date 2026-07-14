@@ -141,7 +141,6 @@ class AppController(QObject):
         # Track pending rotations for batch preview regeneration
         self._pending_rotated_paths: List[str] = []
         # Cache volume at preview-preload start, used for per-run diagnostics.
-        self._preview_preload_start_volume_bytes: Optional[int] = None
         self._ai_rating_warning_messages: list[str] = []
         self._pick_best_pending_after_similarity: bool = False
         self._easy_delete_pending_after_similarity: bool = False
@@ -163,14 +162,6 @@ class AppController(QObject):
         )
         self.worker_manager.similarity_error.connect(self.handle_similarity_error)
 
-        # Preview Preloader Worker
-        self.worker_manager.preview_preload_progress.connect(
-            self.handle_preview_progress
-        )
-        self.worker_manager.preview_preload_finished.connect(
-            self.handle_preview_finished
-        )
-        self.worker_manager.preview_preload_error.connect(self.handle_preview_error)
 
         # Blur Detection Worker
         self.worker_manager.blur_detection_progress.connect(
@@ -1160,28 +1151,6 @@ class AppController(QObject):
             unrated.append(path)
         return unrated, already_rated_count
 
-    def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
-        logger.info(f"Starting preview preloader for {len(image_data_list)} images.")
-        if not image_data_list:
-            self.main_window.hide_loading_overlay()
-            return
-
-        paths_for_preloader = self._get_image_paths(image_data_list)
-
-        if not paths_for_preloader:
-            self.main_window.hide_loading_overlay()
-            return
-
-        self.main_window.update_loading_text(
-            f"Preloading previews ({len(paths_for_preloader)} images)..."
-        )
-        self._preview_preload_start_volume_bytes = (
-            self.main_window.image_pipeline.preview_cache.volume()
-        )
-        self.worker_manager.start_preview_preload(
-            paths_for_preloader,
-        )
-
     # --- Slots for WorkerManager Signals ---
 
     def handle_files_found(self, batch_of_file_data: List[Dict[str, any]]):
@@ -1583,25 +1552,6 @@ class AppController(QObject):
     def handle_rating_load_error(self, message: str):
         logger.error(f"Rating load failed: {message}", exc_info=True)
         self.main_window.statusBar().showMessage(f"Rating Load Error: {message}", 5000)
-        self.main_window.hide_loading_overlay()
-
-    def handle_preview_progress(self, percentage: int, message: str):
-        self.main_window.update_loading_text(message)
-
-    def handle_preview_finished(self):
-        self.main_window.statusBar().showMessage("Previews regenerated.", 5000)
-        self.main_window.hide_loading_overlay()
-        if self._supports_grouping_workflow_ui():
-            self.main_window.grouping_step_widget.refresh_cached_previews()
-
-        self._preview_preload_start_volume_bytes = None
-        self.main_window._update_image_info_label()
-
-    def handle_preview_error(self, message: str):
-        logger.error(f"Preview preload failed: {message}", exc_info=True)
-        self.main_window.statusBar().showMessage(
-            f"Preview Preload Error: {message}", 5000
-        )
         self.main_window.hide_loading_overlay()
 
     def handle_similarity_progress(self, percentage, message):

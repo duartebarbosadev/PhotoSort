@@ -35,7 +35,6 @@ from PyQt6.QtCore import (
     QItemSelectionModel,
     QEvent,
     QItemSelection,
-    QPoint,
 )
 from PyQt6.QtGui import (
     QColor,
@@ -64,8 +63,6 @@ from core.app_settings import (
     CENTER_PANEL_STRETCH,
     RIGHT_PANEL_STRETCH,
     DISPLAY_MAX_RESOLUTION,
-    THUMBNAIL_PRELOAD_BATCH_SIZE,
-    THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
 )
 from ui.app_state import AppState
 from ui.ui_components import LoadingOverlay
@@ -92,8 +89,8 @@ from ui.controllers.hotkey_controller import HotkeyController
 from ui.controllers.navigation_controller import NavigationController
 from ui.controllers.selection_controller import SelectionController
 from ui.controllers.similarity_controller import SimilarityController
-from ui.controllers.preview_controller import PreviewController
 from ui.controllers.metadata_controller import MetadataController
+from ui.thumbnail_load_coordinator import ViewportThumbnailLoader
 
 logger = logging.getLogger(__name__)
 FILTER_LOG_INTERVAL = 100
@@ -206,7 +203,6 @@ class MainWindow(QMainWindow):
         self._left_panel_views = set()
         self._image_viewer_views = set()
         self._last_displayed_preview_path: Optional[str] = None
-        self._preview_preload_start_volume_bytes: Optional[int] = None
         self._filter_apply_count = 0
         self._last_filter_search_text: Optional[str] = None
         self._close_after_grouping_save = False
@@ -232,8 +228,6 @@ class MainWindow(QMainWindow):
         self.metadata_sidebar = None
         self.sidebar_visible = False
         self.thumbnail_delegate = None
-        self._thumbnail_requested_paths: set[str] = set()
-        self._thumbnail_load_scheduled = False
         self.show_folders_mode = False
         self.group_by_similarity_mode = False
         self.navigation_skip_singleton_clusters = False
@@ -257,7 +251,6 @@ class MainWindow(QMainWindow):
         self.selection_controller = SelectionController(self)
         self.filter_controller = FilterController(self)
         self.similarity_controller = SimilarityController(self)
-        self.preview_controller = PreviewController(self)
         self.metadata_controller = MetadataController(self)
 
         # Hotkey controller wraps navigation key handling
@@ -283,6 +276,7 @@ class MainWindow(QMainWindow):
         self._shortcut_handlers: dict[tuple[int, int], Callable[[], None]] = {}
         self._init_shortcut_handlers()
         self._create_widgets()
+        self.thumbnail_loader = ViewportThumbnailLoader(self, self)
 
         # At this point _create_widgets() built file_system_model + proxy_model and wired it;
         # it's now safe to apply any deferred FilterController initialization.
@@ -999,80 +993,10 @@ class MainWindow(QMainWindow):
             self.schedule_visible_thumbnail_load()
 
     def reset_thumbnail_requests(self) -> None:
-        self._thumbnail_requested_paths.clear()
+        self.thumbnail_loader.reset()
 
     def schedule_visible_thumbnail_load(self, *_args) -> None:
-        if self._thumbnail_load_scheduled:
-            return
-        self._thumbnail_load_scheduled = True
-        QTimer.singleShot(0, self._load_visible_thumbnail_batch)
-
-    def _visible_thumbnail_paths(self) -> List[str]:
-        view = self._get_active_file_view()
-        if view is None:
-            return []
-
-        paths: List[str] = []
-        index = view.indexAt(QPoint(1, 1))
-        if isinstance(view, QTreeView):
-            if not index.isValid():
-                index = view.model().index(0, 0)
-            for _ in range(THUMBNAIL_PRELOAD_VISIBLE_MARGIN):
-                previous = view.indexAbove(index)
-                if not previous.isValid():
-                    break
-                index = previous
-            limit = THUMBNAIL_PRELOAD_BATCH_SIZE + (
-                THUMBNAIL_PRELOAD_VISIBLE_MARGIN * 2
-            )
-            for _ in range(limit):
-                if not index.isValid():
-                    break
-                item_data = index.data(Qt.ItemDataRole.UserRole)
-                if isinstance(item_data, dict) and item_data.get("path"):
-                    paths.append(item_data["path"])
-                index = view.indexBelow(index)
-        else:
-            model = view.model()
-            start_row = max(
-                0,
-                (index.row() if index.isValid() else 0)
-                - THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
-            )
-            limit = THUMBNAIL_PRELOAD_BATCH_SIZE + (
-                THUMBNAIL_PRELOAD_VISIBLE_MARGIN * 2
-            )
-            for row in range(start_row, min(model.rowCount(), start_row + limit)):
-                item_data = model.index(row, 0).data(Qt.ItemDataRole.UserRole)
-                if isinstance(item_data, dict) and item_data.get("path"):
-                    paths.append(item_data["path"])
-        return paths
-
-    def _load_visible_thumbnail_batch(self) -> None:
-        self._thumbnail_load_scheduled = False
-        if not self.menu_manager.toggle_thumbnails_action.isChecked():
-            return
-        if self.worker_manager.is_thumbnail_preload_running():
-            return
-
-        candidates = self._visible_thumbnail_paths()
-        if not candidates:
-            candidates = [
-                item.get("path")
-                for item in self.app_state.image_files_data[
-                    :THUMBNAIL_PRELOAD_BATCH_SIZE
-                ]
-                if item.get("path")
-            ]
-        pending = [
-            path
-            for path in candidates
-            if path not in self._thumbnail_requested_paths
-        ]
-        if not pending:
-            return
-        self._thumbnail_requested_paths.update(pending)
-        self.worker_manager.start_thumbnail_preload(pending)
+        self.thumbnail_loader.schedule()
 
     def _rebuild_model_view(
         self,
@@ -3153,174 +3077,6 @@ class MainWindow(QMainWindow):
             f"Returned focus to {type(active_view).__name__}, hasFocus={active_view.hasFocus()}"
         )
 
-    def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
-        try:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    f"Delegating preview preload: {len(image_data_list)} items"
-                )
-            self._preview_preload_start_volume_bytes = (
-                self.image_pipeline.preview_cache.volume()
-            )
-            self.preview_controller.start_preload(image_data_list)
-        except Exception as e:
-            logger.error(f"PreviewController error: {e}")
-
-    # --- Rating Loader Worker Handlers ---
-    def _handle_rating_load_progress(self, current: int, total: int, basename: str):
-        percentage = int((current / total) * 100) if total > 0 else 0
-        logger.debug(
-            f"Rating load progress: {percentage}% ({current}/{total}) - {basename}"
-        )
-        self.update_loading_text(
-            f"Loading ratings: {percentage}% ({current}/{total}) - {basename}"
-        )
-
-    def _handle_metadata_batch_loaded(
-        self, metadata_batch: List[Tuple[str, Dict[str, Any]]]
-    ):
-        logger.debug(f"Metadata batch loaded with {len(metadata_batch)} items.")
-
-        currently_selected_paths = self._get_selected_file_paths_from_view()
-
-        needs_active_selection_refresh = False
-        for image_path, metadata in metadata_batch:
-            if not metadata:
-                continue
-
-            logger.debug(
-                f"Processing metadata from batch for {os.path.basename(image_path)}: {metadata}"
-            )
-
-            # Update any visible viewer showing this image
-            for viewer in self.advanced_image_viewer.image_viewers:
-                if viewer.isVisible() and viewer._file_path == image_path:
-                    logger.debug(f"Updating viewer for {os.path.basename(image_path)}.")
-                    viewer.update_rating_display(metadata.get("rating", 0))
-
-            # Check if the processed image is part of the current selection
-            if image_path in currently_selected_paths:
-                logger.debug(
-                    f"Batch contains a selected item: {os.path.basename(image_path)}. Marking for UI refresh."
-                )
-                needs_active_selection_refresh = True
-
-        if needs_active_selection_refresh:
-            logger.debug(
-                "Triggering _handle_file_selection_changed after processing batch due to active item update."
-            )
-            self._handle_file_selection_changed()
-
-        # After a batch, it's good practice to re-apply the filter in case ratings changed
-        self._apply_filter()
-
-    def _handle_rating_load_finished(self):
-        logger.info(
-            "_handle_rating_load_finished: Received RatingLoaderWorker.finished signal."
-        )
-        self.statusBar().showMessage("Background rating loading finished.", 3000)
-
-        if not self.app_state.image_files_data:
-            logger.info(
-                "_handle_rating_load_finished: No image files data found in app_state. Hiding loading overlay."
-            )
-            self.hide_loading_overlay()
-            return
-
-        logger.info(
-            "_handle_rating_load_finished: image_files_data found. Preparing to start preview preloader."
-        )
-        self.update_loading_text("Ratings loaded. Preloading previews...")
-        try:
-            logger.info(
-                "_handle_rating_load_finished: --- CALLING --- _start_preview_preloader."
-            )
-            self._start_preview_preloader(
-                self.app_state.image_files_data.copy()
-            )  # Pass a copy
-            logger.info(
-                "_handle_rating_load_finished: --- RETURNED --- _start_preview_preloader call completed."
-            )
-        except Exception as e_start_preview:
-            logger.error(
-                f"_handle_rating_load_finished: Error calling _start_preview_preloader: {e_start_preview}",
-                exc_info=True,
-            )
-            self.hide_loading_overlay()  # Ensure overlay is hidden on error
-        logger.info("<<< EXIT >>> _handle_rating_load_finished.")
-
-    def _handle_rating_load_error(self, message: str):
-        logger.error(f"Rating Load Error: {message}")
-        self.statusBar().showMessage(f"Rating Load Error: {message}", 5000)
-        # Still proceed to preview preloading even if rating load had errors for some files
-        if self.app_state.image_files_data:
-            self.update_loading_text("Rating load errors. Preloading previews...")
-            self._start_preview_preloader(
-                self.app_state.image_files_data.copy()
-            )  # Pass a copy
-        else:
-            self.hide_loading_overlay()
-
-    # Slot for WorkerManager's preview_preload_progress signal
-    def _handle_preview_progress(self, percentage: int, message: str):
-        logger.debug(
-            f"<<< ENTRY >>> _handle_preview_progress: {percentage}% - {message}"
-        )
-        self.update_loading_text(message)
-        logger.debug("<<< EXIT >>> _handle_preview_progress.")
-
-    # Slot for WorkerManager's preview_preload_finished signal
-    def _handle_preview_finished(self):
-        logger.debug(
-            "<<< ENTRY >>> _handle_preview_finished: Received PreviewPreloaderWorker.finished signal."
-        )
-        self.statusBar().showMessage("Previews regenerated.", 5000)
-        self.hide_loading_overlay()
-        logger.debug("_handle_preview_finished: Loading overlay hidden.")
-
-        # Log final cache vs image size
-        if self.app_state.current_folder_path:
-            total_image_size_bytes = self._calculate_folder_image_size(
-                self.app_state.current_folder_path
-            )
-            total_preview_cache_size_bytes = self.image_pipeline.preview_cache.volume()
-            preload_start_volume = self._preview_preload_start_volume_bytes
-            if preload_start_volume is None:
-                preview_cache_size_bytes = total_preview_cache_size_bytes
-            else:
-                preview_cache_size_bytes = max(
-                    0, total_preview_cache_size_bytes - preload_start_volume
-                )
-            logger.info("--- Cache vs. Image Size Diagnostics (Post-Preload) ---")
-            logger.info(
-                f"Total Original Image Size: {total_image_size_bytes / (1024 * 1024):.2f} MB"
-            )
-            logger.info(
-                f"Preview Cache Added This Preload: {preview_cache_size_bytes / (1024 * 1024):.2f} MB"
-            )
-            logger.info(
-                f"Current Preview Cache Total: {total_preview_cache_size_bytes / (1024 * 1024):.2f} MB"
-            )
-            if total_image_size_bytes > 0:
-                ratio = (preview_cache_size_bytes / total_image_size_bytes) * 100
-                logger.info(f"Cache-to-Image Size Ratio: {ratio:.2f}%")
-            logger.info("---------------------------------------------------------")
-
-        self._preview_preload_start_volume_bytes = None
-        self._update_image_info_label()  # Update UI with final cache size
-
-        # WorkerManager handles thread cleanup
-        logger.info("<<< EXIT >>> _handle_preview_finished.")
-
-    # Slot for WorkerManager's preview_preload_error signal
-    def _handle_preview_error(self, message: str):
-        logger.info(f"<<< ENTRY >>> _handle_preview_error: {message}")
-        logger.error(f"Preview Preload Error: {message}")
-        self.statusBar().showMessage(f"Preview Preload Error: {message}", 5000)
-        self.hide_loading_overlay()
-        # WorkerManager handles thread cleanup
-        logger.info("<<< EXIT >>> _handle_preview_error.")
-
     def _toggle_folder_visibility(self, checked: bool):
         self.show_folders_mode = checked
 
@@ -3623,45 +3379,6 @@ class MainWindow(QMainWindow):
             f"Updated {updated_count}/{total_items} thumbnails from cache in {duration:.2f}s"
         )
 
-    def _start_similarity_analysis(self):
-        logger.info("_start_similarity_analysis delegated to SimilarityController")
-        paths = [
-            fd.get("path")
-            for fd in (self.app_state.image_files_data or [])
-            if fd.get("path") and fd.get("media_type", "image") == "image"
-        ]
-        self.similarity_controller.start(paths)
-
-    # Slot for WorkerManager's similarity_progress signal
-    def _handle_similarity_progress(self, percentage, message):
-        self.update_loading_text(f"Similarity: {message} ({percentage}%)")
-
-    # Slot for WorkerManager's similarity_embeddings_generated signal
-    def _handle_embeddings_generated(self, embeddings_dict):
-        self.similarity_controller.embeddings_generated(embeddings_dict)
-
-    # Slot for WorkerManager's similarity_clustering_complete signal
-    def _handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
-        self.similarity_controller.clustering_complete(cluster_results_dict, True)
-
-    # Slot for WorkerManager's similarity_error signal
-    def _handle_similarity_error(self, message):
-        self.similarity_controller.error(message)
-
-    def _reload_current_folder(self):
-        if self.app_state.image_files_data:
-            if (
-                self.app_state.image_files_data[0]
-                and "path" in self.app_state.image_files_data[0]
-            ):
-                current_dir = os.path.dirname(
-                    self.app_state.image_files_data[0]["path"]
-                )
-                if os.path.isdir(current_dir):
-                    self._load_folder(current_dir)
-                    return
-        self.statusBar().showMessage("No folder context to reload.", 3000)
-
     def _handle_item_collapsed(self, proxy_index: QModelIndex):
         if self.group_by_similarity_mode and proxy_index.isValid():
             active_view = self.left_panel.tree_display_view
@@ -3678,146 +3395,6 @@ class MainWindow(QMainWindow):
         if self.group_by_similarity_mode and self.app_state.cluster_results:
             self._rebuild_model_view()
 
-    def _start_blur_detection_analysis(self):
-        logger.info("_start_blur_detection_analysis called.")
-        if not self.app_state.image_files_data:
-            self.statusBar().showMessage(
-                "No images loaded to analyze for blurriness.", 3000
-            )
-            return
-
-        if self.worker_manager.is_blur_detection_running():
-            self.statusBar().showMessage("Blur detection is already in progress.", 3000)
-            return
-
-        self.show_loading_overlay("Starting blur detection...")
-        self.menu_manager.detect_blur_action.setEnabled(False)
-
-        image_data = [
-            fd
-            for fd in self.app_state.image_files_data
-            if fd.get("media_type", "image") == "image"
-        ]
-        if not image_data:
-            self.hide_loading_overlay()
-            self.statusBar().showMessage(
-                "Blur detection is currently available for images only.", 3000
-            )
-            return
-        self.worker_manager.start_blur_detection(
-            image_data,
-            self.blur_detection_threshold,
-            True,  # Always enable processing for RAW files
-        )
-
-    # Slot for WorkerManager's blur_detection_progress signal
-    def _handle_blur_detection_progress(
-        self, current: int, total: int, path_basename: str
-    ):
-        percentage = int((current / total) * 100) if total > 0 else 0
-        self.update_loading_text(
-            f"Detecting blur: {percentage}% ({current}/{total}) - {path_basename}"
-        )
-
-    # Slot for WorkerManager's blur_detection_status_updated signal
-    def _handle_blur_status_updated(self, image_path: str, is_blurred: bool):
-        self.app_state.update_blur_status(image_path, is_blurred)
-
-        source_model = self.file_system_model
-        proxy_model = self.proxy_model
-        active_view = self._get_active_file_view()
-
-        item_to_update = None
-        # This search needs to be through the source model, not the proxy,
-        # because the item might be filtered out in the proxy.
-        # We iterate through the source model to find the QStandardItem.
-        for r_top in range(source_model.rowCount()):
-            top_item = source_model.item(r_top)
-            if not top_item:
-                continue
-
-            # Check top-level item
-            top_item_data = top_item.data(Qt.ItemDataRole.UserRole)
-            if (
-                isinstance(top_item_data, dict)
-                and top_item_data.get("path") == image_path
-            ):
-                item_to_update = top_item
-                break
-
-            if top_item.hasChildren():  # Check children if it's a folder/group
-                for r_child in range(top_item.rowCount()):
-                    child_item = top_item.child(r_child)
-                    if not child_item:
-                        continue
-
-                    child_item_data = child_item.data(Qt.ItemDataRole.UserRole)
-                    if (
-                        isinstance(child_item_data, dict)
-                        and child_item_data.get("path") == image_path
-                    ):
-                        item_to_update = child_item
-                        break
-
-                    # Potentially check grandchildren if structure is deeper (e.g., date view inside cluster view)
-                    if child_item.hasChildren():
-                        for r_grandchild in range(child_item.rowCount()):
-                            grandchild_item = child_item.child(r_grandchild)
-                            if not grandchild_item:
-                                continue
-                            grandchild_item_data = grandchild_item.data(
-                                Qt.ItemDataRole.UserRole
-                            )
-                            if (
-                                isinstance(grandchild_item_data, dict)
-                                and grandchild_item_data.get("path") == image_path
-                            ):
-                                item_to_update = grandchild_item
-                                break
-                        if item_to_update:
-                            break
-                if item_to_update:
-                    break
-
-        if item_to_update:
-            original_text = os.path.basename(image_path)
-            # Update the UserRole data in the source model item
-            item_user_data = item_to_update.data(Qt.ItemDataRole.UserRole)
-            if isinstance(item_user_data, dict):
-                item_user_data["is_blurred"] = is_blurred  # Update existing dict
-                item_to_update.setData(item_user_data, Qt.ItemDataRole.UserRole)
-            else:  # Should not happen if item was created correctly
-                item_to_update.setData(
-                    {"path": image_path, "is_blurred": is_blurred},
-                    Qt.ItemDataRole.UserRole,
-                )
-
-            # Update display text and color
-            if is_blurred is True:
-                item_to_update.setForeground(QColor(Qt.GlobalColor.red))
-                item_to_update.setText(original_text + " (Blurred)")
-            elif is_blurred is False:
-                default_text_color = QApplication.palette().text().color()
-                item_to_update.setForeground(default_text_color)
-                item_to_update.setText(original_text)
-            else:  # is_blurred is None
-                default_text_color = QApplication.palette().text().color()
-                item_to_update.setForeground(default_text_color)
-                item_to_update.setText(original_text)
-
-            # If the updated item is currently selected, refresh the main image view and status bar
-            if active_view and active_view.currentIndex().isValid():
-                current_proxy_idx = active_view.currentIndex()
-                current_source_idx = proxy_model.mapToSource(current_proxy_idx)
-                selected_item = source_model.itemFromIndex(current_source_idx)
-                if selected_item == item_to_update:
-                    self._handle_file_selection_changed()  # Re-process selection to update main view
-        else:
-            logger.warning(
-                f"Could not find QStandardItem for {image_path} to update blur status in UI."
-            )
-
-    # Slot for WorkerManager's blur_detection_finished signal
     def _perform_group_selection_from_key(
         self, key: int, active_view_from_event: QWidget
     ) -> bool:

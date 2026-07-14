@@ -414,60 +414,6 @@ class LoadingOverlay(QWidget):
             self.show()
 
 
-# --- Preview Preloader Worker ---
-class PreviewPreloaderWorker(QObject):
-    progress_update = pyqtSignal(int, str)
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-
-    def __init__(
-        self,
-        image_paths,
-        max_size,
-        image_pipeline_instance: ImagePipeline,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self._image_paths = image_paths
-        self._max_size = max_size
-        self.image_pipeline = image_pipeline_instance
-        self._is_running = True
-
-    def stop(self):
-        self._is_running = False
-
-    def _should_continue(self):
-        return self._is_running
-
-    def _report_progress(self, count, total):
-        if total > 0:
-            percentage = int((count / total) * 100)
-            # Report progress more frequently or at key milestones
-            if percentage % 5 == 0 or count == total or count == 1:
-                self.progress_update.emit(
-                    percentage, f"Preloading previews ({count}/{total})..."
-                )
-
-    def run_preload(self):
-        self._is_running = True
-        try:
-            self.image_pipeline.preload_previews(
-                self._image_paths,
-                progress_callback=self._report_progress,
-                should_continue_callback=self._should_continue,
-            )
-        except Exception as e:
-            err_msg = f"Error during preview preloading thread: {e}"
-            logger.error(err_msg, exc_info=True)
-            self.error.emit(err_msg)
-        finally:
-            if self._is_running:
-                self.progress_update.emit(100, "Preview preloading complete.")
-            else:
-                self.progress_update.emit(100, "Preview preloading cancelled.")
-            self.finished.emit()
-
-
 # --- Blur Detection Worker ---
 class BlurDetectionWorker(QObject):
     progress_update = pyqtSignal(int, int, str)  # current, total, basename

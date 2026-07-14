@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     from ui.ui_components import (
         BlurDetectionWorker,
         CudaDetectionWorker,
-        PreviewPreloaderWorker,
         RotationDetectionWorker,
         SimilarityWorker,
     )
@@ -61,11 +60,6 @@ class WorkerManager(QObject):
     similarity_embeddings_generated = pyqtSignal(dict)  # {image_path: embedding_vector}
     similarity_clustering_complete = pyqtSignal(dict)  # {image_path: cluster_id}
     similarity_error = pyqtSignal(str)
-
-    # Preview Preloader Signals
-    preview_preload_progress = pyqtSignal(int, str)  # percentage, message
-    preview_preload_finished = pyqtSignal()
-    preview_preload_error = pyqtSignal(str)
 
     # Blur Detection Signals
     blur_detection_progress = pyqtSignal(int, int, str)  # current, total, basename
@@ -167,9 +161,6 @@ class WorkerManager(QObject):
 
         self.similarity_thread: Optional[QThread] = None
         self.similarity_worker: Optional["SimilarityWorker"] = None
-
-        self.preview_preloader_thread: Optional[QThread] = None
-        self.preview_preloader_worker: Optional[PreviewPreloaderWorker] = None
 
         self.blur_detection_thread: Optional[QThread] = None
         self.blur_detection_worker: Optional[BlurDetectionWorker] = None
@@ -358,60 +349,6 @@ class WorkerManager(QObject):
             self.similarity_worker = None
         else:
             self.similarity_thread = temp_thread
-
-    def _cleanup_preview_preloader_refs(self):
-        if self.preview_preloader_worker:
-            self.preview_preloader_worker.deleteLater()
-            self.preview_preloader_worker = None
-        if self.preview_preloader_thread:
-            self.preview_preloader_thread.deleteLater()
-            self.preview_preloader_thread = None
-        logger.info("Preview preloader thread and worker cleaned up.")
-
-    # --- Preview Preloader Management ---
-    def start_preview_preload(self, image_paths: List[str]):
-        from ui.ui_components import PreviewPreloaderWorker
-
-        self.stop_preview_preload()
-        self.preview_preloader_thread = QThread()
-        self.preview_preloader_worker = PreviewPreloaderWorker(
-            image_paths, None, self.image_pipeline
-        )
-        self.preview_preloader_worker.moveToThread(self.preview_preloader_thread)
-
-        self.preview_preloader_worker.progress_update.connect(
-            self.preview_preload_progress
-        )
-        self.preview_preloader_worker.finished.connect(self.preview_preload_finished)
-        self.preview_preloader_worker.error.connect(self.preview_preload_error)
-
-        self.preview_preloader_thread.started.connect(
-            self.preview_preloader_worker.run_preload
-        )
-        self.preview_preload_finished.connect(self.preview_preloader_thread.quit)
-        self.preview_preload_error.connect(self.preview_preloader_thread.quit)
-
-        self.preview_preloader_thread.finished.connect(
-            self._cleanup_preview_preloader_refs
-        )
-
-        self.preview_preloader_thread.start()
-        logger.info("Preview preloader thread started.")
-
-    def stop_preview_preload(self):
-        worker_stop = (
-            self.preview_preloader_worker.stop
-            if self.preview_preloader_worker
-            else None
-        )
-        temp_thread, _ = self._terminate_thread(
-            self.preview_preloader_thread, worker_stop
-        )
-        if temp_thread is None:
-            self.preview_preloader_thread = None
-            self.preview_preloader_worker = None
-        else:
-            self.preview_preloader_thread = temp_thread
 
     def _cleanup_blur_detection_refs(self):
         if self.blur_detection_worker:
@@ -756,7 +693,6 @@ class WorkerManager(QObject):
         logger.info("Stopping all workers...")
         self.stop_file_scan()
         self.stop_similarity_analysis()
-        self.stop_preview_preload()
         self.stop_blur_detection()
         self.stop_rating_load()
         self.stop_rotation_detection()
@@ -778,12 +714,6 @@ class WorkerManager(QObject):
 
     def is_similarity_worker_running(self) -> bool:
         return self.similarity_thread is not None and self.similarity_thread.isRunning()
-
-    def is_preview_preloader_running(self) -> bool:
-        return (
-            self.preview_preloader_thread is not None
-            and self.preview_preloader_thread.isRunning()
-        )
 
     def is_blur_detection_running(self) -> bool:
         return (
@@ -878,7 +808,6 @@ class WorkerManager(QObject):
         return (
             self.is_file_scanner_running()
             or self.is_similarity_worker_running()
-            or self.is_preview_preloader_running()
             or self.is_blur_detection_running()
             or self.is_rating_loader_running()
             or self.is_rotation_detection_running()
