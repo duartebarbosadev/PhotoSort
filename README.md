@@ -118,11 +118,11 @@ To use the **Auto Rotate Images** feature (`Ctrl+R`), download the pre-trained O
 
 PhotoSort integrates the model published in [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection), which is trained to classify images into the four uprightness classes `0°`, `90°`, `180°`, and `270°`.
 
-1. **Create a `models` directory** in the root of the project.
+1. In PhotoSort, open **About → Models Folder**.
 2. **Download the model file**:
    * **Link**: [Open the deep-image-orientation-detection releases page](https://github.com/duartebarbosadev/deep-image-orientation-detection/releases)
    * Download the latest `orientation_model*.onnx` asset.
-3. **Place the downloaded model file inside the `models` directory.**
+3. **Place the downloaded model file inside the folder opened by PhotoSort.** Source checkouts also support the legacy project-root `models/` directory.
 
 The application will automatically detect and load the newest matching `orientation_model*.onnx` file when you use the rotation detection feature, so versioned filenames such as `orientation_model_v2_0.9882.onnx` work without being renamed.
 

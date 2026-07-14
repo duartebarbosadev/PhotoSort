@@ -43,6 +43,7 @@ def iter_bundle_roots(include_executable_dir: bool = False) -> List[str]:
 
 _APP_NAME = "PhotoSort"
 _CACHE_ROOT_ENV = "PHOTOSORT_CACHE_ROOT"
+_DATA_ROOT_ENV = "PHOTOSORT_DATA_ROOT"
 
 
 def _platform_cache_base() -> str:
@@ -60,6 +61,20 @@ def _platform_cache_base() -> str:
     return os.path.join(os.path.expanduser("~"), ".cache")
 
 
+def _platform_data_base() -> str:
+    """Return the OS-appropriate persistent application-data directory."""
+    if sys.platform == "darwin":
+        return os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        if local_app_data:
+            return local_app_data
+    xdg_data = os.environ.get("XDG_DATA_HOME", "")
+    if xdg_data:
+        return xdg_data
+    return os.path.join(os.path.expanduser("~"), ".local", "share")
+
+
 def resolve_user_cache_dir(app_subdir: str) -> str:
     """Return a writable cache directory nested under the app's platform cache dir.
 
@@ -71,10 +86,12 @@ def resolve_user_cache_dir(app_subdir: str) -> str:
     candidates: List[str] = []
     if override_root:
         candidates.append(os.path.join(override_root, app_subdir))
-    candidates.extend([
-        os.path.join(_platform_cache_base(), _APP_NAME, app_subdir),
-        os.path.join(tempfile.gettempdir(), _APP_NAME, app_subdir),
-    ])
+    candidates.extend(
+        [
+            os.path.join(_platform_cache_base(), _APP_NAME, app_subdir),
+            os.path.join(tempfile.gettempdir(), _APP_NAME, app_subdir),
+        ]
+    )
 
     for candidate in candidates:
         try:
@@ -96,6 +113,20 @@ def get_app_cache_root() -> str:
     if override_root:
         return override_root
     return os.path.join(_platform_cache_base(), _APP_NAME)
+
+
+def resolve_user_data_dir(app_subdir: str) -> str:
+    """Return a writable persistent data directory for user-managed app files."""
+    override_root = os.environ.get(_DATA_ROOT_ENV)
+    root = override_root or os.path.join(_platform_data_base(), _APP_NAME)
+    target = os.path.join(root, app_subdir)
+    os.makedirs(target, exist_ok=True)
+    return target
+
+
+def get_app_models_dir() -> str:
+    """Return the stable user-writable directory for downloaded ONNX models."""
+    return resolve_user_data_dir("models")
 
 
 def get_app_log_dir() -> str:

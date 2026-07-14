@@ -228,6 +228,27 @@ class TestUpdateChecker:
         assert url == "https://example.com/windows.exe"
 
     @patch("platform.system")
+    def test_find_download_url_windows_prefers_cpu_zip(self, mock_platform):
+        checker = UpdateChecker()
+        mock_platform.return_value = "Windows"
+        assets = [
+            {
+                "name": "PhotoSort-Windows-x64-CUDA.zip",
+                "browser_download_url": "https://example.com/cuda.zip",
+            },
+            {
+                "name": "PhotoSort-Windows-x64.zip",
+                "browser_download_url": "https://example.com/cpu.zip",
+            },
+            {
+                "name": "PhotoSort-Windows-x64.exe",
+                "browser_download_url": "https://example.com/legacy.exe",
+            },
+        ]
+
+        assert checker._find_download_url(assets) == "https://example.com/cpu.zip"
+
+    @patch("platform.system")
     def test_find_download_url_macos(self, mock_platform):
         """Test finding macOS download URL."""
         checker = UpdateChecker()

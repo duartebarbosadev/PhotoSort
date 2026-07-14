@@ -19,18 +19,6 @@ from core.runtime_paths import (  # noqa: E402
     get_app_log_dir,
 )
 
-
-def _ensure_local_model_cache():
-    """Point PyInstaller builds to the bundled models directory."""
-    base_dir = resolve_runtime_root(PROJECT_ROOT)
-    models_dir = os.path.abspath(os.path.join(base_dir, "models"))
-    os.makedirs(models_dir, exist_ok=True)
-    os.environ.setdefault("PHOTOSORT_MODELS_DIR", models_dir)
-    os.environ.setdefault("PYIQA_CACHE_DIR", models_dir)
-
-
-_ensure_local_model_cache()
-
 # Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
 try:
     from core.pyexiv2_init import ensure_pyexiv2_initialized  # noqa: E402
@@ -282,6 +270,11 @@ def resolve_splash_logo_path() -> Optional[str]:
 
 def main():
     """Main application entry point."""
+
+    if "--packaging-smoke-test" in sys.argv:
+        from core.packaging_smoke import run_packaging_smoke
+
+        raise SystemExit(run_packaging_smoke())
 
     # Create QApplication early for splash screen
     app = QApplication(sys.argv)

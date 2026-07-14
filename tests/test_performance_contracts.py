@@ -11,6 +11,7 @@ from core.app_settings import (
     IMAGE_PIPELINE_MAX_WORKERS,
     THUMBNAIL_PRELOAD_BATCH_SIZE,
 )
+from core.packaging_smoke import REQUIRED_PACKAGED_MODULES
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,3 +57,15 @@ def test_image_work_budgets_remain_bounded():
     assert FILE_SCAN_EMIT_BATCH_SIZE >= 32
     assert THUMBNAIL_PRELOAD_BATCH_SIZE <= 32
     assert max(DISPLAY_MAX_RESOLUTION) <= 2560
+
+
+def test_packaging_contract_covers_every_lazy_workflow():
+    required = set(REQUIRED_PACKAGED_MODULES)
+    assert {
+        "ui.easy_delete_step_widget",
+        "ui.fix_rotation_step_widget",
+        "ui.metadata_sidebar",
+        "ui.pick_best_step_widget",
+        "workers.best_shot_worker",
+        "workers.grouping_worker",
+    } <= required

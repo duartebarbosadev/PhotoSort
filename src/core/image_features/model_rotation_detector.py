@@ -25,7 +25,11 @@ from core.app_settings import (
     set_orientation_model_name,
     ROTATION_MODEL_IMAGE_SIZE,
 )
-from core.runtime_paths import is_frozen_runtime, resolve_runtime_root
+from core.runtime_paths import (
+    get_app_models_dir,
+    is_frozen_runtime,
+    resolve_runtime_root,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -216,12 +220,13 @@ class ModelRotationDetector(RotationDetectorProtocol):
         """Resolve the ONNX model path across source and frozen bundles.
 
         Search order:
-          1) PyInstaller extraction dir (sys._MEIPASS)/models
-          2) Project root (two levels up from this file)/models
-          3) Current working directory ./models
+          1) Persistent user application-data models directory
+          2) PyInstaller bundle directory (for an optionally bundled model)
+          3) Project root (source development)
+          4) Current working directory (legacy source setup)
         """
         # Build candidate base dirs
-        base_dirs = []
+        base_dirs = [get_app_models_dir()]
         if is_frozen_runtime():
             base_dirs.append(os.path.join(resolve_runtime_root(), MODEL_SAVE_DIR))
 
@@ -230,6 +235,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
         )
         base_dirs.append(os.path.join(project_root, MODEL_SAVE_DIR))
         base_dirs.append(os.path.join(os.getcwd(), MODEL_SAVE_DIR))
+        base_dirs = list(dict.fromkeys(os.path.abspath(path) for path in base_dirs))
 
         model_name = get_orientation_model_name()
         # 1) If a specific model is configured, try to find it in candidates
@@ -263,11 +269,8 @@ class ModelRotationDetector(RotationDetectorProtocol):
 
     def _build_expected_model_path(self) -> str:
         """Best-effort path hint for the dialog when the model is missing."""
-        project_root = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..")
-        )
         model_name = get_orientation_model_name() or "orientation_model.onnx"
-        return os.path.join(project_root, MODEL_SAVE_DIR, model_name)
+        return os.path.join(get_app_models_dir(), model_name)
 
     def _load_image(self, path: str):
         try:

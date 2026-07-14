@@ -163,7 +163,8 @@ class UpdateChecker:
         import platform
 
         system = platform.system().lower()
-
+        machine = platform.machine().lower()
+        candidates = []
         for asset in assets:
             name = asset.get("name", "").lower()
             download_url = asset.get("browser_download_url")
@@ -171,13 +172,30 @@ class UpdateChecker:
             if not download_url:
                 continue
 
-            # Match platform-specific assets
-            if system == "windows" and "windows" in name and name.endswith(".exe"):
-                return download_url
+            if (
+                system == "windows"
+                and "windows" in name
+                and name.endswith((".zip", ".exe"))
+            ):
+                # The CPU build works everywhere; never auto-select the much larger
+                # CUDA package without explicit hardware/user intent.
+                candidates.append(
+                    (
+                        1 if "cuda" in name else 0,
+                        0 if name.endswith(".zip") else 1,
+                        name,
+                        download_url,
+                    )
+                )
             elif system == "darwin" and "macos" in name and name.endswith(".dmg"):
-                return download_url
+                wants_arm = machine in {"arm64", "aarch64"}
+                is_arm_asset = "applesilicon" in name or "arm64" in name
+                architecture_penalty = 0 if wants_arm == is_arm_asset else 1
+                candidates.append((architecture_penalty, 0, name, download_url))
 
-        return None
+        if not candidates:
+            return None
+        return min(candidates)[-1]
 
     def _is_newer_version(self, latest: str, current: str) -> bool:
         """

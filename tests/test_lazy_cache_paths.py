@@ -85,6 +85,14 @@ def test_cache_root_can_be_isolated_for_performance_runs(monkeypatch, tmp_path):
     assert runtime_paths.get_app_cache_root() == str(tmp_path)
 
 
+def test_models_directory_uses_persistent_data_root(monkeypatch, tmp_path):
+    runtime_paths = importlib.import_module("core.runtime_paths")
+    monkeypatch.setenv("PHOTOSORT_DATA_ROOT", str(tmp_path))
+
+    assert runtime_paths.get_app_models_dir() == str(tmp_path / "models")
+    assert (tmp_path / "models").is_dir()
+
+
 def test_similarity_clustering_eps_setting_clamps_and_validates(monkeypatch):
     app_settings = _reload_module("core.app_settings")
 

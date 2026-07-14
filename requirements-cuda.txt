@@ -1,18 +1,2 @@
-diskcache
-mediapipe<0.10.30
-numpy
-onnxruntime-gpu
-openai
-opencv-python
-piexif
-Pillow
-Pillow-heif
-pyexiv2
-PyQt6
-rawpy
-scikit-learn
-send2trash
-huggingface_hub
-torch
-torchvision
-transformers
+-r requirements-common.txt
+onnxruntime-gpu==1.24.4
