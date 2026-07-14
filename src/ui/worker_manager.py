@@ -153,7 +153,7 @@ class WorkerManager(QObject):
 
     # Fix Rotation Detection signals
     fix_rotation_progress = pyqtSignal(int, str)
-    fix_rotation_complete = pyqtSignal(dict)   # {path: angle}
+    fix_rotation_complete = pyqtSignal(dict)  # {path: angle}
     fix_rotation_model_not_found = pyqtSignal(str)
     fix_rotation_error = pyqtSignal(str)
 
@@ -1188,7 +1188,9 @@ class WorkerManager(QObject):
             self.easy_delete_thread = temp_thread
 
     def is_easy_delete_running(self) -> bool:
-        return self.easy_delete_thread is not None and self.easy_delete_thread.isRunning()
+        return (
+            self.easy_delete_thread is not None and self.easy_delete_thread.isRunning()
+        )
 
     def _cleanup_easy_delete_worker(self) -> None:
         if self.easy_delete_worker:
@@ -1228,21 +1230,41 @@ class WorkerManager(QObject):
         )
         self.fix_rotation_detect_worker.moveToThread(self.fix_rotation_detect_thread)
 
-        self.fix_rotation_detect_worker.progress_update.connect(self.fix_rotation_progress.emit)
-        self.fix_rotation_detect_worker.completed.connect(self.fix_rotation_complete.emit)
-        self.fix_rotation_detect_worker.model_not_found.connect(self.fix_rotation_model_not_found.emit)
+        self.fix_rotation_detect_worker.progress_update.connect(
+            self.fix_rotation_progress.emit
+        )
+        self.fix_rotation_detect_worker.completed.connect(
+            self.fix_rotation_complete.emit
+        )
+        self.fix_rotation_detect_worker.model_not_found.connect(
+            self.fix_rotation_model_not_found.emit
+        )
         self.fix_rotation_detect_worker.error.connect(self.fix_rotation_error.emit)
-        self.fix_rotation_detect_worker.finished.connect(self.fix_rotation_detect_thread.quit)
-        self.fix_rotation_detect_worker.finished.connect(self.fix_rotation_detect_worker.deleteLater)
-        self.fix_rotation_detect_thread.finished.connect(self._cleanup_fix_rotation_detect_worker)
-        self.fix_rotation_detect_thread.started.connect(self.fix_rotation_detect_worker.run)
+        self.fix_rotation_detect_worker.finished.connect(
+            self.fix_rotation_detect_thread.quit
+        )
+        self.fix_rotation_detect_worker.finished.connect(
+            self.fix_rotation_detect_worker.deleteLater
+        )
+        self.fix_rotation_detect_thread.finished.connect(
+            self._cleanup_fix_rotation_detect_worker
+        )
+        self.fix_rotation_detect_thread.started.connect(
+            self.fix_rotation_detect_worker.run
+        )
 
         self.fix_rotation_detect_thread.start()
         logger.info("Fix rotation detection thread started.")
 
     def stop_fix_rotation_detection(self) -> None:
-        worker_stop = self.fix_rotation_detect_worker.stop if self.fix_rotation_detect_worker else None
-        temp_thread, _ = self._terminate_thread(self.fix_rotation_detect_thread, worker_stop)
+        worker_stop = (
+            self.fix_rotation_detect_worker.stop
+            if self.fix_rotation_detect_worker
+            else None
+        )
+        temp_thread, _ = self._terminate_thread(
+            self.fix_rotation_detect_thread, worker_stop
+        )
         if temp_thread is None:
             self.fix_rotation_detect_thread = None
             self.fix_rotation_detect_worker = None
@@ -1250,7 +1272,10 @@ class WorkerManager(QObject):
             self.fix_rotation_detect_thread = temp_thread
 
     def is_fix_rotation_running(self) -> bool:
-        return self.fix_rotation_detect_thread is not None and self.fix_rotation_detect_thread.isRunning()
+        return (
+            self.fix_rotation_detect_thread is not None
+            and self.fix_rotation_detect_thread.isRunning()
+        )
 
     def _cleanup_fix_rotation_detect_worker(self) -> None:
         if self.fix_rotation_detect_worker:
@@ -1258,7 +1283,9 @@ class WorkerManager(QObject):
                 if not sip.isdeleted(self.fix_rotation_detect_worker):
                     self.fix_rotation_detect_worker.deleteLater()
             except Exception:
-                logger.debug("Fix rotation detect worker already deleted.", exc_info=True)
+                logger.debug(
+                    "Fix rotation detect worker already deleted.", exc_info=True
+                )
             self.fix_rotation_detect_worker = None
         if self.fix_rotation_detect_thread:
             self.fix_rotation_detect_thread.deleteLater()

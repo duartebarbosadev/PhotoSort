@@ -967,7 +967,9 @@ class MainWindow(QMainWindow):
 
         # Fix Rotation step widget signals
         self.fix_rotation_step_widget.skip_requested.connect(self.show_pick_best_step)
-        self.fix_rotation_step_widget.proceed_requested.connect(self.show_pick_best_step)
+        self.fix_rotation_step_widget.proceed_requested.connect(
+            self.show_pick_best_step
+        )
         self.fix_rotation_step_widget.apply_rotations_requested.connect(
             self.app_controller.start_fix_rotation_apply
         )
@@ -1311,7 +1313,9 @@ class MainWindow(QMainWindow):
         self.workflow_stack.setCurrentWidget(self.easy_delete_page)
         self.update_workflow_navigation()
         if self.app_state.easy_delete_results:
-            self.easy_delete_step_widget.show_results(self.app_state.easy_delete_results)
+            self.easy_delete_step_widget.show_results(
+                self.app_state.easy_delete_results
+            )
             return
         self.app_controller.start_easy_delete_workflow()
 
@@ -1818,7 +1822,10 @@ class MainWindow(QMainWindow):
         else:
             has_special = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
         skip_deleted = not has_special  # Holding Ctrl/Cmd includes deleted
-        if self.app_state.workflow_step != "pick_best" and self.hotkey_controller.handle_key(key, skip_deleted=skip_deleted):
+        if (
+            self.app_state.workflow_step != "pick_best"
+            and self.hotkey_controller.handle_key(key, skip_deleted=skip_deleted)
+        ):
             event.accept()
             return
 

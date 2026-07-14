@@ -41,8 +41,12 @@ class AppState:
             int, Dict[str, Any]
         ] = {}  # cluster_id -> {winner_path, ranked, failed, all_paths}
         self.pick_best_winners_by_path: Dict[str, bool] = {}  # path -> True if winner
-        self.easy_delete_results: Dict[str, Dict[str, Any]] = {}  # path -> detection entry
-        self.fix_rotation_results: Dict[str, int] = {}  # path -> suggested angle (non-zero only)
+        self.easy_delete_results: Dict[
+            str, Dict[str, Any]
+        ] = {}  # path -> detection entry
+        self.fix_rotation_results: Dict[
+            str, int
+        ] = {}  # path -> suggested angle (non-zero only)
 
         # Could also hold current folder path, filter states, etc. if desired.
         self.current_folder_path: Optional[str] = None

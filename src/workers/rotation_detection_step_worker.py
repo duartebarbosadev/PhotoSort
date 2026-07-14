@@ -54,7 +54,10 @@ class RotationDetectionStepWorker(QObject):
     def _on_result(self, path: str, angle: int) -> None:
         self._processed += 1
         percent = int((self._processed / max(self._total, 1)) * 100)
-        self.progress_update.emit(percent, f"Checking {os.path.basename(path)}… ({self._processed}/{self._total})")
+        self.progress_update.emit(
+            percent,
+            f"Checking {os.path.basename(path)}… ({self._processed}/{self._total})",
+        )
         if angle != 0:
             self._results[path] = angle
 
@@ -63,7 +66,9 @@ class RotationDetectionStepWorker(QObject):
             self.completed.emit({})
             return
 
-        self.progress_update.emit(0, f"Starting rotation analysis for {self._total} images…")
+        self.progress_update.emit(
+            0, f"Starting rotation analysis for {self._total} images…"
+        )
 
         self.rotation_detector.detect_rotation_in_batch(
             image_paths=self.image_paths,

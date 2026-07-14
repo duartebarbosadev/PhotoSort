@@ -45,7 +45,9 @@ class _RotatedImageLabel(QLabel):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setStyleSheet("background: #0D1117;")
 
-    def set_pixmap_and_angle(self, pixmap: Optional[QPixmap], preview_angle: int = 0) -> None:
+    def set_pixmap_and_angle(
+        self, pixmap: Optional[QPixmap], preview_angle: int = 0
+    ) -> None:
         self._source_pixmap = pixmap
         self._preview_angle = preview_angle
         self._refresh()
@@ -75,14 +77,14 @@ class _RotatedImageLabel(QLabel):
 class FixRotationStepWidget(QWidget):
     """Step 3: Detect and fix wrongly-rotated images before culling."""
 
-    apply_rotations_requested = pyqtSignal(dict)   # {path: angle_degrees}
+    apply_rotations_requested = pyqtSignal(dict)  # {path: angle_degrees}
     proceed_requested = pyqtSignal()
     skip_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._suggestions: Dict[str, int] = {}      # path -> suggested angle
-        self._marked: Dict[str, bool] = {}          # path -> True if marked for rotation
+        self._suggestions: Dict[str, int] = {}  # path -> suggested angle
+        self._marked: Dict[str, bool] = {}  # path -> True if marked for rotation
         self._ordered_paths: List[str] = []
         self._current_index: int = -1
         self._image_pipeline = None
@@ -114,7 +116,8 @@ class FixRotationStepWidget(QWidget):
 
     def show_model_not_found(self, message: str) -> None:
         self._loading_label.setText(
-            "Rotation model not found — skip this step or install the model.\n\n" + message
+            "Rotation model not found — skip this step or install the model.\n\n"
+            + message
         )
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
@@ -239,7 +242,10 @@ class FixRotationStepWidget(QWidget):
                     rgb = pil_img.convert("RGB")
                     data = rgb.tobytes("raw", "RGB")
                     qimg = QImage(
-                        data, rgb.width, rgb.height, rgb.width * 3,
+                        data,
+                        rgb.width,
+                        rgb.height,
+                        rgb.width * 3,
                         QImage.Format.Format_RGB888,
                     )
                     return QPixmap.fromImage(qimg)
@@ -247,7 +253,11 @@ class FixRotationStepWidget(QWidget):
             if not px.isNull():
                 return px
         except Exception as exc:
-            logger.debug("FixRotation: pixmap load failed for %s: %s", os.path.basename(path), exc)
+            logger.debug(
+                "FixRotation: pixmap load failed for %s: %s",
+                os.path.basename(path),
+                exc,
+            )
         return None
 
     def _refresh_controls(self) -> None:
@@ -326,7 +336,9 @@ class FixRotationStepWidget(QWidget):
         self._refresh_controls()
 
     def _on_apply(self) -> None:
-        rotations = {p: a for p, a in self._suggestions.items() if self._marked.get(p, False)}
+        rotations = {
+            p: a for p, a in self._suggestions.items() if self._marked.get(p, False)
+        }
         if rotations:
             self.apply_rotations_requested.emit(rotations)
 
@@ -365,9 +377,9 @@ class FixRotationStepWidget(QWidget):
         self._content_stack = QStackedWidget()
         root.addWidget(self._content_stack, 1)
 
-        self._content_stack.addWidget(self._build_loading_page())   # 0
-        self._content_stack.addWidget(self._build_results_page())   # 1
-        self._content_stack.addWidget(self._build_empty_page())     # 2
+        self._content_stack.addWidget(self._build_loading_page())  # 0
+        self._content_stack.addWidget(self._build_results_page())  # 1
+        self._content_stack.addWidget(self._build_empty_page())  # 2
         self._content_stack.setCurrentIndex(0)
 
     def _build_loading_page(self) -> QWidget:
@@ -383,7 +395,9 @@ class FixRotationStepWidget(QWidget):
         self._loading_label = QLabel("Analyzing rotation…")
         self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._loading_label.setWordWrap(True)
-        self._loading_label.setStyleSheet("font-size: 13px; color: #aaaaaa; margin-bottom: 12px;")
+        self._loading_label.setStyleSheet(
+            "font-size: 13px; color: #aaaaaa; margin-bottom: 12px;"
+        )
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
@@ -410,7 +424,9 @@ class FixRotationStepWidget(QWidget):
         self._summary_label = QLabel()
         self._summary_label.setStyleSheet("font-size: 13px; font-weight: bold;")
 
-        hint = QLabel("R — toggle  ·  A — apply  ·  ←/→ — navigate  ·  Enter — proceed  ·  Esc — skip")
+        hint = QLabel(
+            "R — toggle  ·  A — apply  ·  ←/→ — navigate  ·  Enter — proceed  ·  Esc — skip"
+        )
         hint.setStyleSheet("font-size: 11px; color: #888888;")
 
         skip_btn = QPushButton("Skip Step")
@@ -469,7 +485,9 @@ class FixRotationStepWidget(QWidget):
 
         self._current_hdr = QLabel("CURRENT")
         self._current_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._current_hdr.setStyleSheet("font-size: 11px; color: #808080; letter-spacing: 1px;")
+        self._current_hdr.setStyleSheet(
+            "font-size: 11px; color: #808080; letter-spacing: 1px;"
+        )
 
         self._current_img = _RotatedImageLabel()
         current_pane_layout.addWidget(self._current_hdr)
@@ -483,7 +501,9 @@ class FixRotationStepWidget(QWidget):
 
         self._preview_hdr = QLabel("AFTER ROTATION")
         self._preview_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_hdr.setStyleSheet("font-size: 11px; color: #4B6EAF; font-weight: bold; letter-spacing: 1px;")
+        self._preview_hdr.setStyleSheet(
+            "font-size: 11px; color: #4B6EAF; font-weight: bold; letter-spacing: 1px;"
+        )
 
         self._preview_img = _RotatedImageLabel()
         preview_pane_layout.addWidget(self._preview_hdr)

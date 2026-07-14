@@ -915,7 +915,10 @@ class PickBestStepWidget(QWidget):
     def event(self, event):
         if event.type() == QEvent.Type.ShortcutOverride:
             key_event = event
-            if key_event.key() == Qt.Key.Key_I and key_event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            if (
+                key_event.key() == Qt.Key.Key_I
+                and key_event.modifiers() == Qt.KeyboardModifier.NoModifier
+            ):
                 event.accept()
                 return True
         return super().event(event)
