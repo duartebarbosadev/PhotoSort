@@ -52,9 +52,9 @@ jobs:
 
       # I currently publish unsigned ZIP/DMG artifacts and intentionally leave
       # these secrets unset. The conditional signing and notarization steps are
-      # skipped automatically. I can configure trusted signing here later if the
-      # project requires it; self-signed certificates would not remove public
-      # Windows or macOS trust warnings.
+      # skipped automatically. In the future I may configure trusted signing here later if the
+      # a lot of people think it's necessary; for now,
+      # I don't want to pay for a code signing certificate or Apple Developer account.
       WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
       MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
