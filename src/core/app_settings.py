@@ -124,6 +124,10 @@ EASY_DELETE_BLUR_THRESHOLD = 100.0
 EASY_DELETE_DARK_MEAN_THRESHOLD = 15.0   # 0-255 mean brightness; below = near-black
 EASY_DELETE_WHITE_MEAN_THRESHOLD = 248.0  # 0-255 mean brightness; above = overexposed
 EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01  # cosine distance; below = near-identical
+EASY_DELETE_TERRIBLE_AESTHETIC_THRESHOLD = 0.4  # cafe_aesthetic score; below = terrible
+
+# Fix Rotation step
+FIX_ROTATION_MIN_CONFIDENCE = 0.70  # model confidence; below = skip suggestion
 
 # Iteration limits for safety
 DEFAULT_MAX_ITERATIONS = 5000  # Default maximum iterations for various loops

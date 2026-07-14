@@ -27,6 +27,7 @@ _ISSUE_LABELS: Dict[str, tuple] = {
     "dark": ("DARK", "#4A90D9"),
     "white": ("WHITE", "#F5B700"),
     "duplicate": ("DUP", "#A78BFA"),
+    "terrible": ("UGLY", "#FF9500"),
 }
 
 _MARKED_COLOR = "#E53935"
@@ -41,7 +42,7 @@ class _ScaledImageLabel(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(80, 80)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setStyleSheet("background: #0D1117;")
+        self.setStyleSheet("background: #232628;")
 
     def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:
         self._source_pixmap = pixmap
@@ -115,6 +116,13 @@ class EasyDeleteStepWidget(QWidget):
         self._flagged_paths = self._build_ordered_paths(results)
         self._current_index = -1
 
+        counts = {}
+        for path in self._flagged_paths:
+            t = self._results.get(path, {}).get("type", "?")
+            counts[t] = counts.get(t, 0) + 1
+        logger.info(f"EasyDelete results: {len(self._flagged_paths)} flagged — "
+                    f"{', '.join(f'{v} {k}' for k, v in sorted(counts.items()))}")
+
         if self._flagged_paths:
             self._populate_list()
             self._content_stack.setCurrentIndex(1)
@@ -130,7 +138,7 @@ class EasyDeleteStepWidget(QWidget):
     def _build_ordered_paths(self, results: dict) -> List[str]:
         ordered: List[str] = []
         seen: set = set()
-        for issue_type in ("duplicate", "blur", "dark", "white"):
+        for issue_type in ("duplicate", "blur", "dark", "white", "terrible"):
             for path, entry in results.items():
                 if path not in seen and entry["type"] == issue_type and entry["suggest_delete"]:
                     ordered.append(path)
@@ -207,6 +215,7 @@ class EasyDeleteStepWidget(QWidget):
         reason = entry.get("reason", "")
         self._issue_label.setText(f"<b style='color:{color}'>[{label}]</b>  {reason}")
         self._suggestion_label.hide()
+        logger.info(f"Showing [{label}] {os.path.basename(path)} — {reason}")
 
     def _show_pair(self, path: str, pair_path: str, entry: dict) -> None:
         self._image_stack.setCurrentIndex(1)
@@ -280,14 +289,16 @@ class EasyDeleteStepWidget(QWidget):
         path = self._flagged_paths[self._current_index]
         is_marked = self._is_marked_func(path) if self._is_marked_func else False
         if is_marked:
-            self._mark_btn.setText("Unmark for Deletion")
+            self._mark_btn.setText("Unmark for Deletion  [X]")
             self._mark_btn.setStyleSheet(
-                "background: #4A1A1A; color: #EF9A9A; border: 1px solid #E53935; padding: 4px 12px;"
+                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #8C2E35,stop:1 #6E2228);"
+                " color: #FFFFFF; border: 1px solid #A63B42; padding: 4px 12px;"
             )
         else:
-            self._mark_btn.setText("Mark for Deletion (X)")
+            self._mark_btn.setText("Mark for Deletion  [X]")
             self._mark_btn.setStyleSheet(
-                "background: #2D1A1A; color: #E53935; border: 1px solid #8B2C2C; padding: 4px 12px;"
+                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #A63B42,stop:1 #8C2E35);"
+                " color: #FFFFFF; border: 1px solid #B84A52; padding: 4px 12px;"
             )
         self._refresh_list_colors()
 
@@ -361,16 +372,21 @@ class EasyDeleteStepWidget(QWidget):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.setSpacing(16)
 
+        title = QLabel("Easy Delete")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size: 20px; font-weight: bold; margin-bottom: 4px;")
+
         self._loading_label = QLabel("Analyzing images…")
         self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._loading_label.setStyleSheet("font-size: 14px; color: #B8C2CC;")
         self._loading_label.setWordWrap(True)
+        self._loading_label.setStyleSheet("font-size: 13px; color: #aaaaaa; margin-bottom: 12px;")
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
-        self._progress_bar.setFixedWidth(420)
+        self._progress_bar.setFixedWidth(320)
         self._progress_bar.setTextVisible(True)
 
+        layout.addWidget(title)
         layout.addWidget(self._loading_label)
         layout.addWidget(self._progress_bar, alignment=Qt.AlignmentFlag.AlignCenter)
         return page
@@ -378,47 +394,50 @@ class EasyDeleteStepWidget(QWidget):
     def _build_results_page(self) -> QWidget:
         page = QWidget()
         page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(0, 0, 0, 0)
-        page_layout.setSpacing(0)
+        page_layout.setContentsMargins(10, 8, 10, 8)
+        page_layout.setSpacing(8)
 
-        # Header bar
+        # Header row
         header = QWidget()
-        header.setStyleSheet("background: #141920; border-bottom: 1px solid #2A3040;")
-        header.setFixedHeight(44)
         hl = QHBoxLayout(header)
-        hl.setContentsMargins(12, 6, 12, 6)
+        hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(8)
 
         self._summary_label = QLabel()
-        self._summary_label.setStyleSheet("font-size: 13px; color: #B8C2CC; font-weight: 600;")
+        self._summary_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+
+        hint = QLabel("X — mark/unmark  ·  ←/→ — navigate  ·  Enter — proceed")
+        hint.setStyleSheet("font-size: 11px; color: #888888;")
 
         skip_btn = QPushButton("Skip Step")
-        skip_btn.setObjectName("workflowStepButton")
-        skip_btn.setFixedHeight(28)
+        skip_btn.setFixedWidth(80)
         skip_btn.clicked.connect(self._on_skip)
 
         hl.addWidget(self._summary_label)
         hl.addStretch()
+        hl.addWidget(hint)
         hl.addWidget(skip_btn)
         page_layout.addWidget(header)
 
-        # Main split: list on left, viewer on right
+        # Main split: list | viewer
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(6)
+        splitter.setHandleWidth(4)
+        splitter.setChildrenCollapsible(False)
 
         # Left list
         left = QWidget()
         left.setMinimumWidth(200)
-        left.setMaximumWidth(320)
+        left.setMaximumWidth(300)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
         self._items_list = QListWidget()
         self._items_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._items_list.setStyleSheet(
-            "QListWidget { background: #0D1117; border: none; color: #D5DBE1; }"
-            "QListWidget::item { padding: 7px 12px; border-bottom: 1px solid #1C2230; font-size: 11px; }"
-            "QListWidget::item:selected { background: #1E2A3A; }"
+            "QListWidget { background: #242729; border: none; border-right: 1px solid #3C3F41; color: #A9B7C6; }"
+            "QListWidget::item { padding: 7px 12px; border-bottom: 1px solid #303538; font-size: 11px; }"
+            "QListWidget::item:selected { background: #1E3F62; color: #E0E8F0; }"
+            "QListWidget::item:hover { background: #2C3438; }"
         )
         self._items_list.itemClicked.connect(self._on_item_clicked)
         left_layout.addWidget(self._items_list)
@@ -426,12 +445,12 @@ class EasyDeleteStepWidget(QWidget):
         # Right viewer
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(12, 10, 12, 8)
-        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(8, 4, 8, 4)
+        right_layout.setSpacing(6)
 
         self._issue_label = QLabel()
         self._issue_label.setWordWrap(True)
-        self._issue_label.setStyleSheet("font-size: 12px; color: #B8C2CC;")
+        self._issue_label.setStyleSheet("font-size: 12px; color: #A9B7C6;")
         right_layout.addWidget(self._issue_label)
 
         # Image display: 0=single, 1=pair
@@ -453,7 +472,7 @@ class EasyDeleteStepWidget(QWidget):
         lp = QWidget()
         ll = QVBoxLayout(lp)
         ll.setContentsMargins(0, 0, 4, 0)
-        ll.setSpacing(4)
+        ll.setSpacing(3)
         self._pair_left_hdr = QLabel()
         self._pair_left_hdr.setWordWrap(True)
         self._pair_left_hdr.setStyleSheet("font-size: 11px;")
@@ -464,7 +483,7 @@ class EasyDeleteStepWidget(QWidget):
         rp = QWidget()
         rl = QVBoxLayout(rp)
         rl.setContentsMargins(4, 0, 0, 0)
-        rl.setSpacing(4)
+        rl.setSpacing(3)
         self._pair_right_hdr = QLabel()
         self._pair_right_hdr.setWordWrap(True)
         self._pair_right_hdr.setStyleSheet("font-size: 11px;")
@@ -476,15 +495,15 @@ class EasyDeleteStepWidget(QWidget):
         pair_splitter.addWidget(rp)
         pl.addWidget(pair_splitter, 1)
 
-        self._image_stack.addWidget(single)  # 0
-        self._image_stack.addWidget(pair)    # 1
+        self._image_stack.addWidget(single)   # 0
+        self._image_stack.addWidget(pair)     # 1
         right_layout.addWidget(self._image_stack, 1)
 
         # Suggestion banner (duplicate hint)
         self._suggestion_label = QLabel()
         self._suggestion_label.setWordWrap(True)
         self._suggestion_label.setStyleSheet(
-            "background: #1E1A08; color: #F5B700; border: 1px solid #4A3B00;"
+            "background: #2C2616; color: #F5B700; border: 1px solid #4A3B00;"
             " border-radius: 4px; padding: 6px 10px; font-size: 11px;"
         )
         self._suggestion_label.hide()
@@ -492,29 +511,26 @@ class EasyDeleteStepWidget(QWidget):
 
         # Action bar
         action = QHBoxLayout()
-        action.setSpacing(8)
+        action.setSpacing(6)
 
         self._prev_btn = QPushButton("← Prev")
-        self._prev_btn.setFixedWidth(72)
+        self._prev_btn.setFixedWidth(70)
         self._prev_btn.clicked.connect(self._on_prev)
 
         self._counter_label = QLabel("0 of 0")
         self._counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._counter_label.setStyleSheet("color: #B8C2CC; font-size: 12px;")
-        self._counter_label.setFixedWidth(80)
+        self._counter_label.setStyleSheet("font-size: 12px; color: #808080;")
+        self._counter_label.setFixedWidth(72)
 
         self._next_btn = QPushButton("Next →")
-        self._next_btn.setFixedWidth(72)
+        self._next_btn.setFixedWidth(70)
         self._next_btn.clicked.connect(self._on_next)
 
-        self._mark_btn = QPushButton("Mark for Deletion (X)")
-        self._mark_btn.setMinimumWidth(170)
-        self._mark_btn.setStyleSheet(
-            "background: #2D1A1A; color: #E53935; border: 1px solid #8B2C2C; padding: 4px 12px;"
-        )
+        self._mark_btn = QPushButton("Mark for Deletion  [X]")
+        self._mark_btn.setMinimumWidth(160)
         self._mark_btn.clicked.connect(self._on_mark_toggle)
 
-        self._done_btn = QPushButton("Done → Pick Best")
+        self._done_btn = QPushButton("Done → Fix Rotation")
         self._done_btn.setObjectName("acceptButton")
         self._done_btn.clicked.connect(self._on_done)
 
@@ -543,7 +559,7 @@ class EasyDeleteStepWidget(QWidget):
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet("font-size: 16px; color: #66BB6A;")
 
-        btn = QPushButton("Continue to Pick Best →")
+        btn = QPushButton("Continue to Fix Rotation →")
         btn.setObjectName("acceptButton")
         btn.setFixedWidth(230)
         btn.clicked.connect(self._on_done)

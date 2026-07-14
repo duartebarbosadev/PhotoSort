@@ -11,6 +11,7 @@ from core.app_settings import (
     EASY_DELETE_BLUR_THRESHOLD,
     EASY_DELETE_DARK_MEAN_THRESHOLD,
     EASY_DELETE_DUPLICATE_COSINE_DISTANCE,
+    EASY_DELETE_TERRIBLE_AESTHETIC_THRESHOLD,
     EASY_DELETE_WHITE_MEAN_THRESHOLD,
 )
 from core.image_features.blur_detector import BLUR_DETECTION_PREVIEW_SIZE, BlurDetector
@@ -63,17 +64,21 @@ class EasyDeleteWorker(QObject):
         for i, path in enumerate(self.image_paths):
             if self._should_stop:
                 break
-            percent = int((i / total) * 70)
+            percent = int((i / total) * 60)
             self.progress_update.emit(percent, f"Analyzing {os.path.basename(path)}… ({i + 1}/{total})")
             issue = self._detect_issue(path)
             if issue:
                 results[path] = issue
 
         if not self._should_stop and self.cluster_map and self.embeddings_cache:
-            self.progress_update.emit(70, "Detecting near-duplicates…")
+            self.progress_update.emit(60, "Detecting near-duplicates…")
             for path, entry in self._detect_duplicates().items():
                 if path not in results:
                     results[path] = entry
+
+        if not self._should_stop:
+            self.progress_update.emit(70, "Scoring aesthetic quality…")
+            self._detect_terrible_aesthetic(results)
 
         if not self._should_stop:
             self.progress_update.emit(100, "Detection complete.")
@@ -218,3 +223,55 @@ class EasyDeleteWorker(QObject):
 
         keep_name = os.path.basename(keep_path)
         return f"Near-duplicate of {keep_name} — {', '.join(reasons)}"
+
+    def _detect_terrible_aesthetic(self, results: Dict[str, dict]) -> None:
+        try:
+            import torch  # noqa: F401 - check availability
+            from core.best_photo_finder.scorers import HuggingFaceAestheticScorer
+            from core.best_photo_finder.config import SelectorConfig
+            from pathlib import Path
+        except ImportError:
+            logger.debug("Aesthetic scoring skipped: torch or best_photo_finder not available.")
+            return
+
+        unscored = [p for p in self.image_paths if p not in results]
+        if not unscored or self._should_stop:
+            logger.info("Aesthetic scoring: no unscored images to evaluate or stopped.")
+            return
+
+        logger.info(f"Aesthetic scoring: evaluating {len(unscored)} images "
+                    f"(threshold < {EASY_DELETE_TERRIBLE_AESTHETIC_THRESHOLD})")
+
+        try:
+            scorer = HuggingFaceAestheticScorer()
+            config = SelectorConfig()
+            total = len(unscored)
+            batch_size = config.aesthetic_batch_size
+            logger.info(f"Aesthetic scoring: using batch size {batch_size}")
+            flagged_count = 0
+
+            for batch_start in range(0, total, batch_size):
+                if self._should_stop:
+                    break
+                batch = unscored[batch_start : batch_start + batch_size]
+                percent = 70 + int((batch_start / total) * 28)
+                self.progress_update.emit(percent, f"Scoring aesthetics… ({batch_start + 1}/{total})")
+                try:
+                    scores = scorer.score_batch([Path(p) for p in batch], config)
+                    for path_obj, score in scores.items():
+                        path_str = str(path_obj)
+                        logger.debug(f"Aesthetic score: {score:.4f} — {os.path.basename(path_str)}")
+                        if score < EASY_DELETE_TERRIBLE_AESTHETIC_THRESHOLD and path_str not in results:
+                            results[path_str] = {
+                                "type": "terrible",
+                                "pair_path": None,
+                                "suggest_delete": True,
+                                "reason": f"Low aesthetic quality (score: {score:.2f})",
+                            }
+                            flagged_count += 1
+                            logger.info(f"Flagged TERRIBLE: {os.path.basename(path_str)} (score: {score:.4f})")
+                except Exception as e:
+                    logger.warning(f"Aesthetic batch scoring failed: {e}")
+            logger.info(f"Aesthetic scoring complete: {flagged_count}/{total} flagged as terrible")
+        except Exception as e:
+            logger.warning(f"Aesthetic scoring phase failed: {e}")
