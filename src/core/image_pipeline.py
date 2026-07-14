@@ -760,9 +760,13 @@ class ImagePipeline:
             f"Thumbnail preloading finished. Processed {processed_count}/{total_files}."
         )
 
-    def _ensure_preview_generated_and_cached(self, image_path: str) -> bool:
+    def ensure_preview_cached(self, image_path: str) -> bool:
         """
-        Worker function for preload_previews. Generates and caches one preview at PRELOAD_MAX_RESOLUTION.
+        Generate and cache one navigation-sized preview when it is missing.
+
+        This method is safe to call from a background worker. It deliberately
+        stores a bounded PRELOAD_MAX_RESOLUTION image instead of decoding at the
+        larger display size, which keeps navigation prefetch memory predictable.
         Automatically applies auto-edits for RAW files.
         Returns True if successful or already cached, False on error.
         """
@@ -840,7 +844,7 @@ class ImagePipeline:
                     )
                     break
                 future = executor.submit(
-                    self._ensure_preview_generated_and_cached,
+                    self.ensure_preview_cached,
                     image_path,
                 )
                 futures_map[future] = image_path

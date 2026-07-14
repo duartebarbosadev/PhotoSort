@@ -174,6 +174,7 @@ THUMBNAIL_MAX_WORKERS = 4  # Max concurrent thumbnail generation threads
 IMAGE_PIPELINE_MAX_WORKERS = 4  # Keep concurrent decodes below memory pressure limits
 HIGH_MEMORY_DECODE_MAX_WORKERS = 1  # RAW/HEIC full decodes can use hundreds of MB
 IMAGE_MEMORY_CACHE_SIZE_BYTES = 256 * 1024 * 1024  # Shared hot-image budget
+NAVIGATION_PREVIEW_LOOKAHEAD = 4  # Selected image plus a small directional buffer
 
 # Preview size estimation
 # Preview cache payload for this app is usually well below original image bytes,

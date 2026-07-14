@@ -87,6 +87,7 @@ from ui.controllers.similarity_controller import SimilarityController
 from ui.controllers.metadata_controller import MetadataController
 from ui.controllers.cache_controller import CacheController
 from ui.controllers.status_controller import StatusController
+from ui.controllers.preview_load_controller import PreviewLoadController
 from ui.thumbnail_load_coordinator import ViewportThumbnailLoader
 from ui.models.media_filter_proxy import (
     CustomFilterProxyModel,
@@ -160,6 +161,9 @@ class MainWindow(QMainWindow):
         self.metadata_controller = MetadataController(self)
         self.cache_controller = CacheController(self)
         self.status_controller = StatusController(self)
+        self.preview_load_controller = PreviewLoadController(self.image_pipeline, self)
+        self.preview_load_controller.preview_ready.connect(self._handle_preview_ready)
+        self.preview_load_controller.preview_failed.connect(self._handle_preview_failed)
 
         # Hotkey controller wraps navigation key handling
         self.hotkey_controller = HotkeyController(self)
@@ -671,6 +675,14 @@ class MainWindow(QMainWindow):
 
     def reset_thumbnail_requests(self) -> None:
         self.thumbnail_loader.reset()
+
+    def reset_preview_requests(self) -> None:
+        self.preview_load_controller.reset()
+
+    def prefetch_navigation_previews(self, image_paths: List[str]) -> None:
+        self.preview_load_controller.request(
+            path for path in image_paths if not is_video_extension(path)
+        )
 
     def schedule_visible_thumbnail_load(self, *_args) -> None:
         self.thumbnail_loader.schedule()
@@ -1713,6 +1725,7 @@ class MainWindow(QMainWindow):
 
         self._close_after_grouping_save = False
         logger.info("Stopping all workers on application close.")
+        self.preview_load_controller.shutdown()
         self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
         event.accept()
 
@@ -2276,15 +2289,16 @@ class MainWindow(QMainWindow):
 
         if not reuse_preview:
             logger.debug(f"Getting preview pixmap for {file_path}")
-            pixmap = self.image_pipeline.get_preview_qpixmap(
+            pixmap = self.image_pipeline.get_cached_preview_qpixmap(
                 file_path, display_max_size=DISPLAY_MAX_RESOLUTION
             )
+            preview_is_cached = bool(pixmap and not pixmap.isNull())
 
-            if not pixmap or pixmap.isNull():
+            if not preview_is_cached:
                 logger.debug(
-                    f"Preview pixmap unavailable, trying thumbnail for {file_path}"
+                    f"Cached preview unavailable, trying cached thumbnail for {file_path}"
                 )
-                pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path)
+                pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(file_path)
 
             if pixmap and not pixmap.isNull():
                 logger.debug(f"Setting image data for {file_path}")
@@ -2295,14 +2309,13 @@ class MainWindow(QMainWindow):
                 }
                 self.advanced_image_viewer.set_image_data(image_data)
             else:
-                logger.debug(f"Failed to load image data for {file_path}")
-                self.advanced_image_viewer.setText("Failed to load image")
-                self.statusBar().showMessage(
-                    f"Error: Could not load image data for {os.path.basename(file_path)}",
-                    7000,
-                )
-                self.invalidate_last_displayed_preview()
-                return
+                self.advanced_image_viewer.setText("Loading preview…")
+
+            if not preview_is_cached:
+                # A cache miss must never decode on the UI thread. Keyboard
+                # navigation may already have queued this path and its lookahead;
+                # the controller deduplicates this narrower mouse request.
+                self.preview_load_controller.request([file_path])
 
         self._last_displayed_preview_path = file_path
         self._update_status_bar_for_image(
@@ -2312,6 +2325,43 @@ class MainWindow(QMainWindow):
         if self.sidebar_visible:
             logger.debug("Updating sidebar with current selection")
             self._update_sidebar_with_current_selection()
+
+    def _handle_preview_ready(self, file_path: str) -> None:
+        """Upgrade the current thumbnail only when the result is still relevant."""
+        if self.app_state.focused_image_path != file_path:
+            return
+        pixmap = self.image_pipeline.get_cached_preview_qpixmap(
+            file_path, display_max_size=DISPLAY_MAX_RESOLUTION
+        )
+        if pixmap is None or pixmap.isNull():
+            return
+        metadata = self._get_cached_metadata_for_selection(file_path)
+        if metadata is None:
+            return
+        self.advanced_image_viewer.set_image_data(
+            {
+                "pixmap": pixmap,
+                "path": file_path,
+                "rating": metadata.get("rating", 0),
+            }
+        )
+        self._last_displayed_preview_path = file_path
+        self._update_status_bar_for_image(
+            file_path,
+            metadata,
+            pixmap,
+            self.app_state.get_file_data_by_path(file_path),
+        )
+
+    def _handle_preview_failed(self, file_path: str) -> None:
+        if self.app_state.focused_image_path != file_path:
+            return
+        self.advanced_image_viewer.setText("Failed to load image")
+        self.statusBar().showMessage(
+            f"Error: Could not load image data for {os.path.basename(file_path)}",
+            7000,
+        )
+        self.invalidate_last_displayed_preview()
 
     def _display_single_video_preview(
         self,

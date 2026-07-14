@@ -4,6 +4,8 @@ from PyQt6.QtCore import QModelIndex, Qt
 from PyQt6.QtWidgets import QAbstractItemView
 import logging
 
+from core.app_settings import NAVIGATION_PREVIEW_LOOKAHEAD
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +22,7 @@ class NavigationContext(Protocol):
     def validate_and_select_image_candidate(
         self, proxy_index: QModelIndex, direction: str, log_skip: bool
     ): ...
+    def prefetch_navigation_previews(self, image_paths: List[str]) -> None: ...
 
 
 def navigate_group_cyclic(
@@ -152,6 +155,20 @@ class NavigationController:
             all_visible, current_path, direction, skip_deleted, deleted_set
         )
         if target_path:
+            target_position = all_visible.index(target_path)
+            step = -1 if direction in ("up", "left") else 1
+            preview_paths = [target_path]
+            position = target_position
+            while len(preview_paths) <= NAVIGATION_PREVIEW_LOOKAHEAD:
+                position += step
+                if position < 0 or position >= len(all_visible):
+                    break
+                candidate = all_visible[position]
+                if not skip_deleted or candidate not in deleted_set:
+                    preview_paths.append(candidate)
+            prefetch = getattr(self.ctx, "prefetch_navigation_previews", None)
+            if callable(prefetch):
+                prefetch(preview_paths)
             proxy_idx = self.ctx.find_proxy_index_for_path(target_path)
             if proxy_idx.isValid():
                 self.ctx.validate_and_select_image_candidate(
