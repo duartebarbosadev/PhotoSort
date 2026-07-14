@@ -603,13 +603,18 @@ class SimilarityWorker(QObject):
     finished = pyqtSignal()
 
     def __init__(
-        self, file_paths: List[str], allow_model_download: bool = False, parent=None
+        self,
+        file_paths: List[str],
+        allow_model_download: bool = False,
+        image_pipeline: Optional[ImagePipeline] = None,
+        parent=None,
     ):
         super().__init__(parent)
         self.file_paths = file_paths
         self.allow_model_download = allow_model_download
         self._is_running = True
         self.similarity_engine = None
+        self.image_pipeline = image_pipeline
 
     def _has_raw_images(self) -> bool:
         """Check if any of the file paths are RAW image files."""
@@ -634,7 +639,8 @@ class SimilarityWorker(QObject):
 
             # 1. Instantiate the engine inside the worker thread
             self.similarity_engine = SimilarityEngine(
-                allow_model_download=self.allow_model_download
+                allow_model_download=self.allow_model_download,
+                image_pipeline=self.image_pipeline,
             )
 
             # 2. Connect its signals to this worker's signals

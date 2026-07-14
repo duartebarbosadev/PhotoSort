@@ -8,9 +8,12 @@ external apply_auto_edits parameters.
 
 import inspect
 from unittest.mock import Mock, patch
-from src.core.image_pipeline import ImagePipeline
+from src.core.image_pipeline import CACHE_SCHEMA_VERSION, ImagePipeline
 from src.core.image_processing.raw_image_processor import is_raw_extension
 from PIL import Image
+from PyQt6.QtWidgets import QApplication
+
+_app = QApplication.instance() or QApplication([])
 
 
 class TestAutomaticRawProcessing:
@@ -101,7 +104,7 @@ class TestAutomaticRawProcessing:
                     "src.core.image_processing.raw_image_processor.RawImageProcessor.process_raw_for_thumbnail"
                 ) as mock_process,
             ):
-                mock_process.return_value = Mock()  # Mock PIL image
+                mock_process.return_value = Image.new("RGB", (32, 32))
 
                 # Call the internal method directly
                 pipeline._get_pil_thumbnail("test.arw")
@@ -114,7 +117,7 @@ class TestAutomaticRawProcessing:
 
     def test_cache_key_generation_includes_raw_detection(self):
         """Test that cache keys are generated correctly with RAW detection."""
-        ImagePipeline()
+        pipeline = ImagePipeline()
 
         with (
             patch("src.core.image_pipeline.is_raw_extension") as mock_is_raw,
@@ -123,20 +126,16 @@ class TestAutomaticRawProcessing:
             mock_normpath.return_value = "test.arw"
             mock_is_raw.return_value = True
 
-            # Access the cache key generation logic directly
-            # This simulates what happens in _get_pil_thumbnail
-            normalized_path = "test.arw"
-            ext = ".arw"
-            apply_auto_edits = is_raw_extension(ext)
-            apply_orientation = True
-
-            cache_key = (normalized_path, apply_auto_edits, apply_orientation)
+            cache_key = pipeline.thumbnail_cache_key(
+                "test.arw", True, file_size=10, mtime_ns=20
+            )
 
             # Verify cache key structure
             assert cache_key[0] == "test.arw"  # path
-            assert cache_key[1]  # RAW detection result for .arw
-            assert cache_key[2]  # orientation
-            assert len(cache_key) == 3
+            assert cache_key[1] == "thumbnail"
+            assert cache_key[2] == CACHE_SCHEMA_VERSION
+            assert cache_key[5]  # RAW detection result for .arw
+            assert cache_key[6]  # orientation
 
     def test_preload_thumbnails_processes_each_file_individually(self):
         """Test that preload_thumbnails processes each file with individual RAW detection."""
@@ -286,7 +285,7 @@ def test_get_cached_preview_qpixmap_uses_high_res_cache_without_generation(tmp_p
     cached_preview = Image.new("RGB", (1600, 1200), color="red")
 
     def cache_get(key):
-        if key[1] == (800, 600):
+        if key[5] == (800, 600):
             return None
         return cached_preview
 

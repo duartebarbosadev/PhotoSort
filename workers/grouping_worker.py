@@ -11,6 +11,7 @@ from core.grouping import (
     build_grouping_plan,
     execute_grouping_plan,
 )
+from core.image_pipeline import ImagePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class GroupingPreviewWorker(QObject):
         mode: str,
         source_root: Optional[str] = None,
         location_depth: int = 3,
+        image_pipeline: Optional[ImagePipeline] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -34,6 +36,7 @@ class GroupingPreviewWorker(QObject):
         self.mode = mode
         self.source_root = source_root
         self.location_depth = location_depth
+        self.image_pipeline = image_pipeline
         self._should_stop = False
 
     def stop(self):
@@ -50,6 +53,7 @@ class GroupingPreviewWorker(QObject):
                 progress_callback=self.progress_update.emit,
                 source_root=self.source_root,
                 location_depth=self.location_depth,
+                image_pipeline=self.image_pipeline,
             )
             if self._should_stop:
                 return
@@ -78,6 +82,7 @@ class GroupingWorkflowWorker(QObject):
         prepared_plan=None,
         location_depth: int = 3,
         move_companions: bool = False,
+        image_pipeline: Optional[ImagePipeline] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -89,6 +94,7 @@ class GroupingWorkflowWorker(QObject):
         self.prepared_plan = prepared_plan
         self.location_depth = location_depth
         self.move_companions = move_companions
+        self.image_pipeline = image_pipeline
         self._should_stop = False
 
     def stop(self):
@@ -108,6 +114,7 @@ class GroupingWorkflowWorker(QObject):
                     progress_callback=self.progress_update.emit,
                     source_root=self.source_root,
                     location_depth=self.location_depth,
+                    image_pipeline=self.image_pipeline,
                 )
             plan.apply_group_label_overrides(self.group_name_overrides)
             plan.output_root = self.output_root

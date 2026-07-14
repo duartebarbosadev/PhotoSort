@@ -3363,22 +3363,12 @@ class MainWindow(QMainWindow):
         #
         # Note: We only try to get from cache (no generation) if thumbnails are enabled
         if self.menu_manager.toggle_thumbnails_action.isChecked():
-            # Try to get from cache only (won't generate if missing)
-            # Determine cache key: apply_auto_edits is True for RAW files
-            from core.image_processing.raw_image_processor import is_raw_extension
-
-            ext = os.path.splitext(file_path)[1].lower()
-            apply_auto_edits = is_raw_extension(ext)
-            cache_key = (
-                os.path.normpath(file_path),
-                apply_auto_edits,
-                False,
-            )  # (path, apply_auto_edits, apply_orientation)
-            cached_thumbnail = self.image_pipeline.thumbnail_cache.get(cache_key)
-            if cached_thumbnail:
-                from PIL.ImageQt import ImageQt
-
-                pixmap = QPixmap.fromImage(ImageQt(cached_thumbnail))
+            pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
+                file_path,
+                file_size=file_data.get("file_size"),
+                mtime_ns=file_data.get("mtime_ns"),
+            )
+            if pixmap:
                 item.setIcon(QIcon(pixmap))
             elif media_type == "video":
                 # Videos fall back to play icon until first-frame thumbnail is generated.
@@ -3497,28 +3487,19 @@ class MainWindow(QMainWindow):
                     file_path = file_data["path"]
                     media_type = file_data.get("media_type", "image")
 
-                    # Try to get thumbnail from cache (with correct cache key for RAW files)
-                    from core.image_processing.raw_image_processor import (
-                        is_raw_extension,
-                    )
-
-                    ext = os.path.splitext(file_path)[1].lower()
-                    apply_auto_edits = is_raw_extension(ext)
-                    cache_key = (os.path.normpath(file_path), apply_auto_edits, False)
-                    cached_thumbnail = self.image_pipeline.thumbnail_cache.get(
-                        cache_key
+                    pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
+                        file_path,
+                        file_size=file_data.get("file_size"),
+                        mtime_ns=file_data.get("mtime_ns"),
                     )
 
                     should_update_icon = (
                         media_type == "video" or child_item.icon().isNull()
                     )
-                    if cached_thumbnail and should_update_icon:
+                    if pixmap and should_update_icon:
                         # Always refresh video icons so placeholders can be replaced.
                         # For images, only set if icon is currently empty.
                         try:
-                            from PIL.ImageQt import ImageQt
-
-                            pixmap = QPixmap.fromImage(ImageQt(cached_thumbnail))
                             child_item.setIcon(QIcon(pixmap))
                             updated_count += 1
                         except Exception as e:
@@ -4293,8 +4274,7 @@ class MainWindow(QMainWindow):
         )
 
         t1 = time.perf_counter()
-        self.image_pipeline.preview_cache.delete_all_for_path(file_path)
-        self.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
+        self.image_pipeline.invalidate_path(file_path)
         t2 = time.perf_counter()
         logger.info(f"HSR: Cache clearing for {filename} took {t2 - t1:.4f}s.")
 

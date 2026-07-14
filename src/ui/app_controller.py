@@ -2190,10 +2190,7 @@ class AppController(QObject):
             # Perform only lightweight cache invalidation (no preview regeneration yet)
             filename = os.path.basename(file_path)
             logger.info(f"Rotation completed for '{filename}' (Lossy: {is_lossy})")
-            self.main_window.image_pipeline.preview_cache.delete_all_for_path(file_path)
-            self.main_window.image_pipeline.thumbnail_cache.delete_all_for_path(
-                file_path
-            )
+            self.main_window.image_pipeline.invalidate_path(file_path)
 
     def handle_rotation_application_finished(
         self, successful_count: int, failed_count: int

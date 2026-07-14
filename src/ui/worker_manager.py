@@ -328,7 +328,9 @@ class WorkerManager(QObject):
         self.stop_similarity_analysis()
         self.similarity_thread = QThread()
         self.similarity_worker = SimilarityWorker(
-            file_paths, allow_model_download=allow_model_download
+            file_paths,
+            allow_model_download=allow_model_download,
+            image_pipeline=self.image_pipeline,
         )
         self.similarity_worker.moveToThread(self.similarity_thread)
 
@@ -638,7 +640,11 @@ class WorkerManager(QObject):
         self.stop_grouping_preview()
         self.grouping_preview_thread = QThread()
         self.grouping_preview_worker = GroupingPreviewWorker(
-            items, mode, source_root, location_depth
+            items,
+            mode,
+            source_root,
+            location_depth,
+            image_pipeline=self.image_pipeline,
         )
         self.grouping_preview_worker.moveToThread(self.grouping_preview_thread)
 
@@ -699,6 +705,7 @@ class WorkerManager(QObject):
             prepared_plan=prepared_plan,
             location_depth=location_depth,
             move_companions=move_companions,
+            image_pipeline=self.image_pipeline,
         )
         self.grouping_workflow_worker.moveToThread(self.grouping_workflow_thread)
 
