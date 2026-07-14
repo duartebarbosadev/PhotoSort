@@ -70,7 +70,7 @@ def select_next_surviving_path(
                         cand_base = _os.path.basename(candidate)
                         # Longest common prefix length as a cheap locality proxy
                         lcp = 0
-                        for a_ch, c_ch in zip(anchor_base, cand_base):
+                        for a_ch, c_ch in zip(anchor_base, cand_base, strict=False):
                             if a_ch == c_ch:
                                 lcp += 1
                             else:

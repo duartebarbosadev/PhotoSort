@@ -42,16 +42,12 @@ class ImageOrientationHandler:
         except (ValueError, TypeError):
             return 0
 
-        if orientation == 1:  # Horizontal (normal)
-            return 0
-        elif orientation == 3:  # Rotated 180
-            return 180
-        elif orientation == 6:  # Rotated 90 CW
-            return 90
-        elif orientation == 8:  # Rotated 270 CW (90 CCW)
-            return 270
-        else:
-            return 0  # Other orientations (like flipped) are not handled as simple rotations
+        return {
+            1: 0,  # Horizontal (normal)
+            3: 180,
+            6: 90,
+            8: 270,
+        }.get(orientation, 0)
 
     @staticmethod
     def get_composite_rotation(

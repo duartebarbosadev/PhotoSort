@@ -341,10 +341,7 @@ class EasyDeleteStepWidget(QWidget):
         self._issue_label.setText(
             f"<b style='color:{color}'>[DUP]</b>  Near-duplicate pair"
         )
-        if suggest_delete:
-            keep_path = pair_path
-        else:
-            keep_path = path
+        keep_path = pair_path if suggest_delete else path
         logger.info(
             "EasyDelete duplicate: keeping %s over %s — %s",
             os.path.basename(keep_path),

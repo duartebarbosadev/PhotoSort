@@ -196,7 +196,7 @@ class MetadataCard(QFrame):
         values_layout.setContentsMargins(0, 0, 0, 0)
         values_layout.setSpacing(12)
 
-        unique_values = set(str(v) for v in values if v is not None and str(v) != "N/A")
+        unique_values = {str(v) for v in values if v is not None and str(v) != "N/A"}
         all_same = len(unique_values) <= 1
 
         for value in values:
@@ -926,7 +926,9 @@ class MetadataSidebar(QWidget):
                         ]
                         if all(
                             dv == sv
-                            for dv, sv in zip(display_values, source_values)
+                            for dv, sv in zip(
+                                display_values, source_values, strict=False
+                            )
                             if dv is not None and sv is not None and dv != "N/A"
                         ):
                             continue

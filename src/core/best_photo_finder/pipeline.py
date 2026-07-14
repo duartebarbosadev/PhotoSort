@@ -162,7 +162,7 @@ class PhotoSelector:
         if preview_images:
             preview_batch = {
                 path: preview_images[path]
-                for path in path_lookup.keys()
+                for path in path_lookup
                 if path in preview_images
             }
             aesthetic_scores = self.aesthetic_scorer.score_batch_from_images(

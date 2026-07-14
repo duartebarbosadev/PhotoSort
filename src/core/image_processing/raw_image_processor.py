@@ -162,6 +162,14 @@ def is_raw_extension(ext: str) -> bool:
     return ext.lower() in _rawpy_supported_set
 
 
+def is_raw_file(file_path: str) -> bool:
+    """Return whether a path has an extension supported by the RAW decoder."""
+
+    if not file_path:
+        return False
+    return is_raw_extension(os.path.splitext(file_path)[1])
+
+
 class RawImageProcessor:
     """Handles loading and processing of RAW image formats."""
 

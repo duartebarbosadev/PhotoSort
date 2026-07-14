@@ -9,9 +9,6 @@ if SRC_DIR and SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-# Ensure the project root is on sys.path so top-level packages (e.g., workers/) are importable
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from core.runtime_paths import (  # noqa: E402
     iter_bundle_roots,
@@ -20,13 +17,14 @@ from core.runtime_paths import (  # noqa: E402
 )
 
 # Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
+_pyexiv2_initialization_warning: Optional[str] = None
 try:
     from core.pyexiv2_init import ensure_pyexiv2_initialized  # noqa: E402
 
     ensure_pyexiv2_initialized()
 except Exception as e:
-    # If we can't initialize pyexiv2, log the error but don't prevent app startup
-    print(f"Warning: Failed to initialize pyexiv2: {e}")
+    # Logging is imported immediately below; retain the warning until then.
+    _pyexiv2_initialization_warning = f"Failed to initialize pyexiv2: {e}"
 
 import logging  # noqa: E402
 import argparse  # noqa: E402
@@ -35,6 +33,9 @@ import traceback  # noqa: E402  # For global exception handler
 from PyQt6.QtCore import Qt, QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen  # noqa: E402
 from PyQt6.QtGui import QIcon, QPixmap, QFont, QFontDatabase  # noqa: E402
+
+if _pyexiv2_initialization_warning:
+    logging.getLogger(__name__).warning(_pyexiv2_initialization_warning)
 
 
 def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:

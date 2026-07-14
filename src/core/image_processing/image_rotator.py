@@ -8,7 +8,7 @@ Handles image rotation with support for:
 
 import os
 import logging
-from typing import Literal, Tuple
+from typing import ClassVar, Literal, Tuple
 from PIL import Image, ImageOps
 
 # Use the new pyexiv2 abstraction layer
@@ -26,7 +26,7 @@ RotationDirection = Literal["clockwise", "counterclockwise", "180"]
 
 class ImageRotator:
     # Define supported image formats for different rotation types
-    _RAW_FORMATS_EXIF_ONLY = {
+    _RAW_FORMATS_EXIF_ONLY: ClassVar[set[str]] = {
         ".arw",
         ".cr2",
         ".nef",
@@ -37,18 +37,18 @@ class ImageRotator:
         ".pef",
         ".srw",
     }
-    _LOSSLESS_JPEG_FORMATS = {".jpg", ".jpeg"}
-    _LOSSLESS_HEIF_FORMATS = {
+    _LOSSLESS_JPEG_FORMATS: ClassVar[set[str]] = {".jpg", ".jpeg"}
+    _LOSSLESS_HEIF_FORMATS: ClassVar[set[str]] = {
         ".heif",
         ".heic",
     }  # For lossless HEIF/HEIC rotation via metadata
-    _STANDARD_PIXEL_ROTATION_FORMATS = {
+    _STANDARD_PIXEL_ROTATION_FORMATS: ClassVar[set[str]] = {
         ".png",
         ".tiff",
         ".tif",
         ".bmp",
     }
-    _XMP_UPDATE_SUPPORTED_EXTENSIONS = {
+    _XMP_UPDATE_SUPPORTED_EXTENSIONS: ClassVar[set[str]] = {
         ".jpg",
         ".jpeg",
         ".tiff",
@@ -412,9 +412,7 @@ class ImageRotator:
             ".heif (lossless via metadata)"
         )  # Add specific mention for HEIF/HEIC lossless
         formats.append(".heic (lossless via metadata)")
-        return sorted(
-            list(set(formats))
-        )  # Use set to remove duplicates, then convert to list and sort
+        return sorted(set(formats))
 
     def try_metadata_rotation_first(
         self, image_path: str, direction: RotationDirection

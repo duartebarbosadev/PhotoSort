@@ -89,9 +89,7 @@ class PickBestWorker(QObject):
             preview_loader=self._load_preview_image,
         )
         results: Dict[int, dict] = {}
-        processed = 0
-
-        for cluster_id in sorted(scorable_clusters.keys()):
+        for processed, cluster_id in enumerate(sorted(scorable_clusters)):
             if self._should_stop:
                 logger.info("PickBestWorker: stop requested.")
                 break
@@ -158,7 +156,6 @@ class PickBestWorker(QObject):
                 )
 
             results[cluster_id] = cluster_result
-            processed += 1
 
         if not self._should_stop:
             self.progress_update.emit(100, "Scoring complete.")

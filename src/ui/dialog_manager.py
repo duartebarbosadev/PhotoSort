@@ -44,7 +44,7 @@ from core.app_settings import (
     set_easy_delete_white_threshold,
 )
 from core.runtime_paths import get_app_cache_root, get_app_log_dir, get_app_models_dir
-from core.image_processing.raw_image_processor import is_raw_extension
+from core.image_processing.raw_image_processor import is_raw_file
 from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
     ModelNotFoundError,
@@ -96,17 +96,11 @@ class DialogManager:
 
     def _should_apply_raw_processing(self, file_path: str) -> bool:
         """Determine if RAW processing should be applied to the given file."""
-        if not file_path:
-            return False
-        ext = os.path.splitext(file_path)[1].lower()
-        return is_raw_extension(ext)
+        return is_raw_file(file_path)
 
     def _has_raw_images(self, file_paths: List[str]) -> bool:
         """Check if any of the provided file paths are RAW image files."""
-        for path in file_paths:
-            if self._should_apply_raw_processing(path):
-                return True
-        return False
+        return any(self._should_apply_raw_processing(path) for path in file_paths)
 
     def show_about_dialog(self, block: bool = True):
         """Show the 'About' dialog.

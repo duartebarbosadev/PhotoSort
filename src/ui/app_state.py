@@ -1,4 +1,5 @@
-from typing import Dict, Any, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional
 from datetime import datetime as datetime_obj
 import logging
 import os
@@ -9,6 +10,16 @@ from core.caching.analysis_cache import AnalysisCache
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class MediaSummary:
+    """Constant-time aggregate information about the loaded media library."""
+
+    total_items: int = 0
+    image_count: int = 0
+    video_count: int = 0
+    total_size_bytes: int = 0
+
+
 class AppState:
     """
     Holds application-level UI state and data caches.
@@ -16,9 +27,9 @@ class AppState:
     """
 
     def __init__(self):
-        self.image_files_data: List[
-            Dict[str, Any]
-        ] = []  # {'path': str, 'is_blurred': Optional[bool], 'media_type': str}
+        self._image_files_data: List[Dict[str, Any]] = []
+        self._file_data_by_path: Dict[str, Dict[str, Any]] = {}
+        self._media_summary = MediaSummary()
         self.rating_cache: Dict[
             str, int
         ] = {}  # This is an in-memory dictionary for quick UI access
@@ -60,10 +71,73 @@ class AppState:
         self.grouping_source_root: Optional[str] = None
         self.skip_grouping_step_once: bool = False
 
+    @property
+    def image_files_data(self) -> List[Dict[str, Any]]:
+        """Loaded file records.
+
+        Assigning a collection rebuilds the path index and aggregate counters. New
+        application code should use :meth:`extend_file_data` for scan batches so
+        those structures can be updated incrementally.
+        """
+
+        return self._image_files_data
+
+    @image_files_data.setter
+    def image_files_data(self, records: Iterable[Dict[str, Any]]) -> None:
+        self._image_files_data = list(records or [])
+        self._rebuild_media_index()
+
+    def _rebuild_media_index(self) -> None:
+        self._file_data_by_path = {
+            record["path"]: record
+            for record in self._image_files_data
+            if isinstance(record, dict) and record.get("path")
+        }
+        video_count = sum(
+            1
+            for record in self._image_files_data
+            if record.get("media_type") == "video"
+        )
+        self._media_summary = MediaSummary(
+            total_items=len(self._image_files_data),
+            image_count=len(self._image_files_data) - video_count,
+            video_count=video_count,
+            total_size_bytes=sum(
+                int(record.get("file_size") or 0) for record in self._image_files_data
+            ),
+        )
+
+    def extend_file_data(self, records: Iterable[Dict[str, Any]]) -> None:
+        """Add a scan batch while maintaining indexes and counters in O(batch)."""
+
+        batch = list(records)
+        if not batch:
+            return
+        self._image_files_data.extend(batch)
+        for record in batch:
+            path = record.get("path")
+            if path:
+                self._file_data_by_path[path] = record
+
+        added_videos = sum(1 for item in batch if item.get("media_type") == "video")
+        previous = self._media_summary
+        self._media_summary = MediaSummary(
+            total_items=previous.total_items + len(batch),
+            image_count=previous.image_count + len(batch) - added_videos,
+            video_count=previous.video_count + added_videos,
+            total_size_bytes=previous.total_size_bytes
+            + sum(int(item.get("file_size") or 0) for item in batch),
+        )
+
+    def media_summary(self) -> MediaSummary:
+        """Return precomputed media counts and total byte size."""
+
+        return self._media_summary
+
     def clear_all_file_specific_data(self, clear_disk_caches: bool = False):
         """Clears file/folder-scoped state and optionally disk caches."""
         folder_path = self.current_folder_path
-        self.image_files_data.clear()
+        self.image_files_data = []
         self.rating_cache.clear()  # Clears in-memory dict
         self.date_cache.clear()
         self.cluster_results.clear()
@@ -133,6 +207,8 @@ class AppState:
         file_data = self.get_file_data_by_path(old_path)
         if file_data:
             file_data["path"] = new_path
+            self._file_data_by_path.pop(old_path, None)
+            self._file_data_by_path[new_path] = file_data
 
         # Update in-memory caches
         if old_path in self.rating_cache:
@@ -176,10 +252,10 @@ class AppState:
     # Add more methods as needed, e.g., to get specific data,
     # update blur status, etc.
     def update_blur_status(self, file_path: str, is_blurred: Optional[bool]):
-        for file_data in self.image_files_data:
-            if file_data.get("path") == file_path:
-                file_data["is_blurred"] = is_blurred
-                return
+        file_data = self.get_file_data_by_path(file_path)
+        if file_data is not None:
+            file_data["is_blurred"] = is_blurred
+            return
         # If path not in image_files_data, it might be an error or a new file
         # For now, we assume it should exist if blur status is being updated post-scan.
         logger.warning(
@@ -187,10 +263,7 @@ class AppState:
         )
 
     def get_file_data_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
-        for file_data in self.image_files_data:
-            if file_data.get("path") == file_path:
-                return file_data
-        return None
+        return self._file_data_by_path.get(file_path)
 
     def mark_for_deletion(self, file_path: str):
         """Marks a file for deletion."""
@@ -224,6 +297,22 @@ class AppState:
         self.best_shot_rankings.clear()
         self.best_shot_scores_by_path.clear()
         self.best_shot_winners.clear()
+
+    def is_best_shot_winner(self, file_path: str) -> bool:
+        """Check winner status in O(1) for normal ranked results."""
+
+        score = self.best_shot_scores_by_path.get(file_path)
+        if score is not None:
+            cluster_id = score.get("cluster_id")
+            winner = self.best_shot_winners.get(cluster_id)
+            if winner is not None:
+                return winner.get("image_path") == file_path
+        # Restored legacy cache entries may not contain a cluster id.
+        return any(
+            winner.get("image_path") == file_path
+            for winner in self.best_shot_winners.values()
+            if isinstance(winner, dict)
+        )
 
     def clear_pick_best_results(self):
         """Resets pick-best step results."""

@@ -23,9 +23,7 @@ def _clean_number(value: Any) -> float | None:
 def _fourcc_to_string(code: int) -> str:
     if not code:
         return ""
-    chars = []
-    for shift in range(0, 32, 8):
-        chars.append(chr((code >> shift) & 0xFF))
+    chars = [chr((code >> shift) & 0xFF) for shift in range(0, 32, 8)]
     return "".join(chars).strip()
 
 

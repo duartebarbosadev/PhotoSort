@@ -104,14 +104,14 @@ def navigate_linear(
 
 def _iter_indices(direction: str, current_index: int, total: int):
     if total <= 0:
-        return tuple()
+        return ()
     if direction == "down":
         start = current_index + 1 if current_index >= 0 else 0
         return range(max(0, start), total)
     if direction == "up":
         start = current_index - 1 if current_index >= 0 else total - 1
         return range(min(start, total - 1), -1, -1)
-    return tuple()
+    return ()
 
 
 def find_next_rating_match(

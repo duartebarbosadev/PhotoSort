@@ -11,6 +11,61 @@ class ImageFileOperations:
     """Handles file system operations for image files."""
 
     @staticmethod
+    def move_path(source_path: str, destination_path: str) -> Tuple[bool, str]:
+        """Move a file or directory to an exact destination path.
+
+        This lower-level primitive is used by workflows that have already
+        resolved naming collisions and therefore cannot use :meth:`move_image`.
+        """
+
+        if not os.path.exists(source_path):
+            return False, f"Source path does not exist: {source_path}"
+        try:
+            parent_dir = os.path.dirname(destination_path)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+            shutil.move(source_path, destination_path)
+            logger.info(
+                "Moved '%s' to '%s'.",
+                os.path.basename(source_path),
+                os.path.basename(destination_path),
+            )
+            return True, destination_path
+        except OSError as exc:
+            message = f"Failed to move '{source_path}' to '{destination_path}': {exc}"
+            logger.error(message, exc_info=True)
+            return False, message
+
+    @staticmethod
+    def clear_directory_contents(directory: str) -> Tuple[bool, str]:
+        """Remove every child of ``directory`` while keeping the directory."""
+
+        if not os.path.isdir(directory):
+            return True, "Directory does not exist."
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        shutil.rmtree(entry.path)
+                    else:
+                        os.unlink(entry.path)
+            return True, "Directory contents cleared."
+        except OSError as exc:
+            message = f"Failed to clear directory '{directory}': {exc}"
+            logger.error(message, exc_info=True)
+            return False, message
+
+    @staticmethod
+    def remove_empty_directory(directory: str) -> bool:
+        """Remove an empty directory, returning whether it was removed."""
+
+        try:
+            os.rmdir(directory)
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
     def move_image(source_path: str, destination_folder: str) -> Tuple[bool, str]:
         """
         Moves an image file from the source path to the destination folder.

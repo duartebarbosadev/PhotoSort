@@ -251,7 +251,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         system_prompt: Optional[str] = None,
     ) -> List[Dict[str, object]]:
         content: List[Dict[str, object]] = [{"type": "text", "text": prompt}]
-        for index, b64 in labelled_images:
+        for _index, b64 in labelled_images:
             content.append(
                 {
                     "type": "image_url",
@@ -340,16 +340,15 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
             f"AI ranking cluster {cluster_id} with {len(image_paths)} images using LLM strategy"
         )
         if len(image_paths) <= 1:
-            normalized_results: List[Dict[str, object]] = []
-            for path in image_paths:
-                normalized_results.append(
-                    {
-                        "image_path": path,
-                        "composite_score": 1.0,
-                        "metrics": {"llm_selected": True},
-                        "analysis": "",
-                    }
-                )
+            normalized_results: List[Dict[str, object]] = [
+                {
+                    "image_path": path,
+                    "composite_score": 1.0,
+                    "metrics": {"llm_selected": True},
+                    "analysis": "",
+                }
+                for path in image_paths
+            ]
             if normalized_results:
                 logger.info(
                     "Cluster %s has a single image; skipping LLM call.", cluster_id

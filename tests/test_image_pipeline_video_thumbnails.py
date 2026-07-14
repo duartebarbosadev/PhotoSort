@@ -34,9 +34,7 @@ def test_video_thumbnail_generates_first_frame_with_overlay(tmp_path):
     frame = np.full((120, 200, 3), 100, dtype=np.uint8)
     fake_capture = _FakeCapture(opened=True, frame=frame)
 
-    with patch(
-        "cv2.VideoCapture", return_value=fake_capture
-    ) as mock_capture:
+    with patch("cv2.VideoCapture", return_value=fake_capture) as mock_capture:
         thumbnail = pipeline._get_pil_thumbnail("/tmp/video.mp4")
 
     assert thumbnail is not None
