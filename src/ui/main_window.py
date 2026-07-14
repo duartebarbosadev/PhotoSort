@@ -46,7 +46,6 @@ from PyQt6.QtGui import (
     QResizeEvent,
     QPixmap,
 )
-from sklearn.metrics.pairwise import cosine_similarity
 import sys
 
 from core.image_pipeline import ImagePipeline
@@ -55,7 +54,6 @@ from core.image_processing.raw_image_processor import is_raw_extension
 
 from core.metadata_processor import MetadataProcessor  # New metadata processor
 from core.media_utils import is_video_extension
-from core.video_metadata import get_basic_video_metadata
 from core.app_settings import (
     get_preview_cache_size_gb,
     set_preview_cache_size_gb,
@@ -64,19 +62,16 @@ from core.app_settings import (
     LEFT_PANEL_STRETCH,
     CENTER_PANEL_STRETCH,
     RIGHT_PANEL_STRETCH,
+    DISPLAY_MAX_RESOLUTION,
 )
 from ui.app_state import AppState
 from ui.ui_components import LoadingOverlay
 from ui.worker_manager import WorkerManager
-from ui.metadata_sidebar import MetadataSidebar
 from ui.dialog_manager import DialogManager
 from ui.left_panel import LeftPanel
 from ui.app_controller import AppController
 from ui.menu_manager import MenuManager
 from ui.grouping_step_widget import GroupingStepWidget
-from ui.pick_best_step_widget import PickBestStepWidget
-from ui.easy_delete_step_widget import EasyDeleteStepWidget
-from ui.fix_rotation_step_widget import FixRotationStepWidget
 from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
 from ui.helpers.index_lookup_utils import find_proxy_index_for_path
@@ -94,8 +89,8 @@ from ui.controllers.hotkey_controller import HotkeyController
 from ui.controllers.navigation_controller import NavigationController
 from ui.controllers.selection_controller import SelectionController
 from ui.controllers.similarity_controller import SimilarityController
-from ui.controllers.preview_controller import PreviewController
 from ui.controllers.metadata_controller import MetadataController
+from ui.thumbnail_load_coordinator import ViewportThumbnailLoader
 
 logger = logging.getLogger(__name__)
 FILTER_LOG_INTERVAL = 100
@@ -152,9 +147,6 @@ class CustomFilterProxyModel(QSortFilterProxyModel):
             return False
 
         file_path = item_user_data["path"]
-        if not os.path.exists(file_path):
-            return False
-
         search_text = self.filterRegularExpression().pattern().lower()
         search_match = search_text in item_text.lower()
         if not search_match:
@@ -211,7 +203,6 @@ class MainWindow(QMainWindow):
         self._left_panel_views = set()
         self._image_viewer_views = set()
         self._last_displayed_preview_path: Optional[str] = None
-        self._preview_preload_start_volume_bytes: Optional[int] = None
         self._filter_apply_count = 0
         self._last_filter_search_text: Optional[str] = None
         self._close_after_grouping_save = False
@@ -260,7 +251,6 @@ class MainWindow(QMainWindow):
         self.selection_controller = SelectionController(self)
         self.filter_controller = FilterController(self)
         self.similarity_controller = SimilarityController(self)
-        self.preview_controller = PreviewController(self)
         self.metadata_controller = MetadataController(self)
 
         # Hotkey controller wraps navigation key handling
@@ -286,6 +276,7 @@ class MainWindow(QMainWindow):
         self._shortcut_handlers: dict[tuple[int, int], Callable[[], None]] = {}
         self._init_shortcut_handlers()
         self._create_widgets()
+        self.thumbnail_loader = ViewportThumbnailLoader(self, self)
 
         # At this point _create_widgets() built file_system_model + proxy_model and wired it;
         # it's now safe to apply any deferred FilterController initialization.
@@ -386,18 +377,10 @@ class MainWindow(QMainWindow):
                     if file_data.get("media_type") == "video"
                 )
                 num_images -= num_videos
-                current_files_size_bytes = 0
-                for file_data in self.app_state.image_files_data:
-                    try:
-                        if "path" in file_data and os.path.exists(file_data["path"]):
-                            current_files_size_bytes += os.path.getsize(
-                                file_data["path"]
-                            )
-                    except OSError as e:
-                        # Log lightly, this can be noisy if many files are temporarily unavailable
-                        logger.warning(
-                            f"Could not get size for '{file_data.get('path', 'Unknown')}' for info label: {e}"
-                        )
+                current_files_size_bytes = sum(
+                    int(file_data.get("file_size") or 0)
+                    for file_data in self.app_state.image_files_data
+                )
                 total_size_mb = current_files_size_bytes / (1024 * 1024)
 
                 # Add cache size information to the status text
@@ -670,21 +653,9 @@ class MainWindow(QMainWindow):
         logger.debug("Creating widgets...")
         self.workflow_stack = QStackedWidget()
         self.grouping_step_widget = GroupingStepWidget(self)
-        self.easy_delete_step_widget = EasyDeleteStepWidget(self)
-        self.easy_delete_step_widget.set_is_marked_func(
-            self.app_state.is_marked_for_deletion
-        )
-        self.easy_delete_step_widget.set_has_any_marked_func(
-            lambda: bool(self.app_state.marked_for_deletion)
-        )
-        self.fix_rotation_step_widget = FixRotationStepWidget(self)
-        self.pick_best_step_widget = PickBestStepWidget(self)
-        self.pick_best_step_widget.set_is_marked_func(
-            self.app_state.is_marked_for_deletion
-        )
-        self.pick_best_step_widget.set_has_any_marked_func(
-            lambda: bool(self.app_state.marked_for_deletion)
-        )
+        self.easy_delete_step_widget = None
+        self.fix_rotation_step_widget = None
+        self.pick_best_step_widget = None
         self.workflow_nav = QWidget()
         self.workflow_nav.setObjectName("workflowNav")
         self.step_organize_button = QPushButton("1. Organize")
@@ -809,22 +780,19 @@ class MainWindow(QMainWindow):
         grouping_page_layout.addWidget(self.grouping_step_widget)
 
         self.easy_delete_page = QWidget()
-        easy_delete_page_layout = QVBoxLayout(self.easy_delete_page)
-        easy_delete_page_layout.setContentsMargins(0, 0, 0, 0)
-        easy_delete_page_layout.setSpacing(0)
-        easy_delete_page_layout.addWidget(self.easy_delete_step_widget)
+        self.easy_delete_page_layout = QVBoxLayout(self.easy_delete_page)
+        self.easy_delete_page_layout.setContentsMargins(0, 0, 0, 0)
+        self.easy_delete_page_layout.setSpacing(0)
 
         self.fix_rotation_page = QWidget()
-        fix_rotation_page_layout = QVBoxLayout(self.fix_rotation_page)
-        fix_rotation_page_layout.setContentsMargins(0, 0, 0, 0)
-        fix_rotation_page_layout.setSpacing(0)
-        fix_rotation_page_layout.addWidget(self.fix_rotation_step_widget)
+        self.fix_rotation_page_layout = QVBoxLayout(self.fix_rotation_page)
+        self.fix_rotation_page_layout.setContentsMargins(0, 0, 0, 0)
+        self.fix_rotation_page_layout.setSpacing(0)
 
         self.pick_best_page = QWidget()
-        pick_best_page_layout = QVBoxLayout(self.pick_best_page)
-        pick_best_page_layout.setContentsMargins(0, 0, 0, 0)
-        pick_best_page_layout.setSpacing(0)
-        pick_best_page_layout.addWidget(self.pick_best_step_widget)
+        self.pick_best_page_layout = QVBoxLayout(self.pick_best_page)
+        self.pick_best_page_layout.setContentsMargins(0, 0, 0, 0)
+        self.pick_best_page_layout.setSpacing(0)
 
         self.cull_page = QWidget()
         cull_page_layout = QVBoxLayout(self.cull_page)
@@ -838,18 +806,10 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(self.left_panel)
         main_splitter.addWidget(self.center_pane_container)
 
-        # Create metadata sidebar and add to splitter
-        self.metadata_sidebar = MetadataSidebar(self)
-        self.metadata_sidebar.hide_requested.connect(self._hide_metadata_sidebar)
-        main_splitter.addWidget(self.metadata_sidebar)
-
-        # Set stretch factors: left=1, center=3, right=1 (when visible)
+        # The metadata sidebar is inserted on first use.
         main_splitter.setStretchFactor(0, LEFT_PANEL_STRETCH)  # Left pane
         main_splitter.setStretchFactor(1, CENTER_PANEL_STRETCH)  # Center pane
-        main_splitter.setStretchFactor(2, RIGHT_PANEL_STRETCH)  # Right pane (sidebar)
-
-        # Initially hide the sidebar by setting its size to 0
-        main_splitter.setSizes([350, 850, 0])
+        main_splitter.setSizes([350, 850])
         self.main_splitter = main_splitter  # Store reference for sidebar toggling
 
         cull_page_layout.addWidget(main_splitter)
@@ -933,6 +893,10 @@ class MainWindow(QMainWindow):
         self.left_panel.search_input.returnPressed.connect(self._apply_filter)
         self.left_panel.search_input.editingFinished.connect(self._apply_filter)
         self.left_panel.tree_display_view.collapsed.connect(self._handle_item_collapsed)
+        for view in self._left_panel_views:
+            view.verticalScrollBar().valueChanged.connect(
+                self.schedule_visible_thumbnail_load
+            )
         self.left_panel.connect_signals()
         self.grouping_step_widget.mode_changed.connect(
             self._handle_grouping_mode_changed
@@ -952,39 +916,6 @@ class MainWindow(QMainWindow):
         self.step_fix_rotation_button.clicked.connect(self._go_to_fix_rotation_step)
         self.step_pick_best_button.clicked.connect(self._go_to_pick_best_step)
         self.step_cull_button.clicked.connect(self._go_to_cull_step)
-
-        # Easy Delete step widget signals
-        self.easy_delete_step_widget.skip_requested.connect(self.show_fix_rotation_step)
-        self.easy_delete_step_widget.proceed_to_pick_best_requested.connect(
-            self.show_fix_rotation_step
-        )
-        self.easy_delete_step_widget.mark_for_deletion_requested.connect(
-            self._mark_paths_for_deletion
-        )
-        self.easy_delete_step_widget.unmark_for_deletion_requested.connect(
-            self._unmark_paths_for_deletion
-        )
-
-        # Fix Rotation step widget signals
-        self.fix_rotation_step_widget.skip_requested.connect(self.show_pick_best_step)
-        self.fix_rotation_step_widget.proceed_requested.connect(
-            self.show_pick_best_step
-        )
-        self.fix_rotation_step_widget.apply_rotations_requested.connect(
-            self.app_controller.start_fix_rotation_apply
-        )
-
-        # Pick Best step widget signals
-        self.pick_best_step_widget.skip_requested.connect(self.show_cull_step)
-        self.pick_best_step_widget.proceed_to_cull_requested.connect(
-            self.show_cull_step
-        )
-        self.pick_best_step_widget.mark_for_deletion_requested.connect(
-            self._mark_paths_for_deletion
-        )
-        self.pick_best_step_widget.unmark_for_deletion_requested.connect(
-            self._unmark_paths_for_deletion
-        )
 
         # Connect MenuManager signals
         self.menu_manager.connect_signals()
@@ -1058,6 +989,14 @@ class MainWindow(QMainWindow):
 
     def _toggle_thumbnail_view(self, checked):
         self._rebuild_model_view()
+        if checked:
+            self.schedule_visible_thumbnail_load()
+
+    def reset_thumbnail_requests(self) -> None:
+        self.thumbnail_loader.reset()
+
+    def schedule_visible_thumbnail_load(self, *_args) -> None:
+        self.thumbnail_loader.schedule()
 
     def _rebuild_model_view(
         self,
@@ -1305,30 +1244,89 @@ class MainWindow(QMainWindow):
         self.workflow_stack.setCurrentWidget(self.cull_page)
         self.update_workflow_navigation()
 
+    def _ensure_easy_delete_widget(self):
+        if self.easy_delete_step_widget is None:
+            from ui.easy_delete_step_widget import EasyDeleteStepWidget
+
+            widget = EasyDeleteStepWidget(self)
+            widget.set_is_marked_func(self.app_state.is_marked_for_deletion)
+            widget.set_has_any_marked_func(
+                lambda: bool(self.app_state.marked_for_deletion)
+            )
+            widget.skip_requested.connect(self.show_fix_rotation_step)
+            widget.proceed_to_pick_best_requested.connect(
+                self.show_fix_rotation_step
+            )
+            widget.mark_for_deletion_requested.connect(
+                self._mark_paths_for_deletion
+            )
+            widget.unmark_for_deletion_requested.connect(
+                self._unmark_paths_for_deletion
+            )
+            self.easy_delete_page_layout.addWidget(widget)
+            self.easy_delete_step_widget = widget
+        return self.easy_delete_step_widget
+
+    def _ensure_fix_rotation_widget(self):
+        if self.fix_rotation_step_widget is None:
+            from ui.fix_rotation_step_widget import FixRotationStepWidget
+
+            widget = FixRotationStepWidget(self)
+            widget.skip_requested.connect(self.show_pick_best_step)
+            widget.proceed_requested.connect(self.show_pick_best_step)
+            widget.apply_rotations_requested.connect(
+                self.app_controller.start_fix_rotation_apply
+            )
+            self.fix_rotation_page_layout.addWidget(widget)
+            self.fix_rotation_step_widget = widget
+        return self.fix_rotation_step_widget
+
+    def _ensure_pick_best_widget(self):
+        if self.pick_best_step_widget is None:
+            from ui.pick_best_step_widget import PickBestStepWidget
+
+            widget = PickBestStepWidget(self)
+            widget.set_is_marked_func(self.app_state.is_marked_for_deletion)
+            widget.set_has_any_marked_func(
+                lambda: bool(self.app_state.marked_for_deletion)
+            )
+            widget.skip_requested.connect(self.show_cull_step)
+            widget.proceed_to_cull_requested.connect(self.show_cull_step)
+            widget.mark_for_deletion_requested.connect(
+                self._mark_paths_for_deletion
+            )
+            widget.unmark_for_deletion_requested.connect(
+                self._unmark_paths_for_deletion
+            )
+            self.pick_best_page_layout.addWidget(widget)
+            self.pick_best_step_widget = widget
+        return self.pick_best_step_widget
+
     def show_easy_delete_step(self) -> None:
+        widget = self._ensure_easy_delete_widget()
         self.app_state.workflow_step = "easy_delete"
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(False)
-        self.easy_delete_step_widget.set_image_pipeline(self.image_pipeline)
+        widget.set_image_pipeline(self.image_pipeline)
         self.workflow_stack.setCurrentWidget(self.easy_delete_page)
         self.update_workflow_navigation()
         if self.app_state.easy_delete_results:
-            self.easy_delete_step_widget.show_results(
-                self.app_state.easy_delete_results
-            )
+            widget.show_results(self.app_state.easy_delete_results)
             return
         self.app_controller.start_easy_delete_workflow()
 
     def show_fix_rotation_step(self) -> None:
+        widget = self._ensure_fix_rotation_widget()
         self.app_state.workflow_step = "fix_rotation"
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(False)
-        self.fix_rotation_step_widget.set_image_pipeline(self.image_pipeline)
+        widget.set_image_pipeline(self.image_pipeline)
         self.workflow_stack.setCurrentWidget(self.fix_rotation_page)
         self.update_workflow_navigation()
         self.app_controller.start_fix_rotation_workflow()
 
     def show_pick_best_step(self) -> None:
+        self._ensure_pick_best_widget()
         self.app_state.workflow_step = "pick_best"
         self.workflow_stack.setCurrentWidget(self.pick_best_page)
         # Disable application-wide 1-9 shortcuts so PickBestStepWidget can handle them
@@ -1454,8 +1452,18 @@ class MainWindow(QMainWindow):
     def ensure_metadata_sidebar(self) -> None:
         if not self.metadata_sidebar:
             try:
+                from ui.metadata_sidebar import MetadataSidebar
+
                 self.metadata_sidebar = MetadataSidebar(self)
+                self.metadata_sidebar.hide_requested.connect(
+                    self._hide_metadata_sidebar
+                )
+                self.main_splitter.addWidget(self.metadata_sidebar)
+                self.main_splitter.setStretchFactor(2, RIGHT_PANEL_STRETCH)
+                self.main_splitter.setSizes([350, 850, 0])
             except Exception:
+                logger.exception("Could not create metadata sidebar")
+                self.metadata_sidebar = None
                 return
 
     # --- NavigationContext adapter wrappers ---
@@ -2598,7 +2606,7 @@ class MainWindow(QMainWindow):
         if not reuse_preview:
             logger.debug(f"Getting preview pixmap for {file_path}")
             pixmap = self.image_pipeline.get_preview_qpixmap(
-                file_path, display_max_size=(8000, 8000)
+                file_path, display_max_size=DISPLAY_MAX_RESOLUTION
             )
 
             if not pixmap or pixmap.isNull():
@@ -2703,7 +2711,7 @@ class MainWindow(QMainWindow):
             return
 
         pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path, display_max_size=(8000, 8000)
+            file_path, display_max_size=DISPLAY_MAX_RESOLUTION
         )
 
         if not pixmap or pixmap.isNull():
@@ -2779,7 +2787,7 @@ class MainWindow(QMainWindow):
                 continue
 
             pixmap = self.image_pipeline.get_preview_qpixmap(
-                path, display_max_size=(8000, 8000)
+                path, display_max_size=DISPLAY_MAX_RESOLUTION
             )
             if not pixmap or pixmap.isNull():
                 pixmap = self.image_pipeline.get_thumbnail_qpixmap(path)
@@ -2837,7 +2845,16 @@ class MainWindow(QMainWindow):
                 )
                 if emb1 is not None and emb2 is not None:
                     try:
-                        similarity = cosine_similarity([emb1], [emb2])[0][0]
+                        import numpy as np
+
+                        first = np.asarray(emb1, dtype=np.float32)
+                        second = np.asarray(emb2, dtype=np.float32)
+                        denominator = np.linalg.norm(first) * np.linalg.norm(second)
+                        similarity = (
+                            float(np.dot(first, second) / denominator)
+                            if denominator
+                            else 0.0
+                        )
                         self.statusBar().showMessage(
                             f"Comparing {len(images_data_for_viewer)} images. Similarity (first 2): {similarity:.4f}"
                         )
@@ -3060,174 +3077,6 @@ class MainWindow(QMainWindow):
             f"Returned focus to {type(active_view).__name__}, hasFocus={active_view.hasFocus()}"
         )
 
-    def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
-        try:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    f"Delegating preview preload: {len(image_data_list)} items"
-                )
-            self._preview_preload_start_volume_bytes = (
-                self.image_pipeline.preview_cache.volume()
-            )
-            self.preview_controller.start_preload(image_data_list)
-        except Exception as e:
-            logger.error(f"PreviewController error: {e}")
-
-    # --- Rating Loader Worker Handlers ---
-    def _handle_rating_load_progress(self, current: int, total: int, basename: str):
-        percentage = int((current / total) * 100) if total > 0 else 0
-        logger.debug(
-            f"Rating load progress: {percentage}% ({current}/{total}) - {basename}"
-        )
-        self.update_loading_text(
-            f"Loading ratings: {percentage}% ({current}/{total}) - {basename}"
-        )
-
-    def _handle_metadata_batch_loaded(
-        self, metadata_batch: List[Tuple[str, Dict[str, Any]]]
-    ):
-        logger.debug(f"Metadata batch loaded with {len(metadata_batch)} items.")
-
-        currently_selected_paths = self._get_selected_file_paths_from_view()
-
-        needs_active_selection_refresh = False
-        for image_path, metadata in metadata_batch:
-            if not metadata:
-                continue
-
-            logger.debug(
-                f"Processing metadata from batch for {os.path.basename(image_path)}: {metadata}"
-            )
-
-            # Update any visible viewer showing this image
-            for viewer in self.advanced_image_viewer.image_viewers:
-                if viewer.isVisible() and viewer._file_path == image_path:
-                    logger.debug(f"Updating viewer for {os.path.basename(image_path)}.")
-                    viewer.update_rating_display(metadata.get("rating", 0))
-
-            # Check if the processed image is part of the current selection
-            if image_path in currently_selected_paths:
-                logger.debug(
-                    f"Batch contains a selected item: {os.path.basename(image_path)}. Marking for UI refresh."
-                )
-                needs_active_selection_refresh = True
-
-        if needs_active_selection_refresh:
-            logger.debug(
-                "Triggering _handle_file_selection_changed after processing batch due to active item update."
-            )
-            self._handle_file_selection_changed()
-
-        # After a batch, it's good practice to re-apply the filter in case ratings changed
-        self._apply_filter()
-
-    def _handle_rating_load_finished(self):
-        logger.info(
-            "_handle_rating_load_finished: Received RatingLoaderWorker.finished signal."
-        )
-        self.statusBar().showMessage("Background rating loading finished.", 3000)
-
-        if not self.app_state.image_files_data:
-            logger.info(
-                "_handle_rating_load_finished: No image files data found in app_state. Hiding loading overlay."
-            )
-            self.hide_loading_overlay()
-            return
-
-        logger.info(
-            "_handle_rating_load_finished: image_files_data found. Preparing to start preview preloader."
-        )
-        self.update_loading_text("Ratings loaded. Preloading previews...")
-        try:
-            logger.info(
-                "_handle_rating_load_finished: --- CALLING --- _start_preview_preloader."
-            )
-            self._start_preview_preloader(
-                self.app_state.image_files_data.copy()
-            )  # Pass a copy
-            logger.info(
-                "_handle_rating_load_finished: --- RETURNED --- _start_preview_preloader call completed."
-            )
-        except Exception as e_start_preview:
-            logger.error(
-                f"_handle_rating_load_finished: Error calling _start_preview_preloader: {e_start_preview}",
-                exc_info=True,
-            )
-            self.hide_loading_overlay()  # Ensure overlay is hidden on error
-        logger.info("<<< EXIT >>> _handle_rating_load_finished.")
-
-    def _handle_rating_load_error(self, message: str):
-        logger.error(f"Rating Load Error: {message}")
-        self.statusBar().showMessage(f"Rating Load Error: {message}", 5000)
-        # Still proceed to preview preloading even if rating load had errors for some files
-        if self.app_state.image_files_data:
-            self.update_loading_text("Rating load errors. Preloading previews...")
-            self._start_preview_preloader(
-                self.app_state.image_files_data.copy()
-            )  # Pass a copy
-        else:
-            self.hide_loading_overlay()
-
-    # Slot for WorkerManager's preview_preload_progress signal
-    def _handle_preview_progress(self, percentage: int, message: str):
-        logger.debug(
-            f"<<< ENTRY >>> _handle_preview_progress: {percentage}% - {message}"
-        )
-        self.update_loading_text(message)
-        logger.debug("<<< EXIT >>> _handle_preview_progress.")
-
-    # Slot for WorkerManager's preview_preload_finished signal
-    def _handle_preview_finished(self):
-        logger.debug(
-            "<<< ENTRY >>> _handle_preview_finished: Received PreviewPreloaderWorker.finished signal."
-        )
-        self.statusBar().showMessage("Previews regenerated.", 5000)
-        self.hide_loading_overlay()
-        logger.debug("_handle_preview_finished: Loading overlay hidden.")
-
-        # Log final cache vs image size
-        if self.app_state.current_folder_path:
-            total_image_size_bytes = self._calculate_folder_image_size(
-                self.app_state.current_folder_path
-            )
-            total_preview_cache_size_bytes = self.image_pipeline.preview_cache.volume()
-            preload_start_volume = self._preview_preload_start_volume_bytes
-            if preload_start_volume is None:
-                preview_cache_size_bytes = total_preview_cache_size_bytes
-            else:
-                preview_cache_size_bytes = max(
-                    0, total_preview_cache_size_bytes - preload_start_volume
-                )
-            logger.info("--- Cache vs. Image Size Diagnostics (Post-Preload) ---")
-            logger.info(
-                f"Total Original Image Size: {total_image_size_bytes / (1024 * 1024):.2f} MB"
-            )
-            logger.info(
-                f"Preview Cache Added This Preload: {preview_cache_size_bytes / (1024 * 1024):.2f} MB"
-            )
-            logger.info(
-                f"Current Preview Cache Total: {total_preview_cache_size_bytes / (1024 * 1024):.2f} MB"
-            )
-            if total_image_size_bytes > 0:
-                ratio = (preview_cache_size_bytes / total_image_size_bytes) * 100
-                logger.info(f"Cache-to-Image Size Ratio: {ratio:.2f}%")
-            logger.info("---------------------------------------------------------")
-
-        self._preview_preload_start_volume_bytes = None
-        self._update_image_info_label()  # Update UI with final cache size
-
-        # WorkerManager handles thread cleanup
-        logger.info("<<< EXIT >>> _handle_preview_finished.")
-
-    # Slot for WorkerManager's preview_preload_error signal
-    def _handle_preview_error(self, message: str):
-        logger.info(f"<<< ENTRY >>> _handle_preview_error: {message}")
-        logger.error(f"Preview Preload Error: {message}")
-        self.statusBar().showMessage(f"Preview Preload Error: {message}", 5000)
-        self.hide_loading_overlay()
-        # WorkerManager handles thread cleanup
-        logger.info("<<< EXIT >>> _handle_preview_error.")
-
     def _toggle_folder_visibility(self, checked: bool):
         self.show_folders_mode = checked
 
@@ -3373,22 +3222,12 @@ class MainWindow(QMainWindow):
         #
         # Note: We only try to get from cache (no generation) if thumbnails are enabled
         if self.menu_manager.toggle_thumbnails_action.isChecked():
-            # Try to get from cache only (won't generate if missing)
-            # Determine cache key: apply_auto_edits is True for RAW files
-            from core.image_processing.raw_image_processor import is_raw_extension
-
-            ext = os.path.splitext(file_path)[1].lower()
-            apply_auto_edits = is_raw_extension(ext)
-            cache_key = (
-                os.path.normpath(file_path),
-                apply_auto_edits,
-                False,
-            )  # (path, apply_auto_edits, apply_orientation)
-            cached_thumbnail = self.image_pipeline.thumbnail_cache.get(cache_key)
-            if cached_thumbnail:
-                from PIL.ImageQt import ImageQt
-
-                pixmap = QPixmap.fromImage(ImageQt(cached_thumbnail))
+            pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
+                file_path,
+                file_size=file_data.get("file_size"),
+                mtime_ns=file_data.get("mtime_ns"),
+            )
+            if pixmap:
                 item.setIcon(QIcon(pixmap))
             elif media_type == "video":
                 # Videos fall back to play icon until first-frame thumbnail is generated.
@@ -3507,28 +3346,19 @@ class MainWindow(QMainWindow):
                     file_path = file_data["path"]
                     media_type = file_data.get("media_type", "image")
 
-                    # Try to get thumbnail from cache (with correct cache key for RAW files)
-                    from core.image_processing.raw_image_processor import (
-                        is_raw_extension,
-                    )
-
-                    ext = os.path.splitext(file_path)[1].lower()
-                    apply_auto_edits = is_raw_extension(ext)
-                    cache_key = (os.path.normpath(file_path), apply_auto_edits, False)
-                    cached_thumbnail = self.image_pipeline.thumbnail_cache.get(
-                        cache_key
+                    pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
+                        file_path,
+                        file_size=file_data.get("file_size"),
+                        mtime_ns=file_data.get("mtime_ns"),
                     )
 
                     should_update_icon = (
                         media_type == "video" or child_item.icon().isNull()
                     )
-                    if cached_thumbnail and should_update_icon:
+                    if pixmap and should_update_icon:
                         # Always refresh video icons so placeholders can be replaced.
                         # For images, only set if icon is currently empty.
                         try:
-                            from PIL.ImageQt import ImageQt
-
-                            pixmap = QPixmap.fromImage(ImageQt(cached_thumbnail))
                             child_item.setIcon(QIcon(pixmap))
                             updated_count += 1
                         except Exception as e:
@@ -3549,45 +3379,6 @@ class MainWindow(QMainWindow):
             f"Updated {updated_count}/{total_items} thumbnails from cache in {duration:.2f}s"
         )
 
-    def _start_similarity_analysis(self):
-        logger.info("_start_similarity_analysis delegated to SimilarityController")
-        paths = [
-            fd.get("path")
-            for fd in (self.app_state.image_files_data or [])
-            if fd.get("path") and fd.get("media_type", "image") == "image"
-        ]
-        self.similarity_controller.start(paths)
-
-    # Slot for WorkerManager's similarity_progress signal
-    def _handle_similarity_progress(self, percentage, message):
-        self.update_loading_text(f"Similarity: {message} ({percentage}%)")
-
-    # Slot for WorkerManager's similarity_embeddings_generated signal
-    def _handle_embeddings_generated(self, embeddings_dict):
-        self.similarity_controller.embeddings_generated(embeddings_dict)
-
-    # Slot for WorkerManager's similarity_clustering_complete signal
-    def _handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
-        self.similarity_controller.clustering_complete(cluster_results_dict, True)
-
-    # Slot for WorkerManager's similarity_error signal
-    def _handle_similarity_error(self, message):
-        self.similarity_controller.error(message)
-
-    def _reload_current_folder(self):
-        if self.app_state.image_files_data:
-            if (
-                self.app_state.image_files_data[0]
-                and "path" in self.app_state.image_files_data[0]
-            ):
-                current_dir = os.path.dirname(
-                    self.app_state.image_files_data[0]["path"]
-                )
-                if os.path.isdir(current_dir):
-                    self._load_folder(current_dir)
-                    return
-        self.statusBar().showMessage("No folder context to reload.", 3000)
-
     def _handle_item_collapsed(self, proxy_index: QModelIndex):
         if self.group_by_similarity_mode and proxy_index.isValid():
             active_view = self.left_panel.tree_display_view
@@ -3604,146 +3395,6 @@ class MainWindow(QMainWindow):
         if self.group_by_similarity_mode and self.app_state.cluster_results:
             self._rebuild_model_view()
 
-    def _start_blur_detection_analysis(self):
-        logger.info("_start_blur_detection_analysis called.")
-        if not self.app_state.image_files_data:
-            self.statusBar().showMessage(
-                "No images loaded to analyze for blurriness.", 3000
-            )
-            return
-
-        if self.worker_manager.is_blur_detection_running():
-            self.statusBar().showMessage("Blur detection is already in progress.", 3000)
-            return
-
-        self.show_loading_overlay("Starting blur detection...")
-        self.menu_manager.detect_blur_action.setEnabled(False)
-
-        image_data = [
-            fd
-            for fd in self.app_state.image_files_data
-            if fd.get("media_type", "image") == "image"
-        ]
-        if not image_data:
-            self.hide_loading_overlay()
-            self.statusBar().showMessage(
-                "Blur detection is currently available for images only.", 3000
-            )
-            return
-        self.worker_manager.start_blur_detection(
-            image_data,
-            self.blur_detection_threshold,
-            True,  # Always enable processing for RAW files
-        )
-
-    # Slot for WorkerManager's blur_detection_progress signal
-    def _handle_blur_detection_progress(
-        self, current: int, total: int, path_basename: str
-    ):
-        percentage = int((current / total) * 100) if total > 0 else 0
-        self.update_loading_text(
-            f"Detecting blur: {percentage}% ({current}/{total}) - {path_basename}"
-        )
-
-    # Slot for WorkerManager's blur_detection_status_updated signal
-    def _handle_blur_status_updated(self, image_path: str, is_blurred: bool):
-        self.app_state.update_blur_status(image_path, is_blurred)
-
-        source_model = self.file_system_model
-        proxy_model = self.proxy_model
-        active_view = self._get_active_file_view()
-
-        item_to_update = None
-        # This search needs to be through the source model, not the proxy,
-        # because the item might be filtered out in the proxy.
-        # We iterate through the source model to find the QStandardItem.
-        for r_top in range(source_model.rowCount()):
-            top_item = source_model.item(r_top)
-            if not top_item:
-                continue
-
-            # Check top-level item
-            top_item_data = top_item.data(Qt.ItemDataRole.UserRole)
-            if (
-                isinstance(top_item_data, dict)
-                and top_item_data.get("path") == image_path
-            ):
-                item_to_update = top_item
-                break
-
-            if top_item.hasChildren():  # Check children if it's a folder/group
-                for r_child in range(top_item.rowCount()):
-                    child_item = top_item.child(r_child)
-                    if not child_item:
-                        continue
-
-                    child_item_data = child_item.data(Qt.ItemDataRole.UserRole)
-                    if (
-                        isinstance(child_item_data, dict)
-                        and child_item_data.get("path") == image_path
-                    ):
-                        item_to_update = child_item
-                        break
-
-                    # Potentially check grandchildren if structure is deeper (e.g., date view inside cluster view)
-                    if child_item.hasChildren():
-                        for r_grandchild in range(child_item.rowCount()):
-                            grandchild_item = child_item.child(r_grandchild)
-                            if not grandchild_item:
-                                continue
-                            grandchild_item_data = grandchild_item.data(
-                                Qt.ItemDataRole.UserRole
-                            )
-                            if (
-                                isinstance(grandchild_item_data, dict)
-                                and grandchild_item_data.get("path") == image_path
-                            ):
-                                item_to_update = grandchild_item
-                                break
-                        if item_to_update:
-                            break
-                if item_to_update:
-                    break
-
-        if item_to_update:
-            original_text = os.path.basename(image_path)
-            # Update the UserRole data in the source model item
-            item_user_data = item_to_update.data(Qt.ItemDataRole.UserRole)
-            if isinstance(item_user_data, dict):
-                item_user_data["is_blurred"] = is_blurred  # Update existing dict
-                item_to_update.setData(item_user_data, Qt.ItemDataRole.UserRole)
-            else:  # Should not happen if item was created correctly
-                item_to_update.setData(
-                    {"path": image_path, "is_blurred": is_blurred},
-                    Qt.ItemDataRole.UserRole,
-                )
-
-            # Update display text and color
-            if is_blurred is True:
-                item_to_update.setForeground(QColor(Qt.GlobalColor.red))
-                item_to_update.setText(original_text + " (Blurred)")
-            elif is_blurred is False:
-                default_text_color = QApplication.palette().text().color()
-                item_to_update.setForeground(default_text_color)
-                item_to_update.setText(original_text)
-            else:  # is_blurred is None
-                default_text_color = QApplication.palette().text().color()
-                item_to_update.setForeground(default_text_color)
-                item_to_update.setText(original_text)
-
-            # If the updated item is currently selected, refresh the main image view and status bar
-            if active_view and active_view.currentIndex().isValid():
-                current_proxy_idx = active_view.currentIndex()
-                current_source_idx = proxy_model.mapToSource(current_proxy_idx)
-                selected_item = source_model.itemFromIndex(current_source_idx)
-                if selected_item == item_to_update:
-                    self._handle_file_selection_changed()  # Re-process selection to update main view
-        else:
-            logger.warning(
-                f"Could not find QStandardItem for {image_path} to update blur status in UI."
-            )
-
-    # Slot for WorkerManager's blur_detection_finished signal
     def _perform_group_selection_from_key(
         self, key: int, active_view_from_event: QWidget
     ) -> bool:
@@ -4082,6 +3733,7 @@ class MainWindow(QMainWindow):
 
     def _show_metadata_sidebar(self):
         """Show the metadata sidebar, ensuring it reflects the current selection state."""
+        self.ensure_metadata_sidebar()
         if not self.metadata_sidebar:
             return
 
@@ -4173,7 +3825,7 @@ class MainWindow(QMainWindow):
             # Single image mode
             pixmap = self.image_pipeline.get_preview_qpixmap(
                 selected_paths[0],
-                display_max_size=(8000, 8000),  # High resolution for zoom
+                display_max_size=DISPLAY_MAX_RESOLUTION,
             )
             if pixmap:
                 self.sync_viewer.set_image(pixmap, 0)
@@ -4182,7 +3834,7 @@ class MainWindow(QMainWindow):
             pixmaps = []
             for path in selected_paths[:2]:  # Max 2 images
                 pixmap = self.image_pipeline.get_preview_qpixmap(
-                    path, display_max_size=(8000, 8000)
+                    path, display_max_size=DISPLAY_MAX_RESOLUTION
                 )
                 if pixmap:
                     pixmaps.append(pixmap)
@@ -4257,6 +3909,8 @@ class MainWindow(QMainWindow):
         )
 
         if is_video_extension(file_path):
+            from core.video_metadata import get_basic_video_metadata
+
             raw_exif = get_basic_video_metadata(file_path)
             logger.info(
                 "_update_sidebar_with_current_selection: Loaded %d video metadata field(s) for %s",
@@ -4303,8 +3957,7 @@ class MainWindow(QMainWindow):
         )
 
         t1 = time.perf_counter()
-        self.image_pipeline.preview_cache.delete_all_for_path(file_path)
-        self.image_pipeline.thumbnail_cache.delete_all_for_path(file_path)
+        self.image_pipeline.invalidate_path(file_path)
         t2 = time.perf_counter()
         logger.info(f"HSR: Cache clearing for {filename} took {t2 - t1:.4f}s.")
 
@@ -4341,7 +3994,7 @@ class MainWindow(QMainWindow):
             # Pre-cache the correctly generated preview before the selection handler runs
             self.image_pipeline.get_preview_qpixmap(
                 file_path,
-                display_max_size=(8000, 8000),
+                display_max_size=DISPLAY_MAX_RESOLUTION,
                 force_regenerate=True,
                 force_default_brightness=True,  # This is the key change
             )
@@ -4991,7 +4644,7 @@ class MainWindow(QMainWindow):
         # Load ONE base pixmap, respecting the user's current auto-edit setting.
         # This represents the "current" view of the image.
         current_pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path, (8000, 8000)
+            file_path, DISPLAY_MAX_RESOLUTION
         )
         t2 = time.perf_counter()
         logger.info(f"SBS_COMP: get_preview_qpixmap (base) took: {t2 - t1:.4f}s")

@@ -20,13 +20,9 @@ from typing import List, Optional
 import os
 
 from core.image_pipeline import ImagePipeline
-from core.image_features.blur_detector import (
-    BlurDetector,
-)
 from core.caching.exif_cache import ExifCache
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.media_utils import is_image_extension
-from ui.helpers.cluster_utils import ClusterUtils
 import logging
 
 logger = logging.getLogger(__name__)
@@ -145,6 +141,8 @@ class DroppableTreeView(QTreeView):
 
     def _parse_cluster_id(self, value) -> Optional[int]:
         """Delegate to the shared parser used elsewhere in the UI."""
+        from ui.helpers.cluster_utils import ClusterUtils
+
         return ClusterUtils.parse_cluster_id(value)
 
     def _move_dragged_items_to_cluster(self, target_cluster_id: int):
@@ -416,60 +414,6 @@ class LoadingOverlay(QWidget):
             self.show()
 
 
-# --- Preview Preloader Worker ---
-class PreviewPreloaderWorker(QObject):
-    progress_update = pyqtSignal(int, str)
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-
-    def __init__(
-        self,
-        image_paths,
-        max_size,
-        image_pipeline_instance: ImagePipeline,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self._image_paths = image_paths
-        self._max_size = max_size
-        self.image_pipeline = image_pipeline_instance
-        self._is_running = True
-
-    def stop(self):
-        self._is_running = False
-
-    def _should_continue(self):
-        return self._is_running
-
-    def _report_progress(self, count, total):
-        if total > 0:
-            percentage = int((count / total) * 100)
-            # Report progress more frequently or at key milestones
-            if percentage % 5 == 0 or count == total or count == 1:
-                self.progress_update.emit(
-                    percentage, f"Preloading previews ({count}/{total})..."
-                )
-
-    def run_preload(self):
-        self._is_running = True
-        try:
-            self.image_pipeline.preload_previews(
-                self._image_paths,
-                progress_callback=self._report_progress,
-                should_continue_callback=self._should_continue,
-            )
-        except Exception as e:
-            err_msg = f"Error during preview preloading thread: {e}"
-            logger.error(err_msg, exc_info=True)
-            self.error.emit(err_msg)
-        finally:
-            if self._is_running:
-                self.progress_update.emit(100, "Preview preloading complete.")
-            else:
-                self.progress_update.emit(100, "Preview preloading cancelled.")
-            self.finished.emit()
-
-
 # --- Blur Detection Worker ---
 class BlurDetectionWorker(QObject):
     progress_update = pyqtSignal(int, int, str)  # current, total, basename
@@ -499,6 +443,8 @@ class BlurDetectionWorker(QObject):
     def run_detection(self):
         self._is_running = True
         try:
+            from core.image_features.blur_detector import BlurDetector
+
             BlurDetector.detect_blur_in_batch(
                 image_paths=self._image_paths,
                 threshold=self._blur_threshold,
@@ -603,13 +549,18 @@ class SimilarityWorker(QObject):
     finished = pyqtSignal()
 
     def __init__(
-        self, file_paths: List[str], allow_model_download: bool = False, parent=None
+        self,
+        file_paths: List[str],
+        allow_model_download: bool = False,
+        image_pipeline: Optional[ImagePipeline] = None,
+        parent=None,
     ):
         super().__init__(parent)
         self.file_paths = file_paths
         self.allow_model_download = allow_model_download
         self._is_running = True
         self.similarity_engine = None
+        self.image_pipeline = image_pipeline
 
     def _has_raw_images(self) -> bool:
         """Check if any of the file paths are RAW image files."""
@@ -634,7 +585,8 @@ class SimilarityWorker(QObject):
 
             # 1. Instantiate the engine inside the worker thread
             self.similarity_engine = SimilarityEngine(
-                allow_model_download=self.allow_model_download
+                allow_model_download=self.allow_model_download,
+                image_pipeline=self.image_pipeline,
             )
 
             # 2. Connect its signals to this worker's signals

@@ -154,6 +154,7 @@ DEFAULT_SAFETY_ITERATION_MULTIPLIER = 2  # Multiplier for safety iteration limit
 # Batch processing
 METADATA_PROCESSING_CHUNK_SIZE = 25  # Chunk size for metadata processing
 METADATA_EMIT_BATCH_SIZE = 50  # Batch size for metadata emission
+FILE_SCAN_EMIT_BATCH_SIZE = 64  # Reduce cross-thread/UI work during discovery
 
 # UI Population Settings (for large folders)
 LARGE_FOLDER_THRESHOLD = 500  # Items above this use chunked UI population
@@ -169,6 +170,9 @@ THUMBNAIL_PRELOAD_VISIBLE_MARGIN = (
     10  # Number of items above/below visible area to preload
 )
 THUMBNAIL_MAX_WORKERS = 4  # Max concurrent thumbnail generation threads
+IMAGE_PIPELINE_MAX_WORKERS = 4  # Keep concurrent decodes below memory pressure limits
+HIGH_MEMORY_DECODE_MAX_WORKERS = 1  # RAW/HEIC full decodes can use hundreds of MB
+IMAGE_MEMORY_CACHE_SIZE_BYTES = 256 * 1024 * 1024  # Shared hot-image budget
 
 # Preview size estimation
 # Preview cache payload for this app is usually well below original image bytes,
@@ -224,6 +228,7 @@ DEFAULT_RATING_CACHE_SIZE_LIMIT_MB = 256  # Default 256MB limit for rating cache
 # Image size settings
 THUMBNAIL_MAX_SIZE = (256, 256)  # Maximum size for thumbnails
 PRELOAD_MAX_RESOLUTION = (1920, 1200)  # Fixed high resolution for preloading
+DISPLAY_MAX_RESOLUTION = (2560, 2560)  # Enough for a sharp screen preview/zoom
 BLUR_DETECTION_PREVIEW_SIZE = (640, 480)  # Size for image used in blur detection
 
 # --- Update Check Constants ---

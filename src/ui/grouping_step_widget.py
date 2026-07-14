@@ -54,6 +54,7 @@ from core.app_settings import (
     set_location_grouping_depth,
     get_companion_files_preference,
     set_companion_files_preference,
+    DISPLAY_MAX_RESOLUTION,
 )
 from ui.advanced_image_viewer import ZoomableImageView
 from ui.dialog_components import (
@@ -93,7 +94,7 @@ PREVIEW_PAGE_IMAGE = 1
 PREVIEW_PAGE_FOLDER = 2
 
 ROOT_LEVEL_GROUP_LABEL = "Root files"
-SELECTED_PREVIEW_DISPLAY_SIZE = (8000, 8000)
+SELECTED_PREVIEW_DISPLAY_SIZE = DISPLAY_MAX_RESOLUTION
 MAX_FOLDER_PREVIEW_ITEMS = 200
 
 _DROP_TARGET_KINDS = {ITEM_GROUP, ITEM_DIRECTORY, ITEM_ROOT, ITEM_UNASSIGNED}

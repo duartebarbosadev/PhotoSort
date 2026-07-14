@@ -70,7 +70,7 @@ def test_similarity_grouping_plan_uses_ml_similarity_pipeline(tmp_path, monkeypa
 
     monkeypatch.setattr(
         "src.core.grouping._run_ml_similarity_pipeline",
-        lambda paths, progress_callback=None, shared_engine=None: {
+        lambda paths, progress_callback=None, shared_engine=None, image_pipeline=None: {
             str(red_a): 1,
             str(red_b): 1,
             str(blue_a): 2,
@@ -257,7 +257,7 @@ def test_mixed_grouping_partitions_by_date_then_similarity(tmp_path, monkeypatch
     )
     monkeypatch.setattr(
         "src.core.grouping._run_ml_similarity_pipeline",
-        lambda paths, progress_callback=None, shared_engine=None: (
+        lambda paths, progress_callback=None, shared_engine=None, image_pipeline=None: (
             {str(a): 1, str(b): 1} if set(paths) == {str(a), str(b)} else {str(c): 1}
         ),
     )

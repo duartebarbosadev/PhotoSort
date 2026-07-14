@@ -96,6 +96,7 @@ def test_clear_all_file_specific_data_keeps_disk_caches_by_default():
 
         rating_cache_cls.return_value.clear.assert_not_called()
         exif_cache_cls.return_value.clear.assert_not_called()
+        state.analysis_cache.clear_folder.assert_not_called()
 
 
 def test_clear_all_file_specific_data_can_clear_disk_caches_when_requested():
@@ -111,3 +112,4 @@ def test_clear_all_file_specific_data_can_clear_disk_caches_when_requested():
 
         rating_cache_cls.return_value.clear.assert_called_once()
         exif_cache_cls.return_value.clear.assert_called_once()
+        state.analysis_cache.clear_folder.assert_called_once_with("/tmp/folder")

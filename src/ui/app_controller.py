@@ -5,17 +5,14 @@ import logging
 from typing import List, Dict, Any, Tuple, Optional
 
 import numpy as np
-from sklearn.cluster import DBSCAN
 from PyQt6.QtCore import QObject, QTimer
 from core.app_settings import (
     add_recent_folder,
-    get_preview_cache_size_bytes,
-    PREVIEW_ESTIMATED_SIZE_FACTOR,
     get_similarity_embedding_model_name,
     get_companion_files_preference,
 )
 from core.similarity_embedding_model import is_similarity_model_installed
-from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS, is_image_extension
+from core.media_utils import is_image_extension
 from core.image_file_ops import ImageFileOperations
 from core.pyexiv2_wrapper import PyExiv2Operations
 from core.grouping import build_grouping_output_root
@@ -144,7 +141,6 @@ class AppController(QObject):
         # Track pending rotations for batch preview regeneration
         self._pending_rotated_paths: List[str] = []
         # Cache volume at preview-preload start, used for per-run diagnostics.
-        self._preview_preload_start_volume_bytes: Optional[int] = None
         self._ai_rating_warning_messages: list[str] = []
         self._pick_best_pending_after_similarity: bool = False
         self._easy_delete_pending_after_similarity: bool = False
@@ -166,14 +162,6 @@ class AppController(QObject):
         )
         self.worker_manager.similarity_error.connect(self.handle_similarity_error)
 
-        # Preview Preloader Worker
-        self.worker_manager.preview_preload_progress.connect(
-            self.handle_preview_progress
-        )
-        self.worker_manager.preview_preload_finished.connect(
-            self.handle_preview_finished
-        )
-        self.worker_manager.preview_preload_error.connect(self.handle_preview_error)
 
         # Blur Detection Worker
         self.worker_manager.blur_detection_progress.connect(
@@ -365,42 +353,10 @@ class AppController(QObject):
         add_recent_folder(folder_path)
         self.main_window.menu_manager.update_recent_folders_menu()
 
-        estimated_folder_image_size_bytes = self._calculate_folder_image_size(
-            folder_path
-        )
-        preview_cache_limit_bytes = get_preview_cache_size_bytes()
-
-        logger.debug(
-            "Folder Size: %.2f MB",
-            estimated_folder_image_size_bytes / (1024 * 1024),
-        )
-        logger.debug(
-            "Preview Cache Limit: %.2f GB",
-            preview_cache_limit_bytes / (1024 * 1024 * 1024),
-        )
-        logger.debug(
-            "Current Preview Cache Usage: %.2f MB",
-            self.main_window.image_pipeline.preview_cache.volume() / (1024 * 1024),
-        )
-
-        # Remove hardcoded factor, now using centralized constant
-        estimated_preview_data_needed_for_folder_bytes = int(
-            estimated_folder_image_size_bytes * PREVIEW_ESTIMATED_SIZE_FACTOR
-        )
-
-        if (
-            preview_cache_limit_bytes > 0
-            and estimated_preview_data_needed_for_folder_bytes
-            > preview_cache_limit_bytes
-        ):
-            self.main_window.dialog_manager.show_potential_cache_overflow_warning(
-                estimated_preview_data_needed_for_folder_bytes,
-                preview_cache_limit_bytes,
-            )
-
         self.worker_manager.stop_all_workers()
 
         self.app_state.clear_all_file_specific_data()
+        self.main_window.reset_thumbnail_requests()
         self.main_window.invalidate_last_displayed_preview()
         self.app_state.current_folder_path = folder_path
         self.app_state.skip_grouping_step_once = skip_grouping_step
@@ -734,6 +690,8 @@ class AppController(QObject):
                 ),
                 PICK_BEST_REFINEMENT_EPS,
             )
+            from sklearn.cluster import DBSCAN
+
             dbscan = DBSCAN(
                 eps=strict_eps,
                 min_samples=PICK_BEST_REFINEMENT_MIN_SAMPLES,
@@ -1112,24 +1070,6 @@ class AppController(QObject):
     def _filter_image_paths(self, paths: List[str]) -> List[str]:
         return [path for path in paths if path and is_image_extension(path)]
 
-    def _calculate_folder_image_size(self, folder_path: str) -> int:
-        total_size_bytes = 0
-        try:
-            for root, _, files in os.walk(folder_path):
-                for filename in files:
-                    ext = os.path.splitext(filename)[1].lower()
-                    if ext in SUPPORTED_IMAGE_EXTENSIONS:
-                        try:
-                            full_path = os.path.join(root, filename)
-                            total_size_bytes += os.path.getsize(full_path)
-                        except OSError:
-                            pass  # Ignore files that can't be accessed
-        except Exception:
-            logger.error(
-                f"Error calculating folder image size for {folder_path}", exc_info=True
-            )
-        return total_size_bytes
-
     def _get_existing_rating_for_path(self, image_path: str) -> Optional[int]:
         normalized_path = os.path.normpath(image_path)
         cached_rating = self._get_cached_rating(normalized_path)
@@ -1211,28 +1151,6 @@ class AppController(QObject):
             unrated.append(path)
         return unrated, already_rated_count
 
-    def _start_preview_preloader(self, image_data_list: List[Dict[str, any]]):
-        logger.info(f"Starting preview preloader for {len(image_data_list)} images.")
-        if not image_data_list:
-            self.main_window.hide_loading_overlay()
-            return
-
-        paths_for_preloader = self._get_image_paths(image_data_list)
-
-        if not paths_for_preloader:
-            self.main_window.hide_loading_overlay()
-            return
-
-        self.main_window.update_loading_text(
-            f"Preloading previews ({len(paths_for_preloader)} images)..."
-        )
-        self._preview_preload_start_volume_bytes = (
-            self.main_window.image_pipeline.preview_cache.volume()
-        )
-        self.worker_manager.start_preview_preload(
-            paths_for_preloader,
-        )
-
     # --- Slots for WorkerManager Signals ---
 
     def handle_files_found(self, batch_of_file_data: List[Dict[str, any]]):
@@ -1271,14 +1189,14 @@ class AppController(QObject):
                 self.main_window.show_grouping_step()
                 self.refresh_grouping_preview()
 
+        # The folder is usable now. Metadata and thumbnails are enhancements and
+        # must not keep the blocking overlay on screen.
+        self.main_window.hide_loading_overlay()
+
         media_file_data = self._get_media_file_data()
         if media_file_data:
-            # Start thumbnail preload in background (non-blocking)
-            media_paths = self._get_media_paths(media_file_data)
-            if media_paths:
-                self.worker_manager.start_thumbnail_preload(media_paths)
+            self.main_window.schedule_visible_thumbnail_load()
 
-            self.main_window.update_loading_text("Loading metadata...")
             self.worker_manager.start_rating_load(
                 media_file_data.copy(),
                 self.app_state.rating_disk_cache,
@@ -1624,75 +1542,16 @@ class AppController(QObject):
         self.main_window._apply_filter()
 
     def handle_rating_load_finished(self):
-        logger.info("Rating loading finished. Starting preview preloading.")
+        logger.info("Background rating loading finished.")
         self.main_window.statusBar().showMessage(
             "Background rating loading finished.", 3000
         )
 
-        if not self.app_state.image_files_data:
-            self.main_window.hide_loading_overlay()
-            return
-
-        self.main_window.update_loading_text("Ratings loaded. Preloading previews...")
-        self._start_preview_preloader(self.app_state.image_files_data.copy())
+        self.main_window.hide_loading_overlay()
 
     def handle_rating_load_error(self, message: str):
         logger.error(f"Rating load failed: {message}", exc_info=True)
         self.main_window.statusBar().showMessage(f"Rating Load Error: {message}", 5000)
-        if self.app_state.image_files_data:
-            self.main_window.update_loading_text(
-                "Rating load errors. Preloading previews..."
-            )
-            self._start_preview_preloader(self.app_state.image_files_data.copy())
-        else:
-            self.main_window.hide_loading_overlay()
-
-    def handle_preview_progress(self, percentage: int, message: str):
-        self.main_window.update_loading_text(message)
-
-    def handle_preview_finished(self):
-        self.main_window.statusBar().showMessage("Previews regenerated.", 5000)
-        self.main_window.hide_loading_overlay()
-        if self._supports_grouping_workflow_ui():
-            self.main_window.grouping_step_widget.refresh_cached_previews()
-
-        if self.app_state.current_folder_path:
-            total_image_size_bytes = self._calculate_folder_image_size(
-                self.app_state.current_folder_path
-            )
-            total_preview_cache_size_bytes = (
-                self.main_window.image_pipeline.preview_cache.volume()
-            )
-            preload_start_volume = self._preview_preload_start_volume_bytes
-            if preload_start_volume is None:
-                preview_cache_size_bytes = total_preview_cache_size_bytes
-            else:
-                preview_cache_size_bytes = max(
-                    0, total_preview_cache_size_bytes - preload_start_volume
-                )
-            logger.debug("--- Cache vs. Image Size Diagnostics (Post-Preload) ---")
-            logger.debug(
-                f"Total Original Image Size: {total_image_size_bytes / (1024 * 1024):.2f} MB"
-            )
-            logger.debug(
-                f"Preview Cache Added This Preload: {preview_cache_size_bytes / (1024 * 1024):.2f} MB"
-            )
-            logger.debug(
-                f"Current Preview Cache Total: {total_preview_cache_size_bytes / (1024 * 1024):.2f} MB"
-            )
-            if total_image_size_bytes > 0:
-                ratio = (preview_cache_size_bytes / total_image_size_bytes) * 100
-                logger.debug(f"Cache-to-Image Size Ratio: {ratio:.2f}%")
-            logger.debug("---------------------------------------------------------")
-
-        self._preview_preload_start_volume_bytes = None
-        self.main_window._update_image_info_label()
-
-    def handle_preview_error(self, message: str):
-        logger.error(f"Preview preload failed: {message}", exc_info=True)
-        self.main_window.statusBar().showMessage(
-            f"Preview Preload Error: {message}", 5000
-        )
         self.main_window.hide_loading_overlay()
 
     def handle_similarity_progress(self, percentage, message):
@@ -2280,10 +2139,7 @@ class AppController(QObject):
             # Perform only lightweight cache invalidation (no preview regeneration yet)
             filename = os.path.basename(file_path)
             logger.info(f"Rotation completed for '{filename}' (Lossy: {is_lossy})")
-            self.main_window.image_pipeline.preview_cache.delete_all_for_path(file_path)
-            self.main_window.image_pipeline.thumbnail_cache.delete_all_for_path(
-                file_path
-            )
+            self.main_window.image_pipeline.invalidate_path(file_path)
 
     def handle_rotation_application_finished(
         self, successful_count: int, failed_count: int
@@ -2384,6 +2240,7 @@ class AppController(QObject):
         self.main_window._update_thumbnails_from_cache()
         if self._supports_grouping_workflow_ui():
             self.main_window.grouping_step_widget.refresh_cached_thumbnails()
+        self.main_window.schedule_visible_thumbnail_load()
 
     def handle_thumbnail_preload_error(self, error_message: str):
         """Handle errors from thumbnail preload worker."""

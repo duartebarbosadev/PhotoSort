@@ -9,6 +9,7 @@ from core.app_settings import (
     THUMBNAIL_MIN_FILE_SIZE,
 )
 from core.runtime_paths import resolve_user_cache_dir
+from core.caching.image_codec import decode_cached_image, encode_cached_image
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,9 @@ class ThumbnailCache:
         """
         try:
             cached_item = self._cache.get(key)
-            if isinstance(cached_item, Image.Image):
-                return cached_item
+            decoded = decode_cached_image(cached_item)
+            if decoded is not None:
+                return decoded
             elif cached_item is not None:
                 # This case should ideally not happen if we consistently cache PIL.Image
                 logger.warning(
@@ -96,7 +98,7 @@ class ThumbnailCache:
             )
             return
         try:
-            self._cache.set(key, value)
+            self._cache.set(key, encode_cached_image(value, quality=82))
         except Exception as e:
             logger.error(
                 f"Error writing to Thumbnail cache for key '{key}': {e}", exc_info=True

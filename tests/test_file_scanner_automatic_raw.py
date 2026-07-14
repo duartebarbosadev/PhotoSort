@@ -37,15 +37,15 @@ class TestFileScannerAutomaticRaw:
             )
 
     @patch("src.core.file_scanner.os.walk")
-    @patch("src.core.file_scanner.os.path.isfile")
+    @patch("src.core.file_scanner.os.stat")
     @patch("src.core.file_scanner.BlurDetector.is_image_blurred")
     def test_scan_directory_blur_detection_without_apply_auto_edits(
-        self, mock_blur, mock_isfile, mock_walk
+        self, mock_blur, mock_stat, mock_walk
     ):
         """Test that blur detection works without apply_auto_edits parameter."""
         # Setup mocks
         mock_walk.return_value = [("/test", [], ["test.jpg", "test.arw"])]
-        mock_isfile.return_value = True
+        mock_stat.return_value = Mock(st_size=1, st_mtime_ns=1)
         mock_blur.return_value = False
 
         # Create scanner with None parent instead of mock
@@ -76,12 +76,12 @@ class TestFileScannerAutomaticRaw:
                 assert kwargs["threshold"] == 100.0
 
     @patch("src.core.file_scanner.os.walk")
-    @patch("src.core.file_scanner.os.path.isfile")
-    def test_preload_thumbnails_not_called_by_scanner(self, mock_isfile, mock_walk):
+    @patch("src.core.file_scanner.os.stat")
+    def test_preload_thumbnails_not_called_by_scanner(self, mock_stat, mock_walk):
         """Test that FileScanner no longer preloads thumbnails (now done by separate worker)."""
         # Setup mocks
         mock_walk.return_value = [("/test", [], ["test.jpg", "test.arw"])]
-        mock_isfile.return_value = True
+        mock_stat.return_value = Mock(st_size=1, st_mtime_ns=1)
 
         # Create scanner with None parent instead of mock
         scanner = FileScanner(Mock())
@@ -143,7 +143,7 @@ class TestFileScannerIntegration:
 
         with (
             patch("src.core.file_scanner.os.walk") as mock_walk,
-            patch("src.core.file_scanner.os.path.isfile") as mock_isfile,
+            patch("src.core.file_scanner.os.stat") as mock_stat,
             patch("src.core.file_scanner.BlurDetector.is_image_blurred") as mock_blur,
             patch("src.core.file_scanner.SUPPORTED_MEDIA_EXTENSIONS", {".jpg", ".arw"}),
             patch.object(scanner.image_pipeline, "preload_thumbnails") as mock_preload,
@@ -152,7 +152,7 @@ class TestFileScannerIntegration:
             mock_walk.return_value = [
                 ("/test", [], ["image.jpg", "raw.arw", "other.txt"])
             ]
-            mock_isfile.return_value = True
+            mock_stat.return_value = Mock(st_size=1, st_mtime_ns=1)
             mock_blur.return_value = False
 
             # Run the scan with blur detection

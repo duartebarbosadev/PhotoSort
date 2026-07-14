@@ -9,11 +9,10 @@ from functools import lru_cache
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from PIL import Image
-from sklearn.cluster import DBSCAN
 
 from core.image_file_ops import ImageFileOperations
 from core.media_utils import is_video_extension
@@ -23,7 +22,10 @@ from core.metadata_processor import (
     _parse_exif_date,
     _parse_date_from_filename,
 )
-from core.similarity_engine import SimilarityEngine
+
+if TYPE_CHECKING:
+    from core.image_pipeline import ImagePipeline
+    from core.similarity_engine import SimilarityEngine
 
 logger = logging.getLogger(__name__)
 
@@ -354,6 +356,8 @@ def _cluster_vectors(
     eps: float,
     min_samples: int = 1,
 ) -> Dict[str, int]:
+    from sklearn.cluster import DBSCAN
+
     if not vectors_by_path:
         return {}
     paths = list(vectors_by_path.keys())
@@ -709,10 +713,16 @@ def _run_ml_similarity_pipeline(
     image_paths: Sequence[str],
     progress_callback=None,
     shared_engine: Optional[SimilarityEngine] = None,
+    image_pipeline: Optional[ImagePipeline] = None,
 ) -> Dict[str, int]:
     if not image_paths:
         return {}
-    engine = shared_engine or SimilarityEngine()
+    if shared_engine is None:
+        from core.similarity_engine import SimilarityEngine
+
+        engine = SimilarityEngine(image_pipeline=image_pipeline)
+    else:
+        engine = shared_engine
     _embeddings, cluster_results = engine.run_analysis_sync(
         list(image_paths),
         progress_callback=progress_callback,
@@ -731,6 +741,7 @@ def build_grouping_plan(
     progress_callback=None,
     source_root: Optional[str] = None,
     location_depth: int = 3,
+    image_pipeline: Optional[ImagePipeline] = None,
 ) -> GroupingPlan:
     mode_value = GroupingMode(mode)
     valid_items = [
@@ -763,12 +774,14 @@ def build_grouping_plan(
             image_paths,
             skipped_paths,
             progress_callback=progress_callback,
+            image_pipeline=image_pipeline,
         )
     return _build_similarity_plan(
         total_items,
         image_paths,
         skipped_paths,
         progress_callback=progress_callback,
+        image_pipeline=image_pipeline,
     )
 
 
@@ -822,10 +835,12 @@ def _build_similarity_plan(
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
     progress_callback=None,
+    image_pipeline: Optional[ImagePipeline] = None,
 ) -> GroupingPlan:
     assignments = _run_ml_similarity_pipeline(
         image_paths,
         progress_callback=progress_callback,
+        image_pipeline=image_pipeline,
     )
     grouped_paths = set(assignments.keys())
     unassigned = sorted([path for path in image_paths if path not in grouped_paths])
@@ -932,6 +947,7 @@ def _build_mixed_plan(
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
     progress_callback=None,
+    image_pipeline: Optional[ImagePipeline] = None,
 ) -> GroupingPlan:
     date_buckets: Dict[str, List[str]] = {}
     undated: List[str] = []
@@ -954,6 +970,7 @@ def _build_mixed_plan(
         assignments = _run_ml_similarity_pipeline(
             bucket_paths,
             progress_callback=_bucket_progress if progress_callback else None,
+            image_pipeline=image_pipeline,
         )
         grouped_by_cluster: Dict[int, List[str]] = {}
         for path, cluster_id in assignments.items():

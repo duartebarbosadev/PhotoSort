@@ -43,7 +43,7 @@ from core.app_settings import (
     set_easy_delete_duplicate_distance,
     set_easy_delete_white_threshold,
 )
-from core.runtime_paths import get_app_cache_root, get_app_log_dir
+from core.runtime_paths import get_app_cache_root, get_app_log_dir, get_app_models_dir
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
@@ -288,26 +288,9 @@ class DialogManager:
             logger.error("Failed to open logs folder", exc_info=True)
 
     def _open_models_folder(self):
-        """Open the models directory (where ONNX model files live) in the system file browser.
-
-        Strategy:
-        - Prefer ./models next to the running app (CWD/models), creating it if missing.
-        - Fallback to project-root/models (useful in dev), creating if needed.
-        """
+        """Open the persistent user models directory in the system file browser."""
         try:
-            cwd_models = os.path.join(os.getcwd(), "models")
-            project_root = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "..", "..")
-            )
-            dev_models = os.path.join(project_root, "models")
-
-            # Choose the best target: existing CWD/models, else existing dev models, else create CWD/models
-            target = (
-                cwd_models
-                if os.path.isdir(cwd_models)
-                else (dev_models if os.path.isdir(dev_models) else cwd_models)
-            )
-            os.makedirs(target, exist_ok=True)
+            target = get_app_models_dir()
             url = QUrl.fromLocalFile(os.path.abspath(target))
             opened = QDesktopServices.openUrl(url)
             if not opened:
@@ -1914,7 +1897,7 @@ class DialogManager:
             "You can download the model from the official GitHub repository.\n\n"
             "1. Click 'Download Model' to open the releases page.\n"
             "2. Download the latest 'orientation_model.onnx' file.\n"
-            "3. Place the downloaded file inside the 'models' folder in the application directory.\n"
+            "3. Click 'Open Models Folder' and place the downloaded file there.\n"
             "4. Restart the application or re-run the rotation analysis."
         )
         dialog.setInformativeText(detailed_text)

@@ -1,19 +1,2 @@
-diskcache
-reverse-geocode
-mediapipe<0.10.30
-numpy
-onnxruntime
-openai
-opencv-python
-piexif
-Pillow
-Pillow-heif
-pyexiv2
-PyQt6
-rawpy
-scikit-learn
-send2trash
-huggingface_hub
-torch
-torchvision
-transformers
+-r requirements-common.txt
+onnxruntime==1.24.4

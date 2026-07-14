@@ -40,6 +40,7 @@ class _DummyMainWindow:
         self.rebuild_count = 0
         self.info_label_updates = 0
         self.overlay_hidden = False
+        self.schedule_visible_thumbnail_load = Mock()
 
     def update_loading_text(self, text):
         self._loading_updates.append(text)
@@ -94,7 +95,7 @@ def _make_controller(image_files_data):
 def test_handle_scan_finished_preloads_thumbnails_and_metadata_for_videos_too():
     image_path = "/tmp/a.jpg"
     video_path = "/tmp/b.mp4"
-    controller, _, _, worker_manager = _make_controller(
+    controller, main_window, _, worker_manager = _make_controller(
         [
             {"path": image_path, "media_type": "image", "is_blurred": None},
             {"path": video_path, "media_type": "video", "is_blurred": None},
@@ -103,13 +104,25 @@ def test_handle_scan_finished_preloads_thumbnails_and_metadata_for_videos_too():
 
     controller.handle_scan_finished()
 
-    worker_manager.start_thumbnail_preload.assert_called_once_with(
-        [image_path, video_path]
-    )
+    worker_manager.start_thumbnail_preload.assert_not_called()
+    main_window.schedule_visible_thumbnail_load.assert_called_once()
     args, _ = worker_manager.start_rating_load.call_args
     loaded_data = args[0]
     assert len(loaded_data) == 2
     assert {entry["media_type"] for entry in loaded_data} == {"image", "video"}
+    assert main_window.overlay_hidden
+
+
+def test_rating_completion_does_not_trigger_global_preview_preload():
+    controller, main_window, _, worker_manager = _make_controller(
+        [{"path": "/tmp/a.jpg", "media_type": "image", "is_blurred": None}]
+    )
+    worker_manager.start_preview_preload = Mock()
+
+    controller.handle_rating_load_finished()
+
+    worker_manager.start_preview_preload.assert_not_called()
+    assert main_window.overlay_hidden
 
 
 def test_apply_rating_to_selection_skips_videos_and_writes_images_only():

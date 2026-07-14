@@ -52,6 +52,7 @@ class SimilarityEngine(QObject):
         model_name: Optional[str] = None,
         *,
         allow_model_download: bool = False,
+        image_pipeline: Optional[ImagePipeline] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -72,11 +73,7 @@ class SimilarityEngine(QObject):
             embedding_cache_dir, self._region_cache_filename
         )
 
-        ip_instantiation_start_time = time.perf_counter()
-        self.image_pipeline = ImagePipeline()  # Instantiate ImagePipeline
-        logger.debug(
-            f"ImagePipeline instantiated in {time.perf_counter() - ip_instantiation_start_time:.4f}s"
-        )
+        self.image_pipeline = image_pipeline or ImagePipeline()
         logger.info(
             f"SimilarityEngine initialized in {time.perf_counter() - init_start_time:.4f}s"
         )

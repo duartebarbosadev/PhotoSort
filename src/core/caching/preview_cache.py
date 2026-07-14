@@ -5,6 +5,7 @@ import time
 from PIL import Image
 from typing import Optional, Tuple
 from core.runtime_paths import resolve_user_cache_dir
+from core.caching.image_codec import decode_cached_image, encode_cached_image
 
 # Import the settings function to get the cache size limit
 from core.app_settings import (
@@ -63,8 +64,9 @@ class PreviewCache:
         """
         try:
             cached_item = self._cache.get(key)
-            if isinstance(cached_item, Image.Image):
-                return cached_item
+            decoded = decode_cached_image(cached_item)
+            if decoded is not None:
+                return decoded
             elif cached_item is not None:
                 logger.warning(
                     f"Invalid item type in Preview cache for key '{key}': {type(cached_item)}"
@@ -102,7 +104,7 @@ class PreviewCache:
                     key_list.append(key)
                     self._cache.set(index_key, key_list)
                 # Set the actual data
-                self._cache.set(key, value)
+                self._cache.set(key, encode_cached_image(value, quality=88))
         except Exception as e:
             logger.error(
                 f"Error writing to Preview cache for key '{key}': {e}", exc_info=True
