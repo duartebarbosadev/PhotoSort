@@ -289,18 +289,32 @@ class AppController(QObject):
         self.worker_manager.pick_best_error.connect(self.handle_pick_best_error)
 
         # Easy Delete Worker
-        self.worker_manager.easy_delete_progress.connect(self.handle_easy_delete_progress)
-        self.worker_manager.easy_delete_complete.connect(self.handle_easy_delete_complete)
+        self.worker_manager.easy_delete_progress.connect(
+            self.handle_easy_delete_progress
+        )
+        self.worker_manager.easy_delete_complete.connect(
+            self.handle_easy_delete_complete
+        )
         self.worker_manager.easy_delete_error.connect(self.handle_easy_delete_error)
 
         # Fix Rotation Worker
-        self.worker_manager.fix_rotation_progress.connect(self.handle_fix_rotation_progress)
-        self.worker_manager.fix_rotation_complete.connect(self.handle_fix_rotation_complete)
-        self.worker_manager.fix_rotation_model_not_found.connect(self.handle_fix_rotation_model_not_found)
+        self.worker_manager.fix_rotation_progress.connect(
+            self.handle_fix_rotation_progress
+        )
+        self.worker_manager.fix_rotation_complete.connect(
+            self.handle_fix_rotation_complete
+        )
+        self.worker_manager.fix_rotation_model_not_found.connect(
+            self.handle_fix_rotation_model_not_found
+        )
         self.worker_manager.fix_rotation_error.connect(self.handle_fix_rotation_error)
         # Rotation application signals are already wired in the cull-step path; reuse them for apply feedback
-        self.worker_manager.rotation_application_progress.connect(self._on_fix_rotation_apply_progress)
-        self.worker_manager.rotation_application_finished.connect(self._on_fix_rotation_apply_finished)
+        self.worker_manager.rotation_application_progress.connect(
+            self._on_fix_rotation_apply_progress
+        )
+        self.worker_manager.rotation_application_finished.connect(
+            self._on_fix_rotation_apply_finished
+        )
 
     # --- Public Methods (called from MainWindow) ---
 
@@ -1453,17 +1467,24 @@ class AppController(QObject):
             self.main_window.statusBar().showMessage("No images loaded.", 3000)
             return
 
-        if self.worker_manager.is_easy_delete_running() or self._easy_delete_pending_after_similarity:
+        if (
+            self.worker_manager.is_easy_delete_running()
+            or self._easy_delete_pending_after_similarity
+        ):
             return
 
         if self.app_state.easy_delete_results:
-            self.main_window.easy_delete_step_widget.show_results(self.app_state.easy_delete_results)
+            self.main_window.easy_delete_step_widget.show_results(
+                self.app_state.easy_delete_results
+            )
             return
 
         if self.app_state.cluster_results:
             self._start_easy_delete_detection()
         else:
-            logger.info("Easy Delete: no cluster results yet, running similarity first.")
+            logger.info(
+                "Easy Delete: no cluster results yet, running similarity first."
+            )
             self._easy_delete_pending_after_similarity = True
             self.main_window.easy_delete_step_widget.show_loading(
                 "Step 1/2: Computing similarity clusters…", 0
@@ -1511,23 +1532,34 @@ class AppController(QObject):
         if self.worker_manager.is_fix_rotation_running():
             return
 
-        if self.app_state.fix_rotation_results is not None and self.app_state.fix_rotation_results != {}:
-            self.main_window.fix_rotation_step_widget.show_results(self.app_state.fix_rotation_results)
+        if (
+            self.app_state.fix_rotation_results is not None
+            and self.app_state.fix_rotation_results != {}
+        ):
+            self.main_window.fix_rotation_step_widget.show_results(
+                self.app_state.fix_rotation_results
+            )
             return
 
-        image_paths = [fd["path"] for fd in self.app_state.image_files_data if fd.get("path")]
+        image_paths = [
+            fd["path"] for fd in self.app_state.image_files_data if fd.get("path")
+        ]
         if not image_paths:
             self.main_window.fix_rotation_step_widget.show_results({})
             return
 
-        self.main_window.fix_rotation_step_widget.show_loading("Starting rotation analysis…", 0)
+        self.main_window.fix_rotation_step_widget.show_loading(
+            "Starting rotation analysis…", 0
+        )
         self.worker_manager.start_fix_rotation_detection(image_paths)
 
     def handle_fix_rotation_progress(self, percent: int, message: str) -> None:
         self.main_window.fix_rotation_step_widget.show_loading(message, percent)
 
     def handle_fix_rotation_complete(self, results: dict) -> None:
-        logger.info(f"Fix Rotation detection complete: {len(results)} images need rotation.")
+        logger.info(
+            f"Fix Rotation detection complete: {len(results)} images need rotation."
+        )
         self.app_state.fix_rotation_results = results
         self.main_window.fix_rotation_step_widget.show_results(results)
 
@@ -1546,13 +1578,19 @@ class AppController(QObject):
             return
         self.worker_manager.start_rotation_application(rotations)
 
-    def _on_fix_rotation_apply_progress(self, current: int, total: int, filename: str) -> None:
+    def _on_fix_rotation_apply_progress(
+        self, current: int, total: int, filename: str
+    ) -> None:
         if self.app_state.workflow_step == "fix_rotation":
-            self.main_window.fix_rotation_step_widget.show_applying(current, total, filename)
+            self.main_window.fix_rotation_step_widget.show_applying(
+                current, total, filename
+            )
 
     def _on_fix_rotation_apply_finished(self, successful: int, failed: int) -> None:
         if self.app_state.workflow_step == "fix_rotation":
-            self.main_window.fix_rotation_step_widget.show_apply_complete(successful, failed)
+            self.main_window.fix_rotation_step_widget.show_apply_complete(
+                successful, failed
+            )
             self.main_window.statusBar().showMessage(
                 f"Rotation applied: {successful} OK, {failed} failed.", 5000
             )

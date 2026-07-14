@@ -7,6 +7,7 @@ from typing import Callable, Dict, List, Optional
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QKeyEvent, QPixmap
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -27,7 +28,13 @@ _ISSUE_LABELS: Dict[str, tuple] = {
     "dark": ("DARK", "#4A90D9"),
     "white": ("WHITE", "#F5B700"),
     "duplicate": ("DUP", "#A78BFA"),
-    "terrible": ("UGLY", "#FF9500"),
+}
+_ISSUE_ORDER = ("duplicate", "blur", "dark", "white")
+_CATEGORY_NAMES: Dict[str, str] = {
+    "blur": "Blurry",
+    "dark": "Near-black",
+    "white": "Overexposed",
+    "duplicate": "Duplicates",
 }
 
 _MARKED_COLOR = "#E53935"
@@ -77,6 +84,10 @@ class EasyDeleteStepWidget(QWidget):
         self._results: Dict[str, dict] = {}
         self._flagged_paths: List[str] = []
         self._current_index: int = -1
+        self._category_counts: Dict[str, int] = {}
+        self._enabled_categories: Dict[str, bool] = {}
+        self._category_checkboxes: Dict[str, QCheckBox] = {}
+        self._updating_category_toggles = False
         self._is_marked_func: Optional[Callable[[str], bool]] = None
         self._has_any_marked_func: Optional[Callable[[], bool]] = None
         self._image_pipeline = None
@@ -113,15 +124,24 @@ class EasyDeleteStepWidget(QWidget):
 
     def show_results(self, results: Dict[str, dict]) -> None:
         self._results = results
+        self._category_counts = self._build_category_counts(results)
+        self._enabled_categories = {
+            issue_type: True
+            for issue_type in _ISSUE_ORDER
+            if self._category_counts.get(issue_type, 0) > 0
+        }
         self._flagged_paths = self._build_ordered_paths(results)
         self._current_index = -1
+        self._refresh_category_controls()
 
         counts = {}
         for path in self._flagged_paths:
             t = self._results.get(path, {}).get("type", "?")
             counts[t] = counts.get(t, 0) + 1
-        logger.info(f"EasyDelete results: {len(self._flagged_paths)} flagged — "
-                    f"{', '.join(f'{v} {k}' for k, v in sorted(counts.items()))}")
+        logger.info(
+            f"EasyDelete results: {len(self._flagged_paths)} flagged — "
+            f"{', '.join(f'{v} {k}' for k, v in sorted(counts.items()))}"
+        )
 
         if self._flagged_paths:
             self._populate_list()
@@ -136,16 +156,84 @@ class EasyDeleteStepWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ordered_paths(self, results: dict) -> List[str]:
+        return self._build_ordered_paths_for_issue_types(
+            results, self._enabled_issue_types()
+        )
+
+    def _build_ordered_paths_for_issue_types(
+        self, results: dict, issue_types: List[str] | tuple[str, ...]
+    ) -> List[str]:
         ordered: List[str] = []
         seen: set = set()
-        for issue_type in ("duplicate", "blur", "dark", "white", "terrible"):
+        for issue_type in issue_types:
             for path, entry in results.items():
-                if path not in seen and entry["type"] == issue_type and entry["suggest_delete"]:
+                if (
+                    path not in seen
+                    and entry["type"] == issue_type
+                    and entry["suggest_delete"]
+                ):
                     ordered.append(path)
                     seen.add(path)
                     if entry.get("pair_path"):
                         seen.add(entry["pair_path"])
         return ordered
+
+    def _build_category_counts(self, results: dict) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        ordered_paths = self._build_ordered_paths_for_issue_types(results, _ISSUE_ORDER)
+        for path in ordered_paths:
+            issue_type = results.get(path, {}).get("type", "")
+            counts[issue_type] = counts.get(issue_type, 0) + 1
+        return counts
+
+    def _enabled_issue_types(self) -> List[str]:
+        return [
+            issue_type
+            for issue_type in _ISSUE_ORDER
+            if self._enabled_categories.get(issue_type, False)
+        ]
+
+    def _issue_types_with_counts(self) -> List[str]:
+        return [
+            issue_type
+            for issue_type in _ISSUE_ORDER
+            if self._category_counts.get(issue_type, 0) > 0
+        ]
+
+    def _refresh_category_controls(self) -> None:
+        issue_types = self._issue_types_with_counts()
+        summary_parts = [
+            f"{_CATEGORY_NAMES.get(issue_type, issue_type.title())}: {self._category_counts[issue_type]}"
+            for issue_type in issue_types
+        ]
+        self._category_summary_label.setText(" · ".join(summary_parts))
+        self._category_summary_label.setVisible(bool(summary_parts))
+
+        while self._category_toggle_layout.count():
+            item = self._category_toggle_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        self._category_checkboxes = {}
+        self._updating_category_toggles = True
+        for issue_type in issue_types:
+            count = self._category_counts[issue_type]
+            checkbox = QCheckBox(
+                f"{_CATEGORY_NAMES.get(issue_type, issue_type.title())} ({count})"
+            )
+            checkbox.setChecked(self._enabled_categories.get(issue_type, True))
+            checkbox.setStyleSheet("font-size: 11px; color: #A9B7C6;")
+            checkbox.toggled.connect(
+                lambda checked, issue_type=issue_type: self._on_category_toggled(
+                    issue_type, checked
+                )
+            )
+            self._category_checkboxes[issue_type] = checkbox
+            self._category_toggle_layout.addWidget(checkbox)
+        self._category_toggle_layout.addStretch()
+        self._updating_category_toggles = False
+        self._category_toggle_container.setVisible(bool(issue_types))
 
     def _populate_list(self) -> None:
         self._items_list.clear()
@@ -166,9 +254,15 @@ class EasyDeleteStepWidget(QWidget):
             self._items_list.addItem(item)
 
         total = len(self._flagged_paths)
-        self._summary_label.setText(
-            f"{total} image{'s' if total != 1 else ''} flagged for review"
-        )
+        all_total = sum(self._category_counts.values())
+        if total == all_total:
+            self._summary_label.setText(
+                f"{total} image{'s' if total != 1 else ''} flagged for review"
+            )
+        else:
+            self._summary_label.setText(
+                f"{total} of {all_total} flagged image{'s' if all_total != 1 else ''} visible"
+            )
         self._refresh_list_colors()
 
     def _refresh_list_colors(self) -> None:
@@ -244,7 +338,9 @@ class EasyDeleteStepWidget(QWidget):
         self._suggestion_label.setText(reason)
         self._suggestion_label.show()
         _, color = _ISSUE_LABELS.get("duplicate", ("DUP", "#A78BFA"))
-        self._issue_label.setText(f"<b style='color:{color}'>[DUP]</b>  Near-duplicate pair")
+        self._issue_label.setText(
+            f"<b style='color:{color}'>[DUP]</b>  Near-duplicate pair"
+        )
         if suggest_delete:
             keep_path = pair_path
         else:
@@ -267,7 +363,10 @@ class EasyDeleteStepWidget(QWidget):
                     rgb = pil_img.convert("RGB")
                     data = rgb.tobytes("raw", "RGB")
                     qimg = QImage(
-                        data, rgb.width, rgb.height, rgb.width * 3,
+                        data,
+                        rgb.width,
+                        rgb.height,
+                        rgb.width * 3,
                         QImage.Format.Format_RGB888,
                     )
                     return QPixmap.fromImage(qimg)
@@ -275,13 +374,22 @@ class EasyDeleteStepWidget(QWidget):
             if not px.isNull():
                 return px
         except Exception as exc:
-            logger.debug("EasyDelete: could not load pixmap for %s: %s", os.path.basename(path), exc)
+            logger.debug(
+                "EasyDelete: could not load pixmap for %s: %s",
+                os.path.basename(path),
+                exc,
+            )
         return None
 
     def _refresh_controls(self) -> None:
         total = len(self._flagged_paths)
         if total == 0:
+            self._counter_label.setText("0 of 0")
+            self._prev_btn.setEnabled(False)
+            self._next_btn.setEnabled(False)
+            self._mark_btn.setEnabled(False)
             return
+        self._mark_btn.setEnabled(True)
         self._counter_label.setText(f"{self._current_index + 1} of {total}")
         self._prev_btn.setEnabled(self._current_index > 0)
         self._next_btn.setEnabled(self._current_index < total - 1)
@@ -329,6 +437,44 @@ class EasyDeleteStepWidget(QWidget):
         else:
             self.mark_for_deletion_requested.emit([path])
         QTimer.singleShot(0, self._refresh_controls)
+
+    def _on_category_toggled(self, issue_type: str, checked: bool) -> None:
+        if self._updating_category_toggles:
+            return
+        self._enabled_categories[issue_type] = checked
+        self._apply_category_filter()
+
+    def _apply_category_filter(self) -> None:
+        current_path = None
+        if 0 <= self._current_index < len(self._flagged_paths):
+            current_path = self._flagged_paths[self._current_index]
+
+        self._flagged_paths = self._build_ordered_paths(self._results)
+        self._populate_list()
+        self._content_stack.setCurrentIndex(1)
+
+        if not self._flagged_paths:
+            self._show_no_enabled_categories()
+            return
+
+        if current_path in self._flagged_paths:
+            next_index = self._flagged_paths.index(current_path)
+        else:
+            next_index = 0
+        self._navigate_to(next_index)
+
+    def _show_no_enabled_categories(self) -> None:
+        self._current_index = -1
+        self._items_list.clearSelection()
+        self._single_img.set_pixmap(None)
+        self._pair_left_img.set_pixmap(None)
+        self._pair_right_img.set_pixmap(None)
+        self._image_stack.setCurrentIndex(0)
+        self._issue_label.setText(
+            "No enabled categories. Re-enable a category on the left to review those images."
+        )
+        self._suggestion_label.hide()
+        self._refresh_controls()
 
     def _on_done(self) -> None:
         self.proceed_to_pick_best_requested.emit()
@@ -379,7 +525,9 @@ class EasyDeleteStepWidget(QWidget):
         self._loading_label = QLabel("Analyzing images…")
         self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._loading_label.setWordWrap(True)
-        self._loading_label.setStyleSheet("font-size: 13px; color: #aaaaaa; margin-bottom: 12px;")
+        self._loading_label.setStyleSheet(
+            "font-size: 13px; color: #aaaaaa; margin-bottom: 12px;"
+        )
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
@@ -430,7 +578,21 @@ class EasyDeleteStepWidget(QWidget):
         left.setMaximumWidth(300)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(0)
+        left_layout.setSpacing(4)
+
+        self._category_summary_label = QLabel()
+        self._category_summary_label.setWordWrap(True)
+        self._category_summary_label.setStyleSheet(
+            "font-size: 11px; color: #A9B7C6; padding: 0 4px 2px 4px;"
+        )
+        left_layout.addWidget(self._category_summary_label)
+
+        self._category_toggle_container = QWidget()
+        self._category_toggle_layout = QHBoxLayout(self._category_toggle_container)
+        self._category_toggle_layout.setContentsMargins(4, 0, 4, 4)
+        self._category_toggle_layout.setSpacing(6)
+        left_layout.addWidget(self._category_toggle_container)
+
         self._items_list = QListWidget()
         self._items_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._items_list.setStyleSheet(
@@ -495,8 +657,8 @@ class EasyDeleteStepWidget(QWidget):
         pair_splitter.addWidget(rp)
         pl.addWidget(pair_splitter, 1)
 
-        self._image_stack.addWidget(single)   # 0
-        self._image_stack.addWidget(pair)     # 1
+        self._image_stack.addWidget(single)  # 0
+        self._image_stack.addWidget(pair)  # 1
         right_layout.addWidget(self._image_stack, 1)
 
         # Suggestion banner (duplicate hint)

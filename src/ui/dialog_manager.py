@@ -31,9 +31,17 @@ from PyQt6.QtCore import Qt, QSize, QUrl, QEventLoop, QThread
 from PyQt6.QtGui import QIcon, QDesktopServices
 
 from core.app_settings import (
+    get_easy_delete_blur_threshold,
+    get_easy_delete_dark_threshold,
+    get_easy_delete_duplicate_distance,
+    get_easy_delete_white_threshold,
     get_rotation_confirm_lossy,
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
+    set_easy_delete_blur_threshold,
+    set_easy_delete_dark_threshold,
+    set_easy_delete_duplicate_distance,
+    set_easy_delete_white_threshold,
 )
 from core.runtime_paths import get_app_cache_root, get_app_log_dir
 from core.image_processing.raw_image_processor import is_raw_extension
@@ -602,6 +610,93 @@ class DialogManager:
 
         content_layout.addWidget(similarity_card)
 
+        # --- Easy Delete Card ---
+        easy_delete_card, easy_delete_layout = build_card("dialogCard")
+        easy_delete_title = QLabel("Easy Delete")
+        easy_delete_title.setObjectName("cardSectionTitle")
+        easy_delete_layout.addWidget(easy_delete_title)
+
+        sep_easy_delete = QFrame()
+        sep_easy_delete.setObjectName("cardSeparator")
+        sep_easy_delete.setFrameShape(QFrame.Shape.HLine)
+        sep_easy_delete.setFixedHeight(1)
+        easy_delete_layout.addWidget(sep_easy_delete)
+
+        easy_delete_desc = QLabel(
+            "Tune the thresholds used to flag obvious rejects during Easy Delete scans."
+        )
+        easy_delete_desc.setObjectName("cardDescription")
+        easy_delete_desc.setWordWrap(True)
+        easy_delete_layout.addWidget(easy_delete_desc)
+
+        easy_delete_form = QGridLayout()
+        easy_delete_form.setHorizontalSpacing(12)
+        easy_delete_form.setVerticalSpacing(12)
+
+        blur_threshold_label = QLabel("Blur sharpness threshold")
+        blur_threshold_spin = QDoubleSpinBox()
+        blur_threshold_spin.setObjectName("easyDeleteBlurThresholdSpin")
+        blur_threshold_spin.setRange(10.0, 1000.0)
+        blur_threshold_spin.setDecimals(1)
+        blur_threshold_spin.setSingleStep(10.0)
+        blur_threshold_spin.setValue(get_easy_delete_blur_threshold())
+        blur_threshold_spin.setToolTip(
+            "Lower = stricter (more images flagged as blurry); this is the minimum "
+            "acceptable peak local sharpness."
+        )
+        easy_delete_form.addWidget(blur_threshold_label, 0, 0)
+        easy_delete_form.addWidget(blur_threshold_spin, 0, 1)
+
+        dark_threshold_label = QLabel("Near-black brightness threshold")
+        dark_threshold_spin = QDoubleSpinBox()
+        dark_threshold_spin.setObjectName("easyDeleteDarkThresholdSpin")
+        dark_threshold_spin.setRange(0.0, 128.0)
+        dark_threshold_spin.setDecimals(1)
+        dark_threshold_spin.setSingleStep(1.0)
+        dark_threshold_spin.setValue(get_easy_delete_dark_threshold())
+        dark_threshold_spin.setToolTip(
+            "Images with mean brightness below this value (0-255) are flagged near-black."
+        )
+        easy_delete_form.addWidget(dark_threshold_label, 1, 0)
+        easy_delete_form.addWidget(dark_threshold_spin, 1, 1)
+
+        white_threshold_label = QLabel("Overexposed brightness threshold")
+        white_threshold_spin = QDoubleSpinBox()
+        white_threshold_spin.setObjectName("easyDeleteWhiteThresholdSpin")
+        white_threshold_spin.setRange(128.0, 255.0)
+        white_threshold_spin.setDecimals(1)
+        white_threshold_spin.setSingleStep(1.0)
+        white_threshold_spin.setValue(get_easy_delete_white_threshold())
+        white_threshold_spin.setToolTip(
+            "Images with mean brightness above this value (0-255) are flagged overexposed."
+        )
+        easy_delete_form.addWidget(white_threshold_label, 2, 0)
+        easy_delete_form.addWidget(white_threshold_spin, 2, 1)
+
+        duplicate_distance_label = QLabel("Near-duplicate distance")
+        duplicate_distance_spin = QDoubleSpinBox()
+        duplicate_distance_spin.setObjectName("easyDeleteDuplicateDistanceSpin")
+        duplicate_distance_spin.setRange(0.0, 0.5)
+        duplicate_distance_spin.setDecimals(3)
+        duplicate_distance_spin.setSingleStep(0.005)
+        duplicate_distance_spin.setValue(get_easy_delete_duplicate_distance())
+        duplicate_distance_spin.setToolTip(
+            "Cosine distance; higher catches looser duplicates, lower only near-identical."
+        )
+        easy_delete_form.addWidget(duplicate_distance_label, 3, 0)
+        easy_delete_form.addWidget(duplicate_distance_spin, 3, 1)
+        easy_delete_layout.addLayout(easy_delete_form)
+
+        easy_delete_note = QLabel(
+            "These settings apply to future Easy Delete analysis runs; lower blur and "
+            "duplicate thresholds are more conservative."
+        )
+        easy_delete_note.setObjectName("cardNote")
+        easy_delete_note.setWordWrap(True)
+        easy_delete_layout.addWidget(easy_delete_note)
+
+        content_layout.addWidget(easy_delete_card)
+
         # --- AI Engine Card ---
         ai_card, ai_layout = build_card("dialogCard")
         ai_title = QLabel("AI Rating Engine")
@@ -1003,13 +1098,24 @@ class DialogManager:
                 similarity_model_combo.currentText().strip()
             )
             set_similarity_clustering_eps(similarity_threshold_spin.value())
+            set_easy_delete_blur_threshold(blur_threshold_spin.value())
+            set_easy_delete_dark_threshold(dark_threshold_spin.value())
+            set_easy_delete_white_threshold(white_threshold_spin.value())
+            set_easy_delete_duplicate_distance(duplicate_distance_spin.value())
 
             logger.info(
-                "Preferences saved: mode=%s, custom_threads=%s, similarity_model=%s, similarity_eps=%.3f",
+                "Preferences saved: mode=%s, custom_threads=%s, similarity_model=%s, "
+                "similarity_eps=%.3f, easy_delete_blur=%.1f, "
+                "easy_delete_dark=%.1f, easy_delete_white=%.1f, "
+                "easy_delete_duplicate=%.3f",
                 get_performance_mode().value,
                 get_custom_thread_count(),
                 get_similarity_embedding_model_name(),
                 get_similarity_clustering_eps(),
+                get_easy_delete_blur_threshold(),
+                get_easy_delete_dark_threshold(),
+                get_easy_delete_white_threshold(),
+                get_easy_delete_duplicate_distance(),
             )
             dialog.accept()
 
