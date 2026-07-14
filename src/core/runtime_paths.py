@@ -42,6 +42,7 @@ def iter_bundle_roots(include_executable_dir: bool = False) -> List[str]:
 
 
 _APP_NAME = "PhotoSort"
+_CACHE_ROOT_ENV = "PHOTOSORT_CACHE_ROOT"
 
 
 def _platform_cache_base() -> str:
@@ -66,10 +67,14 @@ def resolve_user_cache_dir(app_subdir: str) -> str:
     so all PhotoSort data is grouped in one visible location rather than spread
     across multiple sibling directories.
     """
-    candidates: List[str] = [
+    override_root = os.environ.get(_CACHE_ROOT_ENV)
+    candidates: List[str] = []
+    if override_root:
+        candidates.append(os.path.join(override_root, app_subdir))
+    candidates.extend([
         os.path.join(_platform_cache_base(), _APP_NAME, app_subdir),
         os.path.join(tempfile.gettempdir(), _APP_NAME, app_subdir),
-    ]
+    ])
 
     for candidate in candidates:
         try:
@@ -87,6 +92,9 @@ def resolve_user_cache_dir(app_subdir: str) -> str:
 
 def get_app_cache_root() -> str:
     """Return the root PhotoSort cache directory (parent of all cache subdirs)."""
+    override_root = os.environ.get(_CACHE_ROOT_ENV)
+    if override_root:
+        return override_root
     return os.path.join(_platform_cache_base(), _APP_NAME)
 
 

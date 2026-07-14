@@ -21,8 +21,12 @@ def test_disk_caches_store_compressed_payloads_and_return_images(tmp_path):
     thumbnail_cache.set(thumbnail_key, image)
     preview_cache.set(preview_key, image)
 
-    assert isinstance(thumbnail_cache._cache.get(thumbnail_key), bytes)
-    assert isinstance(preview_cache._cache.get(preview_key), bytes)
+    thumbnail_payload = thumbnail_cache._cache.get(thumbnail_key)
+    preview_payload = preview_cache._cache.get(preview_key)
+    assert isinstance(thumbnail_payload, bytes)
+    assert isinstance(preview_payload, bytes)
+    assert len(thumbnail_payload) < image.width * image.height
+    assert len(preview_payload) < image.width * image.height
     assert thumbnail_cache.get(thumbnail_key).size == image.size
     assert preview_cache.get(preview_key).size == image.size
 
@@ -85,6 +89,37 @@ def test_concurrent_thumbnail_requests_generate_once(tmp_path):
 
     assert all(image is not None for image in images)
     processor.assert_called_once()
+
+
+def test_high_memory_thumbnail_formats_decode_serially(tmp_path):
+    sources = []
+    for index in range(4):
+        source = tmp_path / f"source-{index}.heic"
+        source.write_bytes(b"placeholder")
+        sources.append(str(source))
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+    active = 0
+    max_active = 0
+
+    def generate(*_args, **_kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        time.sleep(0.02)
+        active -= 1
+        return Image.new("RGB", (256, 160), "orange")
+
+    with patch(
+        "core.image_pipeline.StandardImageProcessor.process_for_thumbnail",
+        side_effect=generate,
+    ):
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            list(executor.map(pipeline._get_pil_thumbnail, sources))
+
+    assert max_active == 1
 
 
 def test_similarity_grouping_reuses_the_shared_pipeline():

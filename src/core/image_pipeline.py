@@ -89,13 +89,19 @@ class ImagePipeline:
         )  # Instantiate if it has non-static methods or state
         logger.debug("ImageOrientationHandler instantiated.")
 
-        from core.app_settings import IMAGE_MEMORY_CACHE_SIZE_BYTES
+        from core.app_settings import (
+            HIGH_MEMORY_DECODE_MAX_WORKERS,
+            IMAGE_MEMORY_CACHE_SIZE_BYTES,
+        )
 
         self._memory_cache: OrderedDict[tuple, Image.Image] = OrderedDict()
         self._memory_cache_bytes = 0
         self._memory_cache_limit_bytes = IMAGE_MEMORY_CACHE_SIZE_BYTES
         self._memory_cache_lock = threading.RLock()
         self._generation_locks = [threading.Lock() for _ in range(64)]
+        self._high_memory_decode_gate = threading.BoundedSemaphore(
+            HIGH_MEMORY_DECODE_MAX_WORKERS
+        )
 
         # Image decoding is memory-heavy. More threads reduce responsiveness and can
         # multiply full-resolution buffers without improving useful throughput.
@@ -228,21 +234,31 @@ class ImagePipeline:
                 return cached_img
 
             pil_img: Optional[Image.Image] = None
-            if is_raw_extension(ext):
-                pil_img = RawImageProcessor.process_raw_for_thumbnail(
-                    normalized_path, apply_auto_edits, THUMBNAIL_MAX_SIZE
-                )
-            elif is_video_extension(ext):
-                pil_img = self._extract_video_thumbnail_with_overlay(normalized_path)
-            elif ext in SUPPORTED_STANDARD_EXTENSIONS:
-                pil_img = StandardImageProcessor.process_for_thumbnail(
-                    normalized_path, THUMBNAIL_MAX_SIZE, apply_orientation
-                )
-            else:
-                logger.warning(
-                    f"Unsupported extension for thumbnail: {ext} for '{os.path.basename(normalized_path)}'"
-                )
-                return None
+            high_memory_format = is_raw_extension(ext) or ext in {".heic", ".heif"}
+            decode_gate = self._high_memory_decode_gate if high_memory_format else None
+            if decode_gate:
+                decode_gate.acquire()
+            try:
+                if is_raw_extension(ext):
+                    pil_img = RawImageProcessor.process_raw_for_thumbnail(
+                        normalized_path, apply_auto_edits, THUMBNAIL_MAX_SIZE
+                    )
+                elif is_video_extension(ext):
+                    pil_img = self._extract_video_thumbnail_with_overlay(
+                        normalized_path
+                    )
+                elif ext in SUPPORTED_STANDARD_EXTENSIONS:
+                    pil_img = StandardImageProcessor.process_for_thumbnail(
+                        normalized_path, THUMBNAIL_MAX_SIZE, apply_orientation
+                    )
+                else:
+                    logger.warning(
+                        f"Unsupported extension for thumbnail: {ext} for '{os.path.basename(normalized_path)}'"
+                    )
+                    return None
+            finally:
+                if decode_gate:
+                    decode_gate.release()
 
             if pil_img:
                 if apply_orientation and ext not in SUPPORTED_STANDARD_EXTENSIONS:

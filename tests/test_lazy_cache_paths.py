@@ -75,6 +75,16 @@ def test_huggingface_cache_dir_is_resolved_lazily(monkeypatch, tmp_path):
     resolver.assert_called_once_with("hf")
 
 
+def test_cache_root_can_be_isolated_for_performance_runs(monkeypatch, tmp_path):
+    runtime_paths = importlib.import_module("core.runtime_paths")
+    monkeypatch.setenv("PHOTOSORT_CACHE_ROOT", str(tmp_path))
+
+    assert runtime_paths.resolve_user_cache_dir("previews") == str(
+        tmp_path / "previews"
+    )
+    assert runtime_paths.get_app_cache_root() == str(tmp_path)
+
+
 def test_similarity_clustering_eps_setting_clamps_and_validates(monkeypatch):
     app_settings = _reload_module("core.app_settings")
 

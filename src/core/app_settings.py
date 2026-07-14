@@ -171,6 +171,7 @@ THUMBNAIL_PRELOAD_VISIBLE_MARGIN = (
 )
 THUMBNAIL_MAX_WORKERS = 4  # Max concurrent thumbnail generation threads
 IMAGE_PIPELINE_MAX_WORKERS = 4  # Keep concurrent decodes below memory pressure limits
+HIGH_MEMORY_DECODE_MAX_WORKERS = 1  # RAW/HEIC full decodes can use hundreds of MB
 IMAGE_MEMORY_CACHE_SIZE_BYTES = 256 * 1024 * 1024  # Shared hot-image budget
 
 # Preview size estimation
