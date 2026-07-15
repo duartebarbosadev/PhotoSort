@@ -1,198 +1,229 @@
+# PhotoSort
 
-# PhotoSort: Photo Library Culler
+PhotoSort is a fast desktop photo-culling and organizing tool for large photo
+libraries. It is designed to be the step before editing.
 
 <div align="center">
   <img src="assets/main-window-screenshot.png" alt="PhotoSort Main Window" />
 </div>
 
-PhotoSort is a fast, powerful desktop application for managing large photo libraries, making it easier than ever to sort, cull, and organize your photos.
-
 **Use this at your personal risk. Always use backups.**
 
-## Key Features
+## What PhotoSort does
 
-* **Intelligent Culling Tools**:
-  * **Ratings & Labels**: Assign star ratings for quick categorization.
-  * **Blur Detection**: Automatically identify and flag blurry photos.
-  * **AI Orientation Detection**: Auto-detects the correct image orientation using a fine-tuned EfficientNetV2 ONNX model and proposes rotations.
-  * **Similarity Analysis**: Group visually similar images to easily spot duplicates or near-duplicates.
-  * **Pick Best (Local AI Ranking)**: Score each similarity cluster locally using technical quality checks plus an aesthetic model, with preview-cache reuse and RAW support.
-  * **Fast Processing**: Intensive operations (scanning, thumbnailing, analysis) run once in batch to ensure fast image scrolling.
-  * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
-  * **Video Browsing Support**: Scan and browse common video formats with playback and first-frame thumbnails (analysis and ratings remain image-only).
-  * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed.
-  * **AI Best-Shot Ranking**: Send stacks to an OpenAI-compatible vision model (e.g. Qwen3-VL) to pick the keeper frame automatically.
-  * **AI Star Ratings**: Ask the configured AI engine to score individual photos with 1–5 stars.
-- **Performance Modes**: Configurable threading system (Settings → Preferences, `F10`) to balance between system responsiveness (Balanced) and maximum processing speed (Performance).
-- **Metadata Display**: Shows EXIF information (camera model, exposure settings, etc.).
+PhotoSort is a good fit if you want to move quickly through a folder, compare
+similar frames, and make fast culling decisions with its keyboard based controls. It is focused on a fast review workflow rather than being a full Lightroom replacement.
 
-## AI Models Used
+PhotoSort's main features include ultra fast image browsing (even RAW),
+keyboard-driven review, side-by-side comparison, ratings and metadata, visual
+similarity groups, blur detection, and video browsing. The workflow is divided
+into focused steps so you can organize, review, and cull a folder without
+committing every decision immediately.
 
-PhotoSort uses a mix of local models and configurable external AI endpoints:
+## Quick start
 
-- **Similarity analysis**: [`facebook/dinov2-small`](https://huggingface.co/facebook/dinov2-small) by default, with `facebook/dinov2-base` and a configurable grouping threshold available in Preferences, for visual image embeddings and crop-aware similarity clustering.
-- **Pick Best local aesthetic scoring**: [`cafeai/cafe_aesthetic`](https://huggingface.co/cafeai/cafe_aesthetic) via `transformers`.
-- **Pick Best local technical scoring**: OpenCV face/eye cascades plus MediaPipe Face Mesh for blur / eye-state / face-quality heuristics.
-- **Auto-rotation**: the local ONNX orientation classifier from [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection), a fine-tuned EfficientNetV2 model that predicts whether an image should stay at `0°` or be corrected by `90°`, `180°`, or `270°`. PhotoSort loads `orientation_model*.onnx` files from the project `models/` directory.
-- **AI Best Shot ranking and AI star ratings**: any **OpenAI-compatible vision model** you configure in Preferences.
-  Default example in app settings: `Qwen3-VL-30B-A3B-Instruct-MLX-4bit` at `http://127.0.0.1:8000/v1`.
+1. Download the latest release from the [GitHub Releases
+   page](https://github.com/duartebarbosadev/PhotoSort/releases).
+2. Choose the normal CPU build unless you already know that you want the NVIDIA
+   CUDA build; see [Downloads](#downloads).
+3. Start PhotoSort and open a folder containing photos or videos.
+4. Review the workflow steps in order, or skip directly to the step you need.
 
-## Getting Started
+### Windows
 
-### Installation & Running
+Download and extract `PhotoSort-Windows-x64.zip`, open the extracted folder,
+and run `PhotoSort.exe`. There is no separate installer.
 
-You can download the latest prebuilt binaries from the [Releases page](https://github.com/duartebarbosadev/photosort/releases):
+### macOS
 
-- **Windows**: Download the `.exe` file and run it directly (no separate installer required).
-- **macOS**: Download the `.dmg`, open it, then drag **PhotoSort** to your **Applications** folder.
-- **Windows**: Download the `.exe` file and run it directly (no separate installer required).
-- **macOS**: Download the `.dmg`, open it, then drag **PhotoSort** to your **Applications** folder.
-If you prefer to build from source or want to contribute:
+Download `PhotoSort-macOS-AppleSilicon.dmg`, open it, and drag **PhotoSort** to
+the **Applications** folder. This release is for Apple Silicon Macs.
 
-1. **Clone the repository:**
+Release builds are not signed. If macOS warns that it cannot
+verify the developer or that the app cannot be opened:
 
-   ```bash
-   git clone https://github.com/duartebarbosadev/photosort
-   cd PhotoSort
-   ```
+1. Close the warning and make sure **PhotoSort** is in **Applications**.
+2. Control-click (or right-click) **PhotoSort**, choose **Open**, then choose
+   **Open** again in the confirmation dialog.
+3. If the confirmation option is not shown, open **System Settings → Privacy &
+   Security**, scroll to the Security section, and click **Open Anyway** for
+   PhotoSort. Confirm with your Mac password or Touch ID if prompted.
 
-2. **Install system dependencies (macOS only):**
+You normally only need to approve the application once. Only do this for a
+release downloaded from the official [GitHub Releases
+page](https://github.com/duartebarbosadev/PhotoSort/releases).
 
-   On macOS, the `pyexiv2` library requires certain system libraries to be installed via Homebrew:
+## The basic culling workflow
 
-   ```bash
-   brew install brotli inih gettext
-   ```
+PhotoSort does not immediately delete an image when you mark it. Decisions are
+staged so you can review them and change your mind.
 
-   > **Note**: These dependencies are only required on macOS. Windows and Linux users can skip this step.
+### 1. Organize
 
-> **Python version:** PhotoSort is tested on Python 3.12. Newer interpreters may work, but 3.12 is the supported target for now.
-> This matters for `mediapipe`, which is installed as part of the default requirements used by Pick Best local scoring.
+Plan a new folder structure using the current folder, similarity, face, date,
+location, or mixed grouping modes. Review the proposed changes in the **After**
+tree, rename groups if needed, and apply them explicitly. PhotoSort can move
+RAW+JPEG pairs and XMP sidecars together when companion-file handling is
+enabled. The run also writes a `grouping-manifest.json` in the output folder.
 
-3. **Create a Python 3.12 virtual environment (recommended):**
+Use the grouping and review tools to build a Keep or Favorites folder, and
+adjust the proposed destinations before applying the changes.
 
-   ```bash
-   python3.12 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
+### 2. Easy Delete
 
-4. **Install dependencies:**
-   Choose the appropriate requirements file based on your hardware:
+Find obvious rejects such as blurry, very dark, very bright, or near-duplicate
+images. Review the suggestions and stage the images you want to remove. Nothing
+is sent to the Trash until you confirm later in Cull.
 
-   #### For CPU (Default)
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 3. Fix Rotation
 
-   #### For NVIDIA CUDA GPU Acceleration
-   ```bash
-   pip install -r requirements-cuda.txt
-   ```
+PhotoSort can detect images whose orientation appears wrong and show a proposed
+correction. Accept only the changes you want. It tries a lossless metadata
+rotation first and uses pixel rotation as a fallback when necessary.
 
-   > **Note**: The CUDA version requires NVIDIA CUDA Toolkit and cuDNN to be installed on your system.
-   
-   > **Note**: These packages are mutually exclusive. If switching between CPU and CUDA versions, create separate virtual environments or uninstall the current onnx package before installing the other.
+### 4. Pick Best
 
-5. **Run the application:**
-   The main entry point is [`src/main.py`](src/main.py).
+Compare similar shots and choose the keeper in each group. The local Pick Best
+workflow combines technical checks with an aesthetic model; choices are still
+reviewable and staged as Keep or Trash decisions.
 
-  ```
-  python -m src.main [--folder FOLDER_PATH | --last-folder] [--clear-cache]
+### 5. Cull
 
-  # Examples:
-  #   Open a specific folder at startup:
-  #       python -m src.main --folder "C:/Users/MyUser/Pictures"
-  #   Open the most recent folder at startup:
-  #       python -m src.main --last-folder
-  #   Clear all caches before starting:
-  #       python -m src.main --clear-cache
-  #   Open folder and clear caches (useful for development):
-  #       python -m src.main --folder "C:/Users/MyUser/Pictures" --clear-cache
-  ```
+Review every staged decision in one place. Only after you confirm are selected
+files moved to the operating system's Trash or Recycle Bin. The application does
+not permanently erase them itself, so recovery is normally handled through the
+system Trash/Recycle Bin.
 
-### AI Model Setup
+## Everyday controls
 
-#### Rotation Detection Model
+- **Up/Down** (or **J/K**): move through images.
+- **Left/Right** (or **H/L**): move within a similarity group.
+- **D**: mark the current selection for deletion.
+- **Shift+D**: commit marked deletions and move them to the Trash/Recycle Bin.
+- **Alt+D**: clear deletion marks before committing.
+- **Ctrl-click**: select multiple images for comparison or batch actions.
+- **Shift+Up/Down**: compare nearby images side by side when available.
+- **Ctrl+S**: analyze visually similar images.
+- **Ctrl+B**: analyze best shots in similarity groups.
+- **Alt+B**: analyze only the selected images as a best-shot set.
+- **Ctrl+R**: detect incorrect image orientation.
+- **Ctrl+A**: request AI star ratings for visible images.
+- **F10**: open Preferences.
 
-To use the **Auto Rotate Images** feature (`Ctrl+R`), download the pre-trained ONNX model used by PhotoSort's rotation detector.
-
-PhotoSort integrates the model published in [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection), which is trained to classify images into the four uprightness classes `0°`, `90°`, `180°`, and `270°`.
-
-1. In PhotoSort, open **About → Models Folder**.
-2. **Download the model file**:
-   * **Link**: [Open the deep-image-orientation-detection releases page](https://github.com/duartebarbosadev/deep-image-orientation-detection/releases)
-   * Download the latest `orientation_model*.onnx` asset.
-3. **Place the downloaded model file inside the folder opened by PhotoSort.**.
-
-The application will automatically detect and load the newest matching `orientation_model*.onnx` file when you use the rotation detection feature, so versioned filenames such as `orientation_model_v2_0.9882.onnx` work without being renamed.
-
-#### Local Model Downloads
-
-The following local models are downloaded or installed on first use:
-
-- `facebook/dinov2-small` or `facebook/dinov2-base` for similarity embeddings. PhotoSort asks before downloading the selected model, then reuses the local Hugging Face cache for offline runs. Preferences also include a similarity grouping threshold.
-- `cafeai/cafe_aesthetic` for Pick Best local aesthetic scoring
-
-If you are running offline, warm these models once while online first so they are present in your local Hugging Face cache.
-
-#### AI Best Shot Ranking & Ratings
-
-PhotoSort relies on an OpenAI-compatible vision model to rank
-similar shots and request AI star ratings. Configure the endpoint under
-**Preferences → AI Rating Engine** (`F10`) by providing the API key (optional for
-local deployments), base URL, model name, prompt templates, max tokens, timeout,
-and concurrency. Any server that implements the OpenAI Chat Completions API with
-vision support will work.
-
-The app default is configured for a local OpenAI-compatible server using:
-
-- Model: `Qwen3-VL-30B-A3B-Instruct-MLX-4bit`
-- Base URL: `http://127.0.0.1:8000/v1`
-
-**Using the results**  
-- **Similarity stacks**: After running **View → Analyze Similarity**, launch
-  **View → Analyze Best Shots** (`Ctrl+B`) to automatically pick a winner for every cluster
-  (metrics appear in the UI tooltips). For ad-hoc comparisons select a handful of
-  images and trigger **View → Analyze Best Shots (Selected)** (`Alt+B`) to rank
-  just that group.
-- **Pick Best**: After running similarity, use the **Pick Best** workflow step to score each cluster locally using cached previews plus aesthetic and technical analysis.
-- **AI star ratings**: To score every visible image, run **View → AI Rate Images**
-  (`Ctrl+A`). The ratings are stored in your XMP sidecars/metadata cache so
-  they survive reloads, and you can filter the library using the standard rating
-  controls.
-
-### Exporting Logs
-
-To capture detailed logs for debugging, you can enable file logging by setting an environment variable before running the application.
-
-* **macOS/Linux**:
-  ```bash
-  export PHOTOSORT_ENABLE_FILE_LOGGING=true
-  export PHOTOSORT_LOG_LEVEL=DEBUG
-  python -m src.main
-  ```
-* **Windows (Command Prompt)**:
-  ```bash
-  set PHOTOSORT_ENABLE_FILE_LOGGING=true
-  set PHOTOSORT_LOG_LEVEL=DEBUG
-  python -m src.main
-  ```
-* **Windows (PowerShell)**:
-  ```powershell
-  $env:PHOTOSORT_ENABLE_FILE_LOGGING="true"
-  $env:PHOTOSORT_LOG_LEVEL="DEBUG"
-  python -m src.main
-  ```
-
-Logs will be saved to `~/.photosort_logs/photosort_app.log`.
-
-## **Keyboard Shortcuts**:
+The workflow pages show their own relevant shortcuts. The complete shortcut map
+is also available here:
 
 ![PhotoSort Keyboard Shortcuts](assets/keyboard-layout.png)
 
-> **Note:** For the "Focus on image (1-9)" actions, if multiple images are highlighted, pressing `1` will show the first highlighted image, `2` the second, and so on.
+For “Focus on image (1–9)”, the number selects that position among the images
+currently highlighted.
 
+## Ratings and metadata
+
+You can assign 1–5 star ratings, filter by rating, and use ratings while
+reviewing a library. Ratings are written to image metadata/XMP sidecars where
+supported, so compatible applications such as Lightroom can read them.
+
+Ratings are useful for marking keepers, filtering a library, and continuing the
+workflow in another photo application. To place selected photos in a Keep or
+Favorites folder, use the reviewed Organize workflow.
+
+## AI-assisted features
+
+The core culling workflow does not require an online service or a local large
+language model. PhotoSort uses a mix of local machine-learning models and
+optional AI services:
+
+The following features use local, smaller models or conventional computer vision:
+
+- **Similarity Analysis** groups visually similar images.
+- **AI Orientation Detection** proposes 0°, 90°, 180°, or 270° corrections.
+- **Pick Best local scoring** combines local aesthetic and technical checks.
+
+AI Star Ratings and AI Best-Shot Ranking use an OpenAI-compatible vision model.
+You can connect them to a paid API or to a local model server, but they are
+optional and are not needed for browsing, organizing, similarity analysis, or
+the standard culling workflow:
+
+- **AI Star Ratings** scores individual photos from 1–5 stars.
+- **AI Best-Shot Ranking** ranks a selected stack or every similarity group.
+
+The local models are downloaded or installed on first use, with a confirmation
+where applicable. Similarity uses
+[`facebook/dinov2-small`](https://huggingface.co/facebook/dinov2-small) by
+default; Pick Best local scoring uses
+[`cafeai/cafe_aesthetic`](https://huggingface.co/cafeai/cafe_aesthetic). For
+orientation detection, download an `orientation_model*.onnx` file from the
+[deep-image-orientation-detection releases](https://github.com/duartebarbosadev/deep-image-orientation-detection/releases)
+and place it in the Models Folder opened from **About → Models Folder**.
+
+For LLM features, configure an OpenAI-compatible endpoint in **Preferences →
+AI Rating Engine** (`F10`). A local server is optional; the example default is
+`Qwen3-VL-30B-A3B-Instruct-MLX-4bit` at `http://127.0.0.1:8000/v1`.
+
+## AI disclosure
+
+AI was used extensively to help make PhotoSort exist. In my head, the choice
+was between letting AI help me build this project or not doing it because I would have to spend months manually creating this. And also there are already tools that work "goodish" like lightroom to cull, or just the normal image preview, but I wanted to create something better. But even with AI it still took me months.
+I am not going to spend a lot more time than I would have simply because
+some people are against AI. AI is a tool, and I use it alongside my own
+judgment, testing, and experience.
+
+I also personally cull all my photos with PhotoSort, so I am comfortable with
+the AI-assisted work that went into it.
+
+## Building from source
+
+This section is for contributors and users who want to run the development
+version. Prebuilt releases do not require Python, Bash, or these dependencies.
+
+PhotoSort source builds require Python 3.14.x. Other feature releases are not
+supported until the native image and machine-learning dependencies have been
+validated against them.
+
+```bash
+git clone https://github.com/duartebarbosadev/PhotoSort
+cd PhotoSort
+python3.14 -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+python -m src.main
+```
+
+On macOS, install the system libraries required by `pyexiv2` first:
+
+```bash
+brew install brotli inih gettext
+```
+
+For a source installation with NVIDIA CUDA acceleration, install
+`requirements-cuda.txt` instead of `requirements.txt`. Do not install both
+ONNX Runtime variants in the same environment; use separate virtual
+environments when switching.
+
+Useful development commands:
+
+```bash
+python -m src.main --folder "C:/Users/MyUser/Pictures"
+python -m src.main --last-folder
+python -m src.main --clear-cache
+```
+
+See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture and contribution
+guidance, and [PACKAGING.md](PACKAGING.md) for desktop release builds.
+
+## Logs
+
+Enable file logging when reporting a problem:
+
+```bash
+PHOTOSORT_ENABLE_FILE_LOGGING=true PHOTOSORT_LOG_LEVEL=DEBUG python -m src.main
+```
+
+On Windows, set the same variables in Command Prompt or PowerShell before
+starting PhotoSort. Logs are saved to `~/.photosort_logs/photosort_app.log`.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a pull request or open an issue for bugs, feature requests, or suggestions.
+Contributions, bug reports, feature requests, and workflow feedback are
+welcome. Please open an issue or submit a pull request.
