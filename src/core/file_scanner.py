@@ -168,7 +168,9 @@ class FileScanner(QObject):
                             self.files_found.emit(discovery_batch)
                             discovery_batch = []
                         if len(all_file_data) % 100 == 0:
-                            logger.debug(f"Discovered {len(all_file_data)} files so far...")
+                            logger.debug(
+                                f"Discovered {len(all_file_data)} files so far..."
+                            )
 
             if discovery_batch:
                 self.files_found.emit(discovery_batch)
