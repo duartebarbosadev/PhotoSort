@@ -833,6 +833,19 @@ class IndividualViewer(QWidget):
         logger.debug(f"Updating rating display to {rating}")
         self.update_rating_display(rating)
 
+    def set_loading(
+        self,
+        file_path: str,
+        rating: int = 0,
+        message: str = "Loading preview…",
+    ) -> None:
+        """Keep path identity while an asynchronous preview is pending."""
+        self._file_path = file_path
+        self._stop_video()
+        self._set_media_mode("image")
+        self.image_view.setText(message)
+        self.update_rating_display(rating)
+
     def update_rating_display(self, rating: int):
         """Update the star buttons to reflect the current rating."""
         for i, btn in enumerate(self.star_buttons):
@@ -1013,6 +1026,12 @@ class SynchronizedImageViewer(QWidget):
         self._view_mode = "single"
         self._is_marked_for_deletion_func = None
         self._has_any_marked_for_deletion_func = None
+        self._layout_fit_timer = QTimer(self)
+        self._layout_fit_timer.setSingleShot(True)
+        self._layout_fit_timer.setInterval(50)
+        self._layout_fit_timer.timeout.connect(
+            self._fit_visible_images_after_layout_change
+        )
 
         self._setup_ui()
         self.setFocusPolicy(
@@ -1192,7 +1211,7 @@ class SynchronizedImageViewer(QWidget):
         self._update_controls_visibility()
 
     def _on_splitter_moved(self, pos, index):
-        QTimer.singleShot(50, self._fit_visible_images_after_layout_change)
+        self._schedule_layout_fit()
 
     def _create_viewer(self) -> IndividualViewer:
         viewer = IndividualViewer()
@@ -1350,7 +1369,11 @@ class SynchronizedImageViewer(QWidget):
 
         self._update_controls_visibility()
         logger.debug("Scheduling fit_visible_images_after_layout_change")
-        QTimer.singleShot(50, self._fit_visible_images_after_layout_change)
+        self._schedule_layout_fit()
+
+    def _schedule_layout_fit(self) -> None:
+        """Coalesce repeated image/layout changes into one final fit operation."""
+        self._layout_fit_timer.start()
 
     def set_focused_viewer(self, index: int):
         """Public method to set the focused viewer by index."""
@@ -1458,6 +1481,11 @@ class SynchronizedImageViewer(QWidget):
                         image_data.get("rating", 0),
                         image_data.get("label"),
                     )
+                elif image_data.get("path"):
+                    viewer.set_loading(
+                        image_data["path"],
+                        image_data.get("rating", 0),
+                    )
                 else:
                     logger.debug(f"Clearing viewer {i} due to invalid pixmap")
                     viewer.clear()  # Clear if pixmap is invalid
@@ -1475,6 +1503,33 @@ class SynchronizedImageViewer(QWidget):
             self._set_view_mode("single")
 
         self._update_controls_visibility()
+
+    def update_image_pixmap(
+        self, file_path: str, pixmap: QPixmap, rating: int = 0
+    ) -> bool:
+        """Upgrade the displayed image without rebuilding layout or focus state."""
+        if pixmap.isNull():
+            return False
+        updated = False
+        for viewer in self.image_viewers:
+            if viewer.get_file_path() != file_path or viewer.is_video_loaded():
+                continue
+            viewer.image_view.set_image(pixmap)
+            viewer.update_rating_display(rating)
+            updated = True
+        return updated
+
+    def displays_path(self, file_path: str) -> bool:
+        return any(viewer.get_file_path() == file_path for viewer in self.image_viewers)
+
+    def show_preview_message(self, file_path: str, message: str) -> bool:
+        updated = False
+        for viewer in self.image_viewers:
+            if viewer.get_file_path() != file_path or viewer.is_video_loaded():
+                continue
+            viewer.set_loading(file_path, message=message)
+            updated = True
+        return updated
 
     def set_images_data(self, images_data: List[Dict[str, Any]]):
         """Populate viewers with a list of image data."""
@@ -1508,6 +1563,11 @@ class SynchronizedImageViewer(QWidget):
                             data["path"],
                             data.get("rating", 0),
                             data.get("label"),
+                        )
+                    elif data.get("path"):
+                        viewer.set_loading(
+                            data["path"],
+                            data.get("rating", 0),
                         )
                     else:
                         viewer.clear()

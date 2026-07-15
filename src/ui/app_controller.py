@@ -144,6 +144,7 @@ class AppController(QObject):
         self._ai_rating_warning_messages: list[str] = []
         self._pick_best_pending_after_similarity: bool = False
         self._easy_delete_pending_after_similarity: bool = False
+        self._pending_grouping_preview: Optional[Tuple[object, str]] = None
 
     def connect_signals(self):
         """Connects signals from the WorkerManager to the controller's slots."""
@@ -358,6 +359,7 @@ class AppController(QObject):
         self.main_window.reset_thumbnail_requests()
         self.main_window.reset_preview_requests()
         self.main_window.invalidate_last_displayed_preview()
+        self._pending_grouping_preview = None
         self.app_state.current_folder_path = folder_path
         self.app_state.skip_grouping_step_once = skip_grouping_step
         if record_as_source:
@@ -386,6 +388,8 @@ class AppController(QObject):
 
         self.main_window.file_system_model.clear()
         self.main_window.file_system_model.setColumnCount(1)
+        if hasattr(self.main_window, "mark_cull_model_dirty"):
+            self.main_window.mark_cull_model_dirty()
         self.main_window.update_grouping_preview("Preparing grouping preview...")
         self.main_window.show_grouping_step()
 
@@ -482,6 +486,7 @@ class AppController(QObject):
         )
 
     def refresh_grouping_preview(self):
+        self._pending_grouping_preview = None
         if not self.app_state.image_files_data:
             self.main_window.update_grouping_preview("No files loaded for grouping.")
             return
@@ -505,6 +510,17 @@ class AppController(QObject):
             source_root,
             location_depth=self.main_window.grouping_step_widget.get_location_depth(),
         )
+
+    def activate_grouping_preview(self) -> None:
+        pending = self._pending_grouping_preview
+        self._pending_grouping_preview = None
+        if pending is None:
+            self.refresh_grouping_preview()
+            return
+        plan, output_root = pending
+        self.main_window.grouping_step_widget.set_preview_plan(plan, output_root)
+        self.main_window.grouping_step_widget.set_loading_state("Preview ready", False)
+        self.main_window.schedule_visible_thumbnail_load()
 
     def start_grouping_workflow(
         self,
@@ -1176,18 +1192,20 @@ class AppController(QObject):
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(has_images)
 
         self._restore_analysis_state()
-        self.main_window._rebuild_model_view()
         if self._supports_grouping_workflow_ui():
+            if hasattr(self.main_window, "mark_cull_model_dirty"):
+                self.main_window.mark_cull_model_dirty()
             skip_grouping_step_once = getattr(
                 self.app_state, "skip_grouping_step_once", False
             )
             if skip_grouping_step_once:
                 self.app_state.skip_grouping_step_once = False
-                self.refresh_grouping_preview()
                 self.main_window.show_cull_step()
             else:
                 self.main_window.show_grouping_step()
                 self.refresh_grouping_preview()
+        else:
+            self.main_window._rebuild_model_view()
 
         # The folder is usable now. Metadata and thumbnails are enhancements and
         # must not keep the blocking overlay on screen.
@@ -1234,11 +1252,33 @@ class AppController(QObject):
             self.app_state.grouping_source_root or self.app_state.current_folder_path
         )
         output_root = source_root or ""
+        plan_source_root = getattr(plan, "source_root", "") or ""
+        if (
+            plan_source_root
+            and source_root
+            and os.path.normcase(os.path.normpath(plan_source_root))
+            != os.path.normcase(os.path.normpath(source_root))
+        ):
+            logger.info(
+                "Discarding stale grouping preview for %s; active source is %s",
+                plan_source_root,
+                source_root,
+            )
+            return
         self.main_window.update_grouping_preview(
             f"{mode_label}: {len(plan.groups)} folders ready."
         )
+        if getattr(self.app_state, "workflow_step", "organize") != "organize":
+            logger.info(
+                "Grouping preview is ready but Organize is not visible; "
+                "deferring tree construction until Organize is opened."
+            )
+            self._pending_grouping_preview = (plan, output_root)
+            return
+        self._pending_grouping_preview = None
         self.main_window.grouping_step_widget.set_preview_plan(plan, output_root)
         self.main_window.grouping_step_widget.set_loading_state("Preview ready", False)
+        self.main_window.schedule_visible_thumbnail_load()
 
     def handle_grouping_preview_error(self, message: str):
         self.main_window.update_grouping_preview(f"Preview unavailable: {message}")
@@ -1391,7 +1431,7 @@ class AppController(QObject):
         ):
             return
 
-        if self.app_state.easy_delete_results:
+        if self.app_state.easy_delete_results is not None:
             self.main_window.easy_delete_step_widget.show_results(
                 self.app_state.easy_delete_results
             )
@@ -1450,18 +1490,13 @@ class AppController(QObject):
         if self.worker_manager.is_fix_rotation_running():
             return
 
-        if (
-            self.app_state.fix_rotation_results is not None
-            and self.app_state.fix_rotation_results != {}
-        ):
+        if self.app_state.fix_rotation_results is not None:
             self.main_window.fix_rotation_step_widget.show_results(
                 self.app_state.fix_rotation_results
             )
             return
 
-        image_paths = [
-            fd["path"] for fd in self.app_state.image_files_data if fd.get("path")
-        ]
+        image_paths = self._get_image_paths()
         if not image_paths:
             self.main_window.fix_rotation_step_widget.show_results({})
             return
@@ -2129,10 +2164,17 @@ class AppController(QObject):
     ):
         """Handle completion of a single rotation.
 
-        Defers UI-heavy updates (preview regeneration, selection refresh) until batch completion.
-        Only performs lightweight cache invalidation here.
+        Defers UI refresh until batch completion and invalidates shared caches.
         """
+        fix_rotation_widget = getattr(
+            self.main_window, "fix_rotation_step_widget", None
+        )
+        if fix_rotation_widget is not None:
+            fix_rotation_widget.record_apply_result(file_path, success)
+
         if success:
+            if self.app_state.fix_rotation_results is not None:
+                self.app_state.fix_rotation_results.pop(file_path, None)
             # Track for batch processing
             self._pending_rotated_paths.append(file_path)
 
@@ -2146,7 +2188,7 @@ class AppController(QObject):
     ):
         """Handle completion of all rotation applications.
 
-        Performs batch preview regeneration in parallel, then updates UI.
+        Refreshes visible UI lazily; previews are generated only when requested.
         """
         logger.info(
             f"Rotation batch finished: {successful_count} successful, {failed_count} failed. "
@@ -2155,37 +2197,13 @@ class AppController(QObject):
 
         try:
             if self._pending_rotated_paths:
-                # Update loading overlay for preview regeneration
-                overlay_text = f"Regenerating previews for {len(self._pending_rotated_paths)} images..."
-                self.main_window.show_loading_overlay(overlay_text)
+                rotated_paths = list(self._pending_rotated_paths)
+                self.main_window._batch_update_rotated_thumbnails(rotated_paths)
 
-                # Batch regenerate previews in parallel using existing infrastructure
-                t1 = time.perf_counter()
-                self.main_window.image_pipeline.preload_previews(
-                    self._pending_rotated_paths
-                )
-                t2 = time.perf_counter()
-                logger.info(
-                    f"Batch preview regeneration for {len(self._pending_rotated_paths)} images "
-                    f"completed in {t2 - t1:.2f}s"
-                )
-
-                # Batch update thumbnails in UI
-                t3 = time.perf_counter()
-                self.main_window._batch_update_rotated_thumbnails(
-                    self._pending_rotated_paths
-                )
-                t4 = time.perf_counter()
-                logger.info(f"Batch thumbnail update completed in {t4 - t3:.2f}s")
-
-                # Single selection refresh if any rotated images are in current selection
                 selected_paths = self.main_window._get_selected_file_paths_from_view()
-                if any(path in selected_paths for path in self._pending_rotated_paths):
-                    t5 = time.perf_counter()
+                if any(path in selected_paths for path in rotated_paths):
                     self.main_window.invalidate_last_displayed_preview()
                     self.main_window._handle_file_selection_changed()
-                    t6 = time.perf_counter()
-                    logger.info(f"Selection refresh completed in {t6 - t5:.2f}s")
 
         except Exception as e:
             logger.error(
@@ -2232,14 +2250,16 @@ class AppController(QObject):
         # Optional: Update status bar or progress indicator
         # For now, just log - thumbnails load silently in background
 
-    def handle_thumbnail_preload_complete(self):
-        """Handle completion of thumbnail preload worker."""
+    def handle_thumbnail_preload_complete(self, image_paths=None):
+        """Apply newly cached thumbnails only to their matching UI items."""
         self._last_thumbnail_preload_logged = 0
-        logger.info("Thumbnail preloading completed - updating tree view icons")
-        # Update all tree view items with the cached thumbnails
-        self.main_window._update_thumbnails_from_cache()
+        completed_paths = list(image_paths or [])
+        logger.info("Thumbnail preloading completed for %d paths", len(completed_paths))
+        self.main_window._update_thumbnails_from_cache(completed_paths)
         if self._supports_grouping_workflow_ui():
-            self.main_window.grouping_step_widget.refresh_cached_thumbnails()
+            self.main_window.grouping_step_widget.refresh_cached_thumbnails(
+                completed_paths
+            )
         self.main_window.schedule_visible_thumbnail_load()
 
     def handle_thumbnail_preload_error(self, error_message: str):

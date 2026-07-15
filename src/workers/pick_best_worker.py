@@ -10,6 +10,7 @@ from core.best_photo_finder.pipeline import PhotoSelector
 from core.best_photo_finder.scorers import HuggingFaceAestheticScorer
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.image_processing.standard_image_processor import SUPPORTED_STANDARD_EXTENSIONS
+from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
 from core.media_utils import is_video_extension
 
 logger = logging.getLogger(__name__)
@@ -173,4 +174,7 @@ class PickBestWorker(QObject):
     def _load_preview_image(self, path: Path):
         if self.image_pipeline is None:
             return None
-        return self.image_pipeline.get_preview_image(str(path))
+        return self.image_pipeline.get_analysis_image(
+            str(path),
+            target_size=ANALYSIS_CACHE_RESOLUTION,
+        )

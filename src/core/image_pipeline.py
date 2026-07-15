@@ -46,6 +46,7 @@ def _record_preview_generation_log(duration: float, basename: str) -> None:
 # Default sizes and resolutions (can be made configurable or passed in)
 THUMBNAIL_MAX_SIZE: Tuple[int, int] = (256, 256)
 PRELOAD_MAX_RESOLUTION: Tuple[int, int] = (1920, 1200)
+ANALYSIS_CACHE_RESOLUTION: Tuple[int, int] = (1024, 1024)
 CACHE_SCHEMA_VERSION = 2
 # DISPLAY_MAX_RESOLUTION might be different, e.g., based on UI element size
 
@@ -160,9 +161,32 @@ class ImagePipeline:
             apply_auto_edits,
         )
 
+    def analysis_cache_key(
+        self,
+        image_path: str,
+        target_size: Tuple[int, int],
+    ) -> tuple:
+        """Return a fingerprinted key for neutral, model-sized image inputs."""
+        normalized_path = os.path.normpath(image_path)
+        file_size, mtime_ns = self._file_fingerprint(normalized_path)
+        return (
+            normalized_path,
+            "analysis",
+            CACHE_SCHEMA_VERSION,
+            int(file_size),
+            int(mtime_ns),
+            tuple(target_size),
+        )
+
     @staticmethod
     def _image_memory_size(image: Image.Image) -> int:
         return image.width * image.height * max(1, len(image.getbands()))
+
+    @staticmethod
+    def _qpixmap_from_pil(image: Image.Image) -> QPixmap:
+        """Create a pixmap that owns its storage independently of Pillow."""
+        qt_image = ImageQt(image).copy()
+        return QPixmap.fromImage(qt_image).copy()
 
     def _memory_get(self, key: tuple) -> Optional[Image.Image]:
         with self._memory_cache_lock:
@@ -271,10 +295,12 @@ class ImagePipeline:
         *,
         file_size: Optional[int] = None,
         mtime_ns: Optional[int] = None,
+        memory_only: bool = False,
     ) -> Optional[QPixmap]:
         """
         Returns a thumbnail QPixmap only if it is already cached.
         Never generates a new thumbnail on cache miss.
+        ``memory_only`` also prevents disk-cache reads for latency-sensitive UI calls.
         """
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):
@@ -287,12 +313,16 @@ class ImagePipeline:
             file_size=file_size,
             mtime_ns=mtime_ns,
         )
-        cached_img = self._cache_get(self.thumbnail_cache, cache_key)
+        cached_img = (
+            self._memory_get(cache_key)
+            if memory_only
+            else self._cache_get(self.thumbnail_cache, cache_key)
+        )
         if cached_img is None:
             return None
 
         try:
-            return QPixmap.fromImage(ImageQt(cached_img))
+            return self._qpixmap_from_pil(cached_img)
         except Exception:
             logger.error(
                 "Error converting cached PIL thumbnail to QPixmap for %s",
@@ -410,7 +440,7 @@ class ImagePipeline:
         pil_img = self._get_pil_thumbnail(image_path, apply_orientation)
         if pil_img:
             try:
-                return QPixmap.fromImage(ImageQt(pil_img))
+                return self._qpixmap_from_pil(pil_img)
             except Exception:
                 logger.error(
                     f"Error converting PIL thumbnail to QPixmap for {os.path.basename(image_path)}",
@@ -445,31 +475,21 @@ class ImagePipeline:
         )
 
         if is_raw_extension(ext):
-            # process_raw_for_preview uses PRELOAD_MAX_RESOLUTION by default if not overridden
-            # We need a version or parameters for specific target_resolution
-            # For now, let's assume load_raw_as_pil can be used carefully.
-            # RawImageProcessor.process_raw_for_preview can be adapted or a new method created.
-            # Let's refine this: load_raw_as_pil with half_size=False for better quality for display generation.
-            temp_pil_img = RawImageProcessor.load_raw_as_pil(
+            # Use the same bounded preview path as background prefetch. It
+            # prefers the camera's embedded JPEG and falls back to half-size
+            # demosaicing, avoiding a full-resolution RAW decode for display.
+            pil_img = RawImageProcessor.process_raw_for_preview(
                 normalized_path,
-                target_mode="RGBA",
-                apply_auto_edits=apply_auto_edits,
-                half_size=False,  # Use full processing for better quality display master
+                apply_auto_edits,
+                target_resolution,
                 force_default_brightness=force_default_brightness,
             )
-            if temp_pil_img:
-                temp_pil_img.thumbnail(target_resolution, Image.Resampling.LANCZOS)
-                pil_img = temp_pil_img
 
         elif ext in SUPPORTED_STANDARD_EXTENSIONS:
-            # StandardImageProcessor.process_for_preview uses PRELOAD_MAX_RESOLUTION
-            # StandardImageProcessor.load_as_pil can be used for full, then thumbnail
-            temp_pil_img = StandardImageProcessor.load_as_pil(
-                normalized_path, target_mode="RGBA"
+            pil_img = StandardImageProcessor.process_for_preview(
+                normalized_path,
+                target_resolution,
             )
-            if temp_pil_img:
-                temp_pil_img.thumbnail(target_resolution, Image.Resampling.LANCZOS)
-                pil_img = temp_pil_img
         else:
             logger.warning(
                 f"Unsupported extension for display preview: {ext} for '{os.path.basename(normalized_path)}'"
@@ -563,6 +583,8 @@ class ImagePipeline:
         image_path: str,
         display_max_size: Optional[Tuple[int, int]] = None,
         force_default_brightness: bool = False,
+        *,
+        memory_only: bool = False,
     ) -> Optional[QPixmap]:
         """
         Returns a preview QPixmap only if a suitable preview already exists in cache.
@@ -571,6 +593,7 @@ class ImagePipeline:
         ``force_default_brightness`` is accepted for API compatibility with
         :meth:`get_preview_qpixmap` but is ignored here; brightness is baked in
         when previews are generated and stored in the cache.
+        ``memory_only`` also prevents disk-cache reads for latency-sensitive UI calls.
         """
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):
@@ -582,10 +605,14 @@ class ImagePipeline:
         )
         display_cache_key = self.preview_cache_key(normalized_path, key_display_size)
 
-        cached_display_pil = self._cache_get(self.preview_cache, display_cache_key)
+        cached_display_pil = (
+            self._memory_get(display_cache_key)
+            if memory_only
+            else self._cache_get(self.preview_cache, display_cache_key)
+        )
         if cached_display_pil is not None:
             try:
-                return QPixmap.fromImage(ImageQt(cached_display_pil))
+                return self._qpixmap_from_pil(cached_display_pil)
             except Exception:
                 logger.error(
                     "Error converting cached display preview to QPixmap for %s",
@@ -597,7 +624,11 @@ class ImagePipeline:
         preload_cache_key = self.preview_cache_key(
             normalized_path, PRELOAD_MAX_RESOLUTION
         )
-        cached_high_res_pil = self._cache_get(self.preview_cache, preload_cache_key)
+        cached_high_res_pil = (
+            self._memory_get(preload_cache_key)
+            if memory_only
+            else self._cache_get(self.preview_cache, preload_cache_key)
+        )
         if cached_high_res_pil is None:
             return None
 
@@ -605,9 +636,16 @@ class ImagePipeline:
         if display_max_size:
             display_pil_img.thumbnail(display_max_size, Image.Resampling.LANCZOS)
 
-        self._cache_set(self.preview_cache, display_cache_key, display_pil_img.copy())
+        if memory_only:
+            self._memory_set(display_cache_key, display_pil_img)
+        else:
+            self._cache_set(
+                self.preview_cache,
+                display_cache_key,
+                display_pil_img.copy(),
+            )
         try:
-            return QPixmap.fromImage(ImageQt(display_pil_img))
+            return self._qpixmap_from_pil(display_pil_img)
         except Exception:
             logger.error(
                 "Error converting cached high-res preview to QPixmap for %s",
@@ -649,7 +687,7 @@ class ImagePipeline:
         if not force_regenerate:
             cached_display_pil = self._cache_get(self.preview_cache, display_cache_key)
             if cached_display_pil:
-                return QPixmap.fromImage(ImageQt(cached_display_pil))
+                return self._qpixmap_from_pil(cached_display_pil)
             else:
                 logger.debug(
                     f"Display cache MISS: {os.path.basename(normalized_path)} (Size: {key_display_size})"
@@ -671,7 +709,7 @@ class ImagePipeline:
                 display_pil_img.thumbnail(display_max_size, Image.Resampling.LANCZOS)
 
             self._cache_set(self.preview_cache, display_cache_key, display_pil_img)
-            return QPixmap.fromImage(ImageQt(display_pil_img))
+            return self._qpixmap_from_pil(display_pil_img)
 
         # 3. Generate fresh for display size, then cache
         logger.debug(
@@ -693,7 +731,7 @@ class ImagePipeline:
             self._cache_set(
                 self.preview_cache, display_cache_key, generated_display_pil
             )
-            return QPixmap.fromImage(ImageQt(generated_display_pil))
+            return self._qpixmap_from_pil(generated_display_pil)
 
         logger.error(
             f"Failed to generate or retrieve preview for {os.path.basename(normalized_path)}",
@@ -760,7 +798,12 @@ class ImagePipeline:
             f"Thumbnail preloading finished. Processed {processed_count}/{total_files}."
         )
 
-    def ensure_preview_cached(self, image_path: str) -> bool:
+    def ensure_preview_cached(
+        self,
+        image_path: str,
+        *,
+        force_default_brightness: bool = False,
+    ) -> bool:
         """
         Generate and cache one navigation-sized preview when it is missing.
 
@@ -780,29 +823,46 @@ class ImagePipeline:
             normalized_path, PRELOAD_MAX_RESOLUTION
         )
 
-        if self._cache_get(self.preview_cache, preload_cache_key) is not None:
+        if (
+            not force_default_brightness
+            and self._cache_get(self.preview_cache, preload_cache_key) is not None
+        ):
             return True
 
         with self._generation_lock(preload_cache_key):
-            if self._cache_get(self.preview_cache, preload_cache_key) is not None:
+            if (
+                not force_default_brightness
+                and self._cache_get(self.preview_cache, preload_cache_key) is not None
+            ):
                 return True
 
             pil_img: Optional[Image.Image] = None
             ext = os.path.splitext(normalized_path)[1].lower()
             start_time = time.time()
-            if is_raw_extension(ext):
-                pil_img = RawImageProcessor.process_raw_for_preview(
-                    normalized_path, apply_auto_edits, PRELOAD_MAX_RESOLUTION
-                )
-            elif ext in SUPPORTED_STANDARD_EXTENSIONS:
-                pil_img = StandardImageProcessor.process_for_preview(
-                    normalized_path, PRELOAD_MAX_RESOLUTION
-                )
-            else:
-                logger.warning(
-                    f"Unsupported extension for preview preload: {ext} for '{os.path.basename(normalized_path)}'"
-                )
-                return False
+            high_memory_format = is_raw_extension(ext) or ext in {".heic", ".heif"}
+            decode_gate = self._high_memory_decode_gate if high_memory_format else None
+            if decode_gate:
+                decode_gate.acquire()
+            try:
+                if is_raw_extension(ext):
+                    pil_img = RawImageProcessor.process_raw_for_preview(
+                        normalized_path,
+                        apply_auto_edits,
+                        PRELOAD_MAX_RESOLUTION,
+                        force_default_brightness=force_default_brightness,
+                    )
+                elif ext in SUPPORTED_STANDARD_EXTENSIONS:
+                    pil_img = StandardImageProcessor.process_for_preview(
+                        normalized_path, PRELOAD_MAX_RESOLUTION
+                    )
+                else:
+                    logger.warning(
+                        f"Unsupported extension for preview preload: {ext} for '{os.path.basename(normalized_path)}'"
+                    )
+                    return False
+            finally:
+                if decode_gate:
+                    decode_gate.release()
 
             if pil_img:
                 self._cache_set(self.preview_cache, preload_cache_key, pil_img)
@@ -942,6 +1002,118 @@ class ImagePipeline:
                 )
 
         return pil_img
+
+    def get_analysis_image(
+        self,
+        image_path: str,
+        target_size: Tuple[int, int],
+        target_mode: str = "RGB",
+    ) -> Optional[Image.Image]:
+        """Return a small, neutral image for ML and measurement workloads.
+
+        Unlike display previews, analysis inputs do not apply cosmetic RAW edits.
+        RAW files prefer their embedded JPEG and only fall back to half-size
+        post-processing. Cached results are invalidated when the source changes.
+        """
+        normalized_path = os.path.normpath(image_path)
+        if not os.path.isfile(normalized_path):
+            logger.error("File does not exist: %s", normalized_path)
+            return None
+
+        cache_key = self.analysis_cache_key(normalized_path, ANALYSIS_CACHE_RESOLUTION)
+        cached_image = self._cache_get(self.preview_cache, cache_key)
+        if cached_image is not None:
+            return self._prepare_analysis_result(cached_image, target_size, target_mode)
+
+        with self._generation_lock(cache_key):
+            cached_image = self._cache_get(self.preview_cache, cache_key)
+            if cached_image is None:
+                ext = os.path.splitext(normalized_path)[1].lower()
+                high_memory_format = is_raw_extension(ext) or ext in {
+                    ".heic",
+                    ".heif",
+                }
+                decode_gate = (
+                    self._high_memory_decode_gate if high_memory_format else None
+                )
+                if decode_gate:
+                    decode_gate.acquire()
+                try:
+                    if is_raw_extension(ext):
+                        cached_image = RawImageProcessor.load_raw_for_blur_detection(
+                            normalized_path,
+                            target_size=ANALYSIS_CACHE_RESOLUTION,
+                            apply_auto_edits=False,
+                        )
+                    elif ext in SUPPORTED_STANDARD_EXTENSIONS:
+                        cached_image = StandardImageProcessor.load_for_blur_detection(
+                            normalized_path,
+                            target_size=ANALYSIS_CACHE_RESOLUTION,
+                        )
+                    else:
+                        logger.warning(
+                            "Unsupported analysis image extension %s for %s",
+                            ext,
+                            os.path.basename(normalized_path),
+                        )
+                finally:
+                    if decode_gate:
+                        decode_gate.release()
+
+                if cached_image is not None:
+                    if cached_image.mode != "RGB":
+                        cached_image = cached_image.convert("RGB")
+                    self._cache_set(
+                        self.preview_cache,
+                        cache_key,
+                        cached_image.copy(),
+                    )
+
+        if cached_image is None:
+            return None
+        return self._prepare_analysis_result(cached_image, target_size, target_mode)
+
+    @staticmethod
+    def _prepare_analysis_result(
+        image: Image.Image,
+        target_size: Tuple[int, int],
+        target_mode: str,
+    ) -> Image.Image:
+        result = image.copy()
+        result.thumbnail(target_size, Image.Resampling.LANCZOS)
+        if result.mode != target_mode:
+            result = result.convert(target_mode)
+        return result
+
+    def get_cached_analysis_qpixmap(
+        self,
+        image_path: str,
+        target_size: Tuple[int, int] = ANALYSIS_CACHE_RESOLUTION,
+        *,
+        memory_only: bool = False,
+    ) -> Optional[QPixmap]:
+        """Return an existing shared analysis image without generating work."""
+        normalized_path = os.path.normpath(image_path)
+        if not os.path.isfile(normalized_path):
+            return None
+        cache_key = self.analysis_cache_key(normalized_path, ANALYSIS_CACHE_RESOLUTION)
+        cached_image = (
+            self._memory_get(cache_key)
+            if memory_only
+            else self._cache_get(self.preview_cache, cache_key)
+        )
+        if cached_image is None:
+            return None
+        result = self._prepare_analysis_result(cached_image, target_size, "RGB")
+        try:
+            return self._qpixmap_from_pil(result)
+        except Exception:
+            logger.error(
+                "Error converting cached analysis image to QPixmap for %s",
+                os.path.basename(normalized_path),
+                exc_info=True,
+            )
+            return None
 
     def clear_all_image_caches(self):
         """Clears both thumbnail and preview caches."""

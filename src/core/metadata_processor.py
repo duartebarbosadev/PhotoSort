@@ -723,6 +723,20 @@ class MetadataProcessor:
             return minimal_result
 
     @staticmethod
+    def get_cached_detailed_metadata(
+        image_path: str,
+        exif_disk_cache: Optional[ExifCache],
+    ) -> Optional[Dict[str, Any]]:
+        """Return detailed metadata only when batch loading already cached it."""
+        if exif_disk_cache is None:
+            return None
+        resolved = MetadataProcessor._resolve_path_forms(image_path)
+        if not resolved:
+            return None
+        _operational_path, cache_key_path = resolved
+        return exif_disk_cache.get(cache_key_path)
+
+    @staticmethod
     def rotate_image(
         image_path: str,
         direction: RotationDirection,

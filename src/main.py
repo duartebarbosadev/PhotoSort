@@ -38,6 +38,13 @@ if _pyexiv2_initialization_warning:
     logging.getLogger(__name__).warning(_pyexiv2_initialization_warning)
 
 
+def _resolve_log_level(value: Optional[str] = None) -> int:
+    """Return the configured application log level, defaulting safely to INFO."""
+    level_name = (value or os.environ.get("PHOTOSORT_LOG_LEVEL", "INFO")).upper()
+    level = getattr(logging, level_name, None)
+    return level if isinstance(level, int) else logging.INFO
+
+
 def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
     """Load an external QSS stylesheet.
 
@@ -356,9 +363,11 @@ def main():
     )
     args = parser.parse_args()
 
-    # --- Aggressive Logging Setup ---
+    # --- Logging Setup ---
     # Get the root logger
     root_logger = logging.getLogger()
+    configured_log_level = _resolve_log_level()
+    root_logger.setLevel(configured_log_level)
 
     # Remove any existing handlers
     for handler in root_logger.handlers[:]:  # Iterate over a copy
@@ -375,7 +384,7 @@ def main():
     if sys.stderr is not None:
         console_handler = logging.StreamHandler(sys.stderr)  # or sys.stdout
         console_handler.setFormatter(formatter)
-        console_handler.setLevel(logging.DEBUG)  # Set level for console
+        console_handler.setLevel(configured_log_level)
         root_logger.addHandler(console_handler)
 
     # Conditionally create and add a file handler
@@ -388,25 +397,17 @@ def main():
             os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
             file_handler = logging.FileHandler(log_file_path, mode="a")  # Append mode
             file_handler.setFormatter(formatter)
-            file_handler.setLevel(logging.DEBUG)  # Log DEBUG and above to file
+            file_handler.setLevel(configured_log_level)
             root_logger.addHandler(file_handler)
-            root_logger.setLevel(
-                logging.DEBUG
-            )  # Ensure root logger captures DEBUG for file handler
             logging.info(f"File logging enabled: {log_file_path}")
         except Exception as e_file_log:
             logging.error(
                 f"Failed to initialize file logging: {e_file_log}", exc_info=True
             )
-            root_logger.setLevel(logging.INFO)  # Fallback to INFO if file logging fails
     else:
-        root_logger.setLevel(
-            logging.DEBUG
-        )  # Default to DEBUG if file logging is not enabled
         logging.info(
             "File logging disabled. To enable, set PHOTOSORT_ENABLE_FILE_LOGGING=true."
         )
-
     # --- Suppress verbose third-party loggers ---
     logging.getLogger("PIL").setLevel(logging.INFO)
     logging.getLogger("PIL.PngImagePlugin").setLevel(logging.INFO)

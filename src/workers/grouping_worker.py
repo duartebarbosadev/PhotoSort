@@ -7,6 +7,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.grouping import (
     GroupingMode,
+    augment_grouping_plan_with_filesystem_paths,
     build_grouping_output_root,
     build_grouping_plan,
     execute_grouping_plan,
@@ -54,6 +55,10 @@ class GroupingPreviewWorker(QObject):
                 source_root=self.source_root,
                 location_depth=self.location_depth,
                 image_pipeline=self.image_pipeline,
+            )
+            plan = augment_grouping_plan_with_filesystem_paths(
+                plan,
+                self.source_root,
             )
             if self._should_stop:
                 return
@@ -116,6 +121,10 @@ class GroupingWorkflowWorker(QObject):
                     location_depth=self.location_depth,
                     image_pipeline=self.image_pipeline,
                 )
+            plan = augment_grouping_plan_with_filesystem_paths(
+                plan,
+                self.source_root,
+            )
             plan.apply_group_label_overrides(self.group_name_overrides)
             plan.output_root = self.output_root
             if self._should_stop:

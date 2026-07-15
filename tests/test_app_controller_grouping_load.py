@@ -106,8 +106,102 @@ def test_handle_thumbnail_preload_complete_refreshes_grouping_widget():
         ),
     )
 
-    AppController.handle_thumbnail_preload_complete(controller)
+    completed_paths = ["/tmp/one.jpg", "/tmp/two.jpg"]
+    AppController.handle_thumbnail_preload_complete(controller, completed_paths)
 
     assert controller._last_thumbnail_preload_logged == 0
-    update_thumbnails_from_cache.assert_called_once_with()
-    refresh_cached_thumbnails.assert_called_once_with()
+    update_thumbnails_from_cache.assert_called_once_with(completed_paths)
+    refresh_cached_thumbnails.assert_called_once_with(completed_paths)
+
+
+def test_scan_finished_defers_hidden_cull_model_until_cull_is_shown():
+    actions = {
+        name: Mock()
+        for name in (
+            "open_folder_action",
+            "analyze_similarity_action",
+            "analyze_best_shots_selected_action",
+            "detect_blur_action",
+            "auto_rotate_action",
+            "group_by_similarity_action",
+            "ai_rate_images_action",
+        )
+    }
+    rebuild_model = Mock()
+    mark_cull_model_dirty = Mock()
+    show_grouping_step = Mock()
+    refresh_grouping_preview = Mock()
+    controller = SimpleNamespace(
+        app_state=SimpleNamespace(
+            image_files_data=[{"path": "/tmp/a.jpg"}],
+            skip_grouping_step_once=False,
+            rating_disk_cache=Mock(),
+        ),
+        worker_manager=SimpleNamespace(
+            start_grouping_preview=Mock(),
+            start_rating_load=Mock(),
+        ),
+        main_window=SimpleNamespace(
+            menu_manager=SimpleNamespace(**actions),
+            grouping_step_widget=SimpleNamespace(),
+            update_grouping_preview=Mock(),
+            show_grouping_step=show_grouping_step,
+            show_cull_step=Mock(),
+            mark_cull_model_dirty=mark_cull_model_dirty,
+            _rebuild_model_view=rebuild_model,
+            update_loading_text=Mock(),
+            hide_loading_overlay=Mock(),
+            schedule_visible_thumbnail_load=Mock(),
+            _update_image_info_label=Mock(),
+        ),
+        _get_image_file_data=lambda: [{"path": "/tmp/a.jpg"}],
+        _get_media_file_data=lambda: [],
+        _restore_analysis_state=Mock(),
+        refresh_grouping_preview=refresh_grouping_preview,
+    )
+    controller._supports_grouping_workflow_ui = lambda: (
+        AppController._supports_grouping_workflow_ui(controller)
+    )
+
+    AppController.handle_scan_finished(controller)
+
+    mark_cull_model_dirty.assert_called_once()
+    rebuild_model.assert_not_called()
+    show_grouping_step.assert_called_once()
+    refresh_grouping_preview.assert_called_once()
+
+
+def test_grouping_preview_does_not_build_hidden_organize_trees():
+    set_preview_plan = Mock()
+    controller = SimpleNamespace(
+        app_state=SimpleNamespace(
+            workflow_step="cull",
+            grouping_source_root="/tmp/photos",
+            current_folder_path="/tmp/photos",
+        ),
+        main_window=SimpleNamespace(
+            update_grouping_preview=Mock(),
+            schedule_visible_thumbnail_load=Mock(),
+            grouping_step_widget=SimpleNamespace(
+                set_preview_plan=set_preview_plan,
+                set_loading_state=Mock(),
+            ),
+        ),
+    )
+    plan = SimpleNamespace(
+        mode="current",
+        groups=[],
+        source_root="/tmp/photos",
+    )
+
+    AppController.handle_grouping_preview_ready(controller, plan)
+
+    set_preview_plan.assert_not_called()
+    controller.main_window.schedule_visible_thumbnail_load.assert_not_called()
+    assert controller._pending_grouping_preview == (plan, "/tmp/photos")
+
+    AppController.activate_grouping_preview(controller)
+
+    set_preview_plan.assert_called_once_with(plan, "/tmp/photos")
+    controller.main_window.schedule_visible_thumbnail_load.assert_called_once()
+    assert controller._pending_grouping_preview is None

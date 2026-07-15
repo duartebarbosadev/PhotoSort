@@ -212,7 +212,12 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         preview = None
         if self.image_pipeline is not None:
             try:
-                preview = self.image_pipeline.get_preview_image(image_path)
+                from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
+
+                preview = self.image_pipeline.get_analysis_image(
+                    image_path,
+                    target_size=ANALYSIS_CACHE_RESOLUTION,
+                )
                 if preview is not None and preview.mode != "RGB":
                     preview = preview.convert("RGB")
             except Exception:

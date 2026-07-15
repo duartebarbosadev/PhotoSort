@@ -43,3 +43,30 @@ def test_thumbnail_loader_reset_allows_a_new_folder_to_request_paths_again():
     loader._load_visible_batch()
 
     assert context.worker_manager.start_thumbnail_preload.call_count == 2
+
+
+def test_repeated_schedules_are_coalesced_until_scrolling_is_idle(monkeypatch):
+    context = _context(item_count=1)
+    loader = ViewportThumbnailLoader(context)
+    starts = []
+    monkeypatch.setattr(loader._load_timer, "start", lambda: starts.append(True))
+
+    loader.schedule()
+    loader.schedule()
+    loader.schedule()
+
+    assert starts == [True, True, True]
+    context.worker_manager.start_thumbnail_preload.assert_not_called()
+
+
+def test_thumbnail_loader_uses_visible_paths_from_active_workflow():
+    context = _context()
+    context.get_workflow_visible_thumbnail_paths = Mock(
+        return_value=["organize-visible.jpg"]
+    )
+    context._get_active_file_view = Mock(
+        side_effect=AssertionError("hidden Cull view must not be inspected")
+    )
+    loader = ViewportThumbnailLoader(context)
+
+    assert loader._visible_paths() == ["organize-visible.jpg"]

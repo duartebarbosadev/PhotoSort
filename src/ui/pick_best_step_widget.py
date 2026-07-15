@@ -5,9 +5,7 @@ import os
 from fractions import Fraction
 from typing import Callable, Dict, List, Optional
 
-from PyQt6.QtCore import QEvent, Qt, pyqtSignal
-from PyQt6.QtGui import QKeyEvent
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -27,6 +25,12 @@ from core.metadata_processor import (
     _parse_exif_date,
 )
 from ui.advanced_image_viewer import SynchronizedImageViewer
+from ui.workflow_review_components import (
+    PICK_BEST_SHORTCUTS,
+    WorkflowReviewHeader,
+    WorkflowStateBanner,
+    install_workflow_shortcuts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,7 @@ KEEP_BORDER_COLOR = "#66BB6A"
 FOCUSED_BORDER_COLOR = "#4FC3F7"
 CARD_BG = "#20252C"
 CARD_BG_WINNER = "#2C2616"
+CARD_BORDER_COLOR = "#3A434C"
 
 
 def _first_present(metadata: dict, *keys: str):
@@ -103,6 +108,7 @@ class CompareCard(QFrame):
         self._slot_number = slot_number
 
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("workflowCompareCard")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -115,6 +121,7 @@ class CompareCard(QFrame):
         top_row.setSpacing(8)
 
         self._slot_label = QLabel(f"{slot_number}")
+        self._slot_label.setObjectName("workflowCompareSlot")
         self._slot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._slot_label.setFixedSize(22, 22)
         self._slot_label.setStyleSheet(
@@ -123,6 +130,7 @@ class CompareCard(QFrame):
         top_row.addWidget(self._slot_label, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self._state_label = QLabel()
+        self._state_label.setObjectName("workflowCompareState")
         self._state_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
@@ -130,6 +138,7 @@ class CompareCard(QFrame):
         layout.addLayout(top_row)
 
         self._name_label = QLabel("")
+        self._name_label.setObjectName("workflowCompareName")
         self._name_label.setWordWrap(False)
         self._name_label.setStyleSheet(
             "font-size: 12px; font-weight: 600; color: #F5F7FA;"
@@ -137,6 +146,7 @@ class CompareCard(QFrame):
         layout.addWidget(self._name_label)
 
         self._score_label = QLabel("")
+        self._score_label.setObjectName("workflowCompareScore")
         self._score_label.setStyleSheet("font-size: 11px; color: #AAB4BE;")
         layout.addWidget(self._score_label)
 
@@ -149,14 +159,17 @@ class CompareCard(QFrame):
         self._meta_rows: list[tuple[QLabel, QLabel]] = []
         for row in range(6):
             key = QLabel("")
+            key.setObjectName("workflowCompareMetaKey")
             key.setStyleSheet("font-size: 10px; color: #7D8792;")
             value = QLabel("")
+            value.setObjectName("workflowCompareMetaValue")
             value.setStyleSheet("font-size: 10px; color: #D5DBE1;")
             self._meta_grid.addWidget(key, row, 0)
             self._meta_grid.addWidget(value, row, 1)
             self._meta_rows.append((key, value))
 
         self._hint_label = QLabel("Click image/card or press number key")
+        self._hint_label.setObjectName("workflowCompareHint")
         self._hint_label.setStyleSheet("font-size: 10px; color: #6D7782;")
         layout.addWidget(self._hint_label)
 
@@ -226,34 +239,33 @@ class CompareCard(QFrame):
             value_label.setVisible(visible)
 
     def _update_style(self) -> None:
-        if self.is_winner:
+        if self._marked:
+            border_color = MARKED_BORDER_COLOR
+            status = "MARKED FOR TRASH · staged"
+            color = "#FF7B86"
+        elif self.is_winner:
             border_color = WINNER_BORDER_COLOR
-            bg = CARD_BG_WINNER
-            status = "BEST DELETE" if self._marked else "BEST KEEP"
-            color = MARKED_BORDER_COLOR if self._marked else WINNER_BORDER_COLOR
-            self._state_label.setText(status)
-            self._state_label.setStyleSheet(
-                f"font-size: 11px; font-weight: bold; color: {color};"
-            )
-            self._hint_label.setText(
-                f"Best candidate on the right. Click or press {self._slot_number} to toggle"
-            )
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            status = "AI PICK · KEEP"
+            color = WINNER_BORDER_COLOR
         else:
-            border_color = MARKED_BORDER_COLOR if self._marked else KEEP_BORDER_COLOR
-            if self._focused:
-                border_color = FOCUSED_BORDER_COLOR
-            bg = CARD_BG
-            status = "DELETE" if self._marked else "KEEP"
-            color = MARKED_BORDER_COLOR if self._marked else KEEP_BORDER_COLOR
-            self._state_label.setText(status)
-            self._state_label.setStyleSheet(
-                f"font-size: 11px; font-weight: bold; color: {color};"
-            )
+            border_color = FOCUSED_BORDER_COLOR if self._focused else CARD_BORDER_COLOR
+            status = "KEEP"
+            color = KEEP_BORDER_COLOR
+
+        bg = CARD_BG_WINNER if self.is_winner else CARD_BG
+        self._state_label.setText(status)
+        self._state_label.setStyleSheet(
+            f"font-size: 11px; font-weight: bold; color: {color};"
+        )
+        if self.is_winner:
             self._hint_label.setText(
-                f"Click image/card or press {self._slot_number} to toggle"
+                f"AI pick. Click or press {self._slot_number} to change the choice"
             )
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self._hint_label.setText(
+                f"Click image/card or press {self._slot_number} to change the choice"
+            )
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.setStyleSheet(
             f"CompareCard {{"
@@ -286,6 +298,7 @@ class PickBestStepWidget(QWidget):
         self._focus_mode = False
         self._current_images_data: List[Dict] = []
         self._info_visible = True
+        self._is_marked_func: Optional[Callable[[str], bool]] = None
         self._create_widgets()
         self._connect_signals()
         self._create_shortcuts()
@@ -324,10 +337,23 @@ class PickBestStepWidget(QWidget):
         self._stack.setCurrentWidget(self._page_review)
 
     def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
+        self._is_marked_func = func
         self._sync_viewer.set_is_marked_for_deletion_func(func)
 
     def set_has_any_marked_func(self, func: Callable[[], bool]) -> None:
         self._sync_viewer.set_has_any_marked_for_deletion_func(func)
+
+    def refresh_deletion_state(self) -> None:
+        """Synchronize cards when marks are changed from another workflow."""
+
+        if not self._is_marked_func or not self._cluster_mark_state:
+            return
+        for path in list(self._cluster_mark_state):
+            self._cluster_mark_state[path] = bool(self._is_marked_func(path))
+        for card in self._compare_cards:
+            if card.isVisible() and card.path:
+                card.set_marked(self._cluster_mark_state.get(card.path, False))
+        self._update_cluster_header_only()
 
     def _create_widgets(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -372,16 +398,35 @@ class PickBestStepWidget(QWidget):
         self._stack.addWidget(self._page_loading)
 
         self._page_review = QWidget()
+        self._page_review.setObjectName("workflowReviewPage")
         review_layout = QVBoxLayout(self._page_review)
-        review_layout.setContentsMargins(10, 8, 10, 8)
-        review_layout.setSpacing(8)
+        review_layout.setContentsMargins(0, 0, 0, 0)
+        review_layout.setSpacing(0)
 
-        header = QWidget()
-        header_layout = QHBoxLayout(header)
+        self._review_header = WorkflowReviewHeader(
+            step_number=4,
+            title="Pick Best",
+            description=(
+                "Compare each cluster and choose what to keep. Red choices are "
+                "marked for Trash only; no files move on this screen."
+            ),
+            shortcuts=PICK_BEST_SHORTCUTS,
+        )
+        review_layout.addWidget(self._review_header)
+
+        review_content = QWidget()
+        content_layout = QVBoxLayout(review_content)
+        content_layout.setContentsMargins(12, 10, 12, 10)
+        content_layout.setSpacing(8)
+
+        cluster_bar = QWidget()
+        cluster_bar.setObjectName("workflowClusterBar")
+        header_layout = QHBoxLayout(cluster_bar)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(8)
 
         self._prev_cluster_btn = QPushButton("◀ Prev Cluster")
+        self._prev_cluster_btn.setObjectName("workflowGhostButton")
         self._prev_cluster_btn.setFixedWidth(110)
         header_layout.addWidget(self._prev_cluster_btn)
 
@@ -391,27 +436,35 @@ class PickBestStepWidget(QWidget):
         header_layout.addWidget(self._cluster_info_label, stretch=1)
 
         self._next_cluster_btn = QPushButton("Next Cluster ▶")
+        self._next_cluster_btn.setObjectName("workflowGhostButton")
         self._next_cluster_btn.setFixedWidth(110)
         header_layout.addWidget(self._next_cluster_btn)
-        review_layout.addWidget(header)
+        content_layout.addWidget(cluster_bar)
 
         self._subset_info_label = QLabel()
         self._subset_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._subset_info_label.setStyleSheet("font-size: 11px; color: #92A0AD;")
-        review_layout.addWidget(self._subset_info_label)
+        content_layout.addWidget(self._subset_info_label)
 
         self._hint_label = QLabel(
-            "Up to 3 images per round. Winner stays on the right."
-            " Press 1, 2, 3 to toggle keep/delete — C to focus an image, i to hide/show info."
+            "The AI pick stays on the right as a reference, and every choice remains editable."
         )
         self._hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hint_label.setWordWrap(True)
         self._hint_label.setStyleSheet("font-size: 11px; color: #888888;")
-        review_layout.addWidget(self._hint_label)
+        content_layout.addWidget(self._hint_label)
 
         self._sync_viewer = SynchronizedImageViewer()
         self._sync_viewer.controls_frame.hide()
-        review_layout.addWidget(self._sync_viewer, stretch=1)
+        content_layout.addWidget(self._sync_viewer, stretch=1)
+
+        self._state_banner = WorkflowStateBanner()
+        self._state_banner.set_state(
+            "Staged choices",
+            "Marked photos remain on disk until you confirm moving them to Trash in Cull.",
+            tone="info",
+        )
+        content_layout.addWidget(self._state_banner)
 
         self._cards_row = QWidget()
         self._cards_layout = QHBoxLayout(self._cards_row)
@@ -421,7 +474,7 @@ class PickBestStepWidget(QWidget):
             card = CompareCard(slot + 1, self._cards_row)
             self._cards_layout.addWidget(card)
             self._compare_cards.append(card)
-        review_layout.addWidget(self._cards_row)
+        content_layout.addWidget(self._cards_row)
 
         action_bar = QWidget()
         action_layout = QHBoxLayout(action_bar)
@@ -429,35 +482,37 @@ class PickBestStepWidget(QWidget):
         action_layout.setSpacing(8)
 
         self._prev_set_btn = QPushButton("◀ Prev Set")
+        self._prev_set_btn.setObjectName("workflowGhostButton")
         action_layout.addWidget(self._prev_set_btn)
 
-        self._keep_all_btn = QPushButton("Keep Visible")
-        self._keep_all_btn.setToolTip("Unmark the visible non-winners")
+        self._keep_all_btn = QPushButton("Keep visible  [K]")
+        self._keep_all_btn.setObjectName("workflowDecisionKeep")
+        self._keep_all_btn.setToolTip("Keep every currently visible photo")
         action_layout.addWidget(self._keep_all_btn)
 
-        self._mark_rest_btn = QPushButton("Delete Visible")
-        self._mark_rest_btn.setToolTip("Mark the visible non-winners for deletion")
+        self._mark_rest_btn = QPushButton("Mark visible for Trash  [X]")
+        self._mark_rest_btn.setObjectName("workflowDecisionTrash")
+        self._mark_rest_btn.setToolTip("Stage every currently visible photo for Trash")
         action_layout.addWidget(self._mark_rest_btn)
 
         self._next_set_btn = QPushButton("Next Set ▶")
+        self._next_set_btn.setObjectName("workflowGhostButton")
         action_layout.addWidget(self._next_set_btn)
 
         action_layout.addStretch()
 
-        self._skip_btn_review = QPushButton("Skip Step →")
-        action_layout.addWidget(self._skip_btn_review)
-
-        self._done_btn = QPushButton("Done: Go to Cull →")
-        self._done_btn.setStyleSheet("font-weight: bold;")
+        self._done_btn = QPushButton("Continue to Cull  →")
+        self._done_btn.setObjectName("workflowPrimaryButton")
         action_layout.addWidget(self._done_btn)
 
-        review_layout.addWidget(action_bar)
+        content_layout.addWidget(action_bar)
+        review_layout.addWidget(review_content, 1)
         self._stack.addWidget(self._page_review)
         self._stack.setCurrentWidget(self._page_loading)
 
     def _connect_signals(self) -> None:
         self._skip_btn_loading.clicked.connect(self.skip_requested)
-        self._skip_btn_review.clicked.connect(self.skip_requested)
+        self._review_header.skip_button.clicked.connect(self.skip_requested)
         self._done_btn.clicked.connect(self._on_done)
         self._prev_cluster_btn.clicked.connect(self._prev_cluster)
         self._next_cluster_btn.clicked.connect(self._next_cluster)
@@ -481,20 +536,25 @@ class PickBestStepWidget(QWidget):
             card.toggled.connect(self._on_card_toggled)
 
     def _create_shortcuts(self) -> None:
-        self._shortcuts: List[QShortcut] = []
-        bindings = [
-            ("1", lambda: self._activate_slot_shortcut(0)),
-            ("2", lambda: self._activate_slot_shortcut(1)),
-            ("3", lambda: self._activate_slot_shortcut(2)),
-            ("Left", self._prev_cluster),
-            ("Right", self._next_cluster),
-            ("C", self._toggle_focus_mode),
-        ]
-        for key_text, handler in bindings:
-            shortcut = QShortcut(QKeySequence(key_text), self)
-            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-            shortcut.activated.connect(handler)
-            self._shortcuts.append(shortcut)
+        self._shortcuts = install_workflow_shortcuts(
+            self,
+            PICK_BEST_SHORTCUTS,
+            {
+                "slots:1": lambda: self._activate_slot_shortcut(0),
+                "slots:2": lambda: self._activate_slot_shortcut(1),
+                "slots:3": lambda: self._activate_slot_shortcut(2),
+                "clusters:Left": self._prev_cluster,
+                "clusters:Right": self._next_cluster,
+                "sets:[": self._prev_subset,
+                "sets:]": self._next_subset,
+                "bulk:K": self._keep_visible,
+                "bulk:X": self._delete_visible,
+                "focus": self._toggle_focus_mode,
+                "info": self._toggle_info,
+                "continue": self._on_done,
+                "skip": self.skip_requested.emit,
+            },
+        )
 
     def _load_cluster(self, index: int) -> None:
         if not self._clusters:
@@ -529,10 +589,18 @@ class PickBestStepWidget(QWidget):
             }
         else:
             self._cluster_mark_state = {
-                path: path != winner_path for path in self._cluster_ordered_paths
+                path: (
+                    bool(self._is_marked_func(path))
+                    if self._is_marked_func and self._is_marked_func(path)
+                    else path != winner_path
+                )
+                for path in self._cluster_ordered_paths
             }
         self._subset_index = 0
         self._update_cluster_ui(score_by_path, failure_reason_by_path)
+        # The cards describe application-level staged state, so write their
+        # initial recommendations to that shared source of truth immediately.
+        self._commit_current_cluster_marks()
 
     def _update_cluster_ui(
         self,
@@ -543,20 +611,20 @@ class PickBestStepWidget(QWidget):
         total_clusters = len(self._clusters)
         total_sets = self._subset_count()
         visible_kept = sum(
-            1
-            for path, marked in self._cluster_mark_state.items()
-            if path != self._current_winner_path and not marked
+            1 for marked in self._cluster_mark_state.values() if not marked
         )
         visible_deleted = sum(
-            1
-            for path, marked in self._cluster_mark_state.items()
-            if path != self._current_winner_path and marked
+            1 for marked in self._cluster_mark_state.values() if marked
         )
         self._cluster_info_label.setText(
-            f"Cluster {self._cluster_index + 1} / {total_clusters}  •  {len(self._current_all_paths)} photos  •  {visible_kept} keep / {visible_deleted} delete"
+            f"Cluster {self._cluster_index + 1} of {total_clusters}  ·  {len(self._current_all_paths)} photos"
+        )
+        self._review_header.set_summary(
+            f"{visible_kept} keep  ·  {visible_deleted} marked for Trash",
+            "danger" if visible_deleted else "neutral",
         )
         self._subset_info_label.setText(
-            f"Set {self._subset_index + 1} / {total_sets}  •  top challengers on the left, winner locked on the right"
+            f"Set {self._subset_index + 1} of {total_sets}  ·  challengers on the left, editable AI pick on the right"
         )
         self._prev_cluster_btn.setEnabled(self._cluster_index > 0)
         self._next_cluster_btn.setEnabled(self._cluster_index < total_clusters - 1)
@@ -582,25 +650,37 @@ class PickBestStepWidget(QWidget):
 
         image_pipeline = getattr(self.window(), "image_pipeline", None)
         images_data = []
+        missing_preview_paths = []
         for path in subset_paths:
             pixmap = None
             if image_pipeline is not None:
                 try:
-                    pixmap = image_pipeline.get_cached_preview_qpixmap(path)
+                    pixmap = image_pipeline.get_cached_analysis_qpixmap(
+                        path,
+                        memory_only=True,
+                    )
                     if pixmap is None:
-                        pixmap = image_pipeline.get_preview_qpixmap(
-                            path, display_max_size=None
+                        pixmap = image_pipeline.get_cached_preview_qpixmap(
+                            path,
+                            memory_only=True,
                         )
                     if pixmap is None:
-                        pixmap = image_pipeline.get_thumbnail_qpixmap(
-                            path, apply_orientation=True
+                        pixmap = image_pipeline.get_cached_thumbnail_qpixmap(
+                            path,
+                            apply_orientation=True,
+                            memory_only=True,
                         )
                 except Exception as exc:
                     logger.debug("Could not load preview for %s: %s", path, exc)
+            if pixmap is None or pixmap.isNull():
+                missing_preview_paths.append(path)
             images_data.append({"path": path, "pixmap": pixmap, "rating": 0})
 
         self._current_images_data = images_data
         self._sync_viewer.set_images_data(images_data)
+        request = getattr(self.window(), "request_interactive_previews", None)
+        if missing_preview_paths and callable(request):
+            request(missing_preview_paths)
         for viewer in self._sync_viewer.image_viewers:
             viewer.control_bar.hide()
 
@@ -634,6 +714,23 @@ class PickBestStepWidget(QWidget):
             self._sync_viewer.set_focused_viewer(self._focused_slot_index)
         self.setFocus()
 
+    def handle_preview_ready(self, path: str) -> None:
+        if path not in self._subset_paths:
+            return
+        image_pipeline = getattr(self.window(), "image_pipeline", None)
+        if image_pipeline is None:
+            return
+        pixmap = image_pipeline.get_cached_preview_qpixmap(
+            path,
+            memory_only=True,
+        )
+        if pixmap is None or pixmap.isNull():
+            return
+        for image_data in self._current_images_data:
+            if image_data.get("path") == path:
+                image_data["pixmap"] = pixmap
+        self._sync_viewer.update_image_pixmap(path, pixmap)
+
     def _metadata_rows_for_path(
         self, path: str, *, failure_reason: Optional[str] = None
     ) -> list[tuple[str, str]]:
@@ -651,9 +748,9 @@ class PickBestStepWidget(QWidget):
         app_state = getattr(self.window(), "app_state", None)
         cache = getattr(app_state, "exif_disk_cache", None) if app_state else None
         try:
-            metadata = MetadataProcessor.get_detailed_metadata(path, cache)
+            metadata = MetadataProcessor.get_cached_detailed_metadata(path, cache)
         except Exception:
-            logger.debug("EXIF lookup failed for %s", path, exc_info=True)
+            logger.debug("Cached EXIF lookup failed for %s", path, exc_info=True)
 
         if isinstance(metadata, dict):
             capture_date = _format_capture_date(metadata)
@@ -779,18 +876,14 @@ class PickBestStepWidget(QWidget):
 
     def _update_cluster_header_only(self) -> None:
         total_clusters = len(self._clusters)
-        kept = sum(
-            1
-            for path, marked in self._cluster_mark_state.items()
-            if path != self._current_winner_path and not marked
-        )
-        deleted = sum(
-            1
-            for path, marked in self._cluster_mark_state.items()
-            if path != self._current_winner_path and marked
-        )
+        kept = sum(1 for marked in self._cluster_mark_state.values() if not marked)
+        deleted = sum(1 for marked in self._cluster_mark_state.values() if marked)
         self._cluster_info_label.setText(
-            f"Cluster {self._cluster_index + 1} / {total_clusters}  •  {len(self._current_all_paths)} photos  •  {kept} keep / {deleted} delete"
+            f"Cluster {self._cluster_index + 1} of {total_clusters}  ·  {len(self._current_all_paths)} photos"
+        )
+        self._review_header.set_summary(
+            f"{kept} keep  ·  {deleted} marked for Trash",
+            "danger" if deleted else "neutral",
         )
 
     def _subset_count(self) -> int:
@@ -912,39 +1005,6 @@ class PickBestStepWidget(QWidget):
         self._commit_current_cluster_marks()
         self.proceed_to_cull_requested.emit()
 
-    def event(self, event):
-        if event.type() == QEvent.Type.ShortcutOverride:
-            key_event = event
-            if (
-                key_event.key() == Qt.Key.Key_I
-                and key_event.modifiers() == Qt.KeyboardModifier.NoModifier
-            ):
-                event.accept()
-                return True
-        return super().event(event)
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        key = event.key()
-
-        if key in (Qt.Key.Key_1, Qt.Key.Key_2, Qt.Key.Key_3):
-            slot = key - Qt.Key.Key_1
-            self._focused_slot_index = slot
-            self._update_focus_state()
-            if self._focus_mode:
-                self._sync_viewer.set_focused_viewer(slot)
-            else:
-                self._toggle_slot(slot)
-        elif key == Qt.Key.Key_Left:
-            self._prev_cluster()
-        elif key == Qt.Key.Key_Right:
-            self._next_cluster()
-        elif key == Qt.Key.Key_C:
-            self._toggle_focus_mode()
-        elif key == Qt.Key.Key_I:
-            self._toggle_info()
-        else:
-            super().keyPressEvent(event)
-
     def _activate_slot_shortcut(self, slot_index: int) -> None:
         self._focused_slot_index = slot_index
         self._update_focus_state()
@@ -959,8 +1019,7 @@ class PickBestStepWidget(QWidget):
             return
         self._focus_mode = False
         self._hint_label.setText(
-            "Up to 3 images per round. Winner stays on the right."
-            " Press 1, 2, 3 to toggle keep/delete — C to focus an image, i to hide/show info."
+            "The AI pick stays on the right as a reference, and every choice remains editable."
         )
 
     def _toggle_focus_mode(self) -> None:
@@ -969,8 +1028,7 @@ class PickBestStepWidget(QWidget):
             slot = min(self._focused_slot_index, max(0, len(self._subset_paths) - 1))
             self._sync_viewer.set_focused_viewer(slot)
             self._hint_label.setText(
-                "Focus mode: press 1, 2, 3 to switch between images."
-                " Press C to return to side-by-side compare."
+                "Focus mode · press 1, 2, or 3 to switch photos · press C to compare again."
             )
         else:
             self._exit_focus_mode()

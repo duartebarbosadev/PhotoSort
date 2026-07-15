@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QSignalSpy, QTest
 
 from src.ui.advanced_image_viewer import IndividualViewer, SynchronizedImageViewer
 
@@ -46,6 +47,60 @@ def test_viewer_pool_matches_multi_selection_size():
     viewer.set_image_data(reduced_images[0])
     assert len(viewer.image_viewers) == 1
 
+    viewer.deleteLater()
+
+
+def test_preview_upgrade_does_not_rebuild_view_mode():
+    viewer = SynchronizedImageViewer()
+    initial = _make_image("upgrade.jpg", size=16)
+    viewer.set_image_data(initial)
+    focused_events = []
+    viewer.focused_image_changed.connect(
+        lambda index, path: focused_events.append((index, path))
+    )
+
+    upgraded = _make_image("upgrade.jpg", size=32)
+    assert viewer.update_image_pixmap(upgraded["path"], upgraded["pixmap"], rating=3)
+
+    assert focused_events == []
+    assert viewer.get_primary_viewer().get_current_pixmap().size().width() == 32
+    viewer.deleteLater()
+
+
+def test_loading_placeholder_preserves_path_for_async_upgrade():
+    viewer = SynchronizedImageViewer()
+    viewer.set_image_data({"pixmap": None, "path": "pending.arw", "rating": 2})
+
+    assert viewer.displays_path("pending.arw")
+    upgraded = _make_image("pending.arw", size=32)
+    assert viewer.update_image_pixmap("pending.arw", upgraded["pixmap"], rating=2)
+    assert viewer.get_primary_viewer().get_current_pixmap().width() == 32
+    viewer.deleteLater()
+
+
+def test_preview_upgrade_updates_every_slot_showing_same_rotation_source():
+    viewer = SynchronizedImageViewer()
+    loading = {"pixmap": None, "path": "rotation.arw", "rating": 0}
+    viewer.set_images_data([loading.copy(), loading.copy()])
+
+    upgraded = _make_image("rotation.arw", size=40)
+    assert viewer.update_image_pixmap("rotation.arw", upgraded["pixmap"])
+    assert [slot.get_current_pixmap().width() for slot in viewer.image_viewers] == [
+        40,
+        40,
+    ]
+    viewer.deleteLater()
+
+
+def test_repeated_layout_changes_coalesce_to_one_fit():
+    viewer = SynchronizedImageViewer()
+    timeout_spy = QSignalSpy(viewer._layout_fit_timer.timeout)
+
+    for _ in range(10):
+        viewer._schedule_layout_fit()
+    QTest.qWait(80)
+
+    assert len(timeout_spy) == 1
     viewer.deleteLater()
 
 

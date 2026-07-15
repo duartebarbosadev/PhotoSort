@@ -168,16 +168,19 @@ To capture detailed logs for debugging, you can enable file logging by setting a
 * **macOS/Linux**:
   ```bash
   export PHOTOSORT_ENABLE_FILE_LOGGING=true
+  export PHOTOSORT_LOG_LEVEL=DEBUG
   python -m src.main
   ```
 * **Windows (Command Prompt)**:
   ```bash
   set PHOTOSORT_ENABLE_FILE_LOGGING=true
+  set PHOTOSORT_LOG_LEVEL=DEBUG
   python -m src.main
   ```
 * **Windows (PowerShell)**:
   ```powershell
   $env:PHOTOSORT_ENABLE_FILE_LOGGING="true"
+  $env:PHOTOSORT_LOG_LEVEL="DEBUG"
   python -m src.main
   ```
 

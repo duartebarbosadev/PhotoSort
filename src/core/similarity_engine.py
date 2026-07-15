@@ -8,7 +8,7 @@ import numpy as np  # Import numpy for array manipulation
 from sklearn.cluster import DBSCAN
 from core.utils.time_utils import format_eta
 
-from core.image_pipeline import ImagePipeline
+from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION, ImagePipeline
 from core.image_file_ops import ImageFileOperations
 from core.similarity_embedding_model import (
     SimilarityEmbeddingModel,
@@ -309,14 +309,9 @@ class SimilarityEngine(QObject):
             valid_paths_in_batch = []
 
             for batch_offset, path in enumerate(batch_paths, start=1):
-                # Use ImagePipeline to get a suitable PIL image for processing
-                logger.debug(
-                    f"Getting PIL image for '{os.path.basename(path)}' (preloaded: True)"
-                )
-                img = self.image_pipeline.get_pil_image_for_processing(
+                img = self.image_pipeline.get_analysis_image(
                     path,
-                    target_mode="RGB",
-                    use_preloaded_preview_if_available=True,  # Prioritize cached previews
+                    target_size=ANALYSIS_CACHE_RESOLUTION,
                 )
                 if img:
                     logger.debug(
