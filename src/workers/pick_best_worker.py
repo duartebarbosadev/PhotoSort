@@ -4,9 +4,16 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from core.best_photo_finder.errors import NoScorableImagesError, NoSupportedImagesError
+from core.best_photo_finder.errors import (
+    FaceLandmarkerError,
+    NoScorableImagesError,
+    NoSupportedImagesError,
+)
 from core.best_photo_finder.pipeline import PhotoSelector
-from core.best_photo_finder.scorers import HuggingFaceAestheticScorer
+from core.best_photo_finder.scorers import (
+    HuggingFaceAestheticScorer,
+    OpenCvMediapipeTechnicalScorer,
+)
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.image_processing.standard_image_processor import SUPPORTED_STANDARD_EXTENSIONS
 from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
@@ -83,6 +90,7 @@ class PickBestWorker(QObject):
 
         # Share one PhotoSelector instance so the aesthetic model loads once
         selector = PhotoSelector(
+            technical_scorer=OpenCvMediapipeTechnicalScorer(),
             aesthetic_scorer=HuggingFaceAestheticScorer(
                 progress_callback=self._handle_model_progress
             ),
@@ -138,6 +146,14 @@ class PickBestWorker(QObject):
                                 len(cluster_result["failed"]),
                                 _summarize_failed_images(cluster_result["failed"]),
                             )
+                    except FaceLandmarkerError as exc:
+                        message = (
+                            "Pick Best stopped because required face landmark analysis "
+                            f"failed. {exc}"
+                        )
+                        logger.error(message, exc_info=True)
+                        self.error.emit(message)
+                        return
                     except (NoSupportedImagesError, NoScorableImagesError) as exc:
                         if isinstance(exc, NoScorableImagesError):
                             cluster_result["failed"] = [

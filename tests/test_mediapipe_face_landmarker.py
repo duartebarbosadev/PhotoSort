@@ -6,8 +6,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from core.best_photo_finder.errors import FaceLandmarkerError
+from core.best_photo_finder.config import SelectorConfig
 from core.best_photo_finder.scorers import (
     LEFT_EYE_INDICES,
+    RIGHT_EYE_INDICES,
     MediaPipeTasksFaceLandmarker,
     OpenCvMediapipeTechnicalScorer,
     _eye_aspect_ratio,
@@ -108,7 +111,7 @@ def test_technical_scorer_initializes_landmarker_once_and_closes_it():
     assert backend.close_calls == 1
 
 
-def test_invalid_landmarker_disables_repeated_initialization():
+def test_invalid_landmarker_is_a_fatal_scoring_error():
     calls = 0
 
     def factory(_model_path):
@@ -118,10 +121,55 @@ def test_invalid_landmarker_disables_repeated_initialization():
 
     scorer = OpenCvMediapipeTechnicalScorer(face_landmarker_factory=factory)
 
-    assert scorer._get_face_landmarker() is None
-    assert scorer._get_face_landmarker() is None
+    with pytest.raises(FaceLandmarkerError, match="could not be initialized"):
+        scorer._get_face_landmarker()
+
     assert calls == 1
-    assert scorer._face_landmarker_error == "invalid model"
+
+
+def test_technical_scorer_uses_landmarker_for_the_full_image():
+    landmarks = [SimpleNamespace(x=0.5, y=0.5) for _ in range(478)]
+    for indices in (LEFT_EYE_INDICES, RIGHT_EYE_INDICES):
+        p1, p2, p3, p4, p5, p6 = indices
+        landmarks[p1] = SimpleNamespace(x=0.2, y=0.4)
+        landmarks[p4] = SimpleNamespace(x=0.8, y=0.4)
+        landmarks[p2] = SimpleNamespace(x=0.3, y=0.3)
+        landmarks[p6] = SimpleNamespace(x=0.3, y=0.5)
+        landmarks[p3] = SimpleNamespace(x=0.7, y=0.3)
+        landmarks[p5] = SimpleNamespace(x=0.7, y=0.5)
+
+    backend = _Backend([landmarks])
+    scorer = OpenCvMediapipeTechnicalScorer(
+        face_landmarker_factory=lambda _path: backend
+    )
+    image = np.zeros((120, 200, 3), dtype=np.uint8)
+
+    metrics = scorer.score_image(Path("photo.jpg"), image, SelectorConfig())
+
+    assert backend.detect_calls == 1
+    assert metrics.face_count == 1
+    assert metrics.closed_face_count == 0
+    assert metrics.max_face_area_ratio > 0
+
+
+def test_landmarker_detection_failure_closes_native_resource_and_fails():
+    class FailingBackend(_Backend):
+        def detect_landmarks(self, rgb_image):
+            raise RuntimeError("native detection error")
+
+    backend = FailingBackend()
+    scorer = OpenCvMediapipeTechnicalScorer(
+        face_landmarker_factory=lambda _path: backend
+    )
+
+    with pytest.raises(FaceLandmarkerError, match="native detection error"):
+        scorer.score_image(
+            Path("photo.jpg"),
+            np.zeros((40, 40, 3), dtype=np.uint8),
+            SelectorConfig(),
+        )
+
+    assert backend.close_calls == 1
 
 
 def test_eye_aspect_ratio_preserves_open_and_closed_eye_threshold_behavior():

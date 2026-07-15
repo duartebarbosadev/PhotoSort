@@ -6,6 +6,10 @@ class MissingDependencyError(SelectionError):
     """Raised when an optional runtime dependency is required but unavailable."""
 
 
+class FaceLandmarkerError(SelectionError):
+    """Raised when required MediaPipe face analysis cannot run reliably."""
+
+
 class NoSupportedImagesError(SelectionError):
     """Raised when the caller provides no supported image files."""
 

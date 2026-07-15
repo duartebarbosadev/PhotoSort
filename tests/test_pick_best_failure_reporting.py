@@ -8,7 +8,11 @@ import pytest
 from PyQt6.QtWidgets import QApplication
 
 from core.best_photo_finder.config import SelectorConfig
-from core.best_photo_finder.errors import NoScorableImagesError, SelectionError
+from core.best_photo_finder.errors import (
+    FaceLandmarkerError,
+    NoScorableImagesError,
+    SelectionError,
+)
 from core.best_photo_finder.pipeline import PhotoSelector
 from ui.pick_best_step_widget import PickBestStepWidget
 from workers.pick_best_worker import PickBestWorker
@@ -118,6 +122,42 @@ def test_pick_best_worker_closes_selector_when_cancelled(monkeypatch):
     worker.run()
 
     assert closed == [True]
+
+
+def test_pick_best_worker_stops_on_face_landmarker_failure(monkeypatch):
+    class _FakeTechnicalScorer:
+        pass
+
+    class _FakeSelector:
+        def __init__(self, **_kwargs):
+            pass
+
+        def select(self, _paths):
+            raise FaceLandmarkerError("model could not load")
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(
+        "workers.pick_best_worker.OpenCvMediapipeTechnicalScorer",
+        _FakeTechnicalScorer,
+    )
+    monkeypatch.setattr("workers.pick_best_worker.PhotoSelector", _FakeSelector)
+
+    worker = PickBestWorker({1: ["/tmp/a.jpg", "/tmp/b.jpg"]})
+    errors = []
+    completed = []
+    closed = []
+    worker.error.connect(errors.append)
+    worker.completed.connect(completed.append)
+
+    worker.run()
+
+    assert completed == []
+    assert closed == [True]
+    assert len(errors) == 1
+    assert "Pick Best stopped" in errors[0]
+    assert "model could not load" in errors[0]
 
 
 def test_pick_best_widget_shows_failure_reason_for_unscored_image(monkeypatch):

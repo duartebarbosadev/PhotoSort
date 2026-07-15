@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable, Sequence
 
 from core.best_photo_finder.config import SelectorConfig
 from core.best_photo_finder.errors import (
+    FaceLandmarkerError,
     NoScorableImagesError,
     NoSupportedImagesError,
     SelectionError,
@@ -144,6 +145,8 @@ class PhotoSelector:
                     metrics = self.technical_scorer.score_image(path, preview, config)
                 else:
                     metrics = self.technical_scorer.score(path, config)
+            except FaceLandmarkerError:
+                raise
             except SelectionError as exc:
                 failed.append(
                     ImageScore(
