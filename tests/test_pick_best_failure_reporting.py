@@ -137,7 +137,7 @@ def test_pick_best_widget_shows_failure_reason_for_unscored_image(monkeypatch):
 
 def test_pick_best_widget_shows_capture_date_in_metadata(monkeypatch):
     monkeypatch.setattr(
-        "ui.pick_best_step_widget.MetadataProcessor.get_detailed_metadata",
+        "ui.pick_best_step_widget.MetadataProcessor.get_cached_detailed_metadata",
         lambda path, cache: {
             "Exif.Photo.DateTimeOriginal": "2024:01:02 03:04:05",
             "Exif.Image.Make": "SONY",

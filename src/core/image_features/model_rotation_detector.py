@@ -277,9 +277,11 @@ class ModelRotationDetector(RotationDetectorProtocol):
             norm = os.path.normpath(path)
             _, ext = os.path.splitext(norm)
             if is_raw_extension(ext):
-                # Always apply auto-edits for RAW files in rotation detection
-                return RawImageProcessor.load_raw_as_pil(
-                    norm, half_size=True, apply_auto_edits=True
+                model_input_size = IMAGE_SIZE + 32
+                return RawImageProcessor.load_raw_for_blur_detection(
+                    norm,
+                    target_size=(model_input_size, model_input_size),
+                    apply_auto_edits=False,
                 )
             from PIL import Image, ImageOps  # type: ignore
 

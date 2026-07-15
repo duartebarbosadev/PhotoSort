@@ -40,6 +40,7 @@ from PyQt6.QtGui import (
     QColor,
     QAction,
     QKeyEvent,
+    QKeySequence,
     QIcon,
     QStandardItemModel,
     QStandardItem,
@@ -110,6 +111,7 @@ class MainWindow(QMainWindow):
         self._left_panel_views = set()
         self._image_viewer_views = set()
         self._last_displayed_preview_path: Optional[str] = None
+        self._pending_rotation_comparison_path: Optional[str] = None
         self._filter_apply_count = 0
         self._last_filter_search_text: Optional[str] = None
         self._close_after_grouping_save = False
@@ -247,6 +249,7 @@ class MainWindow(QMainWindow):
     def invalidate_last_displayed_preview(self):
         """Reset cached preview tracking so the next selection forces a refresh."""
         self._last_displayed_preview_path = None
+        self._pending_rotation_comparison_path = None
 
     def _create_loading_overlay(self):
         start_time = time.perf_counter()
@@ -342,21 +345,42 @@ class MainWindow(QMainWindow):
         self.step_organize_button = QPushButton("1. Organize")
         self.step_organize_button.setObjectName("workflowStepButton")
         self.step_organize_button.setCheckable(True)
+        self.step_organize_button.setToolTip(
+            "Plan folder changes, review them, then apply explicitly"
+        )
         self.step_easy_delete_button = QPushButton("2. Easy Delete")
         self.step_easy_delete_button.setObjectName("workflowStepButton")
         self.step_easy_delete_button.setCheckable(True)
+        self.step_easy_delete_button.setToolTip(
+            "Review obvious issues and stage reversible Trash marks"
+        )
         self.step_fix_rotation_button = QPushButton("3. Fix Rotation")
         self.step_fix_rotation_button.setObjectName("workflowStepButton")
         self.step_fix_rotation_button.setCheckable(True)
+        self.step_fix_rotation_button.setToolTip(
+            "Preview rotation corrections and apply only the queued changes"
+        )
         self.step_pick_best_button = QPushButton("4. Pick Best")
         self.step_pick_best_button.setObjectName("workflowStepButton")
         self.step_pick_best_button.setCheckable(True)
+        self.step_pick_best_button.setToolTip(
+            "Compare similar photos and stage Keep or Trash choices"
+        )
         self.step_cull_button = QPushButton("5. Cull")
         self.step_cull_button.setObjectName("workflowStepButton")
         self.step_cull_button.setCheckable(True)
+        self.step_cull_button.setToolTip(
+            "Review all staged marks and confirm any move to Trash"
+        )
 
         # Models
         self.file_system_model = QStandardItemModel()  # Model for file system
+        # Organize is the startup page. Cull's potentially large model is built
+        # only when Cull is shown instead of blocking Organize startup.
+        self._cull_model_dirty = True
+        # Keep thumbnail completion updates O(1). Rewalking thousands of rows for
+        # every viewport batch makes keyboard navigation visibly stall.
+        self._file_items_by_path: Dict[str, QStandardItem] = {}
         self.proxy_model = CustomFilterProxyModel(self)
         self.proxy_model.setSourceModel(self.file_system_model)
         self.proxy_model.app_state_ref = self.app_state  # Link AppState to proxy model
@@ -578,6 +602,14 @@ class MainWindow(QMainWindow):
             view.verticalScrollBar().valueChanged.connect(
                 self.schedule_visible_thumbnail_load
             )
+        for tree in (
+            self.grouping_step_widget.before_tree,
+            self.grouping_step_widget.preview_tree,
+        ):
+            tree.verticalScrollBar().valueChanged.connect(
+                self.schedule_visible_thumbnail_load
+            )
+            tree.expanded.connect(self.schedule_visible_thumbnail_load)
         self.left_panel.connect_signals()
         self.grouping_step_widget.mode_changed.connect(
             self._handle_grouping_mode_changed
@@ -639,6 +671,8 @@ class MainWindow(QMainWindow):
 
     def _go_to_grouping_step(self) -> None:
         self.show_grouping_step()
+        if self.app_state.image_files_data:
+            self.app_controller.activate_grouping_preview()
 
     def _go_to_easy_delete_step(self) -> None:
         if not self.app_state.image_files_data:
@@ -684,8 +718,67 @@ class MainWindow(QMainWindow):
             path for path in image_paths if not is_video_extension(path)
         )
 
+    def request_interactive_preview(
+        self,
+        image_path: str,
+        *,
+        force_default_brightness: bool = False,
+    ) -> None:
+        self.request_interactive_previews(
+            [image_path],
+            force_default_brightness=force_default_brightness,
+        )
+
+    def request_interactive_previews(
+        self,
+        image_paths,
+        *,
+        force_default_brightness: bool = False,
+    ) -> None:
+        paths = [path for path in image_paths if path and not is_video_extension(path)]
+        if paths:
+            self.preview_load_controller.request(
+                paths,
+                force_default_brightness=force_default_brightness,
+            )
+
+    def _get_cached_interactive_pixmap(
+        self,
+        image_path: str,
+        *,
+        apply_thumbnail_orientation: bool = False,
+    ) -> Tuple[Optional[QPixmap], bool]:
+        """Return an immediately available pixmap without decoding on the UI thread."""
+        pixmap = self.image_pipeline.get_cached_preview_qpixmap(
+            image_path,
+            display_max_size=DISPLAY_MAX_RESOLUTION,
+            memory_only=True,
+        )
+        preview_is_cached = bool(pixmap and not pixmap.isNull())
+        if not preview_is_cached:
+            pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
+                image_path,
+                apply_orientation=apply_thumbnail_orientation,
+                memory_only=True,
+            )
+        if pixmap is not None and pixmap.isNull():
+            pixmap = None
+        return pixmap, preview_is_cached
+
     def schedule_visible_thumbnail_load(self, *_args) -> None:
         self.thumbnail_loader.schedule()
+
+    def get_workflow_visible_thumbnail_paths(self, limit: int) -> Optional[List[str]]:
+        if self.app_state.workflow_step == "organize":
+            return self.grouping_step_widget.visible_thumbnail_paths(limit)
+        return None
+
+    def mark_cull_model_dirty(self) -> None:
+        self._cull_model_dirty = True
+
+    def _ensure_cull_model_ready(self) -> None:
+        if self._cull_model_dirty and self.app_state.image_files_data:
+            self._rebuild_model_view()
 
     def _rebuild_model_view(
         self,
@@ -699,6 +792,7 @@ class MainWindow(QMainWindow):
 
         self.update_loading_text("Rebuilding view...")
         self.file_system_model.clear()
+        self._file_items_by_path.clear()
         root_item = self.file_system_model.invisibleRootItem()
         active_view = self._get_active_file_view()
 
@@ -899,6 +993,14 @@ class MainWindow(QMainWindow):
                     for idx_to_expand in reversed(expand_list):
                         active_view.expand(idx_to_expand)
 
+        self._cull_model_dirty = False
+        thumbnail_loader = getattr(self, "thumbnail_loader", None)
+        if thumbnail_loader is not None:
+            # The model owns new item objects now. Re-request only its viewport
+            # so cached results are applied to those objects in the background.
+            thumbnail_loader.reset()
+            thumbnail_loader.schedule()
+
     # --- Controller adapter helpers (SimilarityContext / PreviewContext / MetadataContext) ---
     def status_message(self, msg: str, timeout: int = 3000) -> None:
         self.statusBar().showMessage(msg, timeout)
@@ -907,6 +1009,7 @@ class MainWindow(QMainWindow):
         self._rebuild_model_view()
 
     def show_grouping_step(self) -> None:
+        self.reset_preview_requests()
         self.app_state.workflow_step = "organize"
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(True)
@@ -927,10 +1030,13 @@ class MainWindow(QMainWindow):
         self.update_workflow_navigation()
 
     def show_cull_step(self) -> None:
+        self.reset_preview_requests()
         self.app_state.workflow_step = "cull"
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(True)
         self.workflow_stack.setCurrentWidget(self.cull_page)
+        self._ensure_cull_model_ready()
+        self.schedule_visible_thumbnail_load()
         self.update_workflow_navigation()
 
     def _ensure_easy_delete_widget(self):
@@ -986,6 +1092,7 @@ class MainWindow(QMainWindow):
         return self.pick_best_step_widget
 
     def show_easy_delete_step(self) -> None:
+        self.reset_preview_requests()
         widget = self._ensure_easy_delete_widget()
         self.app_state.workflow_step = "easy_delete"
         for action in self.menu_manager.image_focus_actions.values():
@@ -993,12 +1100,13 @@ class MainWindow(QMainWindow):
         widget.set_image_pipeline(self.image_pipeline)
         self.workflow_stack.setCurrentWidget(self.easy_delete_page)
         self.update_workflow_navigation()
-        if self.app_state.easy_delete_results:
+        if self.app_state.easy_delete_results is not None:
             widget.show_results(self.app_state.easy_delete_results)
             return
         self.app_controller.start_easy_delete_workflow()
 
     def show_fix_rotation_step(self) -> None:
+        self.reset_preview_requests()
         widget = self._ensure_fix_rotation_widget()
         self.app_state.workflow_step = "fix_rotation"
         for action in self.menu_manager.image_focus_actions.values():
@@ -1009,7 +1117,8 @@ class MainWindow(QMainWindow):
         self.app_controller.start_fix_rotation_workflow()
 
     def show_pick_best_step(self) -> None:
-        self._ensure_pick_best_widget()
+        self.reset_preview_requests()
+        widget = self._ensure_pick_best_widget()
         self.app_state.workflow_step = "pick_best"
         self.workflow_stack.setCurrentWidget(self.pick_best_page)
         # Disable application-wide 1-9 shortcuts so PickBestStepWidget can handle them
@@ -1017,6 +1126,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(False)
         self.update_workflow_navigation()
         if self.app_state.pick_best_results:
+            widget.refresh_deletion_state()
             return
         self.app_controller.start_pick_best_workflow()
 
@@ -1041,6 +1151,51 @@ class MainWindow(QMainWindow):
             self.app_state.workflow_step == "pick_best"
         )
         self.step_cull_button.setChecked(self.app_state.workflow_step == "cull")
+        self._set_cull_shortcuts_active(self.app_state.workflow_step == "cull")
+
+    def _set_cull_shortcuts_active(self, active: bool) -> None:
+        """Suspend Cull-only shortcuts while a guided workflow owns the keyboard."""
+
+        manager = self.menu_manager
+        actions = [
+            manager.find_action,
+            manager.rotate_clockwise_action,
+            manager.rotate_counterclockwise_action,
+            manager.rotate_180_action,
+            manager.mark_for_delete_action,
+            manager.commit_deletions_action,
+            manager.clear_marked_deletions_action,
+            manager.actual_size_action,
+            manager.fit_to_view_action,
+            manager.zoom_in_action,
+            manager.zoom_out_action,
+            manager.single_view_action,
+            manager.side_by_side_view_action,
+            manager.sync_pan_zoom_action,
+            manager.view_list_action,
+            manager.view_icons_action,
+            manager.view_grid_action,
+            manager.view_rotation_action,
+            manager.toggle_folder_view_action,
+            manager.group_by_similarity_action,
+            manager.toggle_thumbnails_action,
+            manager.detect_blur_action,
+            manager.toggle_metadata_sidebar_action,
+        ]
+        if not hasattr(self, "_cull_action_shortcuts"):
+            self._cull_action_shortcuts = {
+                action: action.shortcut() for action in actions
+            }
+        for action in actions:
+            original = self._cull_action_shortcuts.get(action)
+            action.setShortcut(
+                original if active and original is not None else QKeySequence()
+            )
+
+    def _refresh_workflow_deletion_state(self) -> None:
+        for widget in (self.easy_delete_step_widget, self.pick_best_step_widget):
+            if widget is not None:
+                widget.refresh_deletion_state()
 
     def _mark_paths_for_deletion(self, paths: list) -> None:
         self.deletion_controller.mark_paths(
@@ -1050,6 +1205,7 @@ class MainWindow(QMainWindow):
             self.proxy_model,
         )
         self.proxy_model.invalidate()
+        self._refresh_workflow_deletion_state()
 
     def _unmark_paths_for_deletion(self, paths: list) -> None:
         self.deletion_controller.unmark_paths(
@@ -1059,6 +1215,7 @@ class MainWindow(QMainWindow):
             self.proxy_model,
         )
         self.proxy_model.invalidate()
+        self._refresh_workflow_deletion_state()
 
     def update_grouping_preview(self, text: str) -> None:
         self.grouping_step_widget.set_preview_text(text)
@@ -1513,9 +1670,8 @@ class MainWindow(QMainWindow):
         else:
             has_special = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
         skip_deleted = not has_special  # Holding Ctrl/Cmd includes deleted
-        if (
-            self.app_state.workflow_step != "pick_best"
-            and self.hotkey_controller.handle_key(key, skip_deleted=skip_deleted)
+        if self.app_state.workflow_step == "cull" and self.hotkey_controller.handle_key(
+            key, skip_deleted=skip_deleted
         ):
             event.accept()
             return
@@ -2244,6 +2400,7 @@ class MainWindow(QMainWindow):
         self, file_path: str, file_data_from_model: Optional[Dict[str, Any]]
     ):
         """Handles displaying preview and info for a single selected image."""
+        self._pending_rotation_comparison_path = None
         logger.debug(f"Displaying single image preview: {os.path.basename(file_path)}")
         if not os.path.exists(file_path):
             logger.warning(f"File not found: {file_path}")
@@ -2288,34 +2445,19 @@ class MainWindow(QMainWindow):
                 primary_viewer.update_rating_display(metadata.get("rating", 0))
 
         if not reuse_preview:
-            logger.debug(f"Getting preview pixmap for {file_path}")
-            pixmap = self.image_pipeline.get_cached_preview_qpixmap(
-                file_path, display_max_size=DISPLAY_MAX_RESOLUTION
-            )
-            preview_is_cached = bool(pixmap and not pixmap.isNull())
-
-            if not preview_is_cached:
-                logger.debug(
-                    f"Cached preview unavailable, trying cached thumbnail for {file_path}"
-                )
-                pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(file_path)
-
-            if pixmap and not pixmap.isNull():
-                logger.debug(f"Setting image data for {file_path}")
-                image_data = {
-                    "pixmap": pixmap,
-                    "path": file_path,
-                    "rating": metadata.get("rating", 0),
-                }
-                self.advanced_image_viewer.set_image_data(image_data)
-            else:
-                self.advanced_image_viewer.setText("Loading preview…")
+            pixmap, preview_is_cached = self._get_cached_interactive_pixmap(file_path)
+            image_data = {
+                "pixmap": pixmap,
+                "path": file_path,
+                "rating": metadata.get("rating", 0),
+            }
+            self.advanced_image_viewer.set_image_data(image_data)
 
             if not preview_is_cached:
                 # A cache miss must never decode on the UI thread. Keyboard
                 # navigation may already have queued this path and its lookahead;
                 # the controller deduplicates this narrower mouse request.
-                self.preview_load_controller.request([file_path])
+                self.request_interactive_preview(file_path)
 
         self._last_displayed_preview_path = file_path
         self._update_status_bar_for_image(
@@ -2328,23 +2470,39 @@ class MainWindow(QMainWindow):
 
     def _handle_preview_ready(self, file_path: str) -> None:
         """Upgrade the current thumbnail only when the result is still relevant."""
-        if self.app_state.focused_image_path != file_path:
-            return
+        workflow_widget = {
+            "organize": self.grouping_step_widget,
+            "easy_delete": self.easy_delete_step_widget,
+            "fix_rotation": self.fix_rotation_step_widget,
+            "pick_best": self.pick_best_step_widget,
+        }.get(self.app_state.workflow_step)
+        workflow_handler = getattr(workflow_widget, "handle_preview_ready", None)
+        if callable(workflow_handler):
+            workflow_handler(file_path)
         pixmap = self.image_pipeline.get_cached_preview_qpixmap(
-            file_path, display_max_size=DISPLAY_MAX_RESOLUTION
+            file_path,
+            display_max_size=DISPLAY_MAX_RESOLUTION,
+            memory_only=True,
         )
         if pixmap is None or pixmap.isNull():
             return
-        metadata = self._get_cached_metadata_for_selection(file_path)
-        if metadata is None:
+
+        if self._pending_rotation_comparison_path == file_path:
+            self._render_rotation_comparison(file_path, pixmap)
+            self._pending_rotation_comparison_path = None
             return
-        self.advanced_image_viewer.set_image_data(
-            {
-                "pixmap": pixmap,
-                "path": file_path,
-                "rating": metadata.get("rating", 0),
-            }
+
+        metadata = self._get_cached_metadata_for_selection(file_path) or {}
+        rating = metadata.get("rating", 0)
+        updated = self.advanced_image_viewer.update_image_pixmap(
+            file_path, pixmap, rating
         )
+        sync_viewer = getattr(self, "sync_viewer", None)
+        if sync_viewer is not None:
+            sync_viewer.update_image_pixmap(file_path, pixmap, rating)
+
+        if self.app_state.focused_image_path != file_path or not updated:
+            return
         self._last_displayed_preview_path = file_path
         self._update_status_bar_for_image(
             file_path,
@@ -2354,14 +2512,45 @@ class MainWindow(QMainWindow):
         )
 
     def _handle_preview_failed(self, file_path: str) -> None:
+        if self.app_state.workflow_step == "organize":
+            self.grouping_step_widget.handle_preview_failed(file_path)
+        self.advanced_image_viewer.show_preview_message(
+            file_path, "Failed to load image"
+        )
+        sync_viewer = getattr(self, "sync_viewer", None)
+        if sync_viewer is not None:
+            sync_viewer.show_preview_message(file_path, "Failed to load image")
         if self.app_state.focused_image_path != file_path:
             return
-        self.advanced_image_viewer.setText("Failed to load image")
         self.statusBar().showMessage(
             f"Error: Could not load image data for {os.path.basename(file_path)}",
             7000,
         )
         self.invalidate_last_displayed_preview()
+
+    def _render_rotation_comparison(
+        self, file_path: str, current_pixmap: QPixmap
+    ) -> None:
+        """Render a cached base preview and its suggested orientation."""
+        rotation = self.rotation_suggestions.get(file_path)
+        if rotation is None or current_pixmap.isNull():
+            return
+        from PyQt6.QtGui import QTransform
+
+        transform = QTransform()
+        transform.rotate(rotation)
+        suggested_pixmap = current_pixmap.transformed(
+            transform,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        metadata = self._get_cached_metadata_for_selection(file_path) or {}
+        rating = metadata.get("rating", 0)
+        self.advanced_image_viewer.set_images_data(
+            [
+                {"pixmap": current_pixmap, "path": file_path, "rating": rating},
+                {"pixmap": suggested_pixmap, "path": file_path, "rating": rating},
+            ]
+        )
 
     def _display_single_video_preview(
         self,
@@ -2431,33 +2620,24 @@ class MainWindow(QMainWindow):
             self.invalidate_last_displayed_preview()
             return
 
-        pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path, display_max_size=DISPLAY_MAX_RESOLUTION
+        pixmap, preview_is_cached = self._get_cached_interactive_pixmap(file_path)
+        image_data = {
+            "pixmap": pixmap,
+            "path": file_path,
+            "rating": metadata.get("rating", 0),
+        }
+        self.advanced_image_viewer.set_image_data(
+            image_data, preserve_view_mode=preserve_side_by_side
         )
-
-        if not pixmap or pixmap.isNull():
-            pixmap = self.image_pipeline.get_thumbnail_qpixmap(file_path)
-
-        if pixmap and not pixmap.isNull():
-            image_data = {
-                "pixmap": pixmap,
-                "path": file_path,
-                "rating": metadata.get("rating", 0),
-            }
-            self.advanced_image_viewer.set_image_data(
-                image_data, preserve_view_mode=preserve_side_by_side
+        self._update_status_bar_for_image(
+            file_path, metadata, pixmap, file_data_from_model
+        )
+        self._last_displayed_preview_path = file_path
+        if not preview_is_cached:
+            self.request_interactive_preview(
+                file_path,
+                force_default_brightness=True,
             )
-            self._update_status_bar_for_image(
-                file_path, metadata, pixmap, file_data_from_model
-            )
-            self._last_displayed_preview_path = file_path
-        else:
-            self.advanced_image_viewer.setText("Failed to load image")
-            self.statusBar().showMessage(
-                f"Error: Could not load image data for {os.path.basename(file_path)}",
-                7000,
-            )
-            self.invalidate_last_displayed_preview()
 
         if self.sidebar_visible:
             self._update_sidebar_with_current_selection()
@@ -2486,6 +2666,7 @@ class MainWindow(QMainWindow):
 
         images_data_for_viewer = []
         metadata_for_sidebar = []
+        missing_preview_paths = []
 
         for path in selected_paths:
             if is_video_extension(path):
@@ -2507,38 +2688,32 @@ class MainWindow(QMainWindow):
                 metadata_for_sidebar.append(combined_meta)
                 continue
 
-            pixmap = self.image_pipeline.get_preview_qpixmap(
-                path, display_max_size=DISPLAY_MAX_RESOLUTION
+            pixmap, preview_is_cached = self._get_cached_interactive_pixmap(path)
+            if not preview_is_cached:
+                missing_preview_paths.append(path)
+            basic_metadata = self._get_cached_metadata_for_selection(path)
+            raw_exif = MetadataProcessor.get_cached_detailed_metadata(
+                path, self.app_state.exif_disk_cache
             )
-            if not pixmap or pixmap.isNull():
-                pixmap = self.image_pipeline.get_thumbnail_qpixmap(path)
 
-            if pixmap and not pixmap.isNull():
-                basic_metadata = self._get_cached_metadata_for_selection(path)
-                raw_exif = MetadataProcessor.get_detailed_metadata(
-                    path, self.app_state.exif_disk_cache
-                )
+            images_data_for_viewer.append(
+                {
+                    "media_type": "image",
+                    "pixmap": pixmap,
+                    "path": path,
+                    "rating": basic_metadata.get("rating", 0) if basic_metadata else 0,
+                    "label": basic_metadata.get("label") if basic_metadata else None,
+                }
+            )
 
-                images_data_for_viewer.append(
-                    {
-                        "media_type": "image",
-                        "pixmap": pixmap,
-                        "path": path,
-                        "rating": basic_metadata.get("rating", 0)
-                        if basic_metadata
-                        else 0,
-                        "label": basic_metadata.get("label")
-                        if basic_metadata
-                        else None,
-                    }
-                )
-
-                combined_meta = (basic_metadata or {}).copy()
-                combined_meta["raw_exif"] = (raw_exif or {}).copy()
-                metadata_for_sidebar.append(combined_meta)
+            combined_meta = (basic_metadata or {}).copy()
+            combined_meta["raw_exif"] = (raw_exif or {}).copy()
+            metadata_for_sidebar.append(combined_meta)
 
         if images_data_for_viewer:
             self.advanced_image_viewer.set_images_data(images_data_for_viewer)
+            if missing_preview_paths:
+                self.preview_load_controller.request(missing_preview_paths)
 
             if self.sidebar_visible:
                 if len(images_data_for_viewer) >= 2:
@@ -2936,27 +3111,11 @@ class MainWindow(QMainWindow):
         item = QStandardItem(item_text)
         item.setData(file_data, Qt.ItemDataRole.UserRole)
         item.setEditable(False)
+        self._file_items_by_path[os.path.normpath(file_path)] = item
 
-        # Skip synchronous thumbnail generation during view population
-        # Thumbnails will be loaded in the background and applied via _update_thumbnails_from_cache()
-        # This dramatically improves initial folder load time (from ~50s to <2s for 1000+ images)
-        #
-        # Note: We only try to get from cache (no generation) if thumbnails are enabled
-        if self.menu_manager.toggle_thumbnails_action.isChecked():
-            pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
-                file_path,
-                file_size=file_data.get("file_size"),
-                mtime_ns=file_data.get("mtime_ns"),
-            )
-            if pixmap:
-                item.setIcon(QIcon(pixmap))
-            elif media_type == "video":
-                # Videos fall back to play icon until first-frame thumbnail is generated.
-                item.setIcon(
-                    self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
-                )
-            # If not in cache, background worker will handle it and we'll update later.
-        elif media_type == "video":
+        # Never deserialize cached thumbnails while constructing thousands of
+        # model rows. The shared viewport loader applies only visible results.
+        if media_type == "video":
             item.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
 
         # Unified presentation (marked / blurred) delegated to deletion controller
@@ -3033,7 +3192,7 @@ class MainWindow(QMainWindow):
 
         logger.debug("Finished removing temporary best-shot labels")
 
-    def _update_thumbnails_from_cache(self):
+    def _update_thumbnails_from_cache(self, image_paths: Optional[List[str]] = None):
         """
         Update all tree view item icons with thumbnails from the cache.
         Called after background thumbnail preload completes.
@@ -3041,6 +3200,24 @@ class MainWindow(QMainWindow):
         """
         if not self.menu_manager.toggle_thumbnails_action.isChecked():
             return  # Thumbnails are disabled, nothing to do
+
+        if image_paths is not None:
+            for file_path in dict.fromkeys(image_paths):
+                item = self._file_items_by_path.get(os.path.normpath(file_path))
+                if item is None:
+                    continue
+                file_data = item.data(Qt.ItemDataRole.UserRole)
+                if not isinstance(file_data, dict):
+                    continue
+                pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
+                    file_path,
+                    file_size=file_data.get("file_size"),
+                    mtime_ns=file_data.get("mtime_ns"),
+                    memory_only=True,
+                )
+                if pixmap is not None and not pixmap.isNull():
+                    item.setIcon(QIcon(pixmap))
+            return
 
         logger.info("Updating tree view thumbnails from cache...")
         start_time = time.perf_counter()
@@ -3068,6 +3245,7 @@ class MainWindow(QMainWindow):
                         file_path,
                         file_size=file_data.get("file_size"),
                         mtime_ns=file_data.get("mtime_ns"),
+                        memory_only=True,
                     )
 
                     should_update_icon = (
@@ -3538,27 +3716,23 @@ class MainWindow(QMainWindow):
         self.sync_viewer = SynchronizedImageViewer()
         layout.addWidget(self.sync_viewer)
 
-        # Load images
-        if len(selected_paths) == 1:
-            # Single image mode
-            pixmap = self.image_pipeline.get_preview_qpixmap(
-                selected_paths[0],
-                display_max_size=DISPLAY_MAX_RESOLUTION,
+        images_data = []
+        missing_preview_paths = []
+        for path in selected_paths[:2]:
+            pixmap, preview_is_cached = self._get_cached_interactive_pixmap(path)
+            if not preview_is_cached:
+                missing_preview_paths.append(path)
+            metadata = self._get_cached_metadata_for_selection(path) or {}
+            images_data.append(
+                {
+                    "pixmap": pixmap,
+                    "path": path,
+                    "rating": metadata.get("rating", 0),
+                }
             )
-            if pixmap:
-                self.sync_viewer.set_image(pixmap, 0)
-        elif len(selected_paths) >= 2:
-            # Side-by-side comparison mode
-            pixmaps = []
-            for path in selected_paths[:2]:  # Max 2 images
-                pixmap = self.image_pipeline.get_preview_qpixmap(
-                    path, display_max_size=DISPLAY_MAX_RESOLUTION
-                )
-                if pixmap:
-                    pixmaps.append(pixmap)
-
-            if pixmaps:
-                self.sync_viewer.set_images(pixmaps)
+        self.sync_viewer.set_images_data(images_data)
+        if missing_preview_paths:
+            self.preview_load_controller.request(missing_preview_paths)
 
         self.advanced_viewer_window.show()
 
@@ -3626,37 +3800,15 @@ class MainWindow(QMainWindow):
             f"_update_sidebar_with_current_selection: Got cached metadata for {os.path.basename(file_path)}: {metadata}"
         )
 
-        if is_video_extension(file_path):
-            from core.video_metadata import get_basic_video_metadata
-
-            raw_exif = get_basic_video_metadata(file_path)
-            logger.info(
-                "_update_sidebar_with_current_selection: Loaded %d video metadata field(s) for %s",
-                len(raw_exif),
-                os.path.basename(file_path),
-            )
-        else:
-            # Get detailed EXIF data for sidebar - now much cleaner
-            logger.info(
-                "_update_sidebar_with_current_selection: Calling get_detailed_metadata for %s",
-                os.path.basename(file_path),
-            )
-            raw_exif = MetadataProcessor.get_detailed_metadata(
+        # Detailed metadata is populated by the folder's batch metadata worker.
+        # A selection change must remain cache-only so a slow RAW/video parser can
+        # never block navigation on the UI thread.
+        raw_exif = (
+            MetadataProcessor.get_cached_detailed_metadata(
                 file_path, self.app_state.exif_disk_cache
             )
-
-            if not raw_exif:
-                logger.warning(
-                    "_update_sidebar_with_current_selection: No raw EXIF data returned for %s",
-                    os.path.basename(file_path),
-                )
-                raw_exif = {}
-            else:
-                logger.info(
-                    "_update_sidebar_with_current_selection: Got %d raw EXIF keys for %s",
-                    len(raw_exif),
-                    os.path.basename(file_path),
-                )
+            or {}
+        )
 
         # Update sidebar
         logger.info(
@@ -3668,69 +3820,24 @@ class MainWindow(QMainWindow):
         self, file_path: str, direction: str, message: str, is_lossy: bool
     ):
         """Handle successful rotation - update caches and UI."""
-        handle_start_time = time.perf_counter()
         filename = os.path.basename(file_path)
         logger.info(
             f"Handling successful rotation for '{filename}' (Lossy: {is_lossy})"
         )
 
-        t1 = time.perf_counter()
         self.image_pipeline.invalidate_path(file_path)
-        t2 = time.perf_counter()
-        logger.info(f"HSR: Cache clearing for {filename} took {t2 - t1:.4f}s.")
-
-        t3 = time.perf_counter()
-        proxy_idx = self._find_proxy_index_for_path(file_path)
-        t4 = time.perf_counter()
-        logger.info(
-            f"HSR: _find_proxy_index_for_path for {filename} took {t4 - t3:.4f}s."
-        )
-
-        if proxy_idx.isValid():
-            source_idx = self.proxy_model.mapToSource(proxy_idx)
-            item = self.file_system_model.itemFromIndex(source_idx)
-            if item:
-                t5 = time.perf_counter()
-                new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(file_path)
-                t6 = time.perf_counter()
-                logger.info(
-                    f"HSR: get_thumbnail_qpixmap for {filename} took {t6 - t5:.4f}s."
-                )
-                if new_thumbnail:
-                    from PyQt6.QtGui import QIcon
-
-                    item.setIcon(QIcon(new_thumbnail))
-                    logger.info(f"HSR: Set new icon for {filename}.")
+        self.thumbnail_loader.invalidate_paths([file_path])
 
         selected_paths = self._get_selected_file_paths_from_view()
         if file_path in selected_paths:
-            logger.info(
-                f"HSR: {filename} is in current selection, triggering selection changed handler."
-            )
-            t7 = time.perf_counter()
-
-            # Pre-cache the correctly generated preview before the selection handler runs
-            self.image_pipeline.get_preview_qpixmap(
-                file_path,
-                display_max_size=DISPLAY_MAX_RESOLUTION,
-                force_regenerate=True,
-                force_default_brightness=True,  # This is the key change
-            )
-            logger.info(
-                f"HSR: Pre-cached non-brightened preview for {filename} in {time.perf_counter() - t7:.4f}s"
-            )
-
-            t8 = time.perf_counter()
             self._handle_file_selection_changed()
-            t9 = time.perf_counter()
-            logger.info(f"HSR: _handle_file_selection_changed took {t9 - t8:.4f}s.")
+            self.request_interactive_preview(
+                file_path,
+                force_default_brightness=True,
+            )
 
         self.statusBar().showMessage(message, 5000)
-        logger.info(message)  # Log the original user-facing message
-        handle_end_time = time.perf_counter()
-        logger.info(
-            f"HSR: End for {filename}. Total time: {handle_end_time - handle_start_time:.4f}s"
-        )
+        logger.info(message)
 
     def _batch_update_rotated_thumbnails(self, rotated_paths: List[str]):
         """Update thumbnails for a batch of rotated images efficiently.
@@ -3738,19 +3845,8 @@ class MainWindow(QMainWindow):
         Args:
             rotated_paths: List of file paths that were rotated
         """
-        from PyQt6.QtGui import QIcon
-
-        for file_path in rotated_paths:
-            proxy_idx = self._find_proxy_index_for_path(file_path)
-            if proxy_idx.isValid():
-                source_idx = self.proxy_model.mapToSource(proxy_idx)
-                item = self.file_system_model.itemFromIndex(source_idx)
-                if item:
-                    new_thumbnail = self.image_pipeline.get_thumbnail_qpixmap(file_path)
-                    if new_thumbnail:
-                        item.setIcon(QIcon(new_thumbnail))
-
-        logger.info(f"Batch updated {len(rotated_paths)} thumbnails")
+        self.thumbnail_loader.invalidate_paths(rotated_paths)
+        logger.info("Queued %d rotated thumbnails for refresh", len(rotated_paths))
 
     def _rotate_current_image_clockwise(self):
         """Rotate the currently selected image(s) 90° clockwise (for keyboard shortcut)."""
@@ -4205,6 +4301,7 @@ class MainWindow(QMainWindow):
             f"Cleared deletion marks for {len(marked_files)} image(s).", 5000
         )
         self.proxy_model.invalidate()
+        self._refresh_workflow_deletion_state()
 
         visible_paths = self._get_all_visible_image_paths()
         if not visible_paths:
@@ -4301,31 +4398,40 @@ class MainWindow(QMainWindow):
         # Trigger a repaint of the view to draw the underline
         active_view.viewport().update()
 
+        # Displaying a file selected in the list makes the viewer report that
+        # same file as focused. It is already synchronized; touching the
+        # selection again would create a feedback cycle and briefly suppress
+        # genuine keyboard navigation events.
+        if self._get_current_selected_image_path() == file_path:
+            return
+
         proxy_index = self._find_proxy_index_for_path(file_path)
 
         if proxy_index.isValid():
             self._is_syncing_selection = True
+            try:
+                selection_model = active_view.selectionModel()
+                original_selection = selection_model.selection()
 
-            selection_model = active_view.selectionModel()
-            original_selection = selection_model.selection()
+                # Set the current item indicator, which the delegate uses for underlining.
+                # This might temporarily clear the visual selection.
+                active_view.setCurrentIndex(proxy_index)
 
-            # Set the current item indicator, which the delegate uses for underlining.
-            # This might temporarily clear the visual selection.
-            active_view.setCurrentIndex(proxy_index)
+                # Re-apply the original selection to ensure the multi-selection highlight is preserved.
+                if not original_selection.isEmpty():
+                    selection_model.select(
+                        original_selection, QItemSelectionModel.SelectionFlag.Select
+                    )
 
-            # Re-apply the original selection to ensure the multi-selection highlight is preserved.
-            if not original_selection.isEmpty():
-                selection_model.select(
-                    original_selection, QItemSelectionModel.SelectionFlag.Select
+                active_view.scrollTo(
+                    proxy_index, QAbstractItemView.ScrollHint.PositionAtCenter
                 )
-
-            active_view.scrollTo(
-                proxy_index, QAbstractItemView.ScrollHint.PositionAtCenter
-            )
-            active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
-
-            # Reset the flag after the event queue is cleared to prevent loops
-            QTimer.singleShot(0, lambda: setattr(self, "_is_syncing_selection", False))
+                active_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            finally:
+                # Selection-model signals in this UI thread are synchronous.
+                # Never hold the guard across event-loop turns, where it would
+                # discard real arrow-key selections.
+                self._is_syncing_selection = False
 
     def _update_item_blur_status(self, image_path: str, is_blurred: bool):
         self.deletion_controller.update_blur_status(
@@ -4340,8 +4446,6 @@ class MainWindow(QMainWindow):
 
     def _display_side_by_side_comparison(self, file_path):
         """Displays the current image and the rotated suggestion side-by-side."""
-        sbs_start_time = time.perf_counter()
-        logger.info(f"SBS_COMP: Start for {os.path.basename(file_path)}")
         logger.info(
             f"Showing side-by-side comparison for: {os.path.basename(file_path)} (path: {file_path})"
         )
@@ -4349,54 +4453,28 @@ class MainWindow(QMainWindow):
 
         if file_path not in self.rotation_suggestions:
             logger.warning(
-                f"SBS_COMP: File {os.path.basename(file_path)} not in rotation_suggestions."
+                f"File {os.path.basename(file_path)} not in rotation_suggestions."
             )
             return
 
-        rotation = self.rotation_suggestions[file_path]
-        logger.info(f"SBS_COMP: Suggestion is {rotation} degrees.")
-
-        t1 = time.perf_counter()
-        # Load ONE base pixmap, respecting the user's current auto-edit setting.
-        # This represents the "current" view of the image.
-        current_pixmap = self.image_pipeline.get_preview_qpixmap(
-            file_path, DISPLAY_MAX_RESOLUTION
+        current_pixmap, preview_is_cached = self._get_cached_interactive_pixmap(
+            file_path
         )
-        t2 = time.perf_counter()
-        logger.info(f"SBS_COMP: get_preview_qpixmap (base) took: {t2 - t1:.4f}s")
-
-        if current_pixmap and not current_pixmap.isNull():
-            from PyQt6.QtGui import QTransform
-
-            transform = QTransform()
-            transform.rotate(rotation)
-
-            t3 = time.perf_counter()
-            suggested_pixmap = current_pixmap.transformed(
-                transform, Qt.TransformationMode.SmoothTransformation
-            )
-            t4 = time.perf_counter()
-            logger.info(f"SBS_COMP: QPixmap.transformed took: {t4 - t3:.4f}s")
-
-            t5 = time.perf_counter()
-            self.advanced_image_viewer.set_images_data(
-                [
-                    {"pixmap": current_pixmap, "path": file_path, "rating": 0},
-                    {"pixmap": suggested_pixmap, "path": file_path, "rating": 0},
-                ]
-            )
-            t6 = time.perf_counter()
-            logger.info(
-                f"SBS_COMP: advanced_image_viewer.set_images_data took: {t6 - t5:.4f}s"
-            )
+        if current_pixmap is not None:
+            self._render_rotation_comparison(file_path, current_pixmap)
         else:
-            logger.warning(
-                f"SBS_COMP: Failed to load base pixmap for {os.path.basename(file_path)}"
+            metadata = self._get_cached_metadata_for_selection(file_path) or {}
+            loading_data = {
+                "pixmap": None,
+                "path": file_path,
+                "rating": metadata.get("rating", 0),
+            }
+            self.advanced_image_viewer.set_images_data(
+                [loading_data.copy(), loading_data.copy()]
             )
-            self.advanced_image_viewer.clear()
-
-        sbs_end_time = time.perf_counter()
-        logger.info(f"SBS_COMP: End. Total time: {sbs_end_time - sbs_start_time:.4f}s")
+        if not preview_is_cached:
+            self._pending_rotation_comparison_path = file_path
+            self.request_interactive_preview(file_path)
 
     def _accept_all_rotations(self):
         """Apply all suggested rotations and exit rotation view."""

@@ -30,8 +30,14 @@ class PreviewLoadController(QObject):
         self._cancel_event: Event | None = None
         self._primary_path: str | None = None
         self._requested_paths: tuple[str, ...] = ()
+        self._force_default_brightness = False
 
-    def request(self, image_paths: Iterable[str]) -> None:
+    def request(
+        self,
+        image_paths: Iterable[str],
+        *,
+        force_default_brightness: bool = False,
+    ) -> None:
         ordered_paths = tuple(dict.fromkeys(path for path in image_paths if path))
         if not ordered_paths:
             return
@@ -42,6 +48,7 @@ class PreviewLoadController(QObject):
             and set(ordered_paths).issubset(self._requested_paths)
             and self._cancel_event is not None
             and not self._cancel_event.is_set()
+            and force_default_brightness == self._force_default_brightness
         ):
             return
 
@@ -52,12 +59,14 @@ class PreviewLoadController(QObject):
         self._cancel_event = cancel_event
         self._primary_path = primary_path
         self._requested_paths = ordered_paths
+        self._force_default_brightness = force_default_brightness
 
         worker = PreviewPrefetchWorker(
             ordered_paths,
             self._image_pipeline,
             cancel_event,
             request_id,
+            force_default_brightness=force_default_brightness,
         )
         worker.signals.preview_ready.connect(self._handle_preview_ready)
         worker.signals.preview_failed.connect(self._handle_preview_failed)
@@ -75,6 +84,7 @@ class PreviewLoadController(QObject):
         self.cancel()
         self._primary_path = None
         self._requested_paths = ()
+        self._force_default_brightness = False
 
     def shutdown(self) -> None:
         self.reset()

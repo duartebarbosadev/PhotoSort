@@ -296,7 +296,8 @@ This project ships native desktop binaries via PyInstaller and GitHub Actions. K
   - Only create the console `StreamHandler` if `stderr` exists.
   - Default to file logging when `stderr` is `None` (EXE mode). Logs go to:
     - Windows: `%USERPROFILE%\.photosort_logs\photosort_app.log`.
-  - You can still force file logging in dev with `PHOTOSORT_ENABLE_FILE_LOGGING=true`.
+  - You can still force detailed file logging in dev with
+    `PHOTOSORT_ENABLE_FILE_LOGGING=true` and `PHOTOSORT_LOG_LEVEL=DEBUG`.
 
 ### 10.4 PyInstaller flags and hidden imports
 - Windows (EXE): `--onefile -w -n PhotoSort` with `--paths src`.

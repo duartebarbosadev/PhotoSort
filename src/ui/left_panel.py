@@ -144,6 +144,7 @@ class LeftPanel(QWidget):
         # Tree and Grid Views
         self.tree_display_view = DroppableTreeView(self.proxy_model, self.main_window)
         self.tree_display_view.setHeaderHidden(True)
+        self.tree_display_view.setUniformRowHeights(True)
         self.tree_display_view.setIndentation(15)
         self.tree_display_view.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
@@ -187,6 +188,7 @@ class LeftPanel(QWidget):
         )
         self.rotation_suggestions_view.setModel(self.proxy_model)
         self.rotation_suggestions_view.setHeaderHidden(True)
+        self.rotation_suggestions_view.setUniformRowHeights(True)
         self.rotation_suggestions_view.setIndentation(15)
         self.rotation_suggestions_view.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection

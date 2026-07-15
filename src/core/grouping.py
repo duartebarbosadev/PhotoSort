@@ -68,6 +68,10 @@ class GroupingPlan:
     output_root: str = ""
     file_name_overrides: Dict[str, str] = field(default_factory=dict)
     deleted_paths: List[str] = field(default_factory=list)
+    # The Organize UI must not walk the source tree again when the preview
+    # worker has already included non-media files that need to move with it.
+    filesystem_inventory_complete: bool = False
+    source_root: str = ""
 
     def to_preview(self) -> GroupingPreview:
         return GroupingPreview(
@@ -96,6 +100,145 @@ class GroupingPlan:
         if override:
             return override
         return os.path.basename(source_path)
+
+
+def augment_grouping_plan_with_filesystem_paths(
+    plan: GroupingPlan,
+    source_root: Optional[str],
+) -> GroupingPlan:
+    """Include unmanaged files in a grouping plan outside the UI thread.
+
+    The scanner intentionally returns supported media. Organize also needs to
+    preserve other files in directories that contain scanned media (for
+    example JSON metadata). This inventory is prepared by the grouping worker
+    so the widget can render the plan without performing its own filesystem
+    walks.
+    """
+    root = os.path.normpath(source_root or "")
+    if plan.filesystem_inventory_complete:
+        return plan
+    plan.source_root = root
+    if not root or not os.path.isdir(root):
+        plan.filesystem_inventory_complete = True
+        return plan
+
+    planned_paths = list(
+        dict.fromkeys(
+            [path for group in plan.groups for path in group.source_paths]
+            + list(plan.unassigned_paths)
+            + list(plan.skipped_paths)
+        )
+    )
+    normalized_root = os.path.normcase(root)
+    candidate_directories: List[str] = []
+    seen_directories: set[str] = set()
+    for path in planned_paths:
+        directory = os.path.normpath(os.path.dirname(path))
+        normalized_directory = os.path.normcase(directory)
+        try:
+            if (
+                os.path.commonpath([normalized_directory, normalized_root])
+                != normalized_root
+            ):
+                continue
+        except (ValueError, OSError):
+            continue
+        if normalized_directory in seen_directories or not os.path.isdir(directory):
+            continue
+        seen_directories.add(normalized_directory)
+        candidate_directories.append(directory)
+
+    # If a directory is already covered by an ancestor walk, do not traverse
+    # it again. Mixed root/nested media layouts otherwise duplicate most I/O.
+    walk_roots: List[str] = []
+    for directory in sorted(
+        candidate_directories, key=lambda value: value.count(os.sep)
+    ):
+        normalized_directory = os.path.normcase(os.path.normpath(directory))
+        if any(
+            normalized_directory == existing
+            or normalized_directory.startswith(existing + os.sep)
+            for existing in (
+                os.path.normcase(os.path.normpath(value)) for value in walk_roots
+            )
+        ):
+            continue
+        walk_roots.append(directory)
+
+    deleted_paths = [
+        os.path.normcase(os.path.normpath(path))
+        for path in (plan.deleted_paths or [])
+        if path
+    ]
+
+    def is_pending_deletion(path: str) -> bool:
+        normalized_path = os.path.normcase(os.path.normpath(path))
+        for deleted_path in deleted_paths:
+            if normalized_path == deleted_path:
+                return True
+            try:
+                if os.path.commonpath([normalized_path, deleted_path]) == deleted_path:
+                    return True
+            except (ValueError, OSError):
+                continue
+        return False
+
+    discovered_paths: List[str] = []
+    for walk_root in walk_roots:
+        for current_root, _dirnames, filenames in os.walk(walk_root):
+            for filename in filenames:
+                # XMP files follow the separate companion-file preference.
+                if os.path.splitext(filename)[1].lower() == ".xmp":
+                    continue
+                path = os.path.join(current_root, filename)
+                if not is_pending_deletion(path):
+                    discovered_paths.append(path)
+
+    normalized_planned = {
+        os.path.normcase(os.path.normpath(path)) for path in planned_paths
+    }
+    extra_paths = sorted(
+        path
+        for path in dict.fromkeys(discovered_paths)
+        if os.path.normcase(os.path.normpath(path)) not in normalized_planned
+    )
+
+    groups_by_label = {
+        os.path.normpath(group.group_label or ""): group for group in plan.groups
+    }
+    used_group_ids = {str(group.group_id) for group in plan.groups}
+    next_group_id = 1
+
+    for path in extra_paths:
+        relative_directory = os.path.relpath(os.path.dirname(path), root)
+        label = "" if relative_directory in {"", "."} else relative_directory
+        normalized_label = os.path.normpath(label or "")
+        group = groups_by_label.get(normalized_label)
+        if group is None:
+            while str(next_group_id) in used_group_ids:
+                next_group_id += 1
+            group_id = str(next_group_id)
+            next_group_id += 1
+            used_group_ids.add(group_id)
+            group = GroupingGroup(
+                group_id=group_id,
+                group_label=label,
+                source_paths=[],
+            )
+            plan.groups.append(group)
+            groups_by_label[normalized_label] = group
+        group.source_paths.append(path)
+
+    for group in plan.groups:
+        group.source_paths = sorted(dict.fromkeys(group.source_paths))
+    plan.filesystem_inventory_complete = True
+    logger.info(
+        "Grouping filesystem inventory prepared off the UI thread: planned=%d extra=%d roots=%d",
+        len(planned_paths),
+        len(extra_paths),
+        len(walk_roots),
+    )
+    return plan
 
 
 @dataclass
@@ -517,8 +660,19 @@ def _compute_face_vector_from_crop(
     return vector / norm, True
 
 
-def _compute_face_vector(path: str) -> Tuple[Optional[np.ndarray], bool]:
-    image = _load_image_for_features(path)
+def _compute_face_vector(
+    path: str,
+    image_pipeline: Optional[ImagePipeline] = None,
+) -> Tuple[Optional[np.ndarray], bool]:
+    if image_pipeline is not None:
+        from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
+
+        image = image_pipeline.get_analysis_image(
+            path,
+            target_size=ANALYSIS_CACHE_RESOLUTION,
+        )
+    else:
+        image = _load_image_for_features(path)
     if image is None:
         return None, False
     width, height = image.size
@@ -766,7 +920,12 @@ def build_grouping_plan(
             total_items, image_paths, skipped_paths, location_depth
         )
     if mode_value == GroupingMode.FACE:
-        return _build_face_plan(total_items, image_paths, skipped_paths)
+        return _build_face_plan(
+            total_items,
+            image_paths,
+            skipped_paths,
+            image_pipeline=image_pipeline,
+        )
     if mode_value == GroupingMode.MIXED:
         return _build_mixed_plan(
             total_items,
@@ -860,11 +1019,15 @@ def _build_face_plan(
     total_items: int,
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
+    image_pipeline: Optional[ImagePipeline] = None,
 ) -> GroupingPlan:
     vectors: Dict[str, np.ndarray] = {}
     unassigned: List[str] = []
     for path in image_paths:
-        vector, has_face_like_signal = _compute_face_vector(path)
+        vector, has_face_like_signal = _compute_face_vector(
+            path,
+            image_pipeline=image_pipeline,
+        )
         if vector is None or not has_face_like_signal:
             unassigned.append(path)
             continue

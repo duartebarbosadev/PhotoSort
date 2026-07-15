@@ -289,6 +289,7 @@ class RawImageProcessor:
         image_path: str,
         apply_auto_edits: bool = False,
         preview_max_resolution: tuple = PRELOAD_MAX_RESOLUTION,
+        force_default_brightness: bool = False,
     ) -> Optional[Image.Image]:
         """
         Generates a PIL.Image preview from a RAW file for preloading.
@@ -328,13 +329,12 @@ class RawImageProcessor:
                                         "preview_auto_edits", basename
                                     )
                                     temp_img = ImageOps.autocontrast(temp_img)
-                                    enhancer = ImageEnhance.Brightness(temp_img)
-                                    temp_img = enhancer.enhance(
-                                        1.2
-                                    )  # Example brightness factor
+                                    if not force_default_brightness:
+                                        enhancer = ImageEnhance.Brightness(temp_img)
+                                        temp_img = enhancer.enhance(1.2)
                                 # Copy to preserve image data after context exit
                                 pil_img = temp_img.convert("RGBA").copy()
-                            if (
+                            if pil_img is not None and (
                                 pil_img.width > preview_max_resolution[0]
                                 or pil_img.height > preview_max_resolution[1]
                             ):
@@ -376,9 +376,11 @@ class RawImageProcessor:
                         "output_bps": 8,
                         "half_size": True,
                     }
-                    if apply_auto_edits:
+                    if apply_auto_edits and not force_default_brightness:
                         _record_raw_preview_stat("preview_auto_edits", basename)
                         postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_STANDARD
+                        postprocess_params["no_auto_bright"] = False
+                    elif apply_auto_edits:
                         postprocess_params["no_auto_bright"] = False
                     else:
                         logger.debug(
@@ -498,12 +500,12 @@ class RawImageProcessor:
 
                 # Apply PIL enhancements if auto_edits are on, regardless of brightness setting
                 if apply_auto_edits:
-                    logger.info(
+                    logger.debug(
                         f"Applying PIL ImageOps.autocontrast for: {os.path.basename(normalized_path)}"
                     )
                     pil_img = ImageOps.autocontrast(pil_img)
 
-                    logger.info(
+                    logger.debug(
                         f"Applying PIL ImageEnhance.Color (1.2) for: {os.path.basename(normalized_path)}"
                     )
                     color_enhancer = ImageEnhance.Color(pil_img)
@@ -549,6 +551,7 @@ class RawImageProcessor:
         try:
             with rawpy.imread(normalized_path) as raw:
                 temp_pil_img: Optional[Image.Image] = None
+                used_embedded_thumbnail = False
                 try:  # Attempt embedded thumbnail first
                     thumb: ImageFile = raw.extract_thumb()
                     if (
@@ -559,6 +562,7 @@ class RawImageProcessor:
                             img = ImageOps.exif_transpose(img)
                             # Copy to preserve after context exit
                             temp_pil_img = img.copy()
+                            used_embedded_thumbnail = True
                 except (
                     rawpy.LibRawNoThumbnailError,
                     rawpy.LibRawUnsupportedThumbnailError,
@@ -572,34 +576,19 @@ class RawImageProcessor:
                         "half_size": True,
                     }
                     if apply_auto_edits:
-                        logger.debug(
-                            f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_STANDARD}) for blur detection load: {os.path.basename(normalized_path)}"
-                        )
                         postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_STANDARD
                         postprocess_params["no_auto_bright"] = False
                     else:
-                        logger.debug(
-                            f"Disabling auto-bright for blur detection load: {os.path.basename(normalized_path)}"
-                        )
                         postprocess_params["no_auto_bright"] = True
 
                     rgb_array = raw.postprocess(**postprocess_params)
                     temp_pil_img = Image.fromarray(rgb_array)
                     if apply_auto_edits:
-                        logger.debug(
-                            f"Applying ImageOps.autocontrast for blur detection load: {os.path.basename(normalized_path)}"
-                        )
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
 
                 if temp_pil_img:
                     # If embedded thumbnail was used and auto-edits applied, do it here too
-                    if (
-                        apply_auto_edits
-                        and raw.extract_thumb().format == rawpy.ThumbFormat.JPEG
-                    ):  # A bit of a simplification
-                        logger.debug(
-                            f"Applying auto-edits to embedded JPEG thumbnail from RAW for blur detection: {os.path.basename(normalized_path)}"
-                        )
+                    if apply_auto_edits and used_embedded_thumbnail:
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
                         enhancer = ImageEnhance.Brightness(temp_pil_img)
                         temp_pil_img = enhancer.enhance(1.1)

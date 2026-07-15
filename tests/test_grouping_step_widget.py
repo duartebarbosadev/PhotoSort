@@ -20,8 +20,13 @@ _app = QApplication.instance() or QApplication([])
 
 
 class _CacheOnlyPipeline:
-    def __init__(self, *, cached_preview: QPixmap | None = None):
-        self.get_cached_thumbnail_qpixmap = Mock(return_value=None)
+    def __init__(
+        self,
+        *,
+        cached_preview: QPixmap | None = None,
+        cached_thumbnail: QPixmap | None = None,
+    ):
+        self.get_cached_thumbnail_qpixmap = Mock(return_value=cached_thumbnail)
         self.get_cached_preview_qpixmap = Mock(return_value=cached_preview)
         self.get_thumbnail_qpixmap = Mock(return_value=None)
         self.get_preview_qpixmap = Mock(return_value=cached_preview)
@@ -50,7 +55,7 @@ def test_grouping_step_widget_tracks_mode_and_busy_state():
     )
 
     assert widget.primary_button.isEnabled()
-    assert widget.primary_button.text() == "Apply Changes"
+    assert widget.primary_button.text() == "Review, then Apply"
     assert widget.folder_button.isEnabled()
     assert all(btn.isEnabled() for btn in widget._mode_buttons.values())
 
@@ -63,7 +68,7 @@ def test_grouping_step_widget_tracks_mode_and_busy_state():
 
     widget.set_busy(False)
     assert widget.primary_button.isEnabled()
-    assert widget.primary_button.text() == "Apply Changes"
+    assert widget.primary_button.text() == "Review, then Apply"
     assert widget.folder_button.isEnabled()
     assert widget.back_button.isEnabled()
     assert all(btn.isEnabled() for btn in widget._mode_buttons.values())
@@ -102,7 +107,7 @@ def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
     ]
 
 
-def test_grouping_step_widget_set_preview_plan_uses_cached_thumbnails_only(tmp_path):
+def test_grouping_step_widget_set_preview_plan_does_not_read_thumbnail_cache(tmp_path):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
@@ -135,10 +140,49 @@ def test_grouping_step_widget_set_preview_plan_uses_cached_thumbnails_only(tmp_p
 
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     assert pipeline.get_preview_qpixmap.call_count == 0
-    assert pipeline.get_cached_thumbnail_qpixmap.call_count >= 4
+    assert pipeline.get_cached_thumbnail_qpixmap.call_count == 0
+
+    widget.refresh_cached_thumbnails([first])
+
+    # One completion updates the matching item in each tree, without touching
+    # the thousands of other rows a real folder may contain.
+    assert pipeline.get_cached_thumbnail_qpixmap.call_count == 2
 
 
-def test_grouping_step_widget_selected_preview_loads_immediately_on_cache_miss(
+def test_cached_thumbnail_update_does_not_rebuild_organize_trees(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "a.jpg")
+    source_root.joinpath("a.jpg").write_bytes(b"preview")
+    thumbnail = QPixmap(16, 16)
+
+    pipeline = _CacheOnlyPipeline(cached_thumbnail=thumbnail)
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(image_pipeline=pipeline)
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="demo", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    widget._refresh_preview_trees = Mock()
+
+    widget.refresh_cached_thumbnails([first])
+
+    widget._refresh_preview_trees.assert_not_called()
+    assert widget._file_name_overrides == {}
+    assert not widget._after_file_items_by_path[first].icon(0).isNull()
+
+
+def test_grouping_step_widget_selected_preview_uses_cached_preview_immediately(
     tmp_path,
 ):
     source_root = tmp_path / "demo"
@@ -149,20 +193,27 @@ def test_grouping_step_widget_selected_preview_loads_immediately_on_cache_miss(
 
     preview = QPixmap(10, 10)
     preview.fill()
-    pipeline = _CacheOnlyPipeline()
-    pipeline.get_preview_qpixmap.return_value = preview
+    pipeline = _CacheOnlyPipeline(cached_preview=preview)
+    request_preview = Mock()
     widget = GroupingStepWidget()
-    widget._parent_window = SimpleNamespace(image_pipeline=pipeline)
+    widget._parent_window = SimpleNamespace(
+        image_pipeline=pipeline,
+        request_interactive_preview=request_preview,
+    )
 
     widget._update_selected_preview(first)
 
-    assert pipeline.get_preview_qpixmap.call_count == 1
+    assert pipeline.get_cached_preview_qpixmap.call_count == 1
+    assert pipeline.get_preview_qpixmap.call_count == 0
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
+    request_preview.assert_not_called()
     assert widget.large_preview_name.text() == "a.jpg"
-    assert widget.large_preview_view.current_pixmap() is not None
+    assert widget.large_preview_view.has_image()
 
 
-def test_grouping_step_widget_selected_preview_falls_back_to_thumbnail(tmp_path):
+def test_grouping_step_widget_selected_preview_queues_upgrade_from_cached_thumbnail(
+    tmp_path,
+):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
@@ -171,18 +222,49 @@ def test_grouping_step_widget_selected_preview_falls_back_to_thumbnail(tmp_path)
 
     thumbnail = QPixmap(12, 12)
     thumbnail.fill()
-    pipeline = _CacheOnlyPipeline()
-    pipeline.get_preview_qpixmap.return_value = None
-    pipeline.get_thumbnail_qpixmap.return_value = thumbnail
+    pipeline = _CacheOnlyPipeline(cached_thumbnail=thumbnail)
+    request_preview = Mock()
 
     widget = GroupingStepWidget()
-    widget._parent_window = SimpleNamespace(image_pipeline=pipeline)
+    widget._parent_window = SimpleNamespace(
+        image_pipeline=pipeline,
+        request_interactive_preview=request_preview,
+    )
 
     widget._update_selected_preview(first)
 
-    assert pipeline.get_preview_qpixmap.call_count == 1
-    assert pipeline.get_thumbnail_qpixmap.call_count == 1
-    assert widget.large_preview_view.current_pixmap() is not None
+    assert pipeline.get_cached_preview_qpixmap.call_count == 1
+    assert pipeline.get_cached_thumbnail_qpixmap.call_count == 1
+    assert pipeline.get_preview_qpixmap.call_count == 0
+    assert pipeline.get_thumbnail_qpixmap.call_count == 0
+    request_preview.assert_called_once_with(first)
+    assert widget.large_preview_view.has_image()
+
+
+def test_grouping_step_widget_applies_only_current_background_preview(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "a.jpg")
+    second = str(source_root / "b.jpg")
+    source_root.joinpath("a.jpg").write_bytes(b"preview")
+    source_root.joinpath("b.jpg").write_bytes(b"preview")
+
+    preview = QPixmap(20, 20)
+    preview.fill()
+    pipeline = _CacheOnlyPipeline()
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(
+        image_pipeline=pipeline,
+        request_interactive_preview=Mock(),
+    )
+    widget._update_selected_preview(second)
+    pipeline.get_cached_preview_qpixmap.return_value = preview
+
+    widget.handle_preview_ready(first)
+    assert not widget.large_preview_view.has_image()
+
+    widget.handle_preview_ready(second)
+    assert widget.large_preview_view.has_image()
 
 
 def test_grouping_step_widget_folder_preview_uses_cached_thumbnails_only(tmp_path):
@@ -223,23 +305,6 @@ def test_grouping_step_widget_folder_preview_uses_cached_thumbnails_only(tmp_pat
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     assert pipeline.get_preview_qpixmap.call_count == 0
     assert pipeline.get_cached_thumbnail_qpixmap.call_count == 2
-
-
-def test_grouping_step_widget_filesystem_walk_filters_non_media(tmp_path):
-    source_root = tmp_path / "demo"
-    beach_dir = source_root / "Beach"
-    beach_dir.mkdir(parents=True)
-    media_path = beach_dir / "a.jpg"
-    text_path = beach_dir / "notes.txt"
-    media_path.write_bytes(b"preview")
-    text_path.write_text("ignore me")
-
-    widget = GroupingStepWidget()
-    widget.set_source_folder(str(source_root))
-
-    discovered = widget._filesystem_file_paths_under_root(str(source_root))
-
-    assert discovered == [str(media_path)]
 
 
 def test_grouping_step_widget_hides_leaf_only_context_actions(tmp_path):

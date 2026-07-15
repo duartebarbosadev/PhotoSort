@@ -110,7 +110,7 @@ class WorkerManager(QObject):
 
     # Thumbnail Preload Signals (background, not blocking scan)
     thumbnail_preload_progress = pyqtSignal(int, int, str)  # current, total, message
-    thumbnail_preload_finished = pyqtSignal()
+    thumbnail_preload_finished = pyqtSignal(object)  # completed image paths
     thumbnail_preload_error = pyqtSignal(str)
 
     # Best Shot Analysis Signals
@@ -955,7 +955,7 @@ class WorkerManager(QObject):
         # Start the thread
         self.thumbnail_preload_thread.start()
 
-    def _cleanup_thumbnail_preload_worker(self):
+    def _cleanup_thumbnail_preload_worker(self, _image_paths=None):
         """Clean up the thumbnail preload worker and thread."""
         self._finish_worker_slot(
             "thumbnail_preload_thread",
@@ -1036,6 +1036,7 @@ class WorkerManager(QObject):
             cluster_map=cluster_map,
             embeddings_cache=embeddings_cache,
             exif_disk_cache=exif_disk_cache,
+            image_pipeline=self.image_pipeline,
         )
         self.easy_delete_worker.moveToThread(self.easy_delete_thread)
 

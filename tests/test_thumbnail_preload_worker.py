@@ -45,7 +45,7 @@ class TestThumbnailPreloadWorker:
         finished_emitted = []
 
         worker.progress.connect(lambda c, t, m: progress_signals.append((c, t, m)))
-        worker.finished.connect(lambda: finished_emitted.append(True))
+        worker.finished.connect(lambda paths: finished_emitted.append(paths))
 
         test_paths = ["/test/image1.jpg", "/test/image2.jpg"]
 
@@ -64,7 +64,7 @@ class TestThumbnailPreloadWorker:
         assert "should_continue_callback" in call_args[1]
 
         # Verify finished signal was emitted
-        assert len(finished_emitted) == 1
+        assert finished_emitted == [test_paths]
 
     def test_progress_callback_emits_signal(self):
         """Test that progress callback emits progress signal."""
@@ -148,7 +148,7 @@ class TestThumbnailPreloadWorker:
         worker = ThumbnailPreloadWorker(image_pipeline=mock_pipeline)
 
         finished_emitted = []
-        worker.finished.connect(lambda: finished_emitted.append(True))
+        worker.finished.connect(lambda paths: finished_emitted.append(paths))
 
         # Run with empty list
         worker.preload_thumbnails([])
@@ -157,4 +157,4 @@ class TestThumbnailPreloadWorker:
         mock_pipeline.preload_thumbnails.assert_not_called()
 
         # Should still emit finished signal
-        assert len(finished_emitted) == 1
+        assert finished_emitted == [[]]

@@ -2072,6 +2072,289 @@ QPushButton#refuseAllButton:pressed {
 }
 
 /* ─────────────────────────────────────────────────────────────────
+   Guided workflow review system (Easy Delete, Fix Rotation, Pick Best)
+   ───────────────────────────────────────────────────────────────── */
+
+QWidget#workflowReviewPage {
+    background-color: #202326;
+}
+
+QFrame#workflowReviewHeader {
+    background-color: #292D31;
+    border: none;
+    border-bottom: 1px solid #3B4248;
+}
+
+QLabel#workflowStepPill {
+    background-color: #183B68;
+    color: #8FC5FF;
+    border: 1px solid #285789;
+    border-radius: 7px;
+    padding: 3px 8px;
+    font-size: 7.5pt;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+QLabel#workflowReviewTitle {
+    color: #F2F5F7;
+    font-size: 14pt;
+    font-weight: 750;
+    background: transparent;
+}
+
+QLabel#workflowReviewDescription {
+    color: #83919C;
+    font-size: 8.5pt;
+    background: transparent;
+}
+
+QLabel#workflowReviewSummary {
+    color: #B7C2CB;
+    background-color: #22272B;
+    border: 1px solid #3B4248;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 8.5pt;
+    font-weight: 650;
+}
+
+QLabel#workflowReviewSummary[tone="danger"] {
+    color: #FF9AA3;
+    background-color: #3A2429;
+    border-color: #6E343D;
+}
+
+QLabel#workflowReviewSummary[tone="warning"] {
+    color: #F2C96D;
+    background-color: #352F20;
+    border-color: #66552B;
+}
+
+QFrame#workflowShortcutStrip {
+    background-color: #22262A;
+    border: 1px solid #3A4147;
+    border-radius: 8px;
+}
+
+QLabel#workflowShortcutHeading {
+    color: #66737E;
+    font-size: 7pt;
+    font-weight: 800;
+    letter-spacing: 1px;
+    background: transparent;
+}
+
+QLabel#workflowKeycap {
+    background-color: #343A40;
+    color: #E3E8EC;
+    border: 1px solid #505960;
+    border-bottom: 2px solid #202428;
+    border-radius: 5px;
+    padding: 1px 5px;
+    min-width: 12px;
+    font-size: 7.5pt;
+    font-weight: 700;
+}
+
+QLabel#workflowShortcutLabel {
+    color: #7E8A94;
+    font-size: 7.5pt;
+    background: transparent;
+}
+
+QPushButton#workflowGhostButton {
+    background-color: transparent;
+    color: #AAB5BE;
+    border: 1px solid #485058;
+    border-radius: 7px;
+    padding: 5px 11px;
+    font-size: 8.5pt;
+    font-weight: 600;
+}
+
+QPushButton#workflowGhostButton:hover {
+    background-color: #363C42;
+    border-color: #626E77;
+    color: #FFFFFF;
+}
+
+QPushButton#workflowGhostButton:disabled {
+    background-color: transparent;
+    color: #505A62;
+    border-color: #343A3F;
+}
+
+QPushButton#workflowPrimaryButton {
+    background-color: #176F46;
+    color: #FFFFFF;
+    border: 1px solid #23895A;
+    border-radius: 7px;
+    padding: 6px 15px;
+    min-height: 20px;
+    font-size: 8.75pt;
+    font-weight: 750;
+}
+
+QPushButton#workflowPrimaryButton:hover {
+    background-color: #1C8252;
+    border-color: #2CA068;
+}
+
+QPushButton#workflowPrimaryButton:disabled {
+    background-color: #2D3A34;
+    color: #69766F;
+    border-color: #39483F;
+}
+
+QPushButton#workflowDecisionKeep,
+QPushButton#workflowDecisionTrash,
+QPushButton#workflowDecisionRotate {
+    background-color: #2B3035;
+    color: #AAB5BE;
+    border: 1px solid #454D54;
+    border-radius: 7px;
+    padding: 6px 11px;
+    min-height: 20px;
+    font-size: 8.5pt;
+    font-weight: 650;
+}
+
+QPushButton#workflowDecisionKeep:hover,
+QPushButton#workflowDecisionTrash:hover,
+QPushButton#workflowDecisionRotate:hover {
+    background-color: #353C42;
+    color: #FFFFFF;
+}
+
+QPushButton#workflowDecisionKeep:checked {
+    color: #A5E4C0;
+    background-color: #1E4934;
+    border-color: #2A7950;
+}
+
+QPushButton#workflowDecisionTrash:checked {
+    color: #FFFFFF;
+    background-color: #8C303B;
+    border-color: #C14A58;
+}
+
+QPushButton#workflowDecisionRotate:checked {
+    color: #D9F7FF;
+    background-color: #145A70;
+    border-color: #2189A6;
+}
+
+QFrame#workflowStateBanner {
+    background-color: #272C31;
+    border: 1px solid #414950;
+    border-radius: 7px;
+}
+
+QFrame#workflowStateBanner[tone="danger"] {
+    background-color: #392328;
+    border-color: #713640;
+}
+
+QFrame#workflowStateBanner[tone="warning"] {
+    background-color: #353021;
+    border-color: #67572D;
+}
+
+QFrame#workflowStateBanner[tone="success"] {
+    background-color: #20372B;
+    border-color: #326047;
+}
+
+QFrame#workflowStateBanner[tone="info"] {
+    background-color: #202F3A;
+    border-color: #34566B;
+}
+
+QLabel#workflowStateIcon {
+    color: #91A0AB;
+    background: transparent;
+    font-size: 11pt;
+    font-weight: 800;
+}
+
+QLabel#workflowStateTitle {
+    color: #E2E7EB;
+    background: transparent;
+    font-size: 8.75pt;
+    font-weight: 750;
+}
+
+QLabel#workflowStateDetail {
+    color: #8C99A3;
+    background: transparent;
+    font-size: 8.25pt;
+}
+
+QFrame#workflowStateBanner[tone="danger"] QLabel#workflowStateIcon,
+QFrame#workflowStateBanner[tone="danger"] QLabel#workflowStateTitle {
+    color: #FF8F99;
+}
+
+QFrame#workflowStateBanner[tone="warning"] QLabel#workflowStateIcon,
+QFrame#workflowStateBanner[tone="warning"] QLabel#workflowStateTitle {
+    color: #F3C85F;
+}
+
+QFrame#workflowStateBanner[tone="success"] QLabel#workflowStateIcon,
+QFrame#workflowStateBanner[tone="success"] QLabel#workflowStateTitle {
+    color: #78D99F;
+}
+
+QFrame#workflowStateBanner[tone="info"] QLabel#workflowStateIcon,
+QFrame#workflowStateBanner[tone="info"] QLabel#workflowStateTitle {
+    color: #7DC8F1;
+}
+
+QWidget#workflowClusterBar {
+    background-color: #252A2E;
+    border: 1px solid #393F44;
+    border-radius: 8px;
+}
+
+QFrame#workflowCompareCard {
+    border-radius: 9px;
+}
+
+QLabel#workflowCompareSlot {
+    border-radius: 11px;
+    background-color: #14191E;
+    color: #C3CCD3;
+    font-weight: 750;
+}
+
+QLabel#workflowCompareName {
+    color: #F1F4F6;
+    font-size: 9pt;
+    font-weight: 650;
+}
+
+QLabel#workflowCompareScore {
+    color: #9CA8B2;
+    font-size: 8.25pt;
+}
+
+QLabel#workflowCompareMetaKey {
+    color: #71808B;
+    font-size: 7.75pt;
+}
+
+QLabel#workflowCompareMetaValue {
+    color: #CBD3D9;
+    font-size: 7.75pt;
+}
+
+QLabel#workflowCompareHint {
+    color: #66727C;
+    font-size: 7.5pt;
+}
+
+/* ─────────────────────────────────────────────────────────────────
    Step 1 — Group Photos (new two-tree layout)
    ───────────────────────────────────────────────────────────────── */
 

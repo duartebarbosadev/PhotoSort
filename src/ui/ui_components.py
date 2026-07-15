@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QStyleOptionViewItem,
     QListView,
 )
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex, QPoint, QRect
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QModelIndex, QPoint, QRect, QSize
 from PyQt6.QtGui import (
     QPainter,
     QPalette,
@@ -293,6 +293,21 @@ class FocusHighlightDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self.app_state = app_state
         self.main_window = main_window
+
+    def sizeHint(
+        self,
+        option: Optional[QStyleOptionViewItem],
+        index: Optional[QModelIndex],
+    ) -> QSize:
+        """Reserve stable row height before asynchronous thumbnails arrive."""
+        size = super().sizeHint(option, index)
+        view = option.widget if option is not None else None
+        if view is None or not hasattr(view, "iconSize"):
+            return size
+        icon_size = view.iconSize()
+        if icon_size.isValid() and icon_size.height() > 0:
+            size.setHeight(max(size.height(), icon_size.height() + 4))
+        return size
 
     def paint(
         self,

@@ -17,7 +17,7 @@ class ThumbnailPreloadWorker(QObject):
 
     # Signals
     progress = pyqtSignal(int, int, str)  # current, total, message
-    finished = pyqtSignal()
+    finished = pyqtSignal(object)  # paths whose thumbnails are now cached
     error = pyqtSignal(str)
 
     def __init__(self, image_pipeline: ImagePipeline):
@@ -42,7 +42,7 @@ class ThumbnailPreloadWorker(QObject):
 
         if total == 0:
             logger.info("No images to preload thumbnails for")
-            self.finished.emit()
+            self.finished.emit([])
             return
 
         logger.info(f"Starting thumbnail preload for {total} images")
@@ -69,7 +69,7 @@ class ThumbnailPreloadWorker(QObject):
 
             if self._is_running:
                 logger.info(f"Thumbnail preload complete for {total} images")
-                self.finished.emit()
+                self.finished.emit(list(image_paths))
             else:
                 logger.info("Thumbnail preload stopped by user request")
 

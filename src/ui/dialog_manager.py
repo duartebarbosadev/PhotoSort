@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
 )
-from PyQt6.QtCore import Qt, QSize, QUrl, QEventLoop, QThread
+from PyQt6.QtCore import Qt, QSize, QUrl
 from PyQt6.QtGui import QIcon, QDesktopServices
 
 from core.app_settings import (
@@ -55,7 +55,6 @@ from ui.dialog_components import (
     build_dialog_header,
     make_dialog_draggable,
 )
-from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +80,6 @@ def _build_kv_row(key_text, value_widget, parent_layout):
 class DialogManager:
     """A manager class for handling the creation of dialogs."""
 
-    THUMBNAIL_PRELOAD_ASYNC_THRESHOLD = 20
-
     def __init__(self, parent):
         """
         Initialize the DialogManager.
@@ -97,6 +94,16 @@ class DialogManager:
     def _should_apply_raw_processing(self, file_path: str) -> bool:
         """Determine if RAW processing should be applied to the given file."""
         return is_raw_file(file_path)
+
+    def _cached_thumbnail_icon(self, file_path: str) -> QIcon:
+        """Build a dialog icon without decoding media on the UI thread."""
+        pixmap = self.parent.image_pipeline.get_cached_thumbnail_qpixmap(
+            file_path,
+            memory_only=True,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return QIcon(pixmap)
+        return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
 
     def _has_raw_images(self, file_paths: List[str]) -> bool:
         """Check if any of the provided file paths are RAW image files."""
@@ -1414,16 +1421,13 @@ class DialogManager:
         list_widget.setSpacing(10)
 
         for file_path in files:
-            thumbnail_pixmap = self.parent.image_pipeline.get_thumbnail_qpixmap(
-                file_path,
-                apply_orientation=True,
+            item = QListWidgetItem(
+                self._cached_thumbnail_icon(file_path),
+                os.path.basename(file_path),
             )
-            if thumbnail_pixmap:
-                icon = QIcon(thumbnail_pixmap)
-                item = QListWidgetItem(icon, os.path.basename(file_path))
-                item.setSizeHint(QSize(148, 168))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                list_widget.addItem(item)
+            item.setSizeHint(QSize(148, 168))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            list_widget.addItem(item)
 
         body.addWidget(list_widget)
         outer.addLayout(body)
@@ -1458,9 +1462,6 @@ class DialogManager:
             f"Showing confirm delete dialog for {len(deleted_file_paths)} files"
         )
 
-        if deleted_file_paths:
-            self._preload_thumbnails_for_dialog(deleted_file_paths)
-
         num_selected = len(deleted_file_paths)
         if num_selected == 1:
             message = "Are you sure you want to move this image to the trash?"
@@ -1475,72 +1476,6 @@ class DialogManager:
             f"User {'confirmed' if result else 'cancelled'} confirm delete dialog"
         )
         return result
-
-    def _preload_thumbnails_for_dialog(self, file_paths: List[str]):
-        """Preload thumbnails with optional background worker to keep the UI responsive."""
-        if not file_paths:
-            return
-
-        total = len(file_paths)
-        base_message = f"Loading previews for {total} images..."
-        self.parent.show_loading_overlay(base_message)
-
-        if total < self.THUMBNAIL_PRELOAD_ASYNC_THRESHOLD:
-            try:
-                self.parent.image_pipeline.preload_thumbnails(
-                    file_paths,
-                    progress_callback=lambda processed, total_count: (
-                        self.parent.update_loading_text(
-                            f"{base_message} ({processed}/{total_count})"
-                        )
-                    ),
-                )
-            except Exception:
-                logger.error(
-                    "Error preloading thumbnails for dialog.",
-                    exc_info=True,
-                )
-            finally:
-                self.parent.hide_loading_overlay()
-            return
-
-        loop = QEventLoop()
-        thread = QThread(self.parent)
-        worker = ThumbnailPreloadWorker(self.parent.image_pipeline)
-        worker.moveToThread(thread)
-        result = {"error": None}
-
-        def _update_progress(current: int, total_count: int, message: str):
-            progress_text = message or f"{base_message} ({current}/{total_count})"
-            self.parent.update_loading_text(progress_text)
-
-        def _on_finished():
-            loop.quit()
-
-        def _on_error(message: str):
-            result["error"] = message
-            loop.quit()
-
-        worker.progress.connect(_update_progress)
-        worker.finished.connect(_on_finished)
-        worker.error.connect(_on_error)
-        thread.started.connect(lambda: worker.preload_thumbnails(file_paths))
-
-        try:
-            thread.start()
-            loop.exec()
-        finally:
-            worker.stop()
-            thread.quit()
-            thread.wait()
-            worker.deleteLater()
-            thread.deleteLater()
-            self.parent.hide_loading_overlay()
-
-        if result["error"]:
-            logger.warning(
-                f"Thumbnail preload error during dialog preparation: {result['error']}"
-            )
 
     def show_potential_cache_overflow_warning(
         self,
@@ -1597,9 +1532,6 @@ class DialogManager:
         """
         logger.info(f"Showing commit deletions dialog for {len(marked_files)} files")
 
-        if marked_files:
-            self._preload_thumbnails_for_dialog(marked_files)
-
         count = len(marked_files)
         result = self._show_delete_confirmation_dialog(
             files=marked_files,
@@ -1641,9 +1573,6 @@ class DialogManager:
         """
         Shared helper to present a confirmation dialog for pending deletions.
         """
-        if marked_files:
-            self._preload_thumbnails_for_dialog(marked_files)
-
         dialog = QDialog(self.parent)
         dialog.setWindowTitle(window_title)
         dialog.setObjectName(f"{object_name_prefix}Dialog")
@@ -1680,18 +1609,10 @@ class DialogManager:
         list_widget.setSpacing(10)
 
         for file_path in marked_files:
-            thumbnail_pixmap = self.parent.image_pipeline.get_thumbnail_qpixmap(
-                file_path,
-                apply_orientation=True,
+            item = QListWidgetItem(
+                self._cached_thumbnail_icon(file_path),
+                os.path.basename(file_path),
             )
-            if thumbnail_pixmap:
-                icon = QIcon(thumbnail_pixmap)
-            else:
-                icon = self.parent.style().standardIcon(
-                    QStyle.StandardPixmap.SP_FileIcon
-                )
-
-            item = QListWidgetItem(icon, os.path.basename(file_path))
             item.setSizeHint(QSize(148, 168))
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             list_widget.addItem(item)

@@ -8,6 +8,7 @@ external apply_auto_edits parameters.
 
 import inspect
 from unittest.mock import Mock, patch
+from core.app_settings import PRELOAD_MAX_RESOLUTION
 from src.core.image_pipeline import CACHE_SCHEMA_VERSION, ImagePipeline
 from src.core.image_processing.raw_image_processor import is_raw_extension
 from PIL import Image
@@ -274,6 +275,27 @@ def test_get_cached_preview_qpixmap_does_not_generate_on_cache_miss(tmp_path):
     assert pixmap is None
 
 
+def test_memory_only_preview_lookup_never_reads_disk_cache(tmp_path):
+    image_path = tmp_path / "disk-cached.jpg"
+    image_path.write_bytes(b"preview")
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+    pipeline.preview_cache.get = Mock(
+        return_value=Image.new("RGB", (800, 600), color="red")
+    )
+
+    pixmap = pipeline.get_cached_preview_qpixmap(
+        str(image_path),
+        display_max_size=(800, 600),
+        memory_only=True,
+    )
+
+    assert pixmap is None
+    pipeline.preview_cache.get.assert_not_called()
+
+
 def test_get_cached_preview_qpixmap_uses_high_res_cache_without_generation(tmp_path):
     image_path = tmp_path / "a.jpg"
     image_path.write_bytes(b"preview")
@@ -303,3 +325,66 @@ def test_get_cached_preview_qpixmap_uses_high_res_cache_without_generation(tmp_p
 
     assert pixmap is not None
     pipeline.preview_cache.set.assert_called_once()
+
+
+def test_display_preview_uses_bounded_raw_preview_processor(tmp_path):
+    image_path = tmp_path / "a.arw"
+    image_path.write_bytes(b"raw")
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+    expected = Image.new("RGBA", (800, 600), color="blue")
+
+    with (
+        patch(
+            "src.core.image_pipeline.RawImageProcessor.process_raw_for_preview",
+            return_value=expected,
+        ) as process_preview,
+        patch(
+            "src.core.image_pipeline.RawImageProcessor.load_raw_as_pil",
+            side_effect=AssertionError(
+                "display previews must not fully decode RAW files"
+            ),
+        ),
+    ):
+        result = pipeline._generate_pil_preview_for_display(
+            str(image_path),
+            (800, 600),
+        )
+
+    assert result is expected
+    process_preview.assert_called_once_with(
+        str(image_path),
+        True,
+        (800, 600),
+        force_default_brightness=False,
+    )
+
+
+def test_forced_default_brightness_replaces_existing_navigation_preview(tmp_path):
+    image_path = tmp_path / "rotated.arw"
+    image_path.write_bytes(b"raw")
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+    pipeline.preview_cache.get = Mock(
+        return_value=Image.new("RGB", (32, 32), color="red")
+    )
+    replacement = Image.new("RGB", (64, 64), color="blue")
+
+    with patch(
+        "src.core.image_pipeline.RawImageProcessor.process_raw_for_preview",
+        return_value=replacement,
+    ) as process_preview:
+        assert pipeline.ensure_preview_cached(
+            str(image_path), force_default_brightness=True
+        )
+
+    process_preview.assert_called_once_with(
+        str(image_path),
+        True,
+        PRELOAD_MAX_RESOLUTION,
+        force_default_brightness=True,
+    )

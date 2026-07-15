@@ -8,6 +8,7 @@ from src.core.grouping import (
     GroupingMode,
     GroupingGroup,
     GroupingPlan,
+    augment_grouping_plan_with_filesystem_paths,
     build_grouping_output_root,
     build_grouping_plan,
     execute_grouping_plan,
@@ -56,6 +57,47 @@ def _create_offset_face_like_image(
         width=4,
     )
     image.save(path)
+
+
+def test_grouping_inventory_adds_unmanaged_files_once_in_shared_core(
+    tmp_path, monkeypatch
+):
+    source_root = tmp_path / "source"
+    media_dir = source_root / "Beach"
+    unrelated_dir = source_root / "Documents"
+    media_dir.mkdir(parents=True)
+    unrelated_dir.mkdir()
+    image_path = media_dir / "a.jpg"
+    metadata_path = media_dir / "a.json"
+    xmp_path = media_dir / "a.xmp"
+    unrelated_path = unrelated_dir / "notes.txt"
+    _create_solid_image(str(image_path), (120, 80, 40))
+    metadata_path.write_text("{}", encoding="utf-8")
+    xmp_path.write_text("sidecar", encoding="utf-8")
+    unrelated_path.write_text("unrelated", encoding="utf-8")
+
+    plan = build_grouping_plan(
+        [{"path": str(image_path)}],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+    augment_grouping_plan_with_filesystem_paths(plan, str(source_root))
+
+    planned_paths = {path for group in plan.groups for path in group.source_paths}
+    assert planned_paths == {str(image_path), str(metadata_path)}
+    assert str(xmp_path) not in planned_paths
+    assert str(unrelated_path) not in planned_paths
+    assert plan.filesystem_inventory_complete
+    assert plan.source_root == str(source_root)
+
+    monkeypatch.setattr(
+        os,
+        "walk",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed inventory must not be scanned again")
+        ),
+    )
+    augment_grouping_plan_with_filesystem_paths(plan, str(source_root))
 
 
 def test_similarity_grouping_plan_uses_ml_similarity_pipeline(tmp_path, monkeypatch):

@@ -9,7 +9,7 @@ from core.image_features.model_rotation_detector import (
 )
 from core.image_pipeline import ImagePipeline
 from core.caching.exif_cache import ExifCache
-from core.app_settings import calculate_max_workers
+from core.app_settings import ROTATION_MODEL_IMAGE_SIZE, calculate_max_workers
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +43,15 @@ class RotationDetector:
         then the model predicts any remaining rotation.
         """
         try:
-            # Get the image with EXIF orientation already applied by the pipeline.
-            # Auto-edits are automatically applied for RAW files by the pipeline.
-            pil_image = self.image_pipeline.get_pil_image_for_processing(
+            model_input_size = ROTATION_MODEL_IMAGE_SIZE + 32
+            pil_image = self.image_pipeline.get_analysis_image(
                 image_path,
-                use_preloaded_preview_if_available=False,
-                apply_exif_transpose=True,  # This is the key change.
+                target_size=(model_input_size, model_input_size),
             )
+            if pil_image is None:
+                if result_callback:
+                    result_callback(image_path, 0)
+                return
 
             final_suggested_rotation = self.model_detector.predict_rotation_angle(
                 image_path, image=pil_image
@@ -80,7 +82,6 @@ class RotationDetector:
     ) -> None:
         """
         Detects rotation suggestions for a batch of images in parallel.
-        Auto-edits are automatically applied for RAW files.
         """
         total_files = len(image_paths)
         processed_count = 0

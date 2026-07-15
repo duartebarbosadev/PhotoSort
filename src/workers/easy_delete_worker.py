@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from core import app_settings
 from core.image_features.blur_detector import BLUR_DETECTION_PREVIEW_SIZE, BlurDetector
+from core.image_pipeline import ImagePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class EasyDeleteWorker(QObject):
         cluster_map: Optional[Dict[int, List[str]]] = None,
         embeddings_cache: Optional[Dict] = None,
         exif_disk_cache=None,
+        image_pipeline: Optional[ImagePipeline] = None,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
@@ -44,6 +46,7 @@ class EasyDeleteWorker(QObject):
         self.cluster_map = cluster_map or {}
         self.embeddings_cache = embeddings_cache or {}
         self.exif_disk_cache = exif_disk_cache
+        self.image_pipeline = image_pipeline
         self._should_stop = False
         self._sharpness_cache: Dict[str, float] = {}
         self._hash_cache: Dict[str, Optional[str]] = {}
@@ -141,11 +144,17 @@ class EasyDeleteWorker(QObject):
         return max_variance
 
     def _load_gray_for_detection(self, path: str) -> Optional[np.ndarray]:
-        pil_img = BlurDetector._load_image_for_detection(
-            path,
-            target_size=BLUR_DETECTION_PREVIEW_SIZE,
-            apply_auto_edits_for_raw=True,
-        )
+        if self.image_pipeline is not None:
+            pil_img = self.image_pipeline.get_analysis_image(
+                path,
+                target_size=BLUR_DETECTION_PREVIEW_SIZE,
+            )
+        else:
+            pil_img = BlurDetector._load_image_for_detection(
+                path,
+                target_size=BLUR_DETECTION_PREVIEW_SIZE,
+                apply_auto_edits_for_raw=False,
+            )
         if pil_img is None:
             return None
 

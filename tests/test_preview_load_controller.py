@@ -5,9 +5,11 @@ from ui.controllers.preview_load_controller import PreviewLoadController
 class _Pipeline:
     def __init__(self):
         self.generated = []
+        self.options = []
 
-    def ensure_preview_cached(self, path):
+    def ensure_preview_cached(self, path, **options):
         self.generated.append(path)
+        self.options.append(options)
         return True
 
 
@@ -60,3 +62,18 @@ def test_new_selection_cancels_stale_work_and_only_emits_latest_result():
     assert pipeline.generated == ["current.jpg"]
     assert ready == ["current.jpg"]
     assert pool.clear_count >= 2
+
+
+def test_force_default_brightness_is_part_of_request_identity_and_reaches_worker():
+    pipeline = _Pipeline()
+    controller = PreviewLoadController(pipeline)
+    pool = _Pool()
+    controller._pool = pool
+
+    controller.request(["rotated.arw"])
+    controller.request(["rotated.arw"], force_default_brightness=True)
+
+    assert len(pool.started) == 2
+    pool.started[-1].run()
+    assert pipeline.generated == ["rotated.arw"]
+    assert pipeline.options == [{"force_default_brightness": True}]
