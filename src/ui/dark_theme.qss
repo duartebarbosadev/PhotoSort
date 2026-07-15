@@ -2757,3 +2757,77 @@ QPushButton#groupingEmptyCTA:hover {
 QPushButton#groupingEmptyCTA:pressed {
     background: #1C3A60;
 }
+
+/* Missing model warning and button containers */
+QWidget#missingModelWidget {
+    background: transparent;
+}
+
+QLabel#errorSummaryLabel {
+    font-size: 13px;
+    color: #dddddd;
+}
+
+QLabel#modelPathLabel {
+    background-color: #232729;
+    color: #f28b82;
+    border: 1px solid #3c3f41;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-family: monospace;
+    font-size: 11px;
+    margin-top: 4px;
+    margin-bottom: 12px;
+}
+
+QLabel#instructionsLabel {
+    font-size: 12px;
+    color: #bbbbbb;
+}
+
+QPushButton#downloadModelBtn,
+QPushButton#openModelsBtn {
+    background-color: #363B3F;
+    color: #C8D4DE;
+    border: 1px solid #4A5257;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-weight: bold;
+    font-size: 12px;
+    min-width: 150px;
+}
+
+QPushButton#downloadModelBtn:hover,
+QPushButton#openModelsBtn:hover {
+    background-color: #3E464C;
+    border-color: #627079;
+    color: #FFFFFF;
+}
+
+QPushButton#downloadModelBtn:pressed,
+QPushButton#openModelsBtn:pressed {
+    background-color: #2D3338;
+}
+
+QPushButton#retryBtn {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #178B4A, stop: 1 #0F6D39);
+    color: #FFFFFF;
+    border: 1px solid #0D5E32;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-weight: bold;
+    font-size: 12px;
+    min-width: 150px;
+}
+
+QPushButton#retryBtn:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #1C9A53, stop: 1 #147B42);
+    border-color: #116B39;
+}
+
+QPushButton#retryBtn:pressed {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0F6D39, stop: 1 #0B582E);
+}

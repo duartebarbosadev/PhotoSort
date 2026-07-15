@@ -41,6 +41,7 @@ from core.app_settings import (
     set_easy_delete_dark_threshold,
     set_easy_delete_duplicate_distance,
     set_easy_delete_white_threshold,
+    ROTATION_MODEL_DOWNLOAD_URL,
 )
 from core.runtime_paths import get_app_cache_root, get_app_log_dir, get_app_models_dir
 from core.image_processing.raw_image_processor import is_raw_file
@@ -1844,9 +1845,7 @@ class DialogManager:
 
         if download_button:
             download_button.clicked.connect(
-                lambda: webbrowser.open(
-                    "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"
-                )
+                lambda: webbrowser.open(ROTATION_MODEL_DOWNLOAD_URL)
             )
         if open_models_button:
             open_models_button.clicked.connect(self._open_models_folder)

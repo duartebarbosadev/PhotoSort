@@ -2,8 +2,8 @@ import logging
 import os
 from typing import override
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPixmap, QTransform
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
+from PyQt6.QtGui import QColor, QPixmap, QTransform, QDesktopServices
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -18,6 +18,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from core.runtime_paths import get_app_models_dir, is_frozen_runtime
+from core.app_settings import ROTATION_MODEL_DOWNLOAD_URL
 
 from ui.workflow_review_components import (
     FIX_ROTATION_SHORTCUTS,
@@ -87,6 +89,7 @@ class FixRotationStepWidget(QWidget):
     apply_rotations_requested = pyqtSignal(dict)  # {path: angle_degrees}
     proceed_requested = pyqtSignal()
     skip_requested = pyqtSignal()
+    retry_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -123,6 +126,8 @@ class FixRotationStepWidget(QWidget):
 
     def show_loading(self, message: str = "", percent: int = -1) -> None:
         self._loading_label.setText(message or "Analyzing rotation…")
+        self._missing_model_widget.setVisible(False)
+        self._progress_bar.setVisible(True)
         if percent < 0:
             self._progress_bar.setRange(0, 0)
         else:
@@ -132,17 +137,32 @@ class FixRotationStepWidget(QWidget):
 
     def show_error(self, message: str) -> None:
         self._loading_label.setText(f"Error: {message}")
+        self._missing_model_widget.setVisible(False)
+        self._progress_bar.setVisible(True)
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
         self._content_stack.setCurrentIndex(0)
 
     def show_model_not_found(self, message: str) -> None:
         self._loading_label.setText(
-            "Rotation model not found — skip this step or install the model.\n\n"
-            + message
+            "Rotation model not found. Follow the instructions below to install it."
         )
-        self._progress_bar.setRange(0, 100)
-        self._progress_bar.setValue(0)
+        self._model_path_label.setText(message)
+        
+        instructions_text = (
+            "<p style='color: #a9b7c6; font-size: 13px; font-weight: bold; margin-bottom: 8px; text-align: left;'>"
+            "Follow these steps to enable this feature:</p>"
+            "<ol style='color: #bbbbbb; font-size: 12px; line-height: 1.6; margin-left: 20px; text-align: left;'>"
+            "<li>Click <b>Download Model</b> to open the GitHub releases page.</li>"
+            "<li>Download the latest <b>orientation_model.onnx</b> file.</li>"
+            "<li>Click <b>Open Models Folder</b> and place the downloaded file there.</li>"
+            "<li><b>Restart</b> the application or re-run the rotation analysis.</li>"
+            "</ol>"
+        )
+        self._instructions_label.setText(instructions_text)
+        
+        self._missing_model_widget.setVisible(True)
+        self._progress_bar.setVisible(False)
         self._content_stack.setCurrentIndex(0)
 
     def show_results(self, suggestions: dict[str, int]) -> None:
@@ -506,6 +526,62 @@ class FixRotationStepWidget(QWidget):
             "font-size: 13px; color: #aaaaaa; margin-bottom: 12px;"
         )
 
+        # Container for the missing model view
+        self._missing_model_widget = QWidget()
+        self._missing_model_widget.setObjectName("missingModelWidget")
+        missing_layout = QVBoxLayout(self._missing_model_widget)
+        missing_layout.setContentsMargins(0, 0, 0, 0)
+        missing_layout.setSpacing(12)
+        missing_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._error_summary_label = QLabel("The automatic rotation feature requires a model file that was not found:")
+        self._error_summary_label.setObjectName("errorSummaryLabel")
+        self._error_summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._error_summary_label.setWordWrap(True)
+
+        self._model_path_label = QLabel()
+        self._model_path_label.setObjectName("modelPathLabel")
+        self._model_path_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._model_path_label.setWordWrap(True)
+        self._model_path_label.setFixedWidth(520)
+
+        self._instructions_label = QLabel()
+        self._instructions_label.setObjectName("instructionsLabel")
+        self._instructions_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._instructions_label.setWordWrap(True)
+        self._instructions_label.setFixedWidth(520)
+
+        # Download buttons container widget
+        self._download_btn_container = QWidget()
+        btn_layout = QHBoxLayout(self._download_btn_container)
+        btn_layout.setContentsMargins(0, 12, 0, 0)
+        btn_layout.setSpacing(16)
+
+        self._download_model_btn = QPushButton("Download Model")
+        self._download_model_btn.setObjectName("downloadModelBtn")
+        self._download_model_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(ROTATION_MODEL_DOWNLOAD_URL))
+        )
+
+        self._open_models_btn = QPushButton("Open Models Folder")
+        self._open_models_btn.setObjectName("openModelsBtn")
+        self._open_models_btn.clicked.connect(self._open_models_folder_clicked)
+
+        self._retry_btn = QPushButton("Check Again")
+        self._retry_btn.setObjectName("retryBtn")
+        self._retry_btn.clicked.connect(self.retry_requested.emit)
+
+        btn_layout.addWidget(self._download_model_btn)
+        btn_layout.addWidget(self._open_models_btn)
+        btn_layout.addWidget(self._retry_btn)
+
+        missing_layout.addWidget(self._error_summary_label)
+        missing_layout.addWidget(self._model_path_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        missing_layout.addWidget(self._instructions_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        missing_layout.addWidget(self._download_btn_container, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self._missing_model_widget.setVisible(False)
+
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setFixedWidth(320)
@@ -513,8 +589,21 @@ class FixRotationStepWidget(QWidget):
 
         layout.addWidget(title)
         layout.addWidget(self._loading_label)
+        layout.addWidget(self._missing_model_widget)
         layout.addWidget(self._progress_bar, alignment=Qt.AlignmentFlag.AlignCenter)
         return page
+
+    def _open_models_folder_clicked(self) -> None:
+        try:
+            if not is_frozen_runtime():
+                target = os.path.abspath("./models")
+                os.makedirs(target, exist_ok=True)
+            else:
+                target = get_app_models_dir()
+            url = QUrl.fromLocalFile(os.path.abspath(target))
+            QDesktopServices.openUrl(url)
+        except Exception as e:
+            logger.error(f"Failed to open models folder: {e}", exc_info=True)
 
     def _build_results_page(self) -> QWidget:
         page = QWidget()

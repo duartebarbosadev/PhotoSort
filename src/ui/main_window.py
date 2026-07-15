@@ -1144,6 +1144,9 @@ class MainWindow(QMainWindow):
             widget.apply_rotations_requested.connect(
                 self.app_controller.start_fix_rotation_apply
             )
+            widget.retry_requested.connect(
+                self.app_controller.start_fix_rotation_workflow
+            )
             self.fix_rotation_page_layout.addWidget(widget)
             self.fix_rotation_step_widget = widget
         return self.fix_rotation_step_widget

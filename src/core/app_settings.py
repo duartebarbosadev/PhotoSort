@@ -87,6 +87,9 @@ DEFAULT_EXIF_CACHE_SIZE_MB = 256  # Default to 256 MB for EXIF cache
 DEFAULT_ROTATION_CONFIRM_LOSSY = True  # Default to asking before lossy rotation
 MAX_RECENT_FOLDERS = 10  # Max number of recent folders to store
 DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
+ROTATION_MODEL_DOWNLOAD_URL = (
+    "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"
+)
 DEFAULT_UPDATE_CHECK_ENABLED = True  # Default to enable automatic update checks
 DEFAULT_PERFORMANCE_MODE = PerformanceMode.BALANCED  # Default to balanced mode
 DEFAULT_CUSTOM_THREAD_COUNT = 4  # Default custom thread count
