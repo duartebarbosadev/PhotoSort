@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox
 
 from src.core.grouping import GroupingGroup, GroupingPlan
@@ -107,6 +107,36 @@ def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
     ]
 
 
+def test_unchanged_grouping_edit_check_does_not_build_filesystem_action_preview(
+    tmp_path, monkeypatch
+):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    monkeypatch.setattr(
+        widget,
+        "_build_action_lines",
+        Mock(side_effect=AssertionError("edit check must stay in memory")),
+    )
+
+    assert not widget.has_unsaved_grouping_edits()
+
+
 def test_grouping_step_widget_set_preview_plan_does_not_read_thumbnail_cache(tmp_path):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"
@@ -147,6 +177,42 @@ def test_grouping_step_widget_set_preview_plan_does_not_read_thumbnail_cache(tmp
     # One completion updates the matching item in each tree, without touching
     # the thousands of other rows a real folder may contain.
     assert pipeline.get_cached_thumbnail_qpixmap.call_count == 2
+
+
+def test_organize_tree_reuses_icon_completed_before_tree_construction(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+    pixmap = QPixmap(120, 80)
+    pixmap.fill()
+    cached_icon = QIcon(pixmap)
+    pipeline = _CacheOnlyPipeline()
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(
+        image_pipeline=pipeline,
+        get_cached_thumbnail_icon=Mock(return_value=cached_icon),
+    )
+    widget.set_source_folder(str(source_root))
+
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    assert not widget._before_file_items_by_path[first].icon(0).isNull()
+    assert not widget._after_file_items_by_path[first].icon(0).isNull()
+    pipeline.get_cached_thumbnail_qpixmap.assert_not_called()
 
 
 def test_cached_thumbnail_update_does_not_rebuild_organize_trees(tmp_path):
@@ -806,6 +872,46 @@ def test_grouping_step_widget_shows_folder_preview_grid(tmp_path):
     assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
     assert widget.folder_preview_grid.count() == 2
     assert widget.folder_preview_title.text() == "Beach"
+    assert widget.visible_thumbnail_paths()[:2] == [first, second]
+
+
+def test_grouping_folder_preview_requests_thumbnail_loading(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+    schedule = Mock()
+
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(
+        image_pipeline=_CacheOnlyPipeline(),
+        schedule_visible_thumbnail_load=schedule,
+    )
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[first],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    schedule.reset_mock()
+    widget._handle_before_item_changed(
+        widget._before_dir_items_by_relative_path["Beach"],
+        None,
+    )
+
+    schedule.assert_called_once()
 
 
 def test_grouping_step_widget_before_tree_includes_unmanaged_files(tmp_path):

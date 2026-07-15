@@ -101,6 +101,9 @@ class TestAutomaticRawProcessing:
             # Mock file existence to avoid file system calls
             with (
                 patch("os.path.exists", return_value=True),
+                patch.object(pipeline, "_memory_get", return_value=None),
+                patch.object(pipeline, "_cache_get", return_value=None),
+                patch.object(pipeline, "_cache_set"),
                 patch(
                     "src.core.image_processing.raw_image_processor.RawImageProcessor.process_raw_for_thumbnail"
                 ) as mock_process,
@@ -114,6 +117,10 @@ class TestAutomaticRawProcessing:
                 mock_is_raw.assert_called_with(".arw")
                 assert mock_is_raw.call_count >= 1, (
                     "is_raw_extension should be called at least once"
+                )
+                assert (
+                    mock_process.call_args.kwargs["fallback_decode_gate"]
+                    is pipeline._high_memory_decode_gate
                 )
 
     def test_cache_key_generation_includes_raw_detection(self):

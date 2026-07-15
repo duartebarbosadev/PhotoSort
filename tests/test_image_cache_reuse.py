@@ -93,16 +93,19 @@ def test_concurrent_thumbnail_requests_generate_once(tmp_path):
     processor.assert_called_once()
 
 
-def test_high_memory_thumbnail_formats_decode_serially(tmp_path):
+def test_high_memory_thumbnail_formats_obey_dynamic_decode_limit(tmp_path):
     sources = []
     for index in range(4):
         source = tmp_path / f"source-{index}.heic"
         source.write_bytes(b"placeholder")
         sources.append(str(source))
-    pipeline = ImagePipeline(
-        thumbnail_cache_dir=str(tmp_path / "thumb"),
-        preview_cache_dir=str(tmp_path / "preview"),
-    )
+    with patch(
+        "core.app_settings.calculate_high_memory_decode_workers", return_value=2
+    ):
+        pipeline = ImagePipeline(
+            thumbnail_cache_dir=str(tmp_path / "thumb"),
+            preview_cache_dir=str(tmp_path / "preview"),
+        )
     active = 0
     max_active = 0
 
@@ -121,7 +124,7 @@ def test_high_memory_thumbnail_formats_decode_serially(tmp_path):
         with ThreadPoolExecutor(max_workers=4) as executor:
             list(executor.map(pipeline._get_pil_thumbnail, sources))
 
-    assert max_active == 1
+    assert max_active == 2
 
 
 def test_similarity_grouping_reuses_the_shared_pipeline():

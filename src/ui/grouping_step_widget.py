@@ -1103,8 +1103,6 @@ class GroupingStepWidget(QWidget):
         if self._current_plan is None:
             return False
         effective_plan = self.get_effective_plan()
-        if not self._build_action_lines(effective_plan):
-            return False
         return self._plan_signature(effective_plan) != self._plan_signature(
             self._current_plan
         )
@@ -1866,10 +1864,14 @@ class GroupingStepWidget(QWidget):
         return source_root
 
     def _set_tree_item_icon(self, item: QTreeWidgetItem, source_path: str) -> None:
-        # Tree construction must be presentation-only. Even a cache lookup can
-        # deserialize and convert an image, so visible rows receive thumbnails
-        # later through refresh_cached_thumbnails().
-        item.setIcon(0, self._file_icon)
+        # This is an O(1) lookup in the shared UI-icon cache; it never reads or
+        # decodes image data while the tree is being constructed.
+        icon = None
+        if self._parent_window is not None:
+            get_icon = getattr(self._parent_window, "get_cached_thumbnail_icon", None)
+            if callable(get_icon):
+                icon = get_icon(source_path)
+        item.setIcon(0, icon or self._file_icon)
 
     def visible_thumbnail_paths(
         self,
@@ -1902,10 +1904,53 @@ class GroupingStepWidget(QWidget):
                 inspected += 1
             return paths
 
-        combined = paths_for_tree(self.before_tree) + paths_for_tree(self.preview_tree)
+        def paths_for_folder_preview() -> List[str]:
+            if self.preview_pane_stack.currentIndex() != PREVIEW_PAGE_FOLDER:
+                return []
+            grid = self.folder_preview_grid
+            viewport_rect = grid.viewport().rect()
+            margin = max(0, viewport_rect.height())
+            preload_rect = viewport_rect.adjusted(0, -margin, 0, margin)
+            visible_paths: List[str] = []
+            fallback_paths: List[str] = []
+            for index in range(grid.count()):
+                item = grid.item(index)
+                if item is None:
+                    continue
+                source_path = item.data(Qt.ItemDataRole.UserRole)
+                if not source_path:
+                    continue
+                source_path = str(source_path)
+                if len(fallback_paths) < limit:
+                    fallback_paths.append(source_path)
+                if grid.visualItemRect(item).intersects(preload_rect):
+                    visible_paths.append(source_path)
+                    if len(visible_paths) >= limit:
+                        break
+            # A newly populated/offscreen widget may not have valid visual rects
+            # until the next layout pass; its first page is still the right work.
+            return visible_paths or fallback_paths
+
+        combined = (
+            paths_for_folder_preview()
+            + paths_for_tree(self.before_tree)
+            + paths_for_tree(self.preview_tree)
+        )
         return list(dict.fromkeys(combined))[:limit]
 
     def _set_preview_icon(self, item: QTreeWidgetItem, source_path: str) -> None:
+        if self._parent_window is not None:
+            get_icon = getattr(self._parent_window, "get_cached_thumbnail_icon", None)
+            if callable(get_icon):
+                icon = get_icon(source_path)
+                if icon is not None:
+                    was_ignoring = self._ignore_preview_item_change
+                    self._ignore_preview_item_change = True
+                    try:
+                        item.setIcon(0, icon)
+                    finally:
+                        self._ignore_preview_item_change = was_ignoring
+                    return
         image_pipeline = getattr(self._parent_window, "image_pipeline", None)
         if image_pipeline is None:
             return
@@ -2100,6 +2145,14 @@ class GroupingStepWidget(QWidget):
         self.preview_selection_label.setVisible(True)
         self.preview_selection_meta.setText(meta_count)
         self.preview_selection_meta.setVisible(True)
+        if self._parent_window is not None:
+            schedule_thumbnails = getattr(
+                self._parent_window,
+                "schedule_visible_thumbnail_load",
+                None,
+            )
+            if callable(schedule_thumbnails):
+                schedule_thumbnails()
         logger.debug(
             "Organize folder preview updated in %.3fs (item=%s total_paths=%d visible_paths=%d)",
             time.perf_counter() - start_time,
@@ -2145,6 +2198,12 @@ class GroupingStepWidget(QWidget):
             self._collect_descendant_source_paths(item.child(index), collected_paths)
 
     def _cached_thumbnail_icon_for_path(self, source_path: str) -> Optional[QIcon]:
+        if self._parent_window is not None:
+            get_icon = getattr(self._parent_window, "get_cached_thumbnail_icon", None)
+            if callable(get_icon):
+                icon = get_icon(source_path)
+                if icon is not None:
+                    return icon
         image_pipeline = getattr(self._parent_window, "image_pipeline", None)
         if image_pipeline is None:
             return None

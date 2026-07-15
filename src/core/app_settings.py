@@ -3,7 +3,9 @@ Application Settings Module
 Manages persistent application settings using QSettings.
 """
 
+import ctypes
 import os
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -170,9 +172,6 @@ THUMBNAIL_PRELOAD_BATCH_SIZE = 20  # Number of thumbnails to generate per batch
 THUMBNAIL_PRELOAD_VISIBLE_MARGIN = (
     10  # Number of items above/below visible area to preload
 )
-THUMBNAIL_MAX_WORKERS = 4  # Max concurrent thumbnail generation threads
-IMAGE_PIPELINE_MAX_WORKERS = 4  # Keep concurrent decodes below memory pressure limits
-HIGH_MEMORY_DECODE_MAX_WORKERS = 1  # RAW/HEIC full decodes can use hundreds of MB
 IMAGE_MEMORY_CACHE_SIZE_BYTES = 256 * 1024 * 1024  # Shared hot-image budget
 NAVIGATION_PREVIEW_LOOKAHEAD = 4  # Selected image plus a small directional buffer
 
@@ -569,7 +568,7 @@ def get_custom_thread_count() -> int:
 
 def set_custom_thread_count(count: int):
     """Sets the custom thread count. Must be between 1 and system CPU count."""
-    max_threads = os.cpu_count() or 4
+    max_threads = get_available_cpu_count()
     if not (1 <= count <= max_threads):
         raise ValueError(
             f"Thread count must be between 1 and {max_threads}, got {count}"
@@ -598,7 +597,7 @@ def calculate_max_workers(
         calculate_max_workers()  # Uses performance mode settings
         calculate_max_workers(min_workers=2, max_workers=8)  # Constrained to 2-8 range
     """
-    cpu_count = os.cpu_count() or 4
+    cpu_count = get_available_cpu_count()
     mode = get_performance_mode()
 
     if mode == PerformanceMode.PERFORMANCE:
@@ -617,6 +616,123 @@ def calculate_max_workers(
         workers = min(max_workers, workers)
 
     return workers
+
+
+def get_available_cpu_count() -> int:
+    """Return CPUs available to this process across desktops and containers."""
+    process_cpu_count = getattr(os, "process_cpu_count", None)
+    if process_cpu_count is not None:
+        count = process_cpu_count()
+        if count:
+            return max(1, int(count))
+    get_affinity = getattr(os, "sched_getaffinity", None)
+    if get_affinity is not None:
+        try:
+            affinity_count = len(get_affinity(0))
+            if affinity_count:
+                return affinity_count
+        except OSError:
+            pass
+    return max(1, os.cpu_count() or 4)
+
+
+def _get_windows_physical_memory_bytes() -> Optional[int]:
+    """Return installed memory on Windows without an optional dependency."""
+    if os.name != "nt":
+        return None
+
+    class MemoryStatusEx(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", ctypes.c_ulong),
+            ("dwMemoryLoad", ctypes.c_ulong),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
+
+    status = MemoryStatusEx()
+    status.dwLength = ctypes.sizeof(status)
+    try:
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return int(status.ullTotalPhys)
+    except (AttributeError, OSError):
+        pass
+    return None
+
+
+def get_total_physical_memory_bytes() -> Optional[int]:
+    """Return installed physical memory on Windows, macOS, or Linux."""
+    if os.name == "nt":
+        return _get_windows_physical_memory_bytes()
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        page_count = os.sysconf("SC_PHYS_PAGES")
+        total = int(page_size) * int(page_count)
+        return total if total > 0 else None
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _get_linux_cgroup_memory_limit_bytes() -> Optional[int]:
+    """Return the effective Linux container memory ceiling when constrained."""
+    if not sys.platform.startswith("linux"):
+        return None
+    for path in (
+        "/sys/fs/cgroup/memory.max",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+    ):
+        try:
+            with open(path, encoding="ascii") as limit_file:
+                raw_value = limit_file.read().strip()
+            if raw_value == "max":
+                continue
+            limit = int(raw_value)
+            # Some cgroup v1 hosts use a huge sentinel for "unlimited".
+            if 0 < limit < 1 << 60:
+                return limit
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def get_usable_memory_bytes() -> Optional[int]:
+    """Return memory usable by this process, respecting Linux containers."""
+    physical = get_total_physical_memory_bytes()
+    container_limit = _get_linux_cgroup_memory_limit_bytes()
+    if physical and container_limit:
+        return min(physical, container_limit)
+    return physical or container_limit
+
+
+def calculate_thumbnail_workers() -> int:
+    """Choose cheap thumbnail concurrency from CPU and usable memory budgets."""
+    cpu_budget = calculate_max_workers(min_workers=1)
+    usable_memory = get_usable_memory_bytes()
+    if usable_memory is None:
+        return cpu_budget
+    # Avoid excessive in-flight buffers on CPU-rich, low-memory hosts.
+    memory_budget = max(1, usable_memory // (1024**3))
+    return max(1, min(cpu_budget, memory_budget))
+
+
+def calculate_high_memory_decode_workers() -> int:
+    """Choose a memory-safe concurrency limit for full RAW/HEIC decodes.
+
+    Performance mode may use one full decoder per 8 GiB of usable memory.
+    Balanced mode uses at most half that capacity. Custom mode respects both
+    the requested thread count and the memory-derived ceiling.
+    """
+    usable_memory = get_usable_memory_bytes()
+    memory_slots = max(1, usable_memory // (8 * 1024**3)) if usable_memory else 1
+    mode = get_performance_mode()
+    cpu_budget = calculate_max_workers(min_workers=1)
+    if mode == PerformanceMode.BALANCED:
+        memory_slots = max(1, memory_slots // 2)
+    return max(1, min(cpu_budget, memory_slots))
 
 
 def get_best_shot_batch_size() -> int:
