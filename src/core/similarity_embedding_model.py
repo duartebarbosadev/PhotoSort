@@ -1,7 +1,8 @@
 import logging
 import time
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 
@@ -33,7 +34,7 @@ def sanitize_model_id(model_name: str) -> str:
     return model_name.replace("/", "_").replace(":", "_")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SimilarityModelSpec:
     model_name: str
     pipeline_version: str = SIMILARITY_EMBEDDING_PIPELINE_VERSION
@@ -49,7 +50,7 @@ class SimilarityModelSpec:
         )
 
 
-def build_similarity_image_regions(image: object) -> List[object]:
+def build_similarity_image_regions(image: object) -> list[object]:
     """Build large overlapping regions for occlusion-resistant image matching."""
     if not hasattr(image, "crop") or not hasattr(image, "size"):
         return [image]
@@ -82,14 +83,14 @@ def build_similarity_image_regions(image: object) -> List[object]:
     return regions
 
 
-def normalize_similarity_model_name(model_name: Optional[str]) -> str:
+def normalize_similarity_model_name(model_name: str | None) -> str:
     if model_name in SUPPORTED_SIMILARITY_EMBEDDING_MODELS:
         return str(model_name)
     return DEFAULT_SIMILARITY_EMBEDDING_MODEL
 
 
 def resolve_similarity_model_snapshot(
-    model_name: Optional[str] = None,
+    model_name: str | None = None,
     *,
     allow_download: bool = False,
     progress_callback: ProgressCallback | None = None,
@@ -138,7 +139,7 @@ def resolve_similarity_model_snapshot(
         ) from download_exc
 
 
-def is_similarity_model_installed(model_name: Optional[str] = None) -> bool:
+def is_similarity_model_installed(model_name: str | None = None) -> bool:
     try:
         resolve_similarity_model_snapshot(model_name, allow_download=False)
         return True
@@ -154,7 +155,7 @@ class SimilarityEmbeddingModel:
 
     def __init__(
         self,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         *,
         allow_download: bool = False,
         progress_callback: ProgressCallback | None = None,
@@ -162,9 +163,9 @@ class SimilarityEmbeddingModel:
         self.spec = SimilarityModelSpec(normalize_similarity_model_name(model_name))
         self.allow_download = allow_download
         self.progress_callback = progress_callback
-        self.snapshot_path: Optional[str] = None
-        self.processor = None
-        self.model = None
+        self.snapshot_path: str | None = None
+        self.processor: Any | None = None
+        self.model: Any | None = None
         self.device = "cpu"
 
     @property
@@ -206,16 +207,18 @@ class SimilarityEmbeddingModel:
         if self.progress_callback:
             self.progress_callback(-1, f"Loading {self.model_name} weights")
 
-        self.processor = AutoImageProcessor.from_pretrained(
+        processor = AutoImageProcessor.from_pretrained(
             self.snapshot_path,
             local_files_only=True,
         )
-        self.model = AutoModel.from_pretrained(
+        model = AutoModel.from_pretrained(
             self.snapshot_path,
             local_files_only=True,
         )
-        self.model.to(self.device)
-        self.model.eval()
+        model.to(self.device)
+        model.eval()
+        self.processor = processor
+        self.model = model
         logger.info(
             "Similarity model loaded in %.4fs", time.perf_counter() - load_start
         )
@@ -226,7 +229,7 @@ class SimilarityEmbeddingModel:
         if self.model is None or self.processor is None:
             raise RuntimeError("Similarity embedding model is not loaded.")
 
-        batch_images: List[object] = list(images)
+        batch_images: list[object] = list(images)
         if not batch_images:
             return np.empty((0, 0), dtype=np.float32)
 
@@ -234,7 +237,7 @@ class SimilarityEmbeddingModel:
 
     def encode_with_regions(
         self, images: Iterable[object]
-    ) -> tuple[np.ndarray, List[np.ndarray]]:
+    ) -> tuple[np.ndarray, list[np.ndarray]]:
         """Encode whole images plus large overlapping regions.
 
         Returns one global embedding per image and one regional embedding matrix per
@@ -245,12 +248,12 @@ class SimilarityEmbeddingModel:
         if self.model is None or self.processor is None:
             raise RuntimeError("Similarity embedding model is not loaded.")
 
-        batch_images: List[object] = list(images)
+        batch_images: list[object] = list(images)
         if not batch_images:
             return np.empty((0, 0), dtype=np.float32), []
 
-        all_regions: List[object] = []
-        region_counts: List[int] = []
+        all_regions: list[object] = []
+        region_counts: list[int] = []
         for image in batch_images:
             regions = build_similarity_image_regions(image)
             all_regions.extend(regions)
@@ -258,7 +261,7 @@ class SimilarityEmbeddingModel:
 
         encoded_regions = self._encode_loaded_images(all_regions)
         global_embeddings = []
-        regional_embeddings: List[np.ndarray] = []
+        regional_embeddings: list[np.ndarray] = []
         cursor = 0
         for count in region_counts:
             image_regions = encoded_regions[cursor : cursor + count]
@@ -268,11 +271,13 @@ class SimilarityEmbeddingModel:
 
         return np.asarray(global_embeddings, dtype=np.float32), regional_embeddings
 
-    def _encode_loaded_images(self, images: List[object]) -> np.ndarray:
+    def _encode_loaded_images(self, images: list[object]) -> np.ndarray:
         import torch
 
         if not images:
             return np.empty((0, 0), dtype=np.float32)
+        if self.processor is None or self.model is None:
+            raise RuntimeError("Similarity embedding model is not loaded.")
 
         encoded_chunks = []
         for start in range(0, len(images), SIMILARITY_ENCODE_CHUNK_SIZE):

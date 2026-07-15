@@ -1,7 +1,7 @@
 import os
 import shutil
 import logging
-from typing import Tuple
+from pathlib import Path
 import send2trash
 
 logger = logging.getLogger(__name__)
@@ -11,33 +11,33 @@ class ImageFileOperations:
     """Handles file system operations for image files."""
 
     @staticmethod
-    def move_path(source_path: str, destination_path: str) -> Tuple[bool, str]:
+    def move_path(source_path: str, destination_path: str) -> tuple[bool, str]:
         """Move a file or directory to an exact destination path.
 
         This lower-level primitive is used by workflows that have already
         resolved naming collisions and therefore cannot use :meth:`move_image`.
         """
 
-        if not os.path.exists(source_path):
+        source = Path(source_path)
+        destination = Path(destination_path)
+        if not source.exists():
             return False, f"Source path does not exist: {source_path}"
         try:
-            parent_dir = os.path.dirname(destination_path)
-            if parent_dir:
-                os.makedirs(parent_dir, exist_ok=True)
-            shutil.move(source_path, destination_path)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            moved_path = source.move(destination)
             logger.info(
                 "Moved '%s' to '%s'.",
-                os.path.basename(source_path),
-                os.path.basename(destination_path),
+                source.name,
+                destination.name,
             )
-            return True, destination_path
+            return True, str(moved_path)
         except OSError as exc:
             message = f"Failed to move '{source_path}' to '{destination_path}': {exc}"
             logger.error(message, exc_info=True)
             return False, message
 
     @staticmethod
-    def clear_directory_contents(directory: str) -> Tuple[bool, str]:
+    def clear_directory_contents(directory: str) -> tuple[bool, str]:
         """Remove every child of ``directory`` while keeping the directory."""
 
         if not os.path.isdir(directory):
@@ -66,7 +66,7 @@ class ImageFileOperations:
             return False
 
     @staticmethod
-    def move_image(source_path: str, destination_folder: str) -> Tuple[bool, str]:
+    def move_image(source_path: str, destination_folder: str) -> tuple[bool, str]:
         """
         Moves an image file from the source path to the destination folder.
 
@@ -78,48 +78,44 @@ class ImageFileOperations:
             tuple: (bool, str) indicating success status and the new file path if successful,
                    or (False, str) with an error message if failed.
         """
-        if not os.path.isfile(source_path):
+        source = Path(source_path)
+        destination_dir = Path(destination_folder)
+        if not source.is_file():
             return False, f"Source is not a valid file: {source_path}"
-        if not os.path.isdir(destination_folder):
+        if not destination_dir.is_dir():
             # Attempt to create destination folder if it doesn't exist
             try:
-                os.makedirs(destination_folder, exist_ok=True)
-                logger.info(f"Created destination folder: {destination_folder}")
+                destination_dir.mkdir(parents=True, exist_ok=True)
+                logger.info("Created destination folder: %s", destination_folder)
             except OSError as e:
                 return (
                     False,
                     f"Destination is not a valid folder and could not be created: {destination_folder}. Error: {e}",
                 )
 
-        filename = os.path.basename(source_path)
-        destination_path = os.path.join(destination_folder, filename)
+        destination = destination_dir / source.name
 
-        if os.path.exists(destination_path):
+        if destination.exists():
             # Basic conflict resolution: append a number if file exists
-            base, ext = os.path.splitext(filename)
             counter = 1
-            while os.path.exists(destination_path):
-                destination_path = os.path.join(
-                    destination_folder, f"{base}_{counter}{ext}"
+            while destination.exists():
+                destination = destination_dir / (
+                    f"{source.stem}_{counter}{source.suffix}"
                 )
                 counter += 1
-            logger.debug(
-                f"Destination file exists. Renaming to: {os.path.basename(destination_path)}."
-            )
+            logger.debug("Destination file exists. Renaming to: %s.", destination.name)
 
         try:
-            shutil.move(source_path, destination_path)
-            logger.info(
-                f"Moved '{os.path.basename(source_path)}' to '{os.path.basename(destination_path)}'."
-            )
-            return True, destination_path
+            moved_path = source.move(destination)
+            logger.info("Moved '%s' to '%s'.", source.name, destination.name)
+            return True, str(moved_path)
         except Exception as e:
-            error_msg = f"Error moving file '{os.path.basename(source_path)}': {e}"
+            error_msg = f"Error moving file '{source.name}': {e}"
             logger.error(error_msg, exc_info=True)
             return False, error_msg
 
     @staticmethod
-    def move_to_trash(file_path: str) -> Tuple[bool, str]:
+    def move_to_trash(file_path: str) -> tuple[bool, str]:
         """
         Moves a file to the system's trash or recycling bin.
 
@@ -130,13 +126,11 @@ class ImageFileOperations:
             tuple: (bool, str) indicating success and a message.
         """
         if not os.path.exists(file_path):
-            logger.warning(
-                f"File does not exist when trying to move to trash: {file_path}"
-            )
+            logger.warning("File does not exist when moving to trash: %s", file_path)
             return False, "File does not exist."
         try:
             send2trash.send2trash(file_path)
-            logger.info(f"Moved to trash: {os.path.basename(file_path)}.")
+            logger.info("Moved to trash: %s.", os.path.basename(file_path))
             return True, "File moved to trash."
         except Exception as e:
             error_msg = (
@@ -146,7 +140,7 @@ class ImageFileOperations:
             return False, error_msg
 
     @staticmethod
-    def rename_image(old_path: str, new_path: str) -> Tuple[bool, str]:
+    def rename_image(old_path: str, new_path: str) -> tuple[bool, str]:
         """
         Renames an image file.
 
@@ -173,7 +167,7 @@ class ImageFileOperations:
             return False, error_msg
 
     @staticmethod
-    def replace_file(source_path: str, destination_path: str) -> Tuple[bool, str]:
+    def replace_file(source_path: str, destination_path: str) -> tuple[bool, str]:
         """
         Safely replaces the destination file with the source file.
 
@@ -184,17 +178,15 @@ class ImageFileOperations:
         Returns:
             tuple: (bool, str) indicating success and a message.
         """
-        if not os.path.isfile(source_path):
+        source = Path(source_path)
+        destination = Path(destination_path)
+        if not source.is_file():
             return False, f"Source file not found: {source_path}"
         try:
-            shutil.move(source_path, destination_path)
-            logger.info(
-                f"Replaced '{os.path.basename(destination_path)}' with '{os.path.basename(source_path)}'."
-            )
+            source.move(destination)
+            logger.info("Replaced '%s' with '%s'.", destination.name, source.name)
             return True, "File replaced successfully."
         except Exception as e:
-            error_msg = (
-                f"Error replacing file '{os.path.basename(destination_path)}': {e}"
-            )
+            error_msg = f"Error replacing file '{destination.name}': {e}"
             logger.error(error_msg, exc_info=True)
             return False, error_msg

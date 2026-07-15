@@ -7,9 +7,16 @@ import sys
 import threading
 import logging
 import queue
-from typing import Dict, Optional, Callable, Any
+from typing import Any
+from collections.abc import Callable
+import contextlib
 
 logger = logging.getLogger(__name__)
+
+type MetadataReply = tuple[bool, Any]
+type MetadataTask = tuple[
+    Callable[..., Any], tuple[Any, ...], dict[str, Any], queue.Queue[MetadataReply]
+]
 
 
 def _is_file_missing_error(exception: Exception, file_path: str) -> bool:
@@ -48,10 +55,9 @@ class MetadataIO:
     _FIRST_REAL_ACCESS_LOGGED = False
 
     # Single-thread dispatcher to avoid cross-thread usage of pyexiv2 (not thread-safe)
-    _TASK_QUEUE: Optional["queue.Queue[tuple]"] = None
-    _WORKER_THREAD: Optional[threading.Thread] = None
+    _TASK_QUEUE: queue.Queue[MetadataTask] | None = None
+    _WORKER_THREAD: threading.Thread | None = None
     _WORKER_READY_EVENT = threading.Event()
-    _STOP_EVENT = threading.Event()
     _THREAD_NAME = "pyexiv2-io"
 
     @classmethod
@@ -76,41 +82,33 @@ class MetadataIO:
         with cls._LOCK:
             if cls._WORKER_THREAD and cls._WORKER_THREAD.is_alive():
                 return
-            cls._TASK_QUEUE = queue.Queue()
-            cls._STOP_EVENT.clear()
+            task_queue: queue.Queue[MetadataTask] = queue.Queue()
+            cls._TASK_QUEUE = task_queue
             cls._WORKER_READY_EVENT.clear()
 
             def _worker_loop():
                 logger.info("MetadataIO worker thread starting...")
                 # Signal that the worker is ready to accept tasks
-                try:
+                with contextlib.suppress(Exception):
                     cls._WORKER_READY_EVENT.set()
-                except Exception:
-                    pass
 
                 # Main task processing loop
                 try:
-                    while not cls._STOP_EVENT.is_set():
+                    while True:
                         try:
-                            item = cls._TASK_QUEUE.get(timeout=0.2)  # type: ignore[arg-type]
-                        except queue.Empty:
-                            continue
-                        if item is None:
+                            fn, args, kwargs, reply_q = task_queue.get()
+                        except queue.ShutDown:
                             break
-                        fn, args, kwargs, reply_q = item
                         try:
                             result = fn(*args, **kwargs)
                             reply_q.put((True, result))
                         except Exception as e:
                             reply_q.put((False, e))
                         finally:
-                            try:
-                                cls._TASK_QUEUE.task_done()  # type: ignore[union-attr]
-                            except Exception:
-                                pass
+                            task_queue.task_done()
                 except Exception as loop_err:
                     logger.error(
-                        f"MetadataIO worker loop error: {loop_err}", exc_info=True
+                        "MetadataIO worker loop error: %s", loop_err, exc_info=True
                     )
                 finally:
                     logger.info("MetadataIO worker thread exiting.")
@@ -121,16 +119,42 @@ class MetadataIO:
             t.start()
             cls._WORKER_THREAD = t
         # Wait briefly for readiness
-        try:
+        with contextlib.suppress(Exception):
             cls._WORKER_READY_EVENT.wait(timeout=3.0)
-        except Exception:
-            pass
+
+    @classmethod
+    def shutdown_worker_thread(
+        cls, *, immediate: bool = False, timeout: float = 3.0
+    ) -> None:
+        """Stop the dedicated metadata dispatcher and release its queue."""
+
+        with cls._LOCK:
+            task_queue = cls._TASK_QUEUE
+            worker_thread = cls._WORKER_THREAD
+            if task_queue is None:
+                return
+            task_queue.shutdown(immediate=immediate)
+
+        if (
+            worker_thread is not None
+            and worker_thread is not threading.current_thread()
+        ):
+            worker_thread.join(timeout=timeout)
+
+        with cls._LOCK:
+            if cls._TASK_QUEUE is task_queue:
+                cls._TASK_QUEUE = None
+            if cls._WORKER_THREAD is worker_thread and (
+                worker_thread is None or not worker_thread.is_alive()
+            ):
+                cls._WORKER_THREAD = None
+            cls._WORKER_READY_EVENT.clear()
 
     @classmethod
     def _call_in_worker(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Dispatch a callable to the dedicated worker and wait for result."""
         if not cls._should_use_worker_thread():
-            # Fallback to direct call (non-Windows, non-frozen dev runs)
+            # Native calls are thread-safe on non-Windows source runtimes.
             return fn(*args, **kwargs)
         # If we're already on the worker thread, execute directly to avoid deadlock
         try:
@@ -139,17 +163,21 @@ class MetadataIO:
         except Exception:
             pass
         cls.start_worker_thread()
-        if not cls._TASK_QUEUE:
+        task_queue = cls._TASK_QUEUE
+        if task_queue is None:
             raise RuntimeError("MetadataIO worker queue not initialized")
-        reply_q: "queue.Queue[tuple]" = queue.Queue(maxsize=1)
-        cls._TASK_QUEUE.put((fn, args, kwargs, reply_q))
+        reply_q: queue.Queue[MetadataReply] = queue.Queue(maxsize=1)
+        try:
+            task_queue.put((fn, args, kwargs, reply_q))
+        except queue.ShutDown as exc:
+            raise RuntimeError("MetadataIO worker queue is shutting down") from exc
         ok, payload = reply_q.get()
         if ok:
             return payload
         raise payload
 
     @classmethod
-    def _read_raw_metadata_inner(cls, operational_path: str) -> Dict:
+    def _read_raw_metadata_inner(cls, operational_path: str) -> dict:
         """Return a merged metadata dict for the given image path.
 
         The dict includes at least:
@@ -192,7 +220,7 @@ class MetadataIO:
             }
 
     @classmethod
-    def read_raw_metadata(cls, operational_path: str) -> Dict:
+    def read_raw_metadata(cls, operational_path: str) -> dict:
         """Public API: dispatch to the dedicated worker thread when enabled."""
         return cls._call_in_worker(cls._read_raw_metadata_inner, operational_path)
 
@@ -200,7 +228,7 @@ class MetadataIO:
     def _set_xmp_rating_inner(cls, operational_path: str, rating: int) -> bool:
         """Set XMP rating (0-5). Returns True if succeeded."""
         if not os.path.isfile(operational_path):
-            logger.warning(f"Cannot set rating; file missing: {operational_path}")
+            logger.warning("Cannot set rating; file missing: %s", operational_path)
             return False
         try:
             with safe_pyexiv2_image(operational_path) as img:
@@ -208,7 +236,9 @@ class MetadataIO:
                 return True
         except Exception as e:
             logger.error(
-                f"Error setting rating for {os.path.basename(operational_path)}: {e}",
+                "Error setting rating for %s: %s",
+                os.path.basename(operational_path),
+                e,
                 exc_info=True,
             )
             return False
@@ -218,11 +248,11 @@ class MetadataIO:
         return cls._call_in_worker(cls._set_xmp_rating_inner, operational_path, rating)
 
     @classmethod
-    def _read_exif_orientation_inner(cls, operational_path: str) -> Optional[int]:
+    def _read_exif_orientation_inner(cls, operational_path: str) -> int | None:
         """Read EXIF orientation value if present (1-8)."""
         if not os.path.isfile(operational_path):
             logger.info(
-                f"File missing when querying EXIF orientation: {operational_path}"
+                "File missing when querying EXIF orientation: %s", operational_path
             )
             return None
         try:
@@ -233,17 +263,21 @@ class MetadataIO:
         except Exception as e:
             if _is_file_missing_error(e, operational_path):
                 logger.warning(
-                    f"File missing while reading EXIF orientation: {operational_path} ({str(e)})"
+                    "File missing while reading EXIF orientation: %s (%s)",
+                    operational_path,
+                    e,
                 )
             else:
                 logger.error(
-                    f"Error getting EXIF orientation for {os.path.basename(operational_path)}: {e}",
+                    "Error getting EXIF orientation for %s: %s",
+                    os.path.basename(operational_path),
+                    e,
                     exc_info=True,
                 )
             return None
 
     @classmethod
-    def read_exif_orientation(cls, operational_path: str) -> Optional[int]:
+    def read_exif_orientation(cls, operational_path: str) -> int | None:
         return cls._call_in_worker(cls._read_exif_orientation_inner, operational_path)
 
     @classmethod
@@ -253,7 +287,7 @@ class MetadataIO:
         """Write EXIF orientation (1-8). Returns True if succeeded."""
         if not os.path.isfile(operational_path):
             logger.warning(
-                f"Cannot set EXIF orientation; file missing: {operational_path}"
+                "Cannot set EXIF orientation; file missing: %s", operational_path
             )
             return False
         try:
@@ -262,7 +296,9 @@ class MetadataIO:
                 return True
         except Exception as e:
             logger.error(
-                f"Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}",
+                "Error setting EXIF orientation for %s: %s",
+                os.path.basename(operational_path),
+                e,
                 exc_info=True,
             )
             return False
@@ -280,7 +316,7 @@ class MetadataIO:
         """Attempt to set XMP tiff Orientation. Returns True if succeeded."""
         if not os.path.isfile(operational_path):
             logger.warning(
-                f"Cannot set XMP orientation; file missing: {operational_path}"
+                "Cannot set XMP orientation; file missing: %s", operational_path
             )
             return False
         try:
@@ -289,7 +325,9 @@ class MetadataIO:
                 return True
         except Exception as e:
             logger.debug(
-                f"Could not set XMP orientation for {os.path.basename(operational_path)}: {e}"
+                "Could not set XMP orientation for %s: %s",
+                os.path.basename(operational_path),
+                e,
             )
             return False
 

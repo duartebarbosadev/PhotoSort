@@ -1,7 +1,5 @@
 """Frozen-application dependency verification used by release CI."""
 
-from __future__ import annotations
-
 import importlib
 import json
 import os
@@ -10,11 +8,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from core.runtime_paths import resolve_face_landmarker_model_path
+
 
 REQUIRED_PACKAGED_MODULES = (
     "PIL.Image",
+    "compression.zstd",
     "cv2",
-    "mediapipe.python.solutions.face_mesh",
+    "mediapipe.tasks.python.vision.face_landmarker",
     "onnxruntime",
     "openai",
     "pillow_heif",
@@ -60,11 +61,36 @@ def run_packaging_smoke() -> int:
         try:
             importlib.import_module(module_name)
             modules[module_name] = {"ok": True}
-        except Exception as exc:  # noqa: BLE001 - report every frozen import failure
+        except Exception as exc:
             modules[module_name] = {
                 "ok": False,
                 "error": f"{type(exc).__name__}: {exc}",
             }
+
+    model_check_name = "resource:face_landmarker.task"
+    try:
+        model_path = resolve_face_landmarker_model_path()
+        modules[model_check_name] = {"ok": True, "path": str(model_path)}
+    except (FileNotFoundError, OSError) as exc:
+        modules[model_check_name] = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    runtime_check_name = "runtime:mediapipe-face-landmarker"
+    try:
+        from core.best_photo_finder.scorers import MediaPipeTasksFaceLandmarker
+
+        face_landmarker = MediaPipeTasksFaceLandmarker(
+            resolve_face_landmarker_model_path()
+        )
+        face_landmarker.close()
+        modules[runtime_check_name] = {"ok": True}
+    except Exception as exc:
+        modules[runtime_check_name] = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
     failures = [name for name, result in modules.items() if not result["ok"]]
     report: dict[str, Any] = {

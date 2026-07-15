@@ -1,4 +1,3 @@
-from typing import List, Tuple, Set, Optional
 import webbrowser
 import os
 import logging
@@ -105,7 +104,7 @@ class DialogManager:
             return QIcon(pixmap)
         return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
 
-    def _has_raw_images(self, file_paths: List[str]) -> bool:
+    def _has_raw_images(self, file_paths: list[str]) -> bool:
         """Check if any of the provided file paths are RAW image files."""
         return any(self._should_apply_raw_processing(path) for path in file_paths)
 
@@ -153,7 +152,7 @@ class DialogManager:
             from core.build_info import VERSION  # type: ignore
 
             version_text = str(VERSION).strip() or None
-        except (ImportError, AttributeError):
+        except ImportError, AttributeError:
             version_text = None
 
         if version_text:
@@ -303,7 +302,7 @@ class DialogManager:
 
     def show_lossy_rotation_confirmation_dialog(
         self, filename: str, rotation_type: str
-    ) -> Tuple[bool, bool]:
+    ) -> tuple[bool, bool]:
         """
         Show a confirmation dialog for lossy rotation with a 'never ask again' option.
 
@@ -709,17 +708,17 @@ class DialogManager:
             max_tokens_value = int(
                 openai_config.get("max_tokens") or DEFAULT_OPENAI_MAX_TOKENS
             )
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             max_tokens_value = DEFAULT_OPENAI_MAX_TOKENS
         try:
             timeout_value = int(openai_config.get("timeout") or DEFAULT_OPENAI_TIMEOUT)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             timeout_value = DEFAULT_OPENAI_TIMEOUT
         try:
             max_workers_value = int(
                 openai_config.get("max_workers") or DEFAULT_OPENAI_MAX_WORKERS
             )
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             max_workers_value = DEFAULT_OPENAI_MAX_WORKERS
         best_prompt_value = (
             openai_config.get("best_shot_prompt") or DEFAULT_BEST_SHOT_PROMPT
@@ -869,8 +868,8 @@ class DialogManager:
                 )
                 return None
 
-        def _extract_model_ids(response) -> Set[str]:
-            model_ids: Set[str] = set()
+        def _extract_model_ids(response) -> set[str]:
+            model_ids: set[str] = set()
             data = getattr(response, "data", None)
             if data is None and isinstance(response, dict):
                 data = response.get("data")
@@ -908,8 +907,8 @@ class DialogManager:
                 test_model = _resolve_or_default(
                     model_combo.currentText(), DEFAULT_OPENAI_MODEL
                 )
-                completion_duration: Optional[float] = None
-                completion_error: Optional[Exception] = None
+                completion_duration: float | None = None
+                completion_error: Exception | None = None
                 try:
                     completion_client = (
                         client.with_options(timeout=probe_timeout)
@@ -1049,7 +1048,7 @@ class DialogManager:
             best_prompt_text = best_prompt_edit.toPlainText()
             rating_prompt_text = rating_prompt_edit.toPlainText()
 
-            def _value_or_none(value: str, default_value: str) -> Optional[str]:
+            def _value_or_none(value: str, default_value: str) -> str | None:
                 trimmed = value.strip()
                 if not trimmed or trimmed == default_value:
                     return ""
@@ -1368,7 +1367,7 @@ class DialogManager:
         logger.info("Closed cache management dialog")
 
     def _show_delete_confirmation_dialog(
-        self, files: List[str], title_text: str, message_text: str
+        self, files: list[str], title_text: str, message_text: str
     ) -> bool:
         """
         Shows a custom, reusable confirmation dialog for deleting files,
@@ -1449,7 +1448,7 @@ class DialogManager:
         )
         return confirmed
 
-    def show_confirm_delete_dialog(self, deleted_file_paths: List[str]) -> bool:
+    def show_confirm_delete_dialog(self, deleted_file_paths: list[str]) -> bool:
         """
         Shows a confirmation dialog for deleting files.
 
@@ -1521,7 +1520,7 @@ class DialogManager:
         warn_box.exec()
         logger.info("Closed potential cache overflow warning dialog")
 
-    def show_commit_deletions_dialog(self, marked_files: List[str]) -> bool:
+    def show_commit_deletions_dialog(self, marked_files: list[str]) -> bool:
         """
         Shows a confirmation dialog for committing marked deletions.
 
@@ -1561,7 +1560,7 @@ class DialogManager:
 
     def _show_marked_files_confirmation_dialog(
         self,
-        marked_files: List[str],
+        marked_files: list[str],
         *,
         window_title: str,
         dialog_title: str,
@@ -1668,7 +1667,7 @@ class DialogManager:
             )
             return "cancel"
 
-    def show_close_confirmation_dialog(self, marked_files: List[str]) -> str:
+    def show_close_confirmation_dialog(self, marked_files: list[str]) -> str:
         """
         Shows a confirmation dialog when closing the application with marked files.
 
@@ -1693,7 +1692,7 @@ class DialogManager:
             object_name_prefix="closeDialog",
         )
 
-    def show_grouping_close_confirmation_dialog(self, action_lines: List[str]) -> str:
+    def show_grouping_close_confirmation_dialog(self, action_lines: list[str]) -> str:
         preview_lines = action_lines[:25]
         preview_text = "\n".join(preview_lines)
         remaining = len(action_lines) - len(preview_lines)
@@ -1768,7 +1767,7 @@ class DialogManager:
             return "close"
         return "cancel"
 
-    def show_folder_change_confirmation_dialog(self, marked_files: List[str]) -> str:
+    def show_folder_change_confirmation_dialog(self, marked_files: list[str]) -> str:
         """
         Shows a confirmation dialog when changing folders with marked files.
 

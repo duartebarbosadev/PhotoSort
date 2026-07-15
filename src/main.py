@@ -1,7 +1,15 @@
 import sys
 import os
 import time
-from typing import Optional
+import contextlib
+
+SUPPORTED_PYTHON = (3, 14)
+if sys.version_info[:2] != SUPPORTED_PYTHON:
+    detected = f"{sys.version_info.major}.{sys.version_info.minor}"
+    raise RuntimeError(
+        "PhotoSort requires Python 3.14.x for source execution "
+        f"(detected Python {detected})."
+    )
 
 # Ensure the 'src' directory is on sys.path when executing as a script
 SRC_DIR = os.path.dirname(__file__)
@@ -12,19 +20,18 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 from core.runtime_paths import (  # noqa: E402
     iter_bundle_roots,
+    is_frozen_runtime,
     resolve_runtime_root,
     get_app_log_dir,
 )
 
-# Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
-_pyexiv2_initialization_warning: Optional[str] = None
+# Initialize pyexiv2 before any Qt imports; this is critical for Windows stability.
 try:
-    from core.pyexiv2_init import ensure_pyexiv2_initialized  # noqa: E402
+    from core.pyexiv2_init import ensure_pyexiv2_initialized
 
     ensure_pyexiv2_initialized()
 except Exception as e:
-    # Logging is imported immediately below; retain the warning until then.
-    _pyexiv2_initialization_warning = f"Failed to initialize pyexiv2: {e}"
+    raise RuntimeError("PhotoSort could not initialize its metadata runtime.") from e
 
 import logging  # noqa: E402
 import argparse  # noqa: E402
@@ -34,11 +41,8 @@ from PyQt6.QtCore import Qt, QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen  # noqa: E402
 from PyQt6.QtGui import QIcon, QPixmap, QFont, QFontDatabase  # noqa: E402
 
-if _pyexiv2_initialization_warning:
-    logging.getLogger(__name__).warning(_pyexiv2_initialization_warning)
 
-
-def _resolve_log_level(value: Optional[str] = None) -> int:
+def _resolve_log_level(value: str | None = None) -> int:
     """Return the configured application log level, defaulting safely to INFO."""
     level_name = (value or os.environ.get("PHOTOSORT_LOG_LEVEL", "INFO")).upper()
     level = getattr(logging, level_name, None)
@@ -51,38 +55,14 @@ def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
     Works in both source runs and frozen bundles (e.g., PyInstaller) by
     checking for the temporary extraction directory at runtime.
     """
+    base_dir = resolve_runtime_root(PROJECT_ROOT)
+    path = os.path.join(base_dir, "dark_theme.qss" if is_frozen_runtime() else filename)
     try:
-        base_dir = resolve_runtime_root(PROJECT_ROOT)
-
-        # Candidate locations, in order of preference
-        candidates = [
-            os.path.join(
-                base_dir, "dark_theme.qss"
-            ),  # bundled at top-level in frozen builds
-            os.path.join(base_dir, filename),  # e.g., src/ui/dark_theme.qss
-            os.path.abspath(filename),  # direct path from CWD
-        ]
-
-        for path in candidates:
-            try:
-                if os.path.exists(path) and os.path.isfile(path):
-                    logging.info(f"Loading stylesheet: {path}")
-                    with open(path, "r", encoding="utf-8") as f:
-                        return f.read()
-            except PermissionError as pe:
-                logging.error(
-                    f"Permission denied when reading stylesheet '{path}': {pe}"
-                )
-                continue
-            except Exception as e_inner:
-                logging.error(f"Failed to read stylesheet '{path}': {e_inner}")
-                continue
-
-        logging.warning(f"Stylesheet not found: searched {candidates}")
-        return ""
+        logging.info("Loading stylesheet: %s", path)
+        with open(path, encoding="utf-8") as stylesheet:
+            return stylesheet.read()
     except Exception as e:
-        logging.error(f"Failed to load stylesheet '{filename}': {e}")
-        return ""
+        raise RuntimeError(f"Required stylesheet could not be loaded: {path}") from e
 
 
 def _pick_ui_font_family() -> str:
@@ -159,7 +139,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 
     # Construct a simpler message for the main part of the dialog
     main_error_text = (
-        f"A critical error occurred: {str(exc_value)}\n\n"
+        f"A critical error occurred: {exc_value!s}\n\n"
         "The application may become unstable or need to close.\n"
         "Please report this error with the details provided."
     )
@@ -176,7 +156,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
             error_box.exec()
         except Exception as e_msgbox:
             logging.error(
-                f"Failed to display error dialog: {str(e_msgbox)}\nOriginal error:\n{error_message_details}"
+                f"Failed to display error dialog: {e_msgbox!s}\nOriginal error:\n{error_message_details}"
             )
             # Fallback to stderr if QMessageBox fails
             logging.critical(
@@ -218,7 +198,7 @@ def _resolve_app_icon_path() -> str:
         return ""
 
 
-def _find_resource_path(filename: str, include_exe_dir: bool = False) -> Optional[str]:
+def _find_resource_path(filename: str, include_exe_dir: bool = False) -> str | None:
     """Find the first existing path for a given resource filename.
 
     Search order:
@@ -257,10 +237,8 @@ def apply_app_identity(app: QApplication, main_window=None) -> None:
             icon = QIcon(icon_path)
             app.setWindowIcon(icon)
             if main_window is not None:
-                try:
+                with contextlib.suppress(Exception):
                     main_window.setWindowIcon(icon)
-                except Exception:
-                    pass
             logging.debug(f"Application icon set from: {icon_path}")
         else:
             logging.warning(f"Application icon not found at: {icon_path}")
@@ -268,7 +246,7 @@ def apply_app_identity(app: QApplication, main_window=None) -> None:
         logging.error(f"Failed to apply application icon: {e}")
 
 
-def resolve_splash_logo_path() -> Optional[str]:
+def resolve_splash_logo_path() -> str | None:
     """Resolve the best path to the splashscreen logo across source and PyInstaller runs.
 
     Returns the first existing candidate path, or None if no logo is found.
@@ -308,7 +286,7 @@ def main():
     splash.show()
     app.processEvents()  # should be fast; no text/layout yet
 
-    from pillow_heif import register_heif_opener  # noqa: E402
+    from pillow_heif import register_heif_opener
 
     register_heif_opener()
 

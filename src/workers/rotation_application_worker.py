@@ -9,7 +9,6 @@ import os
 import time
 import threading
 import concurrent.futures
-from typing import Dict, Optional, Tuple
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.metadata_processor import MetadataProcessor
@@ -30,7 +29,7 @@ class RotationApplicationWorker(QObject):
     finished = pyqtSignal(int, int)  # successful_count, failed_count
     error = pyqtSignal(str)
 
-    def __init__(self, exif_disk_cache: Optional[ExifCache] = None):
+    def __init__(self, exif_disk_cache: ExifCache | None = None):
         super().__init__()
         self.exif_disk_cache = exif_disk_cache
         self._is_running = True
@@ -43,7 +42,7 @@ class RotationApplicationWorker(QObject):
 
     def _rotate_single_image(
         self, file_path: str, rotation_degrees: int, total_rotations: int
-    ) -> Tuple[str, str, bool, str, bool]:
+    ) -> tuple[str, str, bool, str, bool]:
         """
         Rotate a single image (used by both sequential and parallel paths).
 
@@ -108,29 +107,12 @@ class RotationApplicationWorker(QObject):
                     False,
                 )
             elif needs_lossy:
-                # Try lossy rotation
-                logger.info(f"Attempting lossy rotation for '{filename}'.")
-                t3 = time.perf_counter()
-                success = MetadataProcessor.rotate_image(
-                    file_path,
-                    direction,
-                    update_metadata_only=False,
-                    exif_disk_cache=self.exif_disk_cache,
+                strict_message = (
+                    f"Lossless rotation failed for {filename}; PhotoSort will not "
+                    "rewrite JPEG pixels with lossy encoding."
                 )
-                t4 = time.perf_counter()
-                logger.debug(f"Lossy rotation for '{filename}' took {t4 - t3:.2f}s.")
-
-                if success:
-                    return (
-                        file_path,
-                        direction,
-                        True,
-                        f"Rotated {filename} {rotation_degrees}° (lossy)",
-                        True,
-                    )
-                else:
-                    logger.error(f"Lossy rotation failed for '{filename}'.")
-                    return (file_path, direction, False, "Rotation failed", False)
+                logger.error(strict_message)
+                return (file_path, direction, False, strict_message, False)
             else:
                 logger.error(f"Rotation not supported for '{filename}': {message}")
                 return (file_path, direction, False, message, False)
@@ -147,7 +129,7 @@ class RotationApplicationWorker(QObject):
                 f"{single_file_end_time - single_file_start_time:.2f}s."
             )
 
-    def apply_rotations(self, approved_rotations: Dict[str, int]):
+    def apply_rotations(self, approved_rotations: dict[str, int]):
         """
         Apply rotations to multiple images.
         Uses parallel processing for multiple images when max_workers > 1.

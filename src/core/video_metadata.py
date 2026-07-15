@@ -1,9 +1,7 @@
-from __future__ import annotations
-
 import logging
 import math
 import os
-from typing import Any, Dict
+from typing import Any
 
 import cv2
 
@@ -13,7 +11,7 @@ logger = logging.getLogger(__name__)
 def _clean_number(value: Any) -> float | None:
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not math.isfinite(number) or number <= 0:
         return None
@@ -27,8 +25,8 @@ def _fourcc_to_string(code: int) -> str:
     return "".join(chars).strip()
 
 
-def get_basic_video_metadata(file_path: str) -> Dict[str, Any]:
-    metadata: Dict[str, Any] = {}
+def get_basic_video_metadata(file_path: str) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
     if not file_path or not os.path.isfile(file_path):
         return metadata
 

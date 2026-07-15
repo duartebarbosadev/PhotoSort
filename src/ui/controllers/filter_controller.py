@@ -1,6 +1,6 @@
-from __future__ import annotations
 from dataclasses import dataclass
-from typing import Protocol, Optional
+from contextlib import suppress
+from typing import Protocol
 
 from PyQt6.QtCore import QSortFilterProxyModel
 
@@ -12,7 +12,7 @@ class FilterContext(Protocol):
     def refresh_filter(self) -> None: ...  # triggers view/model refresh
 
 
-@dataclass
+@dataclass(slots=True)
 class FilterState:
     rating_filter: str = "Show All"
     cluster_filter_id: int = -1
@@ -91,8 +91,8 @@ class FilterController:
 
     def _push_state_to_proxy(
         self,
-        show_folders: Optional[bool] = None,
-        current_view_mode: Optional[str] = None,
+        show_folders: bool | None = None,
+        current_view_mode: str | None = None,
     ) -> None:
         proxy = getattr(self.ctx, "proxy_model", None)
         if proxy is None:
@@ -101,10 +101,8 @@ class FilterController:
             return
         # Attach AppState reference once (idempotent) if attribute exists
         if getattr(proxy, "app_state_ref", None) is None:
-            try:
+            with suppress(Exception):
                 proxy.app_state_ref = self.ctx.app_state  # type: ignore[attr-defined]
-            except Exception:
-                pass
         # Push current filters
         if hasattr(proxy, "current_rating_filter"):
             proxy.current_rating_filter = self.state.rating_filter  # type: ignore[attr-defined]

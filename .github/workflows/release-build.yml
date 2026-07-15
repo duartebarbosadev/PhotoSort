@@ -23,17 +23,17 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            python: '3.12'
+            python: '3.14'
             artifact_name: PhotoSort-Windows-x64
             requirements_file: requirements.txt
             max_artifact_mb: 500
           - os: windows-latest
-            python: '3.12'
+            python: '3.14'
             artifact_name: PhotoSort-Windows-x64-CUDA
             requirements_file: requirements-cuda.txt
             max_artifact_mb: 750
           - os: macos-14
-            python: '3.12'
+            python: '3.14'
             artifact_name: PhotoSort-macOS-AppleSilicon
             requirements_file: requirements.txt
             max_artifact_mb: 450
@@ -101,17 +101,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r "${{ matrix.requirements_file }}" -r requirements-build.txt
-          set +e
           python -m pip check 2>&1 | tee pip-check.txt
-          pip_check_status=${PIPESTATUS[0]}
-          set -e
-          if [[ $pip_check_status -ne 0 ]]; then
-            # MediaPipe 0.10.21 ships a universal2 binary with x86_64-only wheel
-            # metadata, so pip reports it unsupported on Apple Silicon even though
-            # both architectures are present and the import succeeds.
-            sed '/^mediapipe 0.10.21 is not supported on this platform$/d' pip-check.txt > pip-check-unexpected.txt
-            test ! -s pip-check-unexpected.txt
-          fi
           python -m pip freeze --all > build-environment.txt
 
       - name: Verify ONNX Runtime variant

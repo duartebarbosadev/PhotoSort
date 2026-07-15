@@ -1,7 +1,7 @@
 import os
 import concurrent.futures
 import logging
-from typing import Optional, List, Callable, Dict
+from collections.abc import Callable
 
 from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
@@ -35,7 +35,7 @@ class RotationDetector:
     def _detect_rotation_task(
         self,
         image_path: str,
-        result_callback: Optional[Callable[[str, int], None]],
+        result_callback: Callable[[str, int], None] | None,
     ) -> None:
         """
         Worker task for detecting rotation for a single image.
@@ -73,11 +73,11 @@ class RotationDetector:
 
     def detect_rotation_in_batch(
         self,
-        image_paths: List[str],
-        result_callback: Optional[Callable[[str, int], None]] = None,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None,
-        should_continue_callback: Optional[Callable[[], bool]] = None,
-        num_workers: Optional[int] = None,
+        image_paths: list[str],
+        result_callback: Callable[[str, int], None] | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+        should_continue_callback: Callable[[], bool] | None = None,
+        num_workers: int | None = None,
         **kwargs,
     ) -> None:
         """
@@ -96,7 +96,7 @@ class RotationDetector:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=effective_num_workers
         ) as executor:
-            futures_map: Dict[concurrent.futures.Future, str] = {
+            futures_map: dict[concurrent.futures.Future, str] = {
                 executor.submit(self._detect_rotation_task, path, result_callback): path
                 for path in image_paths
                 if not (should_continue_callback and not should_continue_callback())

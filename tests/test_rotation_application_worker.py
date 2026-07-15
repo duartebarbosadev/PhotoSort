@@ -128,16 +128,13 @@ class TestRotationApplicationWorker:
                 os.unlink(tmp_path)
 
     @patch("workers.rotation_application_worker.MetadataProcessor")
-    def test_apply_rotation_lossy_fallback(self, mock_metadata_processor):
-        """Test lossy rotation fallback when metadata rotation fails"""
-        # Metadata rotation indicates lossy needed
+    def test_apply_rotation_refuses_lossy_jpeg_rewrite(self, mock_metadata_processor):
+        """A failed lossless JPEG rotation must not trigger pixel re-encoding."""
         mock_metadata_processor.try_metadata_rotation_first.return_value = (
             False,
             True,
             "Needs lossy",
         )
-        mock_metadata_processor.rotate_image.return_value = True
-
         worker = RotationApplicationWorker()
         rotation_applied_mock = Mock()
         worker.rotation_applied.connect(rotation_applied_mock)
@@ -149,12 +146,11 @@ class TestRotationApplicationWorker:
             approved_rotations = {tmp_path: 90}
             worker.apply_rotations(approved_rotations)
 
-            # Verify lossy rotation was called
-            mock_metadata_processor.rotate_image.assert_called_once()
-
-            # Verify is_lossy flag is True
+            mock_metadata_processor.rotate_image.assert_not_called()
             args = rotation_applied_mock.call_args[0]
-            assert args[4] is True  # is_lossy
+            assert args[2] is False
+            assert "will not rewrite JPEG pixels" in args[3]
+            assert args[4] is False
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)

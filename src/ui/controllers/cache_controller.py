@@ -1,7 +1,5 @@
 """Cache-management behavior extracted from the main window."""
 
-from __future__ import annotations
-
 import logging
 from typing import Any, Protocol
 

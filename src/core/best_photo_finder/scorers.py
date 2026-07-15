@@ -1,17 +1,21 @@
-from __future__ import annotations
-
 from dataclasses import dataclass, field
-import importlib
 from math import dist
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Protocol, Sequence
+from typing import Protocol
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from core.best_photo_finder.config import SelectorConfig
 from core.best_photo_finder.devices import ResolvedDevice, resolve_device
-from core.best_photo_finder.errors import MissingDependencyError, SelectionError
+from core.best_photo_finder.errors import (
+    FaceLandmarkerError,
+    MissingDependencyError,
+    SelectionError,
+)
 from core.best_photo_finder.models import TechnicalMetrics
 from core.app_settings import get_huggingface_cache_dir
 from core.huggingface_progress import build_hf_tqdm_class
+from core.runtime_paths import resolve_face_landmarker_model_path
+import contextlib
 
 LEFT_EYE_INDICES = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_INDICES = (362, 385, 387, 263, 373, 380)
@@ -25,6 +29,9 @@ class TechnicalScorer(Protocol):
         self, path: Path, image, config: SelectorConfig
     ) -> TechnicalMetrics:
         """Compute blur and face-aware metrics for a preloaded image."""
+
+    def close(self) -> None:
+        """Release native resources held by the scorer."""
 
 
 class AestheticScorer(Protocol):
@@ -58,37 +65,56 @@ def _require_module(name: str):
         ) from exc
 
 
-def _load_face_mesh_factory():
-    try:
+class FaceLandmarkerBackend(Protocol):
+    def detect_landmarks(self, rgb_image) -> Sequence[Sequence[object]]:
+        """Return normalized landmarks for every face in an RGB image."""
+
+    def close(self) -> None:
+        """Release native MediaPipe resources."""
+
+
+class MediaPipeTasksFaceLandmarker:
+    """Small adapter around MediaPipe Tasks' model-backed Face Landmarker."""
+
+    def __init__(self, model_path: Path) -> None:
         mediapipe = _require_module("mediapipe")
-    except MissingDependencyError:
-        raise
-
-    solutions = getattr(mediapipe, "solutions", None)
-    if solutions is not None:
-        face_mesh_module = getattr(solutions, "face_mesh", None)
-        face_mesh_factory = getattr(face_mesh_module, "FaceMesh", None)
-        if face_mesh_factory is not None:
-            return face_mesh_factory
-
-    for module_name in (
-        "mediapipe.python.solutions.face_mesh",
-        "mediapipe.solutions.face_mesh",
-    ):
         try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        face_mesh_factory = getattr(module, "FaceMesh", None)
-        if face_mesh_factory is not None:
-            return face_mesh_factory
+            tasks = mediapipe.tasks
+            vision = tasks.vision
+            options = vision.FaceLandmarkerOptions(
+                base_options=tasks.BaseOptions(model_asset_path=str(model_path)),
+                running_mode=vision.RunningMode.IMAGE,
+                num_faces=10,
+            )
+            self._landmarker = vision.FaceLandmarker.create_from_options(options)
+            self._image_type = mediapipe.Image
+            self._image_format = mediapipe.ImageFormat.SRGB
+        except (AttributeError, ValueError, RuntimeError) as exc:
+            version = getattr(mediapipe, "__version__", "unknown")
+            raise MissingDependencyError(
+                "MediaPipe Tasks Face Landmarker could not be initialized "
+                f"(detected version: {version}, model: {model_path})."
+            ) from exc
 
-    version = getattr(mediapipe, "__version__", "unknown")
-    raise MissingDependencyError(
-        "Installed MediaPipe does not expose the legacy FaceMesh API required by this project "
-        f"(detected version: {version}). Reinstall a compatible release, for example "
-        "`pip install 'mediapipe<0.10.30'`."
-    )
+    def detect_landmarks(self, rgb_image) -> Sequence[Sequence[object]]:
+        try:
+            import numpy as np
+        except ImportError as exc:
+            raise MissingDependencyError(
+                "Missing optional dependency 'numpy'. Install the required extras before running the selector."
+            ) from exc
+        image = self._image_type(
+            image_format=self._image_format,
+            data=np.ascontiguousarray(rgb_image),
+        )
+        return self._landmarker.detect(image).face_landmarks
+
+    def close(self) -> None:
+        self._landmarker.close()
+
+
+def _create_face_landmarker(model_path: Path) -> FaceLandmarkerBackend:
+    return MediaPipeTasksFaceLandmarker(model_path)
 
 
 def _normalized_blur_penalty(variance: float, config: SelectorConfig) -> float:
@@ -125,157 +151,40 @@ def _face_area_ratio(landmarks) -> float:
     return _clamp((max(xs) - min(xs)) * (max(ys) - min(ys)), 0.0, 1.0)
 
 
-@dataclass(frozen=True, slots=True)
-class FaceBox:
-    x: int
-    y: int
-    width: int
-    height: int
-
-    @property
-    def area(self) -> int:
-        return self.width * self.height
-
-
 @dataclass(slots=True)
 class OpenCvMediapipeTechnicalScorer:
-    _face_mesh: object | None = field(default=None, init=False, repr=False)
-    _face_mesh_error: str | None = field(default=None, init=False, repr=False)
-    _face_mesh_disabled: bool = field(default=False, init=False, repr=False)
-    _face_cascade: object | None = field(default=None, init=False, repr=False)
-    _eye_cascade: object | None = field(default=None, init=False, repr=False)
+    face_landmarker_factory: Callable[[Path], FaceLandmarkerBackend] = field(
+        default=_create_face_landmarker, repr=False
+    )
+    _face_landmarker: FaceLandmarkerBackend | None = field(
+        default=None, init=False, repr=False
+    )
 
-    def _get_cascade(self, cv2, filename: str):
-        cascade_path = Path(cv2.data.haarcascades) / filename
-        cascade = cv2.CascadeClassifier(str(cascade_path))
-        if cascade.empty():
-            raise SelectionError(f"Could not load OpenCV cascade: {cascade_path}")
-        return cascade
-
-    def _get_face_cascade(self, cv2):
-        if self._face_cascade is None:
-            self._face_cascade = self._get_cascade(
-                cv2, "haarcascade_frontalface_default.xml"
-            )
-        return self._face_cascade
-
-    def _get_eye_cascade(self, cv2):
-        if self._eye_cascade is None:
-            self._eye_cascade = self._get_cascade(
-                cv2, "haarcascade_eye_tree_eyeglasses.xml"
-            )
-        return self._eye_cascade
-
-    def _detect_faces(self, gray_image, cv2) -> list[FaceBox]:
-        min_side = max(48, min(gray_image.shape[:2]) // 12)
-        detections = self._get_face_cascade(cv2).detectMultiScale(
-            gray_image,
-            scaleFactor=1.1,
-            minNeighbors=5,
-            minSize=(min_side, min_side),
-        )
-        faces = [
-            FaceBox(int(x), int(y), int(width), int(height))
-            for x, y, width, height in detections
-        ]
-        return sorted(faces, key=lambda face: face.area, reverse=True)
-
-    def _expand_face_box(
-        self,
-        face: FaceBox,
-        image_width: int,
-        image_height: int,
-        padding_ratio: float = 0.18,
-    ) -> FaceBox:
-        pad_x = int(face.width * padding_ratio)
-        pad_y = int(face.height * padding_ratio)
-        x0 = max(0, face.x - pad_x)
-        y0 = max(0, face.y - pad_y)
-        x1 = min(image_width, face.x + face.width + pad_x)
-        y1 = min(image_height, face.y + face.height + pad_y)
-        return FaceBox(x=x0, y=y0, width=max(1, x1 - x0), height=max(1, y1 - y0))
-
-    def _detect_open_eyes_in_face(self, face_gray, cv2) -> int:
-        eyes = self._get_eye_cascade(cv2).detectMultiScale(
-            face_gray,
-            scaleFactor=1.05,
-            minNeighbors=3,
-            minSize=(12, 12),
-        )
-        return len(eyes)
-
-    def _face_area_ratio_from_box(
-        self, face: FaceBox, image_width: int, image_height: int
-    ) -> float:
-        return _clamp(face.area / max(1, image_width * image_height), 0.0, 1.0)
-
-    def _score_face_crop(
-        self,
-        face_box: FaceBox,
-        rgb_image,
-        gray_image,
-        image_width: int,
-        image_height: int,
-        config: SelectorConfig,
-        cv2,
-    ):
-        expanded = self._expand_face_box(face_box, image_width, image_height)
-        x0, y0 = expanded.x, expanded.y
-        x1, y1 = x0 + expanded.width, y0 + expanded.height
-        face_rgb = rgb_image[y0:y1, x0:x1]
-        face_gray = gray_image[y0:y1, x0:x1]
-
-        max_face_area_ratio = self._face_area_ratio_from_box(
-            face_box, image_width, image_height
-        )
-        issues: list[str] = []
-        closed = False
-
-        face_mesh = self._get_face_mesh()
-        if face_mesh is not None and face_rgb.size:
-            results = face_mesh.process(face_rgb)
-            face_landmarks_list = results.multi_face_landmarks or []
-            if face_landmarks_list:
-                best = max(
-                    face_landmarks_list,
-                    key=lambda item: _face_area_ratio(item.landmark),
-                )
-                landmarks = best.landmark
-                left_ear = _eye_aspect_ratio(landmarks, LEFT_EYE_INDICES)
-                right_ear = _eye_aspect_ratio(landmarks, RIGHT_EYE_INDICES)
-                closed = min(left_ear, right_ear) < config.eye_closed_threshold
-                landmark_ratio = _face_area_ratio(
-                    landmarks
-                ) * self._face_area_ratio_from_box(expanded, image_width, image_height)
-                max_face_area_ratio = max(max_face_area_ratio, landmark_ratio)
-                return closed, max_face_area_ratio, tuple(issues)
-
-        if self._face_mesh_error:
-            issues.append(f"landmark fallback used: {self._face_mesh_error}")
-
-        upper_face = face_gray[: max(1, face_gray.shape[0] // 2), :]
-        eye_count = self._detect_open_eyes_in_face(upper_face, cv2)
-        closed = eye_count < 2
-        return closed, max_face_area_ratio, tuple(issues)
-
-    def _get_face_mesh(self):
-        if self._face_mesh_disabled:
-            return None
-        if self._face_mesh is not None:
-            return self._face_mesh
-
-        face_mesh_factory = _load_face_mesh_factory()
+    def _get_face_landmarker(self) -> FaceLandmarkerBackend:
+        if self._face_landmarker is not None:
+            return self._face_landmarker
         try:
-            self._face_mesh = face_mesh_factory(
-                static_image_mode=True,
-                max_num_faces=10,
-                refine_landmarks=True,
+            self._face_landmarker = self.face_landmarker_factory(
+                resolve_face_landmarker_model_path()
             )
-        except RuntimeError as exc:
-            self._face_mesh_disabled = True
-            self._face_mesh_error = str(exc)
-            return None
-        return self._face_mesh
+        except (
+            FileNotFoundError,
+            MissingDependencyError,
+            OSError,
+            ValueError,
+            RuntimeError,
+        ) as exc:
+            raise FaceLandmarkerError(
+                f"Face Landmarker could not be initialized: {exc}"
+            ) from exc
+        return self._face_landmarker
+
+    def close(self) -> None:
+        landmarker = self._face_landmarker
+        self._face_landmarker = None
+        if landmarker is not None:
+            with contextlib.suppress(RuntimeError):
+                landmarker.close()
 
     def score(self, path: Path, config: SelectorConfig) -> TechnicalMetrics:
         cv2 = _require_module("cv2")
@@ -317,24 +226,26 @@ class OpenCvMediapipeTechnicalScorer:
         blur_penalty = _normalized_blur_penalty(blur_variance, config)
 
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        faces = self._detect_faces(gray, cv2)
-        face_count = 0
+        face_landmarker = self._get_face_landmarker()
+        try:
+            faces = face_landmarker.detect_landmarks(rgb)
+        except (MissingDependencyError, OSError, ValueError, RuntimeError) as exc:
+            self.close()
+            raise FaceLandmarkerError(
+                f"Face Landmarker failed while analysing {path.name}: {exc}"
+            ) from exc
+
+        face_count = len(faces)
         closed_face_count = 0
         max_face_area_ratio = 0.0
         issues: list[str] = []
 
-        for face in faces:
-            face_count += 1
-            closed, face_area_ratio, face_issues = self._score_face_crop(
-                face, rgb, gray, width, height, config, cv2
-            )
-            if closed:
+        for landmarks in faces:
+            left_ear = _eye_aspect_ratio(landmarks, LEFT_EYE_INDICES)
+            right_ear = _eye_aspect_ratio(landmarks, RIGHT_EYE_INDICES)
+            if min(left_ear, right_ear) < config.eye_closed_threshold:
                 closed_face_count += 1
-            max_face_area_ratio = max(max_face_area_ratio, face_area_ratio)
-            issues.extend(face_issues)
-
-        if not faces and self._face_mesh_error:
-            issues.append(f"face analysis unavailable: {self._face_mesh_error}")
+            max_face_area_ratio = max(max_face_area_ratio, _face_area_ratio(landmarks))
 
         eye_penalty = 0.0
         if face_count:
@@ -482,8 +393,9 @@ class HuggingFaceAestheticScorer:
 
         image_size = config_size = 384
         if self._model is not None:
+            model_config = getattr(self._model, "config", None)
             image_size = int(
-                getattr(self._model.config, "image_size", config_size) or config_size
+                getattr(model_config, "image_size", config_size) or config_size
             )
 
         if image.size != (image_size, image_size):

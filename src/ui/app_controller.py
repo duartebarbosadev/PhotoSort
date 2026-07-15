@@ -2,10 +2,11 @@ import os
 import re
 import time
 import logging
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any
 
 import numpy as np
 from PyQt6.QtCore import QObject, QTimer
+from core.best_photo_finder.payloads import PickBestResults
 from core.app_settings import (
     add_recent_folder,
     get_similarity_embedding_model_name,
@@ -21,7 +22,6 @@ from core.similarity_utils import adaptive_dbscan_eps, l2_normalize_rows
 logger = logging.getLogger(__name__)
 
 AD_HOC_SELECTION_CLUSTER_ID = -1
-THUMBNAIL_PRELOAD_PROGRESS_LOG_INTERVAL = 100
 PICK_BEST_REFINEMENT_EPS = 0.04
 PICK_BEST_REFINEMENT_MIN_SAMPLES = 2
 
@@ -127,24 +127,22 @@ class AppController(QObject):
 
     def __init__(
         self,
-        main_window: "MainWindow",
-        app_state: "AppState",
-        worker_manager: "WorkerManager",
+        main_window: MainWindow,
+        app_state: AppState,
+        worker_manager: WorkerManager,
         parent=None,
     ):
         super().__init__(parent)
         self.main_window = main_window
         self.app_state = app_state
         self.worker_manager = worker_manager
-        self._last_thumbnail_preload_logged = 0
-
         # Track pending rotations for batch preview regeneration
-        self._pending_rotated_paths: List[str] = []
+        self._pending_rotated_paths: list[str] = []
         # Cache volume at preview-preload start, used for per-run diagnostics.
         self._ai_rating_warning_messages: list[str] = []
         self._pick_best_pending_after_similarity: bool = False
         self._easy_delete_pending_after_similarity: bool = False
-        self._pending_grouping_preview: Optional[Tuple[object, str]] = None
+        self._pending_grouping_preview: tuple[object, str] | None = None
 
     def connect_signals(self):
         """Connects signals from the WorkerManager to the controller's slots."""
@@ -229,17 +227,6 @@ class AppController(QObject):
         )
         self.worker_manager.rotation_application_error.connect(
             self.handle_rotation_application_error
-        )
-
-        # Thumbnail Preload Worker
-        self.worker_manager.thumbnail_preload_progress.connect(
-            self.handle_thumbnail_preload_progress
-        )
-        self.worker_manager.thumbnail_preload_finished.connect(
-            self.handle_thumbnail_preload_complete
-        )
-        self.worker_manager.thumbnail_preload_error.connect(
-            self.handle_thumbnail_preload_error
         )
 
         # Best Shot Worker
@@ -525,7 +512,7 @@ class AppController(QObject):
     def start_grouping_workflow(
         self,
         mode: str,
-        group_name_overrides: Optional[Dict[str, str]] = None,
+        group_name_overrides: dict[str, str] | None = None,
         prepared_plan=None,
     ):
         if self.worker_manager.is_grouping_workflow_running():
@@ -605,7 +592,6 @@ class AppController(QObject):
         self.worker_manager.start_blur_detection(
             image_data_list,
             self.main_window.blur_detection_threshold,
-            True,  # Always enable processing for RAW files
         )
 
     def start_auto_rotation_analysis(self):
@@ -646,16 +632,16 @@ class AppController(QObject):
             self.app_state.exif_disk_cache,
         )
 
-    def _build_cluster_path_map(self) -> Dict[int, List[str]]:
+    def _build_cluster_path_map(self) -> dict[int, list[str]]:
         valid_image_paths = set(self._get_image_paths())
-        cluster_map: Dict[int, List[str]] = {}
+        cluster_map: dict[int, list[str]] = {}
         for path, cluster_id in self.app_state.cluster_results.items():
             if cluster_id is None or path not in valid_image_paths:
                 continue
             cluster_map.setdefault(cluster_id, []).append(path)
         return cluster_map
 
-    def _build_pick_best_cluster_map(self) -> Dict[int, List[str]]:
+    def _build_pick_best_cluster_map(self) -> dict[int, list[str]]:
         raw_cluster_map = self._build_cluster_path_map()
 
         # Exclude images already marked for deletion (e.g. from Easy Delete step)
@@ -674,7 +660,7 @@ class AppController(QObject):
         if not base_cluster_map or not embeddings:
             return base_cluster_map
 
-        refined_map: Dict[int, List[str]] = {}
+        refined_map: dict[int, list[str]] = {}
         next_cluster_id = 1
 
         for _cluster_id, paths in sorted(base_cluster_map.items()):
@@ -715,7 +701,7 @@ class AppController(QObject):
             )
             labels = dbscan.fit_predict(embedding_matrix)
 
-            grouped: Dict[int, List[str]] = {}
+            grouped: dict[int, list[str]] = {}
             next_noise_label = 0
             for path, label in zip(embedded_paths, labels, strict=True):
                 if label == -1:
@@ -758,7 +744,7 @@ class AppController(QObject):
             item.get("path") for item in self._get_image_file_data() if item.get("path")
         }
 
-        def _parse_cluster_key(key) -> Optional[int]:
+        def _parse_cluster_key(key) -> int | None:
             if isinstance(key, int):
                 return key
             if isinstance(key, str):
@@ -802,7 +788,7 @@ class AppController(QObject):
 
         saved_rankings = saved.get("best_shot_rankings") or {}
         if isinstance(saved_rankings, dict):
-            normalized_rankings: Dict[int, List[Dict[str, Any]]] = {}
+            normalized_rankings: dict[int, list[dict[str, Any]]] = {}
             for key, value in saved_rankings.items():
                 cluster_id = _parse_cluster_key(key)
                 if cluster_id is None:
@@ -1046,8 +1032,8 @@ class AppController(QObject):
     # --- Private Helper Methods ---
 
     def _get_image_file_data(
-        self, file_data_list: Optional[List[Dict[str, Any]]] = None
-    ) -> List[Dict[str, Any]]:
+        self, file_data_list: list[dict[str, Any]] | None = None
+    ) -> list[dict[str, Any]]:
         source = file_data_list if file_data_list is not None else []
         if file_data_list is None:
             source = getattr(self.app_state, "image_files_data", []) or []
@@ -1058,16 +1044,16 @@ class AppController(QObject):
         ]
 
     def _get_media_file_data(
-        self, file_data_list: Optional[List[Dict[str, Any]]] = None
-    ) -> List[Dict[str, Any]]:
+        self, file_data_list: list[dict[str, Any]] | None = None
+    ) -> list[dict[str, Any]]:
         source = file_data_list if file_data_list is not None else []
         if file_data_list is None:
             source = getattr(self.app_state, "image_files_data", []) or []
         return [fd for fd in source if isinstance(fd, dict) and fd.get("path")]
 
     def _get_image_paths(
-        self, file_data_list: Optional[List[Dict[str, Any]]] = None
-    ) -> List[str]:
+        self, file_data_list: list[dict[str, Any]] | None = None
+    ) -> list[str]:
         return [
             fd.get("path")
             for fd in self._get_image_file_data(file_data_list)
@@ -1075,18 +1061,18 @@ class AppController(QObject):
         ]
 
     def _get_media_paths(
-        self, file_data_list: Optional[List[Dict[str, Any]]] = None
-    ) -> List[str]:
+        self, file_data_list: list[dict[str, Any]] | None = None
+    ) -> list[str]:
         return [
             fd.get("path")
             for fd in self._get_media_file_data(file_data_list)
             if fd.get("path")
         ]
 
-    def _filter_image_paths(self, paths: List[str]) -> List[str]:
+    def _filter_image_paths(self, paths: list[str]) -> list[str]:
         return [path for path in paths if path and is_image_extension(path)]
 
-    def _get_existing_rating_for_path(self, image_path: str) -> Optional[int]:
+    def _get_existing_rating_for_path(self, image_path: str) -> int | None:
         normalized_path = os.path.normpath(image_path)
         cached_rating = self._get_cached_rating(normalized_path)
         if cached_rating is not None:
@@ -1104,7 +1090,7 @@ class AppController(QObject):
         self._cache_rating(normalized_path, rating_int)
         return rating_int
 
-    def _get_cached_rating(self, normalized_path: str) -> Optional[int]:
+    def _get_cached_rating(self, normalized_path: str) -> int | None:
         cached_rating = self.app_state.rating_cache.get(normalized_path)
         if cached_rating is not None:
             return int(cached_rating)
@@ -1117,7 +1103,7 @@ class AppController(QObject):
                 return rating_int
         return None
 
-    def _read_metadata_rating(self, normalized_path: str) -> Optional[float]:
+    def _read_metadata_rating(self, normalized_path: str) -> float | None:
         try:
             return PyExiv2Operations.get_rating(normalized_path)
         except Exception:
@@ -1130,10 +1116,10 @@ class AppController(QObject):
 
     def _normalize_rating_value(
         self, metadata_rating: object, normalized_path: str
-    ) -> Optional[int]:
+    ) -> int | None:
         try:
             rating_int = int(round(float(metadata_rating)))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             logger.debug(
                 "Unexpected rating value for %s: %s",
                 normalized_path,
@@ -1155,9 +1141,9 @@ class AppController(QObject):
             disk_cache.set(normalized_path, 0)
 
     def _partition_unrated_images(
-        self, image_paths: List[str]
-    ) -> Tuple[List[str], int]:
-        unrated: List[str] = []
+        self, image_paths: list[str]
+    ) -> tuple[list[str], int]:
+        unrated: list[str] = []
         already_rated_count = 0
         for path in image_paths:
             existing_rating = self._get_existing_rating_for_path(path)
@@ -1169,7 +1155,7 @@ class AppController(QObject):
 
     # --- Slots for WorkerManager Signals ---
 
-    def handle_files_found(self, batch_of_file_data: List[Dict[str, Any]]):
+    def handle_files_found(self, batch_of_file_data: list[dict[str, Any]]):
         self.app_state.extend_file_data(batch_of_file_data)
         self.main_window.update_loading_text(
             f"Scanning... {len(self.app_state.image_files_data)} files found"
@@ -1402,7 +1388,7 @@ class AppController(QObject):
             f"Scoring images… {message}", percent
         )
 
-    def handle_pick_best_complete(self, results: dict) -> None:
+    def handle_pick_best_complete(self, results: PickBestResults) -> None:
         logger.info(f"Pick Best complete: {len(results)} clusters scored.")
         self.app_state.pick_best_results = results
         # Build quick path→is_winner lookup
@@ -1557,7 +1543,7 @@ class AppController(QObject):
         )
 
     def handle_metadata_batch_loaded(
-        self, metadata_batch: List[Tuple[str, Dict[str, Any]]]
+        self, metadata_batch: list[tuple[str, dict[str, Any]]]
     ):
         currently_selected_paths = self.main_window._get_selected_file_paths_from_view()
         needs_active_selection_refresh = False
@@ -1621,7 +1607,7 @@ class AppController(QObject):
             return
         self.main_window.update_loading_text("Embeddings generated. Clustering...")
 
-    def handle_clustering_complete(self, cluster_results_dict: Dict[str, int]):
+    def handle_clustering_complete(self, cluster_results_dict: dict[str, int]):
         self.app_state.cluster_results = cluster_results_dict
         self.app_state.clear_best_shot_results()
         self.app_state.clear_pick_best_results()
@@ -1722,7 +1708,7 @@ class AppController(QObject):
         self.main_window.update_loading_text(f"Best shots: {message}{suffix}")
 
     def handle_best_shot_complete(
-        self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
+        self, rankings_by_cluster: dict[int, list[dict[str, Any]]]
     ):
         new_results = rankings_by_cluster or {}
         if new_results:
@@ -1784,7 +1770,7 @@ class AppController(QObject):
         if "failed" in lowered or "skipped" in lowered:
             self._ai_rating_warning_messages.append(message)
 
-    def handle_ai_rating_complete(self, results: Dict[str, Dict[str, Any]]):
+    def handle_ai_rating_complete(self, results: dict[str, dict[str, Any]]):
         self.main_window.hide_loading_overlay()
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(
             bool(self._get_image_file_data())
@@ -1794,7 +1780,7 @@ class AppController(QObject):
         self.app_state.ai_rating_results = dict(normalized_results)
 
         ratings_applied = 0
-        rating_operations: List[Tuple[str, int]] = []
+        rating_operations: list[tuple[str, int]] = []
         for image_path, payload in normalized_results.items():
             if not isinstance(payload, dict):
                 continue
@@ -1803,7 +1789,7 @@ class AppController(QObject):
                 continue
             try:
                 rating_int = int(round(float(rating_value)))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 logger.debug("Skipping non-numeric AI rating for %s", image_path)
                 continue
 
@@ -1974,7 +1960,7 @@ class AppController(QObject):
             bool(self._get_image_file_data())
         )
 
-    def _apply_approved_rotations(self, approved_rotations: Dict[str, int]):
+    def _apply_approved_rotations(self, approved_rotations: dict[str, int]):
         """Apply the approved rotations to the images using background worker."""
         logger.info(
             f"Starting rotation application for {len(approved_rotations)} images."
@@ -2065,7 +2051,7 @@ class AppController(QObject):
 
     # --- Rating Writer Handlers ---
 
-    def apply_rating_to_selection(self, rating: int, selected_paths: List[str]):
+    def apply_rating_to_selection(self, rating: int, selected_paths: list[str]):
         """Apply rating to multiple images using background worker."""
         if not selected_paths:
             return
@@ -2238,34 +2224,3 @@ class AppController(QObject):
         self.main_window.statusBar().showMessage(
             f"Error applying rotations: {error_message}", 5000
         )
-
-    def handle_thumbnail_preload_progress(self, current: int, total: int, message: str):
-        """Handle progress updates from thumbnail preload worker."""
-        should_log = (
-            current == 1
-            or current % THUMBNAIL_PRELOAD_PROGRESS_LOG_INTERVAL == 0
-            or current == total
-        )
-        if should_log and current != self._last_thumbnail_preload_logged:
-            self._last_thumbnail_preload_logged = current
-            logger.debug("Thumbnail preload: %d/%d - %s", current, total, message)
-        # Optional: Update status bar or progress indicator
-        # For now, just log - thumbnails load silently in background
-
-    def handle_thumbnail_preload_complete(self, image_paths=None):
-        """Apply newly cached thumbnails only to their matching UI items."""
-        self._last_thumbnail_preload_logged = 0
-        completed_paths = list(image_paths or [])
-        logger.info("Thumbnail preloading completed for %d paths", len(completed_paths))
-        self.main_window._update_thumbnails_from_cache(completed_paths)
-        if self._supports_grouping_workflow_ui():
-            self.main_window.grouping_step_widget.refresh_cached_thumbnails(
-                completed_paths
-            )
-        self.main_window.schedule_visible_thumbnail_load()
-
-    def handle_thumbnail_preload_error(self, error_message: str):
-        """Handle errors from thumbnail preload worker."""
-        self._last_thumbnail_preload_logged = 0
-        logger.warning(f"Thumbnail preload error: {error_message}")
-        # Non-critical - don't show to user, thumbnails will load on demand

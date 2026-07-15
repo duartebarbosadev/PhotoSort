@@ -1,6 +1,5 @@
 from PIL import Image, ImageOps, UnidentifiedImageError
 import os
-from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -38,7 +37,7 @@ class StandardImageProcessor:
         image_path: str,
         thumbnail_max_size: tuple = THUMBNAIL_MAX_SIZE,
         apply_orientation: bool = True,
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Generates a PIL.Image thumbnail from a standard image file.
         """
@@ -87,7 +86,7 @@ class StandardImageProcessor:
     @staticmethod
     def process_for_preview(
         image_path: str, preview_max_resolution: tuple = PRELOAD_MAX_RESOLUTION
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Generates a PIL.Image preview from a standard image file for preloading.
         """
@@ -133,7 +132,7 @@ class StandardImageProcessor:
     @staticmethod
     def load_as_pil(
         image_path: str, target_mode: str = "RGB", apply_exif_transpose: bool = True
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Loads a standard image as a PIL Image object.
         """
@@ -165,7 +164,7 @@ class StandardImageProcessor:
     @staticmethod
     def load_for_blur_detection(
         image_path: str, target_size: tuple = BLUR_DETECTION_PREVIEW_SIZE
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Loads and prepares a PIL image (RGB) from a standard image file for blur detection,
         scaled to target_size.

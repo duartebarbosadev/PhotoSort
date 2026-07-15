@@ -91,29 +91,6 @@ def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch
     assert close_calls == [True]
 
 
-def test_handle_thumbnail_preload_complete_refreshes_grouping_widget():
-    refresh_cached_thumbnails = Mock()
-    update_thumbnails_from_cache = Mock()
-    controller = SimpleNamespace(
-        _last_thumbnail_preload_logged=5,
-        _supports_grouping_workflow_ui=lambda: True,
-        main_window=SimpleNamespace(
-            _update_thumbnails_from_cache=update_thumbnails_from_cache,
-            schedule_visible_thumbnail_load=Mock(),
-            grouping_step_widget=SimpleNamespace(
-                refresh_cached_thumbnails=refresh_cached_thumbnails
-            ),
-        ),
-    )
-
-    completed_paths = ["/tmp/one.jpg", "/tmp/two.jpg"]
-    AppController.handle_thumbnail_preload_complete(controller, completed_paths)
-
-    assert controller._last_thumbnail_preload_logged == 0
-    update_thumbnails_from_cache.assert_called_once_with(completed_paths)
-    refresh_cached_thumbnails.assert_called_once_with(completed_paths)
-
-
 def test_scan_finished_defers_hidden_cull_model_until_cull_is_shown():
     actions = {
         name: Mock()

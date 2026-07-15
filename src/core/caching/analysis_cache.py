@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import time
-from typing import Dict, List, Optional, Set
 
 import diskcache
 from core.runtime_paths import resolve_user_cache_dir
@@ -24,7 +23,7 @@ class AnalysisCache:
     long-running AI computations can be resumed across application sessions.
     """
 
-    def __init__(self, cache_dir: Optional[str] = None):
+    def __init__(self, cache_dir: str | None = None):
         if cache_dir is None:
             cache_dir = resolve_user_cache_dir("analysis")
         os.makedirs(cache_dir, exist_ok=True)
@@ -36,7 +35,7 @@ class AnalysisCache:
         except Exception:
             logger.exception("Failed to close analysis cache.")
 
-    def load(self, folder_path: str) -> Dict[str, object]:
+    def load(self, folder_path: str) -> dict[str, object]:
         key = _normalize_folder_path(folder_path)
         try:
             data = self._cache.get(key)
@@ -50,7 +49,7 @@ class AnalysisCache:
     def save_cluster_results(
         self,
         folder_path: str,
-        cluster_results: Dict[str, int],
+        cluster_results: dict[str, int],
         *,
         reset_best_shots: bool = True,
     ) -> None:
@@ -72,7 +71,7 @@ class AnalysisCache:
         self,
         folder_path: str,
         cluster_id: int,
-        rankings: List[Dict[str, object]],
+        rankings: list[dict[str, object]],
     ) -> None:
         key = _normalize_folder_path(folder_path)
         entry = self.load(folder_path)
@@ -99,16 +98,16 @@ class AnalysisCache:
         except Exception:
             logger.exception("Failed to persist best-shot results for %s", folder_path)
 
-    def get_completed_best_shot_clusters(self, folder_path: str) -> Set[int]:
+    def get_completed_best_shot_clusters(self, folder_path: str) -> set[int]:
         entry = self.load(folder_path)
         rankings_map = entry.get("best_shot_rankings")
         if not isinstance(rankings_map, dict):
             return set()
-        completed: Set[int] = set()
+        completed: set[int] = set()
         for key in rankings_map:
             try:
                 completed.add(int(key))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
         return completed
 
@@ -181,7 +180,7 @@ class AnalysisCache:
     def save_manual_cluster_overrides(
         self,
         folder_path: str,
-        overrides_to_save: Dict[str, int],
+        overrides_to_save: dict[str, int],
     ) -> None:
         """
         Save multiple manual cluster assignments at once.
@@ -210,7 +209,7 @@ class AnalysisCache:
                 "Failed to persist manual cluster overrides for %s", folder_path
             )
 
-    def get_manual_overrides(self, folder_path: str) -> Dict[str, int]:
+    def get_manual_overrides(self, folder_path: str) -> dict[str, int]:
         """Get all manual cluster overrides for a folder."""
         entry = self.load(folder_path)
         overrides = entry.get("manual_cluster_overrides", {})

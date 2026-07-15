@@ -1,6 +1,7 @@
 import time
 import logging
 from ui.advanced_image_viewer import SynchronizedImageViewer
+from core.metadata_io import MetadataIO
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -20,12 +21,8 @@ from PyQt6.QtWidgets import (
 )
 import os
 from datetime import datetime as datetime_obj, date as date_obj
-from typing import (
-    List,
-    Dict,
-    Optional,
-    Any,
-    Tuple,
+from typing import Any, override
+from collections.abc import (
     Callable,
 )  # Import List and Dict for type hinting, Optional, Any, Tuple
 from PyQt6.QtCore import (
@@ -94,9 +91,10 @@ from ui.controllers.status_controller import StatusController
 from ui.controllers.preview_load_controller import PreviewLoadController
 from ui.thumbnail_load_coordinator import ViewportThumbnailLoader
 from ui.models.media_filter_proxy import (
-    CustomFilterProxyModel,
+    MediaFilterProxyModel,
     RATING_FILTER_OPTIONS,
 )
+import contextlib
 
 logger = logging.getLogger(__name__)
 FILTER_LOG_INTERVAL = 100
@@ -120,10 +118,10 @@ class MainWindow(QMainWindow):
         self._is_syncing_selection = False
         self._left_panel_views = set()
         self._image_viewer_views = set()
-        self._last_displayed_preview_path: Optional[str] = None
-        self._pending_rotation_comparison_path: Optional[str] = None
+        self._last_displayed_preview_path: str | None = None
+        self._pending_rotation_comparison_path: str | None = None
         self._filter_apply_count = 0
-        self._last_filter_search_text: Optional[str] = None
+        self._last_filter_search_text: str | None = None
         self._close_after_grouping_save = False
 
         self.image_pipeline = ImagePipeline()
@@ -150,7 +148,7 @@ class MainWindow(QMainWindow):
         self.show_folders_mode = False
         self.group_by_similarity_mode = False
         self.navigation_skip_singleton_clusters = False
-        self.navigation_rating_target: Optional[int] = None
+        self.navigation_rating_target: int | None = None
         self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
         self.rotation_suggestions = {}
         # Controllers (always created – treat as invariants for simpler code paths)
@@ -236,7 +234,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(2000, self.app_controller.automatic_check_for_updates)
 
     # Helper method to update the image information in status bar
-    def _update_image_info_label(self, status_message_override: Optional[str] = None):
+    def _update_image_info_label(self, status_message_override: str | None = None):
         self.status_controller.update(status_message_override)
 
     # --- Helper for controllers ---
@@ -390,11 +388,11 @@ class MainWindow(QMainWindow):
         self._cull_model_dirty = True
         # Keep thumbnail completion updates O(1). Rewalking thousands of rows for
         # every viewport batch makes keyboard navigation visibly stall.
-        self._file_items_by_path: Dict[str, QStandardItem] = {}
+        self._file_items_by_path: dict[str, QStandardItem] = {}
         # One display-sized, implicitly shared QIcon per media path. Workflow
         # models can attach it without another disk read or decode.
-        self._thumbnail_icons_by_path: Dict[str, QIcon] = {}
-        self.proxy_model = CustomFilterProxyModel(self)
+        self._thumbnail_icons_by_path: dict[str, QIcon] = {}
+        self.proxy_model = MediaFilterProxyModel(self)
         self.proxy_model.setSourceModel(self.file_system_model)
         self.proxy_model.app_state_ref = self.app_state  # Link AppState to proxy model
 
@@ -421,9 +419,6 @@ class MainWindow(QMainWindow):
         self.advanced_image_viewer.setMinimumSize(400, 300)
         center_pane_layout.addWidget(self.advanced_image_viewer, 1)
 
-        # Keep a reference to the first viewer for backward compatibility if needed,
-        # but primary interaction is now with the SynchronizedImageViewer itself.
-        self.image_view = self.advanced_image_viewer.image_viewers[0].image_view
         self._image_viewer_views = {
             v.image_view for v in self.advanced_image_viewer.image_viewers
         }
@@ -450,20 +445,6 @@ class MainWindow(QMainWindow):
         button_layout.addStretch(1)
 
         center_pane_layout.addLayout(button_layout)
-
-        # Create dummy view mode buttons for compatibility (not displayed)
-        self.view_list_button = QPushButton("List")
-        self.view_list_button.setCheckable(True)
-        self.view_list_button.setVisible(False)
-        self.view_icons_button = QPushButton("Icons")
-        self.view_icons_button.setCheckable(True)
-        self.view_icons_button.setVisible(False)
-        self.view_grid_button = QPushButton("Grid")
-        self.view_grid_button.setCheckable(True)
-        self.view_grid_button.setVisible(False)
-        self.view_date_button = QPushButton("Date")
-        self.view_date_button.setCheckable(True)
-        self.view_date_button.setVisible(False)
 
         # No bottom bar - image info will be shown in status bar only
 
@@ -735,13 +716,13 @@ class MainWindow(QMainWindow):
         self._thumbnail_icons_by_path.clear()
         self.thumbnail_loader.reset()
 
-    def start_thumbnail_warming(self, image_paths: List[str]) -> None:
+    def start_thumbnail_warming(self, image_paths: list[str]) -> None:
         self.thumbnail_loader.start_folder(image_paths)
 
     def notify_thumbnail_items_rebuilt(self) -> None:
         self.thumbnail_loader.model_rebuilt()
 
-    def get_cached_thumbnail_icon(self, image_path: str) -> Optional[QIcon]:
+    def get_cached_thumbnail_icon(self, image_path: str) -> QIcon | None:
         return self._thumbnail_icons_by_path.get(os.path.normpath(image_path))
 
     def remove_cached_thumbnail_icons(self, image_paths) -> None:
@@ -773,7 +754,7 @@ class MainWindow(QMainWindow):
     def reset_preview_requests(self) -> None:
         self.preview_load_controller.reset()
 
-    def prefetch_navigation_previews(self, image_paths: List[str]) -> None:
+    def prefetch_navigation_previews(self, image_paths: list[str]) -> None:
         self.preview_load_controller.request(
             path for path in image_paths if not is_video_extension(path)
         )
@@ -807,7 +788,7 @@ class MainWindow(QMainWindow):
         image_path: str,
         *,
         apply_thumbnail_orientation: bool = False,
-    ) -> Tuple[Optional[QPixmap], bool]:
+    ) -> tuple[QPixmap | None, bool]:
         """Return an immediately available pixmap without decoding on the UI thread."""
         pixmap = self.image_pipeline.get_cached_preview_qpixmap(
             image_path,
@@ -828,7 +809,7 @@ class MainWindow(QMainWindow):
     def schedule_visible_thumbnail_load(self, *_args) -> None:
         self.thumbnail_loader.schedule()
 
-    def get_workflow_visible_thumbnail_paths(self, limit: int) -> Optional[List[str]]:
+    def get_workflow_visible_thumbnail_paths(self, limit: int) -> list[str] | None:
         if self.app_state.workflow_step == "organize":
             return self.grouping_step_widget.visible_thumbnail_paths(limit)
         return None
@@ -842,8 +823,8 @@ class MainWindow(QMainWindow):
 
     def _rebuild_model_view(
         self,
-        preserved_selection_paths: Optional[List[str]] = None,
-        preserved_focused_path: Optional[str] = None,
+        preserved_selection_paths: list[str] | None = None,
+        preserved_focused_path: str | None = None,
     ):
         if preserved_selection_paths is None:
             preserved_selection_paths = self._get_selected_file_paths_from_view()
@@ -1038,8 +1019,8 @@ class MainWindow(QMainWindow):
                         first_index, QAbstractItemView.ScrollHint.EnsureVisible
                     )
                 else:  # No items visible after filter
-                    self.image_view.clear()
-                    self.image_view.setText("No items match filter")
+                    self.advanced_image_viewer.clear()
+                    self.advanced_image_viewer.setText("No items match filter")
                     self.advanced_image_viewer.clear()
                     self.statusBar().showMessage("No items match current filter.")
 
@@ -1354,7 +1335,7 @@ class MainWindow(QMainWindow):
         self.cluster_sort_combo.setEnabled(enabled)
         self.menu_manager.set_cluster_sort_menu_enabled(enabled)
 
-    def populate_cluster_filter(self, cluster_ids: List[int]) -> None:
+    def populate_cluster_filter(self, cluster_ids: list[int]) -> None:
         self.cluster_filter_combo.clear()
         self.cluster_filter_combo.addItems(
             ["All Clusters"] + [f"Cluster {cid}" for cid in cluster_ids]
@@ -1363,7 +1344,7 @@ class MainWindow(QMainWindow):
         self.menu_manager.update_cluster_filter_menu(cluster_ids)
         self.refresh_navigation_shortcut_actions()
 
-    def get_selected_file_paths(self) -> List[str]:  # For MetadataController
+    def get_selected_file_paths(self) -> list[str]:  # For MetadataController
         # Prefer SelectionController; fall back only if something unexpected occurs
         try:
             return self.selection_controller.get_selected_file_paths()
@@ -1392,7 +1373,7 @@ class MainWindow(QMainWindow):
     # delegating to existing internal implementations that use leading underscores.
     def get_all_visible_image_paths(
         self,
-    ) -> List[str]:  # NavigationController expects this name
+    ) -> list[str]:  # NavigationController expects this name
         return self._get_all_visible_image_paths()
 
     def get_active_view(self):  # QAbstractItemView | None
@@ -1402,70 +1383,30 @@ class MainWindow(QMainWindow):
         return self._is_valid_image_item(proxy_index)
 
     def map_to_source(self, proxy_index):  # QModelIndex
-        active_view = self._get_active_file_view()
-        if not active_view:
-            from PyQt6.QtCore import QModelIndex
-
-            return QModelIndex()
-        model = active_view.model()
-        try:
-            return model.mapToSource(proxy_index)  # type: ignore[attr-defined]
-        except Exception:  # Fallback
-            from PyQt6.QtCore import QModelIndex
-
-            return QModelIndex()
+        return self.proxy_model.mapToSource(proxy_index)
 
     def item_from_source(self, source_index):
-        try:
-            return self.file_system_model.itemFromIndex(source_index)
-        except Exception:
-            return None
+        return self.file_system_model.itemFromIndex(source_index)
 
     def get_group_sibling_images(self, current_proxy_index):
-        # Defer to existing internal method if present
-        internal = getattr(self, "_get_group_sibling_images", None)
-        if callable(internal):
-            return internal(current_proxy_index)
-        # Fallback shape: (parent_idx, [current_proxy_index], [])
-        return None, [current_proxy_index], []
+        return self._get_current_group_sibling_images(current_proxy_index)
 
     def find_first_visible_item(self):  # Expected by NavigationController
         # Delegate to SelectionController (let exceptions surface during development)
         return self.selection_controller.find_first_visible_item()
 
     def find_proxy_index_for_path(self, path: str):  # Expected public name
-        try:
-            return self._find_proxy_index_for_path(path)
-        except Exception:
-            from PyQt6.QtCore import QModelIndex
-
-            return QModelIndex()
+        return self._find_proxy_index_for_path(path)
 
     def validate_and_select_image_candidate(
         self, proxy_index, direction: str, log_skip: bool
     ):
-        validator = getattr(self, "_validate_and_select_image_candidate", None)
-        if callable(validator):
-            return validator(proxy_index, direction, log_skip)
-        # Minimal fallback: set current selection
-        active_view = self._get_active_file_view()
-        if active_view and proxy_index.isValid():
-            sel_model = active_view.selectionModel()
-            if sel_model:
-                try:
-                    flag = getattr(sel_model, "SelectionFlag", None)
-                    if flag is not None:
-                        sel_model.setCurrentIndex(proxy_index, flag.ClearAndSelect)  # type: ignore[attr-defined]
-                    else:
-                        sel_model.setCurrentIndex(proxy_index, 0)
-                except Exception:
-                    pass
+        return self._validate_and_select_image_candidate(
+            proxy_index, direction, log_skip
+        )
 
     def get_marked_deleted(self):  # Iterable[str] expected by NavigationController
-        try:
-            return self.app_state.get_marked_files()
-        except Exception:
-            return []
+        return self.app_state.get_marked_files()
 
     def _rebuild_rotation_view(self):
         self.file_system_model.clear()
@@ -1483,7 +1424,7 @@ class MainWindow(QMainWindow):
             root_item.appendRow(item)
 
     def _populate_model_standard(
-        self, parent_item: QStandardItem, image_data_list: List[Dict[str, Any]]
+        self, parent_item: QStandardItem, image_data_list: list[dict[str, Any]]
     ):
         if not image_data_list:
             return
@@ -1495,7 +1436,7 @@ class MainWindow(QMainWindow):
         processed_count = 0
 
         if self.show_folders_mode and not self.group_by_similarity_mode:
-            files_by_folder: Dict[str, List[Dict[str, Any]]] = {}
+            files_by_folder: dict[str, list[dict[str, Any]]] = {}
             for file_data in image_data_list:
                 f_path = file_data["path"]
                 folder = os.path.dirname(f_path)
@@ -1569,7 +1510,7 @@ class MainWindow(QMainWindow):
                         )  # Log progress so user can see what's happening
 
     def _apply_rating(self, file_path: str, rating: int):
-        """Apply rating to a specific file path (legacy method - now uses background worker)."""
+        """Handle a viewer rating request through the shared background worker."""
         if not os.path.exists(file_path):
             return
         # Use the background worker for all rating operations
@@ -1580,10 +1521,11 @@ class MainWindow(QMainWindow):
         selected_paths = self._get_selected_file_paths_from_view()
         if not selected_paths:
             # If no selection, apply to the currently displayed image(s) in the advanced viewer
-            paths_to_rate = []
-            for viewer in self.advanced_image_viewer.image_viewers:
-                if viewer.isVisible() and viewer._file_path:
-                    paths_to_rate.append(viewer._file_path)
+            paths_to_rate = [
+                viewer._file_path
+                for viewer in self.advanced_image_viewer.image_viewers
+                if viewer.isVisible() and viewer._file_path
+            ]
             if paths_to_rate:
                 self.app_controller.apply_rating_to_selection(rating, paths_to_rate)
             return
@@ -1621,7 +1563,7 @@ class MainWindow(QMainWindow):
             )
             logger.error(f"Failed to delete {file_path}: {message}")
 
-    def _delete_multiple_images(self, file_paths: List[str]):
+    def _delete_multiple_images(self, file_paths: list[str]):
         """Delete multiple image files at once."""
         logger.debug(f"Deleting multiple images: {file_paths}")
 
@@ -1700,9 +1642,7 @@ class MainWindow(QMainWindow):
     def _get_active_file_view(self):
         return self.left_panel.get_active_view() if self.left_panel else None
 
-    # --- SelectionController protocol adapter methods ---
-    # These lightweight wrappers let SelectionController interact with the
-    # existing MainWindow API without renaming legacy methods yet.
+    # --- SelectionController protocol methods ---
 
     def is_valid_image_item(self, proxy_index: QModelIndex) -> bool:  # protocol alias
         return self._is_valid_image_item(proxy_index)
@@ -1723,6 +1663,7 @@ class MainWindow(QMainWindow):
         except Exception:
             logger.exception("refresh_filter: failed to invalidate proxy model")
 
+    @override
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
         if (
@@ -1738,6 +1679,7 @@ class MainWindow(QMainWindow):
         # Sidebar positioning is now handled by the splitter automatically
         # No need for manual position updates
 
+    @override
     def keyPressEvent(self, event: QKeyEvent):
         # Arrow key and Delete navigation is now handled by the eventFilter for the views.
         # MainWindow.keyPressEvent will handle other application-wide shortcuts
@@ -1900,6 +1842,7 @@ class MainWindow(QMainWindow):
 
         return QModelIndex()  # No visible image item found in this subtree
 
+    @override
     def closeEvent(self, event):
         close_start = time.perf_counter()
         logger.info("Application close requested.")
@@ -1972,11 +1915,12 @@ class MainWindow(QMainWindow):
         )
         self.preview_load_controller.shutdown()
         self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
+        MetadataIO.shutdown_worker_thread(immediate=True)
         event.accept()
 
     def _get_current_group_sibling_images(
         self, current_image_proxy_idx: QModelIndex
-    ) -> Tuple[Optional[QModelIndex], List[QModelIndex], int]:
+    ) -> tuple[QModelIndex | None, list[QModelIndex], int]:
         """
         Finds the parent group of the current image and all its visible sibling image items.
         Returns (parent_group_proxy_idx, list_of_sibling_image_proxy_indices, local_idx_of_current_image).
@@ -2019,20 +1963,14 @@ class MainWindow(QMainWindow):
                 if sibling_idx == current_image_proxy_idx:
                     current_item_local_idx = len(sibling_image_items) - 1
 
-        try:
+        with contextlib.suppress(Exception):
             # Debug information to help verify runtime grouping
             logger.debug(
                 "_get_current_group_sibling_images: group_size=%d, cur_local_idx=%s",
                 len(sibling_image_items),
                 current_item_local_idx,
             )
-        except Exception:
-            pass
         return parent_proxy_idx, sibling_image_items, current_item_local_idx
-
-    # Backwards-compatible alias used by get_group_sibling_images adapter
-    def _get_group_sibling_images(self, current_proxy_index: QModelIndex):
-        return self._get_current_group_sibling_images(current_proxy_index)
 
     def _validate_and_select_image_candidate(
         self, candidate_idx: QModelIndex, direction: str, skip_deleted: bool
@@ -2095,7 +2033,7 @@ class MainWindow(QMainWindow):
 
         return True
 
-    def _get_current_visible_path(self) -> Optional[str]:
+    def _get_current_visible_path(self) -> str | None:
         active_view = self._get_active_file_view()
         if not active_view:
             return None
@@ -2112,7 +2050,7 @@ class MainWindow(QMainWindow):
         return None
 
     def _lookup_path_dict(
-        self, mapping: Dict[str, Any], path: Optional[str], default: Any = None
+        self, mapping: dict[str, Any], path: str | None, default: Any = None
     ) -> Any:
         if not mapping or not path:
             return default
@@ -2123,14 +2061,14 @@ class MainWindow(QMainWindow):
             return mapping[normalized]
         return default
 
-    def _get_cached_rating(self, path: str) -> Optional[int]:
+    def _get_cached_rating(self, path: str) -> int | None:
         try:
             value = self._lookup_path_dict(self.app_state.rating_cache, path, 0)
             return int(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0
 
-    def _get_cluster_id_for_path(self, path: str) -> Optional[int]:
+    def _get_cluster_id_for_path(self, path: str) -> int | None:
         value = self._lookup_path_dict(self.app_state.cluster_results, path, None)
         if isinstance(value, str):
             try:
@@ -2140,7 +2078,7 @@ class MainWindow(QMainWindow):
         return value
 
     def _select_path_for_navigation(
-        self, path: Optional[str], direction: str, skip_deleted: bool
+        self, path: str | None, direction: str, skip_deleted: bool
     ) -> bool:
         if not path:
             return False
@@ -2243,7 +2181,7 @@ class MainWindow(QMainWindow):
         )
         self.statusBar().showMessage(message, 4000)
 
-    def set_navigation_rating_target(self, rating: Optional[int]) -> None:
+    def set_navigation_rating_target(self, rating: int | None) -> None:
         if self.navigation_rating_target == rating:
             return
         self.navigation_rating_target = rating
@@ -2374,7 +2312,7 @@ class MainWindow(QMainWindow):
 
     # Removed obsolete _index_below/_index_above and last-visible item logic (moved to SelectionController or no longer needed)
 
-    def _get_all_visible_image_paths(self) -> List[str]:
+    def _get_all_visible_image_paths(self) -> list[str]:
         """Gets an ordered list of file paths for all currently visible image items."""
         paths = []
         active_view = self._get_active_file_view()
@@ -2391,13 +2329,13 @@ class MainWindow(QMainWindow):
 
         # Traversal logic needs to handle both QTreeView (hierarchical) and QListView (flat)
         # We build a queue of proxy indices to visit in display order.
-        queue = []
         root_proxy_parent_idx = (
             QModelIndex()
         )  # Parent for top-level items in the proxy model
-
-        for r in range(proxy_model.rowCount(root_proxy_parent_idx)):
-            queue.append(proxy_model.index(r, 0, root_proxy_parent_idx))
+        queue = [
+            proxy_model.index(row, 0, root_proxy_parent_idx)
+            for row in range(proxy_model.rowCount(root_proxy_parent_idx))
+        ]
 
         head = 0
         while head < len(queue):
@@ -2433,12 +2371,12 @@ class MainWindow(QMainWindow):
                         and item_for_children_check.hasChildren()
                         and active_view.isExpanded(current_proxy_idx)
                     ):
-                        for child_row in range(
-                            proxy_model.rowCount(current_proxy_idx)
-                        ):  # Children from proxy model
-                            queue.append(
-                                proxy_model.index(child_row, 0, current_proxy_idx)
+                        queue.extend(
+                            proxy_model.index(child_row, 0, current_proxy_idx)
+                            for child_row in range(
+                                proxy_model.rowCount(current_proxy_idx)
                             )
+                        )
         return paths
 
     def _find_proxy_index_for_path(self, target_path: str) -> QModelIndex:
@@ -2458,7 +2396,7 @@ class MainWindow(QMainWindow):
             else None,
         )
 
-    def _get_selected_file_paths_from_view(self) -> List[str]:
+    def _get_selected_file_paths_from_view(self) -> list[str]:
         """Return list of selected file paths using SelectionController.
 
         Previous inlined implementation lived here; now delegated for clarity.
@@ -2467,7 +2405,7 @@ class MainWindow(QMainWindow):
 
     def _get_cached_metadata_for_selection(
         self, file_path: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Gets metadata from AppState caches. Assumes caches are populated by RatingLoaderWorker."""
         if not os.path.isfile(file_path):
             logger.warning(
@@ -2486,7 +2424,7 @@ class MainWindow(QMainWindow):
         return {"rating": current_rating, "date": current_date}
 
     def _display_single_image_preview(
-        self, file_path: str, file_data_from_model: Optional[Dict[str, Any]]
+        self, file_path: str, file_data_from_model: dict[str, Any] | None
     ):
         """Handles displaying preview and info for a single selected image."""
         self._pending_rotation_comparison_path = None
@@ -2523,7 +2461,7 @@ class MainWindow(QMainWindow):
             and self._last_displayed_preview_path == file_path
         )
 
-        pixmap: Optional[QPixmap] = None
+        pixmap: QPixmap | None = None
         if reuse_preview:
             pixmap = primary_viewer.get_current_pixmap()
             if pixmap is None or pixmap.isNull():
@@ -2644,8 +2582,8 @@ class MainWindow(QMainWindow):
     def _display_single_video_preview(
         self,
         file_path: str,
-        metadata: Dict[str, Any],
-        file_data_from_model: Optional[Dict[str, Any]],
+        metadata: dict[str, Any],
+        file_data_from_model: dict[str, Any] | None,
     ):
         logger.debug(f"Displaying single video preview: {os.path.basename(file_path)}")
         if not os.path.exists(file_path):
@@ -2674,7 +2612,7 @@ class MainWindow(QMainWindow):
     def _display_rotated_image_preview(
         self,
         file_path: str,
-        file_data_from_model: Optional[Dict[str, Any]],
+        file_data_from_model: dict[str, Any] | None,
         preserve_side_by_side: bool,
     ):
         """Handles displaying preview after rotation, preserving view mode."""
@@ -2744,7 +2682,7 @@ class MainWindow(QMainWindow):
         )
         self.statusBar().showMessage(info.to_message())
 
-    def _display_multi_selection_info(self, selected_paths: List[str]):
+    def _display_multi_selection_info(self, selected_paths: list[str]):
         """Handles UI updates when multiple images are selected."""
         logger.debug(f"Displaying {len(selected_paths)} images side-by-side.")
         self.invalidate_last_displayed_preview()
@@ -2889,7 +2827,7 @@ class MainWindow(QMainWindow):
         self,
         selected=None,
         deselected=None,
-        override_selected_paths: Optional[List[str]] = None,
+        override_selected_paths: list[str] | None = None,
     ):
         if self._is_syncing_selection and override_selected_paths is None:
             logger.debug("_handle_file_selection_changed: Skipping due to sync lock")
@@ -2995,10 +2933,8 @@ class MainWindow(QMainWindow):
             if self.sidebar_visible and self.metadata_sidebar:
                 self.metadata_sidebar.show_placeholder()
         # Always allow MetadataController to update (it internally caches selection)
-        try:
+        with contextlib.suppress(Exception):
             self.metadata_controller.refresh_for_selection()
-        except Exception:
-            pass
 
     def _apply_filter(self):
         # Guard: Don't apply filters if no images are loaded yet
@@ -3129,12 +3065,12 @@ class MainWindow(QMainWindow):
         self.refresh_navigation_shortcut_actions()
 
     def _populate_model_by_date(
-        self, parent_item: QStandardItem, image_data_list: List[Dict[str, Any]]
+        self, parent_item: QStandardItem, image_data_list: list[dict[str, Any]]
     ):
         if not image_data_list:
             return
 
-        images_by_year_month: Dict[Any, Dict[int, List[Dict[str, Any]]]] = {}
+        images_by_year_month: dict[Any, dict[int, list[dict[str, Any]]]] = {}
         unknown_date_key = "Unknown Date"
 
         for file_data in image_data_list:
@@ -3191,7 +3127,7 @@ class MainWindow(QMainWindow):
                     image_item = self._create_standard_item(file_data)
                     parent_for_images.appendRow(image_item)
 
-    def _create_standard_item(self, file_data: Dict[str, Any]):
+    def _create_standard_item(self, file_data: dict[str, Any]):
         file_path = file_data["path"]
         is_blurred = file_data.get("is_blurred")
         media_type = file_data.get("media_type", "image")
@@ -3251,39 +3187,7 @@ class MainWindow(QMainWindow):
 
         # Text decoration for best-shot winners is handled centrally in DeletionMarkController.
 
-    def _remove_temporary_best_labels(self):
-        """Remove temporary best-shot labels (legacy prefix/suffix) from all items."""
-        logger.debug("Removing temporary best-shot labels from items")
-
-        def remove_label_recursive(parent_item: QStandardItem):
-            """Recursively remove best-shot indicators from all items."""
-            for row in range(parent_item.rowCount()):
-                child_item = parent_item.child(row)
-                if not child_item:
-                    continue
-
-                text = child_item.text() or ""
-                modified = text
-                if modified.startswith("[BEST] "):
-                    modified = modified.replace("[BEST] ", "", 1)
-                if modified.endswith(" (Best)"):
-                    modified = modified[: -len(" (Best)")]
-                if modified != text:
-                    child_item.setText(modified)
-
-                # Recurse into children (for grouped/folder views)
-                if child_item.hasChildren():
-                    remove_label_recursive(child_item)
-
-        # Process root items
-        for row in range(self.file_system_model.rowCount()):
-            item = self.file_system_model.item(row)
-            if item:
-                remove_label_recursive(item)
-
-        logger.debug("Finished removing temporary best-shot labels")
-
-    def _update_thumbnails_from_cache(self, image_paths: Optional[List[str]] = None):
+    def _update_thumbnails_from_cache(self, image_paths: list[str] | None = None):
         """
         Update all tree view item icons with thumbnails from the cache.
         Called after background thumbnail preload completes.
@@ -3424,10 +3328,8 @@ class MainWindow(QMainWindow):
                     )
                     break
             elif isinstance(item_data, str) and item_data.startswith("cluster_header_"):
-                try:
+                with contextlib.suppress(ValueError, IndexError):
                     determined_cluster_id = int(item_data.split("_")[-1])
-                except (ValueError, IndexError):
-                    pass
                 break
             search_idx = search_idx.parent()
 
@@ -3470,6 +3372,7 @@ class MainWindow(QMainWindow):
 
         return False
 
+    @override
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             # Ensure the event is for one of our views
@@ -3937,7 +3840,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message, 5000)
         logger.info(message)
 
-    def _batch_update_rotated_thumbnails(self, rotated_paths: List[str]):
+    def _batch_update_rotated_thumbnails(self, rotated_paths: list[str]):
         """Update thumbnails for a batch of rotated images efficiently.
 
         Args:
@@ -4063,7 +3966,7 @@ class MainWindow(QMainWindow):
         logger.info(f"User confirmed deletion of {len(marked_files)} files")
         self._perform_deletion_of_marked_files(marked_files)
 
-    def _perform_deletion_of_marked_files(self, marked_files: List[str]):
+    def _perform_deletion_of_marked_files(self, marked_files: list[str]):
         """Performs the actual deletion of marked files, updating the view in-place."""
         active_view = self._get_active_file_view()
         if not active_view:
@@ -4295,10 +4198,11 @@ class MainWindow(QMainWindow):
             return
 
         # Get all image file paths from the split view
-        all_image_paths = []
-        for viewer in self.advanced_image_viewer.image_viewers:
-            if viewer._file_path is not None:
-                all_image_paths.append(viewer._file_path)
+        all_image_paths = [
+            viewer._file_path
+            for viewer in self.advanced_image_viewer.image_viewers
+            if viewer._file_path is not None
+        ]
 
         # Filter out the file path to keep
         paths_to_mark = [path for path in all_image_paths if path != file_path_to_keep]
@@ -4349,10 +4253,11 @@ class MainWindow(QMainWindow):
             return
 
         # Get all image file paths from the split view
-        all_image_paths = []
-        for viewer in self.advanced_image_viewer.image_viewers:
-            if viewer._file_path is not None:
-                all_image_paths.append(viewer._file_path)
+        all_image_paths = [
+            viewer._file_path
+            for viewer in self.advanced_image_viewer.image_viewers
+            if viewer._file_path is not None
+        ]
 
         # Filter out the file path to keep
         paths_to_unmark = [
@@ -4449,7 +4354,7 @@ class MainWindow(QMainWindow):
                         first_idx, QAbstractItemView.ScrollHint.EnsureVisible
                     )
 
-    def _get_current_selected_image_path(self) -> Optional[str]:
+    def _get_current_selected_image_path(self) -> str | None:
         """Get the file path of the currently selected image."""
         active_view = self._get_active_file_view()
         if not active_view:

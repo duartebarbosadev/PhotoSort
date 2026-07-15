@@ -1,5 +1,4 @@
 import os
-from typing import List
 from PyQt6.QtCore import QModelIndex, Qt
 from PyQt6.QtGui import QStandardItemModel, QStandardItem
 from PyQt6.QtWidgets import QTreeView, QApplication
@@ -37,7 +36,7 @@ class DummyCtx(SelectionContext):  # type: ignore[misc]
         return proxy_index
 
 
-def build_model_with_files(file_paths: List[str]):
+def build_model_with_files(file_paths: list[str]):
     model = QStandardItemModel()
     for p in file_paths:
         item = QStandardItem(os.path.basename(p))

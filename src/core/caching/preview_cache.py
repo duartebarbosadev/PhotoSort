@@ -3,7 +3,6 @@ import os
 import logging
 import time
 from PIL import Image
-from typing import Optional, Tuple
 from core.runtime_paths import resolve_user_cache_dir
 from core.caching.image_codec import decode_cached_image, encode_cached_image
 
@@ -22,7 +21,7 @@ class PreviewCache:
     The cache size is configurable via app_settings.
     """
 
-    def __init__(self, cache_dir: Optional[str] = None):
+    def __init__(self, cache_dir: str | None = None):
         if cache_dir is None:
             cache_dir = resolve_user_cache_dir("previews")
         init_start_time = time.perf_counter()
@@ -51,7 +50,7 @@ class PreviewCache:
             f"Initialization complete in {time.perf_counter() - init_start_time:.4f}s"
         )
 
-    def get(self, key: Tuple[str, Tuple[int, int], bool]) -> Optional[Image.Image]:
+    def get(self, key: tuple[str, tuple[int, int], bool]) -> Image.Image | None:
         """
         Retrieves an item from the cache.
         Key is typically (normalized_path, resolution_tuple, apply_auto_edits_bool).
@@ -79,7 +78,7 @@ class PreviewCache:
             )
             return None
 
-    def set(self, key: Tuple[str, Tuple[int, int], bool], value: Image.Image) -> None:
+    def set(self, key: tuple[str, tuple[int, int], bool], value: Image.Image) -> None:
         """
         Adds or updates an item in the cache and updates the path index.
         Key is typically (normalized_path, resolution_tuple, apply_auto_edits_bool).
@@ -110,7 +109,7 @@ class PreviewCache:
                 f"Error writing to Preview cache for key '{key}': {e}", exc_info=True
             )
 
-    def delete(self, key: Tuple[str, Tuple[int, int], bool]) -> None:
+    def delete(self, key: tuple[str, tuple[int, int], bool]) -> None:
         """
         Deletes an item from the cache and updates the path index.
 
@@ -143,8 +142,7 @@ class PreviewCache:
 
     def delete_all_for_path(self, file_path: str) -> None:
         """
-        Deletes all cache entries for a specific file path using an index.
-        Falls back to iterating the cache if the index is not found.
+        Deletes all cache entries for a specific file path using its index.
 
         Args:
             file_path: The file path to clear from cache.
@@ -171,28 +169,6 @@ class PreviewCache:
                         f"Deleted {len(key_list)} indexed preview cache entries for {os.path.basename(file_path)}."
                     )
                 return
-
-            # --- Fallback for caches created before indexing was implemented ---
-            logger.warning(
-                f"No cache index for '{os.path.basename(normalized_path)}'. Using fallback."
-            )
-            keys_to_delete = []
-            for key in self._cache:
-                # Skip index keys
-                if isinstance(key, str) and key.startswith("index_"):
-                    continue
-
-                if isinstance(key, tuple) and len(key) > 0 and isinstance(key[0], str):
-                    key_path = unicodedata.normalize("NFC", os.path.normpath(key[0]))
-                    if key_path == normalized_path:
-                        keys_to_delete.append(key)
-
-            if keys_to_delete:
-                for key in keys_to_delete:
-                    self._cache.pop(key, default=None)
-                logger.info(
-                    f"Deleted {len(keys_to_delete)} preview cache entries for {os.path.basename(file_path)} via fallback."
-                )
 
         except Exception as e:
             logger.error(
@@ -249,7 +225,7 @@ class PreviewCache:
         except Exception:
             logger.error("Error closing Preview cache.", exc_info=True)
 
-    def __contains__(self, key: Tuple[str, Tuple[int, int], bool]) -> bool:
+    def __contains__(self, key: tuple[str, tuple[int, int], bool]) -> bool:
         return key in self._cache
 
     def __del__(self):

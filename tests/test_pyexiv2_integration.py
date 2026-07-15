@@ -33,7 +33,7 @@ class TestPyExiv2Integration:
 
         try:
             os.unlink(f.name)
-        except (FileNotFoundError, PermissionError):
+        except FileNotFoundError, PermissionError:
             pass
 
     def test_real_metadata_extraction(self, temp_image_with_exif):
@@ -170,7 +170,7 @@ class TestPyExiv2Integration:
                 for temp_file in temp_files:
                     try:
                         os.unlink(temp_file)
-                    except (FileNotFoundError, PermissionError):
+                    except FileNotFoundError, PermissionError:
                         pass
 
         except Exception as e:

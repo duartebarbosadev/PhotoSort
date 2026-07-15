@@ -4,8 +4,6 @@ Keeping model behavior out of ``MainWindow`` makes the filtering rules usable an
 testable without constructing the complete application window.
 """
 
-from __future__ import annotations
-
 from typing import Protocol
 
 from PyQt6.QtCore import QModelIndex, QSortFilterProxyModel, Qt
@@ -100,7 +98,3 @@ class MediaFilterProxyModel(QSortFilterProxyModel):
             self.filterAcceptsRow(child_row, source_index)
             for child_row in range(item.rowCount())
         )
-
-
-# Compatibility name retained for plugins and existing imports.
-CustomFilterProxyModel = MediaFilterProxyModel

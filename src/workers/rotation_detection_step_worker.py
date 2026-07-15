@@ -1,6 +1,5 @@
 import logging
 import os
-from typing import Dict, List, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -24,15 +23,15 @@ class RotationDetectionStepWorker(QObject):
 
     def __init__(
         self,
-        image_paths: List[str],
+        image_paths: list[str],
         rotation_detector: RotationDetector,
-        parent: Optional[QObject] = None,
+        parent: QObject | None = None,
     ):
         super().__init__(parent)
         self.image_paths = list(image_paths)
         self.rotation_detector = rotation_detector
         self._should_stop = False
-        self._results: Dict[str, int] = {}
+        self._results: dict[str, int] = {}
         self._processed = 0
         self._total = len(image_paths)
 

@@ -1,13 +1,13 @@
-from __future__ import annotations
-
 from dataclasses import replace
 from functools import cmp_to_key
 import os
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 from core.best_photo_finder.config import SelectorConfig
 from core.best_photo_finder.errors import (
+    FaceLandmarkerError,
+    IncompleteSelectionError,
     NoScorableImagesError,
     NoSupportedImagesError,
     SelectionError,
@@ -121,6 +121,12 @@ class PhotoSelector:
         self.aesthetic_scorer = aesthetic_scorer or HuggingFaceAestheticScorer()
         self.preview_loader = preview_loader
 
+    def close(self) -> None:
+        """Release native scorer resources owned by this selector."""
+        close = getattr(self.technical_scorer, "close", None)
+        if callable(close):
+            close()
+
     def select(
         self, paths: Sequence[str | Path], config: SelectorConfig | None = None
     ) -> SelectionResult:
@@ -140,6 +146,8 @@ class PhotoSelector:
                     metrics = self.technical_scorer.score_image(path, preview, config)
                 else:
                     metrics = self.technical_scorer.score(path, config)
+            except FaceLandmarkerError:
+                raise
             except SelectionError as exc:
                 failed.append(
                     ImageScore(
@@ -155,6 +163,13 @@ class PhotoSelector:
             failures = _failure_details(failed)
             raise NoScorableImagesError(
                 "No images could be scored successfully."
+                + _format_failure_summary(failures),
+                failures=failures,
+            )
+        if failed:
+            failures = _failure_details(failed)
+            raise IncompleteSelectionError(
+                "Pick Best requires every image in a cluster to be scored."
                 + _format_failure_summary(failures),
                 failures=failures,
             )
@@ -194,6 +209,13 @@ class PhotoSelector:
             failures = _failure_details(failed)
             raise NoScorableImagesError(
                 "Aesthetic scoring failed for every image."
+                + _format_failure_summary(failures),
+                failures=failures,
+            )
+        if failed:
+            failures = _failure_details(failed)
+            raise IncompleteSelectionError(
+                "Pick Best requires an aesthetic score for every image."
                 + _format_failure_summary(failures),
                 failures=failures,
             )

@@ -7,12 +7,11 @@ from unittest.mock import patch, MagicMock
 from PIL import Image
 import threading
 
-from core.pyexiv2_wrapper import (  # noqa: E402
+from core.pyexiv2_wrapper import (
     PyExiv2ImageWrapper,
     safe_pyexiv2_image,
     PyExiv2Operations,
     PyExiv2Error,
-    create_safe_image_context,
 )
 
 
@@ -109,14 +108,6 @@ class TestSafePyExiv2Image:
                 pass
 
             mock_wrapper.assert_called_once_with("test_path", "latin-1")
-
-    def test_create_safe_image_context_alias(self):
-        """Test that create_safe_image_context works as an alias for safe_pyexiv2_image."""
-        from unittest.mock import patch
-
-        with patch("core.pyexiv2_wrapper.safe_pyexiv2_image") as mock_safe:
-            create_safe_image_context("test_path", "utf-8")
-            mock_safe.assert_called_once_with("test_path", "utf-8")
 
 
 class TestPyExiv2Operations:

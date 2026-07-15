@@ -8,7 +8,7 @@ Handles image rotation with support for:
 
 import os
 import logging
-from typing import ClassVar, Literal, Tuple
+from typing import ClassVar, Literal
 from PIL import Image, ImageOps
 
 # Use the new pyexiv2 abstraction layer
@@ -126,7 +126,7 @@ class ImageRotator:
     ) -> bool:
         """
         Perform standard image rotation using PIL.
-        Works for PNG, and as fallback for JPEG.
+        Used for formats whose primary rotation operation rewrites pixels.
         """
         try:
             # Open image
@@ -284,7 +284,7 @@ class ImageRotator:
         image_path: str,
         direction: RotationDirection,
         update_metadata_only: bool = False,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Rotate an image in the specified direction.
 
@@ -336,20 +336,15 @@ class ImageRotator:
         else:
             # Rotate the actual image pixels
             if file_ext in self._LOSSLESS_JPEG_FORMATS:
-                # For JPEG, try metadata rotation first (lossless), then pixel rotation as fallback
-                metadata_success, pixel_available, msg = (
+                metadata_success, _pixel_available, rotation_message = (
                     self.try_metadata_rotation_first(image_path, direction)
                 )
                 if metadata_success:
                     success = True
                     method_used = "metadata-only (lossless)"
-                elif pixel_available:
-                    # Fallback to pixel rotation
-                    success = self._rotate_image_standard(image_path, direction)
-                    method_used = "standard JPEG (lossy fallback)"
                 else:
                     success = False
-                    method_used = "no available rotation method"
+                    method_used = rotation_message
             elif file_ext in self._LOSSLESS_HEIF_FORMATS:
                 # Use metadata-only rotation for HEIF/HEIC (lossless)
                 success = self._update_xmp_orientation(image_path, new_orientation)
@@ -385,19 +380,19 @@ class ImageRotator:
 
     def rotate_clockwise(
         self, image_path: str, update_metadata_only: bool = False
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Rotate image 90° clockwise."""
         return self.rotate_image(image_path, "clockwise", update_metadata_only)
 
     def rotate_counterclockwise(
         self, image_path: str, update_metadata_only: bool = False
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Rotate image 90° counterclockwise."""
         return self.rotate_image(image_path, "counterclockwise", update_metadata_only)
 
     def rotate_180(
         self, image_path: str, update_metadata_only: bool = False
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Rotate image 180°."""
         return self.rotate_image(image_path, "180", update_metadata_only)
 
@@ -416,7 +411,7 @@ class ImageRotator:
 
     def try_metadata_rotation_first(
         self, image_path: str, direction: RotationDirection
-    ) -> Tuple[bool, bool, str]:
+    ) -> tuple[bool, bool, str]:
         """
         Try metadata-only rotation first (the preferred lossless method).
 
@@ -447,7 +442,7 @@ class ImageRotator:
             logger.info(message)
             return True, False, message
         else:
-            # Check if this format supports pixel rotation as a fallback
+            # Report whether satisfying the request would require pixel rewriting.
             # For HEIF/HEIC, if metadata rotation fails, we don't offer lossy pixel rotation.
             if file_ext in self._LOSSLESS_HEIF_FORMATS:
                 message = f"Metadata rotation failed for {filename} (HEIF/HEIC). No other lossless rotation method available."

@@ -1,7 +1,8 @@
 import logging
 import os
+from contextlib import suppress
 from datetime import datetime as datetime_obj
-from typing import Dict, List, Optional, Any
+from typing import Any
 
 import numpy as np
 
@@ -16,7 +17,7 @@ class ClusterUtils:
     """
 
     @staticmethod
-    def parse_cluster_id(value) -> Optional[int]:
+    def parse_cluster_id(value) -> int | None:
         """Parse cluster ID from a cluster result value.
 
         Values can be either integers or strings like "1 - 87.34%".
@@ -26,7 +27,7 @@ class ClusterUtils:
         if isinstance(value, str):
             try:
                 return int(value.split(" - ")[0])
-            except (ValueError, IndexError):
+            except ValueError, IndexError:
                 try:
                     return int(value)
                 except ValueError:
@@ -35,10 +36,10 @@ class ClusterUtils:
 
     @staticmethod
     def group_images_by_cluster(
-        image_files_data: List[Dict[str, Any]],
-        cluster_results: Dict[str, int],
-    ) -> Dict[int, List[Dict[str, Any]]]:
-        images_by_cluster: Dict[int, List[Dict[str, Any]]] = {}
+        image_files_data: list[dict[str, Any]],
+        cluster_results: dict[str, int],
+    ) -> dict[int, list[dict[str, Any]]]:
+        images_by_cluster: dict[int, list[dict[str, Any]]] = {}
         if not image_files_data or not cluster_results:
             return images_by_cluster
 
@@ -58,8 +59,8 @@ class ClusterUtils:
     @staticmethod
     def _resolve_image_datetime(
         path: str,
-        date_cache: Dict[str, Optional[datetime_obj]],
-    ) -> Optional[datetime_obj]:
+        date_cache: dict[str, datetime_obj | None],
+    ) -> datetime_obj | None:
         """Resolve best-effort image datetime for sorting.
 
         Priority:
@@ -76,7 +77,7 @@ class ClusterUtils:
         except OSError:
             return None
 
-        timestamp: Optional[float] = None
+        timestamp: float | None = None
         birth_time = getattr(stat_result, "st_birthtime", 0)
         if birth_time and birth_time > 0:
             timestamp = birth_time
@@ -91,10 +92,10 @@ class ClusterUtils:
 
     @staticmethod
     def get_cluster_timestamps(
-        images_by_cluster: Dict[int, List[Dict[str, Any]]],
-        date_cache: Dict[str, Optional[datetime_obj]],
-    ) -> Dict[int, datetime_obj]:
-        cluster_timestamps: Dict[int, datetime_obj] = {}
+        images_by_cluster: dict[int, list[dict[str, Any]]],
+        date_cache: dict[str, datetime_obj | None],
+    ) -> dict[int, datetime_obj]:
+        cluster_timestamps: dict[int, datetime_obj] = {}
         for cluster_id, file_data_list in images_by_cluster.items():
             earliest_date = datetime_obj.max
             found_date = False
@@ -113,10 +114,10 @@ class ClusterUtils:
 
     @staticmethod
     def calculate_cluster_centroids(
-        images_by_cluster: Dict[int, List[Dict[str, Any]]],
-        embeddings_cache: Dict[str, List[float]],
-    ) -> Dict[int, np.ndarray]:
-        centroids: Dict[int, np.ndarray] = {}
+        images_by_cluster: dict[int, list[dict[str, Any]]],
+        embeddings_cache: dict[str, list[float]],
+    ) -> dict[int, np.ndarray]:
+        centroids: dict[int, np.ndarray] = {}
         if not embeddings_cache:
             return centroids
         for cluster_id, file_data_list in images_by_cluster.items():
@@ -131,10 +132,8 @@ class ClusterUtils:
                 if isinstance(embedding, np.ndarray):
                     cluster_embeddings.append(embedding)
                 elif isinstance(embedding, list):
-                    try:
+                    with suppress(Exception):  # pragma: no cover - defensive
                         cluster_embeddings.append(np.array(embedding, dtype=np.float32))
-                    except Exception:  # pragma: no cover - defensive
-                        pass
             if cluster_embeddings:
                 try:
                     centroids[cluster_id] = np.mean(
@@ -148,10 +147,10 @@ class ClusterUtils:
 
     @staticmethod
     def sort_clusters_by_similarity_time(
-        images_by_cluster: Dict[int, List[Dict[str, Any]]],
-        embeddings_cache: Dict[str, List[float]],
-        date_cache: Dict[str, Optional[datetime_obj]],
-    ) -> List[int]:
+        images_by_cluster: dict[int, list[dict[str, Any]]],
+        embeddings_cache: dict[str, list[float]],
+        date_cache: dict[str, datetime_obj | None],
+    ) -> list[int]:
         """Sort clusters using PCA of centroids, falling back to time.
 
         Strategy:

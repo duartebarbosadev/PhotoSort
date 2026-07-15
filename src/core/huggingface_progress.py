@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 import io
 import time
-from typing import Callable
+from collections.abc import Callable
 
 
 ProgressCallback = Callable[[int, str], None]

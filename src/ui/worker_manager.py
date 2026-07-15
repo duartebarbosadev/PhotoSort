@@ -1,8 +1,7 @@
-from __future__ import annotations
-
 import logging
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
+from collections.abc import Callable
 
 # Import worker classes
 from core.file_scanner import FileScanner
@@ -108,10 +107,6 @@ class WorkerManager(QObject):
     )  # successful_count, failed_count
     rotation_application_error = pyqtSignal(str)
 
-    # Thumbnail Preload Signals (background, not blocking scan)
-    thumbnail_preload_progress = pyqtSignal(int, int, str)  # current, total, message
-    thumbnail_preload_finished = pyqtSignal(object)  # completed image paths
-    thumbnail_preload_error = pyqtSignal(str)
     thumbnail_session_batch_ready = pyqtSignal(str, object)
     thumbnail_session_progress = pyqtSignal(str, int, int, int, bool)
     thumbnail_session_finished = pyqtSignal(str, int, int)
@@ -155,62 +150,62 @@ class WorkerManager(QObject):
     # Fix Rotation Apply signals (reuse rotation_application_* signals)
 
     def __init__(
-        self, image_pipeline_instance: ImagePipeline, parent: Optional[QObject] = None
+        self, image_pipeline_instance: ImagePipeline, parent: QObject | None = None
     ):
         super().__init__(parent)
         self.image_pipeline = image_pipeline_instance
 
-        self.scanner_thread: Optional[QThread] = None
-        self.file_scanner: Optional[FileScanner] = None
+        self.scanner_thread: QThread | None = None
+        self.file_scanner: FileScanner | None = None
 
-        self.similarity_thread: Optional[QThread] = None
-        self.similarity_worker: Optional["SimilarityWorker"] = None
+        self.similarity_thread: QThread | None = None
+        self.similarity_worker: SimilarityWorker | None = None
 
-        self.blur_detection_thread: Optional[QThread] = None
-        self.blur_detection_worker: Optional[BlurDetectionWorker] = None
+        self.blur_detection_thread: QThread | None = None
+        self.blur_detection_worker: BlurDetectionWorker | None = None
 
-        self.rating_loader_thread: Optional[QThread] = None
-        self.rating_loader_worker: Optional[RatingLoaderWorker] = None
+        self.rating_loader_thread: QThread | None = None
+        self.rating_loader_worker: RatingLoaderWorker | None = None
 
-        self.rating_writer_thread: Optional[QThread] = None
-        self.rating_writer_worker: Optional[RatingWriterWorker] = None
+        self.rating_writer_thread: QThread | None = None
+        self.rating_writer_worker: RatingWriterWorker | None = None
 
-        self.rotation_detection_thread: Optional[QThread] = None
-        self.rotation_detection_worker: Optional[RotationDetectionWorker] = None
+        self.rotation_detection_thread: QThread | None = None
+        self.rotation_detection_worker: RotationDetectionWorker | None = None
 
-        self.rotation_application_thread: Optional[QThread] = None
-        self.rotation_application_worker: Optional[RotationApplicationWorker] = None
+        self.rotation_application_thread: QThread | None = None
+        self.rotation_application_worker: RotationApplicationWorker | None = None
 
-        self.thumbnail_preload_thread: Optional[QThread] = None
-        self.thumbnail_preload_worker: Optional[ThumbnailPreloadWorker] = None
-        self.best_shot_thread: Optional[QThread] = None
-        self.best_shot_worker: Optional[BestShotWorker] = None
-        self.ai_rating_thread: Optional[QThread] = None
-        self.ai_rating_worker: Optional[AiRatingWorker] = None
-        self.grouping_preview_thread: Optional[QThread] = None
-        self.grouping_preview_worker: Optional[GroupingPreviewWorker] = None
-        self.grouping_workflow_thread: Optional[QThread] = None
-        self.grouping_workflow_worker: Optional[GroupingWorkflowWorker] = None
+        self.thumbnail_preload_thread: QThread | None = None
+        self.thumbnail_preload_worker: ThumbnailPreloadWorker | None = None
+        self.best_shot_thread: QThread | None = None
+        self.best_shot_worker: BestShotWorker | None = None
+        self.ai_rating_thread: QThread | None = None
+        self.ai_rating_worker: AiRatingWorker | None = None
+        self.grouping_preview_thread: QThread | None = None
+        self.grouping_preview_worker: GroupingPreviewWorker | None = None
+        self.grouping_workflow_thread: QThread | None = None
+        self.grouping_workflow_worker: GroupingWorkflowWorker | None = None
 
-        self.pick_best_thread: Optional[QThread] = None
-        self.pick_best_worker: Optional[PickBestWorker] = None
+        self.pick_best_thread: QThread | None = None
+        self.pick_best_worker: PickBestWorker | None = None
 
-        self.easy_delete_thread: Optional[QThread] = None
-        self.easy_delete_worker: Optional[EasyDeleteWorker] = None
+        self.easy_delete_thread: QThread | None = None
+        self.easy_delete_worker: EasyDeleteWorker | None = None
 
-        self.fix_rotation_detect_thread: Optional[QThread] = None
-        self.fix_rotation_detect_worker: Optional[RotationDetectionStepWorker] = None
+        self.fix_rotation_detect_thread: QThread | None = None
+        self.fix_rotation_detect_worker: RotationDetectionStepWorker | None = None
 
-        self.cuda_detection_thread: Optional[QThread] = None
-        self.cuda_detection_worker: Optional[CudaDetectionWorker] = None
+        self.cuda_detection_thread: QThread | None = None
+        self.cuda_detection_worker: CudaDetectionWorker | None = None
 
-        self.update_check_thread: Optional[QThread] = None
-        self.update_check_worker: Optional[UpdateCheckWorker] = None
+        self.update_check_thread: QThread | None = None
+        self.update_check_worker: UpdateCheckWorker | None = None
 
     def _terminate_thread(
         self,
-        thread: Optional[QThread],
-        worker_stop_method: Optional[Callable[[], Any]] = None,
+        thread: QThread | None,
+        worker_stop_method: Callable[[], Any] | None = None,
         *,
         allow_terminate: bool = True,
     ):
@@ -277,7 +272,7 @@ class WorkerManager(QObject):
         worker_attribute: str,
         *,
         allow_terminate: bool = True,
-        before_stop: Optional[Callable[[Any], None]] = None,
+        before_stop: Callable[[Any], None] | None = None,
     ) -> None:
         """Request cooperative cancellation for one managed worker slot."""
 
@@ -362,7 +357,7 @@ class WorkerManager(QObject):
 
     # --- Similarity Engine Management ---
     def start_similarity_analysis(
-        self, file_paths: List[str], allow_model_download: bool = False
+        self, file_paths: list[str], allow_model_download: bool = False
     ):
         from ui.ui_components import SimilarityWorker
 
@@ -403,9 +398,8 @@ class WorkerManager(QObject):
     # --- Blur Detection Management ---
     def start_blur_detection(
         self,
-        image_data_list: List[Dict[str, Any]],
+        image_data_list: list[dict[str, Any]],
         blur_threshold: float,
-        apply_auto_edits_for_raw: bool,
     ):
         from ui.ui_components import BlurDetectionWorker
 
@@ -417,9 +411,7 @@ class WorkerManager(QObject):
             for data in image_data_list
             if isinstance(data, dict) and "path" in data
         ]
-        self.blur_detection_worker = BlurDetectionWorker(
-            image_paths, blur_threshold, apply_auto_edits_for_raw
-        )
+        self.blur_detection_worker = BlurDetectionWorker(image_paths, blur_threshold)
         self.blur_detection_worker.moveToThread(self.blur_detection_thread)
 
         self.blur_detection_worker.progress_update.connect(self.blur_detection_progress)
@@ -451,7 +443,7 @@ class WorkerManager(QObject):
     # --- Rating Loader Management ---
     def start_rating_load(
         self,
-        image_data_list: List[Dict[str, Any]],
+        image_data_list: list[dict[str, Any]],
         rating_disk_cache: RatingCache,
         app_state: AppState,
     ):
@@ -497,7 +489,7 @@ class WorkerManager(QObject):
         )
 
     # --- Rotation Detection Management ---
-    def start_rotation_detection(self, image_paths: List[str], exif_cache: "ExifCache"):
+    def start_rotation_detection(self, image_paths: list[str], exif_cache: ExifCache):
         from ui.ui_components import RotationDetectionWorker
 
         self.stop_rotation_detection()
@@ -570,9 +562,9 @@ class WorkerManager(QObject):
 
     def start_grouping_preview(
         self,
-        items: List[Dict[str, Any]],
+        items: list[dict[str, Any]],
         mode: str,
-        source_root: Optional[str] = None,
+        source_root: str | None = None,
         location_depth: int = 3,
     ):
         from workers.grouping_worker import GroupingPreviewWorker
@@ -613,11 +605,11 @@ class WorkerManager(QObject):
 
     def start_grouping_workflow(
         self,
-        items: List[Dict[str, Any]],
+        items: list[dict[str, Any]],
         mode: str,
         source_root: str,
-        output_root: Optional[str] = None,
-        group_name_overrides: Optional[Dict[str, str]] = None,
+        output_root: str | None = None,
+        group_name_overrides: dict[str, str] | None = None,
         prepared_plan=None,
         location_depth: int = 3,
         move_companions: bool = False,
@@ -818,9 +810,9 @@ class WorkerManager(QObject):
     # --- Rating Writer Management ---
     def start_rating_writer(
         self,
-        rating_operations: List,
-        rating_disk_cache: Optional[RatingCache] = None,
-        exif_disk_cache: Optional[ExifCache] = None,
+        rating_operations: list,
+        rating_disk_cache: RatingCache | None = None,
+        exif_disk_cache: ExifCache | None = None,
     ):
         """Start writing ratings in a background thread."""
         from workers.rating_writer_worker import RatingWriterWorker
@@ -873,8 +865,8 @@ class WorkerManager(QObject):
     # --- Rotation Application Management ---
     def start_rotation_application(
         self,
-        approved_rotations: Dict[str, int],
-        exif_disk_cache: Optional[ExifCache] = None,
+        approved_rotations: dict[str, int],
+        exif_disk_cache: ExifCache | None = None,
     ):
         """Start applying rotations in a background thread."""
         from workers.rotation_application_worker import RotationApplicationWorker
@@ -940,8 +932,8 @@ class WorkerManager(QObject):
     def start_thumbnail_session(
         self,
         session_id: str,
-        image_paths: List[str],
-        foreground_paths: Optional[List[str]] = None,
+        image_paths: list[str],
+        foreground_paths: list[str] | None = None,
     ) -> bool:
         """Start one prioritized thumbnail session for the active folder."""
         from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
@@ -981,7 +973,7 @@ class WorkerManager(QObject):
         return True
 
     def prioritize_thumbnail_paths(
-        self, session_id: str, image_paths: List[str]
+        self, session_id: str, image_paths: list[str]
     ) -> bool:
         worker = self.thumbnail_preload_worker
         if (
@@ -992,42 +984,6 @@ class WorkerManager(QObject):
             return False
         worker.prioritize(image_paths)
         return True
-
-    def start_thumbnail_preload(self, image_paths: List[str]):
-        """Start preloading thumbnails in a background thread (non-blocking)."""
-        from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
-
-        if self.is_thumbnail_preload_running():
-            logger.warning("Thumbnail preload is already running")
-            return
-
-        logger.info(f"Starting thumbnail preload for {len(image_paths)} images...")
-
-        self.thumbnail_preload_thread = QThread()
-        self.thumbnail_preload_worker = ThumbnailPreloadWorker(
-            image_pipeline=self.image_pipeline
-        )
-        self.thumbnail_preload_worker.moveToThread(self.thumbnail_preload_thread)
-
-        # Connect signals
-        self.thumbnail_preload_worker.progress.connect(
-            self.thumbnail_preload_progress.emit
-        )
-        self.thumbnail_preload_worker.finished.connect(
-            self.thumbnail_preload_finished.emit
-        )
-        self.thumbnail_preload_worker.error.connect(self.thumbnail_preload_error.emit)
-        self.thumbnail_preload_worker.finished.connect(
-            self._cleanup_thumbnail_preload_worker
-        )
-
-        # Connect start signal
-        self.thumbnail_preload_thread.started.connect(
-            lambda: self.thumbnail_preload_worker.preload_thumbnails(image_paths)
-        )
-
-        # Start the thread
-        self.thumbnail_preload_thread.start()
 
     def _cleanup_thumbnail_preload_worker(self, *_args):
         """Clean up the thumbnail preload worker and thread."""
@@ -1055,7 +1011,7 @@ class WorkerManager(QObject):
     def _cleanup_ai_rating_worker(self):
         self._cleanup_worker_refs("ai_rating_thread", "ai_rating_worker", "AI rating")
 
-    def start_pick_best_analysis(self, cluster_map: Dict[int, List[str]]) -> None:
+    def start_pick_best_analysis(self, cluster_map: dict[int, list[str]]) -> None:
         """Start the pick-best scoring worker."""
         from workers.pick_best_worker import PickBestWorker
 
@@ -1092,9 +1048,9 @@ class WorkerManager(QObject):
 
     def start_easy_delete_analysis(
         self,
-        image_paths: List[str],
-        cluster_map: Optional[Dict[int, List[str]]] = None,
-        embeddings_cache: Optional[Dict] = None,
+        image_paths: list[str],
+        cluster_map: dict[int, list[str]] | None = None,
+        embeddings_cache: dict | None = None,
         exif_disk_cache=None,
     ) -> None:
         from workers.easy_delete_worker import EasyDeleteWorker
@@ -1142,7 +1098,7 @@ class WorkerManager(QObject):
     # Fix Rotation Detection
     # ------------------------------------------------------------------
 
-    def start_fix_rotation_detection(self, image_paths: List[str]) -> None:
+    def start_fix_rotation_detection(self, image_paths: list[str]) -> None:
         from workers.rotation_detection_step_worker import RotationDetectionStepWorker
 
         self.stop_fix_rotation_detection()
@@ -1209,9 +1165,9 @@ class WorkerManager(QObject):
 
     def start_best_shot_analysis(
         self,
-        cluster_map: Dict[int, List[str]],
+        cluster_map: dict[int, list[str]],
         *,
-        folder_path: Optional[str] = None,
+        folder_path: str | None = None,
         analysis_cache=None,
     ):
         """Start the best-shot ranking worker."""
@@ -1248,7 +1204,7 @@ class WorkerManager(QObject):
 
     def start_ai_rating(
         self,
-        image_paths: List[str],
+        image_paths: list[str],
     ) -> None:
         """Start AI-driven rating for the provided images."""
         from workers.ai_rating_worker import AiRatingWorker

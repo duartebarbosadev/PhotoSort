@@ -1,7 +1,7 @@
 import logging
 import os
 import subprocess
-from typing import Optional, List, Dict, Any
+from typing import Any, override
 from PyQt6.QtCore import (
     Qt,
     QRectF,
@@ -132,6 +132,7 @@ class ZoomableImageView(QGraphicsView):
                 return True
         return super().event(event)
 
+    @override
     def resizeEvent(self, event):
         """Refit image to view on resize, with debouncing."""
         if self.has_image():
@@ -175,7 +176,7 @@ class ZoomableImageView(QGraphicsView):
                 self._photo_item.setPixmap(transparent_pixmap)
                 self._empty = True
 
-    def current_pixmap(self) -> Optional[QPixmap]:
+    def current_pixmap(self) -> QPixmap | None:
         """Return the currently displayed pixmap if available."""
         pixmap = self._photo_item.pixmap()
         if pixmap and not pixmap.isNull():
@@ -211,7 +212,7 @@ class ZoomableImageView(QGraphicsView):
                     additional_percentage = (self._zoom_factor - 1.0) * 100
                     return int(base_percentage + additional_percentage)
 
-    def set_zoom_factor(self, factor: float, center_point: Optional[QPointF] = None):
+    def set_zoom_factor(self, factor: float, center_point: QPointF | None = None):
         """Set zoom factor with optional center point"""
         factor = max(self._min_zoom, min(self._max_zoom, factor))
 
@@ -259,11 +260,11 @@ class ZoomableImageView(QGraphicsView):
 
         self.zoom_changed.emit(self._zoom_factor, center_point)
 
-    def zoom_in(self, center_point: Optional[QPointF] = None):
+    def zoom_in(self, center_point: QPointF | None = None):
         """Zoom in by zoom step"""
         self.set_zoom_factor(self._zoom_factor * self._zoom_step, center_point)
 
-    def zoom_out(self, center_point: Optional[QPointF] = None):
+    def zoom_out(self, center_point: QPointF | None = None):
         """Zoom out by zoom step, snapping to the minimum zoom level."""
         # Calculate the potential new zoom factor
         new_factor = self._zoom_factor / self._zoom_step
@@ -303,7 +304,8 @@ class ZoomableImageView(QGraphicsView):
             return
         self.set_zoom_factor(1.0)
 
-    def wheelEvent(self, event: Optional[QWheelEvent]):
+    @override
+    def wheelEvent(self, event: QWheelEvent | None):
         """Handle mouse wheel for zooming"""
         if self._empty or event is None:
             super().wheelEvent(
@@ -320,7 +322,8 @@ class ZoomableImageView(QGraphicsView):
         else:
             self.zoom_out(mouse_pos)
 
-    def mousePressEvent(self, event: Optional[QMouseEvent]):
+    @override
+    def mousePressEvent(self, event: QMouseEvent | None):
         """Handle mouse press for panning"""
         if event is None:
             super().mousePressEvent(event)
@@ -332,7 +335,7 @@ class ZoomableImageView(QGraphicsView):
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event: Optional[QMouseEvent]):
+    def mouseMoveEvent(self, event: QMouseEvent | None):
         """Handle mouse move for panning and coordinate tracking"""
         if event is None:
             super().mouseMoveEvent(event)
@@ -364,7 +367,7 @@ class ZoomableImageView(QGraphicsView):
 
         super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event: Optional[QMouseEvent]):
+    def mouseReleaseEvent(self, event: QMouseEvent | None):
         """Handle mouse release"""
         if event is None:
             super().mouseReleaseEvent(event)
@@ -375,7 +378,8 @@ class ZoomableImageView(QGraphicsView):
             self.setCursor(Qt.CursorShape.ArrowCursor)
         super().mouseReleaseEvent(event)
 
-    def keyPressEvent(self, event: Optional[QKeyEvent]):
+    @override
+    def keyPressEvent(self, event: QKeyEvent | None):
         """Handle keyboard shortcuts, allowing number keys to propagate up."""
         if event is None:
             super().keyPressEvent(event)
@@ -494,18 +498,18 @@ class IndividualViewer(QWidget):
         self.setObjectName("individualViewerCard")
         self._file_path = None
         self._is_selected = False
-        self._media_type: Optional[str] = None
+        self._media_type: str | None = None
         self._is_seeking = False
 
         self._setup_ui()
         self._setup_video()
         self._connect_signals()
 
-    def get_file_path(self) -> Optional[str]:
+    def get_file_path(self) -> str | None:
         """Get the file path of the currently displayed image."""
         return self._file_path
 
-    def get_current_pixmap(self) -> Optional[QPixmap]:
+    def get_current_pixmap(self) -> QPixmap | None:
         """Expose the currently displayed pixmap for external consumers."""
         if self._media_type == "video":
             return None
@@ -657,6 +661,7 @@ class IndividualViewer(QWidget):
             self._on_video_playback_state_changed
         )
 
+    @override
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if obj is self.video_widget:
             if event.type() == QEvent.Type.KeyPress:
@@ -821,9 +826,7 @@ class IndividualViewer(QWidget):
         self.video_widget.setFocus()
         self.update_rating_display(rating)
 
-    def set_data(
-        self, pixmap: QPixmap, file_path: str, rating: int, label: Optional[str]
-    ):
+    def set_data(self, pixmap: QPixmap, file_path: str, rating: int, label: str | None):
         """Set all data for the viewer at once."""
         logger.debug(f"IndividualViewer.set_data called with file_path: {file_path}")
         self._file_path = file_path
@@ -882,6 +885,7 @@ class IndividualViewer(QWidget):
                 current_style.polish(self)
             self.update()
 
+    @override
     def mousePressEvent(self, event: QMouseEvent):
         """Handle mouse press events to show context menu on right-click."""
         if event.button() == Qt.MouseButton.RightButton and self._file_path is not None:
@@ -1019,7 +1023,7 @@ class SynchronizedImageViewer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.image_viewers: List[IndividualViewer] = []
+        self.image_viewers: list[IndividualViewer] = []
         self.sync_enabled = True
         self._updating_sync = False
         self._focused_index = 0
@@ -1397,7 +1401,7 @@ class SynchronizedImageViewer(QWidget):
             ):
                 viewer.image_view.fit_in_view()
 
-    def get_focused_image_path_if_any(self) -> Optional[str]:
+    def get_focused_image_path_if_any(self) -> str | None:
         """
         If the view is in 'focused' mode (one image shown out of many),
         returns the file path of the focused image. Otherwise, returns None.
@@ -1414,7 +1418,7 @@ class SynchronizedImageViewer(QWidget):
                         return viewer._file_path
         return None
 
-    def get_primary_viewer(self) -> Optional[IndividualViewer]:
+    def get_primary_viewer(self) -> IndividualViewer | None:
         """Return the primary (first) viewer instance if available."""
         if not self.image_viewers:
             return None
@@ -1426,7 +1430,7 @@ class SynchronizedImageViewer(QWidget):
                 return True
         return False
 
-    def _get_focused_viewer(self) -> Optional[IndividualViewer]:
+    def _get_focused_viewer(self) -> IndividualViewer | None:
         if not self.image_viewers:
             return None
         if 0 <= self._focused_index < len(self.image_viewers):
@@ -1444,7 +1448,7 @@ class SynchronizedImageViewer(QWidget):
 
     def set_image_data(
         self,
-        image_data: Dict[str, Any],
+        image_data: dict[str, Any],
         viewer_index: int = 0,
         preserve_view_mode: bool = False,
     ):
@@ -1531,7 +1535,7 @@ class SynchronizedImageViewer(QWidget):
             updated = True
         return updated
 
-    def set_images_data(self, images_data: List[Dict[str, Any]]):
+    def set_images_data(self, images_data: list[dict[str, Any]]):
         """Populate viewers with a list of image data."""
         num_images = len(images_data)
 
@@ -1717,11 +1721,11 @@ class SynchronizedImageViewer(QWidget):
 
     def _on_delete_others_requested(self, file_path_to_keep: str):
         """Handle delete others request by collecting file paths and emitting a bulk delete signal."""
-        file_paths_to_delete = []
-        for viewer in self.image_viewers:
-            # Collect all other images except the one that requested to keep
-            if viewer._file_path is not None and viewer._file_path != file_path_to_keep:
-                file_paths_to_delete.append(viewer._file_path)
+        file_paths_to_delete = [
+            viewer._file_path
+            for viewer in self.image_viewers
+            if viewer._file_path is not None and viewer._file_path != file_path_to_keep
+        ]
 
         # Emit the bulk delete request if there are files to delete
         if file_paths_to_delete:

@@ -1,11 +1,13 @@
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
+from collections.abc import Iterable
 from datetime import datetime as datetime_obj
 import logging
 import os
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
 from core.caching.analysis_cache import AnalysisCache
+from core.best_photo_finder.payloads import PickBestResults
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +29,16 @@ class AppState:
     """
 
     def __init__(self):
-        self._image_files_data: List[Dict[str, Any]] = []
-        self._file_data_by_path: Dict[str, Dict[str, Any]] = {}
+        self._image_files_data: list[dict[str, Any]] = []
+        self._file_data_by_path: dict[str, dict[str, Any]] = {}
         self._media_summary = MediaSummary()
-        self.rating_cache: Dict[
+        self.rating_cache: dict[
             str, int
         ] = {}  # This is an in-memory dictionary for quick UI access
-        self.date_cache: Dict[str, Optional[datetime_obj]] = {}
-        self.cluster_results: Dict[str, int] = {}  # {image_path: cluster_id}
-        self.embeddings_cache: Dict[
-            str, List[float]
+        self.date_cache: dict[str, datetime_obj | None] = {}
+        self.cluster_results: dict[str, int] = {}  # {image_path: cluster_id}
+        self.embeddings_cache: dict[
+            str, list[float]
         ] = {}  # {image_path: embedding_vector}
         self.rating_disk_cache = (
             RatingCache()
@@ -44,35 +46,33 @@ class AppState:
         self.exif_disk_cache = ExifCache()  # Instance of the new disk cache for EXIF data, now reads size from app_settings
         self.analysis_cache = AnalysisCache()
         self.marked_for_deletion: set = set()  # Set of file paths marked for deletion
-        self.best_shot_rankings: Dict[int, List[Dict[str, Any]]] = {}
-        self.best_shot_scores_by_path: Dict[str, Dict[str, Any]] = {}
-        self.best_shot_winners: Dict[int, Dict[str, Any]] = {}
-        self.ai_rating_results: Dict[str, Dict[str, Any]] = {}
-        self.pick_best_results: Dict[
-            int, Dict[str, Any]
-        ] = {}  # cluster_id -> {winner_path, ranked, failed, all_paths}
-        self.pick_best_winners_by_path: Dict[str, bool] = {}  # path -> True if winner
-        self.easy_delete_results: Optional[Dict[str, Dict[str, Any]]] = (
+        self.best_shot_rankings: dict[int, list[dict[str, Any]]] = {}
+        self.best_shot_scores_by_path: dict[str, dict[str, Any]] = {}
+        self.best_shot_winners: dict[int, dict[str, Any]] = {}
+        self.ai_rating_results: dict[str, dict[str, Any]] = {}
+        self.pick_best_results: PickBestResults = {}
+        self.pick_best_winners_by_path: dict[str, bool] = {}  # path -> True if winner
+        self.easy_delete_results: dict[str, dict[str, Any]] | None = (
             None  # None = not analysed; {} = analysed with no issues
         )
-        self.fix_rotation_results: Optional[Dict[str, int]] = (
+        self.fix_rotation_results: dict[str, int] | None = (
             None  # None = not analysed; {} = analysed with no suggestions
         )
 
         # Could also hold current folder path, filter states, etc. if desired.
-        self.current_folder_path: Optional[str] = None
-        self.focused_image_path: Optional[str] = (
+        self.current_folder_path: str | None = None
+        self.focused_image_path: str | None = (
             None  # Path of the image in the single/focused viewer
         )
         self.workflow_step: str = "organize"
         self.selected_grouping_mode: str = "current"
-        self.grouping_output_root: Optional[str] = None
-        self.grouping_run_summary: Optional[Dict[str, Any]] = None
-        self.grouping_source_root: Optional[str] = None
+        self.grouping_output_root: str | None = None
+        self.grouping_run_summary: dict[str, Any] | None = None
+        self.grouping_source_root: str | None = None
         self.skip_grouping_step_once: bool = False
 
     @property
-    def image_files_data(self) -> List[Dict[str, Any]]:
+    def image_files_data(self) -> list[dict[str, Any]]:
         """Loaded file records.
 
         Assigning a collection rebuilds the path index and aggregate counters. New
@@ -83,7 +83,7 @@ class AppState:
         return self._image_files_data
 
     @image_files_data.setter
-    def image_files_data(self, records: Iterable[Dict[str, Any]]) -> None:
+    def image_files_data(self, records: Iterable[dict[str, Any]]) -> None:
         self._image_files_data = list(records or [])
         self._rebuild_media_index()
 
@@ -107,7 +107,7 @@ class AppState:
             ),
         )
 
-    def extend_file_data(self, records: Iterable[Dict[str, Any]]) -> None:
+    def extend_file_data(self, records: Iterable[dict[str, Any]]) -> None:
         """Add a scan batch while maintaining indexes and counters in O(batch)."""
 
         batch = list(records)
@@ -251,7 +251,7 @@ class AppState:
 
     # Add more methods as needed, e.g., to get specific data,
     # update blur status, etc.
-    def update_blur_status(self, file_path: str, is_blurred: Optional[bool]):
+    def update_blur_status(self, file_path: str, is_blurred: bool | None):
         file_data = self.get_file_data_by_path(file_path)
         if file_data is not None:
             file_data["is_blurred"] = is_blurred
@@ -262,7 +262,7 @@ class AppState:
             f"Path not found in image data to update blur status: {file_path}"
         )
 
-    def get_file_data_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
+    def get_file_data_by_path(self, file_path: str) -> dict[str, Any] | None:
         return self._file_data_by_path.get(file_path)
 
     def mark_for_deletion(self, file_path: str):
@@ -280,7 +280,7 @@ class AppState:
 
         return file_path in self.marked_for_deletion
 
-    def get_marked_files(self) -> List[str]:
+    def get_marked_files(self) -> list[str]:
         """Returns a list of all files marked for deletion."""
         marked_files = list(self.marked_for_deletion)
         logger.debug(f"Retrieved {len(marked_files)} marked files")
@@ -304,15 +304,14 @@ class AppState:
         score = self.best_shot_scores_by_path.get(file_path)
         if score is not None:
             cluster_id = score.get("cluster_id")
-            winner = self.best_shot_winners.get(cluster_id)
+            winner = (
+                self.best_shot_winners.get(cluster_id)
+                if isinstance(cluster_id, int)
+                else None
+            )
             if winner is not None:
                 return winner.get("image_path") == file_path
-        # Restored legacy cache entries may not contain a cluster id.
-        return any(
-            winner.get("image_path") == file_path
-            for winner in self.best_shot_winners.values()
-            if isinstance(winner, dict)
-        )
+        return False
 
     def clear_pick_best_results(self):
         """Resets pick-best step results."""
@@ -320,12 +319,12 @@ class AppState:
         self.pick_best_winners_by_path.clear()
 
     def merge_best_shot_results(
-        self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
+        self, rankings_by_cluster: dict[int, list[dict[str, Any]]]
     ) -> None:
         for cluster_id, rankings in rankings_by_cluster.items():
             if not rankings:
                 continue
-            normalized_rankings: List[Dict[str, Any]] = []
+            normalized_rankings: list[dict[str, Any]] = []
             for entry in rankings:
                 if not isinstance(entry, dict):
                     continue
@@ -341,7 +340,7 @@ class AppState:
             self.best_shot_winners[cluster_id] = normalized_rankings[0]
 
     def set_best_shot_results(
-        self, rankings_by_cluster: Dict[int, List[Dict[str, Any]]]
+        self, rankings_by_cluster: dict[int, list[dict[str, Any]]]
     ):
         """Persist best-shot rankings emitted by the analysis worker."""
         self.clear_best_shot_results()

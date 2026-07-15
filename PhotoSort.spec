@@ -1,4 +1,3 @@
-# -*- mode: python ; coding: utf-8 -*-
 """Single cross-platform PyInstaller definition used by release CI."""
 
 import subprocess
@@ -6,7 +5,6 @@ import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
-    collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
     copy_metadata,
@@ -48,18 +46,15 @@ datas = [
     (str(PROJECT_ROOT / "src" / "ui" / "dark_theme.qss"), "."),
     (str(PROJECT_ROOT / "assets" / "app_icon.ico"), "."),
     (str(PROJECT_ROOT / "assets" / "app_icon.png"), "."),
+    (
+        str(PROJECT_ROOT / "assets" / "models" / "face_landmarker.task"),
+        "models",
+    ),
 ]
-datas += collect_data_files(
-    "mediapipe",
-    includes=[
-        "modules/face_detection/**/*",
-        "modules/face_landmark/**/*",
-        "modules/iris_landmark/**/*",
-    ],
-)
 datas += copy_metadata("pyexiv2")
 
 binaries = collect_dynamic_libs("pyexiv2")
+binaries += collect_dynamic_libs("mediapipe")
 binaries += _homebrew_runtime_libraries()
 
 # AutoModel loads architecture modules by string at runtime. Keep only the
@@ -86,9 +81,10 @@ excluded_transformer_models = [
 ]
 
 hiddenimports = [
+    "compression.zstd",
     "core.build_info",
     "core.packaging_smoke",
-    "mediapipe.python.solutions.face_mesh",
+    "mediapipe.tasks.python.vision.face_landmarker",
     "transformers.models.auto.image_processing_auto",
     "transformers.models.auto.modeling_auto",
     "transformers.models.beit.image_processing_beit",
@@ -121,7 +117,7 @@ a = Analysis(
         "flax",
         "jax",
         "pyiqa",
-        # MediaPipe declares SentencePiece, but PhotoSort only uses Face Mesh.
+        # MediaPipe declares SentencePiece, but PhotoSort only uses Face Landmarker.
         # Excluding the unused native tokenizer also avoids a Windows CUDA
         # PyInstaller dependency-scan crash inside sentencepiece.dll.
         "sentencepiece",

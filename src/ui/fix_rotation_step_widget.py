@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 import logging
 import os
-from typing import Dict, List, Optional
+from typing import override
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap, QTransform
@@ -30,7 +28,7 @@ from ui.workflow_review_components import (
 
 logger = logging.getLogger(__name__)
 
-_ANGLE_LABELS: Dict[int, tuple] = {
+_ANGLE_LABELS: dict[int, tuple] = {
     90: ("90° CW", "#00D4FF"),
     180: ("180°", "#F5B700"),
     -90: ("90° CCW", "#00D4FF"),
@@ -44,9 +42,9 @@ _SKIP_COLOR = "#607080"
 class _RotatedImageLabel(QLabel):
     """QLabel that displays an image and an optional rotation-preview overlay."""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._source_pixmap: Optional[QPixmap] = None
+        self._source_pixmap: QPixmap | None = None
         self._preview_angle: int = 0
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(80, 80)
@@ -54,12 +52,13 @@ class _RotatedImageLabel(QLabel):
         self.setStyleSheet("background: #0D1117;")
 
     def set_pixmap_and_angle(
-        self, pixmap: Optional[QPixmap], preview_angle: int = 0
+        self, pixmap: QPixmap | None, preview_angle: int = 0
     ) -> None:
         self._source_pixmap = pixmap
         self._preview_angle = preview_angle
         self._refresh()
 
+    @override
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._refresh()
@@ -89,11 +88,11 @@ class FixRotationStepWidget(QWidget):
     proceed_requested = pyqtSignal()
     skip_requested = pyqtSignal()
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._suggestions: Dict[str, int] = {}  # path -> suggested angle
-        self._marked: Dict[str, bool] = {}  # path -> True if marked for rotation
-        self._ordered_paths: List[str] = []
+        self._suggestions: dict[str, int] = {}  # path -> suggested angle
+        self._marked: dict[str, bool] = {}  # path -> True if marked for rotation
+        self._ordered_paths: list[str] = []
         self._current_index: int = -1
         self._image_pipeline = None
         self._applying = False
@@ -146,7 +145,7 @@ class FixRotationStepWidget(QWidget):
         self._progress_bar.setValue(0)
         self._content_stack.setCurrentIndex(0)
 
-    def show_results(self, suggestions: Dict[str, int]) -> None:
+    def show_results(self, suggestions: dict[str, int]) -> None:
         self._suggestions = dict(suggestions)
         # Pre-mark all suggestions for rotation
         self._marked = dict.fromkeys(suggestions, True)
@@ -333,7 +332,7 @@ class FixRotationStepWidget(QWidget):
             f"<b style='color:{color}'>[{badge}]</b>  Suggested rotation: <b>{badge}</b>"
         )
 
-    def _load_pixmap(self, path: str) -> Optional[QPixmap]:
+    def _load_pixmap(self, path: str) -> QPixmap | None:
         try:
             if self._image_pipeline:
                 pixmap = self._image_pipeline.get_cached_analysis_qpixmap(

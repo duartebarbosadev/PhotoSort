@@ -1,7 +1,7 @@
 import logging
 import os
 import subprocess
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QPoint, Qt, QSignalBlocker
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 class MenuManager:
     """Manages the creation of menus and actions for the main window."""
 
-    def __init__(self, main_window: "MainWindow"):
+    def __init__(self, main_window: MainWindow):
         self.main_window = main_window
         self.dialog_manager = main_window.dialog_manager
         self.app_state = main_window.app_state
@@ -51,7 +51,7 @@ class MenuManager:
         self.skip_singleton_nav_action: QAction
         self.rating_navigation_menu: QMenu
         self.rating_navigation_group: QActionGroup | None = None
-        self.rating_navigation_actions: dict[Optional[int], QAction] = {}
+        self.rating_navigation_actions: dict[int | None, QAction] = {}
 
         # New: View Mode Shortcut Actions
         self.view_list_action: QAction
@@ -427,7 +427,7 @@ class MenuManager:
         self.rating_navigation_group = QActionGroup(main_win)
         self.rating_navigation_group.setExclusive(True)
         self.rating_navigation_actions.clear()
-        rating_jump_options: list[tuple[str, Optional[int]]] = [("Disabled", None)]
+        rating_jump_options: list[tuple[str, int | None]] = [("Disabled", None)]
         rating_jump_options.extend(
             [(f"{i} Star{'s' if i != 1 else ''}", i) for i in range(0, 6)]
         )
@@ -478,7 +478,7 @@ class MenuManager:
                 "Enable 'Group by Similarity' to activate this navigation mode."
             )
 
-    def sync_rating_navigation_selection(self, rating: Optional[int]) -> None:
+    def sync_rating_navigation_selection(self, rating: int | None) -> None:
         if not self.rating_navigation_actions:
             return
         target = rating if rating in self.rating_navigation_actions else None
@@ -870,7 +870,7 @@ class MenuManager:
                 f"Failed to open '{file_path}' in file explorer: {e}", exc_info=True
             )
 
-    def _parse_cluster_id(self, value) -> Optional[int]:
+    def _parse_cluster_id(self, value) -> int | None:
         """Delegate to the shared parser used elsewhere in the UI."""
         return ClusterUtils.parse_cluster_id(value)
 

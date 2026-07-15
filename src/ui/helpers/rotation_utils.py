@@ -1,5 +1,4 @@
-from __future__ import annotations
-from typing import Optional, Sequence, Iterable
+from collections.abc import Sequence, Iterable
 
 from ui.selection_utils import select_next_surviving_path
 
@@ -8,8 +7,8 @@ def compute_next_after_rotation(
     visible_paths_before: Sequence[str],
     accepted_paths: Iterable[str],
     remaining_paths_after: Sequence[str],
-    anchor_path: Optional[str] = None,
-) -> Optional[str]:
+    anchor_path: str | None = None,
+) -> str | None:
     """Decide which path should be selected after applying rotation(s).
 
     Delegates core heuristic to ``select_next_surviving_path`` while providing a

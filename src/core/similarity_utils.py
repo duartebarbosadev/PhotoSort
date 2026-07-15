@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 import logging
 import os
-from typing import Dict, List, Literal, Tuple
+from typing import Literal
 
 import numpy as np
 from PIL import Image
@@ -13,7 +11,7 @@ logger = logging.getLogger(__name__)
 Orientation = Literal["portrait", "landscape", "square"]
 
 
-def _get_raw_dimensions(image_path: str) -> Tuple[int, int] | None:
+def _get_raw_dimensions(image_path: str) -> tuple[int, int] | None:
     """Return orientation-corrected RAW dimensions when rawpy supports the file."""
     try:
         from core.image_processing.raw_image_processor import is_raw_extension
@@ -94,7 +92,7 @@ def classify_orientation(image_path: str) -> Orientation:
         return "landscape"
 
 
-def build_orientation_map(file_paths: List[str]) -> Dict[str, Orientation]:
+def build_orientation_map(file_paths: list[str]) -> dict[str, Orientation]:
     """
     Build a mapping of file paths to their orientations.
 
@@ -104,7 +102,7 @@ def build_orientation_map(file_paths: List[str]) -> Dict[str, Orientation]:
     Returns:
         Dictionary mapping each path to its orientation.
     """
-    orientation_map: Dict[str, Orientation] = {}
+    orientation_map: dict[str, Orientation] = {}
     for path in file_paths:
         orientation_map[path] = classify_orientation(path)
     return orientation_map
@@ -119,7 +117,7 @@ def l2_normalize_rows(matrix: np.ndarray) -> np.ndarray:
     return matrix / norms
 
 
-def normalize_embedding_vector(values: List[float]) -> Tuple[List[float], bool]:
+def normalize_embedding_vector(values: list[float]) -> tuple[list[float], bool]:
     """Normalize a single embedding vector, returning (normalized_list, changed_flag)."""
     arr = np.asarray(values, dtype=np.float32)
     norm = float(np.linalg.norm(arr))
@@ -130,7 +128,7 @@ def normalize_embedding_vector(values: List[float]) -> Tuple[List[float], bool]:
     return (arr / norm).tolist(), True
 
 
-def normalize_embedding_dict(embeddings: Dict[str, List[float]]) -> bool:
+def normalize_embedding_dict(embeddings: dict[str, list[float]]) -> bool:
     """Normalize all embedding vectors in-place. Returns True if any were updated."""
     updated = False
     for path, vector in list(embeddings.items()):

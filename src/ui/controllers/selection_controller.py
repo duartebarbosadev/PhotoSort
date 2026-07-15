@@ -1,5 +1,4 @@
-from __future__ import annotations
-from typing import List, Protocol, Any
+from typing import Protocol, Any
 import os
 from PyQt6.QtCore import QModelIndex
 from PyQt6.QtGui import QStandardItem
@@ -14,8 +13,6 @@ class SelectionContext(Protocol):
     """
 
     def get_active_view(self) -> Any | None: ...  # view must expose model()
-    @property
-    def proxy_model(self) -> Any: ...  # kept for backward compatibility
     def is_valid_image_item(self, proxy_index: QModelIndex) -> bool: ...
     def file_system_model_item_from_index(
         self, source_index: QModelIndex
@@ -29,7 +26,7 @@ class SelectionController:
     def __init__(self, ctx: SelectionContext):
         self.ctx = ctx
 
-    def get_selected_file_paths(self) -> List[str]:
+    def get_selected_file_paths(self) -> list[str]:
         view = self.ctx.get_active_view()
         if not view:
             return []
@@ -37,7 +34,7 @@ class SelectionController:
         if not sel_model:
             return []
         selected_indexes = sel_model.selectedIndexes()
-        out: List[str] = []
+        out: list[str] = []
         for proxy_index in selected_indexes:
             if proxy_index.column() != 0:
                 continue
@@ -98,8 +95,10 @@ class SelectionController:
                     if getattr(view, "isExpanded", lambda _i: False)(
                         idx
                     ) and model.hasChildren(idx):
-                        for child_row in range(model.rowCount(idx)):
-                            queue.append(model.index(child_row, 0, idx))
+                        queue.extend(
+                            model.index(child_row, 0, idx)
+                            for child_row in range(model.rowCount(idx))
+                        )
                 except Exception:
                     pass
             return QModelIndex()
@@ -149,8 +148,10 @@ class SelectionController:
                     if getattr(view, "isExpanded", lambda _i: False)(
                         idx
                     ) and model.hasChildren(idx):
-                        for child_row in range(model.rowCount(idx)):
-                            queue.append(model.index(child_row, 0, idx))
+                        queue.extend(
+                            model.index(child_row, 0, idx)
+                            for child_row in range(model.rowCount(idx))
+                        )
                 except Exception:
                     pass
             return last_valid

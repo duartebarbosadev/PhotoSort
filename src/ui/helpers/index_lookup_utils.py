@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Callable, List, Optional
+from collections.abc import Callable
 from PyQt6.QtCore import QModelIndex, Qt, QSortFilterProxyModel
 from PyQt6.QtGui import QStandardItemModel
 
@@ -10,7 +8,7 @@ def find_proxy_index_for_path(
     proxy_model: QSortFilterProxyModel,
     source_model: QStandardItemModel,
     is_valid_image_item: Callable[[QModelIndex], bool],
-    is_expanded: Optional[Callable[[QModelIndex], bool]] = None,
+    is_expanded: Callable[[QModelIndex], bool] | None = None,
 ) -> QModelIndex:
     """Pure traversal of proxy model to locate index for a path.
 
@@ -26,10 +24,11 @@ def find_proxy_index_for_path(
     if not isinstance(proxy_model, QSortFilterProxyModel):  # Safety
         return QModelIndex()
 
-    queue: List[QModelIndex] = []
     root_parent = QModelIndex()
-    for r in range(proxy_model.rowCount(root_parent)):
-        queue.append(proxy_model.index(r, 0, root_parent))
+    queue = [
+        proxy_model.index(row, 0, root_parent)
+        for row in range(proxy_model.rowCount(root_parent))
+    ]
 
     head = 0
     while head < len(queue):
@@ -46,12 +45,14 @@ def find_proxy_index_for_path(
                     return current_proxy_idx
         # traverse children if tree-like
         if is_expanded is None or is_expanded(current_proxy_idx):
-            for child_row in range(proxy_model.rowCount(current_proxy_idx)):
-                queue.append(proxy_model.index(child_row, 0, current_proxy_idx))
+            queue.extend(
+                proxy_model.index(child_row, 0, current_proxy_idx)
+                for child_row in range(proxy_model.rowCount(current_proxy_idx))
+            )
     return QModelIndex()
 
 
-def classify_selection(selected_paths: List[str]):
+def classify_selection(selected_paths: list[str]):
     """Return a simple classification tuple for selection state.
 
     ('none' | 'single' | 'multi', count)

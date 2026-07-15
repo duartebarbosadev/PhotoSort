@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -25,11 +23,11 @@ class GroupingPreviewWorker(QObject):
 
     def __init__(
         self,
-        items: List[Dict[str, Any]],
+        items: list[dict[str, Any]],
         mode: str,
-        source_root: Optional[str] = None,
+        source_root: str | None = None,
         location_depth: int = 3,
-        image_pipeline: Optional[ImagePipeline] = None,
+        image_pipeline: ImagePipeline | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -79,15 +77,15 @@ class GroupingWorkflowWorker(QObject):
 
     def __init__(
         self,
-        items: List[Dict[str, Any]],
+        items: list[dict[str, Any]],
         mode: str,
         source_root: str,
-        output_root: Optional[str] = None,
-        group_name_overrides: Optional[Dict[str, str]] = None,
+        output_root: str | None = None,
+        group_name_overrides: dict[str, str] | None = None,
         prepared_plan=None,
         location_depth: int = 3,
         move_companions: bool = False,
-        image_pipeline: Optional[ImagePipeline] = None,
+        image_pipeline: ImagePipeline | None = None,
         parent=None,
     ):
         super().__init__(parent)

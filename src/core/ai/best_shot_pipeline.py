@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import base64
 import io
 import json
@@ -8,8 +6,9 @@ import os
 import re
 import threading
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Set
+from enum import StrEnum
+from typing import Any
+from collections.abc import Sequence
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -26,7 +25,7 @@ from core.app_settings import (
 logger = logging.getLogger(__name__)
 
 
-class BestShotEngine(str, Enum):
+class BestShotEngine(StrEnum):
     LLM = "llm"
 
 
@@ -60,15 +59,15 @@ DEFAULT_RATING_PROMPT = (
 )
 
 
-@dataclass
+@dataclass(slots=True)
 class LLMConfig:
-    api_key: Optional[str]
+    api_key: str | None
     model: str = DEFAULT_OPENAI_MODEL
-    base_url: Optional[str] = DEFAULT_OPENAI_BASE_URL
+    base_url: str | None = DEFAULT_OPENAI_BASE_URL
     max_tokens: int = DEFAULT_OPENAI_MAX_TOKENS
     timeout: int = DEFAULT_OPENAI_TIMEOUT
-    best_shot_prompt: Optional[str] = None
-    rating_prompt: Optional[str] = None
+    best_shot_prompt: str | None = None
+    rating_prompt: str | None = None
     max_workers: int = DEFAULT_OPENAI_MAX_WORKERS
 
     def __post_init__(self) -> None:
@@ -78,7 +77,7 @@ class LLMConfig:
             self.rating_prompt = DEFAULT_RATING_PROMPT
 
 
-def _load_font(image_size: Tuple[int, int]) -> ImageFont.ImageFont:
+def _load_font(image_size: tuple[int, int]) -> ImageFont.ImageFont:
     longer_side = max(image_size)
     font_size = max(24, int(longer_side * 0.08))
     try:
@@ -119,7 +118,7 @@ class BaseBestShotStrategy:
     def __init__(
         self,
         image_pipeline,
-        llm_config: Optional[LLMConfig] = None,
+        llm_config: LLMConfig | None = None,
     ) -> None:
         self.image_pipeline = image_pipeline
         self.llm_config = llm_config
@@ -130,10 +129,10 @@ class BaseBestShotStrategy:
 
     def rank_cluster(
         self, cluster_id: int, image_paths: Sequence[str]
-    ) -> List[Dict[str, object]]:
+    ) -> list[dict[str, object]]:
         raise NotImplementedError
 
-    def rate_image(self, image_path: str) -> Optional[Dict[str, object]]:
+    def rate_image(self, image_path: str) -> dict[str, object] | None:
         raise NotImplementedError
 
     def shutdown(self) -> None:
@@ -158,7 +157,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
 
         self._timeout = llm_config.timeout
         self._base_url = llm_config.base_url or DEFAULT_OPENAI_BASE_URL
-        client_kwargs: Dict[str, object] = {
+        client_kwargs: dict[str, object] = {
             "base_url": self._base_url,
             "timeout": self._timeout,
         }
@@ -209,53 +208,30 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         Always uses the image pipeline to handle RAW files and other formats properly,
         as AI services typically don't support RAW formats natively.
         """
-        preview = None
-        if self.image_pipeline is not None:
-            try:
-                from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
+        if self.image_pipeline is None:
+            raise RuntimeError("AI analysis requires the shared image pipeline.")
 
-                preview = self.image_pipeline.get_analysis_image(
-                    image_path,
-                    target_size=ANALYSIS_CACHE_RESOLUTION,
-                )
-                if preview is not None and preview.mode != "RGB":
-                    preview = preview.convert("RGB")
-            except Exception:
-                logger.exception("Preview generation failed for %s", image_path)
+        from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
 
+        preview = self.image_pipeline.get_analysis_image(
+            image_path,
+            target_size=ANALYSIS_CACHE_RESOLUTION,
+        )
         if preview is None:
-            try:
-                # Fallback for standard formats only - avoid RAW files
-                ext = os.path.splitext(image_path)[1].lower()
-                if ext in {
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                    ".bmp",
-                    ".gif",
-                    ".tiff",
-                    ".tif",
-                    ".webp",
-                }:
-                    preview = Image.open(image_path).convert("RGB")
-                else:
-                    raise RuntimeError(
-                        f"Unsupported format for AI analysis: {ext}. Preview generation required."
-                    )
-            except Exception as exc:
-                logger.error("Failed to load image %s: %s", image_path, exc)
-                raise RuntimeError(f"Cannot load image for AI analysis: {exc}") from exc
+            raise RuntimeError(f"Cannot generate an AI preview for {image_path}.")
+        if preview.mode != "RGB":
+            preview = preview.convert("RGB")
 
         return preview
 
     def _build_messages(
         self,
         prompt: str,
-        labelled_images: List[Tuple[int, str]],
+        labelled_images: list[tuple[int, str]],
         *,
-        system_prompt: Optional[str] = None,
-    ) -> List[Dict[str, object]]:
-        content: List[Dict[str, object]] = [{"type": "text", "text": prompt}]
+        system_prompt: str | None = None,
+    ) -> list[dict[str, object]]:
+        content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
         for _index, b64 in labelled_images:
             content.append(
                 {
@@ -266,7 +242,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                     },
                 }
             )
-        messages: List[Dict[str, object]] = []
+        messages: list[dict[str, object]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": content})
@@ -274,11 +250,11 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
 
     def _call_llm(
         self,
-        messages: List[Dict[str, object]],
+        messages: list[dict[str, object]],
         *,
-        tools: Optional[List[Dict[str, object]]] = None,
-        tool_choice: Optional[str] = None,
-        max_tokens: Optional[int] = None,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: str | None = None,
+        max_tokens: int | None = None,
     ):
         if self._cancel_event.is_set():
             raise RuntimeError("LLM request cancelled")
@@ -286,7 +262,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
             try:
                 if self._cancel_event.is_set():
                     raise RuntimeError("LLM request cancelled")
-                kwargs: Dict[str, object] = {
+                kwargs: dict[str, object] = {
                     "model": self._model,
                     "messages": messages,
                     "max_tokens": max(max_tokens or self._max_tokens, 256),
@@ -317,7 +293,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 f"Unable to reach LLM endpoint at {self._base_url}: {exc}"
             ) from exc
         data = getattr(response, "data", None)
-        model_ids: Set[str] = set()
+        model_ids: set[str] = set()
         if data:
             for entry in data:
                 if isinstance(entry, dict):
@@ -340,12 +316,12 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
 
     def rank_cluster(
         self, cluster_id: int, image_paths: Sequence[str]
-    ) -> List[Dict[str, object]]:
+    ) -> list[dict[str, object]]:
         logger.info(
             f"AI ranking cluster {cluster_id} with {len(image_paths)} images using LLM strategy"
         )
         if len(image_paths) <= 1:
-            normalized_results: List[Dict[str, object]] = [
+            normalized_results: list[dict[str, object]] = [
                 {
                     "image_path": path,
                     "composite_score": 1.0,
@@ -361,7 +337,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
             return normalized_results
 
         images = []
-        labelled_payloads: List[Tuple[int, str]] = []
+        labelled_payloads: list[tuple[int, str]] = []
         for idx, path in enumerate(image_paths, start=1):
             preview = self._load_preview(path)
             annotated = _annotate_image(preview, str(idx))
@@ -393,7 +369,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 f"Could not parse best image selection from LLM response: {analysis[:200]}..."
             )
 
-        ranked: List[Dict[str, object]] = []
+        ranked: list[dict[str, object]] = []
         for idx, path in images:
             score = 1.0 if idx == best_index else 0.5
             ranked.append(
@@ -416,7 +392,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
             )
         return ranked
 
-    def rate_image(self, image_path: str) -> Optional[Dict[str, object]]:
+    def rate_image(self, image_path: str) -> dict[str, object] | None:
         logger.info(f"AI rating image: {os.path.basename(image_path)}")
 
         preview = self._load_preview(image_path)
@@ -526,7 +502,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
             tool_choice=tool_choice,
         )
         analysis = freeform_analysis
-        structured_payload: Dict[str, Any] = {}
+        structured_payload: dict[str, Any] = {}
         tool_calls = getattr(message, "tool_calls", None) or []
         if tool_calls:
             try:
@@ -579,7 +555,7 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
 def create_best_shot_strategy(
     *,
     image_pipeline=None,
-    llm_config: Optional[LLMConfig] = None,
+    llm_config: LLMConfig | None = None,
 ) -> BaseBestShotStrategy:
     """Create the LLM AI strategy for image analysis."""
     config = llm_config or LLMConfig(**get_openai_config())

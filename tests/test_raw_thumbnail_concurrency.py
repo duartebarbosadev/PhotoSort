@@ -32,7 +32,7 @@ def test_embedded_raw_thumbnail_does_not_take_full_decode_gate():
         return_value=_raw_context(raw),
     ):
         result = RawImageProcessor.process_raw_for_thumbnail(
-            "image.arw", fallback_decode_gate=gate
+            "image.arw", full_decode_gate=gate
         )
 
     assert result is not None
@@ -40,7 +40,7 @@ def test_embedded_raw_thumbnail_does_not_take_full_decode_gate():
     gate.release.assert_not_called()
 
 
-def test_raw_fallback_is_serialized_by_full_decode_gate():
+def test_raw_full_decode_is_serialized_by_gate():
     raw = Mock()
     raw.extract_thumb.side_effect = rawpy.LibRawNoThumbnailError()
     raw.postprocess.return_value = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -51,7 +51,7 @@ def test_raw_fallback_is_serialized_by_full_decode_gate():
         return_value=_raw_context(raw),
     ):
         result = RawImageProcessor.process_raw_for_thumbnail(
-            "image.arw", fallback_decode_gate=gate
+            "image.arw", full_decode_gate=gate
         )
 
     assert result is not None

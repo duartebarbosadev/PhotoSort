@@ -1,9 +1,7 @@
 """Status-bar and library-context presentation."""
 
-from __future__ import annotations
-
 import os
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 
 class StatusContext(Protocol):
@@ -20,7 +18,7 @@ class StatusController:
     def __init__(self, context: StatusContext):
         self.context = context
 
-    def update(self, message_override: Optional[str] = None) -> None:
+    def update(self, message_override: str | None = None) -> None:
         ctx = self.context
         if message_override:
             ctx.statusBar().showMessage(message_override)
@@ -81,7 +79,7 @@ class StatusController:
                 sidebar_subtitle,
             )
 
-    def _folder_display_name(self) -> Optional[str]:
+    def _folder_display_name(self) -> str | None:
         folder_path = self.context.app_state.current_folder_path
         if not folder_path:
             return None

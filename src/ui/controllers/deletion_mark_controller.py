@@ -1,7 +1,6 @@
 # Renamed from deletion_controller.py to align with class name DeletionMarkController
-from __future__ import annotations
 import os
-from typing import Optional, List, Callable, Iterable, Tuple
+from collections.abc import Callable, Iterable
 from PyQt6.QtGui import QStandardItem, QColor
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
@@ -26,7 +25,7 @@ class DeletionMarkController:
 
     # --- Presentation helpers ---
     def apply_presentation(
-        self, item: QStandardItem, file_path: str, is_blurred: Optional[bool]
+        self, item: QStandardItem, file_path: str, is_blurred: bool | None
     ):
         # Optimization: Skip marked check if nothing is marked (common case on initial load)
         is_marked = (
@@ -76,7 +75,7 @@ class DeletionMarkController:
         if self._is_marked_func(file_path):
             self.app_state.unmark_for_deletion(file_path)
 
-    def mark_others(self, keep_path: str, paths: List[str]) -> int:
+    def mark_others(self, keep_path: str, paths: list[str]) -> int:
         count = 0
         for p in paths:
             if p != keep_path and not self._is_marked_func(p):
@@ -84,7 +83,7 @@ class DeletionMarkController:
                 count += 1
         return count
 
-    def unmark_others(self, keep_path: str, paths: List[str]) -> int:
+    def unmark_others(self, keep_path: str, paths: list[str]) -> int:
         count = 0
         for p in paths:
             if p != keep_path and self._is_marked_func(p):
@@ -104,7 +103,7 @@ class DeletionMarkController:
         find_proxy_index: Callable[[str], object],
         file_system_model,
         proxy_model,
-    ) -> Tuple[Optional[QStandardItem], Optional[bool]]:
+    ) -> tuple[QStandardItem | None, bool | None]:
         proxy_idx = find_proxy_index(file_path)
         if proxy_idx and proxy_idx.isValid():  # type: ignore[attr-defined]
             source_idx = proxy_model.mapToSource(proxy_idx)
@@ -118,9 +117,9 @@ class DeletionMarkController:
 
     def _update_item_presentation(
         self,
-        item: Optional[QStandardItem],
+        item: QStandardItem | None,
         file_path: str,
-        is_blurred: Optional[bool],
+        is_blurred: bool | None,
     ):
         if item:
             self.apply_presentation(item, file_path, is_blurred)

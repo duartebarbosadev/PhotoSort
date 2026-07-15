@@ -72,17 +72,11 @@ def test_cpu_detection_prefers_process_limit(monkeypatch):
     assert app_settings.get_available_cpu_count() == 6
 
 
-def test_cpu_detection_uses_linux_affinity_when_available(monkeypatch):
-    monkeypatch.setattr(app_settings.os, "process_cpu_count", None, raising=False)
-    monkeypatch.setattr(
-        app_settings.os,
-        "sched_getaffinity",
-        lambda _pid: {2, 3, 4},
-        raising=False,
-    )
+def test_cpu_detection_falls_back_when_process_count_is_unknown(monkeypatch):
+    monkeypatch.setattr(app_settings.os, "process_cpu_count", lambda: None)
     monkeypatch.setattr(app_settings.os, "cpu_count", lambda: 24)
 
-    assert app_settings.get_available_cpu_count() == 3
+    assert app_settings.get_available_cpu_count() == 24
 
 
 def test_windows_memory_detection_uses_global_memory_status(monkeypatch):

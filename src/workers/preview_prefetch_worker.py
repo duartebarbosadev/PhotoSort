@@ -1,10 +1,8 @@
 """Cancelable background work for the bounded navigation preview buffer."""
 
-from __future__ import annotations
-
 import logging
 from threading import Event
-from typing import Iterable
+from collections.abc import Iterable
 
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal
 

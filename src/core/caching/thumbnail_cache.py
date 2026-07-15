@@ -3,7 +3,6 @@ import os
 import logging
 import time
 from PIL import Image
-from typing import Optional, Tuple
 from core.app_settings import (
     DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES,
     THUMBNAIL_MIN_FILE_SIZE,
@@ -21,7 +20,7 @@ class ThumbnailCache:
 
     def __init__(
         self,
-        cache_dir: Optional[str] = None,
+        cache_dir: str | None = None,
         size_limit: int = DEFAULT_THUMBNAIL_CACHE_SIZE_BYTES,
     ):
         if cache_dir is None:
@@ -52,7 +51,7 @@ class ThumbnailCache:
             f"Initialization complete in {time.perf_counter() - init_start_time:.4f}s"
         )
 
-    def get(self, key: Tuple[str, bool]) -> Optional[Image.Image]:
+    def get(self, key: tuple[str, bool]) -> Image.Image | None:
         """
         Retrieves an item from the cache.
         The key is typically (normalized_path, apply_auto_edits_bool).
@@ -83,7 +82,7 @@ class ThumbnailCache:
             )
             return None
 
-    def set(self, key: Tuple[str, bool], value: Image.Image) -> None:
+    def set(self, key: tuple[str, bool], value: Image.Image) -> None:
         """
         Adds or updates an item in the cache.
         The key is typically (normalized_path, apply_auto_edits_bool).
@@ -104,7 +103,7 @@ class ThumbnailCache:
                 f"Error writing to Thumbnail cache for key '{key}': {e}", exc_info=True
             )
 
-    def delete(self, key: Tuple[str, bool]) -> None:
+    def delete(self, key: tuple[str, bool]) -> None:
         """
         Deletes an item from the cache.
 
@@ -185,7 +184,7 @@ class ThumbnailCache:
         except Exception:
             logger.error("Error closing Thumbnail cache.", exc_info=True)
 
-    def __contains__(self, key: Tuple[str, bool]) -> bool:
+    def __contains__(self, key: tuple[str, bool]) -> bool:
         return key in self._cache
 
     def __del__(self):

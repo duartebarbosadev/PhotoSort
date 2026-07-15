@@ -8,7 +8,6 @@ import os
 import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 from PyQt6.QtCore import QSettings
 from core.runtime_paths import resolve_user_cache_dir
 
@@ -27,11 +26,11 @@ class PerformanceMode(Enum):
     CUSTOM = "custom"
 
     @classmethod
-    def from_string(cls, value: str) -> "PerformanceMode":
+    def from_string(cls, value: str) -> PerformanceMode:
         """Convert string to PerformanceMode enum, defaulting to BALANCED."""
         try:
             return cls(value.lower())
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             return cls.BALANCED
 
 
@@ -100,11 +99,10 @@ DEFAULT_OPENAI_MAX_WORKERS = 4
 DEFAULT_BEST_SHOT_BATCH_SIZE = 3
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LocalBestShotConstants:
     model_stride: int = 32
     tensor_cache_key: str = "_photosort_pyiqa_tensor"
-    eye_fallback_max_edge: int = 2048
 
 
 _LOCAL_BEST_SHOT_CONSTANTS = LocalBestShotConstants()
@@ -138,12 +136,8 @@ EASY_DELETE_WHITE_CLIP_FRACTION = (
     0.85  # fraction of pixels above white cutoff; above = overexposed
 )
 EASY_DELETE_WHITE_CLIP_VALUE = 245  # 0-255; pixels at/above this count as "white"
-EASY_DELETE_DARK_MEAN_THRESHOLD = (
-    15.0  # 0-255 mean brightness; below = near-black (legacy default)
-)
-EASY_DELETE_WHITE_MEAN_THRESHOLD = (
-    248.0  # 0-255 mean brightness; above = overexposed (legacy default)
-)
+EASY_DELETE_DARK_MEAN_THRESHOLD = 15.0  # 0-255 mean brightness; below = near-black
+EASY_DELETE_WHITE_MEAN_THRESHOLD = 248.0  # 0-255 mean brightness; above = overexposed
 EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01  # cosine distance; below = near-identical
 
 # Fix Rotation step
@@ -494,7 +488,7 @@ def get_similarity_clustering_eps() -> float:
     )
     try:
         eps = float(eps)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return DEFAULT_SIMILARITY_CLUSTERING_EPS
     return max(
         MIN_SIMILARITY_CLUSTERING_EPS,
@@ -577,9 +571,7 @@ def set_custom_thread_count(count: int):
     settings.setValue(CUSTOM_THREAD_COUNT_KEY, count)
 
 
-def calculate_max_workers(
-    min_workers: int = 1, max_workers: Optional[int] = None
-) -> int:
+def calculate_max_workers(min_workers: int = 1, max_workers: int | None = None) -> int:
     """
     Calculate the optimal number of worker threads based on the current performance mode.
 
@@ -620,23 +612,13 @@ def calculate_max_workers(
 
 def get_available_cpu_count() -> int:
     """Return CPUs available to this process across desktops and containers."""
-    process_cpu_count = getattr(os, "process_cpu_count", None)
-    if process_cpu_count is not None:
-        count = process_cpu_count()
-        if count:
-            return max(1, int(count))
-    get_affinity = getattr(os, "sched_getaffinity", None)
-    if get_affinity is not None:
-        try:
-            affinity_count = len(get_affinity(0))
-            if affinity_count:
-                return affinity_count
-        except OSError:
-            pass
+    count = os.process_cpu_count()
+    if count:
+        return max(1, count)
     return max(1, os.cpu_count() or 4)
 
 
-def _get_windows_physical_memory_bytes() -> Optional[int]:
+def _get_windows_physical_memory_bytes() -> int | None:
     """Return installed memory on Windows without an optional dependency."""
     if os.name != "nt":
         return None
@@ -659,12 +641,12 @@ def _get_windows_physical_memory_bytes() -> Optional[int]:
     try:
         if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
             return int(status.ullTotalPhys)
-    except (AttributeError, OSError):
+    except AttributeError, OSError:
         pass
     return None
 
 
-def get_total_physical_memory_bytes() -> Optional[int]:
+def get_total_physical_memory_bytes() -> int | None:
     """Return installed physical memory on Windows, macOS, or Linux."""
     if os.name == "nt":
         return _get_windows_physical_memory_bytes()
@@ -673,11 +655,11 @@ def get_total_physical_memory_bytes() -> Optional[int]:
         page_count = os.sysconf("SC_PHYS_PAGES")
         total = int(page_size) * int(page_count)
         return total if total > 0 else None
-    except (AttributeError, OSError, TypeError, ValueError):
+    except AttributeError, OSError, TypeError, ValueError:
         return None
 
 
-def _get_linux_cgroup_memory_limit_bytes() -> Optional[int]:
+def _get_linux_cgroup_memory_limit_bytes() -> int | None:
     """Return the effective Linux container memory ceiling when constrained."""
     if not sys.platform.startswith("linux"):
         return None
@@ -694,12 +676,12 @@ def _get_linux_cgroup_memory_limit_bytes() -> Optional[int]:
             # Some cgroup v1 hosts use a huge sentinel for "unlimited".
             if 0 < limit < 1 << 60:
                 return limit
-        except (OSError, ValueError):
+        except OSError, ValueError:
             continue
     return None
 
 
-def get_usable_memory_bytes() -> Optional[int]:
+def get_usable_memory_bytes() -> int | None:
     """Return memory usable by this process, respecting Linux containers."""
     physical = get_total_physical_memory_bytes()
     container_limit = _get_linux_cgroup_memory_limit_bytes()
@@ -786,14 +768,14 @@ def get_openai_config() -> dict:
 
 def set_openai_config(
     *,
-    api_key: Optional[str] = None,
-    model: Optional[str] = None,
-    base_url: Optional[str] = None,
-    max_tokens: Optional[int] = None,
-    timeout: Optional[int] = None,
-    max_workers: Optional[int] = None,
-    best_shot_prompt: Optional[str] = None,
-    rating_prompt: Optional[str] = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+    max_tokens: int | None = None,
+    timeout: int | None = None,
+    max_workers: int | None = None,
+    best_shot_prompt: str | None = None,
+    rating_prompt: str | None = None,
 ) -> None:
     settings = _get_settings()
 

@@ -1,7 +1,5 @@
 """Time-related helper utilities shared across workers."""
 
-from __future__ import annotations
-
 import math
 
 

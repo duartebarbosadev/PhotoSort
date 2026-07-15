@@ -1,5 +1,5 @@
-from __future__ import annotations
-from typing import Protocol, Dict, Tuple, Callable
+from typing import Protocol
+from collections.abc import Callable
 from PyQt6.QtCore import Qt
 
 
@@ -17,7 +17,7 @@ class HotkeyController:
     def __init__(self, ctx: HotkeyContext):
         self.ctx = ctx
         # Bindings map key -> (label, callable accepting skip_deleted)
-        self.bindings: Dict[int, Tuple[str, Callable[[bool], None]]] = {
+        self.bindings: dict[int, tuple[str, Callable[[bool], None]]] = {
             Qt.Key.Key_Left: ("LEFT/H", self.ctx.navigate_left_in_group),
             Qt.Key.Key_H: ("LEFT/H", self.ctx.navigate_left_in_group),
             Qt.Key.Key_Right: ("RIGHT/L", self.ctx.navigate_right_in_group),

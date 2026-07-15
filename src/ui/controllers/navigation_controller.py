@@ -1,5 +1,5 @@
-from __future__ import annotations
-from typing import List, Optional, Iterable, Protocol, Set
+from typing import Protocol
+from collections.abc import Iterable
 from PyQt6.QtCore import QModelIndex, Qt
 from PyQt6.QtWidgets import QAbstractItemView
 import logging
@@ -10,28 +10,28 @@ logger = logging.getLogger(__name__)
 
 
 class NavigationContext(Protocol):
-    def get_active_view(self) -> Optional[QAbstractItemView]: ...
+    def get_active_view(self) -> QAbstractItemView | None: ...
     def is_valid_image_index(self, proxy_index: QModelIndex) -> bool: ...
     def map_to_source(self, proxy_index: QModelIndex) -> QModelIndex: ...
     def item_from_source(self, source_index: QModelIndex): ...
     def get_group_sibling_images(self, current_proxy_index: QModelIndex): ...
     def find_first_visible_item(self) -> QModelIndex: ...
     def find_proxy_index_for_path(self, path: str) -> QModelIndex: ...
-    def get_all_visible_image_paths(self) -> List[str]: ...
+    def get_all_visible_image_paths(self) -> list[str]: ...
     def get_marked_deleted(self) -> Iterable[str]: ...
     def validate_and_select_image_candidate(
         self, proxy_index: QModelIndex, direction: str, log_skip: bool
     ): ...
-    def prefetch_navigation_previews(self, image_paths: List[str]) -> None: ...
+    def prefetch_navigation_previews(self, image_paths: list[str]) -> None: ...
 
 
 def navigate_group_cyclic(
-    group_paths: List[str],
-    current: Optional[str],
+    group_paths: list[str],
+    current: str | None,
     direction: str,
     skip_deleted: bool,
-    deleted_set: Set[str],
-) -> Optional[str]:
+    deleted_set: set[str],
+) -> str | None:
     if not group_paths:
         return None
     if current not in group_paths:
@@ -47,12 +47,12 @@ def navigate_group_cyclic(
 
 
 def navigate_linear(
-    all_visible: List[str],
-    current: Optional[str],
+    all_visible: list[str],
+    current: str | None,
     direction: str,
     skip_deleted: bool,
-    deleted_set: Set[str],
-) -> Optional[str]:
+    deleted_set: set[str],
+) -> str | None:
     if not all_visible:
         return None
     if current not in all_visible:
@@ -87,7 +87,7 @@ class NavigationController:
                 data = item.data(Qt.ItemDataRole.UserRole)
                 if isinstance(data, dict):
                     current_path = data.get("path")
-        group_paths: List[str] = []
+        group_paths: list[str] = []
         if current_proxy_idx.isValid():
             _parent_group_idx, group_image_indices, cur_local_idx = (
                 self.ctx.get_group_sibling_images(current_proxy_idx)

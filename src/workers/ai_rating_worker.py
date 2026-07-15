@@ -3,7 +3,8 @@ import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
-from typing import Dict, Optional, Sequence, TYPE_CHECKING, List
+from typing import TYPE_CHECKING
+from collections.abc import Sequence
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -33,11 +34,11 @@ class AiRatingWorker(QObject):
     def __init__(
         self,
         image_paths: Sequence[str],
-        image_pipeline: Optional["ImagePipeline"] = None,
-        max_workers: Optional[int] = None,
-        llm_config: Optional[LLMConfig] = None,
-        strategy: Optional[BaseBestShotStrategy] = None,
-        parent: Optional[QObject] = None,
+        image_pipeline: ImagePipeline | None = None,
+        max_workers: int | None = None,
+        llm_config: LLMConfig | None = None,
+        strategy: BaseBestShotStrategy | None = None,
+        parent: QObject | None = None,
         max_retries: int = 3,
         retry_delay_seconds: float = 2.0,
     ) -> None:
@@ -53,8 +54,8 @@ class AiRatingWorker(QObject):
         self._max_retries = max(1, int(max_retries))
         self._retry_delay = max(0.0, float(retry_delay_seconds))
         self._executor_lock = threading.Lock()
-        self._executor: Optional[ThreadPoolExecutor] = None
-        self._futures: Dict[Future, str] = {}
+        self._executor: ThreadPoolExecutor | None = None
+        self._futures: dict[Future, str] = {}
 
     def stop(self) -> None:
         self._should_stop = True
@@ -66,8 +67,8 @@ class AiRatingWorker(QObject):
                 logger.debug("Failed to cancel AI rating strategy", exc_info=True)
 
     def _shutdown_executor(self, *, cancel: bool) -> None:
-        executor: Optional[ThreadPoolExecutor] = None
-        futures: List[Future] = []
+        executor: ThreadPoolExecutor | None = None
+        futures: list[Future] = []
         with self._executor_lock:
             executor = self._executor
             if executor is not None:
@@ -99,13 +100,13 @@ class AiRatingWorker(QObject):
             logger.error("AI rating strategy validation failed: %s", exc, exc_info=True)
             raise
 
-    def _rate_single(self, image_path: str) -> Optional[Dict[str, object]]:
+    def _rate_single(self, image_path: str) -> dict[str, object] | None:
         if self._should_stop:
             return None
         if self._strategy is None:
             raise RuntimeError("AI rating strategy not initialised")
         attempts = 0
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         while attempts < self._max_retries and not self._should_stop:
             attempts += 1
             try:
@@ -143,11 +144,11 @@ class AiRatingWorker(QObject):
                 return
 
             logger.info("Starting AI rating of %d images using LLM engine", total)
-            results: Dict[str, Dict[str, object]] = {}
+            results: dict[str, dict[str, object]] = {}
             failures: list[tuple[str, str]] = []
 
             executor = ThreadPoolExecutor(max_workers=self._max_workers)
-            futures: Dict[Future, str] = {}
+            futures: dict[Future, str] = {}
             with self._executor_lock:
                 self._executor = executor
                 self._futures = {}

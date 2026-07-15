@@ -12,7 +12,7 @@ to prevent DLL conflicts and ensure proper initialization order.
 import os
 import logging
 import threading
-from typing import Dict, Any, Optional, List
+from typing import Any
 from contextlib import contextmanager
 
 # Import our initialization module first
@@ -95,37 +95,37 @@ class PyExiv2ImageWrapper:
             raise PyExiv2Error("Image not opened")
         return self._img.get_mime_type()
 
-    def read_exif(self) -> Optional[Dict[str, Any]]:
+    def read_exif(self) -> dict[str, Any] | None:
         """Read EXIF metadata."""
         if self._img is None:
             raise PyExiv2Error("Image not opened")
         return self._img.read_exif()
 
-    def read_iptc(self) -> Optional[Dict[str, Any]]:
+    def read_iptc(self) -> dict[str, Any] | None:
         """Read IPTC metadata."""
         if self._img is None:
             raise PyExiv2Error("Image not opened")
         return self._img.read_iptc()
 
-    def read_xmp(self) -> Optional[Dict[str, Any]]:
+    def read_xmp(self) -> dict[str, Any] | None:
         """Read XMP metadata."""
         if self._img is None:
             raise PyExiv2Error("Image not opened")
         return self._img.read_xmp()
 
-    def modify_exif(self, exif_dict: Dict[str, Any]) -> None:
+    def modify_exif(self, exif_dict: dict[str, Any]) -> None:
         """Modify EXIF metadata."""
         if self._img is None:
             raise PyExiv2Error("Image not opened")
         self._img.modify_exif(exif_dict)
 
-    def modify_iptc(self, iptc_dict: Dict[str, Any]) -> None:
+    def modify_iptc(self, iptc_dict: dict[str, Any]) -> None:
         """Modify IPTC metadata."""
         if self._img is None:
             raise PyExiv2Error("Image not opened")
         self._img.modify_iptc(iptc_dict)
 
-    def modify_xmp(self, xmp_dict: Dict[str, Any]) -> None:
+    def modify_xmp(self, xmp_dict: dict[str, Any]) -> None:
         """Modify XMP metadata."""
         if self._img is None:
             raise PyExiv2Error("Image not opened")
@@ -184,7 +184,7 @@ class PyExiv2Operations:
     """
 
     @staticmethod
-    def get_comprehensive_metadata(image_path: str) -> Dict[str, Any]:
+    def get_comprehensive_metadata(image_path: str) -> dict[str, Any]:
         """
         Get comprehensive metadata for an image.
 
@@ -227,7 +227,7 @@ class PyExiv2Operations:
             raise PyExiv2Error(f"Metadata extraction failed: {e}") from e
 
     @staticmethod
-    def get_basic_info(image_path: str) -> Dict[str, Any]:
+    def get_basic_info(image_path: str) -> dict[str, Any]:
         """
         Get basic image information (dimensions, MIME type, file size).
 
@@ -299,7 +299,7 @@ class PyExiv2Operations:
             return False
 
     @staticmethod
-    def get_rating(image_path: str) -> Optional[int]:
+    def get_rating(image_path: str) -> int | None:
         """
         Get image rating from metadata.
 
@@ -326,7 +326,7 @@ class PyExiv2Operations:
                     if rating is not None:
                         try:
                             return int(rating)
-                        except (ValueError, TypeError):
+                        except ValueError, TypeError:
                             continue
 
                 return None
@@ -365,7 +365,7 @@ class PyExiv2Operations:
             return False
 
     @staticmethod
-    def batch_get_metadata(image_paths: List[str]) -> List[Dict[str, Any]]:
+    def batch_get_metadata(image_paths: list[str]) -> list[dict[str, Any]]:
         """
         Get metadata for multiple images.
 
@@ -386,16 +386,6 @@ class PyExiv2Operations:
                     {"file_path": path, "error": "Metadata extraction failed"}
                 )
         return results
-
-
-# Convenience function for backward compatibility
-def create_safe_image_context(image_path: str, encoding: str = "utf-8"):
-    """
-    Create a safe pyexiv2 image context.
-
-    This is an alias for safe_pyexiv2_image for backward compatibility.
-    """
-    return safe_pyexiv2_image(image_path, encoding)
 
 
 # Initialize on module import

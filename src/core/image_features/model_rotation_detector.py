@@ -5,14 +5,12 @@ torchvision, Pillow) and the ONNX session are loaded only when first needed.
 If anything is missing, detector stays disabled and returns 0.
 """
 
-from __future__ import annotations
-
 import glob
 import logging
 import os
 from dataclasses import dataclass
 import threading
-from typing import Optional, Protocol, runtime_checkable, Any
+from typing import Protocol, runtime_checkable, Any
 
 import numpy as np
 
@@ -48,30 +46,30 @@ class RotationDetectorProtocol(Protocol):  # pragma: no cover - structural typin
     def predict_rotation_angle(
         self,
         image_path: str,
-        image: Optional[object] = None,
+        image: object | None = None,
     ) -> int: ...
 
 
 try:  # pragma: no cover - optional pillow import for typing friendliness
     from PIL import Image as ImageType  # type: ignore
-except Exception:  # noqa: BLE001
+except Exception:
     ImageType = object  # type: ignore
 
 
-@dataclass
+@dataclass(slots=True)
 class _LazyState:
     tried_load: bool = False
     load_failed: bool = False
     failure_logged: bool = False
     session: Any = None
-    input_name: Optional[str] = None
-    output_name: Optional[str] = None
-    provider_name: Optional[str] = None
+    input_name: str | None = None
+    output_name: str | None = None
+    provider_name: str | None = None
     transforms: Any = None
 
 
 class ModelRotationDetector(RotationDetectorProtocol):
-    _instance: Optional["ModelRotationDetector"] = None
+    _instance: ModelRotationDetector | None = None
 
     def __new__(cls, *args, **kwargs):  # singleton pattern
         if cls._instance is None:
@@ -84,7 +82,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
     def predict_rotation_angle(
         self,
         image_path: str,
-        image: Optional[object] = None,
+        image: object | None = None,
     ) -> int:
         if not self._ensure_session_loaded():
             # If session loading failed and this is the first call to predict,
@@ -111,7 +109,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
             )
             predicted_idx = int(np.argmax(result[0], axis=1)[0])
             return CLASS_TO_ANGLE_MAP.get(predicted_idx, 0)
-        except Exception:  # noqa: BLE001
+        except Exception:
             if not self._state.failure_logged:
                 logger.error(
                     "Rotation inference failed; disabling detector.", exc_info=True
@@ -156,7 +154,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
             try:  # pragma: no cover
                 import onnxruntime as ort  # type: ignore
                 import torchvision.transforms as transforms  # type: ignore
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 s.load_failed = True
                 if not s.failure_logged:
                     logger.warning(
@@ -185,14 +183,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
                     "CoreMLExecutionProvider",
                     "CPUExecutionProvider",
                 ]
-                # Try get_available_providers(), fallback to get_all_providers() for older onnxruntime
-                try:
-                    available = ort.get_available_providers()
-                except AttributeError:
-                    try:
-                        available = ort.get_all_providers()
-                    except AttributeError:
-                        available = ["CPUExecutionProvider"]
+                available = ort.get_available_providers()
 
                 chosen = "CPUExecutionProvider"
                 for p in providers_pref:
@@ -205,7 +196,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
                 s.provider_name = chosen
                 logger.info("Rotation model loaded with provider %s", chosen)
                 return True
-            except Exception:  # noqa: BLE001
+            except Exception:
                 s.load_failed = True
                 if not s.failure_logged:
                     logger.error(
@@ -216,14 +207,13 @@ class ModelRotationDetector(RotationDetectorProtocol):
                 return False
 
     # --------------------------- Helper Functions ------------------------- #
-    def _resolve_model_path(self) -> Optional[str]:
+    def _resolve_model_path(self) -> str | None:
         """Resolve the ONNX model path across source and frozen bundles.
 
         Search order:
           1) Persistent user application-data models directory
           2) PyInstaller bundle directory (for an optionally bundled model)
           3) Project root (source development)
-          4) Current working directory (legacy source setup)
         """
         # Build candidate base dirs
         base_dirs = [get_app_models_dir()]
@@ -234,7 +224,6 @@ class ModelRotationDetector(RotationDetectorProtocol):
             os.path.join(os.path.dirname(__file__), "..", "..")
         )
         base_dirs.append(os.path.join(project_root, MODEL_SAVE_DIR))
-        base_dirs.append(os.path.join(os.getcwd(), MODEL_SAVE_DIR))
         base_dirs = list(dict.fromkeys(os.path.abspath(path) for path in base_dirs))
 
         model_name = get_orientation_model_name()
@@ -296,7 +285,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
         except FileNotFoundError:
             logger.error("Rotation detector: file not found %s", os.path.basename(path))
             return None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(
                 "Failed loading image for rotation detection %s: %s",
                 os.path.basename(path),

@@ -1,24 +1,22 @@
-from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional
 
 # Lightweight UI-agnostic description of how a marked/unmarked item should look.
 # The actual QColor / palette lookup happens in MainWindow; we only decide suffix logic here.
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DeletionPresentation:
     text: str
     is_marked: bool
-    is_best: Optional[bool]
-    is_blurred: Optional[bool]
+    is_best: bool | None
+    is_blurred: bool | None
 
 
 def build_item_text(
     basename: str,
     is_marked: bool,
-    is_best: Optional[bool],
-    is_blurred: Optional[bool],
+    is_best: bool | None,
+    is_blurred: bool | None,
 ) -> str:
     """Return the display text given mark + blur states.
 
@@ -41,8 +39,8 @@ def build_item_text(
 def build_presentation(
     basename: str,
     is_marked: bool,
-    is_best: Optional[bool],
-    is_blurred: Optional[bool],
+    is_best: bool | None,
+    is_blurred: bool | None,
 ) -> DeletionPresentation:
     return DeletionPresentation(
         text=build_item_text(basename, is_marked, is_best, is_blurred),

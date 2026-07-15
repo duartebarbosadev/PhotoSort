@@ -8,7 +8,12 @@ import pytest
 from PyQt6.QtWidgets import QApplication
 
 from core.best_photo_finder.config import SelectorConfig
-from core.best_photo_finder.errors import NoScorableImagesError, SelectionError
+from core.best_photo_finder.errors import (
+    FaceLandmarkerError,
+    IncompleteSelectionError,
+    NoScorableImagesError,
+    SelectionError,
+)
 from core.best_photo_finder.pipeline import PhotoSelector
 from ui.pick_best_step_widget import PickBestStepWidget
 from workers.pick_best_worker import PickBestWorker
@@ -57,7 +62,34 @@ def test_selector_includes_per_image_failures_in_no_scorable_error():
     assert "b.jpg: Could not read image: b.jpg" in str(error)
 
 
-def test_pick_best_worker_keeps_failure_reasons_when_cluster_is_skipped(monkeypatch):
+def test_selector_rejects_partial_technical_results():
+    class _PartiallyFailingTechnicalScorer(_FailingTechnicalScorer):
+        def score(self, path: Path, config: SelectorConfig):
+            if path.name == "b.jpg":
+                return super().score(path, config)
+            from core.best_photo_finder.models import TechnicalMetrics
+
+            return TechnicalMetrics(
+                blur_variance=100.0,
+                blur_penalty=0.0,
+                face_count=0,
+                closed_face_count=0,
+                eye_penalty=0.0,
+                max_face_area_ratio=0.0,
+                image_width=100,
+                image_height=100,
+            )
+
+    selector = PhotoSelector(
+        technical_scorer=_PartiallyFailingTechnicalScorer(),
+        aesthetic_scorer=_UnusedAestheticScorer(),
+    )
+
+    with pytest.raises(IncompleteSelectionError, match="requires every image"):
+        selector.select(["/tmp/a.jpg", "/tmp/b.jpg"])
+
+
+def test_pick_best_worker_stops_when_cluster_cannot_be_scored(monkeypatch):
     class _FakeSelector:
         def __init__(self, preview_loader=None, **_kwargs):
             self.preview_loader = preview_loader
@@ -71,28 +103,80 @@ def test_pick_best_worker_keeps_failure_reasons_when_cluster_is_skipped(monkeypa
                 ],
             )
 
+        def close(self):
+            pass
+
     monkeypatch.setattr("workers.pick_best_worker.PhotoSelector", _FakeSelector)
 
     worker = PickBestWorker({7: ["/tmp/a.jpg", "/tmp/b.jpg"]})
+    errors = []
     completed_payload = []
+    worker.error.connect(errors.append)
     worker.completed.connect(lambda payload: completed_payload.append(payload))
 
     worker.run()
 
-    cluster = completed_payload[0][7]
-    assert cluster["winner_path"] is None
-    assert cluster["failed"] == [
-        {
-            "path": "/tmp/a.jpg",
-            "status": "failed",
-            "failure_reason": "Could not read image preview.",
-        },
-        {
-            "path": "/tmp/b.jpg",
-            "status": "failed",
-            "failure_reason": "Could not read image preview.",
-        },
-    ]
+    assert completed_payload == []
+    assert len(errors) == 1
+    assert "cluster 7 could not be scored" in errors[0]
+
+
+def test_pick_best_worker_closes_selector_when_cancelled(monkeypatch):
+    closed = []
+
+    class _FakeSelector:
+        def __init__(self, **_kwargs):
+            pass
+
+        def select(self, paths):  # pragma: no cover - cancelled before selection
+            raise AssertionError(paths)
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr("workers.pick_best_worker.PhotoSelector", _FakeSelector)
+
+    worker = PickBestWorker({1: ["/tmp/a.jpg", "/tmp/b.jpg"]})
+    worker.stop()
+    worker.run()
+
+    assert closed == [True]
+
+
+def test_pick_best_worker_stops_on_face_landmarker_failure(monkeypatch):
+    class _FakeTechnicalScorer:
+        pass
+
+    class _FakeSelector:
+        def __init__(self, **_kwargs):
+            pass
+
+        def select(self, _paths):
+            raise FaceLandmarkerError("model could not load")
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(
+        "workers.pick_best_worker.OpenCvMediapipeTechnicalScorer",
+        _FakeTechnicalScorer,
+    )
+    monkeypatch.setattr("workers.pick_best_worker.PhotoSelector", _FakeSelector)
+
+    worker = PickBestWorker({1: ["/tmp/a.jpg", "/tmp/b.jpg"]})
+    errors = []
+    completed = []
+    closed = []
+    worker.error.connect(errors.append)
+    worker.completed.connect(completed.append)
+
+    worker.run()
+
+    assert completed == []
+    assert closed == [True]
+    assert len(errors) == 1
+    assert "Pick Best stopped" in errors[0]
+    assert "model could not load" in errors[0]
 
 
 def test_pick_best_widget_shows_failure_reason_for_unscored_image(monkeypatch):

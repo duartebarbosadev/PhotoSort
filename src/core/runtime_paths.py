@@ -1,11 +1,9 @@
 """Helpers for working with PyInstaller/runtime resource locations."""
 
-from __future__ import annotations
-
 import os
 import sys
 import tempfile
-from typing import List, Optional
+from pathlib import Path
 
 
 def is_frozen_runtime() -> bool:
@@ -13,7 +11,7 @@ def is_frozen_runtime() -> bool:
     return bool(getattr(sys, "frozen", False) or getattr(sys, "_MEIPASS", None))
 
 
-def resolve_runtime_root(fallback: Optional[str] = None) -> str:
+def resolve_runtime_root(fallback: str | None = None) -> str:
     """Resolve the base directory for resource lookups.
 
     When frozen, prefer PyInstaller's extraction directory, otherwise the
@@ -30,9 +28,9 @@ def resolve_runtime_root(fallback: Optional[str] = None) -> str:
     return os.getcwd()
 
 
-def iter_bundle_roots(include_executable_dir: bool = False) -> List[str]:
+def iter_bundle_roots(include_executable_dir: bool = False) -> list[str]:
     """Return candidate directories that may contain bundled resources."""
-    locations: List[str] = []
+    locations: list[str] = []
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         locations.append(meipass)
@@ -44,6 +42,7 @@ def iter_bundle_roots(include_executable_dir: bool = False) -> List[str]:
 _APP_NAME = "PhotoSort"
 _CACHE_ROOT_ENV = "PHOTOSORT_CACHE_ROOT"
 _DATA_ROOT_ENV = "PHOTOSORT_DATA_ROOT"
+FACE_LANDMARKER_MODEL_NAME = "face_landmarker.task"
 
 
 def _platform_cache_base() -> str:
@@ -83,7 +82,7 @@ def resolve_user_cache_dir(app_subdir: str) -> str:
     across multiple sibling directories.
     """
     override_root = os.environ.get(_CACHE_ROOT_ENV)
-    candidates: List[str] = []
+    candidates: list[str] = []
     if override_root:
         candidates.append(os.path.join(override_root, app_subdir))
     candidates.extend(
@@ -127,6 +126,30 @@ def resolve_user_data_dir(app_subdir: str) -> str:
 def get_app_models_dir() -> str:
     """Return the stable user-writable directory for downloaded ONNX models."""
     return resolve_user_data_dir("models")
+
+
+def resolve_face_landmarker_model_path() -> Path:
+    """Return the bundled MediaPipe Face Landmarker model path.
+
+    A user-managed copy takes precedence, followed by the frozen application's
+    resource directory and the source checkout's vendored asset.
+    """
+    candidates = [Path(get_app_models_dir()) / FACE_LANDMARKER_MODEL_NAME]
+    candidates.extend(
+        Path(root) / "models" / FACE_LANDMARKER_MODEL_NAME
+        for root in iter_bundle_roots(include_executable_dir=True)
+    )
+    project_root = Path(__file__).resolve().parents[2]
+    candidates.append(project_root / "assets" / "models" / FACE_LANDMARKER_MODEL_NAME)
+
+    for candidate in dict.fromkeys(path.resolve() for path in candidates):
+        if candidate.is_file():
+            return candidate
+
+    searched = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(
+        f"MediaPipe Face Landmarker model was not found. Searched: {searched}"
+    )
 
 
 def get_app_log_dir() -> str:

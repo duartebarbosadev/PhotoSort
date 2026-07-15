@@ -6,11 +6,9 @@ pages and makes a shortcut's visible label and actual binding share one source
 of truth.
 """
 
-from __future__ import annotations
-
 import sys
 from dataclasses import dataclass
-from typing import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut

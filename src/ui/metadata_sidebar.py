@@ -6,7 +6,7 @@ Displays comprehensive image metadata in a modern, elegant sidebar
 import os
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Any
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -22,6 +22,7 @@ from PyQt6.QtGui import QFont
 
 from core.media_utils import is_video_extension
 from core.utils.time_utils import format_duration
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,7 @@ class MetadataCard(QFrame):
 
         self.animation.start()
 
-    def add_info_row(self, label: str, value: str, value_color: Optional[str] = None):
+    def add_info_row(self, label: str, value: str, value_color: str | None = None):
         """Add an information row to the card"""
         row_widget = QWidget()
         row_widget.setObjectName("metadataRow")
@@ -176,7 +177,7 @@ class MetadataCard(QFrame):
         self.content_layout.addLayout(row)
 
     def add_comparison_row(
-        self, label: str, values: List[str], highlight_diff: bool = True
+        self, label: str, values: list[str], highlight_diff: bool = True
     ):
         """Add a row for comparing multiple values."""
         row_widget = QWidget()
@@ -229,8 +230,8 @@ class MetadataSidebar(QWidget):
         self.current_image_path = None
         self.raw_metadata = {}
         self.comparison_mode = False
-        self.current_image_paths_for_comparison: List[str] = []
-        self.raw_metadata_for_comparison: List[Dict[str, Any]] = []
+        self.current_image_paths_for_comparison: list[str] = []
+        self.raw_metadata_for_comparison: list[dict[str, Any]] = []
 
         self.setup_ui()
         self.setup_animations()
@@ -323,7 +324,7 @@ class MetadataSidebar(QWidget):
         """Show placeholder content when no image is selected"""
 
     def update_comparison(
-        self, image_paths: List[str], metadatas: List[Dict[str, Any]]
+        self, image_paths: list[str], metadatas: list[dict[str, Any]]
     ):
         """Update the sidebar to show a comparison of multiple images."""
         if len(image_paths) < 2 or len(image_paths) != len(metadatas):
@@ -347,8 +348,8 @@ class MetadataSidebar(QWidget):
     def update_metadata(
         self,
         image_path: str,
-        metadata: Dict[str, Any],
-        raw_exif: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any],
+        raw_exif: dict[str, Any] | None = None,
     ):
         """Update the sidebar with new metadata, resetting to single-image view."""
         self.comparison_mode = False
@@ -431,7 +432,7 @@ class MetadataSidebar(QWidget):
     def _format_bitrate(self, bitrate_bps: Any) -> str:
         try:
             bps = float(bitrate_bps)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return str(bitrate_bps)
         if bps <= 0:
             return "N/A"
@@ -441,18 +442,14 @@ class MetadataSidebar(QWidget):
             return f"{bps / 1_000:.0f} Kbps"
         return f"{bps:.0f} bps"
 
-    def _format_display_value(
-        self, value: Any, fmt: Optional[str], path: str = ""
-    ) -> str:
+    def _format_display_value(self, value: Any, fmt: str | None, path: str = "") -> str:
         """Centralized helper to format metadata values for display."""
         # Handle size as a special case first for clarity and robustness
         if fmt == "size_fallback":
             size_in_bytes = None
             if value is not None:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     size_in_bytes = int(value)
-                except (ValueError, TypeError):
-                    pass
             if size_in_bytes is None and path and os.path.exists(path):
                 try:
                     size_in_bytes = os.stat(path).st_size
@@ -494,7 +491,7 @@ class MetadataSidebar(QWidget):
                     formatted_val = f"f/{val:.1f}".replace(".0", "")
                     # logger.debug(f"Formatted aperture to: {formatted_val}")
                     return formatted_val
-                except (ValueError, TypeError, ZeroDivisionError):
+                except ValueError, TypeError, ZeroDivisionError:
                     logger.warning(
                         f"Could not format aperture value '{value}'.", exc_info=False
                     )
@@ -572,12 +569,12 @@ class MetadataSidebar(QWidget):
                         95: "Fired (Auto), Red-eye",
                     }
                     return flash_map.get(val_int, str(value))
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     return str(value)
             if isinstance(fmt, str) and "{}" in fmt:
                 return fmt.format(value)
             return str(value)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return str(value)
 
     def add_comparison_cards(self):
@@ -593,7 +590,7 @@ class MetadataSidebar(QWidget):
 
         num_images = len(self.current_image_paths_for_comparison)
 
-        def get_val(keys: List[str], image_index: int) -> Any:
+        def get_val(keys: list[str], image_index: int) -> Any:
             """Potent helper to get a value by trying multiple keys in both root and nested dicts."""
             if not (
                 self.raw_metadata_for_comparison
@@ -825,7 +822,7 @@ class MetadataSidebar(QWidget):
                                             date_str.split(".")[0], "%Y:%m:%d %H:%M:%S"
                                         )
                                         break
-                                    except (ValueError, TypeError, AttributeError):
+                                    except ValueError, TypeError, AttributeError:
                                         continue
 
                         # Fallback to filesystem creation/birth time
@@ -843,7 +840,7 @@ class MetadataSidebar(QWidget):
 
                     card.add_comparison_row("Created", creation_times)
                     rows_added += 1
-                except (FileNotFoundError, IndexError):
+                except FileNotFoundError, IndexError:
                     pass
 
             for field in card_def["fields"]:
@@ -896,7 +893,7 @@ class MetadataSidebar(QWidget):
                         try:
                             if w and h:
                                 val = (int(w) * int(h)) / 1_000_000
-                        except (ValueError, TypeError):
+                        except ValueError, TypeError:
                             pass
                     elif fmt == "special" and field["key"][0] == "format":
                         val = (
@@ -981,7 +978,7 @@ class MetadataSidebar(QWidget):
                             date_str.split(".")[0], "%Y:%m:%d %H:%M:%S"
                         )
                         break
-                    except (ValueError, TypeError, AttributeError):
+                    except ValueError, TypeError, AttributeError:
                         continue
 
             # Fallback to filesystem creation/birth time
@@ -1018,7 +1015,7 @@ class MetadataSidebar(QWidget):
                 width_int = int(width)
                 height_int = int(height)
                 card.add_info_row("Resolution", f"{width_int} × {height_int}")
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 card.add_info_row("Resolution", f"{width} × {height}")
             rows_added += 1
 
@@ -1026,7 +1023,7 @@ class MetadataSidebar(QWidget):
         if duration_seconds:
             try:
                 duration_text = format_duration(float(duration_seconds))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 duration_text = ""
             if duration_text:
                 card.add_info_row("Duration", duration_text)
@@ -1036,7 +1033,7 @@ class MetadataSidebar(QWidget):
         if fps:
             try:
                 card.add_info_row("Frame Rate", f"{float(fps):.2f} fps")
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 card.add_info_row("Frame Rate", str(fps))
             rows_added += 1
 
@@ -1321,7 +1318,7 @@ class MetadataSidebar(QWidget):
                 megapixels = (width_int * height_int) / 1_000_000
                 card.add_info_row("Dimensions", f"{width_int} × {height_int}")
                 card.add_info_row("Megapixels", f"{megapixels:.1f} MP")
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 card.add_info_row("Dimensions", f"{width} × {height}")
 
         # Color space
