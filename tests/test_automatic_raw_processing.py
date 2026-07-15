@@ -78,7 +78,6 @@ class TestAutomaticRawProcessing:
         methods_to_check = [
             "get_thumbnail_qpixmap",
             "get_preview_qpixmap",
-            "preload_thumbnails",
         ]
 
         for method_name in methods_to_check:
@@ -119,7 +118,7 @@ class TestAutomaticRawProcessing:
                     "is_raw_extension should be called at least once"
                 )
                 assert (
-                    mock_process.call_args.kwargs["fallback_decode_gate"]
+                    mock_process.call_args.kwargs["full_decode_gate"]
                     is pipeline._high_memory_decode_gate
                 )
 
@@ -144,32 +143,6 @@ class TestAutomaticRawProcessing:
             assert cache_key[2] == CACHE_SCHEMA_VERSION
             assert cache_key[5]  # RAW detection result for .arw
             assert cache_key[6]  # orientation
-
-    def test_preload_thumbnails_processes_each_file_individually(self):
-        """Test that preload_thumbnails processes each file with individual RAW detection."""
-        pipeline = ImagePipeline()
-
-        # Test with mixed file types
-        test_files = ["image1.jpg", "raw1.arw", "image2.png", "raw2.cr2"]
-
-        # Mock to avoid actual file operations
-        with (
-            patch.object(pipeline, "_get_pil_thumbnail") as mock_get_pil,
-            patch("src.core.image_pipeline.os.path.isfile") as mock_isfile,
-        ):
-            mock_isfile.return_value = True
-            mock_get_pil.return_value = None  # Simulate no thumbnail
-
-            # Call preload_thumbnails
-            pipeline.preload_thumbnails(test_files)
-
-            # Verify that _get_pil_thumbnail was called for each file
-            assert mock_get_pil.call_count == len(test_files)
-
-            # Verify each call had the correct file path
-            # Note: preload_thumbnails uses parallel processing, so order is non-deterministic
-            called_paths = [call[0][0] for call in mock_get_pil.call_args_list]
-            assert set(called_paths) == set(test_files)
 
     def test_get_thumbnail_qpixmap_handles_file_types_correctly(self):
         """Test that get_thumbnail_qpixmap processes different file types."""
@@ -221,7 +194,6 @@ class TestRawProcessingIntegration:
         assert hasattr(pipeline, "preview_cache")
         assert hasattr(pipeline, "get_thumbnail_qpixmap")
         assert hasattr(pipeline, "get_preview_qpixmap")
-        assert hasattr(pipeline, "preload_thumbnails")
 
         # Verify methods can be called (they will fail due to missing files, but parameters should be correct)
         try:
@@ -235,11 +207,6 @@ class TestRawProcessingIntegration:
             )
         except Exception:
             pass  # Expected to fail due to missing file
-
-        try:
-            pipeline.preload_thumbnails(["nonexistent1.jpg", "nonexistent2.arw"])
-        except Exception:
-            pass  # Expected to fail due to missing files
 
 
 def test_get_cached_thumbnail_qpixmap_does_not_generate_on_cache_miss(tmp_path):

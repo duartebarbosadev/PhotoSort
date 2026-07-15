@@ -6,7 +6,7 @@ Tests for the release notes generator script (updated for new implementation).
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 # Add scripts directory to path
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".github", "scripts"))
@@ -21,41 +21,23 @@ class TestReleaseNotesGenerator(unittest.TestCase):
         # Use a dummy key; in unit tests we won't actually call the API.
         self.generator = ReleaseNotesGenerator("dummy-api-key")
 
-    # -------------------------
-    # Fallback notes generation
-    # -------------------------
-    def test_fallback_notes_creation(self):
-        """Test that fallback notes are created when OpenAI fails."""
+    def test_generation_failure_is_not_hidden(self):
+        self.generator.client = MagicMock()
+        self.generator.client.chat.completions.create.side_effect = RuntimeError(
+            "API unavailable"
+        )
         commits = [
             {
                 "hash": "abc123456789",
-                "subject": "Add new feature",
-                "body": "",
-                "pr_number": "123",
-                "pr_title": "Add new feature",
-            },
-            {
-                "hash": "def456789012",
-                "subject": "Fix bug in image processing",
+                "subject": "Strict release generation",
                 "body": "",
                 "pr_number": None,
                 "pr_title": None,
-            },
+            }
         ]
-        result = self.generator._create_fallback_notes_from_commits(commits, "v1.0.0")
 
-        self.assertIn("Release v1.0.0", result)
-        self.assertIn("Add new feature", result)
-        self.assertIn("Fix bug in image processing", result)
-        self.assertIn("PR #123", result)
-        self.assertIn("automatically generated", result)
-
-    def test_fallback_notes_empty_commits(self):
-        """Test fallback notes with empty commit list."""
-        result = self.generator._create_fallback_notes_from_commits([], "v1.0.0")
-
-        self.assertIn("Release v1.0.0", result)
-        self.assertIn("could not be generated", result)
+        with self.assertRaisesRegex(RuntimeError, "API unavailable"):
+            self.generator.generate_release_notes(commits, "v1.0.0")
 
     # -------------------------
     # Git metadata helpers

@@ -393,8 +393,9 @@ class HuggingFaceAestheticScorer:
 
         image_size = config_size = 384
         if self._model is not None:
+            model_config = getattr(self._model, "config", None)
             image_size = int(
-                getattr(self._model.config, "image_size", config_size) or config_size
+                getattr(model_config, "image_size", config_size) or config_size
             )
 
         if image.size != (image_size, image_size):

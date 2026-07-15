@@ -388,15 +388,5 @@ class PyExiv2Operations:
         return results
 
 
-# Convenience function for backward compatibility
-def create_safe_image_context(image_path: str, encoding: str = "utf-8"):
-    """
-    Create a safe pyexiv2 image context.
-
-    This is an alias for safe_pyexiv2_image for backward compatibility.
-    """
-    return safe_pyexiv2_image(image_path, encoding)
-
-
 # Initialize on module import
 ensure_pyexiv2_initialized()

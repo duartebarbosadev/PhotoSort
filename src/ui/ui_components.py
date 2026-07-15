@@ -445,13 +445,11 @@ class BlurDetectionWorker(QObject):
         self,
         image_paths: list[str],
         blur_threshold: float,
-        apply_auto_edits_for_raw: bool,
         parent=None,
     ):
         super().__init__(parent)
         self._image_paths = image_paths  # Changed from image_data_list
         self._blur_threshold = blur_threshold
-        self._apply_auto_edits = apply_auto_edits_for_raw
         self._is_running = True
 
     def stop(self):
@@ -468,7 +466,6 @@ class BlurDetectionWorker(QObject):
             BlurDetector.detect_blur_in_batch(
                 image_paths=self._image_paths,
                 threshold=self._blur_threshold,
-                apply_auto_edits_for_raw_preview=self._apply_auto_edits,
                 status_update_callback=self.blur_status_updated.emit,  # Pass signal emitter directly
                 progress_callback=self.progress_update.emit,  # Pass signal emitter directly
                 should_continue_callback=self._should_continue,

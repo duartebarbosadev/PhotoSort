@@ -208,42 +208,19 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         Always uses the image pipeline to handle RAW files and other formats properly,
         as AI services typically don't support RAW formats natively.
         """
-        preview = None
-        if self.image_pipeline is not None:
-            try:
-                from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
+        if self.image_pipeline is None:
+            raise RuntimeError("AI analysis requires the shared image pipeline.")
 
-                preview = self.image_pipeline.get_analysis_image(
-                    image_path,
-                    target_size=ANALYSIS_CACHE_RESOLUTION,
-                )
-                if preview is not None and preview.mode != "RGB":
-                    preview = preview.convert("RGB")
-            except Exception:
-                logger.exception("Preview generation failed for %s", image_path)
+        from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
 
+        preview = self.image_pipeline.get_analysis_image(
+            image_path,
+            target_size=ANALYSIS_CACHE_RESOLUTION,
+        )
         if preview is None:
-            try:
-                # Fallback for standard formats only - avoid RAW files
-                ext = os.path.splitext(image_path)[1].lower()
-                if ext in {
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                    ".bmp",
-                    ".gif",
-                    ".tiff",
-                    ".tif",
-                    ".webp",
-                }:
-                    preview = Image.open(image_path).convert("RGB")
-                else:
-                    raise RuntimeError(
-                        f"Unsupported format for AI analysis: {ext}. Preview generation required."
-                    )
-            except Exception as exc:
-                logger.error("Failed to load image %s: %s", image_path, exc)
-                raise RuntimeError(f"Cannot load image for AI analysis: {exc}") from exc
+            raise RuntimeError(f"Cannot generate an AI preview for {image_path}.")
+        if preview.mode != "RGB":
+            preview = preview.convert("RGB")
 
         return preview
 

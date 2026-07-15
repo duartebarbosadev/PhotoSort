@@ -20,19 +20,18 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 from core.runtime_paths import (  # noqa: E402
     iter_bundle_roots,
+    is_frozen_runtime,
     resolve_runtime_root,
     get_app_log_dir,
 )
 
-# Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
-_pyexiv2_initialization_warning: str | None = None
+# Initialize pyexiv2 before any Qt imports; this is critical for Windows stability.
 try:
     from core.pyexiv2_init import ensure_pyexiv2_initialized
 
     ensure_pyexiv2_initialized()
 except Exception as e:
-    # Logging is imported immediately below; retain the warning until then.
-    _pyexiv2_initialization_warning = f"Failed to initialize pyexiv2: {e}"
+    raise RuntimeError("PhotoSort could not initialize its metadata runtime.") from e
 
 import logging  # noqa: E402
 import argparse  # noqa: E402
@@ -41,9 +40,6 @@ import traceback  # noqa: E402  # For global exception handler
 from PyQt6.QtCore import Qt, QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen  # noqa: E402
 from PyQt6.QtGui import QIcon, QPixmap, QFont, QFontDatabase  # noqa: E402
-
-if _pyexiv2_initialization_warning:
-    logging.getLogger(__name__).warning(_pyexiv2_initialization_warning)
 
 
 def _resolve_log_level(value: str | None = None) -> int:
@@ -59,38 +55,14 @@ def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
     Works in both source runs and frozen bundles (e.g., PyInstaller) by
     checking for the temporary extraction directory at runtime.
     """
+    base_dir = resolve_runtime_root(PROJECT_ROOT)
+    path = os.path.join(base_dir, "dark_theme.qss" if is_frozen_runtime() else filename)
     try:
-        base_dir = resolve_runtime_root(PROJECT_ROOT)
-
-        # Candidate locations, in order of preference
-        candidates = [
-            os.path.join(
-                base_dir, "dark_theme.qss"
-            ),  # bundled at top-level in frozen builds
-            os.path.join(base_dir, filename),  # e.g., src/ui/dark_theme.qss
-            os.path.abspath(filename),  # direct path from CWD
-        ]
-
-        for path in candidates:
-            try:
-                if os.path.exists(path) and os.path.isfile(path):
-                    logging.info(f"Loading stylesheet: {path}")
-                    with open(path, encoding="utf-8") as f:
-                        return f.read()
-            except PermissionError as pe:
-                logging.error(
-                    f"Permission denied when reading stylesheet '{path}': {pe}"
-                )
-                continue
-            except Exception as e_inner:
-                logging.error(f"Failed to read stylesheet '{path}': {e_inner}")
-                continue
-
-        logging.warning(f"Stylesheet not found: searched {candidates}")
-        return ""
+        logging.info("Loading stylesheet: %s", path)
+        with open(path, encoding="utf-8") as stylesheet:
+            return stylesheet.read()
     except Exception as e:
-        logging.error(f"Failed to load stylesheet '{filename}': {e}")
-        return ""
+        raise RuntimeError(f"Required stylesheet could not be loaded: {path}") from e
 
 
 def _pick_ui_font_family() -> str:

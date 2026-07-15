@@ -1542,8 +1542,7 @@ class GroupingStepWidget(QWidget):
 
         tracked_paths = self._all_source_paths()
         root_path = self._source_root or self._common_root_for_paths(tracked_paths)
-        # The preview worker (or the compatibility injection in
-        # set_preview_plan) already supplied a complete inventory. Rewalking
+        # The preview plan already supplies a complete inventory. Rewalking
         # here used to block the UI a second time for every folder.
         all_paths = tracked_paths
         logger.info(

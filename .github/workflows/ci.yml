@@ -58,17 +58,37 @@ jobs:
           
 
       - name: Ruff Lint
-        run: ruff check .
+        run: |
+          ruff check .
+          ruff check --select G004 \
+            src/core/best_photo_finder \
+            src/core/embedding_cache.py \
+            src/core/image_file_ops.py \
+            src/core/media_utils.py \
+            src/core/metadata_io.py \
+            src/core/runtime_paths.py \
+            src/core/similarity_embedding_model.py \
+            src/ui/models/media_filter_proxy.py \
+            src/workers/pick_best_worker.py \
+            src/workers/thumbnail_preload_worker.py
 
       - name: Ruff Format Check
         run: ruff format --check .
 
       - name: Static Type Check
-        run: >-
-          mypy src/core/best_photo_finder/payloads.py
-          src/core/best_photo_finder/models.py
-          src/workers/pick_best_worker.py
-          src/ui/app_state.py
+        run: |
+          mypy \
+            src/core/best_photo_finder \
+            src/core/embedding_cache.py \
+            src/core/image_file_ops.py \
+            src/core/media_utils.py \
+            src/core/metadata_io.py \
+            src/core/runtime_paths.py \
+            src/core/similarity_embedding_model.py \
+            src/ui/app_state.py \
+            src/ui/models/media_filter_proxy.py \
+            src/workers/pick_best_worker.py \
+            src/workers/thumbnail_preload_worker.py
 
       - name: Run Tests
         env:
@@ -127,11 +147,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pip-audit
-          pip install -r requirements.txt || true
-      - name: pip-audit (non-failing)
-        continue-on-error: true
+          pip install -r requirements.txt
+      - name: pip-audit
         run: |
-          pip-audit -r requirements.txt -f json -o pip-audit.json || true
+          pip-audit -r requirements.txt -f json -o pip-audit.json
       - name: Upload pip-audit report
         uses: actions/upload-artifact@v7
         with:

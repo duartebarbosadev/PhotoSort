@@ -15,9 +15,6 @@ from core.image_processing.standard_image_processor import (
     StandardImageProcessor,
     SUPPORTED_STANDARD_EXTENSIONS,
 )
-from core.image_processing.image_orientation_handler import (
-    ImageOrientationHandler,
-)  # Local import
 from core.app_settings import calculate_max_workers
 
 logger = logging.getLogger(__name__)
@@ -61,29 +58,8 @@ class BlurDetector:
                     normalized_path, target_size=target_size
                 )
             else:
-                # Fallback for unknown extensions, try opening with Pillow directly
-                # This part might be redundant if StandardImageProcessor handles more or
-                # if we decide unsupported types are not processed for blur.
-                try:
-                    logger.warning(
-                        f"Unknown extension '{ext}'. Attempting to load with Pillow for blur detection."
-                    )
-                    with Image.open(normalized_path) as img:
-                        # StandardImageProcessor.load_for_blur_detection already handles exif_transpose
-                        # So, if we directly use Image.open, we should also apply it.
-                        img: Image.Image = ImageOrientationHandler.exif_transpose(img)
-                        img.thumbnail(target_size, Image.Resampling.LANCZOS)
-                        pil_img = img.convert("RGB")
-                except UnidentifiedImageError:
-                    logger.error(
-                        f"Pillow could not identify image for blur detection: {os.path.basename(normalized_path)}"
-                    )
-                    return None
-                except FileNotFoundError:
-                    logger.error(
-                        f"File not found for blur detection: {os.path.basename(normalized_path)}"
-                    )
-                    return None
+                logger.error("Unsupported image extension for blur detection: %s", ext)
+                return None
 
             return pil_img
 
@@ -98,7 +74,6 @@ class BlurDetector:
     def is_image_blurred(
         image_path: str,
         threshold: float = 100.0,
-        apply_auto_edits_for_raw_preview: bool = False,  # Kept for compatibility, but ignored
         target_size: tuple[int, int] = BLUR_DETECTION_PREVIEW_SIZE,
     ) -> bool | None:
         """
@@ -110,8 +85,6 @@ class BlurDetector:
         Args:
             image_path (str): The path to the image file.
             threshold (float): The threshold for blur detection. Lower values indicate more blur.
-            apply_auto_edits_for_raw_preview (bool): This parameter is ignored. Auto-edits are
-                                                     always disabled for blur detection on RAW files.
             target_size (Tuple[int, int]): The target size for the image used in blur detection.
 
         Returns:
@@ -169,7 +142,6 @@ class BlurDetector:
     def _detect_blur_task(
         image_path: str,
         threshold: float,
-        apply_auto_edits_for_raw_preview: bool,
         target_size: tuple[int, int],
         status_update_callback: Callable[[str, bool | None], None] | None,
     ) -> None:
@@ -178,7 +150,7 @@ class BlurDetector:
         """
         try:
             is_blurred = BlurDetector.is_image_blurred(
-                image_path, threshold, apply_auto_edits_for_raw_preview, target_size
+                image_path, threshold, target_size
             )
             if status_update_callback:
                 status_update_callback(image_path, is_blurred)
@@ -193,7 +165,6 @@ class BlurDetector:
     def detect_blur_in_batch(
         image_paths: list[str],
         threshold: float = 100.0,
-        apply_auto_edits_for_raw_preview: bool = False,
         target_size: tuple[int, int] = BLUR_DETECTION_PREVIEW_SIZE,
         status_update_callback: Callable[[str, bool | None], None] | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
@@ -227,7 +198,6 @@ class BlurDetector:
                     BlurDetector._detect_blur_task,
                     image_path,
                     threshold,
-                    apply_auto_edits_for_raw_preview,
                     target_size,
                     status_update_callback,  # Pass the callback to the task
                 )

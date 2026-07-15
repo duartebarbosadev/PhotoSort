@@ -107,29 +107,12 @@ class RotationApplicationWorker(QObject):
                     False,
                 )
             elif needs_lossy:
-                # Try lossy rotation
-                logger.info(f"Attempting lossy rotation for '{filename}'.")
-                t3 = time.perf_counter()
-                success = MetadataProcessor.rotate_image(
-                    file_path,
-                    direction,
-                    update_metadata_only=False,
-                    exif_disk_cache=self.exif_disk_cache,
+                strict_message = (
+                    f"Lossless rotation failed for {filename}; PhotoSort will not "
+                    "rewrite JPEG pixels with lossy encoding."
                 )
-                t4 = time.perf_counter()
-                logger.debug(f"Lossy rotation for '{filename}' took {t4 - t3:.2f}s.")
-
-                if success:
-                    return (
-                        file_path,
-                        direction,
-                        True,
-                        f"Rotated {filename} {rotation_degrees}° (lossy)",
-                        True,
-                    )
-                else:
-                    logger.error(f"Lossy rotation failed for '{filename}'.")
-                    return (file_path, direction, False, "Rotation failed", False)
+                logger.error(strict_message)
+                return (file_path, direction, False, strict_message, False)
             else:
                 logger.error(f"Rotation not supported for '{filename}': {message}")
                 return (file_path, direction, False, message, False)

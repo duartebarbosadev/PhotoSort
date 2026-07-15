@@ -2,6 +2,7 @@ import logging
 import time
 from dataclasses import dataclass
 from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 
@@ -163,8 +164,8 @@ class SimilarityEmbeddingModel:
         self.allow_download = allow_download
         self.progress_callback = progress_callback
         self.snapshot_path: str | None = None
-        self.processor = None
-        self.model = None
+        self.processor: Any | None = None
+        self.model: Any | None = None
         self.device = "cpu"
 
     @property
@@ -206,16 +207,18 @@ class SimilarityEmbeddingModel:
         if self.progress_callback:
             self.progress_callback(-1, f"Loading {self.model_name} weights")
 
-        self.processor = AutoImageProcessor.from_pretrained(
+        processor = AutoImageProcessor.from_pretrained(
             self.snapshot_path,
             local_files_only=True,
         )
-        self.model = AutoModel.from_pretrained(
+        model = AutoModel.from_pretrained(
             self.snapshot_path,
             local_files_only=True,
         )
-        self.model.to(self.device)
-        self.model.eval()
+        model.to(self.device)
+        model.eval()
+        self.processor = processor
+        self.model = model
         logger.info(
             "Similarity model loaded in %.4fs", time.perf_counter() - load_start
         )
@@ -273,6 +276,8 @@ class SimilarityEmbeddingModel:
 
         if not images:
             return np.empty((0, 0), dtype=np.float32)
+        if self.processor is None or self.model is None:
+            raise RuntimeError("Similarity embedding model is not loaded.")
 
         encoded_chunks = []
         for start in range(0, len(images), SIMILARITY_ENCODE_CHUNK_SIZE):

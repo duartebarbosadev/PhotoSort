@@ -6,6 +6,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.best_photo_finder.errors import (
     FaceLandmarkerError,
+    IncompleteSelectionError,
     NoScorableImagesError,
     NoSupportedImagesError,
 )
@@ -93,7 +94,7 @@ class PickBestWorker(QObject):
             return
 
         total = len(scorable_clusters)
-        logger.info(f"PickBestWorker: scoring {total} clusters.")
+        logger.info("PickBestWorker: scoring %d clusters.", total)
 
         # Share one PhotoSelector instance so the aesthetic model loads once
         selector = PhotoSelector(
@@ -144,7 +145,9 @@ class PickBestWorker(QObject):
                             img.to_dict() for img in selection.failed_images
                         ]
                         logger.debug(
-                            f"Cluster {cluster_id}: winner={os.path.basename(selection.winner.path)}"
+                            "Cluster %d: winner=%s",
+                            cluster_id,
+                            os.path.basename(selection.winner.path),
                         )
                         if cluster_result["failed"]:
                             logger.warning(
@@ -161,24 +164,40 @@ class PickBestWorker(QObject):
                         logger.error(message, exc_info=True)
                         self.error.emit(message)
                         return
-                    except (NoSupportedImagesError, NoScorableImagesError) as exc:
-                        if isinstance(exc, NoScorableImagesError):
+                    except (
+                        IncompleteSelectionError,
+                        NoSupportedImagesError,
+                        NoScorableImagesError,
+                    ) as exc:
+                        if isinstance(
+                            exc, (IncompleteSelectionError, NoScorableImagesError)
+                        ):
                             cluster_result["failed"] = [
                                 _failed_entry(path, reason)
                                 for path, reason in exc.failures
                             ]
-                        logger.warning(f"Cluster {cluster_id}: skipped — {exc}")
-                        # No winner; treat whole cluster as unscored
-                    except Exception as exc:
-                        logger.error(
-                            f"Cluster {cluster_id}: scoring failed — {exc}",
-                            exc_info=True,
+                        message = (
+                            f"Pick Best stopped because cluster {cluster_id} could not "
+                            f"be scored. {exc}"
                         )
-                        # Don't abort all — continue with remaining clusters
+                        logger.error(message)
+                        self.error.emit(message)
+                        return
+                    except Exception as exc:
+                        message = (
+                            f"Pick Best stopped because cluster {cluster_id} scoring "
+                            f"failed. {exc}"
+                        )
+                        logger.error(message, exc_info=True)
+                        self.error.emit(message)
+                        return
                 else:
                     logger.debug(
-                        f"Cluster {cluster_id}: fewer than 2 supported images, skipping scoring "
-                        f"({len(supported_paths)}/{len(all_paths)} supported)."
+                        "Cluster %d: fewer than 2 supported images, skipping scoring "
+                        "(%d/%d supported).",
+                        cluster_id,
+                        len(supported_paths),
+                        len(all_paths),
                     )
 
                 results[cluster_id] = cluster_result

@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Sequence
 from core.best_photo_finder.config import SelectorConfig
 from core.best_photo_finder.errors import (
     FaceLandmarkerError,
+    IncompleteSelectionError,
     NoScorableImagesError,
     NoSupportedImagesError,
     SelectionError,
@@ -165,6 +166,13 @@ class PhotoSelector:
                 + _format_failure_summary(failures),
                 failures=failures,
             )
+        if failed:
+            failures = _failure_details(failed)
+            raise IncompleteSelectionError(
+                "Pick Best requires every image in a cluster to be scored."
+                + _format_failure_summary(failures),
+                failures=failures,
+            )
 
         if preview_images:
             preview_batch = {
@@ -201,6 +209,13 @@ class PhotoSelector:
             failures = _failure_details(failed)
             raise NoScorableImagesError(
                 "Aesthetic scoring failed for every image."
+                + _format_failure_summary(failures),
+                failures=failures,
+            )
+        if failed:
+            failures = _failure_details(failed)
+            raise IncompleteSelectionError(
+                "Pick Best requires an aesthetic score for every image."
                 + _format_failure_summary(failures),
                 failures=failures,
             )

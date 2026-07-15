@@ -108,7 +108,7 @@ class MetadataIO:
                             task_queue.task_done()
                 except Exception as loop_err:
                     logger.error(
-                        f"MetadataIO worker loop error: {loop_err}", exc_info=True
+                        "MetadataIO worker loop error: %s", loop_err, exc_info=True
                     )
                 finally:
                     logger.info("MetadataIO worker thread exiting.")
@@ -154,7 +154,7 @@ class MetadataIO:
     def _call_in_worker(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Dispatch a callable to the dedicated worker and wait for result."""
         if not cls._should_use_worker_thread():
-            # Fallback to direct call (non-Windows, non-frozen dev runs)
+            # Native calls are thread-safe on non-Windows source runtimes.
             return fn(*args, **kwargs)
         # If we're already on the worker thread, execute directly to avoid deadlock
         try:
@@ -228,7 +228,7 @@ class MetadataIO:
     def _set_xmp_rating_inner(cls, operational_path: str, rating: int) -> bool:
         """Set XMP rating (0-5). Returns True if succeeded."""
         if not os.path.isfile(operational_path):
-            logger.warning(f"Cannot set rating; file missing: {operational_path}")
+            logger.warning("Cannot set rating; file missing: %s", operational_path)
             return False
         try:
             with safe_pyexiv2_image(operational_path) as img:
@@ -236,7 +236,9 @@ class MetadataIO:
                 return True
         except Exception as e:
             logger.error(
-                f"Error setting rating for {os.path.basename(operational_path)}: {e}",
+                "Error setting rating for %s: %s",
+                os.path.basename(operational_path),
+                e,
                 exc_info=True,
             )
             return False
@@ -250,7 +252,7 @@ class MetadataIO:
         """Read EXIF orientation value if present (1-8)."""
         if not os.path.isfile(operational_path):
             logger.info(
-                f"File missing when querying EXIF orientation: {operational_path}"
+                "File missing when querying EXIF orientation: %s", operational_path
             )
             return None
         try:
@@ -261,11 +263,15 @@ class MetadataIO:
         except Exception as e:
             if _is_file_missing_error(e, operational_path):
                 logger.warning(
-                    f"File missing while reading EXIF orientation: {operational_path} ({e!s})"
+                    "File missing while reading EXIF orientation: %s (%s)",
+                    operational_path,
+                    e,
                 )
             else:
                 logger.error(
-                    f"Error getting EXIF orientation for {os.path.basename(operational_path)}: {e}",
+                    "Error getting EXIF orientation for %s: %s",
+                    os.path.basename(operational_path),
+                    e,
                     exc_info=True,
                 )
             return None
@@ -281,7 +287,7 @@ class MetadataIO:
         """Write EXIF orientation (1-8). Returns True if succeeded."""
         if not os.path.isfile(operational_path):
             logger.warning(
-                f"Cannot set EXIF orientation; file missing: {operational_path}"
+                "Cannot set EXIF orientation; file missing: %s", operational_path
             )
             return False
         try:
@@ -290,7 +296,9 @@ class MetadataIO:
                 return True
         except Exception as e:
             logger.error(
-                f"Error setting EXIF orientation for {os.path.basename(operational_path)}: {e}",
+                "Error setting EXIF orientation for %s: %s",
+                os.path.basename(operational_path),
+                e,
                 exc_info=True,
             )
             return False
@@ -308,7 +316,7 @@ class MetadataIO:
         """Attempt to set XMP tiff Orientation. Returns True if succeeded."""
         if not os.path.isfile(operational_path):
             logger.warning(
-                f"Cannot set XMP orientation; file missing: {operational_path}"
+                "Cannot set XMP orientation; file missing: %s", operational_path
             )
             return False
         try:
@@ -317,7 +325,9 @@ class MetadataIO:
                 return True
         except Exception as e:
             logger.debug(
-                f"Could not set XMP orientation for {os.path.basename(operational_path)}: {e}"
+                "Could not set XMP orientation for %s: %s",
+                os.path.basename(operational_path),
+                e,
             )
             return False
 

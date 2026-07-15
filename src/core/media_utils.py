@@ -1,6 +1,6 @@
 import os
 
-SUPPORTED_IMAGE_EXTENSIONS = {
+SUPPORTED_STANDARD_IMAGE_EXTENSIONS = {
     ".jpg",
     ".jpeg",
     ".png",
@@ -8,18 +8,41 @@ SUPPORTED_IMAGE_EXTENSIONS = {
     ".tiff",  # Standard formats
     ".heic",
     ".heif",  # HEIC/HEIF formats
+}
+
+SUPPORTED_RAW_EXTENSIONS = {
     ".arw",
     ".cr2",
     ".cr3",
     ".nef",
-    ".dng",  # Sony, Canon, Nikon, Adobe RAW
+    ".nrw",
+    ".dng",
     ".orf",
     ".raf",
     ".rw2",
     ".pef",
-    ".srw",  # Olympus, Fuji, Panasonic, Pentax, Samsung RAW
-    ".raw",  # Generic RAW
+    ".srw",
+    ".raw",
+    ".ptx",
+    ".cap",
+    ".iiq",
+    ".eip",
+    ".fff",
+    ".mef",
+    ".mdc",
+    ".mos",
+    ".mrw",
+    ".erf",
+    ".kdc",
+    ".dcs",
+    ".dcr",
+    ".x3f",
+    ".rwl",
 }
+
+SUPPORTED_IMAGE_EXTENSIONS = (
+    SUPPORTED_STANDARD_IMAGE_EXTENSIONS | SUPPORTED_RAW_EXTENSIONS
+)
 
 SUPPORTED_VIDEO_EXTENSIONS = {
     ".mp4",

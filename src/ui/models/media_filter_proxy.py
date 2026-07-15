@@ -98,7 +98,3 @@ class MediaFilterProxyModel(QSortFilterProxyModel):
             self.filterAcceptsRow(child_row, source_index)
             for child_row in range(item.rowCount())
         )
-
-
-# Compatibility name retained for plugins and existing imports.
-CustomFilterProxyModel = MediaFilterProxyModel

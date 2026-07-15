@@ -142,8 +142,7 @@ class PreviewCache:
 
     def delete_all_for_path(self, file_path: str) -> None:
         """
-        Deletes all cache entries for a specific file path using an index.
-        Falls back to iterating the cache if the index is not found.
+        Deletes all cache entries for a specific file path using its index.
 
         Args:
             file_path: The file path to clear from cache.
@@ -170,28 +169,6 @@ class PreviewCache:
                         f"Deleted {len(key_list)} indexed preview cache entries for {os.path.basename(file_path)}."
                     )
                 return
-
-            # --- Fallback for caches created before indexing was implemented ---
-            logger.warning(
-                f"No cache index for '{os.path.basename(normalized_path)}'. Using fallback."
-            )
-            keys_to_delete = []
-            for key in self._cache:
-                # Skip index keys
-                if isinstance(key, str) and key.startswith("index_"):
-                    continue
-
-                if isinstance(key, tuple) and len(key) > 0 and isinstance(key[0], str):
-                    key_path = unicodedata.normalize("NFC", os.path.normpath(key[0]))
-                    if key_path == normalized_path:
-                        keys_to_delete.append(key)
-
-            if keys_to_delete:
-                for key in keys_to_delete:
-                    self._cache.pop(key, default=None)
-                logger.info(
-                    f"Deleted {len(keys_to_delete)} preview cache entries for {os.path.basename(file_path)} via fallback."
-                )
 
         except Exception as e:
             logger.error(

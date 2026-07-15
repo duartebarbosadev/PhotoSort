@@ -13,8 +13,6 @@ class SelectionContext(Protocol):
     """
 
     def get_active_view(self) -> Any | None: ...  # view must expose model()
-    @property
-    def proxy_model(self) -> Any: ...  # kept for backward compatibility
     def is_valid_image_item(self, proxy_index: QModelIndex) -> bool: ...
     def file_system_model_item_from_index(
         self, source_index: QModelIndex

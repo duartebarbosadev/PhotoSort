@@ -22,7 +22,6 @@ from core.similarity_utils import adaptive_dbscan_eps, l2_normalize_rows
 logger = logging.getLogger(__name__)
 
 AD_HOC_SELECTION_CLUSTER_ID = -1
-THUMBNAIL_PRELOAD_PROGRESS_LOG_INTERVAL = 100
 PICK_BEST_REFINEMENT_EPS = 0.04
 PICK_BEST_REFINEMENT_MIN_SAMPLES = 2
 
@@ -137,8 +136,6 @@ class AppController(QObject):
         self.main_window = main_window
         self.app_state = app_state
         self.worker_manager = worker_manager
-        self._last_thumbnail_preload_logged = 0
-
         # Track pending rotations for batch preview regeneration
         self._pending_rotated_paths: list[str] = []
         # Cache volume at preview-preload start, used for per-run diagnostics.
@@ -230,17 +227,6 @@ class AppController(QObject):
         )
         self.worker_manager.rotation_application_error.connect(
             self.handle_rotation_application_error
-        )
-
-        # Thumbnail Preload Worker
-        self.worker_manager.thumbnail_preload_progress.connect(
-            self.handle_thumbnail_preload_progress
-        )
-        self.worker_manager.thumbnail_preload_finished.connect(
-            self.handle_thumbnail_preload_complete
-        )
-        self.worker_manager.thumbnail_preload_error.connect(
-            self.handle_thumbnail_preload_error
         )
 
         # Best Shot Worker
@@ -606,7 +592,6 @@ class AppController(QObject):
         self.worker_manager.start_blur_detection(
             image_data_list,
             self.main_window.blur_detection_threshold,
-            True,  # Always enable processing for RAW files
         )
 
     def start_auto_rotation_analysis(self):
@@ -2239,34 +2224,3 @@ class AppController(QObject):
         self.main_window.statusBar().showMessage(
             f"Error applying rotations: {error_message}", 5000
         )
-
-    def handle_thumbnail_preload_progress(self, current: int, total: int, message: str):
-        """Handle progress updates from thumbnail preload worker."""
-        should_log = (
-            current == 1
-            or current % THUMBNAIL_PRELOAD_PROGRESS_LOG_INTERVAL == 0
-            or current == total
-        )
-        if should_log and current != self._last_thumbnail_preload_logged:
-            self._last_thumbnail_preload_logged = current
-            logger.debug("Thumbnail preload: %d/%d - %s", current, total, message)
-        # Optional: Update status bar or progress indicator
-        # For now, just log - thumbnails load silently in background
-
-    def handle_thumbnail_preload_complete(self, image_paths=None):
-        """Apply newly cached thumbnails only to their matching UI items."""
-        self._last_thumbnail_preload_logged = 0
-        completed_paths = list(image_paths or [])
-        logger.info("Thumbnail preloading completed for %d paths", len(completed_paths))
-        self.main_window._update_thumbnails_from_cache(completed_paths)
-        if self._supports_grouping_workflow_ui():
-            self.main_window.grouping_step_widget.refresh_cached_thumbnails(
-                completed_paths
-            )
-        self.main_window.schedule_visible_thumbnail_load()
-
-    def handle_thumbnail_preload_error(self, error_message: str):
-        """Handle errors from thumbnail preload worker."""
-        self._last_thumbnail_preload_logged = 0
-        logger.warning(f"Thumbnail preload error: {error_message}")
-        # Non-critical - don't show to user, thumbnails will load on demand

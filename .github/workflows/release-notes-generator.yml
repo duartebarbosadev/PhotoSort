@@ -4,11 +4,16 @@ on:
   release:
     types: [published, prereleased, created]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to generate notes for.'
+        required: true
+        type: string
   workflow_call:
     inputs:
       tag:
-        description: 'Release tag to generate notes for. If not provided, uses the release event tag or the most recent tag.'
-        required: false
+        description: 'Release tag to generate notes for.'
+        required: true
         type: string
 
 permissions:
@@ -53,13 +58,8 @@ jobs:
             TAG_NAME="${{ github.event.release.tag_name }}"
           fi
 
-          # Fallback to most recent tag for workflow_call, workflow_dispatch, or any other trigger
           if [[ -z "${TAG_NAME}" ]]; then
-            TAG_NAME="$(git tag --sort=-creatordate | head -n 1 || true)"
-          fi
-
-          if [[ -z "${TAG_NAME}" ]]; then
-            echo "No tag found/provided. Exiting."
+            echo "No release tag was provided."
             exit 1
           fi
 

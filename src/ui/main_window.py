@@ -91,7 +91,7 @@ from ui.controllers.status_controller import StatusController
 from ui.controllers.preview_load_controller import PreviewLoadController
 from ui.thumbnail_load_coordinator import ViewportThumbnailLoader
 from ui.models.media_filter_proxy import (
-    CustomFilterProxyModel,
+    MediaFilterProxyModel,
     RATING_FILTER_OPTIONS,
 )
 import contextlib
@@ -392,7 +392,7 @@ class MainWindow(QMainWindow):
         # One display-sized, implicitly shared QIcon per media path. Workflow
         # models can attach it without another disk read or decode.
         self._thumbnail_icons_by_path: dict[str, QIcon] = {}
-        self.proxy_model = CustomFilterProxyModel(self)
+        self.proxy_model = MediaFilterProxyModel(self)
         self.proxy_model.setSourceModel(self.file_system_model)
         self.proxy_model.app_state_ref = self.app_state  # Link AppState to proxy model
 
@@ -419,9 +419,6 @@ class MainWindow(QMainWindow):
         self.advanced_image_viewer.setMinimumSize(400, 300)
         center_pane_layout.addWidget(self.advanced_image_viewer, 1)
 
-        # Keep a reference to the first viewer for backward compatibility if needed,
-        # but primary interaction is now with the SynchronizedImageViewer itself.
-        self.image_view = self.advanced_image_viewer.image_viewers[0].image_view
         self._image_viewer_views = {
             v.image_view for v in self.advanced_image_viewer.image_viewers
         }
@@ -448,20 +445,6 @@ class MainWindow(QMainWindow):
         button_layout.addStretch(1)
 
         center_pane_layout.addLayout(button_layout)
-
-        # Create dummy view mode buttons for compatibility (not displayed)
-        self.view_list_button = QPushButton("List")
-        self.view_list_button.setCheckable(True)
-        self.view_list_button.setVisible(False)
-        self.view_icons_button = QPushButton("Icons")
-        self.view_icons_button.setCheckable(True)
-        self.view_icons_button.setVisible(False)
-        self.view_grid_button = QPushButton("Grid")
-        self.view_grid_button.setCheckable(True)
-        self.view_grid_button.setVisible(False)
-        self.view_date_button = QPushButton("Date")
-        self.view_date_button.setCheckable(True)
-        self.view_date_button.setVisible(False)
 
         # No bottom bar - image info will be shown in status bar only
 
@@ -1036,8 +1019,8 @@ class MainWindow(QMainWindow):
                         first_index, QAbstractItemView.ScrollHint.EnsureVisible
                     )
                 else:  # No items visible after filter
-                    self.image_view.clear()
-                    self.image_view.setText("No items match filter")
+                    self.advanced_image_viewer.clear()
+                    self.advanced_image_viewer.setText("No items match filter")
                     self.advanced_image_viewer.clear()
                     self.statusBar().showMessage("No items match current filter.")
 
@@ -1400,70 +1383,30 @@ class MainWindow(QMainWindow):
         return self._is_valid_image_item(proxy_index)
 
     def map_to_source(self, proxy_index):  # QModelIndex
-        active_view = self._get_active_file_view()
-        if not active_view:
-            from PyQt6.QtCore import QModelIndex
-
-            return QModelIndex()
-        model = active_view.model()
-        try:
-            return model.mapToSource(proxy_index)  # type: ignore[attr-defined]
-        except Exception:  # Fallback
-            from PyQt6.QtCore import QModelIndex
-
-            return QModelIndex()
+        return self.proxy_model.mapToSource(proxy_index)
 
     def item_from_source(self, source_index):
-        try:
-            return self.file_system_model.itemFromIndex(source_index)
-        except Exception:
-            return None
+        return self.file_system_model.itemFromIndex(source_index)
 
     def get_group_sibling_images(self, current_proxy_index):
-        # Defer to existing internal method if present
-        internal = getattr(self, "_get_group_sibling_images", None)
-        if callable(internal):
-            return internal(current_proxy_index)
-        # Fallback shape: (parent_idx, [current_proxy_index], [])
-        return None, [current_proxy_index], []
+        return self._get_current_group_sibling_images(current_proxy_index)
 
     def find_first_visible_item(self):  # Expected by NavigationController
         # Delegate to SelectionController (let exceptions surface during development)
         return self.selection_controller.find_first_visible_item()
 
     def find_proxy_index_for_path(self, path: str):  # Expected public name
-        try:
-            return self._find_proxy_index_for_path(path)
-        except Exception:
-            from PyQt6.QtCore import QModelIndex
-
-            return QModelIndex()
+        return self._find_proxy_index_for_path(path)
 
     def validate_and_select_image_candidate(
         self, proxy_index, direction: str, log_skip: bool
     ):
-        validator = getattr(self, "_validate_and_select_image_candidate", None)
-        if callable(validator):
-            return validator(proxy_index, direction, log_skip)
-        # Minimal fallback: set current selection
-        active_view = self._get_active_file_view()
-        if active_view and proxy_index.isValid():
-            sel_model = active_view.selectionModel()
-            if sel_model:
-                try:
-                    flag = getattr(sel_model, "SelectionFlag", None)
-                    if flag is not None:
-                        sel_model.setCurrentIndex(proxy_index, flag.ClearAndSelect)  # type: ignore[attr-defined]
-                    else:
-                        sel_model.setCurrentIndex(proxy_index, 0)
-                except Exception:
-                    pass
+        return self._validate_and_select_image_candidate(
+            proxy_index, direction, log_skip
+        )
 
     def get_marked_deleted(self):  # Iterable[str] expected by NavigationController
-        try:
-            return self.app_state.get_marked_files()
-        except Exception:
-            return []
+        return self.app_state.get_marked_files()
 
     def _rebuild_rotation_view(self):
         self.file_system_model.clear()
@@ -1567,7 +1510,7 @@ class MainWindow(QMainWindow):
                         )  # Log progress so user can see what's happening
 
     def _apply_rating(self, file_path: str, rating: int):
-        """Apply rating to a specific file path (legacy method - now uses background worker)."""
+        """Handle a viewer rating request through the shared background worker."""
         if not os.path.exists(file_path):
             return
         # Use the background worker for all rating operations
@@ -1699,9 +1642,7 @@ class MainWindow(QMainWindow):
     def _get_active_file_view(self):
         return self.left_panel.get_active_view() if self.left_panel else None
 
-    # --- SelectionController protocol adapter methods ---
-    # These lightweight wrappers let SelectionController interact with the
-    # existing MainWindow API without renaming legacy methods yet.
+    # --- SelectionController protocol methods ---
 
     def is_valid_image_item(self, proxy_index: QModelIndex) -> bool:  # protocol alias
         return self._is_valid_image_item(proxy_index)
@@ -2030,10 +1971,6 @@ class MainWindow(QMainWindow):
                 current_item_local_idx,
             )
         return parent_proxy_idx, sibling_image_items, current_item_local_idx
-
-    # Backwards-compatible alias used by get_group_sibling_images adapter
-    def _get_group_sibling_images(self, current_proxy_index: QModelIndex):
-        return self._get_current_group_sibling_images(current_proxy_index)
 
     def _validate_and_select_image_candidate(
         self, candidate_idx: QModelIndex, direction: str, skip_deleted: bool
@@ -3249,38 +3186,6 @@ class MainWindow(QMainWindow):
         item.setToolTip(tooltip)
 
         # Text decoration for best-shot winners is handled centrally in DeletionMarkController.
-
-    def _remove_temporary_best_labels(self):
-        """Remove temporary best-shot labels (legacy prefix/suffix) from all items."""
-        logger.debug("Removing temporary best-shot labels from items")
-
-        def remove_label_recursive(parent_item: QStandardItem):
-            """Recursively remove best-shot indicators from all items."""
-            for row in range(parent_item.rowCount()):
-                child_item = parent_item.child(row)
-                if not child_item:
-                    continue
-
-                text = child_item.text() or ""
-                modified = text
-                if modified.startswith("[BEST] "):
-                    modified = modified.replace("[BEST] ", "", 1)
-                if modified.endswith(" (Best)"):
-                    modified = modified[: -len(" (Best)")]
-                if modified != text:
-                    child_item.setText(modified)
-
-                # Recurse into children (for grouped/folder views)
-                if child_item.hasChildren():
-                    remove_label_recursive(child_item)
-
-        # Process root items
-        for row in range(self.file_system_model.rowCount()):
-            item = self.file_system_model.item(row)
-            if item:
-                remove_label_recursive(item)
-
-        logger.debug("Finished removing temporary best-shot labels")
 
     def _update_thumbnails_from_cache(self, image_paths: list[str] | None = None):
         """

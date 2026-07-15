@@ -11,28 +11,19 @@ import argparse
 import re
 import logging
 from typing import Any
+from openai import OpenAI
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
-    logger.warning(
-        "OpenAI library not installed. Release notes generation will use fallback mode."
-    )
 
 
 class ReleaseNotesGenerator:
     """Generates release notes using OpenAI API based on git differences."""
 
     def __init__(self, api_key: str, model: str | None = None):
-        self.client = None
-        if OpenAI is not None:
-            # The OpenAI client reads org/project from env if present
-            self.client = OpenAI(api_key=api_key)
+        # The OpenAI client reads org/project from env if present.
+        self.client = OpenAI(api_key=api_key)
         # Allow override via env OPENAI_MODEL; default to a cost-effective model
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
@@ -262,12 +253,6 @@ Please create release notes that:
 Format the response as clean markdown without code blocks around the entire response.
 """
 
-        if not self.client:
-            logger.warning(
-                "OpenAI client unavailable; falling back to commit-derived release notes."
-            )
-            return self._create_fallback_notes_from_commits(commits, tag_name)
-
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -283,44 +268,9 @@ Format the response as clean markdown without code blocks around the entire resp
             )
             return response.choices[0].message.content.strip()
 
-        except Exception as e:
-            logger.error(f"Failed to generate release notes with OpenAI: {e}")
-            return self._create_fallback_notes_from_commits(commits, tag_name)
-
-    def _create_fallback_notes_from_commits(
-        self, commits: list[dict[str, Any]], tag_name: str
-    ) -> str:
-        """Create basic release notes from commit data if OpenAI fails."""
-        if not commits:
-            return f"## Release {tag_name}\n\nRelease notes could not be generated automatically."
-
-        changes: list[str] = []
-        pr_section: list[str] = []
-
-        for commit in commits:
-            change_line = f"- {commit['subject']}"
-            if commit["pr_number"]:
-                change_line += f" (PR #{commit['pr_number']})"
-                pr_section.append(
-                    f"- PR #{commit['pr_number']}: {commit['pr_title'] or commit['subject']}"
-                )
-            changes.append(change_line)
-
-        result = f"""## Release {tag_name}
-
-### Changes in this release:
-
-{chr(10).join(changes)}"""
-
-        if pr_section:
-            result += f"""
-
-### Related Pull Requests:
-
-{chr(10).join(pr_section)}"""
-
-        result += "\n\n*Note: Release notes were automatically generated from commit messages.*"
-        return result
+        except Exception:
+            logger.exception("Failed to generate release notes with OpenAI")
+            raise
 
 
 def main():
@@ -366,7 +316,7 @@ def main():
         if not commits:
             logger.warning("No commits found between releases")
 
-        # Generate notes via OpenAI (with fallback)
+        # Generate notes via OpenAI. Fail the workflow if generation fails.
         release_notes = generator.generate_release_notes(commits, args.tag_name)
 
         # Build repo URL from GitHub Actions env to enable SHA links

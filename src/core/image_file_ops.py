@@ -86,7 +86,7 @@ class ImageFileOperations:
             # Attempt to create destination folder if it doesn't exist
             try:
                 destination_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Created destination folder: {destination_folder}")
+                logger.info("Created destination folder: %s", destination_folder)
             except OSError as e:
                 return (
                     False,
@@ -103,7 +103,7 @@ class ImageFileOperations:
                     f"{source.stem}_{counter}{source.suffix}"
                 )
                 counter += 1
-            logger.debug(f"Destination file exists. Renaming to: {destination.name}.")
+            logger.debug("Destination file exists. Renaming to: %s.", destination.name)
 
         try:
             moved_path = source.move(destination)
@@ -126,13 +126,11 @@ class ImageFileOperations:
             tuple: (bool, str) indicating success and a message.
         """
         if not os.path.exists(file_path):
-            logger.warning(
-                f"File does not exist when trying to move to trash: {file_path}"
-            )
+            logger.warning("File does not exist when moving to trash: %s", file_path)
             return False, "File does not exist."
         try:
             send2trash.send2trash(file_path)
-            logger.info(f"Moved to trash: {os.path.basename(file_path)}.")
+            logger.info("Moved to trash: %s.", os.path.basename(file_path))
             return True, "File moved to trash."
         except Exception as e:
             error_msg = (

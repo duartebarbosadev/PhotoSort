@@ -25,3 +25,11 @@ class NoScorableImagesError(SelectionError):
     ) -> None:
         super().__init__(message)
         self.failures = failures or []
+
+
+class IncompleteSelectionError(SelectionError):
+    """Raised when strict selection cannot score every requested image."""
+
+    def __init__(self, message: str, *, failures: list[tuple[str, str]]) -> None:
+        super().__init__(message)
+        self.failures = failures

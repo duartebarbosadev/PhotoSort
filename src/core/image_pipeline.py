@@ -282,7 +282,7 @@ class ImagePipeline:
                         normalized_path,
                         apply_auto_edits,
                         THUMBNAIL_MAX_SIZE,
-                        fallback_decode_gate=self._high_memory_decode_gate,
+                        full_decode_gate=self._high_memory_decode_gate,
                     )
                 elif is_video_extension(ext):
                     pil_img = self._extract_video_thumbnail_with_overlay(
@@ -505,7 +505,7 @@ class ImagePipeline:
     ) -> Image.Image | None:
         """
         Generates a PIL image sized for display, without using preload cache.
-        This is the fallback if no suitable cached version (display or preloaded) is found.
+        This is the authoritative decode path when no suitable cached image exists.
         Automatically applies auto-edits for RAW files.
         """
         normalized_path = os.path.normpath(image_path)
@@ -631,7 +631,6 @@ class ImagePipeline:
         self,
         image_path: str,
         display_max_size: tuple[int, int] | None = None,
-        force_default_brightness: bool = False,
         *,
         memory_only: bool = False,
     ) -> QPixmap | None:
@@ -639,9 +638,7 @@ class ImagePipeline:
         Returns a preview QPixmap only if a suitable preview already exists in cache.
         Never generates a new preview on cache miss.
 
-        ``force_default_brightness`` is accepted for API compatibility with
-        :meth:`get_preview_qpixmap` but is ignored here; brightness is baked in
-        when previews are generated and stored in the cache.
+        Brightness is baked in when previews are generated and stored in the cache.
         ``memory_only`` also prevents disk-cache reads for latency-sensitive UI calls.
         """
         normalized_path = os.path.normpath(image_path)
@@ -790,59 +787,6 @@ class ImagePipeline:
     def _ensure_thumbnail_generated_and_cached(self, image_path: str) -> None:
         """Worker function for preload_thumbnails."""
         self.ensure_thumbnail_cached(image_path)
-
-    def preload_thumbnails(
-        self,
-        image_paths: list[str],
-        progress_callback: Callable[[int, int], None] | None = None,
-        should_continue_callback: Callable[[], bool] | None = None,
-    ) -> None:
-        """Preloads thumbnails for a list of media paths in parallel."""
-        total_files = len(image_paths)
-        processed_count = 0
-
-        logger.info(
-            f"Preloading thumbnails for {total_files} files (workers: {self._num_workers})..."
-        )
-
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self._num_workers
-        ) as executor:
-            futures_map: dict[concurrent.futures.Future, str] = {}
-            for image_path in image_paths:
-                if should_continue_callback and not should_continue_callback():
-                    logger.info(
-                        "Thumbnail preload cancelled by request. Halting new tasks."
-                    )
-                    break
-                future = executor.submit(
-                    self._ensure_thumbnail_generated_and_cached,
-                    image_path,
-                )
-                futures_map[future] = image_path
-
-            for future in concurrent.futures.as_completed(futures_map):
-                _ = futures_map[future]  # path, if needed for logging
-                try:
-                    future.result()  # Check for exceptions from worker
-                except Exception:
-                    logger.error(
-                        "Error during thumbnail preloading task", exc_info=True
-                    )
-
-                processed_count += 1
-                if progress_callback:
-                    progress_callback(processed_count, total_files)
-                if should_continue_callback and not should_continue_callback():
-                    # Cancel remaining futures if any
-                    for f_cancel in futures_map:
-                        if not f_cancel.done():
-                            f_cancel.cancel()
-                    logger.info("Thumbnail preload cancelled during processing.")
-                    break
-        logger.info(
-            f"Thumbnail preloading finished. Processed {processed_count}/{total_files}."
-        )
 
     def ensure_preview_cached(
         self,
@@ -1015,7 +959,7 @@ class ImagePipeline:
                 f"No preloaded preview found. Loading directly: {os.path.basename(normalized_path)}"
             )
 
-        # Fallback to loading directly
+        # Decode directly after a cache miss.
         pil_img: Image.Image | None = None
         ext = os.path.splitext(normalized_path)[1].lower()
 

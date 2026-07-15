@@ -3,7 +3,6 @@ from PIL import Image, ImageOps, UnidentifiedImageError, ImageFile
 import io
 import os
 import logging
-import time
 import threading
 from PIL import ImageEnhance
 from core.app_settings import (
@@ -13,6 +12,7 @@ from core.app_settings import (
     PRELOAD_MAX_RESOLUTION,
     BLUR_DETECTION_PREVIEW_SIZE,
 )
+from core.media_utils import SUPPORTED_RAW_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -21,23 +21,20 @@ logger = logging.getLogger(__name__)
 # they are here as they were in the original ImageHandler logic for these operations.
 
 
-# Helper function to check RAW extensions safely
-_rawpy_formats_checked = False
-_rawpy_supported_set: set[str] = set()
 DETAIL_LOG_INTERVAL = 250
 _raw_thumbnail_log_lock = threading.Lock()
 _raw_thumbnail_stats: dict[str, int] = {
     "calls": 0,
     "embedded": 0,
     "auto_edits": 0,
-    "fallback_postprocess": 0,
+    "decoded": 0,
 }
 _raw_preview_log_lock = threading.Lock()
 _raw_preview_stats: dict[str, int] = {
     "calls": 0,
     "embedded_preview": 0,
     "preview_auto_edits": 0,
-    "preview_fallback_postprocess": 0,
+    "preview_decoded": 0,
 }
 
 
@@ -54,11 +51,11 @@ def _record_raw_thumbnail_stat(stat_key: str, latest_basename: str) -> None:
 
     if should_log:
         logger.debug(
-            "RAW thumbnail summary after %d files: embedded=%d, auto_edits=%d, fallback_postprocess=%d (latest: %s)",
+            "RAW thumbnail summary after %d files: embedded=%d, auto_edits=%d, decoded=%d (latest: %s)",
             total_calls,
             stats_snapshot["embedded"],
             stats_snapshot["auto_edits"],
-            stats_snapshot["fallback_postprocess"],
+            stats_snapshot["decoded"],
             latest_basename,
         )
 
@@ -85,80 +82,19 @@ def _record_raw_preview_stat(
             else "n/a"
         )
         logger.debug(
-            "RAW preview summary after %d files: embedded=%d, auto_edits=%d, fallback_postprocess=%d (latest: %s, embedded_size: %s)",
+            "RAW preview summary after %d files: embedded=%d, auto_edits=%d, decoded=%d (latest: %s, embedded_size: %s)",
             total_calls,
             stats_snapshot["embedded_preview"],
             stats_snapshot["preview_auto_edits"],
-            stats_snapshot["preview_fallback_postprocess"],
+            stats_snapshot["preview_decoded"],
             latest_basename,
             size_label,
         )
 
 
 def is_raw_extension(ext: str) -> bool:
-    """Checks if the extension is a supported RAW format, handling rawpy errors."""
-    global _rawpy_formats_checked, _rawpy_supported_set
-    if not _rawpy_formats_checked:
-        check_start_time = time.perf_counter()
-        logger.info("Initializing rawpy supported formats set...")
-        try:
-            _rawpy_supported_set = rawpy.supported_formats()
-            logger.info("Successfully retrieved formats from rawpy.")
-        except AttributeError:
-            _rawpy_supported_set = {
-                ".arw",
-                ".cr2",
-                ".cr3",
-                ".nef",
-                ".nrw",  # Nikon RAW
-                ".dng",
-                ".orf",
-                ".raf",
-                ".rw2",
-                ".pef",
-                ".srw",
-                ".raw",
-                ".ptx",
-                ".cap",
-                ".iiq",
-                ".eip",
-                ".fff",
-                ".mef",
-                ".mdc",
-                ".mos",
-                ".mrw",
-                ".erf",
-                ".kdc",
-                ".dcs",
-                ".dcr",
-                ".x3f",
-                ".rwl",
-            }
-            logger.warning(
-                "rawpy.supported_formats() not available. Using a fallback list of RAW extensions."
-            )
-        except Exception as e:
-            logger.error(
-                f"Error getting rawpy supported formats: {e}. Using fallback list."
-            )
-            _rawpy_supported_set = {
-                ".arw",
-                ".cr2",
-                ".cr3",
-                ".nef",
-                ".dng",
-                ".orf",
-                ".raf",
-                ".rw2",
-                ".pef",
-                ".srw",
-                ".raw",
-            }
-        _rawpy_formats_checked = True
-        logger.info(
-            f"rawpy supported formats set initialized in {time.perf_counter() - check_start_time:.4f}s (Count: {len(_rawpy_supported_set)})"
-        )
-    return ext.lower() in _rawpy_supported_set
+    """Return whether an extension is supported by PhotoSort's RAW pipeline."""
+    return ext.lower() in SUPPORTED_RAW_EXTENSIONS
 
 
 def is_raw_file(file_path: str) -> bool:
@@ -177,7 +113,7 @@ class RawImageProcessor:
         image_path: str,
         apply_auto_edits: bool = False,
         thumbnail_max_size: tuple = THUMBNAIL_MAX_SIZE,
-        fallback_decode_gate: threading.Semaphore | None = None,
+        full_decode_gate: threading.Semaphore | None = None,
     ) -> Image.Image | None:
         """
         Generates a PIL.Image thumbnail from a RAW file.
@@ -217,8 +153,8 @@ class RawImageProcessor:
                     rawpy.LibRawNoThumbnailError,
                     rawpy.LibRawUnsupportedThumbnailError,
                 ):
-                    _record_raw_thumbnail_stat("fallback_postprocess", basename)
-                    # Fallback to processing the main image, optimized with half_size=True
+                    _record_raw_thumbnail_stat("decoded", basename)
+                    # Decode the authoritative RAW image when no embedded JPEG exists.
                     postprocess_params = {
                         "use_camera_wb": True,
                         "output_bps": 8,
@@ -234,13 +170,13 @@ class RawImageProcessor:
                         )
                         postprocess_params["no_auto_bright"] = True
 
-                    if fallback_decode_gate:
-                        fallback_decode_gate.acquire()
+                    if full_decode_gate:
+                        full_decode_gate.acquire()
                     try:
                         rgb = raw.postprocess(**postprocess_params)
                     finally:
-                        if fallback_decode_gate:
-                            fallback_decode_gate.release()
+                        if full_decode_gate:
+                            full_decode_gate.release()
                     temp_pil_img = Image.fromarray(rgb)
                     if apply_auto_edits:
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)
@@ -367,16 +303,16 @@ class RawImageProcessor:
                     logger.debug(
                         f"No suitable embedded thumbnail for {os.path.basename(normalized_path)}. Post-processing."
                     )
-                    pass  # Fall through to postprocessing
+                    pass  # Decode the RAW image below.
                 except Exception as e_thumb:
                     logger.warning(
                         f"Error processing embedded thumbnail for {os.path.basename(normalized_path)}: {e_thumb}"
                     )
-                    pass  # Fall through to postprocessing
+                    pass  # Decode the RAW image below.
 
-                # Attempt 2: Fallback to postprocessing (half_size for speed)
+                # Decode the authoritative RAW image when no suitable preview exists.
                 if pil_img is None:
-                    _record_raw_preview_stat("preview_fallback_postprocess", basename)
+                    _record_raw_preview_stat("preview_decoded", basename)
                     postprocess_params = {
                         "use_camera_wb": True,
                         "output_bps": 8,
@@ -572,9 +508,9 @@ class RawImageProcessor:
                     rawpy.LibRawNoThumbnailError,
                     rawpy.LibRawUnsupportedThumbnailError,
                 ):
-                    pass  # Fallback to postprocessing
+                    pass  # Decode the RAW image below.
 
-                if temp_pil_img is None:  # Fallback to postprocessing
+                if temp_pil_img is None:
                     postprocess_params = {
                         "use_camera_wb": True,
                         "output_bps": 8,

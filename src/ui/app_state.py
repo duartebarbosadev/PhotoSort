@@ -311,12 +311,7 @@ class AppState:
             )
             if winner is not None:
                 return winner.get("image_path") == file_path
-        # Restored legacy cache entries may not contain a cluster id.
-        return any(
-            winner.get("image_path") == file_path
-            for winner in self.best_shot_winners.values()
-            if isinstance(winner, dict)
-        )
+        return False
 
     def clear_pick_best_results(self):
         """Resets pick-best step results."""

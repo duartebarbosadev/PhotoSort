@@ -103,7 +103,6 @@ DEFAULT_BEST_SHOT_BATCH_SIZE = 3
 class LocalBestShotConstants:
     model_stride: int = 32
     tensor_cache_key: str = "_photosort_pyiqa_tensor"
-    eye_fallback_max_edge: int = 2048
 
 
 _LOCAL_BEST_SHOT_CONSTANTS = LocalBestShotConstants()
@@ -137,12 +136,8 @@ EASY_DELETE_WHITE_CLIP_FRACTION = (
     0.85  # fraction of pixels above white cutoff; above = overexposed
 )
 EASY_DELETE_WHITE_CLIP_VALUE = 245  # 0-255; pixels at/above this count as "white"
-EASY_DELETE_DARK_MEAN_THRESHOLD = (
-    15.0  # 0-255 mean brightness; below = near-black (legacy default)
-)
-EASY_DELETE_WHITE_MEAN_THRESHOLD = (
-    248.0  # 0-255 mean brightness; above = overexposed (legacy default)
-)
+EASY_DELETE_DARK_MEAN_THRESHOLD = 15.0  # 0-255 mean brightness; below = near-black
+EASY_DELETE_WHITE_MEAN_THRESHOLD = 248.0  # 0-255 mean brightness; above = overexposed
 EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01  # cosine distance; below = near-identical
 
 # Fix Rotation step

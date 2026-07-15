@@ -183,14 +183,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
                     "CoreMLExecutionProvider",
                     "CPUExecutionProvider",
                 ]
-                # Try get_available_providers(), fallback to get_all_providers() for older onnxruntime
-                try:
-                    available = ort.get_available_providers()
-                except AttributeError:
-                    try:
-                        available = ort.get_all_providers()
-                    except AttributeError:
-                        available = ["CPUExecutionProvider"]
+                available = ort.get_available_providers()
 
                 chosen = "CPUExecutionProvider"
                 for p in providers_pref:
@@ -221,7 +214,6 @@ class ModelRotationDetector(RotationDetectorProtocol):
           1) Persistent user application-data models directory
           2) PyInstaller bundle directory (for an optionally bundled model)
           3) Project root (source development)
-          4) Current working directory (legacy source setup)
         """
         # Build candidate base dirs
         base_dirs = [get_app_models_dir()]
@@ -232,7 +224,6 @@ class ModelRotationDetector(RotationDetectorProtocol):
             os.path.join(os.path.dirname(__file__), "..", "..")
         )
         base_dirs.append(os.path.join(project_root, MODEL_SAVE_DIR))
-        base_dirs.append(os.path.join(os.getcwd(), MODEL_SAVE_DIR))
         base_dirs = list(dict.fromkeys(os.path.abspath(path) for path in base_dirs))
 
         model_name = get_orientation_model_name()

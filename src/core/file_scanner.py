@@ -9,15 +9,11 @@ from .image_pipeline import ImagePipeline
 from .image_features.blur_detector import BlurDetector
 from .media_utils import (
     SUPPORTED_MEDIA_EXTENSIONS,
-    SUPPORTED_IMAGE_EXTENSIONS,
     is_video_extension,
 )
 from .app_settings import FILE_SCAN_EMIT_BATCH_SIZE
 
 logger = logging.getLogger(__name__)
-
-# Backward-compatible alias for image-only extensions.
-SUPPORTED_EXTENSIONS = SUPPORTED_IMAGE_EXTENSIONS
 
 
 class FileScanner(QObject):

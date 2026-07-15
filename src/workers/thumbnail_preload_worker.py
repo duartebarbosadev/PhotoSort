@@ -16,11 +16,6 @@ logger = logging.getLogger(__name__)
 class ThumbnailPreloadWorker(QObject):
     """Warm a folder while allowing viewport paths to jump ahead safely."""
 
-    # Legacy one-shot signals remain for callers/tests outside the session scheduler.
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(object)
-    error = pyqtSignal(str)
-
     session_batch_ready = pyqtSignal(str, object)
     session_progress = pyqtSignal(str, int, int, int, bool)
     session_finished = pyqtSignal(str, int, int)
@@ -286,31 +281,3 @@ class ThumbnailPreloadWorker(QObject):
                 self._attempted,
                 self._failures,
             )
-
-    def preload_thumbnails(self, image_paths: list[str]):
-        """Backward-compatible one-shot preload used by existing integrations."""
-        self._is_running = True
-        total = len(image_paths)
-        if total == 0:
-            self.finished.emit([])
-            return
-
-        def progress_callback(current: int, total_count: int):
-            if self._is_running:
-                self.progress.emit(
-                    current,
-                    total_count,
-                    f"Preloading thumbnails: {current}/{total_count}",
-                )
-
-        try:
-            self.image_pipeline.preload_thumbnails(
-                image_paths,
-                progress_callback=progress_callback,
-                should_continue_callback=lambda: self._is_running,
-            )
-            if self._is_running:
-                self.finished.emit(list(image_paths))
-        except Exception as exc:
-            logger.error("Error during thumbnail preload", exc_info=True)
-            self.error.emit(f"Error during thumbnail preload: {exc}")

@@ -107,10 +107,6 @@ class WorkerManager(QObject):
     )  # successful_count, failed_count
     rotation_application_error = pyqtSignal(str)
 
-    # Thumbnail Preload Signals (background, not blocking scan)
-    thumbnail_preload_progress = pyqtSignal(int, int, str)  # current, total, message
-    thumbnail_preload_finished = pyqtSignal(object)  # completed image paths
-    thumbnail_preload_error = pyqtSignal(str)
     thumbnail_session_batch_ready = pyqtSignal(str, object)
     thumbnail_session_progress = pyqtSignal(str, int, int, int, bool)
     thumbnail_session_finished = pyqtSignal(str, int, int)
@@ -404,7 +400,6 @@ class WorkerManager(QObject):
         self,
         image_data_list: list[dict[str, Any]],
         blur_threshold: float,
-        apply_auto_edits_for_raw: bool,
     ):
         from ui.ui_components import BlurDetectionWorker
 
@@ -416,9 +411,7 @@ class WorkerManager(QObject):
             for data in image_data_list
             if isinstance(data, dict) and "path" in data
         ]
-        self.blur_detection_worker = BlurDetectionWorker(
-            image_paths, blur_threshold, apply_auto_edits_for_raw
-        )
+        self.blur_detection_worker = BlurDetectionWorker(image_paths, blur_threshold)
         self.blur_detection_worker.moveToThread(self.blur_detection_thread)
 
         self.blur_detection_worker.progress_update.connect(self.blur_detection_progress)
@@ -991,42 +984,6 @@ class WorkerManager(QObject):
             return False
         worker.prioritize(image_paths)
         return True
-
-    def start_thumbnail_preload(self, image_paths: list[str]):
-        """Start preloading thumbnails in a background thread (non-blocking)."""
-        from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
-
-        if self.is_thumbnail_preload_running():
-            logger.warning("Thumbnail preload is already running")
-            return
-
-        logger.info(f"Starting thumbnail preload for {len(image_paths)} images...")
-
-        self.thumbnail_preload_thread = QThread()
-        self.thumbnail_preload_worker = ThumbnailPreloadWorker(
-            image_pipeline=self.image_pipeline
-        )
-        self.thumbnail_preload_worker.moveToThread(self.thumbnail_preload_thread)
-
-        # Connect signals
-        self.thumbnail_preload_worker.progress.connect(
-            self.thumbnail_preload_progress.emit
-        )
-        self.thumbnail_preload_worker.finished.connect(
-            self.thumbnail_preload_finished.emit
-        )
-        self.thumbnail_preload_worker.error.connect(self.thumbnail_preload_error.emit)
-        self.thumbnail_preload_worker.finished.connect(
-            self._cleanup_thumbnail_preload_worker
-        )
-
-        # Connect start signal
-        self.thumbnail_preload_thread.started.connect(
-            lambda: self.thumbnail_preload_worker.preload_thumbnails(image_paths)
-        )
-
-        # Start the thread
-        self.thumbnail_preload_thread.start()
 
     def _cleanup_thumbnail_preload_worker(self, *_args):
         """Clean up the thumbnail preload worker and thread."""
