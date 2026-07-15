@@ -299,6 +299,7 @@ class AppController(QObject):
         *,
         skip_grouping_step: bool = False,
         record_as_source: bool = True,
+        preserve_deletion_marks: bool = False,
     ):
         load_folder_start_time = time.perf_counter()
         logger.info("Loading folder: %s", folder_path)
@@ -312,7 +313,8 @@ class AppController(QObject):
             return
 
         marked_files = self.app_state.get_marked_files()
-        if marked_files:
+        preserved_marks = set(marked_files) if preserve_deletion_marks else set()
+        if marked_files and not preserve_deletion_marks:
             choice = (
                 self.main_window.dialog_manager.show_folder_change_confirmation_dialog(
                     marked_files
@@ -343,6 +345,8 @@ class AppController(QObject):
         self.worker_manager.stop_all_workers()
 
         self.app_state.clear_all_file_specific_data()
+        if preserved_marks:
+            self.app_state.marked_for_deletion.update(preserved_marks)
         self.main_window.reset_thumbnail_requests()
         self.main_window.reset_preview_requests()
         self.main_window.invalidate_last_displayed_preview()
@@ -1022,6 +1026,7 @@ class AppController(QObject):
             logger.info(
                 f"Successfully moved file to trash: {os.path.basename(file_path)}"
             )
+        return success, message
 
     def rename_image(self, old_path: str, new_path: str):
         """Renames an image file."""
@@ -1325,6 +1330,7 @@ class AppController(QObject):
             summary.output_root,
             skip_grouping_step=True,
             record_as_source=False,
+            preserve_deletion_marks=True,
         )
         self.main_window.finish_pending_close_after_grouping()
 

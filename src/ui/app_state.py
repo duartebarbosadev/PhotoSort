@@ -191,6 +191,7 @@ class AppState:
                 self.best_shot_winners.pop(cluster_removed, None)
 
         self.ai_rating_results.pop(file_path, None)
+        self.marked_for_deletion.discard(file_path)
 
         logger.debug(
             f"Removed data for {os.path.basename(file_path)}: "
@@ -248,6 +249,9 @@ class AppState:
 
         if self.focused_image_path == old_path:
             self.focused_image_path = new_path
+        if old_path in self.marked_for_deletion:
+            self.marked_for_deletion.discard(old_path)
+            self.marked_for_deletion.add(new_path)
 
     # Add more methods as needed, e.g., to get specific data,
     # update blur status, etc.

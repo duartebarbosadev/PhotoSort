@@ -2518,6 +2518,26 @@ QPushButton#groupingSecondaryButton:pressed {
     background-color: #2D3033;
 }
 
+QPushButton#groupingPreviewTrashButton {
+    min-width: 34px;
+    min-height: 28px;
+    background-color: #3A2927;
+    color: #FFB366;
+    border: 1px solid #765048;
+    border-radius: 7px;
+}
+
+QPushButton#groupingPreviewTrashButton:hover {
+    background-color: #55332E;
+    border-color: #D47A65;
+}
+
+QPushButton#groupingPreviewTrashButton:disabled {
+    background-color: #2D3033;
+    color: #777C80;
+    border-color: #3D4245;
+}
+
 /* Separator lines */
 QFrame#groupingBarSep {
     background-color: #333A3E;

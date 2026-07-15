@@ -40,11 +40,15 @@ def test_assignment_removal_and_rename_keep_index_consistent():
     state.image_files_data = [
         {"path": "old.jpg", "media_type": "image", "file_size": 42}
     ]
+    state.mark_for_deletion("old.jpg")
 
     state.update_path("old.jpg", "new.jpg")
     assert state.get_file_data_by_path("old.jpg") is None
     assert state.get_file_data_by_path("new.jpg")["path"] == "new.jpg"
+    assert not state.is_marked_for_deletion("old.jpg")
+    assert state.is_marked_for_deletion("new.jpg")
 
     state.remove_data_for_path("new.jpg")
     assert state.get_file_data_by_path("new.jpg") is None
+    assert not state.is_marked_for_deletion("new.jpg")
     assert state.media_summary() == MediaSummary()

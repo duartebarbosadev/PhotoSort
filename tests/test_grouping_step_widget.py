@@ -5,7 +5,7 @@ from unittest.mock import Mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtGui import QIcon, QPixmap
-from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMenu
 
 from src.core.grouping import GroupingGroup, GroupingPlan
 from src.ui.grouping_step_widget import (
@@ -409,7 +409,8 @@ def test_grouping_step_widget_hides_leaf_only_context_actions(tmp_path):
     assert "Expand all children" not in action_texts
     assert "Collapse all children" not in action_texts
     assert "Preview this file" not in action_texts
-    assert "Delete file" in action_texts
+    assert "Mark for Trash" in action_texts
+    assert "Move file to Trash now…" in action_texts
     assert "Move files now" not in action_texts
     assert "Send to Unassigned" not in action_texts
 
@@ -600,7 +601,7 @@ def test_grouping_step_widget_can_create_parent_directory(tmp_path, monkeypatch)
     assert widget.get_effective_plan().groups[0].group_label == "Trips/Beach"
 
 
-def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path, monkeypatch):
+def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
@@ -623,18 +624,54 @@ def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path, monkeypa
         str(source_root),
     )
 
-    monkeypatch.setattr(
-        "src.ui.grouping_step_widget.QMessageBox.question",
-        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    marks: set[str] = set()
+    widget.set_is_marked_func(marks.__contains__)
+    widget._folder_validation_pool = SimpleNamespace(start=lambda task: task.run())
+    widget.toggle_deletion_marks_requested.connect(marks.update)
+    widget._delete_item(widget._after_group_items_by_id["1"])
+    widget.refresh_deletion_state()
+
+    assert widget.get_effective_plan().groups[0].source_paths == [first]
+    assert widget.get_effective_plan().deleted_paths == []
+    assert marks == {first}
+    assert widget._after_file_items_by_path[first].text(0).endswith("(DELETED)")
+    assert widget.pending_grouping_action_lines() == []
+
+
+def test_grouping_step_widget_rejects_folder_mark_when_unshown_file_exists(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    (beach_dir / "a.jpg").write_bytes(b"preview")
+    (beach_dir / ".hidden.xmp").write_text("sidecar", encoding="utf-8")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+            filesystem_inventory_complete=True,
+        ),
+        str(source_root),
     )
+
+    requested: list[list[str]] = []
+    widget._folder_validation_pool = SimpleNamespace(start=lambda task: task.run())
+    widget.toggle_deletion_marks_requested.connect(requested.append)
     widget._delete_item(widget._after_group_items_by_id["1"])
 
-    assert widget.get_effective_plan().groups == []
-    assert widget.get_effective_plan().deleted_paths == [str(beach_dir)]
-    assert widget.pending_grouping_action_lines() == ["Delete folder Beach"]
+    assert requested == []
 
 
-def test_grouping_step_widget_can_delete_file_from_context(tmp_path, monkeypatch):
+def test_grouping_step_widget_can_mark_or_trash_file_from_context(tmp_path):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
@@ -666,25 +703,24 @@ def test_grouping_step_widget_can_delete_file_from_context(tmp_path, monkeypatch
         action.text(): action for action in menu.actions() if action.text()
     }
 
-    deleted_paths = []
-    monkeypatch.setattr(
-        "src.ui.grouping_step_widget.QMessageBox.question",
-        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
-    )
-    monkeypatch.setattr(
-        "src.ui.grouping_step_widget.ImageFileOperations.move_to_trash",
-        lambda path: (deleted_paths.append(path) or True, "Moved to trash."),
+    marks: set[str] = set()
+    trash_requests: list[tuple[str, list[str]]] = []
+    widget.set_is_marked_func(marks.__contains__)
+    widget.toggle_deletion_marks_requested.connect(marks.update)
+    widget.trash_requested.connect(
+        lambda target, paths: trash_requests.append((target, paths))
     )
 
-    actions_by_text["Delete file"].trigger()
+    actions_by_text["Mark for Trash"].trigger()
 
-    assert deleted_paths == []
-    assert widget.get_effective_plan().groups == []
-    assert widget.get_effective_plan().deleted_paths == [first]
-    assert widget.pending_grouping_action_lines() == [
-        "Delete file Beach/a.jpg",
-        "Remove empty folder Beach",
-    ]
+    assert marks == {first}
+    assert widget.get_effective_plan().groups[0].source_paths == [first]
+    assert widget.get_effective_plan().deleted_paths == []
+    assert trash_requests == []
+
+    actions_by_text["Move file to Trash now…"].trigger()
+
+    assert trash_requests == [(first, [first])]
 
 
 def test_grouping_step_widget_can_match_before_and_after_items(tmp_path):

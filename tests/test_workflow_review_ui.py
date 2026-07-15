@@ -9,11 +9,13 @@ from PyQt6.QtWidgets import QApplication, QWidget
 
 from ui.easy_delete_step_widget import EasyDeleteStepWidget
 from ui.fix_rotation_step_widget import FixRotationStepWidget
+from ui.grouping_step_widget import GroupingStepWidget
 from ui.pick_best_step_widget import PickBestStepWidget
 from ui.main_window import MainWindow
 from ui.workflow_review_components import (
     EASY_DELETE_SHORTCUTS,
     FIX_ROTATION_SHORTCUTS,
+    ORGANIZE_SHORTCUTS,
     PICK_BEST_SHORTCUTS,
 )
 
@@ -127,6 +129,7 @@ def test_pick_best_stages_initial_recommendations_in_shared_state():
 
 def test_visible_shortcut_specs_are_the_installed_source_of_truth():
     widgets_and_specs = (
+        (GroupingStepWidget(), ORGANIZE_SHORTCUTS),
         (EasyDeleteStepWidget(), EASY_DELETE_SHORTCUTS),
         (FixRotationStepWidget(), FIX_ROTATION_SHORTCUTS),
         (PickBestStepWidget(), PICK_BEST_SHORTCUTS),

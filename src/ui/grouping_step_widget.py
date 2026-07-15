@@ -3,10 +3,20 @@ import os
 import time
 import subprocess
 from contextlib import suppress
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import override
 
-from PyQt6.QtCore import QPoint, QSize, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import (
+    QObject,
+    QPoint,
+    QRunnable,
+    QSize,
+    Qt,
+    QThreadPool,
+    QTimer,
+    QUrl,
+    pyqtSignal,
+)
 from PyQt6.QtGui import (
     QAction,
     QBrush,
@@ -46,7 +56,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core.image_file_ops import ImageFileOperations
 from core.grouping import (
     GroupingGroup,
     GroupingPlan,
@@ -113,6 +122,79 @@ _DROP_TARGET_KINDS = {ITEM_GROUP, ITEM_DIRECTORY, ITEM_ROOT, ITEM_UNASSIGNED}
 _DRAGGABLE_KINDS = {ITEM_FILE, ITEM_GROUP}
 
 logger = logging.getLogger(__name__)
+
+
+def validate_directory_inventory(
+    directory_path: str, represented_paths: Iterable[str]
+) -> tuple[bool, str]:
+    """Reject folder deletion when any descendant entry is not represented."""
+    represented = {
+        os.path.normcase(os.path.normpath(path)) for path in represented_paths
+    }
+    discovered: set[str] = set()
+    try:
+        for current_root, dirnames, filenames in os.walk(
+            directory_path, followlinks=False
+        ):
+            for dirname in dirnames:
+                candidate = os.path.join(current_root, dirname)
+                if os.path.islink(candidate):
+                    discovered.add(os.path.normcase(os.path.normpath(candidate)))
+            for filename in filenames:
+                candidate = os.path.join(current_root, filename)
+                discovered.add(os.path.normcase(os.path.normpath(candidate)))
+    except OSError as exc:
+        return False, f"Folder safety check failed: {exc}"
+
+    missing_from_preview = discovered - represented
+    stale_preview = represented - discovered
+    if missing_from_preview or stale_preview:
+        details = []
+        if missing_from_preview:
+            details.append(f"{len(missing_from_preview)} unshown item(s)")
+        if stale_preview:
+            details.append(f"{len(stale_preview)} stale preview item(s)")
+        return (
+            False,
+            "Folder was not marked or trashed because it contains "
+            + " and ".join(details)
+            + ".",
+        )
+    return True, ""
+
+
+class _DirectoryInventorySignals(QObject):
+    completed = pyqtSignal(int, str, str, object, bool, str)
+
+
+class _DirectoryInventoryTask(QRunnable):
+    def __init__(
+        self,
+        request_id: int,
+        operation: str,
+        directory_path: str,
+        represented_paths: list[str],
+    ) -> None:
+        super().__init__()
+        self.request_id = request_id
+        self.operation = operation
+        self.directory_path = directory_path
+        self.represented_paths = represented_paths
+        self.signals = _DirectoryInventorySignals()
+
+    @override
+    def run(self) -> None:
+        safe, reason = validate_directory_inventory(
+            self.directory_path, self.represented_paths
+        )
+        self.signals.completed.emit(
+            self.request_id,
+            self.operation,
+            self.directory_path,
+            self.represented_paths,
+            safe,
+            reason,
+        )
 
 
 class DroppableGroupingTree(QTreeWidget):
@@ -361,6 +443,10 @@ class GroupingStepWidget(QWidget):
     back_requested = pyqtSignal()
     skip_requested = pyqtSignal()
     select_folder_requested = pyqtSignal()
+    toggle_deletion_marks_requested = pyqtSignal(list)
+    commit_deletion_marks_requested = pyqtSignal()
+    clear_deletion_marks_requested = pyqtSignal()
+    trash_requested = pyqtSignal(str, list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -371,7 +457,6 @@ class GroupingStepWidget(QWidget):
         self._editable_groups: list[GroupingGroup] = []
         self._editable_unassigned: list[str] = []
         self._editable_skipped: list[str] = []
-        self._editable_deleted: list[str] = []
         self._file_name_overrides: dict[str, str] = {}
         self._original_group_labels_by_path: dict[str, str] = {}
         self._original_group_labels_by_group_id: dict[str, str] = {}
@@ -383,6 +468,9 @@ class GroupingStepWidget(QWidget):
         self._syncing_tree_selection = False
         self._drag_in_progress = False
         self._current_preview_source_path: str | None = None
+        self._is_marked_func: Callable[[str], bool] = lambda _path: False
+        self._folder_validation_request_id = 0
+        self._folder_validation_pool = QThreadPool.globalInstance()
 
         self._before_root_item: QTreeWidgetItem | None = None
         self._after_root_item: QTreeWidgetItem | None = None
@@ -410,7 +498,10 @@ class GroupingStepWidget(QWidget):
                 "modes:Alt+5": lambda: self._shortcut_set_mode("location"),
                 "rename": self._shortcut_rename,
                 "new_folder": self._shortcut_new_folder,
-                "stage_remove": self._shortcut_stage_remove,
+                "toggle_delete": self._shortcut_toggle_delete,
+                "trash_now": self._shortcut_trash_now,
+                "commit_deletions": self.commit_deletion_marks_requested.emit,
+                "clear_deletions": self.clear_deletion_marks_requested.emit,
                 "apply": self._shortcut_apply,
             },
         )
@@ -565,6 +656,12 @@ class GroupingStepWidget(QWidget):
         self.large_preview_name.setObjectName("groupingSelectionName")
         self.large_preview_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.large_preview_name.setWordWrap(True)
+        self.preview_trash_button = QPushButton("🗑️")
+        self.preview_trash_button.setObjectName("groupingPreviewTrashButton")
+        self.preview_trash_button.setToolTip(
+            "Move the current image to Trash now (Delete / Backspace)"
+        )
+        self.preview_trash_button.setEnabled(False)
         self.folder_preview_page = QWidget()
         self.folder_preview_title = QLabel()
         self.folder_preview_title.setObjectName("groupingSelectionName")
@@ -714,7 +811,10 @@ class GroupingStepWidget(QWidget):
         img_layout.setContentsMargins(12, 12, 12, 10)
         img_layout.setSpacing(8)
         img_layout.addWidget(self.large_preview_view, 1)
-        img_layout.addWidget(self.large_preview_name)
+        preview_caption = QHBoxLayout()
+        preview_caption.addWidget(self.large_preview_name, 1)
+        preview_caption.addWidget(self.preview_trash_button)
+        img_layout.addLayout(preview_caption)
         folder_layout = QVBoxLayout(self.folder_preview_page)
         folder_layout.setContentsMargins(12, 12, 12, 10)
         folder_layout.setSpacing(8)
@@ -788,6 +888,7 @@ class GroupingStepWidget(QWidget):
         self.folder_preview_grid.itemClicked.connect(
             self._handle_folder_preview_item_activated
         )
+        self.preview_trash_button.clicked.connect(self._trash_current_preview)
         self._location_depth_group.buttonClicked.connect(
             self._on_location_depth_changed
         )
@@ -795,12 +896,12 @@ class GroupingStepWidget(QWidget):
 
     def _shortcut_item(self) -> QTreeWidgetItem | None:
         focus = QApplication.focusWidget()
-        if focus is None or not (
-            focus is self.preview_tree or self.preview_tree.isAncestorOf(focus)
-        ):
+        if focus is None or not (focus is self or self.isAncestorOf(focus)):
             return None
         if self.preview_tree.state() == QAbstractItemView.State.EditingState:
             return None
+        if focus is self.before_tree or self.before_tree.isAncestorOf(focus):
+            return self.before_tree.currentItem()
         return self.preview_tree.currentItem()
 
     def _shortcut_set_mode(self, mode: str) -> None:
@@ -825,10 +926,15 @@ class GroupingStepWidget(QWidget):
         if item is not None:
             self._create_subgroup_from_item(item)
 
-    def _shortcut_stage_remove(self) -> None:
+    def _shortcut_toggle_delete(self) -> None:
         item = self._shortcut_item()
         if item is not None:
-            self._delete_item(item)
+            self._toggle_item_deletion_marks(item)
+
+    def _shortcut_trash_now(self) -> None:
+        item = self._shortcut_item()
+        if item is not None:
+            self._request_trash_for_item(item)
 
     def _shortcut_apply(self) -> None:
         if self.primary_button.isEnabled():
@@ -969,7 +1075,85 @@ class GroupingStepWidget(QWidget):
     def set_back_visible(self, visible: bool) -> None:
         self.back_button.setVisible(visible)
 
+    def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
+        """Use the application-wide deletion state as Organize's source of truth."""
+        self._is_marked_func = func
+        self.refresh_deletion_state()
+
+    def refresh_deletion_state(self) -> None:
+        """Refresh mark presentation without rebuilding either tree or its icons."""
+        if self._current_plan is not None:
+            self._update_stats()
+        for path, item in self._before_file_items_by_path.items():
+            self._apply_deletion_presentation(item, path, editable=False)
+        for path, item in self._after_file_items_by_path.items():
+            self._apply_deletion_presentation(item, path, editable=True)
+        for index in range(self.folder_preview_grid.count()):
+            item = self.folder_preview_grid.item(index)
+            if item is None:
+                continue
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if path:
+                path = str(path)
+                item.setText(self._preview_deletion_display_name(path))
+                item.setForeground(
+                    QBrush(
+                        QColor("#FFB366")
+                        if self._is_marked_func(path)
+                        else QApplication.palette().text().color()
+                    )
+                )
+        current = self._current_preview_source_path
+        if current:
+            display_name = self._preview_deletion_display_name(current)
+            self.large_preview_name.setText(display_name)
+            self.preview_selection_label.setText(display_name)
+            self._apply_preview_deletion_style(current)
+
+    def remove_deleted_paths(self, paths: Iterable[str]) -> None:
+        """Remove paths only after the application confirms they reached Trash."""
+        self._remove_deleted_paths_from_state(paths)
+
+    def _deletion_display_name(self, path: str) -> str:
+        name = self._display_name_for_source(path)
+        return f"{name} (DELETED)" if self._is_marked_func(path) else name
+
+    def _preview_deletion_display_name(self, path: str) -> str:
+        name = os.path.basename(path)
+        return f"{name} (DELETED)" if self._is_marked_func(path) else name
+
+    def _apply_preview_deletion_style(self, path: str) -> None:
+        color = "#FFB366" if self._is_marked_func(path) else ""
+        style = f"color: {color};" if color else ""
+        self.large_preview_name.setStyleSheet(style)
+        self.preview_selection_label.setStyleSheet(style)
+
+    def _apply_deletion_presentation(
+        self, item: QTreeWidgetItem, path: str, *, editable: bool
+    ) -> None:
+        was_ignoring = self._ignore_preview_item_change
+        self._ignore_preview_item_change = True
+        try:
+            if editable:
+                item.setData(
+                    0,
+                    Qt.ItemDataRole.EditRole,
+                    self._display_name_for_source(path),
+                )
+            item.setText(0, self._deletion_display_name(path))
+            item.setForeground(
+                0,
+                QBrush(
+                    QColor("#FFB366")
+                    if self._is_marked_func(path)
+                    else QApplication.palette().text().color()
+                ),
+            )
+        finally:
+            self._ignore_preview_item_change = was_ignoring
+
     def set_source_folder(self, folder_path: str | None) -> None:
+        self._folder_validation_request_id += 1
         self._source_root = folder_path
         has_folder = bool(folder_path)
         if has_folder:
@@ -998,7 +1182,6 @@ class GroupingStepWidget(QWidget):
             self._editable_groups = []
             self._editable_unassigned = []
             self._editable_skipped = []
-            self._editable_deleted = []
             self._file_name_overrides = {}
             self._original_group_labels_by_path = {}
             self._original_group_labels_by_group_id = {}
@@ -1045,7 +1228,6 @@ class GroupingStepWidget(QWidget):
         ]
         self._editable_unassigned = list(getattr(plan, "unassigned_paths", []))
         self._editable_skipped = list(getattr(plan, "skipped_paths", []))
-        self._editable_deleted = list(getattr(plan, "deleted_paths", []) or [])
         self._file_name_overrides = dict(getattr(plan, "file_name_overrides", {}) or {})
         self._sticky_empty_group_ids.clear()
         self._group_id_counter = self._compute_group_id_counter()
@@ -1094,7 +1276,7 @@ class GroupingStepWidget(QWidget):
             skipped_paths=list(self._editable_skipped),
             output_root=self._current_output_root,
             file_name_overrides=dict(self._file_name_overrides),
-            deleted_paths=list(self._editable_deleted),
+            deleted_paths=[],
             filesystem_inventory_complete=True,
             source_root=self._source_root or "",
         )
@@ -1198,10 +1380,12 @@ class GroupingStepWidget(QWidget):
     def _update_stats(self) -> None:
         group_count = len(self._editable_groups)
         group_label = "folder" if group_count == 1 else "folders"
-        removal_count = len(self._editable_deleted)
-        removal_label = "removal" if removal_count == 1 else "removals"
+        removal_count = sum(
+            1 for path in self._all_source_paths() if self._is_marked_func(path)
+        )
+        removal_label = "mark" if removal_count == 1 else "marks"
         self.stats_label.setText(
-            f"{group_count} {group_label}  ·  {removal_count} staged {removal_label}"
+            f"{group_count} {group_label}  ·  {removal_count} Trash {removal_label}"
         )
         self.stats_label.setVisible(True)
         self.loading_label.clear()
@@ -1453,6 +1637,7 @@ class GroupingStepWidget(QWidget):
                 self._set_tree_item_icon(file_item, source_path)
                 group_item.addChild(file_item)
                 self._after_file_items_by_path[source_path] = file_item
+                self._apply_deletion_presentation(file_item, source_path, editable=True)
 
         self._add_bucket_item(
             root_item,
@@ -1532,6 +1717,7 @@ class GroupingStepWidget(QWidget):
             self._set_tree_item_icon(file_item, source_path)
             bucket_item.addChild(file_item)
             self._after_file_items_by_path[source_path] = file_item
+            self._apply_deletion_presentation(file_item, source_path, editable=True)
 
     def _render_before_tree(self) -> None:
         start_time = time.perf_counter()
@@ -1626,6 +1812,7 @@ class GroupingStepWidget(QWidget):
             self._set_tree_item_icon(file_item, source_path)
             parent_item.addChild(file_item)
             self._before_file_items_by_path[source_path] = file_item
+            self._apply_deletion_presentation(file_item, source_path, editable=False)
 
         self.before_tree.expandAll()
         logger.info(
@@ -1658,7 +1845,10 @@ class GroupingStepWidget(QWidget):
             source_path = self._item_source_path(item)
             if not source_path:
                 return
-            new_filename = self._normalize_filename(item.text(0), source_path)
+            edited_text = item.text(0)
+            if self._is_marked_func(source_path) and edited_text.endswith(" (DELETED)"):
+                edited_text = edited_text[: -len(" (DELETED)")]
+            new_filename = self._normalize_filename(edited_text, source_path)
             if new_filename == os.path.basename(source_path):
                 self._file_name_overrides.pop(source_path, None)
             else:
@@ -2013,6 +2203,9 @@ class GroupingStepWidget(QWidget):
         self.folder_preview_meta.clear()
         self.folder_preview_grid.clear()
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_HINT)
+        self.preview_trash_button.setEnabled(False)
+        self.large_preview_name.setStyleSheet("")
+        self.preview_selection_label.setStyleSheet("")
         self.preview_selection_label.setVisible(False)
         self.preview_selection_meta.setVisible(False)
         self.thumb_label.clear()
@@ -2028,9 +2221,12 @@ class GroupingStepWidget(QWidget):
             and existing_pixmap is not None
             and not existing_pixmap.isNull()
         ):
-            self.large_preview_name.setText(os.path.basename(source_path))
+            display_name = self._preview_deletion_display_name(source_path)
+            self.large_preview_name.setText(display_name)
             self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
-            self.preview_selection_label.setText(os.path.basename(source_path))
+            self.preview_trash_button.setEnabled(os.path.isfile(source_path))
+            self._apply_preview_deletion_style(source_path)
+            self.preview_selection_label.setText(display_name)
             self.preview_selection_label.setVisible(True)
             self.preview_selection_meta.setText(source_path)
             self.preview_selection_meta.setVisible(True)
@@ -2060,9 +2256,12 @@ class GroupingStepWidget(QWidget):
             self.large_preview_view.set_image(pixmap)
         else:
             self.large_preview_view.setText("Loading preview…")
-        self.large_preview_name.setText(os.path.basename(source_path))
+        display_name = self._preview_deletion_display_name(source_path)
+        self.large_preview_name.setText(display_name)
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
-        self.preview_selection_label.setText(os.path.basename(source_path))
+        self.preview_trash_button.setEnabled(os.path.isfile(source_path))
+        self._apply_preview_deletion_style(source_path)
+        self.preview_selection_label.setText(display_name)
         self.preview_selection_label.setVisible(True)
         self.preview_selection_meta.setText(source_path)
         self.preview_selection_meta.setVisible(True)
@@ -2120,9 +2319,13 @@ class GroupingStepWidget(QWidget):
         visible_preview_paths = preview_paths[:MAX_FOLDER_PREVIEW_ITEMS]
         self.folder_preview_grid.clear()
         for source_path in visible_preview_paths:
-            list_item = QListWidgetItem(os.path.basename(source_path))
+            list_item = QListWidgetItem(
+                self._preview_deletion_display_name(source_path)
+            )
             list_item.setData(Qt.ItemDataRole.UserRole, source_path)
             list_item.setToolTip(self._relative_path_for_source(source_path))
+            if self._is_marked_func(source_path):
+                list_item.setForeground(QBrush(QColor("#FFB366")))
             icon = self._cached_thumbnail_icon_for_path(source_path)
             if icon is not None:
                 list_item.setIcon(icon)
@@ -2140,6 +2343,7 @@ class GroupingStepWidget(QWidget):
             f"{meta_count}\n{self._display_path_for_item(item)}"
         )
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_FOLDER)
+        self.preview_trash_button.setEnabled(False)
         self.preview_selection_label.setText(item_label)
         self.preview_selection_label.setVisible(True)
         self.preview_selection_meta.setText(meta_count)
@@ -2423,15 +2627,23 @@ class GroupingStepWidget(QWidget):
         delete_actions: list[QAction] = []
         if is_after:
             delete_target_path = self._deletable_path_for_item(item)
-            if delete_target_path:
-                label = (
-                    "Delete folder"
-                    if os.path.isdir(delete_target_path)
-                    else "Delete file"
+            candidate_paths = self._preview_paths_for_item(item)
+            if candidate_paths:
+                all_marked = all(self._is_marked_func(path) for path in candidate_paths)
+                mark_action = QAction(
+                    "Unmark from Trash" if all_marked else "Mark for Trash", self
                 )
-                delete_action = QAction(label, self)
-                delete_action.triggered.connect(lambda: self._delete_item(item))
-                delete_actions.append(delete_action)
+                mark_action.triggered.connect(
+                    lambda: self._toggle_item_deletion_marks(item)
+                )
+                delete_actions.append(mark_action)
+            if delete_target_path:
+                noun = "folder" if os.path.isdir(delete_target_path) else "file"
+                trash_action = QAction(f"Move {noun} to Trash now…", self)
+                trash_action.triggered.connect(
+                    lambda: self._request_trash_for_item(item)
+                )
+                delete_actions.append(trash_action)
         if delete_actions:
             sections.append(delete_actions)
 
@@ -3115,114 +3327,88 @@ class GroupingStepWidget(QWidget):
         self._prune_empty_groups()
         self._refresh_preview_trees()
 
-    def _delete_directory_for_item(self, item: QTreeWidgetItem) -> None:
-        directory_path = self._directory_path_for_item(item)
-        if not directory_path or not os.path.isdir(directory_path):
-            return
-        self._delete_existing_path(
-            directory_path,
-            tracked_paths=self._tracked_paths_for_directory(directory_path),
-            is_directory=True,
-        )
-
     def _delete_item(self, item: QTreeWidgetItem | None) -> None:
+        """Compatibility wrapper for the former staged-removal action."""
+        if item is not None:
+            self._toggle_item_deletion_marks(item)
+
+    def _toggle_item_deletion_marks(self, item: QTreeWidgetItem) -> None:
+        selected_paths = self._selected_preview_file_paths()
+        paths = selected_paths or self._preview_paths_for_item(item)
+        paths = [path for path in dict.fromkeys(paths) if os.path.isfile(path)]
+        if not paths:
+            self._show_status_message("No files are available to mark.", 3000)
+            return
+        directory_path = self._deletable_path_for_item(item)
+        if not selected_paths and directory_path and os.path.isdir(directory_path):
+            self._start_directory_validation("mark", directory_path, paths)
+            return
+        self.toggle_deletion_marks_requested.emit(paths)
+
+    def _trash_current_preview(self) -> None:
+        path = self._current_preview_source_path
+        if path and os.path.isfile(path):
+            self.trash_requested.emit(path, [path])
+
+    def _request_trash_for_item(self, item: QTreeWidgetItem) -> None:
+        selected_paths = self._selected_preview_file_paths()
+        if selected_paths:
+            existing = [path for path in selected_paths if os.path.isfile(path)]
+            if existing:
+                self.trash_requested.emit("", existing)
+            return
+
         target_path = self._deletable_path_for_item(item)
         if not target_path:
+            self._show_status_message("This preview item cannot be moved to Trash.", 3000)
             return
-
-        is_directory = os.path.isdir(target_path)
-        target_label = self._relative_display_path(target_path)
-        noun = "folder" if is_directory else "file"
-        prompt = (
-            f"Remove '{target_label}' and all of its contents from the preview? "
-            "It will be moved to trash when you apply changes."
-            if is_directory
-            else f"Remove '{target_label}' from the preview? "
-            "It will be moved to trash when you apply changes."
-        )
-        choice = QMessageBox.question(
-            self,
-            f"Delete {noun.title()}",
-            prompt,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if choice != QMessageBox.StandardButton.Yes:
-            return
-
-        self._mark_path_for_deletion(target_path, is_directory=is_directory)
-        self._show_status_message(f"Marked {target_label} for deletion.", 3000)
-
-    def _delete_existing_path(
-        self, target_path: str, *, tracked_paths: list[str], is_directory: bool
-    ) -> None:
-        target_label = self._relative_display_path(target_path)
-        noun = "Folder" if is_directory else "File"
-        prompt = (
-            f"Move '{target_label}' and all of its contents to the trash?"
-            if is_directory
-            else f"Move '{target_label}' to the trash?"
-        )
-        if tracked_paths:
-            suffix = "item" if len(tracked_paths) == 1 else "items"
-            prompt += (
-                f"\n\nThis will remove {len(tracked_paths)} tracked {suffix} "
-                "from the grouping plan."
-            )
-
-        choice = QMessageBox.question(
-            self,
-            f"Delete {noun}",
-            prompt,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if choice != QMessageBox.StandardButton.Yes:
-            return
-
-        success, message = ImageFileOperations.move_to_trash(target_path)
-        if not success:
-            QMessageBox.warning(
-                self,
-                f"Delete {noun}",
-                message or f"Failed to delete {target_path}.",
-            )
-            return
-
-        if tracked_paths:
-            self._remove_deleted_paths_from_state(tracked_paths)
-        else:
-            self._refresh_preview_trees()
-        self._show_status_message(f"Moved {target_label} to trash.", 3000)
-
-    def _mark_path_for_deletion(self, target_path: str, *, is_directory: bool) -> None:
         tracked_paths = (
             self._tracked_paths_for_directory(target_path)
-            if is_directory
+            if os.path.isdir(target_path)
             else self._tracked_paths_for_file(target_path)
         )
-        normalized_target = os.path.normcase(os.path.normpath(target_path))
-        retained_deleted: list[str] = []
-        for existing_path in self._editable_deleted:
-            normalized_existing = os.path.normcase(os.path.normpath(existing_path))
-            if normalized_existing == normalized_target:
-                continue
-            try:
-                if (
-                    os.path.commonpath([normalized_existing, normalized_target])
-                    == normalized_target
-                ):
-                    continue
-            except Exception:
-                pass
-            retained_deleted.append(existing_path)
-        retained_deleted.append(target_path)
-        self._editable_deleted = retained_deleted
+        if os.path.isdir(target_path):
+            self._start_directory_validation("trash", target_path, tracked_paths)
+            return
+        self.trash_requested.emit(target_path, tracked_paths)
 
-        if tracked_paths:
-            self._remove_deleted_paths_from_state(tracked_paths)
-        else:
-            self._refresh_preview_trees()
+    def _start_directory_validation(
+        self, operation: str, directory_path: str, represented_paths: list[str]
+    ) -> None:
+        self._folder_validation_request_id += 1
+        task = _DirectoryInventoryTask(
+            self._folder_validation_request_id,
+            operation,
+            directory_path,
+            represented_paths,
+        )
+        task.signals.completed.connect(self._handle_directory_validation)
+        self._show_status_message("Checking folder contents…", 2000)
+        self._folder_validation_pool.start(task)
+
+    def _handle_directory_validation(
+        self,
+        request_id: int,
+        operation: str,
+        directory_path: str,
+        represented_paths: object,
+        safe: bool,
+        reason: str,
+    ) -> None:
+        if request_id != self._folder_validation_request_id:
+            return
+        paths = (
+            [str(path) for path in represented_paths]
+            if isinstance(represented_paths, list)
+            else []
+        )
+        if not safe:
+            self._show_status_message(reason, 5000)
+            return
+        if operation == "mark":
+            self.toggle_deletion_marks_requested.emit(paths)
+        elif operation == "trash":
+            self.trash_requested.emit(directory_path, paths)
 
     def _restore_paths_to_original_location(self, paths: Iterable[str]) -> None:
         path_list = [

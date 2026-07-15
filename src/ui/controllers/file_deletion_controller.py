@@ -124,7 +124,13 @@ class FileDeletionController:
             if not os.path.isfile(path):
                 continue
             try:
-                self.ctx.app_controller.move_to_trash(path)
+                result = self.ctx.app_controller.move_to_trash(path)
+                if isinstance(result, tuple):
+                    success, message = result
+                else:
+                    success, message = bool(result), ""
+                if not success:
+                    raise RuntimeError(message)
                 self.ctx.app_state.remove_data_for_path(path)
                 parent_idx = src_idx.parent()
                 parent_item = (

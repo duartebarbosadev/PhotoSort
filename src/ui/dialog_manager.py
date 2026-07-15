@@ -1477,6 +1477,21 @@ class DialogManager:
         )
         return result
 
+    def show_confirm_trash_target_dialog(
+        self, target_path: str, represented_paths: list[str]
+    ) -> bool:
+        """Confirm an Organize folder deletion after its inventory was validated."""
+        name = os.path.basename(os.path.normpath(target_path)) or target_path
+        count = len(represented_paths)
+        return self._show_delete_confirmation_dialog(
+            files=represented_paths,
+            title_text="Confirm Folder Delete",
+            message_text=(
+                f"Move the folder '{name}' and its {count} displayed item(s) "
+                "to the trash?"
+            ),
+        )
+
     def show_potential_cache_overflow_warning(
         self,
         estimated_preview_data_needed_for_folder_bytes: int,

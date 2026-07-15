@@ -198,6 +198,9 @@ class MainWindow(QMainWindow):
         self._shortcut_handlers: dict[tuple[int, int], Callable[[], None]] = {}
         self._init_shortcut_handlers()
         self._create_widgets()
+        self.grouping_step_widget.set_is_marked_func(
+            self.app_state.is_marked_for_deletion
+        )
         self.thumbnail_loader = ViewportThumbnailLoader(self, self)
 
         # At this point _create_widgets() built file_system_model + proxy_model and wired it;
@@ -629,6 +632,18 @@ class MainWindow(QMainWindow):
         self.grouping_step_widget.skip_requested.connect(self._skip_grouping_step)
         self.grouping_step_widget.select_folder_requested.connect(
             self._open_folder_dialog
+        )
+        self.grouping_step_widget.toggle_deletion_marks_requested.connect(
+            self._toggle_organize_deletion_marks
+        )
+        self.grouping_step_widget.commit_deletion_marks_requested.connect(
+            self._commit_marked_deletions
+        )
+        self.grouping_step_widget.clear_deletion_marks_requested.connect(
+            self._clear_all_deletion_marks
+        )
+        self.grouping_step_widget.trash_requested.connect(
+            self._trash_from_organize
         )
         self.step_organize_button.clicked.connect(self._go_to_grouping_step)
         self.step_easy_delete_button.clicked.connect(self._go_to_easy_delete_step)
@@ -1077,6 +1092,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(True)
         self.workflow_stack.setCurrentWidget(self.grouping_page)
         self.grouping_step_widget.set_source_folder(self.app_state.grouping_source_root)
+        self.grouping_step_widget.refresh_deletion_state()
         self.grouping_step_widget.set_current_mode(
             self.app_state.selected_grouping_mode or "current"
         )
@@ -1255,9 +1271,76 @@ class MainWindow(QMainWindow):
             )
 
     def _refresh_workflow_deletion_state(self) -> None:
-        for widget in (self.easy_delete_step_widget, self.pick_best_step_widget):
+        for widget in (
+            self.grouping_step_widget,
+            self.easy_delete_step_widget,
+            self.pick_best_step_widget,
+        ):
             if widget is not None:
                 widget.refresh_deletion_state()
+
+    def _toggle_organize_deletion_marks(self, paths: list[str]) -> None:
+        toggled = 0
+        for path in dict.fromkeys(paths):
+            if not os.path.isfile(path):
+                continue
+            self.deletion_controller.toggle_mark(path)
+            toggled += 1
+        if not toggled:
+            self.statusBar().showMessage("No files are available to mark.", 3000)
+            return
+        self.proxy_model.invalidate()
+        self._refresh_visible_items_icons()
+        self._refresh_workflow_deletion_state()
+        self.statusBar().showMessage(
+            f"Toggled Trash mark for {toggled} file(s).", 4000
+        )
+
+    def _trash_from_organize(
+        self, target_path: str, represented_paths: list[str]
+    ) -> None:
+        represented = list(dict.fromkeys(represented_paths))
+        is_directory = bool(target_path and os.path.isdir(target_path))
+        if is_directory:
+            if not self.dialog_manager.show_confirm_trash_target_dialog(
+                target_path, represented
+            ):
+                return
+            targets = [target_path]
+        else:
+            targets = [target_path] if target_path else represented
+            targets = [path for path in targets if os.path.isfile(path)]
+            if not targets or not self.dialog_manager.show_confirm_delete_dialog(
+                targets
+            ):
+                return
+
+        successful_paths: list[str] = []
+        failures: list[str] = []
+        for path in targets:
+            success, message = ImageFileOperations.move_to_trash(path)
+            if success:
+                successful_paths.extend(represented if is_directory else [path])
+            else:
+                failures.append(message or os.path.basename(path))
+
+        successful_paths = list(dict.fromkeys(successful_paths))
+        if successful_paths:
+            for path in successful_paths:
+                self.app_state.remove_data_for_path(path)
+                self.image_pipeline.invalidate_path(path)
+            self.thumbnail_loader.invalidate_paths(successful_paths)
+            self.grouping_step_widget.remove_deleted_paths(successful_paths)
+            self.proxy_model.invalidate()
+            self.mark_cull_model_dirty()
+            self._refresh_workflow_deletion_state()
+            self.statusBar().showMessage(
+                f"Moved {len(successful_paths)} file(s) to Trash.", 5000
+            )
+        if failures:
+            self.dialog_manager.show_error_dialog(
+                "Trash Error", "\n".join(failures[:5])
+            )
 
     def _mark_paths_for_deletion(self, paths: list) -> None:
         self.deletion_controller.mark_paths(
@@ -3977,42 +4060,37 @@ class MainWindow(QMainWindow):
         logger.debug(f"Visible paths before deletion: {visible_paths_before}")
         logger.debug(f"Marked files for deletion: {marked_files}")
 
-        # Find the index of the first marked file in the visible list
-        first_marked_index = -1
-        if visible_paths_before and marked_files:
-            try:
-                first_marked_index = visible_paths_before.index(marked_files[0])
-                logger.debug(f"First marked file index: {first_marked_index}")
-            except ValueError:
-                first_marked_index = 0
-                logger.debug(
-                    "First marked file not found in visible paths, using index 0"
-                )
-
-        # --- Group indices by parent for safe removal ---
-        source_indices_by_parent = {}
-        for path in marked_files:
-            proxy_idx = self._find_proxy_index_for_path(path)
-            if proxy_idx.isValid():
-                source_idx = self.proxy_model.mapToSource(proxy_idx)
-                parent_idx = source_idx.parent()
-                if parent_idx not in source_indices_by_parent:
-                    source_indices_by_parent[parent_idx] = []
-                source_indices_by_parent[parent_idx].append(source_idx.row())
-
         # --- Delete files and update model ---
         deleted_count = 0
+        successfully_deleted: list[str] = []
         for file_path in marked_files:
             try:
-                self.app_controller.move_to_trash(file_path)
+                success, message = self.app_controller.move_to_trash(file_path)
+                if not success:
+                    raise RuntimeError(message)
                 self.app_state.remove_data_for_path(file_path)
                 deleted_count += 1
+                successfully_deleted.append(file_path)
                 logger.info(f"Moved file to trash: {os.path.basename(file_path)}")
             except Exception as e:
                 logger.error(f"Error moving marked file '{file_path}' to trash: {e}")
 
-        # Clear the marked files from app state after successful deletion
-        self.app_state.clear_all_deletion_marks()
+        for file_path in successfully_deleted:
+            self.app_state.unmark_for_deletion(file_path)
+            self.image_pipeline.invalidate_path(file_path)
+        if successfully_deleted:
+            self.thumbnail_loader.invalidate_paths(successfully_deleted)
+
+        # Rebuild row removals from successful paths only; failed files stay visible.
+        source_indices_by_parent = {}
+        for path in successfully_deleted:
+            proxy_idx = self._find_proxy_index_for_path(path)
+            if proxy_idx.isValid():
+                source_idx = self.proxy_model.mapToSource(proxy_idx)
+                parent_idx = source_idx.parent()
+                source_indices_by_parent.setdefault(parent_idx, []).append(
+                    source_idx.row()
+                )
 
         if deleted_count > 0:
             for parent_idx, rows in source_indices_by_parent.items():
@@ -4044,13 +4122,13 @@ class MainWindow(QMainWindow):
 
             # If the current selection is one of the deleted files, use it as anchor
             # This will ensure we select the next image after the deleted one
-            if current_selected_path_before in marked_files:
+            if current_selected_path_before in successfully_deleted:
                 anchor_path = current_selected_path_before
             # If there are deleted files and current selection is not one of them,
             # use the first deleted file as anchor for better UX
             # This handles cases where user marks files for deletion without having them selected
-            elif marked_files:
-                anchor_path = marked_files[
+            elif successfully_deleted:
+                anchor_path = successfully_deleted[
                     0
                 ]  # Use first deleted file as reference point
             # Fallback to current selection
@@ -4073,7 +4151,7 @@ class MainWindow(QMainWindow):
                 logger.debug("Finding next selection after deletion.")
                 next_path = select_next_surviving_path(
                     visible_paths_before,
-                    marked_files,
+                    successfully_deleted,
                     anchor_path,
                     visible_paths_after_delete,
                 )
@@ -4109,6 +4187,10 @@ class MainWindow(QMainWindow):
                     self.advanced_image_viewer.setText("No valid image to select.")
 
             self._update_image_info_label()
+
+            self.grouping_step_widget.remove_deleted_paths(successfully_deleted)
+            self.mark_cull_model_dirty()
+            self._refresh_workflow_deletion_state()
 
         logger.info(f"Completed committing {deleted_count} deletions")
 
