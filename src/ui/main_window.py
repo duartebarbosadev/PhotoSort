@@ -15,6 +15,8 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,  # For selection and edit triggersor dialogs
     QStackedWidget,
+    QLabel,
+    QProgressBar,
 )
 import os
 from datetime import datetime as datetime_obj, date as date_obj
@@ -35,6 +37,7 @@ from PyQt6.QtCore import (
     QItemSelectionModel,
     QEvent,
     QItemSelection,
+    QSize,
 )
 from PyQt6.QtGui import (
     QColor,
@@ -97,6 +100,13 @@ from ui.models.media_filter_proxy import (
 
 logger = logging.getLogger(__name__)
 FILTER_LOG_INTERVAL = 100
+WORKFLOW_STEP_LABELS = {
+    "organize": "Organize",
+    "easy_delete": "Easy Delete",
+    "fix_rotation": "Fix Rotation",
+    "pick_best": "Pick Best",
+    "cull": "Cull",
+}
 
 
 class MainWindow(QMainWindow):
@@ -381,6 +391,9 @@ class MainWindow(QMainWindow):
         # Keep thumbnail completion updates O(1). Rewalking thousands of rows for
         # every viewport batch makes keyboard navigation visibly stall.
         self._file_items_by_path: Dict[str, QStandardItem] = {}
+        # One display-sized, implicitly shared QIcon per media path. Workflow
+        # models can attach it without another disk read or decode.
+        self._thumbnail_icons_by_path: Dict[str, QIcon] = {}
         self.proxy_model = CustomFilterProxyModel(self)
         self.proxy_model.setSourceModel(self.file_system_model)
         self.proxy_model.app_state_ref = self.app_state  # Link AppState to proxy model
@@ -455,6 +468,18 @@ class MainWindow(QMainWindow):
         # No bottom bar - image info will be shown in status bar only
 
         self.statusBar().showMessage("Ready")
+        self.thumbnail_progress_container = QWidget()
+        thumbnail_progress_layout = QHBoxLayout(self.thumbnail_progress_container)
+        thumbnail_progress_layout.setContentsMargins(6, 0, 6, 0)
+        thumbnail_progress_layout.setSpacing(6)
+        self.thumbnail_progress_label = QLabel()
+        self.thumbnail_progress_bar = QProgressBar()
+        self.thumbnail_progress_bar.setTextVisible(False)
+        self.thumbnail_progress_bar.setFixedWidth(110)
+        thumbnail_progress_layout.addWidget(self.thumbnail_progress_label)
+        thumbnail_progress_layout.addWidget(self.thumbnail_progress_bar)
+        self.thumbnail_progress_container.setVisible(False)
+        self.statusBar().addPermanentWidget(self.thumbnail_progress_container, 0)
         self.statusBar().addPermanentWidget(self.workflow_nav, 0)
         logger.debug(f"Widgets created in {time.perf_counter() - start_time:.4f}s.")
 
@@ -704,11 +729,46 @@ class MainWindow(QMainWindow):
 
     def _toggle_thumbnail_view(self, checked):
         self._rebuild_model_view()
-        if checked:
-            self.schedule_visible_thumbnail_load()
+        self.thumbnail_loader.set_enabled(checked)
 
     def reset_thumbnail_requests(self) -> None:
+        self._thumbnail_icons_by_path.clear()
         self.thumbnail_loader.reset()
+
+    def start_thumbnail_warming(self, image_paths: List[str]) -> None:
+        self.thumbnail_loader.start_folder(image_paths)
+
+    def notify_thumbnail_items_rebuilt(self) -> None:
+        self.thumbnail_loader.model_rebuilt()
+
+    def get_cached_thumbnail_icon(self, image_path: str) -> Optional[QIcon]:
+        return self._thumbnail_icons_by_path.get(os.path.normpath(image_path))
+
+    def remove_cached_thumbnail_icons(self, image_paths) -> None:
+        for image_path in image_paths:
+            self._thumbnail_icons_by_path.pop(os.path.normpath(image_path), None)
+
+    def set_thumbnail_progress(
+        self,
+        attempted: int,
+        total: int,
+        failures: int = 0,
+        paused: bool = False,
+    ) -> None:
+        if total <= 0:
+            self.hide_thumbnail_progress()
+            return
+        prefix = "Thumbnail preparation paused" if paused else "Preparing thumbnails"
+        suffix = f" ({failures} failed)" if failures else ""
+        self.thumbnail_progress_label.setText(
+            f"{prefix} {attempted:,} / {total:,}{suffix}"
+        )
+        self.thumbnail_progress_bar.setRange(0, total)
+        self.thumbnail_progress_bar.setValue(min(attempted, total))
+        self.thumbnail_progress_container.setVisible(True)
+
+    def hide_thumbnail_progress(self) -> None:
+        self.thumbnail_progress_container.setVisible(False)
 
     def reset_preview_requests(self) -> None:
         self.preview_load_controller.reset()
@@ -791,8 +851,10 @@ class MainWindow(QMainWindow):
             preserved_focused_path = self.app_state.focused_image_path
 
         self.update_loading_text("Rebuilding view...")
-        self.file_system_model.clear()
+        # Drop Python wrappers before Qt deletes their underlying model items.
+        # Queued thumbnail callbacks may run re-entrantly during UI updates.
         self._file_items_by_path.clear()
+        self.file_system_model.clear()
         root_item = self.file_system_model.invisibleRootItem()
         active_view = self._get_active_file_view()
 
@@ -998,8 +1060,7 @@ class MainWindow(QMainWindow):
         if thumbnail_loader is not None:
             # The model owns new item objects now. Re-request only its viewport
             # so cached results are applied to those objects in the background.
-            thumbnail_loader.reset()
-            thumbnail_loader.schedule()
+            thumbnail_loader.model_rebuilt()
 
     # --- Controller adapter helpers (SimilarityContext / PreviewContext / MetadataContext) ---
     def status_message(self, msg: str, timeout: int = 3000) -> None:
@@ -1008,9 +1069,29 @@ class MainWindow(QMainWindow):
     def rebuild_model_view(self) -> None:
         self._rebuild_model_view()
 
+    def _set_workflow_step(self, workflow_step: str) -> None:
+        """Update the shared workflow state and log real view transitions once."""
+        previous_step = getattr(self.app_state, "workflow_step", "")
+        self.app_state.workflow_step = workflow_step
+        if previous_step == workflow_step:
+            return
+        previous_label = WORKFLOW_STEP_LABELS.get(
+            previous_step, previous_step.replace("_", " ").title() or "None"
+        )
+        next_label = WORKFLOW_STEP_LABELS.get(
+            workflow_step, workflow_step.replace("_", " ").title()
+        )
+        item_count = len(getattr(self.app_state, "image_files_data", []) or [])
+        logger.info(
+            "Workflow view changed: %s -> %s (media_items=%d)",
+            previous_label,
+            next_label,
+            item_count,
+        )
+
     def show_grouping_step(self) -> None:
         self.reset_preview_requests()
-        self.app_state.workflow_step = "organize"
+        self._set_workflow_step("organize")
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(True)
         self.workflow_stack.setCurrentWidget(self.grouping_page)
@@ -1031,7 +1112,7 @@ class MainWindow(QMainWindow):
 
     def show_cull_step(self) -> None:
         self.reset_preview_requests()
-        self.app_state.workflow_step = "cull"
+        self._set_workflow_step("cull")
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(True)
         self.workflow_stack.setCurrentWidget(self.cull_page)
@@ -1094,7 +1175,7 @@ class MainWindow(QMainWindow):
     def show_easy_delete_step(self) -> None:
         self.reset_preview_requests()
         widget = self._ensure_easy_delete_widget()
-        self.app_state.workflow_step = "easy_delete"
+        self._set_workflow_step("easy_delete")
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(False)
         widget.set_image_pipeline(self.image_pipeline)
@@ -1108,7 +1189,7 @@ class MainWindow(QMainWindow):
     def show_fix_rotation_step(self) -> None:
         self.reset_preview_requests()
         widget = self._ensure_fix_rotation_widget()
-        self.app_state.workflow_step = "fix_rotation"
+        self._set_workflow_step("fix_rotation")
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(False)
         widget.set_image_pipeline(self.image_pipeline)
@@ -1119,7 +1200,7 @@ class MainWindow(QMainWindow):
     def show_pick_best_step(self) -> None:
         self.reset_preview_requests()
         widget = self._ensure_pick_best_widget()
-        self.app_state.workflow_step = "pick_best"
+        self._set_workflow_step("pick_best")
         self.workflow_stack.setCurrentWidget(self.pick_best_page)
         # Disable application-wide 1-9 shortcuts so PickBestStepWidget can handle them
         for action in self.menu_manager.image_focus_actions.values():
@@ -1820,6 +1901,8 @@ class MainWindow(QMainWindow):
         return QModelIndex()  # No visible image item found in this subtree
 
     def closeEvent(self, event):
+        close_start = time.perf_counter()
+        logger.info("Application close requested.")
         if self.worker_manager.is_grouping_workflow_running():
             event.ignore()
             self.statusBar().showMessage(
@@ -1828,13 +1911,16 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # The detailed action preview walks the complete source tree. Most closes
+        # have no Organize edits, so compare the in-memory plan signature first
+        # and only perform filesystem work when a dialog is actually required.
+        has_grouping_edits = self.grouping_step_widget.has_unsaved_grouping_edits()
         grouping_action_lines = (
             self.grouping_step_widget.pending_grouping_action_lines()
+            if has_grouping_edits
+            else []
         )
-        if (
-            self.grouping_step_widget.has_unsaved_grouping_edits()
-            and grouping_action_lines
-        ):
+        if has_grouping_edits and grouping_action_lines:
             choice = self.dialog_manager.show_grouping_close_confirmation_dialog(
                 grouping_action_lines
             )
@@ -1880,7 +1966,10 @@ class MainWindow(QMainWindow):
                 return
 
         self._close_after_grouping_save = False
-        logger.info("Stopping all workers on application close.")
+        logger.info(
+            "Stopping all workers on application close (preflight %.3fs).",
+            time.perf_counter() - close_start,
+        )
         self.preview_load_controller.shutdown()
         self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
         event.accept()
@@ -3113,10 +3202,12 @@ class MainWindow(QMainWindow):
         item.setEditable(False)
         self._file_items_by_path[os.path.normpath(file_path)] = item
 
-        # Never deserialize cached thumbnails while constructing thousands of
-        # model rows. The shared viewport loader applies only visible results.
         if media_type == "video":
             item.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        get_cached_icon = getattr(self, "get_cached_thumbnail_icon", None)
+        cached_icon = get_cached_icon(file_path) if callable(get_cached_icon) else None
+        if cached_icon is not None:
+            item.setIcon(cached_icon)
 
         # Unified presentation (marked / blurred) delegated to deletion controller
         self.deletion_controller.apply_presentation(item, file_path, is_blurred)
@@ -3203,20 +3294,27 @@ class MainWindow(QMainWindow):
 
         if image_paths is not None:
             for file_path in dict.fromkeys(image_paths):
-                item = self._file_items_by_path.get(os.path.normpath(file_path))
-                if item is None:
-                    continue
-                file_data = item.data(Qt.ItemDataRole.UserRole)
-                if not isinstance(file_data, dict):
-                    continue
+                normalized_path = os.path.normpath(file_path)
+                item = self._file_items_by_path.get(normalized_path)
                 pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
                     file_path,
-                    file_size=file_data.get("file_size"),
-                    mtime_ns=file_data.get("mtime_ns"),
                     memory_only=True,
                 )
                 if pixmap is not None and not pixmap.isNull():
-                    item.setIcon(QIcon(pixmap))
+                    display_pixmap = pixmap.scaled(
+                        QSize(120, 120),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    icon = QIcon(display_pixmap)
+                    self._thumbnail_icons_by_path[normalized_path] = icon
+                    if item is not None:
+                        try:
+                            item.setIcon(icon)
+                        except RuntimeError:
+                            # The model was replaced after this completion was
+                            # queued. Keep the shared icon for the new model.
+                            self._file_items_by_path.pop(normalized_path, None)
             return
 
         logger.info("Updating tree view thumbnails from cache...")

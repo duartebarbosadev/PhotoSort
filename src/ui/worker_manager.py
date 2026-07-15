@@ -112,6 +112,10 @@ class WorkerManager(QObject):
     thumbnail_preload_progress = pyqtSignal(int, int, str)  # current, total, message
     thumbnail_preload_finished = pyqtSignal(object)  # completed image paths
     thumbnail_preload_error = pyqtSignal(str)
+    thumbnail_session_batch_ready = pyqtSignal(str, object)
+    thumbnail_session_progress = pyqtSignal(str, int, int, int, bool)
+    thumbnail_session_finished = pyqtSignal(str, int, int)
+    thumbnail_session_error = pyqtSignal(str, str)
 
     # Best Shot Analysis Signals
     best_shot_progress = pyqtSignal(int, str)
@@ -797,6 +801,20 @@ class WorkerManager(QObject):
             or self.is_fix_rotation_running()
         )
 
+    def is_resource_intensive_analysis_running(self) -> bool:
+        """Whether low-priority thumbnail warming should yield compute resources."""
+        return (
+            self.is_similarity_worker_running()
+            or self.is_blur_detection_running()
+            or self.is_rotation_detection_running()
+            or self.is_rotation_application_running()
+            or self.is_best_shot_worker_running()
+            or self.is_ai_rating_running()
+            or self.is_pick_best_running()
+            or self.is_easy_delete_running()
+            or self.is_fix_rotation_running()
+        )
+
     # --- Rating Writer Management ---
     def start_rating_writer(
         self,
@@ -919,6 +937,62 @@ class WorkerManager(QObject):
         self._stop_worker("rotation_application_thread", "rotation_application_worker")
 
     # --- Thumbnail Preload Management ---
+    def start_thumbnail_session(
+        self,
+        session_id: str,
+        image_paths: List[str],
+        foreground_paths: Optional[List[str]] = None,
+    ) -> bool:
+        """Start one prioritized thumbnail session for the active folder."""
+        from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
+
+        if self.is_thumbnail_preload_running():
+            return False
+
+        self.thumbnail_preload_thread = QThread()
+        self.thumbnail_preload_worker = ThumbnailPreloadWorker(
+            image_pipeline=self.image_pipeline,
+            session_id=session_id,
+            all_paths=image_paths,
+            foreground_paths=foreground_paths or [],
+            should_pause_background=self.is_resource_intensive_analysis_running,
+            materialize_background=True,
+        )
+        self.thumbnail_preload_worker.moveToThread(self.thumbnail_preload_thread)
+        self.thumbnail_preload_worker.session_batch_ready.connect(
+            self.thumbnail_session_batch_ready.emit
+        )
+        self.thumbnail_preload_worker.session_progress.connect(
+            self.thumbnail_session_progress.emit
+        )
+        self.thumbnail_preload_worker.session_finished.connect(
+            self.thumbnail_session_finished.emit
+        )
+        self.thumbnail_preload_worker.session_error.connect(
+            self.thumbnail_session_error.emit
+        )
+        self.thumbnail_preload_worker.session_finished.connect(
+            self._cleanup_thumbnail_preload_worker
+        )
+        self.thumbnail_preload_thread.started.connect(
+            self.thumbnail_preload_worker.run_session
+        )
+        self.thumbnail_preload_thread.start()
+        return True
+
+    def prioritize_thumbnail_paths(
+        self, session_id: str, image_paths: List[str]
+    ) -> bool:
+        worker = self.thumbnail_preload_worker
+        if (
+            worker is None
+            or not self.is_thumbnail_preload_running()
+            or worker.session_id != session_id
+        ):
+            return False
+        worker.prioritize(image_paths)
+        return True
+
     def start_thumbnail_preload(self, image_paths: List[str]):
         """Start preloading thumbnails in a background thread (non-blocking)."""
         from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
@@ -955,7 +1029,7 @@ class WorkerManager(QObject):
         # Start the thread
         self.thumbnail_preload_thread.start()
 
-    def _cleanup_thumbnail_preload_worker(self, _image_paths=None):
+    def _cleanup_thumbnail_preload_worker(self, *_args):
         """Clean up the thumbnail preload worker and thread."""
         self._finish_worker_slot(
             "thumbnail_preload_thread",

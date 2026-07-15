@@ -178,6 +178,7 @@ class RawImageProcessor:
         image_path: str,
         apply_auto_edits: bool = False,
         thumbnail_max_size: tuple = THUMBNAIL_MAX_SIZE,
+        fallback_decode_gate: Optional[threading.Semaphore] = None,
     ) -> Optional[Image.Image]:
         """
         Generates a PIL.Image thumbnail from a RAW file.
@@ -234,7 +235,13 @@ class RawImageProcessor:
                         )
                         postprocess_params["no_auto_bright"] = True
 
-                    rgb = raw.postprocess(**postprocess_params)
+                    if fallback_decode_gate:
+                        fallback_decode_gate.acquire()
+                    try:
+                        rgb = raw.postprocess(**postprocess_params)
+                    finally:
+                        if fallback_decode_gate:
+                            fallback_decode_gate.release()
                     temp_pil_img = Image.fromarray(rgb)
                     if apply_auto_edits:
                         temp_pil_img = ImageOps.autocontrast(temp_pil_img)

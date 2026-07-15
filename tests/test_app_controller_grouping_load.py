@@ -182,6 +182,7 @@ def test_grouping_preview_does_not_build_hidden_organize_trees():
         main_window=SimpleNamespace(
             update_grouping_preview=Mock(),
             schedule_visible_thumbnail_load=Mock(),
+            notify_thumbnail_items_rebuilt=Mock(),
             grouping_step_widget=SimpleNamespace(
                 set_preview_plan=set_preview_plan,
                 set_loading_state=Mock(),
@@ -203,5 +204,5 @@ def test_grouping_preview_does_not_build_hidden_organize_trees():
     AppController.activate_grouping_preview(controller)
 
     set_preview_plan.assert_called_once_with(plan, "/tmp/photos")
-    controller.main_window.schedule_visible_thumbnail_load.assert_called_once()
+    controller.main_window.notify_thumbnail_items_rebuilt.assert_called_once()
     assert controller._pending_grouping_preview is None

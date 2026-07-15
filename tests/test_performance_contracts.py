@@ -7,9 +7,10 @@ from pathlib import Path
 from core.app_settings import (
     DISPLAY_MAX_RESOLUTION,
     FILE_SCAN_EMIT_BATCH_SIZE,
-    HIGH_MEMORY_DECODE_MAX_WORKERS,
-    IMAGE_PIPELINE_MAX_WORKERS,
     THUMBNAIL_PRELOAD_BATCH_SIZE,
+    PerformanceMode,
+    calculate_high_memory_decode_workers,
+    calculate_thumbnail_workers,
 )
 from core.packaging_smoke import REQUIRED_PACKAGED_MODULES
 
@@ -51,9 +52,19 @@ print(json.dumps({
     }
 
 
-def test_image_work_budgets_remain_bounded():
-    assert 1 <= IMAGE_PIPELINE_MAX_WORKERS <= 4
-    assert HIGH_MEMORY_DECODE_MAX_WORKERS == 1
+def test_image_work_budgets_follow_performance_mode(monkeypatch):
+    monkeypatch.setattr("core.app_settings.get_available_cpu_count", lambda: 14)
+    monkeypatch.setattr(
+        "core.app_settings.get_performance_mode",
+        lambda: PerformanceMode.PERFORMANCE,
+    )
+    monkeypatch.setattr(
+        "core.app_settings.get_usable_memory_bytes",
+        lambda: 36 * 1024**3,
+    )
+
+    assert calculate_thumbnail_workers() == 14
+    assert calculate_high_memory_decode_workers() == 4
     assert FILE_SCAN_EMIT_BATCH_SIZE >= 32
     assert THUMBNAIL_PRELOAD_BATCH_SIZE <= 32
     assert max(DISPLAY_MAX_RESOLUTION) <= 2560

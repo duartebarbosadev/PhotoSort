@@ -41,6 +41,7 @@ class _DummyMainWindow:
         self.info_label_updates = 0
         self.overlay_hidden = False
         self.schedule_visible_thumbnail_load = Mock()
+        self.start_thumbnail_warming = Mock()
 
     def update_loading_text(self, text):
         self._loading_updates.append(text)
@@ -105,7 +106,9 @@ def test_handle_scan_finished_preloads_thumbnails_and_metadata_for_videos_too():
     controller.handle_scan_finished()
 
     worker_manager.start_thumbnail_preload.assert_not_called()
-    main_window.schedule_visible_thumbnail_load.assert_called_once()
+    main_window.start_thumbnail_warming.assert_called_once_with(
+        [image_path, video_path]
+    )
     args, _ = worker_manager.start_rating_load.call_args
     loaded_data = args[0]
     assert len(loaded_data) == 2

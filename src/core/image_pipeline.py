@@ -91,8 +91,9 @@ class ImagePipeline:
         logger.debug("ImageOrientationHandler instantiated.")
 
         from core.app_settings import (
-            HIGH_MEMORY_DECODE_MAX_WORKERS,
             IMAGE_MEMORY_CACHE_SIZE_BYTES,
+            calculate_high_memory_decode_workers,
+            calculate_thumbnail_workers,
         )
 
         self._memory_cache: OrderedDict[tuple, Image.Image] = OrderedDict()
@@ -100,18 +101,26 @@ class ImagePipeline:
         self._memory_cache_limit_bytes = IMAGE_MEMORY_CACHE_SIZE_BYTES
         self._memory_cache_lock = threading.RLock()
         self._generation_locks = [threading.Lock() for _ in range(64)]
+        self._high_memory_decode_workers = calculate_high_memory_decode_workers()
         self._high_memory_decode_gate = threading.BoundedSemaphore(
-            HIGH_MEMORY_DECODE_MAX_WORKERS
+            self._high_memory_decode_workers
         )
 
         # Image decoding is memory-heavy. More threads reduce responsiveness and can
         # multiply full-resolution buffers without improving useful throughput.
-        from core.app_settings import IMAGE_PIPELINE_MAX_WORKERS
-
-        self._num_workers = IMAGE_PIPELINE_MAX_WORKERS
+        self._num_workers = calculate_thumbnail_workers()
         logger.info(
-            f"ImagePipeline initialized in {time.perf_counter() - init_start_time:.4f}s (workers: {self._num_workers})"
+            "ImagePipeline initialized in %.4fs (thumbnail workers: %d, "
+            "full-decode workers: %d)",
+            time.perf_counter() - init_start_time,
+            self._num_workers,
+            self._high_memory_decode_workers,
         )
+
+    @property
+    def thumbnail_worker_count(self) -> int:
+        """Return the current shared thumbnail concurrency budget."""
+        return self._num_workers
 
     @staticmethod
     def _file_fingerprint(image_path: str) -> Tuple[int, int]:
@@ -231,6 +240,8 @@ class ImagePipeline:
         self,
         image_path: str,
         apply_orientation: bool = False,
+        *,
+        promote_to_memory: bool = True,
     ) -> Optional[Image.Image]:
         """
         Internal method to get/generate a PIL thumbnail.
@@ -245,25 +256,33 @@ class ImagePipeline:
 
         cache_key = self.thumbnail_cache_key(normalized_path, apply_orientation)
 
-        cached_img = self._cache_get(self.thumbnail_cache, cache_key)
+        cached_img = self._memory_get(cache_key)
+        if cached_img is None and promote_to_memory:
+            cached_img = self._cache_get(self.thumbnail_cache, cache_key)
         # If cache hit, return immediately
         if cached_img is not None:
             return cached_img
 
         with self._generation_lock(cache_key):
-            cached_img = self._cache_get(self.thumbnail_cache, cache_key)
+            cached_img = self._memory_get(cache_key)
+            if cached_img is None and promote_to_memory:
+                cached_img = self._cache_get(self.thumbnail_cache, cache_key)
             if cached_img is not None:
                 return cached_img
 
             pil_img: Optional[Image.Image] = None
-            high_memory_format = is_raw_extension(ext) or ext in {".heic", ".heif"}
+            raw_format = is_raw_extension(ext)
+            high_memory_format = ext in {".heic", ".heif"}
             decode_gate = self._high_memory_decode_gate if high_memory_format else None
             if decode_gate:
                 decode_gate.acquire()
             try:
-                if is_raw_extension(ext):
+                if raw_format:
                     pil_img = RawImageProcessor.process_raw_for_thumbnail(
-                        normalized_path, apply_auto_edits, THUMBNAIL_MAX_SIZE
+                        normalized_path,
+                        apply_auto_edits,
+                        THUMBNAIL_MAX_SIZE,
+                        fallback_decode_gate=self._high_memory_decode_gate,
                     )
                 elif is_video_extension(ext):
                     pil_img = self._extract_video_thumbnail_with_overlay(
@@ -285,8 +304,38 @@ class ImagePipeline:
             if pil_img:
                 if apply_orientation and ext not in SUPPORTED_STANDARD_EXTENSIONS:
                     pil_img = self.image_orientation_handler.exif_transpose(pil_img)
-                self._cache_set(self.thumbnail_cache, cache_key, pil_img)
+                if promote_to_memory:
+                    self._cache_set(self.thumbnail_cache, cache_key, pil_img)
+                else:
+                    self.thumbnail_cache.set(cache_key, pil_img)
             return pil_img
+
+    def ensure_thumbnail_cached(
+        self,
+        image_path: str,
+        *,
+        promote_to_memory: bool = True,
+    ) -> bool:
+        """Ensure one thumbnail exists without requiring a UI-thread cache read.
+
+        ``promote_to_memory=False`` is intended for low-priority folder warming:
+        it checks and fills the disk cache without displacing hot viewport images.
+        """
+        if not promote_to_memory:
+            normalized_path = os.path.normpath(image_path)
+            cache_key = self.thumbnail_cache_key(normalized_path, False)
+            if self._memory_get(cache_key) is not None:
+                return True
+            # Membership avoids decoding a disk hit into the shared memory LRU.
+            if cache_key in self.thumbnail_cache:
+                return True
+        return (
+            self._get_pil_thumbnail(
+                image_path,
+                promote_to_memory=promote_to_memory,
+            )
+            is not None
+        )
 
     def get_cached_thumbnail_qpixmap(
         self,
@@ -741,9 +790,7 @@ class ImagePipeline:
 
     def _ensure_thumbnail_generated_and_cached(self, image_path: str) -> None:
         """Worker function for preload_thumbnails."""
-        self._get_pil_thumbnail(
-            image_path
-        )  # This handles generation and caching with automatic RAW detection
+        self.ensure_thumbnail_cached(image_path)
 
     def preload_thumbnails(
         self,

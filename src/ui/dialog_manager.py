@@ -393,6 +393,7 @@ class DialogManager:
         """Show the application preferences dialog."""
         from core.app_settings import (
             PerformanceMode,
+            get_available_cpu_count,
             get_performance_mode,
             set_performance_mode,
             get_custom_thread_count,
@@ -489,7 +490,7 @@ class DialogManager:
         custom_radio.setObjectName("customRadio")
         perf_layout.addWidget(custom_radio)
 
-        max_threads = os.cpu_count() or 4
+        max_threads = get_available_cpu_count()
         current_thread_count = min(get_custom_thread_count(), max_threads)
 
         thread_count_label = QLabel(

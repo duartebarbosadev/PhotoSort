@@ -520,7 +520,7 @@ class AppController(QObject):
         plan, output_root = pending
         self.main_window.grouping_step_widget.set_preview_plan(plan, output_root)
         self.main_window.grouping_step_widget.set_loading_state("Preview ready", False)
-        self.main_window.schedule_visible_thumbnail_load()
+        self.main_window.notify_thumbnail_items_rebuilt()
 
     def start_grouping_workflow(
         self,
@@ -1213,7 +1213,9 @@ class AppController(QObject):
 
         media_file_data = self._get_media_file_data()
         if media_file_data:
-            self.main_window.schedule_visible_thumbnail_load()
+            self.main_window.start_thumbnail_warming(
+                [item["path"] for item in media_file_data if item.get("path")]
+            )
 
             self.worker_manager.start_rating_load(
                 media_file_data.copy(),
@@ -1278,7 +1280,7 @@ class AppController(QObject):
         self._pending_grouping_preview = None
         self.main_window.grouping_step_widget.set_preview_plan(plan, output_root)
         self.main_window.grouping_step_widget.set_loading_state("Preview ready", False)
-        self.main_window.schedule_visible_thumbnail_load()
+        self.main_window.notify_thumbnail_items_rebuilt()
 
     def handle_grouping_preview_error(self, message: str):
         self.main_window.update_grouping_preview(f"Preview unavailable: {message}")
