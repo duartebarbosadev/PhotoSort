@@ -71,6 +71,9 @@ def test_pick_best_worker_keeps_failure_reasons_when_cluster_is_skipped(monkeypa
                 ],
             )
 
+        def close(self):
+            pass
+
     monkeypatch.setattr("workers.pick_best_worker.PhotoSelector", _FakeSelector)
 
     worker = PickBestWorker({7: ["/tmp/a.jpg", "/tmp/b.jpg"]})
@@ -93,6 +96,28 @@ def test_pick_best_worker_keeps_failure_reasons_when_cluster_is_skipped(monkeypa
             "failure_reason": "Could not read image preview.",
         },
     ]
+
+
+def test_pick_best_worker_closes_selector_when_cancelled(monkeypatch):
+    closed = []
+
+    class _FakeSelector:
+        def __init__(self, **_kwargs):
+            pass
+
+        def select(self, paths):  # pragma: no cover - cancelled before selection
+            raise AssertionError(paths)
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr("workers.pick_best_worker.PhotoSelector", _FakeSelector)
+
+    worker = PickBestWorker({1: ["/tmp/a.jpg", "/tmp/b.jpg"]})
+    worker.stop()
+    worker.run()
+
+    assert closed == [True]
 
 
 def test_pick_best_widget_shows_failure_reason_for_unscored_image(monkeypatch):

@@ -5,7 +5,6 @@ import os
 import logging
 import time
 import threading
-from typing import Optional, Set, Dict, Tuple
 from PIL import ImageEnhance
 from core.app_settings import (
     RAW_AUTO_EDIT_BRIGHTNESS_STANDARD,
@@ -24,17 +23,17 @@ logger = logging.getLogger(__name__)
 
 # Helper function to check RAW extensions safely
 _rawpy_formats_checked = False
-_rawpy_supported_set: Set[str] = set()
+_rawpy_supported_set: set[str] = set()
 DETAIL_LOG_INTERVAL = 250
 _raw_thumbnail_log_lock = threading.Lock()
-_raw_thumbnail_stats: Dict[str, int] = {
+_raw_thumbnail_stats: dict[str, int] = {
     "calls": 0,
     "embedded": 0,
     "auto_edits": 0,
     "fallback_postprocess": 0,
 }
 _raw_preview_log_lock = threading.Lock()
-_raw_preview_stats: Dict[str, int] = {
+_raw_preview_stats: dict[str, int] = {
     "calls": 0,
     "embedded_preview": 0,
     "preview_auto_edits": 0,
@@ -67,7 +66,7 @@ def _record_raw_thumbnail_stat(stat_key: str, latest_basename: str) -> None:
 def _record_raw_preview_stat(
     stat_key: str,
     latest_basename: str,
-    latest_embedded_size: Optional[Tuple[int, int]] = None,
+    latest_embedded_size: tuple[int, int] | None = None,
 ) -> None:
     with _raw_preview_log_lock:
         if stat_key not in _raw_preview_stats:
@@ -178,8 +177,8 @@ class RawImageProcessor:
         image_path: str,
         apply_auto_edits: bool = False,
         thumbnail_max_size: tuple = THUMBNAIL_MAX_SIZE,
-        fallback_decode_gate: Optional[threading.Semaphore] = None,
-    ) -> Optional[Image.Image]:
+        fallback_decode_gate: threading.Semaphore | None = None,
+    ) -> Image.Image | None:
         """
         Generates a PIL.Image thumbnail from a RAW file.
         Uses embedded thumbnail if suitable, otherwise processes the RAW.
@@ -188,11 +187,11 @@ class RawImageProcessor:
         normalized_path = os.path.normpath(image_path)
         basename = os.path.basename(normalized_path)
         _record_raw_thumbnail_stat("calls", basename)
-        final_pil_img: Optional[Image.Image] = None
+        final_pil_img: Image.Image | None = None
 
         try:
             with rawpy.imread(normalized_path) as raw:
-                temp_pil_img: Optional[Image.Image] = None
+                temp_pil_img: Image.Image | None = None
                 try:
                     # Attempt to use embedded thumbnail first
                     thumb: ImageFile = raw.extract_thumb()
@@ -297,7 +296,7 @@ class RawImageProcessor:
         apply_auto_edits: bool = False,
         preview_max_resolution: tuple = PRELOAD_MAX_RESOLUTION,
         force_default_brightness: bool = False,
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Generates a PIL.Image preview from a RAW file for preloading.
         Attempts to use embedded JPEG or half-size RAW processing for speed.
@@ -306,7 +305,7 @@ class RawImageProcessor:
         normalized_path = os.path.normpath(image_path)
         basename = os.path.basename(normalized_path)
         _record_raw_preview_stat("calls", basename)
-        pil_img: Optional[Image.Image] = None
+        pil_img: Image.Image | None = None
         try:
             with rawpy.imread(normalized_path) as raw:
                 # Attempt 1: Extract a large enough embedded JPEG preview
@@ -455,12 +454,11 @@ class RawImageProcessor:
         use_camera_wb: bool = True,
         output_bps: int = 8,
         half_size: bool = False,  # Default to full resolution unless specified
-        custom_whitebalance: Optional[list] = None,  # e.g. [R, G, B, G2]
-        demosaic_algorithm: Optional[
-            rawpy.DemosaicAlgorithm
-        ] = None,  # e.g. rawpy.DemosaicAlgorithm.AAHD
+        custom_whitebalance: list | None = None,  # e.g. [R, G, B, G2]
+        demosaic_algorithm: rawpy.DemosaicAlgorithm
+        | None = None,  # e.g. rawpy.DemosaicAlgorithm.AAHD
         force_default_brightness: bool = False,
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Loads a RAW image as a PIL Image object, with more granular control over rawpy postprocessing.
         'apply_auto_edits' will enable brightness adjustment and auto-contrast.
@@ -548,16 +546,16 @@ class RawImageProcessor:
         image_path: str,
         target_size: tuple = BLUR_DETECTION_PREVIEW_SIZE,
         apply_auto_edits: bool = False,
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Loads and prepares a PIL image (RGB) from a RAW file for blur detection, scaled to target_size.
         Uses efficient methods (embedded or half-size postprocess).
         """
         normalized_path = os.path.normpath(image_path)
-        pil_img: Optional[Image.Image] = None
+        pil_img: Image.Image | None = None
         try:
             with rawpy.imread(normalized_path) as raw:
-                temp_pil_img: Optional[Image.Image] = None
+                temp_pil_img: Image.Image | None = None
                 used_embedded_thumbnail = False
                 try:  # Attempt embedded thumbnail first
                     thumb: ImageFile = raw.extract_thumb()

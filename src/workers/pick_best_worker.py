@@ -1,7 +1,6 @@
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -24,7 +23,7 @@ def _failed_entry(path: str, reason: str) -> dict:
     }
 
 
-def _summarize_failed_images(failed_images: List[dict], *, limit: int = 3) -> str:
+def _summarize_failed_images(failed_images: list[dict], *, limit: int = 3) -> str:
     if not failed_images:
         return ""
 
@@ -50,9 +49,9 @@ class PickBestWorker(QObject):
 
     def __init__(
         self,
-        cluster_map: Dict[int, List[str]],
+        cluster_map: dict[int, list[str]],
         image_pipeline=None,
-        parent: Optional[QObject] = None,
+        parent: QObject | None = None,
     ):
         super().__init__(parent)
         self.cluster_map = cluster_map
@@ -89,74 +88,79 @@ class PickBestWorker(QObject):
             ),
             preview_loader=self._load_preview_image,
         )
-        results: Dict[int, dict] = {}
-        for processed, cluster_id in enumerate(sorted(scorable_clusters)):
-            if self._should_stop:
-                logger.info("PickBestWorker: stop requested.")
-                break
+        results: dict[int, dict] = {}
+        try:
+            for processed, cluster_id in enumerate(sorted(scorable_clusters)):
+                if self._should_stop:
+                    logger.info("PickBestWorker: stop requested.")
+                    break
 
-            paths = scorable_clusters[cluster_id]
+                paths = scorable_clusters[cluster_id]
 
-            # Filter to supported extensions only
-            supported_paths = [p for p in paths if self._is_supported_path(p)]
-            all_paths = list(paths)
+                # Filter to supported extensions only
+                supported_paths = [p for p in paths if self._is_supported_path(p)]
+                all_paths = list(paths)
 
-            percent = int((processed / total) * 100)
-            base_names = [os.path.basename(p) for p in paths[:3]]
-            preview = ", ".join(base_names)
-            self.progress_update.emit(
-                percent, f"Scoring cluster {processed + 1}/{total}: {preview}…"
-            )
-
-            cluster_result: dict = {
-                "winner_path": None,
-                "ranked": [],
-                "failed": [],
-                "all_paths": all_paths,
-                "unsupported_paths": [
-                    p for p in all_paths if not self._is_supported_path(p)
-                ],
-            }
-
-            if len(supported_paths) >= 2:
-                try:
-                    selection = selector.select(supported_paths)
-                    cluster_result["winner_path"] = selection.winner.path
-                    cluster_result["ranked"] = [
-                        img.to_dict() for img in selection.ranked_images
-                    ]
-                    cluster_result["failed"] = [
-                        img.to_dict() for img in selection.failed_images
-                    ]
-                    logger.debug(
-                        f"Cluster {cluster_id}: winner={os.path.basename(selection.winner.path)}"
-                    )
-                    if cluster_result["failed"]:
-                        logger.warning(
-                            "Cluster %s: %d image(s) could not be scored — %s",
-                            cluster_id,
-                            len(cluster_result["failed"]),
-                            _summarize_failed_images(cluster_result["failed"]),
-                        )
-                except (NoSupportedImagesError, NoScorableImagesError) as exc:
-                    if isinstance(exc, NoScorableImagesError):
-                        cluster_result["failed"] = [
-                            _failed_entry(path, reason) for path, reason in exc.failures
-                        ]
-                    logger.warning(f"Cluster {cluster_id}: skipped — {exc}")
-                    # No winner; treat whole cluster as unscored
-                except Exception as exc:
-                    logger.error(
-                        f"Cluster {cluster_id}: scoring failed — {exc}", exc_info=True
-                    )
-                    # Don't abort all — continue with remaining clusters
-            else:
-                logger.debug(
-                    f"Cluster {cluster_id}: fewer than 2 supported images, skipping scoring "
-                    f"({len(supported_paths)}/{len(all_paths)} supported)."
+                percent = int((processed / total) * 100)
+                base_names = [os.path.basename(p) for p in paths[:3]]
+                preview = ", ".join(base_names)
+                self.progress_update.emit(
+                    percent, f"Scoring cluster {processed + 1}/{total}: {preview}…"
                 )
 
-            results[cluster_id] = cluster_result
+                cluster_result: dict = {
+                    "winner_path": None,
+                    "ranked": [],
+                    "failed": [],
+                    "all_paths": all_paths,
+                    "unsupported_paths": [
+                        p for p in all_paths if not self._is_supported_path(p)
+                    ],
+                }
+
+                if len(supported_paths) >= 2:
+                    try:
+                        selection = selector.select(supported_paths)
+                        cluster_result["winner_path"] = selection.winner.path
+                        cluster_result["ranked"] = [
+                            img.to_dict() for img in selection.ranked_images
+                        ]
+                        cluster_result["failed"] = [
+                            img.to_dict() for img in selection.failed_images
+                        ]
+                        logger.debug(
+                            f"Cluster {cluster_id}: winner={os.path.basename(selection.winner.path)}"
+                        )
+                        if cluster_result["failed"]:
+                            logger.warning(
+                                "Cluster %s: %d image(s) could not be scored — %s",
+                                cluster_id,
+                                len(cluster_result["failed"]),
+                                _summarize_failed_images(cluster_result["failed"]),
+                            )
+                    except (NoSupportedImagesError, NoScorableImagesError) as exc:
+                        if isinstance(exc, NoScorableImagesError):
+                            cluster_result["failed"] = [
+                                _failed_entry(path, reason)
+                                for path, reason in exc.failures
+                            ]
+                        logger.warning(f"Cluster {cluster_id}: skipped — {exc}")
+                        # No winner; treat whole cluster as unscored
+                    except Exception as exc:
+                        logger.error(
+                            f"Cluster {cluster_id}: scoring failed — {exc}",
+                            exc_info=True,
+                        )
+                        # Don't abort all — continue with remaining clusters
+                else:
+                    logger.debug(
+                        f"Cluster {cluster_id}: fewer than 2 supported images, skipping scoring "
+                        f"({len(supported_paths)}/{len(all_paths)} supported)."
+                    )
+
+                results[cluster_id] = cluster_result
+        finally:
+            selector.close()
 
         if not self._should_stop:
             self.progress_update.emit(100, "Scoring complete.")

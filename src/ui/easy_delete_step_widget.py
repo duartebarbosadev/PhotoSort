@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 import logging
 import os
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
@@ -31,14 +29,14 @@ from ui.workflow_review_components import (
 
 logger = logging.getLogger(__name__)
 
-_ISSUE_LABELS: Dict[str, tuple] = {
+_ISSUE_LABELS: dict[str, tuple] = {
     "blur": ("BLUR", "#FF6B6B"),
     "dark": ("DARK", "#4A90D9"),
     "white": ("WHITE", "#F5B700"),
     "duplicate": ("DUP", "#A78BFA"),
 }
 _ISSUE_ORDER = ("duplicate", "blur", "dark", "white")
-_CATEGORY_NAMES: Dict[str, str] = {
+_CATEGORY_NAMES: dict[str, str] = {
     "blur": "Blurry",
     "dark": "Near-black",
     "white": "Overexposed",
@@ -51,15 +49,15 @@ _MARKED_COLOR = "#E53935"
 class _ScaledImageLabel(QLabel):
     """QLabel that scales a stored pixmap to fill its size while keeping aspect ratio."""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._source_pixmap: Optional[QPixmap] = None
+        self._source_pixmap: QPixmap | None = None
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(80, 80)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setStyleSheet("background: #232628;")
 
-    def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:
+    def set_pixmap(self, pixmap: QPixmap | None) -> None:
         self._source_pixmap = pixmap
         self._refresh()
 
@@ -87,17 +85,17 @@ class EasyDeleteStepWidget(QWidget):
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._results: Dict[str, dict] = {}
-        self._flagged_paths: List[str] = []
+        self._results: dict[str, dict] = {}
+        self._flagged_paths: list[str] = []
         self._current_index: int = -1
-        self._category_counts: Dict[str, int] = {}
-        self._enabled_categories: Dict[str, bool] = {}
-        self._category_checkboxes: Dict[str, QCheckBox] = {}
+        self._category_counts: dict[str, int] = {}
+        self._enabled_categories: dict[str, bool] = {}
+        self._category_checkboxes: dict[str, QCheckBox] = {}
         self._updating_category_toggles = False
-        self._is_marked_func: Optional[Callable[[str], bool]] = None
-        self._has_any_marked_func: Optional[Callable[[], bool]] = None
+        self._is_marked_func: Callable[[str], bool] | None = None
+        self._has_any_marked_func: Callable[[], bool] | None = None
         self._image_pipeline = None
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._setup_ui()
@@ -148,7 +146,7 @@ class EasyDeleteStepWidget(QWidget):
         self._progress_bar.setValue(0)
         self._content_stack.setCurrentIndex(0)
 
-    def show_results(self, results: Dict[str, dict]) -> None:
+    def show_results(self, results: dict[str, dict]) -> None:
         self._results = results
         self._category_counts = self._build_category_counts(results)
         self._enabled_categories = {
@@ -181,15 +179,15 @@ class EasyDeleteStepWidget(QWidget):
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _build_ordered_paths(self, results: dict) -> List[str]:
+    def _build_ordered_paths(self, results: dict) -> list[str]:
         return self._build_ordered_paths_for_issue_types(
             results, self._enabled_issue_types()
         )
 
     def _build_ordered_paths_for_issue_types(
-        self, results: dict, issue_types: List[str] | tuple[str, ...]
-    ) -> List[str]:
-        ordered: List[str] = []
+        self, results: dict, issue_types: list[str] | tuple[str, ...]
+    ) -> list[str]:
+        ordered: list[str] = []
         seen: set = set()
         for issue_type in issue_types:
             for path, entry in results.items():
@@ -204,22 +202,22 @@ class EasyDeleteStepWidget(QWidget):
                         seen.add(entry["pair_path"])
         return ordered
 
-    def _build_category_counts(self, results: dict) -> Dict[str, int]:
-        counts: Dict[str, int] = {}
+    def _build_category_counts(self, results: dict) -> dict[str, int]:
+        counts: dict[str, int] = {}
         ordered_paths = self._build_ordered_paths_for_issue_types(results, _ISSUE_ORDER)
         for path in ordered_paths:
             issue_type = results.get(path, {}).get("type", "")
             counts[issue_type] = counts.get(issue_type, 0) + 1
         return counts
 
-    def _enabled_issue_types(self) -> List[str]:
+    def _enabled_issue_types(self) -> list[str]:
         return [
             issue_type
             for issue_type in _ISSUE_ORDER
             if self._enabled_categories.get(issue_type, False)
         ]
 
-    def _issue_types_with_counts(self) -> List[str]:
+    def _issue_types_with_counts(self) -> list[str]:
         return [
             issue_type
             for issue_type in _ISSUE_ORDER
@@ -404,12 +402,12 @@ class EasyDeleteStepWidget(QWidget):
         label.set_pixmap(pixmap)
         return pixmap is not None and not pixmap.isNull()
 
-    def _request_previews(self, paths: List[str]) -> None:
+    def _request_previews(self, paths: list[str]) -> None:
         request = getattr(self.window(), "request_interactive_previews", None)
         if paths and callable(request):
             request(paths)
 
-    def _load_pixmap(self, path: str) -> Optional[QPixmap]:
+    def _load_pixmap(self, path: str) -> QPixmap | None:
         try:
             if self._image_pipeline:
                 pixmap = self._image_pipeline.get_cached_analysis_qpixmap(

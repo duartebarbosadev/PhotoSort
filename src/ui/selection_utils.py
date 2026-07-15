@@ -1,12 +1,9 @@
-from typing import List, Optional
-
-
 def select_next_surviving_path(
-    visible_paths_before: List[str],
-    removed_paths: List[str],
-    anchor_path_before: Optional[str],
-    visible_paths_after: List[str],
-) -> Optional[str]:
+    visible_paths_before: list[str],
+    removed_paths: list[str],
+    anchor_path_before: str | None,
+    visible_paths_after: list[str],
+) -> str | None:
     """Determine the most appropriate next path to select after one or more items
     have been removed (rotation accepted, files deleted, filtered out, etc.).
 

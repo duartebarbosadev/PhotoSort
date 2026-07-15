@@ -7,7 +7,6 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
@@ -32,7 +31,7 @@ class UpdateInfo:
     release_url: str
     release_notes: str
     published_at: str
-    download_url: Optional[str] = None
+    download_url: str | None = None
 
 
 class UpdateChecker:
@@ -73,7 +72,7 @@ class UpdateChecker:
 
     def check_for_updates(
         self, current_version: str
-    ) -> Tuple[bool, Optional[UpdateInfo], Optional[str]]:
+    ) -> tuple[bool, UpdateInfo | None, str | None]:
         """
         Check for updates from GitHub releases.
 
@@ -158,7 +157,7 @@ class UpdateChecker:
             logger.error(error_msg, exc_info=True)
             return False, None, error_msg
 
-    def _find_download_url(self, assets: list) -> Optional[str]:
+    def _find_download_url(self, assets: list) -> str | None:
         """Find the appropriate download URL for the current platform."""
         import platform
 
@@ -218,7 +217,7 @@ class UpdateChecker:
             # If parsing fails, assume update is available to be safe
             return True
 
-    def _parse_version(self, version: str) -> Tuple[int, ...]:
+    def _parse_version(self, version: str) -> tuple[int, ...]:
         """
         Parse a version string into comparable components.
         Examples: "1.0.2" -> (1, 0, 2), "1.0.2a" -> (1, 0, 2, -1)

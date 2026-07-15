@@ -1,12 +1,10 @@
 """Prioritized background thumbnail loading for one folder session."""
 
-from __future__ import annotations
-
 import concurrent.futures
 from collections import deque
 import logging
 import threading
-from typing import Callable, Iterable, List, Optional
+from collections.abc import Callable, Iterable
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -33,11 +31,11 @@ class ThumbnailPreloadWorker(QObject):
         image_pipeline: ImagePipeline,
         *,
         session_id: str = "",
-        all_paths: Optional[Iterable[str]] = None,
-        foreground_paths: Optional[Iterable[str]] = None,
-        should_pause_background: Optional[Callable[[], bool]] = None,
+        all_paths: Iterable[str] | None = None,
+        foreground_paths: Iterable[str] | None = None,
+        should_pause_background: Callable[[], bool] | None = None,
         materialize_background: bool = True,
-        max_workers: Optional[int] = None,
+        max_workers: int | None = None,
     ):
         super().__init__()
         self.image_pipeline = image_pipeline
@@ -289,7 +287,7 @@ class ThumbnailPreloadWorker(QObject):
                 self._failures,
             )
 
-    def preload_thumbnails(self, image_paths: List[str]):
+    def preload_thumbnails(self, image_paths: list[str]):
         """Backward-compatible one-shot preload used by existing integrations."""
         self._is_running = True
         total = len(image_paths)

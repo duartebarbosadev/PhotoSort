@@ -1,6 +1,5 @@
-from __future__ import annotations
 from collections import Counter
-from typing import Callable, Optional, Sequence, Iterable, Set
+from collections.abc import Callable, Sequence, Iterable
 
 # Navigation helpers extracted from MainWindow. These are UI-agnostic and operate on
 # ordered path lists plus simple state flags. MainWindow is responsible for mapping
@@ -9,11 +8,11 @@ from typing import Callable, Optional, Sequence, Iterable, Set
 
 def navigate_group_cyclic(
     sibling_paths: Sequence[str],
-    current_path: Optional[str],
+    current_path: str | None,
     direction: str,
     skip_deleted: bool,
-    deleted_paths: Set[str] | Iterable[str],
-) -> Optional[str]:
+    deleted_paths: set[str] | Iterable[str],
+) -> str | None:
     """Return the next path within a logical sibling group (left/right cyclic).
 
     direction: 'left' or 'right'
@@ -47,11 +46,11 @@ def navigate_group_cyclic(
 
 def navigate_linear(
     ordered_paths: Sequence[str],
-    current_path: Optional[str],
+    current_path: str | None,
     direction: str,
     skip_deleted: bool,
-    deleted_paths: Set[str] | Iterable[str],
-) -> Optional[str]:
+    deleted_paths: set[str] | Iterable[str],
+) -> str | None:
     """Return next path in a flat ordering (up/down semantics).
 
     direction: 'up' or 'down'
@@ -118,11 +117,11 @@ def find_next_rating_match(
     ordered_paths: Sequence[str],
     direction: str,
     current_index: int,
-    target_rating: Optional[int],
-    rating_lookup: Callable[[str], Optional[int]],
+    target_rating: int | None,
+    rating_lookup: Callable[[str], int | None],
     skip_deleted: bool,
-    is_deleted: Optional[Callable[[str], bool]] = None,
-) -> Optional[str]:
+    is_deleted: Callable[[str], bool] | None = None,
+) -> str | None:
     if target_rating is None or direction not in {"up", "down"}:
         return None
     total = len(ordered_paths)
@@ -145,10 +144,10 @@ def find_next_multi_image_cluster_head(
     ordered_paths: Sequence[str],
     direction: str,
     current_index: int,
-    cluster_lookup: Callable[[str], Optional[int]],
+    cluster_lookup: Callable[[str], int | None],
     skip_deleted: bool,
-    is_deleted: Optional[Callable[[str], bool]] = None,
-) -> Optional[str]:
+    is_deleted: Callable[[str], bool] | None = None,
+) -> str | None:
     if direction not in {"up", "down"}:
         return None
     total = len(ordered_paths)
@@ -217,10 +216,10 @@ def find_next_in_same_multi_cluster(
     ordered_paths: Sequence[str],
     direction: str,
     current_index: int,
-    cluster_lookup: Callable[[str], Optional[int]],
+    cluster_lookup: Callable[[str], int | None],
     skip_deleted: bool,
-    is_deleted: Optional[Callable[[str], bool]] = None,
-) -> Optional[str]:
+    is_deleted: Callable[[str], bool] | None = None,
+) -> str | None:
     """Move within the current multi-image cluster if possible.
 
     Returns the next path inside the same cluster following display order,

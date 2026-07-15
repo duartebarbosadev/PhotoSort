@@ -9,7 +9,6 @@ import os
 import time
 import threading
 import concurrent.futures
-from typing import Dict, Optional, Tuple
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.metadata_processor import MetadataProcessor
@@ -30,7 +29,7 @@ class RotationApplicationWorker(QObject):
     finished = pyqtSignal(int, int)  # successful_count, failed_count
     error = pyqtSignal(str)
 
-    def __init__(self, exif_disk_cache: Optional[ExifCache] = None):
+    def __init__(self, exif_disk_cache: ExifCache | None = None):
         super().__init__()
         self.exif_disk_cache = exif_disk_cache
         self._is_running = True
@@ -43,7 +42,7 @@ class RotationApplicationWorker(QObject):
 
     def _rotate_single_image(
         self, file_path: str, rotation_degrees: int, total_rotations: int
-    ) -> Tuple[str, str, bool, str, bool]:
+    ) -> tuple[str, str, bool, str, bool]:
         """
         Rotate a single image (used by both sequential and parallel paths).
 
@@ -147,7 +146,7 @@ class RotationApplicationWorker(QObject):
                 f"{single_file_end_time - single_file_start_time:.2f}s."
             )
 
-    def apply_rotations(self, approved_rotations: Dict[str, int]):
+    def apply_rotations(self, approved_rotations: dict[str, int]):
         """
         Apply rotations to multiple images.
         Uses parallel processing for multiple images when max_workers > 1.

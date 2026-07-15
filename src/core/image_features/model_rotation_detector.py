@@ -5,14 +5,12 @@ torchvision, Pillow) and the ONNX session are loaded only when first needed.
 If anything is missing, detector stays disabled and returns 0.
 """
 
-from __future__ import annotations
-
 import glob
 import logging
 import os
 from dataclasses import dataclass
 import threading
-from typing import Optional, Protocol, runtime_checkable, Any
+from typing import Protocol, runtime_checkable, Any
 
 import numpy as np
 
@@ -48,7 +46,7 @@ class RotationDetectorProtocol(Protocol):  # pragma: no cover - structural typin
     def predict_rotation_angle(
         self,
         image_path: str,
-        image: Optional[object] = None,
+        image: object | None = None,
     ) -> int: ...
 
 
@@ -64,14 +62,14 @@ class _LazyState:
     load_failed: bool = False
     failure_logged: bool = False
     session: Any = None
-    input_name: Optional[str] = None
-    output_name: Optional[str] = None
-    provider_name: Optional[str] = None
+    input_name: str | None = None
+    output_name: str | None = None
+    provider_name: str | None = None
     transforms: Any = None
 
 
 class ModelRotationDetector(RotationDetectorProtocol):
-    _instance: Optional["ModelRotationDetector"] = None
+    _instance: ModelRotationDetector | None = None
 
     def __new__(cls, *args, **kwargs):  # singleton pattern
         if cls._instance is None:
@@ -84,7 +82,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
     def predict_rotation_angle(
         self,
         image_path: str,
-        image: Optional[object] = None,
+        image: object | None = None,
     ) -> int:
         if not self._ensure_session_loaded():
             # If session loading failed and this is the first call to predict,
@@ -216,7 +214,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
                 return False
 
     # --------------------------- Helper Functions ------------------------- #
-    def _resolve_model_path(self) -> Optional[str]:
+    def _resolve_model_path(self) -> str | None:
         """Resolve the ONNX model path across source and frozen bundles.
 
         Search order:

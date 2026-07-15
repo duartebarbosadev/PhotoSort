@@ -2,7 +2,6 @@ import diskcache
 import os
 import logging
 import time
-from typing import Optional
 from core.app_settings import DEFAULT_RATING_CACHE_SIZE_LIMIT_MB
 from core.runtime_paths import resolve_user_cache_dir
 
@@ -16,7 +15,7 @@ class RatingCache:
 
     def __init__(
         self,
-        cache_dir: Optional[str] = None,
+        cache_dir: str | None = None,
         size_limit_mb: int = DEFAULT_RATING_CACHE_SIZE_LIMIT_MB,
     ):
         if cache_dir is None:
@@ -47,7 +46,7 @@ class RatingCache:
             f"Initialization complete in {time.perf_counter() - init_start_time:.4f}s"
         )
 
-    def get(self, key: str) -> Optional[int]:
+    def get(self, key: str) -> int | None:
         """
         Retrieves an item (rating) from the cache.
         The key is typically the normalized file path.

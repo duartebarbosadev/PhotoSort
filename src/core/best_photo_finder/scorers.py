@@ -1,10 +1,8 @@
-from __future__ import annotations
-
 from dataclasses import dataclass, field
-import importlib
 from math import dist
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Protocol, Sequence
+from typing import Protocol
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from core.best_photo_finder.config import SelectorConfig
 from core.best_photo_finder.devices import ResolvedDevice, resolve_device
@@ -12,6 +10,7 @@ from core.best_photo_finder.errors import MissingDependencyError, SelectionError
 from core.best_photo_finder.models import TechnicalMetrics
 from core.app_settings import get_huggingface_cache_dir
 from core.huggingface_progress import build_hf_tqdm_class
+from core.runtime_paths import resolve_face_landmarker_model_path
 
 LEFT_EYE_INDICES = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_INDICES = (362, 385, 387, 263, 373, 380)
@@ -25,6 +24,9 @@ class TechnicalScorer(Protocol):
         self, path: Path, image, config: SelectorConfig
     ) -> TechnicalMetrics:
         """Compute blur and face-aware metrics for a preloaded image."""
+
+    def close(self) -> None:
+        """Release native resources held by the scorer."""
 
 
 class AestheticScorer(Protocol):
@@ -58,37 +60,56 @@ def _require_module(name: str):
         ) from exc
 
 
-def _load_face_mesh_factory():
-    try:
+class FaceLandmarkerBackend(Protocol):
+    def detect_landmarks(self, rgb_image) -> Sequence[Sequence[object]]:
+        """Return normalized landmarks for every face in an RGB image."""
+
+    def close(self) -> None:
+        """Release native MediaPipe resources."""
+
+
+class MediaPipeTasksFaceLandmarker:
+    """Small adapter around MediaPipe Tasks' model-backed Face Landmarker."""
+
+    def __init__(self, model_path: Path) -> None:
         mediapipe = _require_module("mediapipe")
-    except MissingDependencyError:
-        raise
-
-    solutions = getattr(mediapipe, "solutions", None)
-    if solutions is not None:
-        face_mesh_module = getattr(solutions, "face_mesh", None)
-        face_mesh_factory = getattr(face_mesh_module, "FaceMesh", None)
-        if face_mesh_factory is not None:
-            return face_mesh_factory
-
-    for module_name in (
-        "mediapipe.python.solutions.face_mesh",
-        "mediapipe.solutions.face_mesh",
-    ):
         try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        face_mesh_factory = getattr(module, "FaceMesh", None)
-        if face_mesh_factory is not None:
-            return face_mesh_factory
+            tasks = mediapipe.tasks
+            vision = tasks.vision
+            options = vision.FaceLandmarkerOptions(
+                base_options=tasks.BaseOptions(model_asset_path=str(model_path)),
+                running_mode=vision.RunningMode.IMAGE,
+                num_faces=10,
+            )
+            self._landmarker = vision.FaceLandmarker.create_from_options(options)
+            self._image_type = mediapipe.Image
+            self._image_format = mediapipe.ImageFormat.SRGB
+        except (AttributeError, ValueError, RuntimeError) as exc:
+            version = getattr(mediapipe, "__version__", "unknown")
+            raise MissingDependencyError(
+                "MediaPipe Tasks Face Landmarker could not be initialized "
+                f"(detected version: {version}, model: {model_path})."
+            ) from exc
 
-    version = getattr(mediapipe, "__version__", "unknown")
-    raise MissingDependencyError(
-        "Installed MediaPipe does not expose the legacy FaceMesh API required by this project "
-        f"(detected version: {version}). Reinstall a compatible release, for example "
-        "`pip install 'mediapipe<0.10.30'`."
-    )
+    def detect_landmarks(self, rgb_image) -> Sequence[Sequence[object]]:
+        try:
+            import numpy as np
+        except ImportError as exc:
+            raise MissingDependencyError(
+                "Missing optional dependency 'numpy'. Install the required extras before running the selector."
+            ) from exc
+        image = self._image_type(
+            image_format=self._image_format,
+            data=np.ascontiguousarray(rgb_image),
+        )
+        return self._landmarker.detect(image).face_landmarks
+
+    def close(self) -> None:
+        self._landmarker.close()
+
+
+def _create_face_landmarker(model_path: Path) -> FaceLandmarkerBackend:
+    return MediaPipeTasksFaceLandmarker(model_path)
 
 
 def _normalized_blur_penalty(variance: float, config: SelectorConfig) -> float:
@@ -139,9 +160,14 @@ class FaceBox:
 
 @dataclass(slots=True)
 class OpenCvMediapipeTechnicalScorer:
-    _face_mesh: object | None = field(default=None, init=False, repr=False)
-    _face_mesh_error: str | None = field(default=None, init=False, repr=False)
-    _face_mesh_disabled: bool = field(default=False, init=False, repr=False)
+    face_landmarker_factory: Callable[[Path], FaceLandmarkerBackend] = field(
+        default=_create_face_landmarker, repr=False
+    )
+    _face_landmarker: FaceLandmarkerBackend | None = field(
+        default=None, init=False, repr=False
+    )
+    _face_landmarker_error: str | None = field(default=None, init=False, repr=False)
+    _face_landmarker_disabled: bool = field(default=False, init=False, repr=False)
     _face_cascade: object | None = field(default=None, init=False, repr=False)
     _eye_cascade: object | None = field(default=None, init=False, repr=False)
 
@@ -231,16 +257,19 @@ class OpenCvMediapipeTechnicalScorer:
         issues: list[str] = []
         closed = False
 
-        face_mesh = self._get_face_mesh()
-        if face_mesh is not None and face_rgb.size:
-            results = face_mesh.process(face_rgb)
-            face_landmarks_list = results.multi_face_landmarks or []
+        face_landmarker = self._get_face_landmarker()
+        if face_landmarker is not None and face_rgb.size:
+            try:
+                face_landmarks_list = face_landmarker.detect_landmarks(face_rgb)
+            except (MissingDependencyError, ValueError, RuntimeError) as exc:
+                self._disable_face_landmarker(exc)
+                face_landmarks_list = []
             if face_landmarks_list:
                 best = max(
                     face_landmarks_list,
-                    key=lambda item: _face_area_ratio(item.landmark),
+                    key=_face_area_ratio,
                 )
-                landmarks = best.landmark
+                landmarks = best
                 left_ear = _eye_aspect_ratio(landmarks, LEFT_EYE_INDICES)
                 right_ear = _eye_aspect_ratio(landmarks, RIGHT_EYE_INDICES)
                 closed = min(left_ear, right_ear) < config.eye_closed_threshold
@@ -250,32 +279,52 @@ class OpenCvMediapipeTechnicalScorer:
                 max_face_area_ratio = max(max_face_area_ratio, landmark_ratio)
                 return closed, max_face_area_ratio, tuple(issues)
 
-        if self._face_mesh_error:
-            issues.append(f"landmark fallback used: {self._face_mesh_error}")
+        if self._face_landmarker_error:
+            issues.append(f"landmark fallback used: {self._face_landmarker_error}")
 
         upper_face = face_gray[: max(1, face_gray.shape[0] // 2), :]
         eye_count = self._detect_open_eyes_in_face(upper_face, cv2)
         closed = eye_count < 2
         return closed, max_face_area_ratio, tuple(issues)
 
-    def _get_face_mesh(self):
-        if self._face_mesh_disabled:
+    def _get_face_landmarker(self) -> FaceLandmarkerBackend | None:
+        if self._face_landmarker_disabled:
             return None
-        if self._face_mesh is not None:
-            return self._face_mesh
-
-        face_mesh_factory = _load_face_mesh_factory()
+        if self._face_landmarker is not None:
+            return self._face_landmarker
         try:
-            self._face_mesh = face_mesh_factory(
-                static_image_mode=True,
-                max_num_faces=10,
-                refine_landmarks=True,
+            self._face_landmarker = self.face_landmarker_factory(
+                resolve_face_landmarker_model_path()
             )
-        except RuntimeError as exc:
-            self._face_mesh_disabled = True
-            self._face_mesh_error = str(exc)
+        except (
+            FileNotFoundError,
+            MissingDependencyError,
+            ValueError,
+            RuntimeError,
+        ) as exc:
+            self._disable_face_landmarker(exc)
             return None
-        return self._face_mesh
+        return self._face_landmarker
+
+    def _disable_face_landmarker(self, exc: Exception) -> None:
+        landmarker = self._face_landmarker
+        self._face_landmarker = None
+        self._face_landmarker_disabled = True
+        self._face_landmarker_error = str(exc)
+        if landmarker is not None:
+            try:
+                landmarker.close()
+            except RuntimeError:
+                pass
+
+    def close(self) -> None:
+        landmarker = self._face_landmarker
+        self._face_landmarker = None
+        if landmarker is not None:
+            try:
+                landmarker.close()
+            except RuntimeError:
+                pass
 
     def score(self, path: Path, config: SelectorConfig) -> TechnicalMetrics:
         cv2 = _require_module("cv2")
@@ -333,8 +382,8 @@ class OpenCvMediapipeTechnicalScorer:
             max_face_area_ratio = max(max_face_area_ratio, face_area_ratio)
             issues.extend(face_issues)
 
-        if not faces and self._face_mesh_error:
-            issues.append(f"face analysis unavailable: {self._face_mesh_error}")
+        if not faces and self._face_landmarker_error:
+            issues.append(f"face analysis unavailable: {self._face_landmarker_error}")
 
         eye_penalty = 0.0
         if face_count:

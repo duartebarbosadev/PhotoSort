@@ -1,5 +1,3 @@
-from __future__ import annotations
-from typing import List
 import os
 import logging
 from PyQt6.QtCore import QModelIndex, QItemSelection, QTimer, QItemSelectionModel
@@ -27,8 +25,8 @@ class FileDeletionContextProtocol:
 
     # Methods expected:
     def _get_active_file_view(self): ...  # returns QAbstractItemView or None
-    def _get_selected_file_paths_from_view(self) -> List[str]: ...
-    def _get_all_visible_image_paths(self) -> List[str]: ...
+    def _get_selected_file_paths_from_view(self) -> list[str]: ...
+    def _get_all_visible_image_paths(self) -> list[str]: ...
     def _find_proxy_index_for_path(self, path: str): ...
     def _handle_file_selection_changed(self, override_selected_paths=None): ...
     def _update_image_info_label(self): ...
@@ -49,7 +47,7 @@ class FileDeletionController:
     def __init__(self, ctx: FileDeletionContextProtocol):
         self.ctx = ctx
         # Stateful flags mirrored from previous MainWindow logic
-        self.original_selection_paths: List[str] = []
+        self.original_selection_paths: list[str] = []
         self.was_focused_delete: bool = False
 
     # Public API
@@ -99,7 +97,7 @@ class FileDeletionController:
             )
 
     # --- Internal helpers ---
-    def _collect_source_indices(self, paths: List[str]):
+    def _collect_source_indices(self, paths: list[str]):
         indices = []
         for p in paths:
             proxy = self.ctx._find_proxy_index_for_path(p)

@@ -1,7 +1,6 @@
 import logging
 import os
 import hashlib
-from typing import Dict, List, Optional
 
 import cv2
 import numpy as np
@@ -34,12 +33,12 @@ class EasyDeleteWorker(QObject):
 
     def __init__(
         self,
-        image_paths: List[str],
-        cluster_map: Optional[Dict[int, List[str]]] = None,
-        embeddings_cache: Optional[Dict] = None,
+        image_paths: list[str],
+        cluster_map: dict[int, list[str]] | None = None,
+        embeddings_cache: dict | None = None,
         exif_disk_cache=None,
-        image_pipeline: Optional[ImagePipeline] = None,
-        parent: Optional[QObject] = None,
+        image_pipeline: ImagePipeline | None = None,
+        parent: QObject | None = None,
     ):
         super().__init__(parent)
         self.image_paths = list(image_paths)
@@ -48,8 +47,8 @@ class EasyDeleteWorker(QObject):
         self.exif_disk_cache = exif_disk_cache
         self.image_pipeline = image_pipeline
         self._should_stop = False
-        self._sharpness_cache: Dict[str, float] = {}
-        self._hash_cache: Dict[str, Optional[str]] = {}
+        self._sharpness_cache: dict[str, float] = {}
+        self._hash_cache: dict[str, str | None] = {}
 
     def stop(self) -> None:
         self._should_stop = True
@@ -64,7 +63,7 @@ class EasyDeleteWorker(QObject):
             self.finished.emit()
 
     def _run(self) -> None:
-        results: Dict[str, dict] = {}
+        results: dict[str, dict] = {}
         total = len(self.image_paths)
         if total == 0:
             self.completed.emit(results)
@@ -91,7 +90,7 @@ class EasyDeleteWorker(QObject):
             self.progress_update.emit(100, "Detection complete.")
             self.completed.emit(results)
 
-    def _detect_issue(self, path: str) -> Optional[dict]:
+    def _detect_issue(self, path: str) -> dict | None:
         gray = self._load_gray_for_detection(path)
         if gray is None:
             return None
@@ -143,7 +142,7 @@ class EasyDeleteWorker(QObject):
                 max_variance = max(max_variance, variance)
         return max_variance
 
-    def _load_gray_for_detection(self, path: str) -> Optional[np.ndarray]:
+    def _load_gray_for_detection(self, path: str) -> np.ndarray | None:
         if self.image_pipeline is not None:
             pil_img = self.image_pipeline.get_analysis_image(
                 path,
@@ -185,8 +184,8 @@ class EasyDeleteWorker(QObject):
             self._sharpness_cache[path] = 0.0
             return 0.0
 
-    def _detect_duplicates(self) -> Dict[str, dict]:
-        results: Dict[str, dict] = {}
+    def _detect_duplicates(self) -> dict[str, dict]:
+        results: dict[str, dict] = {}
         # Track which paths are already part of a reported pair to avoid duplicates
         already_paired: set = set()
         duplicate_distance = app_settings.get_easy_delete_duplicate_distance()
@@ -286,11 +285,11 @@ class EasyDeleteWorker(QObject):
         except OSError:
             return 0
 
-    def _file_hash(self, path: str) -> Optional[str]:
+    def _file_hash(self, path: str) -> str | None:
         """Return a SHA-256 hex digest of the file's bytes (cached), or None on error."""
         if path in self._hash_cache:
             return self._hash_cache[path]
-        digest: Optional[str] = None
+        digest: str | None = None
         try:
             hasher = hashlib.sha256()
             with open(path, "rb") as handle:

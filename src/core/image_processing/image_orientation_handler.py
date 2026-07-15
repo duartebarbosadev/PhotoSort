@@ -1,5 +1,5 @@
 from PIL import Image, ImageOps
-from typing import Optional, Dict, Any
+from typing import Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ class ImageOrientationHandler:
             return image
 
     @staticmethod
-    def get_rotation_from_exif(exif_data: Optional[Dict[str, Any]]) -> int:
+    def get_rotation_from_exif(exif_data: dict[str, Any] | None) -> int:
         """
         Gets the rotation in degrees from the EXIF orientation tag.
         Returns 0, 90, 180, or 270. Returns 0 if orientation tag is not present or invalid.
@@ -39,7 +39,7 @@ class ImageOrientationHandler:
 
         try:
             orientation = int(orientation)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return 0
 
         return {

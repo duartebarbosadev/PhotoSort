@@ -358,7 +358,7 @@ def test_execute_grouping_plan_moves_files_handles_name_collisions_and_writes_ma
     assert os.path.exists(moved_paths[1])
     assert moved_paths[0] != moved_paths[1]
     assert os.path.exists(summary.manifest_path)
-    with open(summary.manifest_path, "r", encoding="utf-8") as fh:
+    with open(summary.manifest_path, encoding="utf-8") as fh:
         manifest = json.load(fh)
     assert manifest["moved_count"] == 2
     assert len(manifest["entries"]) == 2

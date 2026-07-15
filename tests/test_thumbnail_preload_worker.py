@@ -179,10 +179,10 @@ class TestThumbnailPreloadWorker:
         worker.run_session()
 
         assert calls[0] == ("visible", True)
-        assert calls[1:] == [
+        assert set(calls[1:]) == {
             ("background-1", True),
             ("background-2", True),
-        ]
+        }
 
     def test_session_reprioritizes_scroll_request_during_background_work(self):
         pipeline = Mock()

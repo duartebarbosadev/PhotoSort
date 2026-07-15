@@ -5,8 +5,6 @@ was removed in NumPy 2.0.  Import this module early to reintroduce the
 attribute so those packages do not crash at import-time.
 """
 
-from __future__ import annotations
-
 import numpy as np
 
 __all__ = ["ensure_numpy_sctypes"]

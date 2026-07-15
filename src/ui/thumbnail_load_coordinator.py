@@ -1,8 +1,6 @@
 """Prioritized, folder-wide thumbnail scheduling for shared file views."""
 
-from __future__ import annotations
-
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
 from uuid import uuid4
 
 from PyQt6.QtCore import QObject, QPoint, QTimer, Qt
@@ -113,7 +111,7 @@ class ViewportThumbnailLoader(QObject):
     def _enabled(self) -> bool:
         return self.context.menu_manager.toggle_thumbnails_action.isChecked()
 
-    def _visible_paths(self) -> List[str]:
+    def _visible_paths(self) -> list[str]:
         workflow_provider = getattr(
             self.context,
             "get_workflow_visible_thumbnail_paths",
@@ -121,7 +119,7 @@ class ViewportThumbnailLoader(QObject):
         )
         limit = THUMBNAIL_PRELOAD_BATCH_SIZE + (THUMBNAIL_PRELOAD_VISIBLE_MARGIN * 2)
         if callable(workflow_provider):
-            workflow_paths: Optional[List[str]] = workflow_provider(limit)
+            workflow_paths: list[str] | None = workflow_provider(limit)
             if workflow_paths is not None:
                 return workflow_paths[:limit]
 
@@ -129,7 +127,7 @@ class ViewportThumbnailLoader(QObject):
         if view is None:
             return []
 
-        paths: List[str] = []
+        paths: list[str] = []
         index = view.indexAt(QPoint(1, 1))
         if isinstance(view, QTreeView):
             if not index.isValid():

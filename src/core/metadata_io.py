@@ -7,7 +7,8 @@ import sys
 import threading
 import logging
 import queue
-from typing import Dict, Optional, Callable, Any
+from typing import Any
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,8 @@ class MetadataIO:
     _FIRST_REAL_ACCESS_LOGGED = False
 
     # Single-thread dispatcher to avoid cross-thread usage of pyexiv2 (not thread-safe)
-    _TASK_QUEUE: Optional["queue.Queue[tuple]"] = None
-    _WORKER_THREAD: Optional[threading.Thread] = None
+    _TASK_QUEUE: queue.Queue[tuple] | None = None
+    _WORKER_THREAD: threading.Thread | None = None
     _WORKER_READY_EVENT = threading.Event()
     _STOP_EVENT = threading.Event()
     _THREAD_NAME = "pyexiv2-io"
@@ -141,7 +142,7 @@ class MetadataIO:
         cls.start_worker_thread()
         if not cls._TASK_QUEUE:
             raise RuntimeError("MetadataIO worker queue not initialized")
-        reply_q: "queue.Queue[tuple]" = queue.Queue(maxsize=1)
+        reply_q: queue.Queue[tuple] = queue.Queue(maxsize=1)
         cls._TASK_QUEUE.put((fn, args, kwargs, reply_q))
         ok, payload = reply_q.get()
         if ok:
@@ -149,7 +150,7 @@ class MetadataIO:
         raise payload
 
     @classmethod
-    def _read_raw_metadata_inner(cls, operational_path: str) -> Dict:
+    def _read_raw_metadata_inner(cls, operational_path: str) -> dict:
         """Return a merged metadata dict for the given image path.
 
         The dict includes at least:
@@ -192,7 +193,7 @@ class MetadataIO:
             }
 
     @classmethod
-    def read_raw_metadata(cls, operational_path: str) -> Dict:
+    def read_raw_metadata(cls, operational_path: str) -> dict:
         """Public API: dispatch to the dedicated worker thread when enabled."""
         return cls._call_in_worker(cls._read_raw_metadata_inner, operational_path)
 
@@ -218,7 +219,7 @@ class MetadataIO:
         return cls._call_in_worker(cls._set_xmp_rating_inner, operational_path, rating)
 
     @classmethod
-    def _read_exif_orientation_inner(cls, operational_path: str) -> Optional[int]:
+    def _read_exif_orientation_inner(cls, operational_path: str) -> int | None:
         """Read EXIF orientation value if present (1-8)."""
         if not os.path.isfile(operational_path):
             logger.info(
@@ -243,7 +244,7 @@ class MetadataIO:
             return None
 
     @classmethod
-    def read_exif_orientation(cls, operational_path: str) -> Optional[int]:
+    def read_exif_orientation(cls, operational_path: str) -> int | None:
         return cls._call_in_worker(cls._read_exif_orientation_inner, operational_path)
 
     @classmethod

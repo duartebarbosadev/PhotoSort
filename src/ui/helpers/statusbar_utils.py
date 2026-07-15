@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -10,11 +8,11 @@ class StatusBarInfo:
     filename: str
     rating: int
     date_text: str
-    cluster_id: Optional[int]
-    size_kb: Optional[int]
+    cluster_id: int | None
+    size_kb: int | None
     width: int
     height: int
-    is_blurred: Optional[bool]
+    is_blurred: bool | None
 
     def to_message(self) -> str:
         cluster_part = f" | C: {self.cluster_id}" if self.cluster_id is not None else ""
@@ -40,7 +38,7 @@ def build_status_bar_info(
     width: int,
     height: int,
     cluster_lookup: dict[str, int] | None = None,
-    file_data_from_model: Optional[dict[str, Any]] = None,
+    file_data_from_model: dict[str, Any] | None = None,
 ) -> StatusBarInfo:
     filename = os.path.basename(file_path)
     rating = int(metadata.get("rating", 0) or 0)

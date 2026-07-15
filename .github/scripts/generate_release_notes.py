@@ -10,7 +10,7 @@ import subprocess
 import argparse
 import re
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +28,7 @@ except ImportError:
 class ReleaseNotesGenerator:
     """Generates release notes using OpenAI API based on git differences."""
 
-    def __init__(self, api_key: str, model: Optional[str] = None):
+    def __init__(self, api_key: str, model: str | None = None):
         self.client = None
         if OpenAI is not None:
             # The OpenAI client reads org/project from env if present
@@ -37,7 +37,7 @@ class ReleaseNotesGenerator:
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     @staticmethod
-    def _sanitize_notes(text: str, repo_url: Optional[str]) -> str:
+    def _sanitize_notes(text: str, repo_url: str | None) -> str:
         """
         Fix '#<sha>' (e.g., '#f525c01') -> '<sha>' and (optionally) auto-link SHAs.
         Keeps '#123' (issues/PRs) intact.
@@ -68,7 +68,7 @@ class ReleaseNotesGenerator:
 
         return text
 
-    def get_previous_tag(self, current_tag: str) -> Optional[str]:
+    def get_previous_tag(self, current_tag: str) -> str | None:
         """Get the previous release tag before the current one."""
         try:
             # Get all tags sorted by creation date (newest first)
@@ -99,8 +99,8 @@ class ReleaseNotesGenerator:
             return None
 
     def get_commits_with_pr_info(
-        self, from_tag: Optional[str], to_tag: str
-    ) -> List[Dict[str, Any]]:
+        self, from_tag: str | None, to_tag: str
+    ) -> list[dict[str, Any]]:
         """Get commits with PR information extracted from commit messages."""
         try:
             separator = "===COMMIT_SEPARATOR==="
@@ -125,7 +125,7 @@ class ReleaseNotesGenerator:
 
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 
-            commits: List[Dict[str, Any]] = []
+            commits: list[dict[str, Any]] = []
             if result.stdout.strip():
                 commit_blocks = result.stdout.strip().split(separator)
 
@@ -169,9 +169,9 @@ class ReleaseNotesGenerator:
             logger.error(f"Failed to get commits with PR info: {e}")
             return []
 
-    def _extract_pr_info(self, subject: str, body: str) -> Dict[str, Optional[str]]:
+    def _extract_pr_info(self, subject: str, body: str) -> dict[str, str | None]:
         """Extract PR number and title from commit messages."""
-        pr_info: Dict[str, Optional[str]] = {"number": None, "title": None}
+        pr_info: dict[str, str | None] = {"number": None, "title": None}
 
         patterns = [
             r"Merge pull request #(\d+) from .+",
@@ -204,15 +204,15 @@ class ReleaseNotesGenerator:
         return pr_info
 
     def generate_release_notes(
-        self, commits: List[Dict[str, Any]], tag_name: str
+        self, commits: list[dict[str, Any]], tag_name: str
     ) -> str:
         """Generate release notes using OpenAI API with commit and PR information."""
         if not commits:
             return f"## Release {tag_name}\n\nNo significant changes found in this release."
 
         # Format commit information for the AI prompt
-        commit_info: List[str] = []
-        pr_links: List[str] = []
+        commit_info: list[str] = []
+        pr_links: list[str] = []
 
         for commit in commits:
             line = f"- {commit['subject']} ({commit['hash'][:7]})"
@@ -288,14 +288,14 @@ Format the response as clean markdown without code blocks around the entire resp
             return self._create_fallback_notes_from_commits(commits, tag_name)
 
     def _create_fallback_notes_from_commits(
-        self, commits: List[Dict[str, Any]], tag_name: str
+        self, commits: list[dict[str, Any]], tag_name: str
     ) -> str:
         """Create basic release notes from commit data if OpenAI fails."""
         if not commits:
             return f"## Release {tag_name}\n\nRelease notes could not be generated automatically."
 
-        changes: List[str] = []
-        pr_section: List[str] = []
+        changes: list[str] = []
+        pr_section: list[str] = []
 
         for commit in commits:
             change_line = f"- {commit['subject']}"

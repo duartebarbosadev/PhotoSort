@@ -5,7 +5,6 @@ Background worker for writing image ratings to metadata without blocking the UI.
 
 import logging
 import os
-from typing import List, Tuple, Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.metadata_processor import MetadataProcessor
@@ -26,8 +25,8 @@ class RatingWriterWorker(QObject):
 
     def __init__(
         self,
-        rating_disk_cache: Optional[RatingCache] = None,
-        exif_disk_cache: Optional[ExifCache] = None,
+        rating_disk_cache: RatingCache | None = None,
+        exif_disk_cache: ExifCache | None = None,
     ):
         super().__init__()
         self.rating_disk_cache = rating_disk_cache
@@ -38,7 +37,7 @@ class RatingWriterWorker(QObject):
         """Signal the worker to stop processing."""
         self._is_running = False
 
-    def write_ratings(self, rating_operations: List[Tuple[str, int]]):
+    def write_ratings(self, rating_operations: list[tuple[str, int]]):
         """
         Write ratings to multiple images.
 

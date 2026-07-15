@@ -1,9 +1,7 @@
 """Compact, backwards-compatible serialization for disk-cached images."""
 
-from __future__ import annotations
-
 from io import BytesIO
-from typing import Any, Optional
+from typing import Any
 
 from PIL import Image
 
@@ -41,7 +39,7 @@ def encode_cached_image(image: Image.Image, *, quality: int) -> bytes:
     return JPEG_MARKER + output.getvalue()
 
 
-def decode_cached_image(value: Any) -> Optional[Image.Image]:
+def decode_cached_image(value: Any) -> Image.Image | None:
     """Decode current byte payloads and legacy pickled PIL image entries."""
     if isinstance(value, Image.Image):
         return value

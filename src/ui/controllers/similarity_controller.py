@@ -1,5 +1,4 @@
-from __future__ import annotations
-from typing import Protocol, Dict, List, Any, Optional
+from typing import Protocol, Any
 from datetime import datetime as datetime_obj
 
 from ui.helpers.cluster_utils import ClusterUtils
@@ -19,7 +18,7 @@ class SimilarityContext(Protocol):
     def set_group_by_similarity_checked(self, checked: bool) -> None: ...
     def set_cluster_sort_visible(self, visible: bool) -> None: ...
     def enable_cluster_sort_combo(self, enabled: bool) -> None: ...
-    def populate_cluster_filter(self, cluster_ids: List[int]) -> None: ...
+    def populate_cluster_filter(self, cluster_ids: list[int]) -> None: ...
 
 
 class AppStateSimilarityView(Protocol):
@@ -28,17 +27,17 @@ class AppStateSimilarityView(Protocol):
     Keeps controller loosely coupled to the concrete AppState implementation.
     """
 
-    image_files_data: List[Dict[str, Any]]
-    cluster_results: Dict[str, int]
-    date_cache: Dict[str, Optional[datetime_obj]]
-    embeddings_cache: Dict[str, List[float]] | Dict[str, Any]
+    image_files_data: list[dict[str, Any]]
+    cluster_results: dict[str, int]
+    date_cache: dict[str, datetime_obj | None]
+    embeddings_cache: dict[str, list[float]] | dict[str, Any]
 
 
 class SimilarityController:
     def __init__(self, ctx: SimilarityContext):
         self.ctx = ctx
 
-    def start(self, paths: List[str]):
+    def start(self, paths: list[str]):
         if not paths:
             self.ctx.status_message("No valid image paths for similarity analysis.")
             return
@@ -49,7 +48,7 @@ class SimilarityController:
         self.ctx.app_state.embeddings_cache = embeddings_dict
         self.ctx.update_loading_text("Embeddings generated. Clustering...")
 
-    def clustering_complete(self, cluster_results: Dict[str, int], group_mode: bool):
+    def clustering_complete(self, cluster_results: dict[str, int], group_mode: bool):
         self.ctx.app_state.cluster_results = cluster_results
         if not cluster_results:
             self.ctx.hide_loading_overlay()
@@ -77,7 +76,7 @@ class SimilarityController:
         self.ctx.hide_loading_overlay()
 
     # --- New extracted logic for cluster grouping / sorting ---
-    def get_images_by_cluster(self) -> Dict[int, List[Dict[str, Any]]]:
+    def get_images_by_cluster(self) -> dict[int, list[dict[str, Any]]]:
         """Return mapping cluster_id -> list of image dicts.
 
         This excludes any paths absent from app_state.image_files_data ensuring
@@ -93,26 +92,26 @@ class SimilarityController:
 
     def _get_cluster_timestamps(
         self,
-        images_by_cluster: Dict[int, List[Dict[str, Any]]],
-        date_cache: Dict[str, Optional[datetime_obj]],
-    ) -> Dict[int, datetime_obj]:
+        images_by_cluster: dict[int, list[dict[str, Any]]],
+        date_cache: dict[str, datetime_obj | None],
+    ) -> dict[int, datetime_obj]:
         return ClusterUtils.get_cluster_timestamps(images_by_cluster, date_cache)
 
     def _sort_by_similarity_time(
         self,
-        images_by_cluster: Dict[int, List[Dict[str, Any]]],
-        embeddings_cache: Dict[str, List[float]],
-        date_cache: Dict[str, Optional[datetime_obj]],
-    ) -> List[int]:
+        images_by_cluster: dict[int, list[dict[str, Any]]],
+        embeddings_cache: dict[str, list[float]],
+        date_cache: dict[str, datetime_obj | None],
+    ) -> list[int]:
         return ClusterUtils.sort_clusters_by_similarity_time(
             images_by_cluster, embeddings_cache, date_cache
         )
 
     def sort_cluster_ids(
         self,
-        images_by_cluster: Dict[int, List[Dict[str, Any]]],
+        images_by_cluster: dict[int, list[dict[str, Any]]],
         sort_method: str,
-    ) -> List[int]:
+    ) -> list[int]:
         """Return ordered cluster ids based on sort method.
 
         Methods:
@@ -147,7 +146,7 @@ class SimilarityController:
             cluster_ids.sort()
         return cluster_ids
 
-    def prepare_clusters(self, sort_method: str) -> Dict[str, Any]:
+    def prepare_clusters(self, sort_method: str) -> dict[str, Any]:
         """Return structured cluster info for view construction.
 
         Returns keys:

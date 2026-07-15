@@ -1,9 +1,7 @@
 """Coordinates responsive, bounded preview loading during navigation."""
 
-from __future__ import annotations
-
 from threading import Event
-from typing import Iterable
+from collections.abc import Iterable
 
 from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal
 

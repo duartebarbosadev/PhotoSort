@@ -1,6 +1,5 @@
-from __future__ import annotations
 from dataclasses import dataclass
-from typing import Protocol, Optional
+from typing import Protocol
 
 from PyQt6.QtCore import QSortFilterProxyModel
 
@@ -91,8 +90,8 @@ class FilterController:
 
     def _push_state_to_proxy(
         self,
-        show_folders: Optional[bool] = None,
-        current_view_mode: Optional[str] = None,
+        show_folders: bool | None = None,
+        current_view_mode: str | None = None,
     ) -> None:
         proxy = getattr(self.ctx, "proxy_model", None)
         if proxy is None:

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Run a repeatable PhotoSort startup/folder-load smoke test and emit JSON."""
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

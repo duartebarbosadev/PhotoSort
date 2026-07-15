@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Callable, List, Optional
+from collections.abc import Callable
 from PyQt6.QtCore import QModelIndex, Qt, QSortFilterProxyModel
 from PyQt6.QtGui import QStandardItemModel
 
@@ -10,7 +8,7 @@ def find_proxy_index_for_path(
     proxy_model: QSortFilterProxyModel,
     source_model: QStandardItemModel,
     is_valid_image_item: Callable[[QModelIndex], bool],
-    is_expanded: Optional[Callable[[QModelIndex], bool]] = None,
+    is_expanded: Callable[[QModelIndex], bool] | None = None,
 ) -> QModelIndex:
     """Pure traversal of proxy model to locate index for a path.
 
@@ -26,7 +24,7 @@ def find_proxy_index_for_path(
     if not isinstance(proxy_model, QSortFilterProxyModel):  # Safety
         return QModelIndex()
 
-    queue: List[QModelIndex] = []
+    queue: list[QModelIndex] = []
     root_parent = QModelIndex()
     for r in range(proxy_model.rowCount(root_parent)):
         queue.append(proxy_model.index(r, 0, root_parent))
@@ -51,7 +49,7 @@ def find_proxy_index_for_path(
     return QModelIndex()
 
 
-def classify_selection(selected_paths: List[str]):
+def classify_selection(selected_paths: list[str]):
     """Return a simple classification tuple for selection state.
 
     ('none' | 'single' | 'multi', count)

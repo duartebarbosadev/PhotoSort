@@ -16,7 +16,6 @@ from PyQt6.QtGui import (
     QDropEvent,
     QStandardItem,
 )
-from typing import List, Optional
 import os
 
 from core.image_pipeline import ImagePipeline
@@ -121,7 +120,7 @@ class DroppableTreeView(QTreeView):
 
         return self._get_cluster_id_from_index(proxy_index) is not None
 
-    def _get_cluster_id_from_index(self, proxy_index) -> Optional[int]:
+    def _get_cluster_id_from_index(self, proxy_index) -> int | None:
         """Extract cluster ID from a cluster header item."""
         if not proxy_index.isValid():
             return None
@@ -139,7 +138,7 @@ class DroppableTreeView(QTreeView):
                 return None
         return None
 
-    def _parse_cluster_id(self, value) -> Optional[int]:
+    def _parse_cluster_id(self, value) -> int | None:
         """Delegate to the shared parser used elsewhere in the UI."""
         from ui.helpers.cluster_utils import ClusterUtils
 
@@ -190,7 +189,7 @@ class DroppableTreeView(QTreeView):
             target_cluster_id,
         )
 
-    def dragEnterEvent(self, event: Optional[QDragEnterEvent]):
+    def dragEnterEvent(self, event: QDragEnterEvent | None):
         if event and self._is_cluster_drop_valid(event):
             event.acceptProposedAction()
         elif event:
@@ -242,7 +241,7 @@ class DroppableTreeView(QTreeView):
 
                 item.setBackground(QBrush(QColor(100, 150, 200, 100)))
 
-    def dragMoveEvent(self, event: Optional[QDragMoveEvent]):
+    def dragMoveEvent(self, event: QDragMoveEvent | None):
         if event and self._is_cluster_drop_valid(event):
             self._highlight_drop_target(event)
             event.acceptProposedAction()
@@ -254,7 +253,7 @@ class DroppableTreeView(QTreeView):
         self._clear_drop_highlight()
         super().dragLeaveEvent(event)
 
-    def dropEvent(self, event: Optional[QDropEvent]):
+    def dropEvent(self, event: QDropEvent | None):
         if not event:
             return
 
@@ -296,8 +295,8 @@ class FocusHighlightDelegate(QStyledItemDelegate):
 
     def sizeHint(
         self,
-        option: Optional[QStyleOptionViewItem],
-        index: Optional[QModelIndex],
+        option: QStyleOptionViewItem | None,
+        index: QModelIndex | None,
     ) -> QSize:
         """Reserve stable row height before asynchronous thumbnails arrive."""
         size = super().sizeHint(option, index)
@@ -311,9 +310,9 @@ class FocusHighlightDelegate(QStyledItemDelegate):
 
     def paint(
         self,
-        painter: Optional[QPainter],
-        option: Optional[QStyleOptionViewItem],
-        index: Optional[QModelIndex],
+        painter: QPainter | None,
+        option: QStyleOptionViewItem | None,
+        index: QModelIndex | None,
     ):
         # Let the base class handle the default painting (selection, text, icon)
         super().paint(painter, option, index)
@@ -438,7 +437,7 @@ class BlurDetectionWorker(QObject):
 
     def __init__(
         self,
-        image_paths: List[str],
+        image_paths: list[str],
         blur_threshold: float,
         apply_auto_edits_for_raw: bool,
         parent=None,
@@ -497,9 +496,9 @@ class RotationDetectionWorker(QObject):
 
     def __init__(
         self,
-        image_paths: List[str],
+        image_paths: list[str],
         image_pipeline: ImagePipeline,
-        exif_cache: "ExifCache",
+        exif_cache: ExifCache,
         parent=None,
     ):
         super().__init__(parent)
@@ -565,9 +564,9 @@ class SimilarityWorker(QObject):
 
     def __init__(
         self,
-        file_paths: List[str],
+        file_paths: list[str],
         allow_model_download: bool = False,
-        image_pipeline: Optional[ImagePipeline] = None,
+        image_pipeline: ImagePipeline | None = None,
         parent=None,
     ):
         super().__init__(parent)

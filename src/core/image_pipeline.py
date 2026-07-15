@@ -2,12 +2,12 @@ import os
 import time
 import logging
 import threading
-from typing import Optional, List, Dict, Tuple, Callable
+from collections.abc import Callable
 from PIL import Image, ImageDraw
 
 try:  # Optional; some minimal Pillow builds may omit ImageQt
     from PIL.ImageQt import ImageQt  # type: ignore
-except (ImportError, ModuleNotFoundError):
+except ImportError, ModuleNotFoundError:
     ImageQt = None  # type: ignore
 from PyQt6.QtGui import QPixmap
 import concurrent.futures
@@ -44,9 +44,9 @@ def _record_preview_generation_log(duration: float, basename: str) -> None:
 
 
 # Default sizes and resolutions (can be made configurable or passed in)
-THUMBNAIL_MAX_SIZE: Tuple[int, int] = (256, 256)
-PRELOAD_MAX_RESOLUTION: Tuple[int, int] = (1920, 1200)
-ANALYSIS_CACHE_RESOLUTION: Tuple[int, int] = (1024, 1024)
+THUMBNAIL_MAX_SIZE: tuple[int, int] = (256, 256)
+PRELOAD_MAX_RESOLUTION: tuple[int, int] = (1920, 1200)
+ANALYSIS_CACHE_RESOLUTION: tuple[int, int] = (1024, 1024)
 CACHE_SCHEMA_VERSION = 2
 # DISPLAY_MAX_RESOLUTION might be different, e.g., based on UI element size
 
@@ -59,8 +59,8 @@ class ImagePipeline:
 
     def __init__(
         self,
-        thumbnail_cache_dir: Optional[str] = None,
-        preview_cache_dir: Optional[str] = None,
+        thumbnail_cache_dir: str | None = None,
+        preview_cache_dir: str | None = None,
     ):
         init_start_time = time.perf_counter()
         logger.info("Initializing ImagePipeline...")
@@ -123,7 +123,7 @@ class ImagePipeline:
         return self._num_workers
 
     @staticmethod
-    def _file_fingerprint(image_path: str) -> Tuple[int, int]:
+    def _file_fingerprint(image_path: str) -> tuple[int, int]:
         try:
             stat_result = os.stat(image_path)
             return stat_result.st_size, stat_result.st_mtime_ns
@@ -135,8 +135,8 @@ class ImagePipeline:
         image_path: str,
         apply_orientation: bool = False,
         *,
-        file_size: Optional[int] = None,
-        mtime_ns: Optional[int] = None,
+        file_size: int | None = None,
+        mtime_ns: int | None = None,
     ) -> tuple:
         normalized_path = os.path.normpath(image_path)
         if file_size is None or mtime_ns is None:
@@ -154,7 +154,7 @@ class ImagePipeline:
             apply_orientation,
         )
 
-    def preview_cache_key(self, image_path: str, resolution: Tuple[int, int]) -> tuple:
+    def preview_cache_key(self, image_path: str, resolution: tuple[int, int]) -> tuple:
         normalized_path = os.path.normpath(image_path)
         file_size, mtime_ns = self._file_fingerprint(normalized_path)
         apply_auto_edits = is_raw_extension(
@@ -173,7 +173,7 @@ class ImagePipeline:
     def analysis_cache_key(
         self,
         image_path: str,
-        target_size: Tuple[int, int],
+        target_size: tuple[int, int],
     ) -> tuple:
         """Return a fingerprinted key for neutral, model-sized image inputs."""
         normalized_path = os.path.normpath(image_path)
@@ -197,7 +197,7 @@ class ImagePipeline:
         qt_image = ImageQt(image).copy()
         return QPixmap.fromImage(qt_image).copy()
 
-    def _memory_get(self, key: tuple) -> Optional[Image.Image]:
+    def _memory_get(self, key: tuple) -> Image.Image | None:
         with self._memory_cache_lock:
             image = self._memory_cache.pop(key, None)
             if image is None:
@@ -220,7 +220,7 @@ class ImagePipeline:
                 _, evicted = self._memory_cache.popitem(last=False)
                 self._memory_cache_bytes -= self._image_memory_size(evicted)
 
-    def _cache_get(self, cache: object, key: tuple) -> Optional[Image.Image]:
+    def _cache_get(self, cache: object, key: tuple) -> Image.Image | None:
         memory_image = self._memory_get(key)
         if memory_image is not None:
             return memory_image
@@ -242,7 +242,7 @@ class ImagePipeline:
         apply_orientation: bool = False,
         *,
         promote_to_memory: bool = True,
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Internal method to get/generate a PIL thumbnail.
         Checks cache first, then generates and caches.
@@ -270,7 +270,7 @@ class ImagePipeline:
             if cached_img is not None:
                 return cached_img
 
-            pil_img: Optional[Image.Image] = None
+            pil_img: Image.Image | None = None
             raw_format = is_raw_extension(ext)
             high_memory_format = ext in {".heic", ".heif"}
             decode_gate = self._high_memory_decode_gate if high_memory_format else None
@@ -342,10 +342,10 @@ class ImagePipeline:
         image_path: str,
         apply_orientation: bool = False,
         *,
-        file_size: Optional[int] = None,
-        mtime_ns: Optional[int] = None,
+        file_size: int | None = None,
+        mtime_ns: int | None = None,
         memory_only: bool = False,
-    ) -> Optional[QPixmap]:
+    ) -> QPixmap | None:
         """
         Returns a thumbnail QPixmap only if it is already cached.
         Never generates a new thumbnail on cache miss.
@@ -383,7 +383,7 @@ class ImagePipeline:
     def _extract_video_thumbnail_with_overlay(
         self,
         video_path: str,
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """Extract first decodable frame and apply a play badge overlay."""
         import cv2
 
@@ -473,7 +473,7 @@ class ImagePipeline:
         self,
         image_path: str,
         apply_orientation: bool = False,
-    ) -> Optional[QPixmap]:
+    ) -> QPixmap | None:
         """
         Gets a QPixmap thumbnail for the given image path.
         Automatically applies auto-edits for RAW files.
@@ -500,16 +500,16 @@ class ImagePipeline:
     def _generate_pil_preview_for_display(
         self,
         image_path: str,
-        display_max_size: Optional[Tuple[int, int]],
+        display_max_size: tuple[int, int] | None,
         force_default_brightness: bool = False,
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Generates a PIL image sized for display, without using preload cache.
         This is the fallback if no suitable cached version (display or preloaded) is found.
         Automatically applies auto-edits for RAW files.
         """
         normalized_path = os.path.normpath(image_path)
-        pil_img: Optional[Image.Image] = None
+        pil_img: Image.Image | None = None
         ext = os.path.splitext(normalized_path)[1].lower()
 
         # Automatically determine if auto-edits should be applied based on file type
@@ -551,10 +551,10 @@ class ImagePipeline:
     def get_preview_image(
         self,
         image_path: str,
-        display_max_size: Optional[Tuple[int, int]] = None,
+        display_max_size: tuple[int, int] | None = None,
         force_regenerate: bool = False,
         force_default_brightness: bool = False,
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """Return a PIL image suitable for analysis/display, leveraging preview cache."""
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):
@@ -630,11 +630,11 @@ class ImagePipeline:
     def get_cached_preview_qpixmap(
         self,
         image_path: str,
-        display_max_size: Optional[Tuple[int, int]] = None,
+        display_max_size: tuple[int, int] | None = None,
         force_default_brightness: bool = False,
         *,
         memory_only: bool = False,
-    ) -> Optional[QPixmap]:
+    ) -> QPixmap | None:
         """
         Returns a preview QPixmap only if a suitable preview already exists in cache.
         Never generates a new preview on cache miss.
@@ -706,12 +706,11 @@ class ImagePipeline:
     def get_preview_qpixmap(
         self,
         image_path: str,
-        display_max_size: Optional[
-            Tuple[int, int]
-        ],  # Max size for the QPixmap to be displayed
+        display_max_size: tuple[int, int]
+        | None,  # Max size for the QPixmap to be displayed
         force_regenerate: bool = False,
         force_default_brightness: bool = False,
-    ) -> Optional[QPixmap]:
+    ) -> QPixmap | None:
         """
         Gets a QPixmap preview for the image path, scaled to display_max_size.
         Automatically applies auto-edits for RAW files.
@@ -794,9 +793,9 @@ class ImagePipeline:
 
     def preload_thumbnails(
         self,
-        image_paths: List[str],
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-        should_continue_callback: Optional[Callable[[], bool]] = None,
+        image_paths: list[str],
+        progress_callback: Callable[[int, int], None] | None = None,
+        should_continue_callback: Callable[[], bool] | None = None,
     ) -> None:
         """Preloads thumbnails for a list of media paths in parallel."""
         total_files = len(image_paths)
@@ -809,7 +808,7 @@ class ImagePipeline:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._num_workers
         ) as executor:
-            futures_map: Dict[concurrent.futures.Future, str] = {}
+            futures_map: dict[concurrent.futures.Future, str] = {}
             for image_path in image_paths:
                 if should_continue_callback and not should_continue_callback():
                     logger.info(
@@ -883,7 +882,7 @@ class ImagePipeline:
             ):
                 return True
 
-            pil_img: Optional[Image.Image] = None
+            pil_img: Image.Image | None = None
             ext = os.path.splitext(normalized_path)[1].lower()
             start_time = time.time()
             high_memory_format = is_raw_extension(ext) or ext in {".heic", ".heif"}
@@ -927,9 +926,9 @@ class ImagePipeline:
 
     def preload_previews(
         self,
-        image_paths: List[str],
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-        should_continue_callback: Optional[Callable[[], bool]] = None,
+        image_paths: list[str],
+        progress_callback: Callable[[int, int], None] | None = None,
+        should_continue_callback: Callable[[], bool] | None = None,
     ) -> None:
         """Preloads preview PIL images (at PRELOAD_MAX_RESOLUTION) in parallel.
         Automatically applies auto-edits for RAW files."""
@@ -943,7 +942,7 @@ class ImagePipeline:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._num_workers
         ) as executor:
-            futures_map: Dict[concurrent.futures.Future, str] = {}
+            futures_map: dict[concurrent.futures.Future, str] = {}
             for image_path in image_paths:
                 if should_continue_callback and not should_continue_callback():
                     logger.info(
@@ -982,7 +981,7 @@ class ImagePipeline:
         target_mode: str = "RGB",
         use_preloaded_preview_if_available: bool = True,
         apply_exif_transpose: bool = True,
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Gets a PIL image for general processing (e.g., similarity engine, blur detection).
         Tries to use a cached high-resolution preview if available and `use_preloaded_preview_if_available` is True.
@@ -1017,7 +1016,7 @@ class ImagePipeline:
             )
 
         # Fallback to loading directly
-        pil_img: Optional[Image.Image] = None
+        pil_img: Image.Image | None = None
         ext = os.path.splitext(normalized_path)[1].lower()
 
         if is_raw_extension(ext):
@@ -1053,9 +1052,9 @@ class ImagePipeline:
     def get_analysis_image(
         self,
         image_path: str,
-        target_size: Tuple[int, int],
+        target_size: tuple[int, int],
         target_mode: str = "RGB",
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """Return a small, neutral image for ML and measurement workloads.
 
         Unlike display previews, analysis inputs do not apply cosmetic RAW edits.
@@ -1123,7 +1122,7 @@ class ImagePipeline:
     @staticmethod
     def _prepare_analysis_result(
         image: Image.Image,
-        target_size: Tuple[int, int],
+        target_size: tuple[int, int],
         target_mode: str,
     ) -> Image.Image:
         result = image.copy()
@@ -1135,10 +1134,10 @@ class ImagePipeline:
     def get_cached_analysis_qpixmap(
         self,
         image_path: str,
-        target_size: Tuple[int, int] = ANALYSIS_CACHE_RESOLUTION,
+        target_size: tuple[int, int] = ANALYSIS_CACHE_RESOLUTION,
         *,
         memory_only: bool = False,
-    ) -> Optional[QPixmap]:
+    ) -> QPixmap | None:
         """Return an existing shared analysis image without generating work."""
         normalized_path = os.path.normpath(image_path)
         if not os.path.isfile(normalized_path):

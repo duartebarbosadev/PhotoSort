@@ -1,7 +1,6 @@
 import os
 import shutil
 import logging
-from typing import Tuple
 import send2trash
 
 logger = logging.getLogger(__name__)
@@ -11,7 +10,7 @@ class ImageFileOperations:
     """Handles file system operations for image files."""
 
     @staticmethod
-    def move_path(source_path: str, destination_path: str) -> Tuple[bool, str]:
+    def move_path(source_path: str, destination_path: str) -> tuple[bool, str]:
         """Move a file or directory to an exact destination path.
 
         This lower-level primitive is used by workflows that have already
@@ -37,7 +36,7 @@ class ImageFileOperations:
             return False, message
 
     @staticmethod
-    def clear_directory_contents(directory: str) -> Tuple[bool, str]:
+    def clear_directory_contents(directory: str) -> tuple[bool, str]:
         """Remove every child of ``directory`` while keeping the directory."""
 
         if not os.path.isdir(directory):
@@ -66,7 +65,7 @@ class ImageFileOperations:
             return False
 
     @staticmethod
-    def move_image(source_path: str, destination_folder: str) -> Tuple[bool, str]:
+    def move_image(source_path: str, destination_folder: str) -> tuple[bool, str]:
         """
         Moves an image file from the source path to the destination folder.
 
@@ -119,7 +118,7 @@ class ImageFileOperations:
             return False, error_msg
 
     @staticmethod
-    def move_to_trash(file_path: str) -> Tuple[bool, str]:
+    def move_to_trash(file_path: str) -> tuple[bool, str]:
         """
         Moves a file to the system's trash or recycling bin.
 
@@ -146,7 +145,7 @@ class ImageFileOperations:
             return False, error_msg
 
     @staticmethod
-    def rename_image(old_path: str, new_path: str) -> Tuple[bool, str]:
+    def rename_image(old_path: str, new_path: str) -> tuple[bool, str]:
         """
         Renames an image file.
 
@@ -173,7 +172,7 @@ class ImageFileOperations:
             return False, error_msg
 
     @staticmethod
-    def replace_file(source_path: str, destination_path: str) -> Tuple[bool, str]:
+    def replace_file(source_path: str, destination_path: str) -> tuple[bool, str]:
         """
         Safely replaces the destination file with the source file.
 

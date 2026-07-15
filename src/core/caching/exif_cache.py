@@ -3,7 +3,7 @@ import os
 import logging
 import time
 import threading
-from typing import Optional, Dict, Any
+from typing import Any
 from core.runtime_paths import resolve_user_cache_dir
 
 # Import the settings functions to get the cache size limit
@@ -23,7 +23,7 @@ class ExifCache:
     The cache size is configurable via app_settings.
     """
 
-    def __init__(self, cache_dir: Optional[str] = None):
+    def __init__(self, cache_dir: str | None = None):
         if cache_dir is None:
             cache_dir = resolve_user_cache_dir("exif_data")
         init_start_time = time.perf_counter()
@@ -61,7 +61,7 @@ class ExifCache:
             f"Initialization complete in {time.perf_counter() - init_start_time:.4f}s"
         )
 
-    def get(self, key: str) -> Optional[Dict[str, Any]]:
+    def get(self, key: str) -> dict[str, Any] | None:
         """
         Retrieves an item (metadata dictionary) from the cache.
         The key is typically the normalized file path.
@@ -88,7 +88,7 @@ class ExifCache:
             )
             return None
 
-    def set(self, key: str, value: Dict[str, Any]) -> None:
+    def set(self, key: str, value: dict[str, Any]) -> None:
         """
         Adds or updates an item (metadata dictionary) in the cache.
         The key is typically the normalized file path.

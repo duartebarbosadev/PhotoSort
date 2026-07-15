@@ -2,7 +2,7 @@ import os
 import cv2
 import numpy as np
 from PIL import Image, UnidentifiedImageError
-from typing import Optional, Tuple, List, Dict, Callable
+from collections.abc import Callable
 import concurrent.futures
 import logging
 
@@ -23,7 +23,7 @@ from core.app_settings import calculate_max_workers
 logger = logging.getLogger(__name__)
 
 # Default size for the image used in blur detection
-BLUR_DETECTION_PREVIEW_SIZE: Tuple[int, int] = (640, 480)
+BLUR_DETECTION_PREVIEW_SIZE: tuple[int, int] = (640, 480)
 
 
 def get_default_num_workers() -> int:
@@ -37,15 +37,15 @@ class BlurDetector:
     @staticmethod
     def _load_image_for_detection(
         image_path: str,
-        target_size: Tuple[int, int] = BLUR_DETECTION_PREVIEW_SIZE,
+        target_size: tuple[int, int] = BLUR_DETECTION_PREVIEW_SIZE,
         apply_auto_edits_for_raw: bool = False,
-    ) -> Optional[Image.Image]:
+    ) -> Image.Image | None:
         """
         Loads and prepares a PIL image (RGB) for blur detection, scaled to target_size.
         Uses RawImageProcessor or StandardImageProcessor based on file type.
         """
         normalized_path = os.path.normpath(image_path)
-        pil_img: Optional[Image.Image] = None
+        pil_img: Image.Image | None = None
 
         try:
             ext = os.path.splitext(normalized_path)[1].lower()
@@ -99,8 +99,8 @@ class BlurDetector:
         image_path: str,
         threshold: float = 100.0,
         apply_auto_edits_for_raw_preview: bool = False,  # Kept for compatibility, but ignored
-        target_size: Tuple[int, int] = BLUR_DETECTION_PREVIEW_SIZE,
-    ) -> Optional[bool]:
+        target_size: tuple[int, int] = BLUR_DETECTION_PREVIEW_SIZE,
+    ) -> bool | None:
         """
         Detects if an image is blurred using the variance of the Laplacian method.
         Operates on a smaller, efficiently loaded preview of the image.
@@ -170,8 +170,8 @@ class BlurDetector:
         image_path: str,
         threshold: float,
         apply_auto_edits_for_raw_preview: bool,
-        target_size: Tuple[int, int],
-        status_update_callback: Optional[Callable[[str, Optional[bool]], None]],
+        target_size: tuple[int, int],
+        status_update_callback: Callable[[str, bool | None], None] | None,
     ) -> None:
         """
         Worker task for detecting blur in a single image and calling the status callback.
@@ -191,14 +191,14 @@ class BlurDetector:
 
     @staticmethod
     def detect_blur_in_batch(
-        image_paths: List[str],
+        image_paths: list[str],
         threshold: float = 100.0,
         apply_auto_edits_for_raw_preview: bool = False,
-        target_size: Tuple[int, int] = BLUR_DETECTION_PREVIEW_SIZE,
-        status_update_callback: Optional[Callable[[str, Optional[bool]], None]] = None,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None,
-        should_continue_callback: Optional[Callable[[], bool]] = None,
-        num_workers: Optional[int] = None,
+        target_size: tuple[int, int] = BLUR_DETECTION_PREVIEW_SIZE,
+        status_update_callback: Callable[[str, bool | None], None] | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+        should_continue_callback: Callable[[], bool] | None = None,
+        num_workers: int | None = None,
     ) -> None:
         """
         Detects blurriness for a batch of images in parallel.
@@ -217,7 +217,7 @@ class BlurDetector:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=effective_num_workers
         ) as executor:
-            futures_map: Dict[concurrent.futures.Future, str] = {}
+            futures_map: dict[concurrent.futures.Future, str] = {}
             for image_path in image_paths:
                 if should_continue_callback and not should_continue_callback():
                     logger.info("Blur detection cancelled. Halting new tasks.")

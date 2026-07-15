@@ -55,7 +55,7 @@ def ensure_pyexiv2_initialized():
                 try:
                     with pyexiv2.Image(test_path):
                         pass
-                except (FileNotFoundError, OSError, RuntimeError):
+                except FileNotFoundError, OSError, RuntimeError:
                     # Expected - we just want to trigger initialization
                     pass
             except Exception as init_error:

@@ -2,7 +2,6 @@ import os
 import time
 import pickle  # For caching embeddings
 import logging
-from typing import List, Dict, Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 import numpy as np  # Import numpy for array manipulation
 from sklearn.cluster import DBSCAN
@@ -49,10 +48,10 @@ class SimilarityEngine(QObject):
 
     def __init__(
         self,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         *,
         allow_model_download: bool = False,
-        image_pipeline: Optional[ImagePipeline] = None,
+        image_pipeline: ImagePipeline | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -87,17 +86,17 @@ class SimilarityEngine(QObject):
 
     def run_analysis_sync(
         self,
-        file_paths: List[str],
+        file_paths: list[str],
         progress_callback=None,
-    ) -> tuple[Dict[str, List[float]], Dict[str, str]]:
+    ) -> tuple[dict[str, list[float]], dict[str, str]]:
         """Run the existing similarity pipeline synchronously and return its results.
 
         This wraps the signal-based workflow so non-Qt callers can reuse the
         exact same embedding + clustering implementation as the UI action.
         """
-        embeddings_result: Dict[str, List[float]] = {}
-        cluster_results: Dict[str, str] = {}
-        errors: List[str] = []
+        embeddings_result: dict[str, list[float]] = {}
+        cluster_results: dict[str, str] = {}
+        errors: list[str] = []
 
         def _on_progress(percent: int, message: str):
             if progress_callback:
@@ -168,7 +167,7 @@ class SimilarityEngine(QObject):
             self.error.emit(error_msg)
         return False
 
-    def _load_cached_embeddings(self) -> Dict[str, List[float]]:
+    def _load_cached_embeddings(self) -> dict[str, list[float]]:
         if os.path.exists(self._cache_path):
             try:
                 cache_load_start_time = time.perf_counter()
@@ -192,7 +191,7 @@ class SimilarityEngine(QObject):
                 )
         return {}
 
-    def _save_embeddings_to_cache(self, embeddings: Dict[str, List[float]]):
+    def _save_embeddings_to_cache(self, embeddings: dict[str, list[float]]):
         try:
             cache_save_start_time = time.perf_counter()
             logger.info(
@@ -210,20 +209,20 @@ class SimilarityEngine(QObject):
             )
             self.error.emit(f"Could not save embeddings cache: {e}")
 
-    def _load_cached_regional_embeddings(self) -> Dict[str, List[List[float]]]:
+    def _load_cached_regional_embeddings(self) -> dict[str, list[list[float]]]:
         if os.path.exists(self._region_cache_path):
             try:
                 cache_load_start_time = time.perf_counter()
                 with open(self._region_cache_path, "rb") as f:
                     cache_data = pickle.load(f)
                 if isinstance(cache_data, dict):
-                    normalized_cache: Dict[str, List[List[float]]] = {}
+                    normalized_cache: dict[str, list[list[float]]] = {}
                     for path, region_vectors in cache_data.items():
                         try:
                             region_matrix = l2_normalize_rows(
                                 np.asarray(region_vectors, dtype=np.float32)
                             )
-                        except (TypeError, ValueError):
+                        except TypeError, ValueError:
                             continue
                         if region_matrix.ndim == 2 and region_matrix.shape[0] > 0:
                             normalized_cache[path] = region_matrix.tolist()
@@ -242,7 +241,7 @@ class SimilarityEngine(QObject):
         return {}
 
     def _save_regional_embeddings_to_cache(
-        self, regional_embeddings: Dict[str, List[List[float]]]
+        self, regional_embeddings: dict[str, list[list[float]]]
     ):
         try:
             cache_save_start_time = time.perf_counter()
@@ -266,7 +265,7 @@ class SimilarityEngine(QObject):
             )
             self.error.emit(f"Could not save regional embeddings cache: {e}")
 
-    def generate_embeddings_for_files(self, file_paths: List[str]):
+    def generate_embeddings_for_files(self, file_paths: list[str]):
         self._is_running = True
         logger.info(f"Starting embedding generation for {len(file_paths)} files.")
 
@@ -416,12 +415,12 @@ class SimilarityEngine(QObject):
 
     def _build_regional_distance_matrix(
         self,
-        embeddings: Dict[str, List[float]],
-        regional_embeddings: Dict[str, List[List[float]]],
-        subset_paths: List[str],
+        embeddings: dict[str, list[float]],
+        regional_embeddings: dict[str, list[list[float]]],
+        subset_paths: list[str],
     ) -> np.ndarray:
         """Build a distance matrix using the best matching large region pair."""
-        region_sets: List[np.ndarray] = []
+        region_sets: list[np.ndarray] = []
         for path in subset_paths:
             region_vectors = regional_embeddings.get(path)
             if region_vectors:
@@ -444,11 +443,11 @@ class SimilarityEngine(QObject):
 
     def _run_dbscan_on_subset(
         self,
-        embeddings: Dict[str, List[float]],
-        subset_paths: List[str],
+        embeddings: dict[str, list[float]],
+        subset_paths: list[str],
         start_cluster_id: int,
-        regional_embeddings: Optional[Dict[str, List[List[float]]]] = None,
-    ) -> tuple[Dict[str, int], int]:
+        regional_embeddings: dict[str, list[list[float]]] | None = None,
+    ) -> tuple[dict[str, int], int]:
         """
         Run DBSCAN on a subset of embeddings.
 
@@ -492,9 +491,9 @@ class SimilarityEngine(QObject):
             dbscan_labels = dbscan.fit_predict(embedding_matrix)
 
         # Map DBSCAN labels to our cluster IDs
-        label_map: Dict[int, int] = {}
+        label_map: dict[int, int] = {}
         current_id = start_cluster_id
-        result: Dict[str, int] = {}
+        result: dict[str, int] = {}
 
         # First pass: map actual clusters (non-noise)
         for original_label in sorted(set(dbscan_labels)):
@@ -517,9 +516,9 @@ class SimilarityEngine(QObject):
 
     def cluster_embeddings(
         self,
-        embeddings: Dict[str, List[float]],
-        orientation_map: Optional[Dict[str, Orientation]] = None,
-        regional_embeddings: Optional[Dict[str, List[List[float]]]] = None,
+        embeddings: dict[str, list[float]],
+        orientation_map: dict[str, Orientation] | None = None,
+        regional_embeddings: dict[str, list[list[float]]] | None = None,
     ):
         if not self._is_running:
             logger.info("Clustering skipped (stop requested).")
@@ -550,7 +549,7 @@ class SimilarityEngine(QObject):
                 len(landscape_paths),
             )
 
-            path_to_cluster: Dict[str, int] = {}
+            path_to_cluster: dict[str, int] = {}
 
             try:
                 # Cluster portrait images first (IDs start at 1)
@@ -701,11 +700,11 @@ class SimilarityEngine(QObject):
                 )
 
         # Group filepaths by their assigned label
-        grouped_filepaths: Dict[int, List[str]] = {}
+        grouped_filepaths: dict[int, list[str]] = {}
         for i, label in enumerate(labels):
             grouped_filepaths.setdefault(int(label), []).append(filepaths[i])
 
-        group_similarities: Dict[
+        group_similarities: dict[
             int, str
         ] = {}  # Stores group_id -> average_similarity_percentage
 

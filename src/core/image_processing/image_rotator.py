@@ -8,7 +8,7 @@ Handles image rotation with support for:
 
 import os
 import logging
-from typing import ClassVar, Literal, Tuple
+from typing import ClassVar, Literal
 from PIL import Image, ImageOps
 
 # Use the new pyexiv2 abstraction layer
@@ -284,7 +284,7 @@ class ImageRotator:
         image_path: str,
         direction: RotationDirection,
         update_metadata_only: bool = False,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Rotate an image in the specified direction.
 
@@ -385,19 +385,19 @@ class ImageRotator:
 
     def rotate_clockwise(
         self, image_path: str, update_metadata_only: bool = False
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Rotate image 90° clockwise."""
         return self.rotate_image(image_path, "clockwise", update_metadata_only)
 
     def rotate_counterclockwise(
         self, image_path: str, update_metadata_only: bool = False
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Rotate image 90° counterclockwise."""
         return self.rotate_image(image_path, "counterclockwise", update_metadata_only)
 
     def rotate_180(
         self, image_path: str, update_metadata_only: bool = False
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Rotate image 180°."""
         return self.rotate_image(image_path, "180", update_metadata_only)
 
@@ -416,7 +416,7 @@ class ImageRotator:
 
     def try_metadata_rotation_first(
         self, image_path: str, direction: RotationDirection
-    ) -> Tuple[bool, bool, str]:
+    ) -> tuple[bool, bool, str]:
         """
         Try metadata-only rotation first (the preferred lossless method).
 

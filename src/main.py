@@ -1,7 +1,14 @@
 import sys
 import os
 import time
-from typing import Optional
+
+SUPPORTED_PYTHON = (3, 14)
+if sys.version_info[:2] != SUPPORTED_PYTHON:
+    detected = f"{sys.version_info.major}.{sys.version_info.minor}"
+    raise RuntimeError(
+        "PhotoSort requires Python 3.14.x for source execution "
+        f"(detected Python {detected})."
+    )
 
 # Ensure the 'src' directory is on sys.path when executing as a script
 SRC_DIR = os.path.dirname(__file__)
@@ -17,7 +24,7 @@ from core.runtime_paths import (  # noqa: E402
 )
 
 # Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
-_pyexiv2_initialization_warning: Optional[str] = None
+_pyexiv2_initialization_warning: str | None = None
 try:
     from core.pyexiv2_init import ensure_pyexiv2_initialized  # noqa: E402
 
@@ -38,7 +45,7 @@ if _pyexiv2_initialization_warning:
     logging.getLogger(__name__).warning(_pyexiv2_initialization_warning)
 
 
-def _resolve_log_level(value: Optional[str] = None) -> int:
+def _resolve_log_level(value: str | None = None) -> int:
     """Return the configured application log level, defaulting safely to INFO."""
     level_name = (value or os.environ.get("PHOTOSORT_LOG_LEVEL", "INFO")).upper()
     level = getattr(logging, level_name, None)
@@ -67,7 +74,7 @@ def load_stylesheet(filename: str = "src/ui/dark_theme.qss") -> str:
             try:
                 if os.path.exists(path) and os.path.isfile(path):
                     logging.info(f"Loading stylesheet: {path}")
-                    with open(path, "r", encoding="utf-8") as f:
+                    with open(path, encoding="utf-8") as f:
                         return f.read()
             except PermissionError as pe:
                 logging.error(
@@ -218,7 +225,7 @@ def _resolve_app_icon_path() -> str:
         return ""
 
 
-def _find_resource_path(filename: str, include_exe_dir: bool = False) -> Optional[str]:
+def _find_resource_path(filename: str, include_exe_dir: bool = False) -> str | None:
     """Find the first existing path for a given resource filename.
 
     Search order:
@@ -268,7 +275,7 @@ def apply_app_identity(app: QApplication, main_window=None) -> None:
         logging.error(f"Failed to apply application icon: {e}")
 
 
-def resolve_splash_logo_path() -> Optional[str]:
+def resolve_splash_logo_path() -> str | None:
     """Resolve the best path to the splashscreen logo across source and PyInstaller runs.
 
     Returns the first existing candidate path, or None if no logo is found.

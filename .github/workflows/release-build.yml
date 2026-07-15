@@ -23,17 +23,17 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            python: '3.12'
+            python: '3.14'
             artifact_name: PhotoSort-Windows-x64
             requirements_file: requirements.txt
             max_artifact_mb: 500
           - os: windows-latest
-            python: '3.12'
+            python: '3.14'
             artifact_name: PhotoSort-Windows-x64-CUDA
             requirements_file: requirements-cuda.txt
             max_artifact_mb: 750
           - os: macos-14
-            python: '3.12'
+            python: '3.14'
             artifact_name: PhotoSort-macOS-AppleSilicon
             requirements_file: requirements.txt
             max_artifact_mb: 450

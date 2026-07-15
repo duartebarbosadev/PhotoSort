@@ -1,9 +1,7 @@
-from __future__ import annotations
-
 import logging
 import os
 from fractions import Fraction
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -51,7 +49,7 @@ def _first_present(metadata: dict, *keys: str):
     return None
 
 
-def _fraction_text(value: object) -> Optional[str]:
+def _fraction_text(value: object) -> str | None:
     if value in (None, ""):
         return None
     text = str(value).strip()
@@ -62,7 +60,7 @@ def _fraction_text(value: object) -> Optional[str]:
                 return f"{float(frac):.1f}s"
             return f"1/{round(1 / float(frac))}s"
         numeric = float(text)
-    except (TypeError, ValueError, ZeroDivisionError):
+    except TypeError, ValueError, ZeroDivisionError:
         return text
     if numeric >= 1:
         return f"{numeric:.1f}s"
@@ -73,16 +71,16 @@ def _fraction_text(value: object) -> Optional[str]:
 
 def _float_text(
     value: object, prefix: str = "", suffix: str = "", digits: int = 1
-) -> Optional[str]:
+) -> str | None:
     if value in (None, ""):
         return None
     try:
         return f"{prefix}{float(value):.{digits}f}{suffix}"
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return f"{prefix}{value}{suffix}"
 
 
-def _format_capture_date(metadata: dict) -> Optional[str]:
+def _format_capture_date(metadata: dict) -> str | None:
     for key in DATE_TAGS_PREFERENCE:
         raw_value = metadata.get(key)
         if raw_value in (None, "", "None"):
@@ -99,7 +97,7 @@ def _format_capture_date(metadata: dict) -> Optional[str]:
 class CompareCard(QFrame):
     toggled = pyqtSignal(str, bool)
 
-    def __init__(self, slot_number: int, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, slot_number: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.path: str = ""
         self.is_winner = False
@@ -181,8 +179,8 @@ class CompareCard(QFrame):
         path: str,
         is_winner: bool,
         marked: bool,
-        score: Optional[float],
-        failure_reason: Optional[str],
+        score: float | None,
+        failure_reason: str | None,
         metadata_rows: list[tuple[str, str]],
     ) -> None:
         self.path = path
@@ -282,23 +280,23 @@ class PickBestStepWidget(QWidget):
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._clusters: List[Dict] = []
+        self._clusters: list[dict] = []
         self._cluster_index = 0
         self._subset_index = 0
-        self._subset_paths: List[str] = []
-        self._compare_cards: List[CompareCard] = []
+        self._subset_paths: list[str] = []
+        self._compare_cards: list[CompareCard] = []
         self._focused_slot_index = 0
         self._current_winner_path = ""
-        self._current_all_paths: List[str] = []
-        self._cluster_ordered_paths: List[str] = []
-        self._cluster_mark_state: Dict[str, bool] = {}
-        self._metadata_cache: Dict[str, list[tuple[str, str]]] = {}
+        self._current_all_paths: list[str] = []
+        self._cluster_ordered_paths: list[str] = []
+        self._cluster_mark_state: dict[str, bool] = {}
+        self._metadata_cache: dict[str, list[tuple[str, str]]] = {}
         self._focus_mode = False
-        self._current_images_data: List[Dict] = []
+        self._current_images_data: list[dict] = []
         self._info_visible = True
-        self._is_marked_func: Optional[Callable[[str], bool]] = None
+        self._is_marked_func: Callable[[str], bool] | None = None
         self._create_widgets()
         self._connect_signals()
         self._create_shortcuts()
@@ -317,7 +315,7 @@ class PickBestStepWidget(QWidget):
         self._loading_label.setText(f"Error: {message}")
         self._progress_bar.setValue(0)
 
-    def show_results(self, results: Dict[int, dict]) -> None:
+    def show_results(self, results: dict[int, dict]) -> None:
         self._clusters = [r for r in results.values() if r.get("winner_path")]
         self._metadata_cache.clear()
         if not self._clusters:
@@ -563,7 +561,7 @@ class PickBestStepWidget(QWidget):
         self._cluster_index = index
         cluster = self._clusters[index]
         winner_path = cluster.get("winner_path", "")
-        all_paths: List[str] = cluster.get("all_paths", [])
+        all_paths: list[str] = cluster.get("all_paths", [])
 
         self._current_winner_path = winner_path
         self._current_all_paths = list(all_paths)
@@ -604,8 +602,8 @@ class PickBestStepWidget(QWidget):
 
     def _update_cluster_ui(
         self,
-        score_by_path: Dict[str, Optional[float]],
-        failure_reason_by_path: Dict[str, str],
+        score_by_path: dict[str, float | None],
+        failure_reason_by_path: dict[str, str],
     ) -> None:
         self._show_subset(score_by_path, failure_reason_by_path)
         total_clusters = len(self._clusters)
@@ -633,8 +631,8 @@ class PickBestStepWidget(QWidget):
 
     def _show_subset(
         self,
-        score_by_path: Dict[str, Optional[float]],
-        failure_reason_by_path: Dict[str, str],
+        score_by_path: dict[str, float | None],
+        failure_reason_by_path: dict[str, str],
     ) -> None:
         non_winners = [
             path
@@ -732,7 +730,7 @@ class PickBestStepWidget(QWidget):
         self._sync_viewer.update_image_pixmap(path, pixmap)
 
     def _metadata_rows_for_path(
-        self, path: str, *, failure_reason: Optional[str] = None
+        self, path: str, *, failure_reason: str | None = None
     ) -> list[tuple[str, str]]:
         if path not in self._metadata_cache:
             self._metadata_cache[path] = self._build_metadata_rows(path)
@@ -845,14 +843,14 @@ class PickBestStepWidget(QWidget):
         return self._metadata_cache[path]
 
     def _cluster_score_maps(
-        self, cluster: Dict
-    ) -> tuple[Dict[str, Optional[float]], Dict[str, str]]:
-        ranked: List[dict] = cluster.get("ranked", [])
-        failed: List[dict] = cluster.get("failed", [])
-        score_by_path: Dict[str, Optional[float]] = {
+        self, cluster: dict
+    ) -> tuple[dict[str, float | None], dict[str, str]]:
+        ranked: list[dict] = cluster.get("ranked", [])
+        failed: list[dict] = cluster.get("failed", [])
+        score_by_path: dict[str, float | None] = {
             entry["path"]: entry.get("final_score") for entry in ranked
         }
-        failure_reason_by_path: Dict[str, str] = {}
+        failure_reason_by_path: dict[str, str] = {}
         for entry in failed:
             path = entry.get("path")
             reason = entry.get("failure_reason")
@@ -896,7 +894,7 @@ class PickBestStepWidget(QWidget):
         )
         return max(1, (non_winner_count + 1) // 2)
 
-    def _visible_paths(self) -> List[str]:
+    def _visible_paths(self) -> list[str]:
         return [path for path in self._subset_paths if path]
 
     def _commit_current_cluster_marks(self) -> None:

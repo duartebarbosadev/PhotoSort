@@ -3,7 +3,8 @@ import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
-from typing import Dict, Iterable, List, Optional, Sequence, TYPE_CHECKING
+from typing import TYPE_CHECKING
+from collections.abc import Iterable, Sequence
 
 from PyQt6.QtCore import QObject, pyqtSignal
 from core.utils.time_utils import format_eta
@@ -36,15 +37,15 @@ class BestShotWorker(QObject):
 
     def __init__(
         self,
-        cluster_map: Dict[int, Sequence[str]],
-        image_pipeline: Optional["ImagePipeline"] = None,
-        max_workers: Optional[int] = None,
-        llm_config: Optional[LLMConfig] = None,
-        strategy: Optional[BaseBestShotStrategy] = None,
-        parent: Optional[QObject] = None,
-        best_shot_batch_size: Optional[int] = None,
-        folder_path: Optional[str] = None,
-        analysis_cache: Optional["AnalysisCache"] = None,
+        cluster_map: dict[int, Sequence[str]],
+        image_pipeline: ImagePipeline | None = None,
+        max_workers: int | None = None,
+        llm_config: LLMConfig | None = None,
+        strategy: BaseBestShotStrategy | None = None,
+        parent: QObject | None = None,
+        best_shot_batch_size: int | None = None,
+        folder_path: str | None = None,
+        analysis_cache: AnalysisCache | None = None,
     ):
         super().__init__(parent)
         self.cluster_map = cluster_map
@@ -52,7 +53,7 @@ class BestShotWorker(QObject):
         self._image_pipeline = image_pipeline
         self._engine = BestShotEngine.LLM.value
         self._llm_config = llm_config
-        self._strategy: Optional[BaseBestShotStrategy] = strategy
+        self._strategy: BaseBestShotStrategy | None = strategy
         self._max_workers = max_workers or calculate_max_workers(
             min_workers=2, max_workers=8
         )
@@ -62,8 +63,8 @@ class BestShotWorker(QObject):
         self._folder_path = folder_path
         self._analysis_cache = analysis_cache
         self._executor_lock = threading.Lock()
-        self._executor: Optional[ThreadPoolExecutor] = None
-        self._futures: Dict[Future, int] = {}
+        self._executor: ThreadPoolExecutor | None = None
+        self._futures: dict[Future, int] = {}
 
     def stop(self):
         self._should_stop = True
@@ -75,8 +76,8 @@ class BestShotWorker(QObject):
                 logger.debug("Failed to cancel best-shot strategy", exc_info=True)
 
     def _shutdown_executor(self, *, cancel: bool) -> None:
-        executor: Optional[ThreadPoolExecutor] = None
-        futures: List[Future] = []
+        executor: ThreadPoolExecutor | None = None
+        futures: list[Future] = []
         with self._executor_lock:
             executor = self._executor
             if executor is not None:
@@ -124,7 +125,7 @@ class BestShotWorker(QObject):
         detail: str,
         *,
         phase: str,
-        cluster_id: Optional[int] = None,
+        cluster_id: int | None = None,
     ) -> str:
         cluster_hint = f" for cluster {cluster_id}" if cluster_id is not None else ""
         if phase == "initialization":
@@ -180,15 +181,15 @@ class BestShotWorker(QObject):
             logger.error("Best shot strategy validation failed: %s", exc, exc_info=True)
             raise RuntimeError(self._format_strategy_error(exc)) from exc
 
-    def _chunk_paths(self, paths: Sequence[str]) -> Iterable[List[str]]:
+    def _chunk_paths(self, paths: Sequence[str]) -> Iterable[list[str]]:
         step = self._best_shot_batch_size
         for i in range(0, len(paths), step):
             yield list(paths[i : i + step])
 
     def _update_results_cache(
         self,
-        results_by_path: Dict[str, Dict[str, object]],
-        batch_results: List[Dict[str, object]],
+        results_by_path: dict[str, dict[str, object]],
+        batch_results: list[dict[str, object]],
         *,
         batch_index: int,
     ) -> None:
@@ -209,10 +210,10 @@ class BestShotWorker(QObject):
     def _determine_global_winner(
         self,
         cluster_id: int,
-        candidate_paths: List[str],
-        results_by_path: Dict[str, Dict[str, object]],
-    ) -> Optional[str]:
-        champion: Optional[str] = None
+        candidate_paths: list[str],
+        results_by_path: dict[str, dict[str, object]],
+    ) -> str | None:
+        champion: str | None = None
         for candidate in candidate_paths:
             if not candidate:
                 continue
@@ -236,12 +237,12 @@ class BestShotWorker(QObject):
 
     def _rank_cluster_with_batching(
         self, cluster_id: int, paths: Sequence[str]
-    ) -> List[Dict[str, object]]:
+    ) -> list[dict[str, object]]:
         if len(paths) <= self._best_shot_batch_size:
             return self._strategy.rank_cluster(cluster_id, paths)
 
-        results_by_path: Dict[str, Dict[str, object]] = {}
-        batch_winners: List[str] = []
+        results_by_path: dict[str, dict[str, object]] = {}
+        batch_winners: list[str] = []
 
         for batch_index, batch_paths in enumerate(self._chunk_paths(paths)):
             if self._should_stop:
@@ -309,7 +310,7 @@ class BestShotWorker(QObject):
 
     def _analyze_cluster(
         self, cluster_id: int, paths: Sequence[str]
-    ) -> Optional[List[Dict[str, object]]]:
+    ) -> list[dict[str, object]] | None:
         if self._should_stop:
             return None
         normalized_paths = [p for p in paths if p]
@@ -318,7 +319,7 @@ class BestShotWorker(QObject):
         if self._strategy is None:
             raise RuntimeError("Best-shot strategy not initialised")
         if len(normalized_paths) <= 1:
-            single_results: List[Dict[str, object]] = [
+            single_results: list[dict[str, object]] = [
                 {
                     "image_path": normalized_paths[0],
                     "composite_score": 1.0,
@@ -360,8 +361,8 @@ class BestShotWorker(QObject):
             logger.info(
                 f"Starting best shot analysis of {total_clusters} clusters using {self._engine} engine"
             )
-            results: Dict[int, List[dict]] = {}
-            futures: Dict[Future, int] = {}
+            results: dict[int, list[dict]] = {}
+            futures: dict[Future, int] = {}
             executor = ThreadPoolExecutor(max_workers=self._max_workers)
             with self._executor_lock:
                 self._executor = executor

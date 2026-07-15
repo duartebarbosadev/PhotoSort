@@ -2,7 +2,7 @@ import os
 import time
 import logging
 from PyQt6.QtCore import QObject, pyqtSignal
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Protocol
 
 from core.metadata_processor import MetadataProcessor
 from core.caching.rating_cache import RatingCache
@@ -22,8 +22,8 @@ class MetadataState(Protocol):
     """Application-state fields the metadata worker is allowed to update."""
 
     exif_disk_cache: Any
-    rating_cache: Dict[str, int]
-    date_cache: Dict[str, Any]
+    rating_cache: dict[str, int]
+    date_cache: dict[str, Any]
 
 
 class RatingLoaderWorker(QObject):
@@ -42,10 +42,10 @@ class RatingLoaderWorker(QObject):
 
     def __init__(
         self,
-        image_data_list: List[Dict[str, Any]],  # Expects list of dicts with 'path'
+        image_data_list: list[dict[str, Any]],  # Expects list of dicts with 'path'
         rating_disk_cache: RatingCache,
         app_state: MetadataState,
-        parent: Optional[QObject] = None,
+        parent: QObject | None = None,
     ):
         super().__init__(parent)
         self._image_data_list = image_data_list

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -7,8 +5,9 @@ import re
 from functools import lru_cache
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 from PIL import Image
@@ -29,7 +28,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class GroupingMode(str, Enum):
+class GroupingMode(StrEnum):
     CURRENT = "current"
     SIMILARITY = "similarity"
     FACE = "face"
@@ -41,9 +40,9 @@ class GroupingMode(str, Enum):
 class GroupingGroup:
     group_id: str
     group_label: str
-    source_paths: List[str]
+    source_paths: list[str]
     destination_folder: str = ""
-    skipped_paths: List[str] = field(default_factory=list)
+    skipped_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -62,12 +61,12 @@ class GroupingPlan:
     mode: str
     total_items: int
     supported_items: int
-    groups: List[GroupingGroup]
-    unassigned_paths: List[str]
-    skipped_paths: List[str]
+    groups: list[GroupingGroup]
+    unassigned_paths: list[str]
+    skipped_paths: list[str]
     output_root: str = ""
-    file_name_overrides: Dict[str, str] = field(default_factory=dict)
-    deleted_paths: List[str] = field(default_factory=list)
+    file_name_overrides: dict[str, str] = field(default_factory=dict)
+    deleted_paths: list[str] = field(default_factory=list)
     # The Organize UI must not walk the source tree again when the preview
     # worker has already included non-media files that need to move with it.
     filesystem_inventory_complete: bool = False
@@ -87,7 +86,7 @@ class GroupingPlan:
             ),
         )
 
-    def apply_group_label_overrides(self, overrides: Dict[str, str] | None) -> None:
+    def apply_group_label_overrides(self, overrides: dict[str, str] | None) -> None:
         if not overrides:
             return
         for group in self.groups:
@@ -104,7 +103,7 @@ class GroupingPlan:
 
 def augment_grouping_plan_with_filesystem_paths(
     plan: GroupingPlan,
-    source_root: Optional[str],
+    source_root: str | None,
 ) -> GroupingPlan:
     """Include unmanaged files in a grouping plan outside the UI thread.
 
@@ -130,7 +129,7 @@ def augment_grouping_plan_with_filesystem_paths(
         )
     )
     normalized_root = os.path.normcase(root)
-    candidate_directories: List[str] = []
+    candidate_directories: list[str] = []
     seen_directories: set[str] = set()
     for path in planned_paths:
         directory = os.path.normpath(os.path.dirname(path))
@@ -141,7 +140,7 @@ def augment_grouping_plan_with_filesystem_paths(
                 != normalized_root
             ):
                 continue
-        except (ValueError, OSError):
+        except ValueError, OSError:
             continue
         if normalized_directory in seen_directories or not os.path.isdir(directory):
             continue
@@ -150,7 +149,7 @@ def augment_grouping_plan_with_filesystem_paths(
 
     # If a directory is already covered by an ancestor walk, do not traverse
     # it again. Mixed root/nested media layouts otherwise duplicate most I/O.
-    walk_roots: List[str] = []
+    walk_roots: list[str] = []
     for directory in sorted(
         candidate_directories, key=lambda value: value.count(os.sep)
     ):
@@ -179,11 +178,11 @@ def augment_grouping_plan_with_filesystem_paths(
             try:
                 if os.path.commonpath([normalized_path, deleted_path]) == deleted_path:
                     return True
-            except (ValueError, OSError):
+            except ValueError, OSError:
                 continue
         return False
 
-    discovered_paths: List[str] = []
+    discovered_paths: list[str] = []
     for walk_root in walk_roots:
         for current_root, _dirnames, filenames in os.walk(walk_root):
             for filename in filenames:
@@ -244,11 +243,11 @@ def augment_grouping_plan_with_filesystem_paths(
 @dataclass
 class GroupingManifestEntry:
     original_path: str
-    new_path: Optional[str]
-    group_id: Optional[str]
-    group_label: Optional[str]
+    new_path: str | None
+    group_id: str | None
+    group_label: str | None
     status: str
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 @dataclass
@@ -261,8 +260,8 @@ class GroupingRunSummary:
     deleted_count: int
     unassigned_count: int
     skipped_count: int
-    groups: List[GroupingGroup]
-    entries: List[GroupingManifestEntry]
+    groups: list[GroupingGroup]
+    entries: list[GroupingManifestEntry]
 
 
 @dataclass(frozen=True)
@@ -320,7 +319,7 @@ def find_directory_rename_candidates(
     *,
     source_root: str,
     output_root: str,
-) -> Dict[str, GroupingDirectoryRename]:
+) -> dict[str, GroupingDirectoryRename]:
     if str(plan.mode) != GroupingMode.CURRENT.value:
         return {}
 
@@ -328,7 +327,7 @@ def find_directory_rename_candidates(
     active_paths = [
         path for group in plan.groups for path in group.source_paths
     ] + list(plan.unassigned_paths)
-    candidates: Dict[str, GroupingDirectoryRename] = {}
+    candidates: dict[str, GroupingDirectoryRename] = {}
     reserved_target_dirs: set[str] = set()
 
     for group in plan.groups:
@@ -388,13 +387,13 @@ def _resolve_collision_safe_destination(destination_dir: str, basename: str) -> 
     return candidate
 
 
-def _find_companion_files(photo_path: str) -> List[str]:
+def _find_companion_files(photo_path: str) -> list[str]:
     """Find companion files with same stem: .xmp sidecars and same-stem images in other formats."""
     from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS  # noqa: PLC0415
 
     stem, src_ext = os.path.splitext(photo_path)
     src_ext_lower = src_ext.lower()
-    companions: List[str] = []
+    companions: list[str] = []
     seen_norm: set = set()
 
     for xmp_ext in (".xmp", ".XMP"):
@@ -448,8 +447,8 @@ def _empty_directory_candidates_from_entries(
     entries: Sequence[GroupingManifestEntry],
     *,
     source_root: str,
-) -> List[str]:
-    candidates: Dict[str, str] = {}
+) -> list[str]:
+    candidates: dict[str, str] = {}
     for entry in entries:
         if entry.status not in {"moved", "unassigned", "deleted"}:
             continue
@@ -463,8 +462,8 @@ def _empty_directory_candidates_from_entries(
     return list(candidates.values())
 
 
-def _prepare_delete_targets(paths: Sequence[str]) -> List[str]:
-    unique_paths: List[str] = []
+def _prepare_delete_targets(paths: Sequence[str]) -> list[str]:
+    unique_paths: list[str] = []
     seen: set[str] = set()
     for path in paths:
         normalized = os.path.normcase(os.path.normpath(path))
@@ -474,7 +473,7 @@ def _prepare_delete_targets(paths: Sequence[str]) -> List[str]:
         unique_paths.append(path)
 
     directory_targets = [path for path in unique_paths if os.path.isdir(path)]
-    filtered_paths: List[str] = []
+    filtered_paths: list[str] = []
     for path in unique_paths:
         if any(
             not _is_same_path(path, directory_path)
@@ -495,11 +494,11 @@ def _prepare_delete_targets(paths: Sequence[str]) -> List[str]:
 
 
 def _cluster_vectors(
-    vectors_by_path: Dict[str, np.ndarray],
+    vectors_by_path: dict[str, np.ndarray],
     *,
     eps: float,
     min_samples: int = 1,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     from sklearn.cluster import DBSCAN
 
     if not vectors_by_path:
@@ -510,9 +509,9 @@ def _cluster_vectors(
         return {paths[0]: 1}
     clustering = DBSCAN(eps=eps, min_samples=min_samples, metric="cosine")
     labels = clustering.fit_predict(matrix)
-    label_to_cluster_id: Dict[int, int] = {}
+    label_to_cluster_id: dict[int, int] = {}
     next_cluster_id = 1
-    assignments: Dict[str, int] = {}
+    assignments: dict[str, int] = {}
     for idx, label in enumerate(labels):
         if label == -1:
             continue
@@ -523,7 +522,7 @@ def _cluster_vectors(
     return assignments
 
 
-def _load_image_for_features(path: str) -> Optional[Image.Image]:
+def _load_image_for_features(path: str) -> Image.Image | None:
     try:
         with Image.open(path) as img:
             return img.convert("RGB")
@@ -537,7 +536,7 @@ def _load_image_for_features(path: str) -> Optional[Image.Image]:
 
 
 @lru_cache(maxsize=1)
-def _load_opencv_face_cascades() -> Tuple[Any, ...]:
+def _load_opencv_face_cascades() -> tuple[Any, ...]:
     try:
         import cv2  # type: ignore
     except Exception:
@@ -550,7 +549,7 @@ def _load_opencv_face_cascades() -> Tuple[Any, ...]:
         "haarcascade_frontalface_default.xml",
         "haarcascade_profileface.xml",
     )
-    cascades: List[Any] = []
+    cascades: list[Any] = []
     for name in cascade_names:
         cascade_path = os.path.join(cascade_dir, name)
         if not os.path.exists(cascade_path):
@@ -563,7 +562,7 @@ def _load_opencv_face_cascades() -> Tuple[Any, ...]:
 
 
 def _score_face_candidate(
-    bbox: Tuple[int, int, int, int],
+    bbox: tuple[int, int, int, int],
     *,
     image_width: int,
     image_height: int,
@@ -580,7 +579,7 @@ def _score_face_candidate(
 
 def _detect_primary_face_bbox(
     image: Image.Image,
-) -> Optional[Tuple[int, int, int, int]]:
+) -> tuple[int, int, int, int] | None:
     cascades = _load_opencv_face_cascades()
     if not cascades:
         return None
@@ -594,7 +593,7 @@ def _detect_primary_face_bbox(
     equalized = cv2.equalizeHist(gray)
     min_side = min(image.size)
     min_face = max(24, int(min_side * 0.12))
-    candidates: List[Tuple[int, int, int, int]] = []
+    candidates: list[tuple[int, int, int, int]] = []
     for cascade in cascades:
         for source in (equalized, gray):
             detected = cascade.detectMultiScale(
@@ -620,13 +619,13 @@ def _detect_primary_face_bbox(
 
 
 def _expand_bbox(
-    bbox: Tuple[int, int, int, int],
+    bbox: tuple[int, int, int, int],
     *,
-    image_size: Tuple[int, int],
+    image_size: tuple[int, int],
     horizontal_pad: float = 0.22,
     top_pad: float = 0.32,
     bottom_pad: float = 0.18,
-) -> Tuple[int, int, int, int]:
+) -> tuple[int, int, int, int]:
     x, y, w, h = bbox
     image_width, image_height = image_size
     left = max(0, int(round(x - (w * horizontal_pad))))
@@ -638,7 +637,7 @@ def _expand_bbox(
 
 def _compute_face_vector_from_crop(
     crop: Image.Image,
-) -> Tuple[Optional[np.ndarray], bool]:
+) -> tuple[np.ndarray | None, bool]:
     face_crop = crop.convert("L").resize((48, 48))
     arr = np.asarray(face_crop, dtype=np.float32) / 255.0
     variance = float(arr.var())
@@ -662,8 +661,8 @@ def _compute_face_vector_from_crop(
 
 def _compute_face_vector(
     path: str,
-    image_pipeline: Optional[ImagePipeline] = None,
-) -> Tuple[Optional[np.ndarray], bool]:
+    image_pipeline: ImagePipeline | None = None,
+) -> tuple[np.ndarray | None, bool]:
     if image_pipeline is not None:
         from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
 
@@ -692,7 +691,7 @@ def _compute_face_vector(
     return _compute_face_vector_from_crop(image.crop((left, top, right, bottom)))
 
 
-def _parse_gps_coordinate(raw_value: Any, ref_value: Any) -> Optional[float]:
+def _parse_gps_coordinate(raw_value: Any, ref_value: Any) -> float | None:
     if raw_value is None:
         return None
     sign = 1.0
@@ -794,8 +793,8 @@ def _reverse_geocode_offline(lat_bucket: float, lon_bucket: float) -> tuple:
 
 
 def _location_label_from_metadata(
-    metadata: Dict[str, Any], depth: int = 3
-) -> Optional[str]:
+    metadata: dict[str, Any], depth: int = 3
+) -> str | None:
     lat = _parse_gps_coordinate(
         metadata.get("Exif.GPSInfo.GPSLatitude"),
         metadata.get("Exif.GPSInfo.GPSLatitudeRef"),
@@ -819,7 +818,7 @@ def _location_label_from_metadata(
     return f"Lat_{lat_bucket:.2f}_Lon_{lon_bucket:.2f}"
 
 
-def _load_comprehensive_metadata(path: str) -> Dict[str, Any]:
+def _load_comprehensive_metadata(path: str) -> dict[str, Any]:
     try:
         resolved = MetadataProcessor._resolve_path_forms(path)  # type: ignore[attr-defined]
         operational = resolved[0] if resolved else path
@@ -832,10 +831,10 @@ def _load_comprehensive_metadata(path: str) -> Dict[str, Any]:
 
 
 def _build_groups_from_assignments(
-    assignments: Dict[str, int],
+    assignments: dict[str, int],
     label_builder,
-) -> List[GroupingGroup]:
-    grouped: Dict[int, List[str]] = {}
+) -> list[GroupingGroup]:
+    grouped: dict[int, list[str]] = {}
     for path, cluster_id in assignments.items():
         grouped.setdefault(cluster_id, []).append(path)
     return [
@@ -848,7 +847,7 @@ def _build_groups_from_assignments(
     ]
 
 
-def _parse_cluster_id(value: Any) -> Optional[int]:
+def _parse_cluster_id(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, str):
@@ -865,9 +864,9 @@ def _parse_cluster_id(value: Any) -> Optional[int]:
 def _run_ml_similarity_pipeline(
     image_paths: Sequence[str],
     progress_callback=None,
-    shared_engine: Optional[SimilarityEngine] = None,
-    image_pipeline: Optional[ImagePipeline] = None,
-) -> Dict[str, int]:
+    shared_engine: SimilarityEngine | None = None,
+    image_pipeline: ImagePipeline | None = None,
+) -> dict[str, int]:
     if not image_paths:
         return {}
     if shared_engine is None:
@@ -880,7 +879,7 @@ def _run_ml_similarity_pipeline(
         list(image_paths),
         progress_callback=progress_callback,
     )
-    assignments: Dict[str, int] = {}
+    assignments: dict[str, int] = {}
     for path, raw_cluster in cluster_results.items():
         cluster_id = _parse_cluster_id(raw_cluster)
         if cluster_id is not None:
@@ -889,12 +888,12 @@ def _run_ml_similarity_pipeline(
 
 
 def build_grouping_plan(
-    items: Sequence[Dict[str, Any]],
+    items: Sequence[dict[str, Any]],
     mode: GroupingMode | str,
     progress_callback=None,
-    source_root: Optional[str] = None,
+    source_root: str | None = None,
     location_depth: int = 3,
-    image_pipeline: Optional[ImagePipeline] = None,
+    image_pipeline: ImagePipeline | None = None,
 ) -> GroupingPlan:
     mode_value = GroupingMode(mode)
     valid_items = [
@@ -948,9 +947,9 @@ def _build_current_structure_plan(
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
     *,
-    source_root: Optional[str] = None,
+    source_root: str | None = None,
 ) -> GroupingPlan:
-    groups_by_label: Dict[str, List[str]] = {}
+    groups_by_label: dict[str, list[str]] = {}
     resolved_source_root = (
         os.path.normpath(source_root)
         if source_root
@@ -968,7 +967,7 @@ def _build_current_structure_plan(
         label = "" if rel_dir in {".", ""} else rel_dir
         groups_by_label.setdefault(label, []).append(path)
 
-    groups: List[GroupingGroup] = []
+    groups: list[GroupingGroup] = []
     for index, label in enumerate(sorted(groups_by_label.keys()), start=1):
         groups.append(
             GroupingGroup(
@@ -993,7 +992,7 @@ def _build_similarity_plan(
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
     progress_callback=None,
-    image_pipeline: Optional[ImagePipeline] = None,
+    image_pipeline: ImagePipeline | None = None,
 ) -> GroupingPlan:
     assignments = _run_ml_similarity_pipeline(
         image_paths,
@@ -1019,10 +1018,10 @@ def _build_face_plan(
     total_items: int,
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
-    image_pipeline: Optional[ImagePipeline] = None,
+    image_pipeline: ImagePipeline | None = None,
 ) -> GroupingPlan:
-    vectors: Dict[str, np.ndarray] = {}
-    unassigned: List[str] = []
+    vectors: dict[str, np.ndarray] = {}
+    unassigned: list[str] = []
     for path in image_paths:
         vector, has_face_like_signal = _compute_face_vector(
             path,
@@ -1054,8 +1053,8 @@ def _build_location_plan(
     skipped_paths: Sequence[str],
     location_depth: int = 3,
 ) -> GroupingPlan:
-    buckets: Dict[str, List[str]] = {}
-    unassigned: List[str] = []
+    buckets: dict[str, list[str]] = {}
+    unassigned: list[str] = []
     for path in image_paths:
         metadata = _load_comprehensive_metadata(path)
         label = _location_label_from_metadata(metadata, depth=location_depth)
@@ -1063,7 +1062,7 @@ def _build_location_plan(
             unassigned.append(path)
             continue
         buckets.setdefault(label, []).append(path)
-    groups: List[GroupingGroup] = []
+    groups: list[GroupingGroup] = []
     for idx, label in enumerate(sorted(buckets.keys()), start=1):
         groups.append(
             GroupingGroup(
@@ -1082,7 +1081,7 @@ def _build_location_plan(
     )
 
 
-def _extract_date_label(path: str) -> Optional[str]:
+def _extract_date_label(path: str) -> str | None:
     """Extract a YYYY-MM-DD date label from EXIF, filename, or filesystem mtime."""
     metadata = _load_comprehensive_metadata(path)
     for tag in DATE_TAGS_PREFERENCE:
@@ -1107,10 +1106,10 @@ def _build_mixed_plan(
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
     progress_callback=None,
-    image_pipeline: Optional[ImagePipeline] = None,
+    image_pipeline: ImagePipeline | None = None,
 ) -> GroupingPlan:
-    date_buckets: Dict[str, List[str]] = {}
-    undated: List[str] = []
+    date_buckets: dict[str, list[str]] = {}
+    undated: list[str] = []
     for path in image_paths:
         label = _extract_date_label(path)
         if not label:
@@ -1118,7 +1117,7 @@ def _build_mixed_plan(
             continue
         date_buckets.setdefault(label, []).append(path)
 
-    groups: List[GroupingGroup] = []
+    groups: list[GroupingGroup] = []
     group_counter = 1
     for date_label in sorted(date_buckets.keys()):
         bucket_paths = date_buckets[date_label]
@@ -1134,12 +1133,12 @@ def _build_mixed_plan(
             progress_callback=_bucket_progress if progress_callback else None,
             image_pipeline=image_pipeline,
         )
-        grouped_by_cluster: Dict[int, List[str]] = {}
+        grouped_by_cluster: dict[int, list[str]] = {}
         for path, cluster_id in assignments.items():
             grouped_by_cluster.setdefault(cluster_id, []).append(path)
 
         # Files not picked up by the similarity pipeline go to the date folder directly
-        standalone: List[str] = [p for p in bucket_paths if p not in assignments]
+        standalone: list[str] = [p for p in bucket_paths if p not in assignments]
 
         local_group_idx = 1
         for cluster_id in sorted(grouped_by_cluster.keys()):
@@ -1195,7 +1194,7 @@ def execute_grouping_plan(
     move_companions: bool = False,
 ) -> GroupingRunSummary:
     os.makedirs(output_root, exist_ok=True)
-    entries: List[GroupingManifestEntry] = []
+    entries: list[GroupingManifestEntry] = []
     directory_renames = find_directory_rename_candidates(
         plan,
         source_root=source_root,
@@ -1394,7 +1393,7 @@ def execute_grouping_plan(
 def _remove_empty_directories(
     root_path: str,
     *,
-    candidate_dirs: Optional[Sequence[str]] = None,
+    candidate_dirs: Sequence[str] | None = None,
 ) -> None:
     if not root_path or not os.path.isdir(root_path):
         return

@@ -1,10 +1,8 @@
-from __future__ import annotations
-
 from dataclasses import replace
 from functools import cmp_to_key
 import os
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 from core.best_photo_finder.config import SelectorConfig
 from core.best_photo_finder.errors import (
@@ -120,6 +118,12 @@ class PhotoSelector:
         self.technical_scorer = technical_scorer or OpenCvMediapipeTechnicalScorer()
         self.aesthetic_scorer = aesthetic_scorer or HuggingFaceAestheticScorer()
         self.preview_loader = preview_loader
+
+    def close(self) -> None:
+        """Release native scorer resources owned by this selector."""
+        close = getattr(self.technical_scorer, "close", None)
+        if callable(close):
+            close()
 
     def select(
         self, paths: Sequence[str | Path], config: SelectorConfig | None = None

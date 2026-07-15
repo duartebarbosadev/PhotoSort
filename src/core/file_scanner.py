@@ -3,7 +3,7 @@ import asyncio
 import logging
 import time
 import concurrent.futures
-from typing import List, Dict, Any
+from typing import Any
 from PyQt6.QtCore import QObject, pyqtSignal
 from .image_pipeline import ImagePipeline
 from .image_features.blur_detector import BlurDetector
@@ -94,7 +94,7 @@ class FileScanner(QObject):
 
     def _detect_blur_for_file(
         self, file_path: str, blur_threshold: float
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Detect blur for a single file (used in parallel processing).
         Returns dict with 'path' and 'is_blurred' keys.
@@ -123,9 +123,9 @@ class FileScanner(QObject):
         blur_threshold: float - Threshold for blur detection if performed.
         """
         self._is_running = True
-        all_file_data: List[Dict[str, Any]] = []
-        discovery_batch: List[Dict[str, Any]] = []
-        image_paths_for_blur: List[str] = []
+        all_file_data: list[dict[str, Any]] = []
+        discovery_batch: list[dict[str, Any]] = []
+        image_paths_for_blur: list[str] = []
 
         try:
             # Phase 1: Fast file discovery

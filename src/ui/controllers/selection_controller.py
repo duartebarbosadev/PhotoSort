@@ -1,5 +1,4 @@
-from __future__ import annotations
-from typing import List, Protocol, Any
+from typing import Protocol, Any
 import os
 from PyQt6.QtCore import QModelIndex
 from PyQt6.QtGui import QStandardItem
@@ -29,7 +28,7 @@ class SelectionController:
     def __init__(self, ctx: SelectionContext):
         self.ctx = ctx
 
-    def get_selected_file_paths(self) -> List[str]:
+    def get_selected_file_paths(self) -> list[str]:
         view = self.ctx.get_active_view()
         if not view:
             return []
@@ -37,7 +36,7 @@ class SelectionController:
         if not sel_model:
             return []
         selected_indexes = sel_model.selectedIndexes()
-        out: List[str] = []
+        out: list[str] = []
         for proxy_index in selected_indexes:
             if proxy_index.column() != 0:
                 continue
