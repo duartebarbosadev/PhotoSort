@@ -82,7 +82,8 @@ COMPREHENSIVE_METADATA_TAGS: list[str] = [
     "Xmp.xmp.Label",
     "Xmp.dc.subject",
     "Xmp.lr.hierarchicalSubject",
-] + DATE_TAGS_PREFERENCE
+    *DATE_TAGS_PREFERENCE,
+]
 
 
 def _parse_exif_date(date_string: str) -> dt_parser | None:
@@ -421,13 +422,13 @@ class MetadataProcessor:
                     # pyexiv2 raises RuntimeError for many IO issues; downshift errno=2 to warning without traceback
                     if _is_file_missing_error(e, op_path):
                         logger.warning(
-                            f"Skipping missing file during metadata extraction: {op_path} ({str(e)})"
+                            f"Skipping missing file during metadata extraction: {op_path} ({e!s})"
                         )
                         chunk_results.append(
                             {
                                 "file_path": op_path,
                                 "file_size": "Unknown",
-                                "error": f"Extraction skipped (missing): {str(e)}",
+                                "error": f"Extraction skipped (missing): {e!s}",
                             }
                         )
                     else:
@@ -706,7 +707,7 @@ class MetadataProcessor:
         except Exception as e:
             if _is_file_missing_error(e, operational_path):
                 logger.warning(
-                    f"Skipping missing file during detailed metadata read: {operational_path} ({str(e)})"
+                    f"Skipping missing file during detailed metadata read: {operational_path} ({e!s})"
                 )
             else:
                 logger.error(
@@ -925,7 +926,7 @@ class MetadataProcessor:
         except Exception as e:
             if _is_file_missing_error(e, operational_path):
                 logger.warning(
-                    f"File missing while setting EXIF orientation: {operational_path} ({str(e)})"
+                    f"File missing while setting EXIF orientation: {operational_path} ({e!s})"
                 )
             else:
                 logger.error(
@@ -978,7 +979,7 @@ class MetadataProcessor:
         except Exception as e:
             if _is_file_missing_error(e, operational_path):
                 logger.warning(
-                    f"File missing while reading EXIF orientation: {operational_path} ({str(e)})"
+                    f"File missing while reading EXIF orientation: {operational_path} ({e!s})"
                 )
             else:
                 logger.error(

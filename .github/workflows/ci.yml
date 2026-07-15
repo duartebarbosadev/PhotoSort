@@ -63,6 +63,13 @@ jobs:
       - name: Ruff Format Check
         run: ruff format --check .
 
+      - name: Static Type Check
+        run: >-
+          mypy src/core/best_photo_finder/payloads.py
+          src/core/best_photo_finder/models.py
+          src/workers/pick_best_worker.py
+          src/ui/app_state.py
+
       - name: Run Tests
         env:
           PYTHONWARNINGS: default

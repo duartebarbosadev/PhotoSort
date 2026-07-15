@@ -1,7 +1,7 @@
 import os
 import time
-import pickle  # For caching embeddings
 import logging
+from pathlib import Path
 from PyQt6.QtCore import QObject, pyqtSignal
 import numpy as np  # Import numpy for array manipulation
 from sklearn.cluster import DBSCAN
@@ -9,6 +9,7 @@ from core.utils.time_utils import format_eta
 
 from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION, ImagePipeline
 from core.image_file_ops import ImageFileOperations
+from core.embedding_cache import load_embedding_cache, save_embedding_cache
 from core.similarity_embedding_model import (
     SimilarityEmbeddingModel,
     SimilarityModelDownloadError,
@@ -28,6 +29,7 @@ from .app_settings import (
     get_similarity_embedding_model_name,
 )  # Import from app_settings
 from .runtime_paths import get_app_cache_root, resolve_user_cache_dir
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -64,13 +66,13 @@ class SimilarityEngine(QObject):
             progress_callback=self._handle_model_progress,
         )
         self._is_running = False
-        self._cache_filename = f"embeddings_{self.model.cache_key}.pkl"
-        self._region_cache_filename = f"embeddings_{self.model.region_cache_key}.pkl"
-        embedding_cache_dir = resolve_user_cache_dir("embeddings")
-        self._cache_path = os.path.join(embedding_cache_dir, self._cache_filename)
-        self._region_cache_path = os.path.join(
-            embedding_cache_dir, self._region_cache_filename
+        self._cache_filename = f"embeddings_{self.model.cache_key}.pkl.zst"
+        self._region_cache_filename = (
+            f"embeddings_{self.model.region_cache_key}.pkl.zst"
         )
+        embedding_cache_dir = Path(resolve_user_cache_dir("embeddings"))
+        self._cache_path = embedding_cache_dir / self._cache_filename
+        self._region_cache_path = embedding_cache_dir / self._region_cache_filename
 
         self.image_pipeline = image_pipeline or ImagePipeline()
         logger.info(
@@ -122,22 +124,14 @@ class SimilarityEngine(QObject):
         try:
             self.generate_embeddings_for_files(file_paths)
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 self.progress_update.disconnect(_on_progress)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 self.embeddings_generated.disconnect(_on_embeddings)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 self.clustering_complete.disconnect(_on_complete)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 self.error.disconnect(_on_error)
-            except Exception:
-                pass
 
         if errors and not cluster_results:
             raise RuntimeError(errors[-1])
@@ -168,27 +162,29 @@ class SimilarityEngine(QObject):
         return False
 
     def _load_cached_embeddings(self) -> dict[str, list[float]]:
-        if os.path.exists(self._cache_path):
+        if self._cache_path.exists():
             try:
                 cache_load_start_time = time.perf_counter()
                 logger.info(f"Loading embeddings cache: {self._cache_path}")
-                with open(self._cache_path, "rb") as f:
-                    cache_data = pickle.load(f)
-                    if isinstance(cache_data, dict) and cache_data:
-                        if normalize_embedding_dict(cache_data):
-                            logger.info(
-                                "Detected legacy non-normalized embeddings. "
-                                "Updating cache to normalized vectors."
-                            )
-                            self._save_embeddings_to_cache(cache_data)
+                cache_data = load_embedding_cache(self._cache_path, kind="global")
+                if not isinstance(cache_data, dict):
+                    raise ValueError("global embedding cache data is not a dictionary")
+                if cache_data and normalize_embedding_dict(cache_data):
                     logger.info(
-                        f"Loaded {len(cache_data)} embeddings from cache in {time.perf_counter() - cache_load_start_time:.4f}s"
+                        "Detected non-normalized embeddings. Updating the cache."
                     )
-                    return cache_data
+                    self._save_embeddings_to_cache(cache_data)
+                logger.info(
+                    "Loaded %d embeddings from cache in %.4fs",
+                    len(cache_data),
+                    time.perf_counter() - cache_load_start_time,
+                )
+                return cache_data
             except Exception as e:
                 logger.warning(
                     f"Failed to load embedding cache '{self._cache_path}': {e}. A new cache will be created."
                 )
+                self._cache_path.unlink(missing_ok=True)
         return {}
 
     def _save_embeddings_to_cache(self, embeddings: dict[str, list[float]]):
@@ -197,8 +193,7 @@ class SimilarityEngine(QObject):
             logger.info(
                 f"Saving {len(embeddings)} embeddings to cache: {self._cache_path}"
             )
-            with open(self._cache_path, "wb") as f:
-                pickle.dump(embeddings, f)
+            save_embedding_cache(self._cache_path, embeddings, kind="global")
             logger.info(
                 f"Embeddings saved in {time.perf_counter() - cache_save_start_time:.4f}s"
             )
@@ -210,11 +205,12 @@ class SimilarityEngine(QObject):
             self.error.emit(f"Could not save embeddings cache: {e}")
 
     def _load_cached_regional_embeddings(self) -> dict[str, list[list[float]]]:
-        if os.path.exists(self._region_cache_path):
+        if self._region_cache_path.exists():
             try:
                 cache_load_start_time = time.perf_counter()
-                with open(self._region_cache_path, "rb") as f:
-                    cache_data = pickle.load(f)
+                cache_data = load_embedding_cache(
+                    self._region_cache_path, kind="regional"
+                )
                 if isinstance(cache_data, dict):
                     normalized_cache: dict[str, list[list[float]]] = {}
                     for path, region_vectors in cache_data.items():
@@ -238,6 +234,7 @@ class SimilarityEngine(QObject):
                     self._region_cache_path,
                     e,
                 )
+                self._region_cache_path.unlink(missing_ok=True)
         return {}
 
     def _save_regional_embeddings_to_cache(
@@ -250,8 +247,11 @@ class SimilarityEngine(QObject):
                 len(regional_embeddings),
                 self._region_cache_path,
             )
-            with open(self._region_cache_path, "wb") as f:
-                pickle.dump(regional_embeddings, f)
+            save_embedding_cache(
+                self._region_cache_path,
+                regional_embeddings,
+                kind="regional",
+            )
             logger.info(
                 "Regional embeddings saved in %.4fs",
                 time.perf_counter() - cache_save_start_time,

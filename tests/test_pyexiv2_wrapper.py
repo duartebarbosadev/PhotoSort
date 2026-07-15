@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 from PIL import Image
 import threading
 
-from core.pyexiv2_wrapper import (  # noqa: E402
+from core.pyexiv2_wrapper import (
     PyExiv2ImageWrapper,
     safe_pyexiv2_image,
     PyExiv2Operations,

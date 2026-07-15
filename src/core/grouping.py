@@ -36,7 +36,7 @@ class GroupingMode(StrEnum):
     MIXED = "mixed"
 
 
-@dataclass
+@dataclass(slots=True)
 class GroupingGroup:
     group_id: str
     group_label: str
@@ -45,7 +45,7 @@ class GroupingGroup:
     skipped_paths: list[str] = field(default_factory=list)
 
 
-@dataclass
+@dataclass(slots=True)
 class GroupingPreview:
     mode: str
     total_items: int
@@ -56,7 +56,7 @@ class GroupingPreview:
     summary_text: str
 
 
-@dataclass
+@dataclass(slots=True)
 class GroupingPlan:
     mode: str
     total_items: int
@@ -240,7 +240,7 @@ def augment_grouping_plan_with_filesystem_paths(
     return plan
 
 
-@dataclass
+@dataclass(slots=True)
 class GroupingManifestEntry:
     original_path: str
     new_path: str | None
@@ -250,7 +250,7 @@ class GroupingManifestEntry:
     reason: str | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class GroupingRunSummary:
     mode: str
     source_root: str
@@ -264,7 +264,7 @@ class GroupingRunSummary:
     entries: list[GroupingManifestEntry]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GroupingDirectoryRename:
     group_id: str
     source_dir: str
@@ -389,7 +389,7 @@ def _resolve_collision_safe_destination(destination_dir: str, basename: str) -> 
 
 def _find_companion_files(photo_path: str) -> list[str]:
     """Find companion files with same stem: .xmp sidecars and same-stem images in other formats."""
-    from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS  # noqa: PLC0415
+    from core.media_utils import SUPPORTED_IMAGE_EXTENSIONS
 
     stem, src_ext = os.path.splitext(photo_path)
     src_ext_lower = src_ext.lower()

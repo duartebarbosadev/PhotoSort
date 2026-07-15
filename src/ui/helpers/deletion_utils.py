@@ -4,7 +4,7 @@ from dataclasses import dataclass
 # The actual QColor / palette lookup happens in MainWindow; we only decide suffix logic here.
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DeletionPresentation:
     text: str
     is_marked: bool

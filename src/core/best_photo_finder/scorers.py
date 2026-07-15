@@ -15,6 +15,7 @@ from core.best_photo_finder.models import TechnicalMetrics
 from core.app_settings import get_huggingface_cache_dir
 from core.huggingface_progress import build_hf_tqdm_class
 from core.runtime_paths import resolve_face_landmarker_model_path
+import contextlib
 
 LEFT_EYE_INDICES = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_INDICES = (362, 385, 387, 263, 373, 380)
@@ -182,10 +183,8 @@ class OpenCvMediapipeTechnicalScorer:
         landmarker = self._face_landmarker
         self._face_landmarker = None
         if landmarker is not None:
-            try:
+            with contextlib.suppress(RuntimeError):
                 landmarker.close()
-            except RuntimeError:
-                pass
 
     def score(self, path: Path, config: SelectorConfig) -> TechnicalMetrics:
         cv2 = _require_module("cv2")

@@ -33,7 +33,7 @@ def sanitize_model_id(model_name: str) -> str:
     return model_name.replace("/", "_").replace(":", "_")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SimilarityModelSpec:
     model_name: str
     pipeline_version: str = SIMILARITY_EMBEDDING_PIPELINE_VERSION

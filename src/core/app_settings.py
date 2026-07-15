@@ -99,7 +99,7 @@ DEFAULT_OPENAI_MAX_WORKERS = 4
 DEFAULT_BEST_SHOT_BATCH_SIZE = 3
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LocalBestShotConstants:
     model_stride: int = 32
     tensor_cache_key: str = "_photosort_pyiqa_tensor"
@@ -617,19 +617,9 @@ def calculate_max_workers(min_workers: int = 1, max_workers: int | None = None) 
 
 def get_available_cpu_count() -> int:
     """Return CPUs available to this process across desktops and containers."""
-    process_cpu_count = getattr(os, "process_cpu_count", None)
-    if process_cpu_count is not None:
-        count = process_cpu_count()
-        if count:
-            return max(1, int(count))
-    get_affinity = getattr(os, "sched_getaffinity", None)
-    if get_affinity is not None:
-        try:
-            affinity_count = len(get_affinity(0))
-            if affinity_count:
-                return affinity_count
-        except OSError:
-            pass
+    count = os.process_cpu_count()
+    if count:
+        return max(1, count)
     return max(1, os.cpu_count() or 4)
 
 

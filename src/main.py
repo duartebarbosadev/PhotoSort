@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+import contextlib
 
 SUPPORTED_PYTHON = (3, 14)
 if sys.version_info[:2] != SUPPORTED_PYTHON:
@@ -26,7 +27,7 @@ from core.runtime_paths import (  # noqa: E402
 # Initialize pyexiv2 before any Qt imports - this is CRITICAL for Windows stability
 _pyexiv2_initialization_warning: str | None = None
 try:
-    from core.pyexiv2_init import ensure_pyexiv2_initialized  # noqa: E402
+    from core.pyexiv2_init import ensure_pyexiv2_initialized
 
     ensure_pyexiv2_initialized()
 except Exception as e:
@@ -166,7 +167,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 
     # Construct a simpler message for the main part of the dialog
     main_error_text = (
-        f"A critical error occurred: {str(exc_value)}\n\n"
+        f"A critical error occurred: {exc_value!s}\n\n"
         "The application may become unstable or need to close.\n"
         "Please report this error with the details provided."
     )
@@ -183,7 +184,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
             error_box.exec()
         except Exception as e_msgbox:
             logging.error(
-                f"Failed to display error dialog: {str(e_msgbox)}\nOriginal error:\n{error_message_details}"
+                f"Failed to display error dialog: {e_msgbox!s}\nOriginal error:\n{error_message_details}"
             )
             # Fallback to stderr if QMessageBox fails
             logging.critical(
@@ -264,10 +265,8 @@ def apply_app_identity(app: QApplication, main_window=None) -> None:
             icon = QIcon(icon_path)
             app.setWindowIcon(icon)
             if main_window is not None:
-                try:
+                with contextlib.suppress(Exception):
                     main_window.setWindowIcon(icon)
-                except Exception:
-                    pass
             logging.debug(f"Application icon set from: {icon_path}")
         else:
             logging.warning(f"Application icon not found at: {icon_path}")
@@ -315,7 +314,7 @@ def main():
     splash.show()
     app.processEvents()  # should be fast; no text/layout yet
 
-    from pillow_heif import register_heif_opener  # noqa: E402
+    from pillow_heif import register_heif_opener
 
     register_heif_opener()
 

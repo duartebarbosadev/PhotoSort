@@ -17,6 +17,7 @@ from PyQt6.QtGui import (
     QStandardItem,
 )
 import os
+from typing import override
 
 from core.image_pipeline import ImagePipeline
 from core.caching.exif_cache import ExifCache
@@ -62,6 +63,7 @@ class DroppableTreeView(QTreeView):
         self.highlighted_drop_target_index = None
         self.original_item_brush = None
 
+    @override
     def keyPressEvent(self, event):
         """
         Override to prevent type-ahead search from consuming single-letter shortcuts.
@@ -189,6 +191,7 @@ class DroppableTreeView(QTreeView):
             target_cluster_id,
         )
 
+    @override
     def dragEnterEvent(self, event: QDragEnterEvent | None):
         if event and self._is_cluster_drop_valid(event):
             event.acceptProposedAction()
@@ -253,6 +256,7 @@ class DroppableTreeView(QTreeView):
         self._clear_drop_highlight()
         super().dragLeaveEvent(event)
 
+    @override
     def dropEvent(self, event: QDropEvent | None):
         if not event:
             return
@@ -393,11 +397,13 @@ class LoadingOverlay(QWidget):
         self.text_label.setText(text)
         self.text_label.adjustSize()
 
+    @override
     def showEvent(self, event):
         if self.parentWidget():
             self.setGeometry(self.parentWidget().rect())
         super().showEvent(event)
 
+    @override
     def hideEvent(self, event):
         super().hideEvent(event)
 

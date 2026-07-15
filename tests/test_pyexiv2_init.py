@@ -58,11 +58,13 @@ class TestPyExiv2Init:
         try:
             with patch("core.pyexiv2_init.sys.modules") as mock_modules:
                 # Mock sys.modules to include Qt modules
-                mock_modules.keys.return_value = [
-                    "PyQt6.QtCore",
-                    "PyQt6.QtWidgets",
-                    "other_module",
-                ]
+                mock_modules.__iter__.return_value = iter(
+                    [
+                        "PyQt6.QtCore",
+                        "PyQt6.QtWidgets",
+                        "other_module",
+                    ]
+                )
 
                 ensure_pyexiv2_initialized()
 

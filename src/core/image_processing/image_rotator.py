@@ -337,7 +337,7 @@ class ImageRotator:
             # Rotate the actual image pixels
             if file_ext in self._LOSSLESS_JPEG_FORMATS:
                 # For JPEG, try metadata rotation first (lossless), then pixel rotation as fallback
-                metadata_success, pixel_available, msg = (
+                metadata_success, pixel_available, _msg = (
                     self.try_metadata_rotation_first(image_path, direction)
                 )
                 if metadata_success:

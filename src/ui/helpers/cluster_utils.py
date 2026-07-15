@@ -1,5 +1,6 @@
 import logging
 import os
+from contextlib import suppress
 from datetime import datetime as datetime_obj
 from typing import Any
 
@@ -131,10 +132,8 @@ class ClusterUtils:
                 if isinstance(embedding, np.ndarray):
                     cluster_embeddings.append(embedding)
                 elif isinstance(embedding, list):
-                    try:
+                    with suppress(Exception):  # pragma: no cover - defensive
                         cluster_embeddings.append(np.array(embedding, dtype=np.float32))
-                    except Exception:  # pragma: no cover - defensive
-                        pass
             if cluster_embeddings:
                 try:
                     centroids[cluster_id] = np.mean(

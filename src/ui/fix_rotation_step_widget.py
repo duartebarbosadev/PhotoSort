@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import override
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap, QTransform
@@ -57,6 +58,7 @@ class _RotatedImageLabel(QLabel):
         self._preview_angle = preview_angle
         self._refresh()
 
+    @override
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._refresh()

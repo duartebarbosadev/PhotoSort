@@ -1,6 +1,8 @@
 from dataclasses import asdict, dataclass, field
 import json
-from typing import Any, Literal
+from typing import Any, Literal, cast
+
+from core.best_photo_finder.payloads import ImageScorePayload
 
 
 @dataclass(slots=True)
@@ -44,8 +46,8 @@ class ImageScore:
             return 0
         return self.image_width * self.image_height
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    def to_dict(self) -> ImageScorePayload:
+        return cast(ImageScorePayload, asdict(self))
 
 
 @dataclass(slots=True)

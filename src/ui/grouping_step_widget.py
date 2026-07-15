@@ -2,7 +2,9 @@ import logging
 import os
 import time
 import subprocess
+from contextlib import suppress
 from collections.abc import Iterable
+from typing import override
 
 from PyQt6.QtCore import QPoint, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (
@@ -168,6 +170,7 @@ class DroppableGroupingTree(QTreeWidget):
     # Drag event overrides
     # ------------------------------------------------------------------
 
+    @override
     def dragEnterEvent(self, event: QDragEnterEvent | None) -> None:
         if event and event.source() is self:
             self._grouping_widget._drag_in_progress = True
@@ -195,6 +198,7 @@ class DroppableGroupingTree(QTreeWidget):
         if event:
             super().dragLeaveEvent(event)
 
+    @override
     def dropEvent(self, event: QDropEvent | None) -> None:
         if not event or event.source() is not self:
             if event:
@@ -326,12 +330,10 @@ class DroppableGroupingTree(QTreeWidget):
 
     def _clear_drop_highlight(self) -> None:
         if self._highlighted_item is not None:
-            try:
+            with suppress(RuntimeError):
                 self._highlighted_item.setBackground(
                     0, self._original_background or QBrush()
                 )
-            except RuntimeError:
-                pass  # item was deleted during tree refresh
         self._highlighted_item = None
         self._original_background = None
 
@@ -872,7 +874,7 @@ class GroupingStepWidget(QWidget):
         if get_companion_files_preference() != "ask":
             return
 
-        from core.grouping import _find_companion_files  # noqa: PLC0415
+        from core.grouping import _find_companion_files
 
         found: list[str] = []
         for path in source_paths:
@@ -3442,12 +3444,12 @@ class GroupingStepWidget(QWidget):
                 continue
             deleted_file_paths.append(deleted_path)
             lines.append(f"Delete file {self._relative_display_path(deleted_path)}")
-        for folder_path in self._empty_directories_after_move(
-            list(moving_paths) + deleted_file_paths
-        ):
-            lines.append(
-                f"Remove empty folder {self._relative_display_path(folder_path)}"
+        lines.extend(
+            f"Remove empty folder {self._relative_display_path(folder_path)}"
+            for folder_path in self._empty_directories_after_move(
+                list(moving_paths) + deleted_file_paths
             )
+        )
         return lines
 
     def _occupied_paths_for_action_preview(self) -> set[str]:

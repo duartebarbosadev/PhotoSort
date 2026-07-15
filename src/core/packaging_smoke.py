@@ -13,6 +13,7 @@ from core.runtime_paths import resolve_face_landmarker_model_path
 
 REQUIRED_PACKAGED_MODULES = (
     "PIL.Image",
+    "compression.zstd",
     "cv2",
     "mediapipe.tasks.python.vision.face_landmarker",
     "onnxruntime",
@@ -60,7 +61,7 @@ def run_packaging_smoke() -> int:
         try:
             importlib.import_module(module_name)
             modules[module_name] = {"ok": True}
-        except Exception as exc:  # noqa: BLE001 - report every frozen import failure
+        except Exception as exc:
             modules[module_name] = {
                 "ok": False,
                 "error": f"{type(exc).__name__}: {exc}",
@@ -85,7 +86,7 @@ def run_packaging_smoke() -> int:
         )
         face_landmarker.close()
         modules[runtime_check_name] = {"ok": True}
-    except Exception as exc:  # noqa: BLE001 - report frozen native failures
+    except Exception as exc:
         modules[runtime_check_name] = {
             "ok": False,
             "error": f"{type(exc).__name__}: {exc}",

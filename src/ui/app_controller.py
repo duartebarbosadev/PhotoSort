@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 from PyQt6.QtCore import QObject, QTimer
+from core.best_photo_finder.payloads import PickBestResults
 from core.app_settings import (
     add_recent_folder,
     get_similarity_embedding_model_name,
@@ -1402,7 +1403,7 @@ class AppController(QObject):
             f"Scoring images… {message}", percent
         )
 
-    def handle_pick_best_complete(self, results: dict) -> None:
+    def handle_pick_best_complete(self, results: PickBestResults) -> None:
         logger.info(f"Pick Best complete: {len(results)} clusters scored.")
         self.app_state.pick_best_results = results
         # Build quick path→is_winner lookup

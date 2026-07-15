@@ -81,6 +81,7 @@ excluded_transformer_models = [
 ]
 
 hiddenimports = [
+    "compression.zstd",
     "core.build_info",
     "core.packaging_smoke",
     "mediapipe.tasks.python.vision.face_landmarker",
@@ -116,7 +117,7 @@ a = Analysis(
         "flax",
         "jax",
         "pyiqa",
-        # MediaPipe declares SentencePiece, but PhotoSort only uses Face Mesh.
+        # MediaPipe declares SentencePiece, but PhotoSort only uses Face Landmarker.
         # Excluding the unused native tokenizer also avoids a Windows CUDA
         # PyInstaller dependency-scan crash inside sentencepiece.dll.
         "sentencepiece",

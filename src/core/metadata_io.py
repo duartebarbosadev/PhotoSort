@@ -9,8 +9,14 @@ import logging
 import queue
 from typing import Any
 from collections.abc import Callable
+import contextlib
 
 logger = logging.getLogger(__name__)
+
+type MetadataReply = tuple[bool, Any]
+type MetadataTask = tuple[
+    Callable[..., Any], tuple[Any, ...], dict[str, Any], queue.Queue[MetadataReply]
+]
 
 
 def _is_file_missing_error(exception: Exception, file_path: str) -> bool:
@@ -49,10 +55,9 @@ class MetadataIO:
     _FIRST_REAL_ACCESS_LOGGED = False
 
     # Single-thread dispatcher to avoid cross-thread usage of pyexiv2 (not thread-safe)
-    _TASK_QUEUE: queue.Queue[tuple] | None = None
+    _TASK_QUEUE: queue.Queue[MetadataTask] | None = None
     _WORKER_THREAD: threading.Thread | None = None
     _WORKER_READY_EVENT = threading.Event()
-    _STOP_EVENT = threading.Event()
     _THREAD_NAME = "pyexiv2-io"
 
     @classmethod
@@ -77,38 +82,30 @@ class MetadataIO:
         with cls._LOCK:
             if cls._WORKER_THREAD and cls._WORKER_THREAD.is_alive():
                 return
-            cls._TASK_QUEUE = queue.Queue()
-            cls._STOP_EVENT.clear()
+            task_queue: queue.Queue[MetadataTask] = queue.Queue()
+            cls._TASK_QUEUE = task_queue
             cls._WORKER_READY_EVENT.clear()
 
             def _worker_loop():
                 logger.info("MetadataIO worker thread starting...")
                 # Signal that the worker is ready to accept tasks
-                try:
+                with contextlib.suppress(Exception):
                     cls._WORKER_READY_EVENT.set()
-                except Exception:
-                    pass
 
                 # Main task processing loop
                 try:
-                    while not cls._STOP_EVENT.is_set():
+                    while True:
                         try:
-                            item = cls._TASK_QUEUE.get(timeout=0.2)  # type: ignore[arg-type]
-                        except queue.Empty:
-                            continue
-                        if item is None:
+                            fn, args, kwargs, reply_q = task_queue.get()
+                        except queue.ShutDown:
                             break
-                        fn, args, kwargs, reply_q = item
                         try:
                             result = fn(*args, **kwargs)
                             reply_q.put((True, result))
                         except Exception as e:
                             reply_q.put((False, e))
                         finally:
-                            try:
-                                cls._TASK_QUEUE.task_done()  # type: ignore[union-attr]
-                            except Exception:
-                                pass
+                            task_queue.task_done()
                 except Exception as loop_err:
                     logger.error(
                         f"MetadataIO worker loop error: {loop_err}", exc_info=True
@@ -122,10 +119,36 @@ class MetadataIO:
             t.start()
             cls._WORKER_THREAD = t
         # Wait briefly for readiness
-        try:
+        with contextlib.suppress(Exception):
             cls._WORKER_READY_EVENT.wait(timeout=3.0)
-        except Exception:
-            pass
+
+    @classmethod
+    def shutdown_worker_thread(
+        cls, *, immediate: bool = False, timeout: float = 3.0
+    ) -> None:
+        """Stop the dedicated metadata dispatcher and release its queue."""
+
+        with cls._LOCK:
+            task_queue = cls._TASK_QUEUE
+            worker_thread = cls._WORKER_THREAD
+            if task_queue is None:
+                return
+            task_queue.shutdown(immediate=immediate)
+
+        if (
+            worker_thread is not None
+            and worker_thread is not threading.current_thread()
+        ):
+            worker_thread.join(timeout=timeout)
+
+        with cls._LOCK:
+            if cls._TASK_QUEUE is task_queue:
+                cls._TASK_QUEUE = None
+            if cls._WORKER_THREAD is worker_thread and (
+                worker_thread is None or not worker_thread.is_alive()
+            ):
+                cls._WORKER_THREAD = None
+            cls._WORKER_READY_EVENT.clear()
 
     @classmethod
     def _call_in_worker(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -140,10 +163,14 @@ class MetadataIO:
         except Exception:
             pass
         cls.start_worker_thread()
-        if not cls._TASK_QUEUE:
+        task_queue = cls._TASK_QUEUE
+        if task_queue is None:
             raise RuntimeError("MetadataIO worker queue not initialized")
-        reply_q: queue.Queue[tuple] = queue.Queue(maxsize=1)
-        cls._TASK_QUEUE.put((fn, args, kwargs, reply_q))
+        reply_q: queue.Queue[MetadataReply] = queue.Queue(maxsize=1)
+        try:
+            task_queue.put((fn, args, kwargs, reply_q))
+        except queue.ShutDown as exc:
+            raise RuntimeError("MetadataIO worker queue is shutting down") from exc
         ok, payload = reply_q.get()
         if ok:
             return payload
@@ -234,7 +261,7 @@ class MetadataIO:
         except Exception as e:
             if _is_file_missing_error(e, operational_path):
                 logger.warning(
-                    f"File missing while reading EXIF orientation: {operational_path} ({str(e)})"
+                    f"File missing while reading EXIF orientation: {operational_path} ({e!s})"
                 )
             else:
                 logger.error(

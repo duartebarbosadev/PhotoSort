@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-@dataclass
+@dataclass(slots=True)
 class StatusBarInfo:
     filename: str
     rating: int

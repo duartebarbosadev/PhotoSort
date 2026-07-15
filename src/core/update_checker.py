@@ -23,7 +23,7 @@ from core.app_settings import (
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(slots=True)
 class UpdateInfo:
     """Information about an available update."""
 

@@ -33,7 +33,7 @@ class StubTreeView:
                 (index.row(), index.parent().row() if index.parent().isValid() else -1)
             )
 
-    def isExpanded(self, index: QModelIndex) -> bool:  # noqa: N802 (Qt style)
+    def isExpanded(self, index: QModelIndex) -> bool:
         if not index.isValid():
             return False
         key = (index.row(), index.parent().row() if index.parent().isValid() else -1)

@@ -34,7 +34,7 @@ def ensure_pyexiv2_initialized():
             # Check if any Qt modules have already been imported
             qt_modules = [
                 name
-                for name in sys.modules.keys()
+                for name in sys.modules
                 if name.startswith(("PyQt", "PySide", "Qt"))
             ]
 
@@ -45,7 +45,7 @@ def ensure_pyexiv2_initialized():
                 )
 
             # Import pyexiv2 to ensure it's loaded first
-            import pyexiv2  # noqa: F401
+            import pyexiv2
 
             # Try to create a dummy image to fully initialize the library
             # This ensures all DLLs are loaded before any Qt operations

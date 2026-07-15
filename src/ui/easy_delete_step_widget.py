@@ -1,6 +1,7 @@
 import logging
 import os
 from collections.abc import Callable
+from typing import override
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
@@ -61,6 +62,7 @@ class _ScaledImageLabel(QLabel):
         self._source_pixmap = pixmap
         self._refresh()
 
+    @override
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._refresh()

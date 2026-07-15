@@ -97,8 +97,10 @@ class SelectionController:
                     if getattr(view, "isExpanded", lambda _i: False)(
                         idx
                     ) and model.hasChildren(idx):
-                        for child_row in range(model.rowCount(idx)):
-                            queue.append(model.index(child_row, 0, idx))
+                        queue.extend(
+                            model.index(child_row, 0, idx)
+                            for child_row in range(model.rowCount(idx))
+                        )
                 except Exception:
                     pass
             return QModelIndex()
@@ -148,8 +150,10 @@ class SelectionController:
                     if getattr(view, "isExpanded", lambda _i: False)(
                         idx
                     ) and model.hasChildren(idx):
-                        for child_row in range(model.rowCount(idx)):
-                            queue.append(model.index(child_row, 0, idx))
+                        queue.extend(
+                            model.index(child_row, 0, idx)
+                            for child_row in range(model.rowCount(idx))
+                        )
                 except Exception:
                     pass
             return last_valid

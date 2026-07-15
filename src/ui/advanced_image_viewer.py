@@ -1,7 +1,7 @@
 import logging
 import os
 import subprocess
-from typing import Any
+from typing import Any, override
 from PyQt6.QtCore import (
     Qt,
     QRectF,
@@ -132,6 +132,7 @@ class ZoomableImageView(QGraphicsView):
                 return True
         return super().event(event)
 
+    @override
     def resizeEvent(self, event):
         """Refit image to view on resize, with debouncing."""
         if self.has_image():
@@ -303,6 +304,7 @@ class ZoomableImageView(QGraphicsView):
             return
         self.set_zoom_factor(1.0)
 
+    @override
     def wheelEvent(self, event: QWheelEvent | None):
         """Handle mouse wheel for zooming"""
         if self._empty or event is None:
@@ -320,6 +322,7 @@ class ZoomableImageView(QGraphicsView):
         else:
             self.zoom_out(mouse_pos)
 
+    @override
     def mousePressEvent(self, event: QMouseEvent | None):
         """Handle mouse press for panning"""
         if event is None:
@@ -375,6 +378,7 @@ class ZoomableImageView(QGraphicsView):
             self.setCursor(Qt.CursorShape.ArrowCursor)
         super().mouseReleaseEvent(event)
 
+    @override
     def keyPressEvent(self, event: QKeyEvent | None):
         """Handle keyboard shortcuts, allowing number keys to propagate up."""
         if event is None:
@@ -657,6 +661,7 @@ class IndividualViewer(QWidget):
             self._on_video_playback_state_changed
         )
 
+    @override
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if obj is self.video_widget:
             if event.type() == QEvent.Type.KeyPress:
@@ -880,6 +885,7 @@ class IndividualViewer(QWidget):
                 current_style.polish(self)
             self.update()
 
+    @override
     def mousePressEvent(self, event: QMouseEvent):
         """Handle mouse press events to show context menu on right-click."""
         if event.button() == Qt.MouseButton.RightButton and self._file_path is not None:
@@ -1715,11 +1721,11 @@ class SynchronizedImageViewer(QWidget):
 
     def _on_delete_others_requested(self, file_path_to_keep: str):
         """Handle delete others request by collecting file paths and emitting a bulk delete signal."""
-        file_paths_to_delete = []
-        for viewer in self.image_viewers:
-            # Collect all other images except the one that requested to keep
-            if viewer._file_path is not None and viewer._file_path != file_path_to_keep:
-                file_paths_to_delete.append(viewer._file_path)
+        file_paths_to_delete = [
+            viewer._file_path
+            for viewer in self.image_viewers
+            if viewer._file_path is not None and viewer._file_path != file_path_to_keep
+        ]
 
         # Emit the bulk delete request if there are files to delete
         if file_paths_to_delete:

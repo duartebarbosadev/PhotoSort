@@ -7,6 +7,7 @@ import os
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
 from core.caching.analysis_cache import AnalysisCache
+from core.best_photo_finder.payloads import PickBestResults
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +50,7 @@ class AppState:
         self.best_shot_scores_by_path: dict[str, dict[str, Any]] = {}
         self.best_shot_winners: dict[int, dict[str, Any]] = {}
         self.ai_rating_results: dict[str, dict[str, Any]] = {}
-        self.pick_best_results: dict[
-            int, dict[str, Any]
-        ] = {}  # cluster_id -> {winner_path, ranked, failed, all_paths}
+        self.pick_best_results: PickBestResults = {}
         self.pick_best_winners_by_path: dict[str, bool] = {}  # path -> True if winner
         self.easy_delete_results: dict[str, dict[str, Any]] | None = (
             None  # None = not analysed; {} = analysed with no issues
@@ -305,7 +304,11 @@ class AppState:
         score = self.best_shot_scores_by_path.get(file_path)
         if score is not None:
             cluster_id = score.get("cluster_id")
-            winner = self.best_shot_winners.get(cluster_id)
+            winner = (
+                self.best_shot_winners.get(cluster_id)
+                if isinstance(cluster_id, int)
+                else None
+            )
             if winner is not None:
                 return winner.get("image_path") == file_path
         # Restored legacy cache entries may not contain a cluster id.

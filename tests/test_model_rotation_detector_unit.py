@@ -30,7 +30,7 @@ def test_predict_uses_stubbed_session(monkeypatch):
     st.load_failed = False
 
     class DummySession:
-        def run(self, outputs, feed):  # noqa: D401 - simple stub
+        def run(self, outputs, feed):
             return [[0]]
 
     class DummyTransforms:

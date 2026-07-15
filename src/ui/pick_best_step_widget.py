@@ -1,6 +1,7 @@
 import logging
 import os
 from fractions import Fraction
+from typing import override
 from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -22,6 +23,7 @@ from core.metadata_processor import (
     MetadataProcessor,
     _parse_exif_date,
 )
+from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResults
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.workflow_review_components import (
     PICK_BEST_SHORTCUTS,
@@ -29,6 +31,7 @@ from ui.workflow_review_components import (
     WorkflowStateBanner,
     install_workflow_shortcuts,
 )
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +218,7 @@ class CompareCard(QFrame):
         self._focused = focused
         self._update_style()
 
+    @override
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self.path:
             self._toggle()
@@ -282,7 +286,7 @@ class PickBestStepWidget(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._clusters: list[dict] = []
+        self._clusters: list[PickBestClusterResult] = []
         self._cluster_index = 0
         self._subset_index = 0
         self._subset_paths: list[str] = []
@@ -315,7 +319,7 @@ class PickBestStepWidget(QWidget):
         self._loading_label.setText(f"Error: {message}")
         self._progress_bar.setValue(0)
 
-    def show_results(self, results: dict[int, dict]) -> None:
+    def show_results(self, results: PickBestResults) -> None:
         self._clusters = [r for r in results.values() if r.get("winner_path")]
         self._metadata_cache.clear()
         if not self._clusters:
@@ -323,10 +327,8 @@ class PickBestStepWidget(QWidget):
                 "No comparable clusters found.\nClick 'Done' to continue to Cull."
             )
             self._skip_btn_loading.setText("Done: Go to Cull →")
-            try:
+            with contextlib.suppress(TypeError):
                 self._skip_btn_loading.clicked.disconnect()
-            except TypeError:
-                pass
             self._skip_btn_loading.clicked.connect(self.proceed_to_cull_requested)
             return
 
@@ -843,7 +845,7 @@ class PickBestStepWidget(QWidget):
         return self._metadata_cache[path]
 
     def _cluster_score_maps(
-        self, cluster: dict
+        self, cluster: PickBestClusterResult
     ) -> tuple[dict[str, float | None], dict[str, str]]:
         ranked: list[dict] = cluster.get("ranked", [])
         failed: list[dict] = cluster.get("failed", [])

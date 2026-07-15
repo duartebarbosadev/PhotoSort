@@ -10,6 +10,11 @@ from core.best_photo_finder.errors import (
     NoSupportedImagesError,
 )
 from core.best_photo_finder.pipeline import PhotoSelector
+from core.best_photo_finder.payloads import (
+    ImageScorePayload,
+    PickBestClusterResult,
+    PickBestResults,
+)
 from core.best_photo_finder.scorers import (
     HuggingFaceAestheticScorer,
     OpenCvMediapipeTechnicalScorer,
@@ -22,7 +27,7 @@ from core.media_utils import is_video_extension
 logger = logging.getLogger(__name__)
 
 
-def _failed_entry(path: str, reason: str) -> dict:
+def _failed_entry(path: str, reason: str) -> ImageScorePayload:
     return {
         "path": path,
         "status": "failed",
@@ -30,7 +35,9 @@ def _failed_entry(path: str, reason: str) -> dict:
     }
 
 
-def _summarize_failed_images(failed_images: list[dict], *, limit: int = 3) -> str:
+def _summarize_failed_images(
+    failed_images: list[ImageScorePayload], *, limit: int = 3
+) -> str:
     if not failed_images:
         return ""
 
@@ -96,7 +103,7 @@ class PickBestWorker(QObject):
             ),
             preview_loader=self._load_preview_image,
         )
-        results: dict[int, dict] = {}
+        results: PickBestResults = {}
         try:
             for processed, cluster_id in enumerate(sorted(scorable_clusters)):
                 if self._should_stop:
@@ -116,7 +123,7 @@ class PickBestWorker(QObject):
                     percent, f"Scoring cluster {processed + 1}/{total}: {preview}…"
                 )
 
-                cluster_result: dict = {
+                cluster_result: PickBestClusterResult = {
                     "winner_path": None,
                     "ranked": [],
                     "failed": [],

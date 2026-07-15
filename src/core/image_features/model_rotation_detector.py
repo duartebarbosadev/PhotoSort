@@ -52,11 +52,11 @@ class RotationDetectorProtocol(Protocol):  # pragma: no cover - structural typin
 
 try:  # pragma: no cover - optional pillow import for typing friendliness
     from PIL import Image as ImageType  # type: ignore
-except Exception:  # noqa: BLE001
+except Exception:
     ImageType = object  # type: ignore
 
 
-@dataclass
+@dataclass(slots=True)
 class _LazyState:
     tried_load: bool = False
     load_failed: bool = False
@@ -109,7 +109,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
             )
             predicted_idx = int(np.argmax(result[0], axis=1)[0])
             return CLASS_TO_ANGLE_MAP.get(predicted_idx, 0)
-        except Exception:  # noqa: BLE001
+        except Exception:
             if not self._state.failure_logged:
                 logger.error(
                     "Rotation inference failed; disabling detector.", exc_info=True
@@ -154,7 +154,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
             try:  # pragma: no cover
                 import onnxruntime as ort  # type: ignore
                 import torchvision.transforms as transforms  # type: ignore
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 s.load_failed = True
                 if not s.failure_logged:
                     logger.warning(
@@ -203,7 +203,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
                 s.provider_name = chosen
                 logger.info("Rotation model loaded with provider %s", chosen)
                 return True
-            except Exception:  # noqa: BLE001
+            except Exception:
                 s.load_failed = True
                 if not s.failure_logged:
                     logger.error(
@@ -294,7 +294,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
         except FileNotFoundError:
             logger.error("Rotation detector: file not found %s", os.path.basename(path))
             return None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(
                 "Failed loading image for rotation detection %s: %s",
                 os.path.basename(path),

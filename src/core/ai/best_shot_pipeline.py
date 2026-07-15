@@ -59,7 +59,7 @@ DEFAULT_RATING_PROMPT = (
 )
 
 
-@dataclass
+@dataclass(slots=True)
 class LLMConfig:
     api_key: str | None
     model: str = DEFAULT_OPENAI_MODEL

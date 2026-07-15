@@ -24,10 +24,11 @@ def find_proxy_index_for_path(
     if not isinstance(proxy_model, QSortFilterProxyModel):  # Safety
         return QModelIndex()
 
-    queue: list[QModelIndex] = []
     root_parent = QModelIndex()
-    for r in range(proxy_model.rowCount(root_parent)):
-        queue.append(proxy_model.index(r, 0, root_parent))
+    queue = [
+        proxy_model.index(row, 0, root_parent)
+        for row in range(proxy_model.rowCount(root_parent))
+    ]
 
     head = 0
     while head < len(queue):
@@ -44,8 +45,10 @@ def find_proxy_index_for_path(
                     return current_proxy_idx
         # traverse children if tree-like
         if is_expanded is None or is_expanded(current_proxy_idx):
-            for child_row in range(proxy_model.rowCount(current_proxy_idx)):
-                queue.append(proxy_model.index(child_row, 0, current_proxy_idx))
+            queue.extend(
+                proxy_model.index(child_row, 0, current_proxy_idx)
+                for child_row in range(proxy_model.rowCount(current_proxy_idx))
+            )
     return QModelIndex()
 
 

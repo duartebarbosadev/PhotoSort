@@ -1,6 +1,7 @@
 import time
 import logging
 from ui.advanced_image_viewer import SynchronizedImageViewer
+from core.metadata_io import MetadataIO
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -20,9 +21,7 @@ from PyQt6.QtWidgets import (
 )
 import os
 from datetime import datetime as datetime_obj, date as date_obj
-from typing import (
-    Any,
-)
+from typing import Any, override
 from collections.abc import (
     Callable,
 )  # Import List and Dict for type hinting, Optional, Any, Tuple
@@ -95,6 +94,7 @@ from ui.models.media_filter_proxy import (
     CustomFilterProxyModel,
     RATING_FILTER_OPTIONS,
 )
+import contextlib
 
 logger = logging.getLogger(__name__)
 FILTER_LOG_INTERVAL = 100
@@ -1578,10 +1578,11 @@ class MainWindow(QMainWindow):
         selected_paths = self._get_selected_file_paths_from_view()
         if not selected_paths:
             # If no selection, apply to the currently displayed image(s) in the advanced viewer
-            paths_to_rate = []
-            for viewer in self.advanced_image_viewer.image_viewers:
-                if viewer.isVisible() and viewer._file_path:
-                    paths_to_rate.append(viewer._file_path)
+            paths_to_rate = [
+                viewer._file_path
+                for viewer in self.advanced_image_viewer.image_viewers
+                if viewer.isVisible() and viewer._file_path
+            ]
             if paths_to_rate:
                 self.app_controller.apply_rating_to_selection(rating, paths_to_rate)
             return
@@ -1721,6 +1722,7 @@ class MainWindow(QMainWindow):
         except Exception:
             logger.exception("refresh_filter: failed to invalidate proxy model")
 
+    @override
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
         if (
@@ -1736,6 +1738,7 @@ class MainWindow(QMainWindow):
         # Sidebar positioning is now handled by the splitter automatically
         # No need for manual position updates
 
+    @override
     def keyPressEvent(self, event: QKeyEvent):
         # Arrow key and Delete navigation is now handled by the eventFilter for the views.
         # MainWindow.keyPressEvent will handle other application-wide shortcuts
@@ -1898,6 +1901,7 @@ class MainWindow(QMainWindow):
 
         return QModelIndex()  # No visible image item found in this subtree
 
+    @override
     def closeEvent(self, event):
         close_start = time.perf_counter()
         logger.info("Application close requested.")
@@ -1970,6 +1974,7 @@ class MainWindow(QMainWindow):
         )
         self.preview_load_controller.shutdown()
         self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
+        MetadataIO.shutdown_worker_thread(immediate=True)
         event.accept()
 
     def _get_current_group_sibling_images(
@@ -2017,15 +2022,13 @@ class MainWindow(QMainWindow):
                 if sibling_idx == current_image_proxy_idx:
                     current_item_local_idx = len(sibling_image_items) - 1
 
-        try:
+        with contextlib.suppress(Exception):
             # Debug information to help verify runtime grouping
             logger.debug(
                 "_get_current_group_sibling_images: group_size=%d, cur_local_idx=%s",
                 len(sibling_image_items),
                 current_item_local_idx,
             )
-        except Exception:
-            pass
         return parent_proxy_idx, sibling_image_items, current_item_local_idx
 
     # Backwards-compatible alias used by get_group_sibling_images adapter
@@ -2389,13 +2392,13 @@ class MainWindow(QMainWindow):
 
         # Traversal logic needs to handle both QTreeView (hierarchical) and QListView (flat)
         # We build a queue of proxy indices to visit in display order.
-        queue = []
         root_proxy_parent_idx = (
             QModelIndex()
         )  # Parent for top-level items in the proxy model
-
-        for r in range(proxy_model.rowCount(root_proxy_parent_idx)):
-            queue.append(proxy_model.index(r, 0, root_proxy_parent_idx))
+        queue = [
+            proxy_model.index(row, 0, root_proxy_parent_idx)
+            for row in range(proxy_model.rowCount(root_proxy_parent_idx))
+        ]
 
         head = 0
         while head < len(queue):
@@ -2431,12 +2434,12 @@ class MainWindow(QMainWindow):
                         and item_for_children_check.hasChildren()
                         and active_view.isExpanded(current_proxy_idx)
                     ):
-                        for child_row in range(
-                            proxy_model.rowCount(current_proxy_idx)
-                        ):  # Children from proxy model
-                            queue.append(
-                                proxy_model.index(child_row, 0, current_proxy_idx)
+                        queue.extend(
+                            proxy_model.index(child_row, 0, current_proxy_idx)
+                            for child_row in range(
+                                proxy_model.rowCount(current_proxy_idx)
                             )
+                        )
         return paths
 
     def _find_proxy_index_for_path(self, target_path: str) -> QModelIndex:
@@ -2993,10 +2996,8 @@ class MainWindow(QMainWindow):
             if self.sidebar_visible and self.metadata_sidebar:
                 self.metadata_sidebar.show_placeholder()
         # Always allow MetadataController to update (it internally caches selection)
-        try:
+        with contextlib.suppress(Exception):
             self.metadata_controller.refresh_for_selection()
-        except Exception:
-            pass
 
     def _apply_filter(self):
         # Guard: Don't apply filters if no images are loaded yet
@@ -3422,10 +3423,8 @@ class MainWindow(QMainWindow):
                     )
                     break
             elif isinstance(item_data, str) and item_data.startswith("cluster_header_"):
-                try:
+                with contextlib.suppress(ValueError, IndexError):
                     determined_cluster_id = int(item_data.split("_")[-1])
-                except ValueError, IndexError:
-                    pass
                 break
             search_idx = search_idx.parent()
 
@@ -3468,6 +3467,7 @@ class MainWindow(QMainWindow):
 
         return False
 
+    @override
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             # Ensure the event is for one of our views
@@ -4293,10 +4293,11 @@ class MainWindow(QMainWindow):
             return
 
         # Get all image file paths from the split view
-        all_image_paths = []
-        for viewer in self.advanced_image_viewer.image_viewers:
-            if viewer._file_path is not None:
-                all_image_paths.append(viewer._file_path)
+        all_image_paths = [
+            viewer._file_path
+            for viewer in self.advanced_image_viewer.image_viewers
+            if viewer._file_path is not None
+        ]
 
         # Filter out the file path to keep
         paths_to_mark = [path for path in all_image_paths if path != file_path_to_keep]
@@ -4347,10 +4348,11 @@ class MainWindow(QMainWindow):
             return
 
         # Get all image file paths from the split view
-        all_image_paths = []
-        for viewer in self.advanced_image_viewer.image_viewers:
-            if viewer._file_path is not None:
-                all_image_paths.append(viewer._file_path)
+        all_image_paths = [
+            viewer._file_path
+            for viewer in self.advanced_image_viewer.image_viewers
+            if viewer._file_path is not None
+        ]
 
         # Filter out the file path to keep
         paths_to_unmark = [

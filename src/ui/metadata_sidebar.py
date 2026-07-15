@@ -22,6 +22,7 @@ from PyQt6.QtGui import QFont
 
 from core.media_utils import is_video_extension
 from core.utils.time_utils import format_duration
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -447,10 +448,8 @@ class MetadataSidebar(QWidget):
         if fmt == "size_fallback":
             size_in_bytes = None
             if value is not None:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     size_in_bytes = int(value)
-                except ValueError, TypeError:
-                    pass
             if size_in_bytes is None and path and os.path.exists(path):
                 try:
                     size_in_bytes = os.stat(path).st_size
