@@ -1585,3 +1585,73 @@ def test_group_items_have_drag_flag(tmp_path):
     assert group_item.flags() & Qt.ItemFlag.ItemIsDragEnabled
     assert file_item.flags() & Qt.ItemFlag.ItemIsDragEnabled
     assert group_item.data(0, ROLE_KIND) == ITEM_GROUP
+
+
+def test_grouping_step_widget_keyboard_navigation_skips_deleted(tmp_path):
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtGui import QKeyEvent
+    import sys
+
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+    second = str(source_root / "Beach" / "b.jpg")
+    third = str(source_root / "Beach" / "c.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=3,
+            supported_items=3,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[first, second, third],
+                ),
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    # Mark the second file for deletion
+    marks = {second}
+    widget.set_is_marked_func(marks.__contains__)
+
+    first_item = widget._after_file_items_by_path[first]
+    second_item = widget._after_file_items_by_path[second]
+    third_item = widget._after_file_items_by_path[third]
+
+    # Focus on first item
+    widget.preview_tree.setCurrentItem(first_item)
+
+    # 1. Press Down without override modifier -> should skip second and select third
+    event_down = QKeyEvent(
+        QEvent.Type.KeyPress, Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier
+    )
+    handled = widget.eventFilter(widget.preview_tree, event_down)
+    assert handled is True
+    assert widget.preview_tree.currentItem() is third_item
+
+    # 2. Press Up without override modifier -> should skip second and select first
+    event_up = QKeyEvent(
+        QEvent.Type.KeyPress, Qt.Key.Key_Up, Qt.KeyboardModifier.NoModifier
+    )
+    handled = widget.eventFilter(widget.preview_tree, event_up)
+    assert handled is True
+    assert widget.preview_tree.currentItem() is first_item
+
+    # 3. Press Down with override modifier (Ctrl on Win/Linux, Cmd on macOS)
+    modifier = (
+        Qt.KeyboardModifier.MetaModifier
+        if sys.platform == "darwin"
+        else Qt.KeyboardModifier.ControlModifier
+    )
+    event_down_override = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Down, modifier)
+    handled_override = widget.eventFilter(widget.preview_tree, event_down_override)
+    assert handled_override is True
+    assert widget.preview_tree.currentItem() is second_item

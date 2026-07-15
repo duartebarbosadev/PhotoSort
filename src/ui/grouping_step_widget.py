@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import time
 import subprocess
 from contextlib import suppress
@@ -7,6 +8,7 @@ from collections.abc import Callable, Iterable
 from typing import override
 
 from PyQt6.QtCore import (
+    QEvent,
     QObject,
     QPoint,
     QRunnable,
@@ -27,6 +29,7 @@ from PyQt6.QtGui import (
     QDragMoveEvent,
     QDropEvent,
     QIcon,
+    QKeyEvent,
     QPixmap,
 )
 from PyQt6.QtWidgets import (
@@ -893,6 +896,8 @@ class GroupingStepWidget(QWidget):
             self._on_location_depth_changed
         )
         self._depth_debounce.timeout.connect(self._fire_depth_change)
+        self.before_tree.installEventFilter(self)
+        self.preview_tree.installEventFilter(self)
 
     def _shortcut_item(self) -> QTreeWidgetItem | None:
         focus = QApplication.focusWidget()
@@ -3721,3 +3726,47 @@ class GroupingStepWidget(QWidget):
         except Exception:
             pass
         return path
+
+    @override
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.KeyPress:
+            if obj in (self.before_tree, self.preview_tree):
+                key_event: QKeyEvent = event
+                key = key_event.key()
+                modifiers = key_event.modifiers()
+                is_up = key in (Qt.Key.Key_Up, Qt.Key.Key_K)
+                is_down = key in (Qt.Key.Key_Down, Qt.Key.Key_J)
+                if is_up or is_down:
+                    has_shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+                    has_alt = bool(modifiers & Qt.KeyboardModifier.AltModifier)
+                    if not has_shift and not has_alt:
+                        has_special = (
+                            bool(modifiers & Qt.KeyboardModifier.MetaModifier)
+                            if sys.platform == "darwin"
+                            else bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+                        )
+                        skip_deleted = not has_special
+                        tree: QTreeWidget = obj
+                        current_item = tree.currentItem()
+                        if current_item is not None:
+                            candidate = current_item
+                            while True:
+                                candidate = (
+                                    tree.itemAbove(candidate)
+                                    if is_up
+                                    else tree.itemBelow(candidate)
+                                )
+                                if candidate is None:
+                                    break
+                                # If skipping is enabled, check if the candidate is marked for deletion
+                                if skip_deleted:
+                                    source_path = self._item_source_path(candidate)
+                                    if source_path and self._is_marked_func(source_path):
+                                        continue
+                                # Found a valid item!
+                                tree.setCurrentItem(candidate)
+                                return True
+                            # If we reached the end of the tree and found no valid item,
+                            # consume the event to prevent selecting an invalid item.
+                            return True
+        return super().eventFilter(obj, event)
