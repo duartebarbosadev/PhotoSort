@@ -3360,7 +3360,9 @@ class GroupingStepWidget(QWidget):
 
         target_path = self._deletable_path_for_item(item)
         if not target_path:
-            self._show_status_message("This preview item cannot be moved to Trash.", 3000)
+            self._show_status_message(
+                "This preview item cannot be moved to Trash.", 3000
+            )
             return
         tracked_paths = (
             self._tracked_paths_for_directory(target_path)

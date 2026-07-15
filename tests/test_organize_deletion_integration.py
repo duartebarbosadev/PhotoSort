@@ -7,9 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from ui.main_window import MainWindow
 
 
-def test_organize_immediate_trash_removes_only_successful_paths(
-    tmp_path, monkeypatch
-):
+def test_organize_immediate_trash_removes_only_successful_paths(tmp_path, monkeypatch):
     first = str(tmp_path / "first.jpg")
     second = str(tmp_path / "second.jpg")
     (tmp_path / "first.jpg").write_bytes(b"first")

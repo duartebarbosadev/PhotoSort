@@ -51,9 +51,7 @@ ORGANIZE_SHORTCUTS = (
     WorkflowShortcutSpec(
         "trash_now", ("Delete", "Backspace"), "Delete", "Move to Trash now"
     ),
-    WorkflowShortcutSpec(
-        "commit_deletions", ("Shift+D",), "Shift+D", "Commit marked"
-    ),
+    WorkflowShortcutSpec("commit_deletions", ("Shift+D",), "Shift+D", "Commit marked"),
     WorkflowShortcutSpec(
         "clear_deletions", ("Alt+D",), f"{_ALT_MODIFIER}D", "Clear marks"
     ),

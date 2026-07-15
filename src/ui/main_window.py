@@ -642,9 +642,7 @@ class MainWindow(QMainWindow):
         self.grouping_step_widget.clear_deletion_marks_requested.connect(
             self._clear_all_deletion_marks
         )
-        self.grouping_step_widget.trash_requested.connect(
-            self._trash_from_organize
-        )
+        self.grouping_step_widget.trash_requested.connect(self._trash_from_organize)
         self.step_organize_button.clicked.connect(self._go_to_grouping_step)
         self.step_easy_delete_button.clicked.connect(self._go_to_easy_delete_step)
         self.step_fix_rotation_button.clicked.connect(self._go_to_fix_rotation_step)
@@ -1292,9 +1290,7 @@ class MainWindow(QMainWindow):
         self.proxy_model.invalidate()
         self._refresh_visible_items_icons()
         self._refresh_workflow_deletion_state()
-        self.statusBar().showMessage(
-            f"Toggled Trash mark for {toggled} file(s).", 4000
-        )
+        self.statusBar().showMessage(f"Toggled Trash mark for {toggled} file(s).", 4000)
 
     def _trash_from_organize(
         self, target_path: str, represented_paths: list[str]
