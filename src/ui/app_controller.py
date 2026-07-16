@@ -1300,7 +1300,6 @@ class AppController(QObject):
         self.app_state.grouping_run_summary = {
             "mode": summary.mode,
             "output_root": summary.output_root,
-            "manifest_path": summary.manifest_path,
             "moved_count": summary.moved_count,
             "deleted_count": getattr(summary, "deleted_count", 0),
             "unassigned_count": summary.unassigned_count,

@@ -1,9 +1,8 @@
-import json
 import logging
 import os
 import re
 from functools import lru_cache
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -241,7 +240,7 @@ def augment_grouping_plan_with_filesystem_paths(
 
 
 @dataclass(slots=True)
-class GroupingManifestEntry:
+class GroupingRunEntry:
     original_path: str
     new_path: str | None
     group_id: str | None
@@ -255,13 +254,12 @@ class GroupingRunSummary:
     mode: str
     source_root: str
     output_root: str
-    manifest_path: str
     moved_count: int
     deleted_count: int
     unassigned_count: int
     skipped_count: int
     groups: list[GroupingGroup]
-    entries: list[GroupingManifestEntry]
+    entries: list[GroupingRunEntry]
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,26 +271,6 @@ class GroupingDirectoryRename:
 
 def build_grouping_output_root(source_root: str, mode: str) -> str:
     return source_root
-
-
-def write_grouping_manifest(summary: GroupingRunSummary) -> str:
-    manifest_path = os.path.join(summary.output_root, "grouping-manifest.json")
-    payload = {
-        "mode": summary.mode,
-        "source_root": summary.source_root,
-        "output_root": summary.output_root,
-        "moved_count": summary.moved_count,
-        "deleted_count": summary.deleted_count,
-        "unassigned_count": summary.unassigned_count,
-        "skipped_count": summary.skipped_count,
-        "generated_at": datetime.now().isoformat(),
-        "groups": [asdict(group) for group in summary.groups],
-        "entries": [asdict(entry) for entry in summary.entries],
-    }
-    os.makedirs(summary.output_root, exist_ok=True)
-    with open(manifest_path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2, ensure_ascii=True)
-    return manifest_path
 
 
 def _sanitize_folder_component(value: str) -> str:
@@ -444,7 +422,7 @@ def _iter_parent_directories(path: str, *, stop_at: str) -> Iterable[str]:
 
 
 def _empty_directory_candidates_from_entries(
-    entries: Sequence[GroupingManifestEntry],
+    entries: Sequence[GroupingRunEntry],
     *,
     source_root: str,
 ) -> list[str]:
@@ -1194,7 +1172,7 @@ def execute_grouping_plan(
     move_companions: bool = False,
 ) -> GroupingRunSummary:
     os.makedirs(output_root, exist_ok=True)
-    entries: list[GroupingManifestEntry] = []
+    entries: list[GroupingRunEntry] = []
     directory_renames = find_directory_rename_candidates(
         plan,
         source_root=source_root,
@@ -1240,7 +1218,7 @@ def execute_grouping_plan(
                 destination_path = os.path.join(destination_dir, basename)
                 moved_count += 1
                 entries.append(
-                    GroupingManifestEntry(
+                    GroupingRunEntry(
                         original_path=source_path,
                         new_path=destination_path,
                         group_id=group.group_id,
@@ -1255,7 +1233,7 @@ def execute_grouping_plan(
                         skipped_path, directory_rename.source_dir
                     )
                     entries.append(
-                        GroupingManifestEntry(
+                        GroupingRunEntry(
                             original_path=skipped_path,
                             new_path=os.path.join(destination_dir, skipped_rel_path),
                             group_id=None,
@@ -1272,7 +1250,7 @@ def execute_grouping_plan(
                 os.path.normpath(desired_destination_path)
             ):
                 entries.append(
-                    GroupingManifestEntry(
+                    GroupingRunEntry(
                         original_path=source_path,
                         new_path=source_path,
                         group_id=group.group_id,
@@ -1294,7 +1272,7 @@ def execute_grouping_plan(
                 _move_companion_files_if_present(source_path, destination_dir)
             moved_count += 1
             entries.append(
-                GroupingManifestEntry(
+                GroupingRunEntry(
                     original_path=source_path,
                     new_path=destination_path,
                     group_id=group.group_id,
@@ -1320,7 +1298,7 @@ def execute_grouping_plan(
                 _move_companion_files_if_present(source_path, unassigned_dir)
             moved_count += 1
             entries.append(
-                GroupingManifestEntry(
+                GroupingRunEntry(
                     original_path=source_path,
                     new_path=destination_path,
                     group_id=None,
@@ -1337,7 +1315,7 @@ def execute_grouping_plan(
             raise RuntimeError(message or f"Failed to delete {target_path}.")
         deleted_count += 1
         entries.append(
-            GroupingManifestEntry(
+            GroupingRunEntry(
                 original_path=target_path,
                 new_path=None,
                 group_id=None,
@@ -1356,7 +1334,7 @@ def execute_grouping_plan(
         if source_path in renamed_skipped_paths:
             continue
         entries.append(
-            GroupingManifestEntry(
+            GroupingRunEntry(
                 original_path=source_path,
                 new_path=None,
                 group_id=None,
@@ -1378,7 +1356,6 @@ def execute_grouping_plan(
         mode=plan.mode,
         source_root=source_root,
         output_root=output_root,
-        manifest_path="",
         moved_count=moved_count,
         deleted_count=deleted_count,
         unassigned_count=len(plan.unassigned_paths),
@@ -1386,7 +1363,6 @@ def execute_grouping_plan(
         groups=plan.groups,
         entries=entries,
     )
-    summary.manifest_path = write_grouping_manifest(summary)
     return summary
 
 

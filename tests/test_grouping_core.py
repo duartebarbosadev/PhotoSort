@@ -1,4 +1,3 @@
-import json
 import os
 
 import numpy as np
@@ -320,7 +319,7 @@ def test_mixed_grouping_partitions_by_date_then_similarity(tmp_path, monkeypatch
     assert plan.unassigned_paths == []
 
 
-def test_execute_grouping_plan_moves_files_handles_name_collisions_and_writes_manifest(
+def test_execute_grouping_plan_moves_files_and_handles_name_collisions(
     tmp_path,
 ):
     source_root = tmp_path / "source"
@@ -357,11 +356,9 @@ def test_execute_grouping_plan_moves_files_handles_name_collisions_and_writes_ma
     assert os.path.exists(moved_paths[0])
     assert os.path.exists(moved_paths[1])
     assert moved_paths[0] != moved_paths[1]
-    assert os.path.exists(summary.manifest_path)
-    with open(summary.manifest_path, encoding="utf-8") as fh:
-        manifest = json.load(fh)
-    assert manifest["moved_count"] == 2
-    assert len(manifest["entries"]) == 2
+    assert summary.moved_count == 2
+    assert len(summary.entries) == 2
+    assert not (source_root / "grouping-manifest.json").exists()
 
 
 def test_build_grouping_output_root_uses_source_root_directly(tmp_path):
