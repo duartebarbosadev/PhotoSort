@@ -1105,6 +1105,35 @@ class ImagePipeline:
             )
             return None
 
+    def get_cached_review_qpixmap(
+        self,
+        image_path: str,
+        *,
+        thumbnail_apply_orientation: bool = False,
+        memory_only: bool = True,
+    ) -> QPixmap | None:
+        """Return the best cached review image without generating or decoding work."""
+        pixmap = self.get_cached_analysis_qpixmap(
+            image_path,
+            memory_only=memory_only,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        pixmap = self.get_cached_preview_qpixmap(
+            image_path,
+            memory_only=memory_only,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        pixmap = self.get_cached_thumbnail_qpixmap(
+            image_path,
+            apply_orientation=thumbnail_apply_orientation,
+            memory_only=memory_only,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        return None
+
     def clear_all_image_caches(self):
         """Clears both thumbnail and preview caches."""
         logger.warning("Clearing all image caches (thumbnails and previews)...")

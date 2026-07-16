@@ -1,6 +1,7 @@
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from PIL import Image
@@ -9,6 +10,29 @@ from core.caching.preview_cache import PreviewCache
 from core.caching.thumbnail_cache import ThumbnailCache
 from core.image_pipeline import CACHE_SCHEMA_VERSION, ImagePipeline
 from core.grouping import _run_ml_similarity_pipeline
+
+
+def test_review_pixmap_reuses_highest_quality_cache_without_redundant_lookups():
+    analysis = Mock()
+    analysis.isNull.return_value = False
+    pipeline = SimpleNamespace(
+        get_cached_analysis_qpixmap=Mock(return_value=analysis),
+        get_cached_preview_qpixmap=Mock(),
+        get_cached_thumbnail_qpixmap=Mock(),
+    )
+
+    result = ImagePipeline.get_cached_review_qpixmap(
+        pipeline,
+        "/tmp/photo.jpg",
+        thumbnail_apply_orientation=True,
+    )
+
+    assert result is analysis
+    pipeline.get_cached_analysis_qpixmap.assert_called_once_with(
+        "/tmp/photo.jpg", memory_only=True
+    )
+    pipeline.get_cached_preview_qpixmap.assert_not_called()
+    pipeline.get_cached_thumbnail_qpixmap.assert_not_called()
 
 
 def test_disk_caches_store_compressed_payloads_and_return_images(tmp_path):

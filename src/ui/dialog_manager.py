@@ -26,9 +26,10 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QButtonGroup,
+    QWidget,
 )
 from PyQt6.QtCore import Qt, QSize, QUrl
-from PyQt6.QtGui import QIcon, QDesktopServices
+from PyQt6.QtGui import QIcon, QDesktopServices, QTransform
 
 from core.app_settings import (
     get_easy_delete_blur_threshold,
@@ -106,13 +107,19 @@ class DialogManager:
     ) -> dict[str, str] | None:
         """Resolve every pending category, optionally before switching workflow."""
         deletion_entries = self._build_deletion_preview_entries(pending)
+        rotation_changes = getattr(pending, "rotation_changes", {}) or {}
+        direct_rotation_actions = bool(
+            pending.rotation_count
+            and not pending.organize_actions
+            and not deletion_entries
+        )
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Resolve Pending Work")
         dialog.setObjectName("workflowTransitionDialog")
         dialog.setProperty("hasTrash", bool(deletion_entries))
         dialog.setModal(True)
         dialog.setMinimumSize(760, 520)
-        if deletion_entries:
+        if deletion_entries or rotation_changes:
             dialog.resize(960, 720)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
         make_dialog_draggable(dialog)
@@ -209,6 +216,11 @@ class DialogManager:
                 accepted_resolutions["trash"] = trash_resolution
             dialog.accept()
 
+        def accept_direct_resolution(key: str, value: str) -> None:
+            accepted_resolutions.clear()
+            accepted_resolutions[key] = value
+            dialog.accept()
+
         if pending.organize_actions:
             preview_lines = pending.organize_actions[:12]
             if len(pending.organize_actions) > len(preview_lines):
@@ -223,12 +235,47 @@ class DialogManager:
                 "\n".join(preview_lines),
             )
         if pending.rotation_count:
-            add_choice_card(
-                "rotation",
-                "Queued rotations",
-                f"{pending.rotation_count} photo rotation(s) are queued but unapplied.",
-                (("apply", "Apply rotations"), ("discard", "Discard queue")),
-            )
+            if direct_rotation_actions:
+                rotation_heading = QLabel(
+                    f"{pending.rotation_count} confirmed rotation(s)"
+                )
+                rotation_heading.setObjectName("workflowTransitionRotationTitle")
+                body.addWidget(rotation_heading)
+                rotation_description = QLabel(
+                    "Review the photos below, then apply the rotations or discard "
+                    "the confirmed queue."
+                )
+                rotation_description.setObjectName("workflowTransitionDescription")
+                rotation_description.setWordWrap(True)
+                body.addWidget(rotation_description)
+
+                if rotation_changes:
+                    rotation_list = QListWidget()
+                    rotation_list.setObjectName("workflowTransitionRotationList")
+                    rotation_list.setIconSize(QSize(180, 130))
+                    rotation_list.setViewMode(QListWidget.ViewMode.IconMode)
+                    rotation_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+                    rotation_list.setMovement(QListWidget.Movement.Static)
+                    rotation_list.setWordWrap(True)
+                    rotation_list.setSpacing(14)
+                    rotation_list.setMinimumHeight(260)
+                    for file_path, angle in rotation_changes.items():
+                        item = QListWidgetItem()
+                        item.setSizeHint(QSize(430, 210))
+                        item.setToolTip(file_path)
+                        rotation_list.addItem(item)
+                        rotation_list.setItemWidget(
+                            item,
+                            self._rotation_comparison_widget(file_path, angle),
+                        )
+                    body.addWidget(rotation_list, 1)
+            else:
+                add_choice_card(
+                    "rotation",
+                    "Queued rotations",
+                    f"{pending.rotation_count} photo rotation(s) are queued but unapplied.",
+                    (("apply", "Apply rotations"), ("discard", "Discard queue")),
+                )
         if deletion_entries:
             trash_heading = QLabel(f"{len(deletion_entries)} item(s) will be removed")
             trash_heading.setObjectName("workflowTransitionTrashTitle")
@@ -274,7 +321,24 @@ class DialogManager:
         stay_button.setDefault(True)
         stay_button.clicked.connect(dialog.reject)
         footer_layout.addWidget(stay_button)
-        if pending.trash_paths:
+        if direct_rotation_actions:
+            discard_button = QPushButton(
+                "Discard Rotations and Switch" if switching else "Discard Rotations"
+            )
+            discard_button.setObjectName("workflowTransitionRotationDiscardButton")
+            discard_button.clicked.connect(
+                lambda: accept_direct_resolution("rotation", "discard")
+            )
+            footer_layout.addWidget(discard_button)
+            apply_button = QPushButton(
+                "Apply Rotations and Switch" if switching else "Apply Rotations"
+            )
+            apply_button.setObjectName("workflowTransitionRotationApplyButton")
+            apply_button.clicked.connect(
+                lambda: accept_direct_resolution("rotation", "apply")
+            )
+            footer_layout.addWidget(apply_button)
+        elif pending.trash_paths:
             clear_button = QPushButton(
                 "Clear Marks and Switch" if switching else "Clear Marks"
             )
@@ -308,8 +372,8 @@ class DialogManager:
         """Determine if RAW processing should be applied to the given file."""
         return is_raw_file(file_path)
 
-    def _cached_thumbnail_icon(self, file_path: str) -> QIcon:
-        """Build a dialog icon without decoding media on the UI thread."""
+    def _cached_thumbnail_pixmap(self, file_path: str):
+        """Read a thumbnail only from shared memory caches."""
         try:
             pixmap = self.parent.image_pipeline.get_cached_thumbnail_qpixmap(
                 file_path,
@@ -318,8 +382,90 @@ class DialogManager:
         except Exception:
             pixmap = None
         if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        return None
+
+    def _cached_review_pixmap(self, file_path: str):
+        """Use the same cache priority as workflow review previews."""
+        try:
+            pixmap = self.parent.image_pipeline.get_cached_review_qpixmap(file_path)
+        except Exception:
+            pixmap = None
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        return None
+
+    def _cached_thumbnail_icon(self, file_path: str) -> QIcon:
+        """Build a dialog icon without decoding media on the UI thread."""
+        pixmap = self._cached_thumbnail_pixmap(file_path)
+        if pixmap is not None:
             return QIcon(pixmap)
         return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+    def _rotation_comparison_widget(self, file_path: str, angle: int) -> QWidget:
+        """Build a cache-only before/after rotation comparison card."""
+        card = QFrame()
+        card.setObjectName("workflowTransitionRotationComparison")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(5)
+
+        filename = QLabel(os.path.basename(file_path))
+        filename.setObjectName("workflowTransitionRotationFilename")
+        filename.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(filename)
+
+        comparison = QHBoxLayout()
+        comparison.setSpacing(8)
+        source = self._cached_review_pixmap(file_path)
+        if source is None:
+            source = self.parent.style().standardIcon(
+                QStyle.StandardPixmap.SP_FileIcon
+            ).pixmap(96, 96)
+        rotated = source.transformed(
+            QTransform().rotate(angle),
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+        def add_preview(caption: str, pixmap) -> None:
+            column = QVBoxLayout()
+            column.setSpacing(3)
+            heading = QLabel(caption)
+            heading.setObjectName("workflowTransitionRotationCaption")
+            heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image = QLabel()
+            image.setObjectName("workflowTransitionRotationPreview")
+            image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image.setFixedSize(170, 120)
+            image.setPixmap(
+                pixmap.scaled(
+                    image.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            column.addWidget(heading)
+            column.addWidget(image)
+            comparison.addLayout(column)
+
+        add_preview("BEFORE", source)
+        arrow = QLabel("→")
+        arrow.setObjectName("workflowTransitionRotationArrow")
+        arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        comparison.addWidget(arrow)
+        add_preview("AFTER", rotated)
+        layout.addLayout(comparison)
+
+        angle_text = {
+            90: "90° clockwise",
+            180: "180°",
+            -90: "90° counterclockwise",
+        }.get(angle, f"{angle}°")
+        detail = QLabel(f"Rotate {angle_text}")
+        detail.setObjectName("workflowTransitionRotationDetail")
+        detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(detail)
+        return card
 
     def _deletion_preview_icon(self, path: str, is_directory: bool) -> QIcon:
         if is_directory:

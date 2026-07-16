@@ -9,6 +9,7 @@ class WorkflowPendingState:
     organize_delete_paths: list[str] = field(default_factory=list)
     organize_removed_folders: list[str] = field(default_factory=list)
     rotation_count: int = 0
+    rotation_changes: dict[str, int] = field(default_factory=dict)
     trash_paths: list[str] = field(default_factory=list)
 
     @property

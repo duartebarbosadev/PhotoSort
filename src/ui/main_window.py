@@ -818,6 +818,7 @@ class MainWindow(QMainWindow):
             organize_delete_paths=organize_delete_paths,
             organize_removed_folders=organize_removed_folders,
             rotation_count=len(rotations),
+            rotation_changes=rotations,
             trash_paths=self.app_state.get_marked_files(),
         )
 

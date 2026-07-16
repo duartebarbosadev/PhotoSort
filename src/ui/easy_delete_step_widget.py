@@ -580,20 +580,7 @@ class EasyDeleteStepWidget(QWidget):
     def _load_pixmap(self, path: str) -> QPixmap | None:
         try:
             if self._image_pipeline:
-                pixmap = self._image_pipeline.get_cached_analysis_qpixmap(
-                    path,
-                    memory_only=True,
-                )
-                if pixmap is None:
-                    pixmap = self._image_pipeline.get_cached_preview_qpixmap(
-                        path,
-                        memory_only=True,
-                    )
-                if pixmap is None:
-                    pixmap = self._image_pipeline.get_cached_thumbnail_qpixmap(
-                        path,
-                        memory_only=True,
-                    )
+                pixmap = self._image_pipeline.get_cached_review_qpixmap(path)
                 if pixmap is not None and not pixmap.isNull():
                     return pixmap
         except Exception as exc:

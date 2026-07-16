@@ -9,7 +9,14 @@ from src.ui.workflow_transition import WorkflowPendingState
 from src.ui.dialog_manager import DialogManager
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QApplication, QDialog, QListWidget, QPushButton, QWidget
+from PyQt6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QLabel,
+    QListWidget,
+    QPushButton,
+    QWidget,
+)
 
 
 def _worker_manager(*, grouping=False, rotations=False):
@@ -330,6 +337,61 @@ def test_in_place_resolution_dialog_does_not_offer_switch_actions():
 
     assert observed == {"stay_text": "Keep Reviewing", "move_text": "Move to Trash"}
     assert result == {"trash": "commit"}
+
+
+def test_rotation_dialog_shows_gallery_and_direct_switch_actions():
+    parent = QWidget()
+    review_pixmap = QPixmap(24, 12)
+    review_pixmap.fill()
+    review_cache = Mock(return_value=review_pixmap)
+    parent.image_pipeline = SimpleNamespace(
+        get_cached_review_qpixmap=review_cache,
+        get_cached_thumbnail_qpixmap=Mock(
+            side_effect=AssertionError("rotation dialog must use review cache priority")
+        ),
+    )
+    manager = DialogManager(parent)
+    observed = {}
+
+    def interact():
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QDialog)
+        gallery = dialog.findChild(QListWidget, "workflowTransitionRotationList")
+        observed["count"] = gallery.count()
+        comparison = gallery.itemWidget(gallery.item(0))
+        observed["captions"] = {
+            label.text()
+            for label in comparison.findChildren(
+                QLabel, "workflowTransitionRotationCaption"
+            )
+        }
+        observed["discard_text"] = dialog.findChild(
+            QPushButton, "workflowTransitionRotationDiscardButton"
+        ).text()
+        apply_button = dialog.findChild(
+            QPushButton, "workflowTransitionRotationApplyButton"
+        )
+        observed["apply_text"] = apply_button.text()
+        apply_button.click()
+
+    QTimer.singleShot(0, interact)
+    result = manager.show_workflow_transition_dialog(
+        "Fix Rotation",
+        "Pick Best",
+        WorkflowPendingState(
+            rotation_count=1,
+            rotation_changes={"/tmp/a.jpg": 90},
+        ),
+    )
+
+    assert observed == {
+        "count": 1,
+        "captions": {"BEFORE", "AFTER"},
+        "discard_text": "Discard Rotations and Switch",
+        "apply_text": "Apply Rotations and Switch",
+    }
+    assert result == {"rotation": "apply"}
+    review_cache.assert_called_once_with("/tmp/a.jpg")
 
 
 def test_deletion_preview_expands_folders_and_shows_non_media_files(tmp_path):

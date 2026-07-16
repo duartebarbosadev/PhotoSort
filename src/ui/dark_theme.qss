@@ -1583,7 +1583,8 @@ QPlainTextEdit#workflowTransitionActionList {
     font-size: 8.5pt;
 }
 
-QListWidget#workflowTransitionTrashList {
+QListWidget#workflowTransitionTrashList,
+QListWidget#workflowTransitionRotationList {
     background: #252627;
     border: 1px solid #3C3F41;
     border-radius: 8px;
@@ -1591,7 +1592,8 @@ QListWidget#workflowTransitionTrashList {
     outline: none;
 }
 
-QListWidget#workflowTransitionTrashList::item {
+QListWidget#workflowTransitionTrashList::item,
+QListWidget#workflowTransitionRotationList::item {
     background: transparent;
     color: #C6D0DA;
     border: 1px solid transparent;
@@ -1600,13 +1602,52 @@ QListWidget#workflowTransitionTrashList::item {
 }
 
 QListWidget#workflowTransitionTrashList::item:hover,
-QListWidget#workflowTransitionTrashList::item:selected {
+QListWidget#workflowTransitionTrashList::item:selected,
+QListWidget#workflowTransitionRotationList::item:hover,
+QListWidget#workflowTransitionRotationList::item:selected {
     background: #303336;
     border-color: #484D51;
 }
 
+QFrame#workflowTransitionRotationComparison {
+    background: #292B2D;
+    border: 1px solid #414447;
+    border-radius: 8px;
+}
+
+QLabel#workflowTransitionRotationFilename {
+    color: #E6EDF3;
+    font-size: 9pt;
+    font-weight: bold;
+}
+
+QLabel#workflowTransitionRotationCaption {
+    color: #89939D;
+    font-size: 8pt;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QLabel#workflowTransitionRotationPreview {
+    background: #1E1F22;
+    border: 1px solid #3C3F41;
+    border-radius: 5px;
+}
+
+QLabel#workflowTransitionRotationArrow {
+    color: #73A7E8;
+    font-size: 18pt;
+    font-weight: bold;
+}
+
+QLabel#workflowTransitionRotationDetail {
+    color: #A9B7C6;
+    font-size: 8.5pt;
+}
+
 QPushButton#workflowTransitionStayButton,
-QPushButton#workflowTransitionClearButton {
+QPushButton#workflowTransitionClearButton,
+QPushButton#workflowTransitionRotationDiscardButton {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
         stop: 0 #3C3F41, stop: 1 #353739);
     color: #A9B7C6;
@@ -1617,13 +1658,15 @@ QPushButton#workflowTransitionClearButton {
 }
 
 QPushButton#workflowTransitionStayButton:hover,
-QPushButton#workflowTransitionClearButton:hover {
+QPushButton#workflowTransitionClearButton:hover,
+QPushButton#workflowTransitionRotationDiscardButton:hover {
     background: #45494A;
     color: #FFFFFF;
     border-color: #646A6E;
 }
 
-QPushButton#workflowTransitionResolveButton {
+QPushButton#workflowTransitionResolveButton,
+QPushButton#workflowTransitionRotationApplyButton {
     background: #4B6EAF;
     color: #FFFFFF;
     border: 1px solid #5A7DB8;
@@ -1631,6 +1674,12 @@ QPushButton#workflowTransitionResolveButton {
     padding: 10px 22px;
     font-size: 9.5pt;
     font-weight: bold;
+}
+
+QPushButton#workflowTransitionResolveButton:hover,
+QPushButton#workflowTransitionRotationApplyButton:hover {
+    background: #587DB8;
+    border-color: #6B8FC7;
 }
 
 QPushButton#workflowTransitionTrashButton {
@@ -1651,7 +1700,9 @@ QPushButton#workflowTransitionTrashButton:hover {
 
 QPushButton#workflowTransitionResolveButton:disabled,
 QPushButton#workflowTransitionClearButton:disabled,
-QPushButton#workflowTransitionTrashButton:disabled {
+QPushButton#workflowTransitionTrashButton:disabled,
+QPushButton#workflowTransitionRotationDiscardButton:disabled,
+QPushButton#workflowTransitionRotationApplyButton:disabled {
     background: #343638;
     color: #69737C;
     border-color: #414447;

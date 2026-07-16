@@ -621,21 +621,10 @@ class PickBestStepWidget(QWidget):
             pixmap = None
             if image_pipeline is not None:
                 try:
-                    pixmap = image_pipeline.get_cached_analysis_qpixmap(
+                    pixmap = image_pipeline.get_cached_review_qpixmap(
                         path,
-                        memory_only=True,
+                        thumbnail_apply_orientation=True,
                     )
-                    if pixmap is None:
-                        pixmap = image_pipeline.get_cached_preview_qpixmap(
-                            path,
-                            memory_only=True,
-                        )
-                    if pixmap is None:
-                        pixmap = image_pipeline.get_cached_thumbnail_qpixmap(
-                            path,
-                            apply_orientation=True,
-                            memory_only=True,
-                        )
                 except Exception as exc:
                     logger.debug("Could not load preview for %s: %s", path, exc)
             if pixmap is None or pixmap.isNull():
