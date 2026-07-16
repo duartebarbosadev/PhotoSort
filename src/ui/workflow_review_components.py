@@ -81,7 +81,7 @@ FIX_ROTATION_SHORTCUTS = (
     WorkflowShortcutSpec("previous", ("Left", "Up"), "←  ↑", "Previous"),
     WorkflowShortcutSpec("next", ("Right", "Down"), "→  ↓", "Next"),
     WorkflowShortcutSpec("apply", ("A",), "A", "Apply"),
-    WorkflowShortcutSpec("primary", ("Return", "Enter"), "Enter", "Continue"),
+    WorkflowShortcutSpec("primary", ("Return", "Enter"), "Enter", "Confirm"),
     WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
 )
 

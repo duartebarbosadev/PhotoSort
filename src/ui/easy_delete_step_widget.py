@@ -968,6 +968,16 @@ class EasyDeleteStepWidget(QWidget):
         self._items_list.itemClicked.connect(self._on_item_clicked)
         left_layout.addWidget(self._items_list)
 
+        self._apply_all_btn = QPushButton("Confirm All")
+        self._apply_all_btn.setObjectName("workflowGhostButton")
+        self._apply_all_btn.setToolTip(
+            "Confirms suggestions only for currently visible categories. For example, "
+            "if Duplicates is enabled and Blurry is disabled, only duplicate "
+            "suggestions are confirmed. You can still review or revise them afterward."
+        )
+        self._apply_all_btn.clicked.connect(self._on_apply_all)
+        left_layout.addWidget(self._apply_all_btn)
+
         # Right viewer
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -1053,6 +1063,7 @@ class EasyDeleteStepWidget(QWidget):
 
         # Action bar
         action = QHBoxLayout()
+        self._action_layout = action
         action.setSpacing(6)
 
         self._prev_btn = QPushButton("← Prev")
@@ -1070,15 +1081,6 @@ class EasyDeleteStepWidget(QWidget):
         self._next_btn.setFixedWidth(70)
         self._next_btn.clicked.connect(self._on_next)
 
-        self._apply_all_btn = QPushButton("Confirm All")
-        self._apply_all_btn.setObjectName("workflowGhostButton")
-        self._apply_all_btn.setToolTip(
-            "Confirms suggestions only for currently visible categories. For example, "
-            "if Duplicates is enabled and Blurry is disabled, only duplicate "
-            "suggestions are confirmed. You can still review or revise them afterward."
-        )
-        self._apply_all_btn.clicked.connect(self._on_apply_all)
-
         self._confirm_btn = QPushButton("Confirm  →")
         self._confirm_btn.setObjectName("workflowPrimaryButton")
         self._confirm_btn.setMinimumWidth(110)
@@ -1094,9 +1096,8 @@ class EasyDeleteStepWidget(QWidget):
         action.addWidget(self._prev_btn)
         action.addWidget(self._counter_label)
         action.addWidget(self._next_btn)
-        action.addStretch()
-        action.addWidget(self._apply_all_btn)
         action.addWidget(self._confirm_btn)
+        action.addStretch()
         action.addWidget(self._apply_btn)
         right_layout.addLayout(action)
 

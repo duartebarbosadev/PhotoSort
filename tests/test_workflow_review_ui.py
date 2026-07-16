@@ -213,6 +213,8 @@ def test_easy_delete_apply_all_only_uses_visible_categories():
     assert widget._apply_all_btn.text() == "Confirm All"
     assert "currently visible categories" in widget._apply_all_btn.toolTip()
     assert "review or revise" in widget._apply_all_btn.toolTip()
+    assert widget._apply_all_btn.parentWidget() is not widget._confirm_btn.parentWidget()
+    assert widget._action_layout.indexOf(widget._confirm_btn) == 3
     assert marks == {duplicate}
     assert widget._confirmed_reviews == {duplicate}
 
@@ -361,17 +363,34 @@ def test_fix_rotation_distinguishes_preview_queue_and_applied_state():
     widget.apply_rotations_requested.connect(emitted.append)
     widget.show_results({first: 90, second: -90})
 
-    assert widget._state_banner.title_label.text().startswith("Queued: rotate")
-    assert "only previewed" in widget._state_banner.detail_label.text()
-    assert widget._mark_btn.isChecked()
-    assert "QUEUED" in widget._items_list.item(0).text()
+    assert widget._state_banner.title_label.text() == "Choose, then confirm"
+    assert "Nothing is queued" in widget._state_banner.detail_label.text()
+    assert widget.pending_rotations() == {}
+    assert not widget._apply_btn.isEnabled()
+    assert not hasattr(widget, "_mark_btn")
+    assert not hasattr(widget, "_keep_btn")
+    assert "REVIEW" in widget._items_list.item(0).text()
+    assert widget._confirm_all_btn.parentWidget() is not widget._confirm_btn.parentWidget()
+    assert widget._action_layout.indexOf(widget._confirm_btn) == 3
+    assert all(
+        child.text() != "Continue without applying  →"
+        for child in widget.findChildren(type(widget._confirm_btn))
+    )
 
-    widget._set_current_marked(False)
+    widget._on_confirm()
+    assert widget.pending_rotations() == {first: 90}
+    assert "CONFIRMED" in widget._items_list.item(0).text()
+    assert "QUEUED" not in widget._items_list.item(0).text()
+    assert widget._current_index == 1
+
+    widget._current_img.clicked.emit()
     _app.processEvents()
-    assert widget._keep_btn.isChecked()
-    assert widget._preview_hdr.text() == "LEAVE AS-IS · no change"
+    assert second not in widget._confirmed
+    assert widget._current_hdr.text() == "ORIGINAL · SELECTED"
+    widget._on_confirm()
+    assert widget.pending_rotations() == {first: 90}
 
-    widget._on_mark_all()
+    widget._on_confirm_all()
     widget._on_apply()
     assert emitted == [{first: 90, second: -90}]
     widget.record_apply_result(first, True)
