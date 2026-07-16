@@ -6,7 +6,6 @@ from typing import override
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
     QHBoxLayout,
     QLabel,
@@ -501,11 +500,6 @@ class EasyDeleteStepWidget(QWidget):
             )
             self._pair_left_card.set_focused(self._focused_path == path)
             self._pair_right_card.set_focused(self._focused_path == pair_path)
-            self._keep_btn.setText("Trash left")
-            self._mark_btn.setText("Trash right")
-            self._set_button_role(self._keep_btn, "workflowDecisionTrash")
-            self._keep_btn.setChecked(left_is_delete)
-            self._mark_btn.setChecked(not left_is_delete)
         else:
             delete_selected = selected_delete == path
             self._set_choice_card(
@@ -519,21 +513,6 @@ class EasyDeleteStepWidget(QWidget):
                 slot=1,
             )
             self._single_card.set_focused(self._focused_path == path)
-            self._keep_btn.setText("Keep")
-            self._mark_btn.setText("Trash")
-            self._set_button_role(self._keep_btn, "workflowDecisionKeep")
-            self._keep_btn.setChecked(not delete_selected)
-            self._mark_btn.setChecked(delete_selected)
-
-    @staticmethod
-    def _set_button_role(button: QPushButton, object_name: str) -> None:
-        if button.objectName() == object_name:
-            return
-        button.setObjectName(object_name)
-        style = button.style()
-        style.unpolish(button)
-        style.polish(button)
-        button.update()
 
     @staticmethod
     def _set_choice_card(
@@ -648,14 +627,10 @@ class EasyDeleteStepWidget(QWidget):
             self._counter_label.setText("0 of 0")
             self._prev_btn.setEnabled(False)
             self._next_btn.setEnabled(False)
-            self._mark_btn.setEnabled(False)
-            self._keep_btn.setEnabled(False)
             self._confirm_btn.setEnabled(False)
             self._apply_all_btn.setEnabled(False)
             self._review_header.set_summary("No suggestions visible")
             return
-        self._mark_btn.setEnabled(True)
-        self._keep_btn.setEnabled(True)
         self._confirm_btn.setEnabled(True)
         self._apply_all_btn.setEnabled(True)
         self._counter_label.setText(f"{self._current_index + 1} of {total}")
@@ -666,9 +641,7 @@ class EasyDeleteStepWidget(QWidget):
         self._confirm_btn.setText(
             "Cancel confirmation" if path in self._confirmed_reviews else "Confirm  →"
         )
-        self._decision_group.blockSignals(True)
         self._update_decision_presentation(path, self._results.get(path, {}))
-        self._decision_group.blockSignals(False)
 
         confirmed_here = sum(
             candidate in self._confirmed_reviews for candidate in self._flagged_paths
@@ -1097,23 +1070,6 @@ class EasyDeleteStepWidget(QWidget):
         self._next_btn.setFixedWidth(70)
         self._next_btn.clicked.connect(self._on_next)
 
-        self._decision_group = QButtonGroup(self)
-        self._decision_group.setExclusive(True)
-
-        self._keep_btn = QPushButton("Keep")
-        self._keep_btn.setObjectName("workflowDecisionKeep")
-        self._keep_btn.setCheckable(True)
-        self._keep_btn.setMinimumWidth(90)
-        self._keep_btn.clicked.connect(lambda: self._select_pair_side(0))
-        self._decision_group.addButton(self._keep_btn)
-
-        self._mark_btn = QPushButton("Trash")
-        self._mark_btn.setObjectName("workflowDecisionTrash")
-        self._mark_btn.setCheckable(True)
-        self._mark_btn.setMinimumWidth(150)
-        self._mark_btn.clicked.connect(lambda: self._select_pair_side(1))
-        self._decision_group.addButton(self._mark_btn)
-
         self._apply_all_btn = QPushButton("Apply suggestions to all visible")
         self._apply_all_btn.setObjectName("workflowGhostButton")
         self._apply_all_btn.clicked.connect(self._on_apply_all)
@@ -1131,8 +1087,6 @@ class EasyDeleteStepWidget(QWidget):
         action.addWidget(self._counter_label)
         action.addWidget(self._next_btn)
         action.addStretch()
-        action.addWidget(self._keep_btn)
-        action.addWidget(self._mark_btn)
         action.addWidget(self._apply_all_btn)
         action.addWidget(self._confirm_btn)
         action.addWidget(self._done_btn)

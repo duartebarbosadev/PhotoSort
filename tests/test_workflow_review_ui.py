@@ -56,6 +56,8 @@ def test_easy_delete_requires_confirmation_before_staging_trash():
     assert widget._pair_left_card._name_label.text() == "delete.jpg"
     assert widget._pair_right_card._name_label.text() == "keep.jpg"
     assert isinstance(widget._pair_left_card, WorkflowDecisionCard)
+    assert not hasattr(widget, "_keep_btn")
+    assert not hasattr(widget, "_mark_btn")
     assert "border" not in widget._pair_left_img.styleSheet()
     assert "border" not in widget._pair_right_img.styleSheet()
     assert all(
