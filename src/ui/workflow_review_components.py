@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass
 from collections.abc import Callable, Iterable, Mapping, Sequence
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFrame,
@@ -50,9 +50,7 @@ ORGANIZE_SHORTCUTS = (
         "new_folder", ("Ctrl+Shift+N",), f"{_PRIMARY_MODIFIER}⇧N", "New folder"
     ),
     WorkflowShortcutSpec("toggle_delete", ("D",), "D", "Mark"),
-    WorkflowShortcutSpec(
-        "trash_now", ("Delete", "Backspace"), "Delete", "Trash now"
-    ),
+    WorkflowShortcutSpec("trash_now", ("Delete", "Backspace"), "Delete", "Trash now"),
     WorkflowShortcutSpec("commit_deletions", ("Shift+D",), "Shift+D", "Commit"),
     WorkflowShortcutSpec(
         "clear_deletions", ("Alt+D",), f"{_ALT_MODIFIER}D", "Clear marks"
@@ -72,6 +70,7 @@ EASY_DELETE_SHORTCUTS = (
     WorkflowShortcutSpec("next", ("Down",), "↓", "Next"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm"),
     WorkflowShortcutSpec("apply_all", ("A",), "A", "All"),
+    WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
 )
 
@@ -124,6 +123,124 @@ def _refresh_style(widget: QWidget) -> None:
     widget.update()
 
 
+class WorkflowDecisionCard(QFrame):
+    """Shared keep/trash card shown separately from workflow image previews."""
+
+    activated = pyqtSignal()
+
+    def __init__(self, slot_number: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._slot_number = slot_number
+        self.setObjectName("workflowCompareCard")
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self._content_layout = QVBoxLayout(self)
+        self._content_layout.setContentsMargins(12, 10, 12, 10)
+        self._content_layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(8)
+
+        self._slot_label = QLabel(str(slot_number))
+        self._slot_label.setObjectName("workflowCompareSlot")
+        self._slot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._slot_label.setFixedSize(22, 22)
+        top_row.addWidget(self._slot_label, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        self._state_label = QLabel()
+        self._state_label.setObjectName("workflowCompareState")
+        self._state_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        top_row.addWidget(self._state_label, stretch=1)
+        self._content_layout.addLayout(top_row)
+
+        self._name_label = QLabel()
+        self._name_label.setObjectName("workflowCompareName")
+        self._name_label.setWordWrap(False)
+        self._content_layout.addWidget(self._name_label)
+
+        self._details_grid = QGridLayout()
+        self._details_grid.setContentsMargins(0, 0, 0, 0)
+        self._details_grid.setHorizontalSpacing(10)
+        self._details_grid.setVerticalSpacing(4)
+        self._details_grid.setColumnStretch(1, 1)
+        self._content_layout.addLayout(self._details_grid)
+
+        self._details_visible = True
+        self._detail_rows: list[tuple[QLabel, QLabel]] = []
+        for row in range(6):
+            key = QLabel()
+            key.setObjectName("workflowCompareMetaKey")
+            value = QLabel()
+            value.setObjectName("workflowCompareMetaValue")
+            value.setWordWrap(True)
+            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self._details_grid.addWidget(key, row, 0)
+            self._details_grid.addWidget(value, row, 1)
+            self._detail_rows.append((key, value))
+
+        self._hint_label = QLabel()
+        self._hint_label.setObjectName("workflowCompareHint")
+        self._content_layout.addWidget(self._hint_label)
+
+    @property
+    def state_label(self) -> QLabel:
+        return self._state_label
+
+    def set_details(self, details: Sequence[tuple[str, str]]) -> None:
+        for index, (key_label, value_label) in enumerate(self._detail_rows):
+            has_value = index < len(details)
+            if has_value:
+                key, value = details[index]
+                key_label.setText(key)
+                value_label.setText(value)
+                value_label.setToolTip(value)
+            key_label.setVisible(self._details_visible and has_value)
+            value_label.setVisible(self._details_visible and has_value)
+
+    def set_details_visible(self, visible: bool) -> None:
+        self._details_visible = visible
+        for key_label, value_label in self._detail_rows:
+            has_value = bool(key_label.text() or value_label.text())
+            key_label.setVisible(visible and has_value)
+            value_label.setVisible(visible and has_value)
+
+    def set_decision(
+        self,
+        *,
+        filename: str,
+        state: str,
+        state_color: str,
+        border_color: str,
+        hint: str,
+        background: str = "#20252C",
+    ) -> None:
+        self._name_label.setText(filename)
+        self._state_label.setText(state)
+        self._state_label.setStyleSheet(
+            f"font-size: 11px; font-weight: bold; color: {state_color};"
+        )
+        self._hint_label.setText(hint)
+        self.setStyleSheet(
+            f"WorkflowDecisionCard, QFrame#workflowCompareCard {{"
+            f"border: 2px solid {border_color};"
+            "border-radius: 10px;"
+            f"background: {background};"
+            "}"
+        )
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.activated.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class WorkflowShortcutStrip(QFrame):
     """Compact, consistent key legend used on every workflow page."""
 
@@ -136,9 +253,7 @@ class WorkflowShortcutStrip(QFrame):
         super().__init__(parent)
         self.setObjectName("workflowShortcutStrip")
         self.setMinimumWidth(0)
-        self.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
-        )
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(6)

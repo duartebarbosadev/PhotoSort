@@ -19,6 +19,7 @@ from ui.workflow_review_components import (
     ORGANIZE_SHORTCUTS,
     PICK_BEST_SHORTCUTS,
     WORKFLOW_SHORTCUTS,
+    WorkflowDecisionCard,
     WorkflowShortcutStrip,
 )
 
@@ -52,7 +53,30 @@ def test_easy_delete_requires_confirmation_before_staging_trash():
     assert "REVIEW" in widget._items_list.item(0).text()
     assert "SELECTED FOR TRASH" in widget._pair_left_hdr.text()
     assert "not confirmed" in widget._pair_left_hdr.text()
+    assert widget._pair_left_card._name_label.text() == "delete.jpg"
+    assert widget._pair_right_card._name_label.text() == "keep.jpg"
+    assert isinstance(widget._pair_left_card, WorkflowDecisionCard)
+    assert "border" not in widget._pair_left_img.styleSheet()
+    assert "border" not in widget._pair_right_img.styleSheet()
+    assert all(
+        label.isHidden() for row in widget._pair_left_card._detail_rows for label in row
+    )
     assert not marks
+
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+    shortcuts["I"].activated.emit()
+    _app.processEvents()
+
+    detail_values = [
+        value.text() for _key, value in widget._pair_left_card._detail_rows
+    ]
+    assert delete_path in detail_values
+    assert "Lower sharpness" in detail_values
+    assert all(
+        not label.isHidden()
+        for row in widget._pair_left_card._detail_rows[:3]
+        for label in row
+    )
 
     widget._pair_right_img.clicked.emit()
     _app.processEvents()
@@ -67,7 +91,9 @@ def test_easy_delete_requires_confirmation_before_staging_trash():
     assert keep_path in marks
     assert delete_path not in marks
     assert widget._state_banner.title_label.text() == "Decision confirmed"
-    assert "no file has been moved or deleted" in widget._state_banner.detail_label.text()
+    assert (
+        "no file has been moved or deleted" in widget._state_banner.detail_label.text()
+    )
     assert "CONFIRMED" in widget._items_list.item(0).text()
     assert "MARKED FOR TRASH" in widget._pair_right_hdr.text()
 
@@ -108,6 +134,8 @@ def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
 
     assert first in marks
     assert widget._current_index == 1
+    assert "SELECTED FOR TRASH" in widget._single_hdr.text()
+    assert "border" not in widget._single_img.styleSheet()
 
     widget._on_apply_all()
     _app.processEvents()
@@ -298,6 +326,7 @@ def test_pick_best_stages_initial_recommendations_in_shared_state():
 
     assert challenger in marks
     assert winner not in marks
+    assert isinstance(widget._compare_cards[0], WorkflowDecisionCard)
     assert widget._compare_cards[0]._state_label.text() == "MARKED FOR TRASH · staged"
     assert widget._compare_cards[1]._state_label.text() == "AI PICK · KEEP"
     assert "marked for Trash" in widget._review_header.summary_label.text()

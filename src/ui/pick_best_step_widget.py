@@ -1,18 +1,14 @@
 import logging
 import os
 from fractions import Fraction
-from typing import override
 from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -27,6 +23,7 @@ from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResul
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.workflow_review_components import (
     PICK_BEST_SHORTCUTS,
+    WorkflowDecisionCard,
     WorkflowReviewHeader,
     WorkflowStateBanner,
     install_workflow_shortcuts,
@@ -97,83 +94,26 @@ def _format_capture_date(metadata: dict) -> str | None:
     return None
 
 
-class CompareCard(QFrame):
+class CompareCard(WorkflowDecisionCard):
     toggled = pyqtSignal(str, bool)
 
     def __init__(self, slot_number: int, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
+        super().__init__(slot_number, parent)
         self.path: str = ""
         self.is_winner = False
         self._marked = False
         self._focused = False
         self._slot_number = slot_number
 
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setObjectName("workflowCompareCard")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
-
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.setSpacing(8)
-
-        self._slot_label = QLabel(f"{slot_number}")
-        self._slot_label.setObjectName("workflowCompareSlot")
-        self._slot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._slot_label.setFixedSize(22, 22)
-        self._slot_label.setStyleSheet(
-            "border-radius: 11px; background: #11161C; color: #B8C2CC; font-weight: bold;"
-        )
-        top_row.addWidget(self._slot_label, alignment=Qt.AlignmentFlag.AlignLeft)
-
-        self._state_label = QLabel()
-        self._state_label.setObjectName("workflowCompareState")
-        self._state_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        top_row.addWidget(self._state_label, stretch=1)
-        layout.addLayout(top_row)
-
-        self._name_label = QLabel("")
-        self._name_label.setObjectName("workflowCompareName")
-        self._name_label.setWordWrap(False)
-        self._name_label.setStyleSheet(
-            "font-size: 12px; font-weight: 600; color: #F5F7FA;"
-        )
-        layout.addWidget(self._name_label)
-
         self._score_label = QLabel("")
         self._score_label.setObjectName("workflowCompareScore")
         self._score_label.setStyleSheet("font-size: 11px; color: #AAB4BE;")
-        layout.addWidget(self._score_label)
+        self._content_layout.insertWidget(2, self._score_label)
 
-        self._meta_grid = QGridLayout()
-        self._meta_grid.setContentsMargins(0, 0, 0, 0)
-        self._meta_grid.setHorizontalSpacing(10)
-        self._meta_grid.setVerticalSpacing(4)
-        layout.addLayout(self._meta_grid)
+        self._meta_grid = self._details_grid
+        self._meta_rows = self._detail_rows
 
-        self._meta_rows: list[tuple[QLabel, QLabel]] = []
-        for row in range(6):
-            key = QLabel("")
-            key.setObjectName("workflowCompareMetaKey")
-            key.setStyleSheet("font-size: 10px; color: #7D8792;")
-            value = QLabel("")
-            value.setObjectName("workflowCompareMetaValue")
-            value.setStyleSheet("font-size: 10px; color: #D5DBE1;")
-            self._meta_grid.addWidget(key, row, 0)
-            self._meta_grid.addWidget(value, row, 1)
-            self._meta_rows.append((key, value))
-
-        self._hint_label = QLabel("Click image/card or press number key")
-        self._hint_label.setObjectName("workflowCompareHint")
-        self._hint_label.setStyleSheet("font-size: 10px; color: #6D7782;")
-        layout.addWidget(self._hint_label)
-
+        self.activated.connect(self._toggle)
         self._update_style()
 
     def configure(
@@ -197,16 +137,7 @@ class CompareCard(QFrame):
             self._score_label.setText(f"Final score {score:.3f}")
             self._score_label.setToolTip("")
 
-        for idx, (key_label, value_label) in enumerate(self._meta_rows):
-            if idx < len(metadata_rows):
-                key_text, value_text = metadata_rows[idx]
-                key_label.setText(key_text)
-                value_label.setText(value_text)
-                key_label.show()
-                value_label.show()
-            else:
-                key_label.hide()
-                value_label.hide()
+        self.set_details(metadata_rows)
 
         self._update_style()
 
@@ -218,14 +149,6 @@ class CompareCard(QFrame):
         self._focused = focused
         self._update_style()
 
-    @override
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.path:
-            self._toggle()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
     def _toggle(self) -> None:
         if not self.path:
             return
@@ -236,9 +159,7 @@ class CompareCard(QFrame):
     def set_info_visible(self, visible: bool) -> None:
         self._score_label.setVisible(visible)
         self._hint_label.setVisible(visible)
-        for key_label, value_label in self._meta_rows:
-            key_label.setVisible(visible)
-            value_label.setVisible(visible)
+        self.set_details_visible(visible)
 
     def _update_style(self) -> None:
         if self._marked:
@@ -255,26 +176,17 @@ class CompareCard(QFrame):
             color = KEEP_BORDER_COLOR
 
         bg = CARD_BG_WINNER if self.is_winner else CARD_BG
-        self._state_label.setText(status)
-        self._state_label.setStyleSheet(
-            f"font-size: 11px; font-weight: bold; color: {color};"
-        )
         if self.is_winner:
-            self._hint_label.setText(
-                f"AI pick. Click or press {self._slot_number} to change the choice"
-            )
+            hint = f"AI pick. Click or press {self._slot_number} to change the choice"
         else:
-            self._hint_label.setText(
-                f"Click image/card or press {self._slot_number} to change the choice"
-            )
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        self.setStyleSheet(
-            f"CompareCard {{"
-            f"border: 2px solid {border_color};"
-            f"border-radius: 10px;"
-            f"background: {bg};"
-            f"}}"
+            hint = f"Click image/card or press {self._slot_number} to change the choice"
+        self.set_decision(
+            filename=os.path.basename(self.path) if self.path else "",
+            state=status,
+            state_color=color,
+            border_color=border_color,
+            background=bg,
+            hint=hint,
         )
 
 

@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 
 from ui.workflow_review_components import (
     EASY_DELETE_SHORTCUTS,
+    WorkflowDecisionCard,
     WorkflowReviewHeader,
     WorkflowStateBanner,
     install_workflow_shortcuts,
@@ -108,6 +109,7 @@ class EasyDeleteStepWidget(QWidget):
         self._has_any_marked_func: Callable[[], bool] | None = None
         self._pending_delete_by_review: dict[str, str | None] = {}
         self._confirmed_reviews: set[str] = set()
+        self._info_visible = False
         self._image_pipeline = None
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._setup_ui()
@@ -121,6 +123,7 @@ class EasyDeleteStepWidget(QWidget):
                 "next": self._on_next,
                 "confirm": self._on_confirm,
                 "apply_all": self._on_apply_all,
+                "info": self._toggle_info,
                 "skip": self._on_skip,
             },
         )
@@ -328,9 +331,7 @@ class EasyDeleteStepWidget(QWidget):
             path = item.data(Qt.ItemDataRole.UserRole)
             item.setForeground(
                 QColor(
-                    _CONFIRMED_COLOR
-                    if path in self._confirmed_reviews
-                    else "#A9B7C6"
+                    _CONFIRMED_COLOR if path in self._confirmed_reviews else "#A9B7C6"
                 )
             )
             item.setText(self._item_text(path))
@@ -391,7 +392,9 @@ class EasyDeleteStepWidget(QWidget):
         self._suggestion_label.hide()
         _, color = _ISSUE_LABELS.get("duplicate", ("DUP", "#A78BFA"))
         duplicate_kind = entry.get("duplicate_kind", "near")
-        classification = "Exact duplicate" if duplicate_kind == "exact" else "Near-duplicate"
+        classification = (
+            "Exact duplicate" if duplicate_kind == "exact" else "Near-duplicate"
+        )
         self._issue_label.setText(
             f"<b style='color:{color}'>{classification}</b>  ·  {reason}"
         )
@@ -424,25 +427,25 @@ class EasyDeleteStepWidget(QWidget):
             pair_path = entry["pair_path"]
             pair_name = os.path.basename(pair_path)
             left_is_delete = selected_delete == path
-            if confirmed:
-                delete_state = "MARKED FOR TRASH · staged"
-                keep_state = "KEEP"
-            else:
-                delete_state = "SELECTED FOR TRASH · not confirmed"
-                keep_state = "SELECTED TO KEEP · not confirmed"
-            self._pair_left_hdr.setText(
-                f"<b style='color:{'#FF7B86' if left_is_delete else '#66BB6A'}'>"
-                f"{delete_state if left_is_delete else keep_state}</b><br>LEFT · {filename}"
+            self._set_choice_card(
+                self._pair_left_card,
+                self._pair_left_hdr,
+                path=path,
+                entry=entry,
+                filename=filename,
+                selected_for_delete=left_is_delete,
+                confirmed=confirmed,
+                slot=1,
             )
-            self._pair_right_hdr.setText(
-                f"<b style='color:{'#66BB6A' if left_is_delete else '#FF7B86'}'>"
-                f"{keep_state if left_is_delete else delete_state}</b><br>RIGHT · {pair_name}"
-            )
-            self._pair_left_img.setStyleSheet(
-                self._image_choice_style(left_is_delete)
-            )
-            self._pair_right_img.setStyleSheet(
-                self._image_choice_style(not left_is_delete)
+            self._set_choice_card(
+                self._pair_right_card,
+                self._pair_right_hdr,
+                path=pair_path,
+                entry=entry,
+                filename=pair_name,
+                selected_for_delete=not left_is_delete,
+                confirmed=confirmed,
+                slot=2,
             )
             self._keep_btn.setText("Trash left")
             self._mark_btn.setText("Trash right")
@@ -451,6 +454,16 @@ class EasyDeleteStepWidget(QWidget):
             self._mark_btn.setChecked(not left_is_delete)
         else:
             delete_selected = selected_delete == path
+            self._set_choice_card(
+                self._single_card,
+                self._single_hdr,
+                path=path,
+                entry=entry,
+                filename=filename,
+                selected_for_delete=delete_selected,
+                confirmed=confirmed,
+                slot=1,
+            )
             self._keep_btn.setText("Keep")
             self._mark_btn.setText("Trash")
             self._set_button_role(self._keep_btn, "workflowDecisionKeep")
@@ -468,9 +481,45 @@ class EasyDeleteStepWidget(QWidget):
         button.update()
 
     @staticmethod
-    def _image_choice_style(selected_for_delete: bool) -> str:
-        color = "#E53935" if selected_for_delete else "#2E7D32"
-        return f"background: #232628; border: 3px solid {color}; border-radius: 4px;"
+    def _set_choice_card(
+        card: WorkflowDecisionCard,
+        state_label: QLabel,
+        *,
+        path: str,
+        entry: dict,
+        filename: str,
+        selected_for_delete: bool,
+        confirmed: bool,
+        slot: int,
+    ) -> None:
+        if selected_for_delete:
+            state = (
+                "MARKED FOR TRASH · staged"
+                if confirmed
+                else "SELECTED FOR TRASH · not confirmed"
+            )
+            color = "#FF7B86"
+            border = "#E53935"
+        else:
+            state = "KEEP" if confirmed else "SELECTED TO KEEP · not confirmed"
+            color = "#66BB6A"
+            border = "#2E7D32"
+        state_label.setText(state)
+        card.set_decision(
+            filename=filename,
+            state=state,
+            state_color=color,
+            border_color=border,
+            hint=f"Click image/card or press {slot} to change the choice · I toggles details",
+        )
+        issue_type = entry.get("type", "")
+        card.set_details(
+            [
+                ("Path", path),
+                ("Issue", _CATEGORY_NAMES.get(issue_type, issue_type.title())),
+                ("Reason", entry.get("reason", "Not provided")),
+            ]
+        )
 
     def _pending_delete(self, path: str, entry: dict) -> str | None:
         if path not in self._pending_delete_by_review:
@@ -600,6 +649,21 @@ class EasyDeleteStepWidget(QWidget):
             return
         self._select_current_delete(path if side == 0 else pair_path)
 
+    def _toggle_single_choice(self) -> None:
+        if self._current_index < 0 or not self._flagged_paths:
+            return
+        review_path = self._flagged_paths[self._current_index]
+        entry = self._results.get(review_path, {})
+        selected_delete = self._pending_delete(review_path, entry)
+        self._select_current_delete(
+            None if selected_delete == review_path else review_path
+        )
+
+    def _toggle_info(self) -> None:
+        self._info_visible = not self._info_visible
+        for card in (self._single_card, self._pair_left_card, self._pair_right_card):
+            card.set_details_visible(self._info_visible)
+
     def _select_current_delete(self, selected_path: str | None) -> None:
         if self._current_index < 0 or not self._flagged_paths:
             return
@@ -653,7 +717,9 @@ class EasyDeleteStepWidget(QWidget):
         to_unmark: list[str] = []
         for review_path in self._flagged_paths:
             entry = self._results.get(review_path, {})
-            suggested_delete = review_path if entry.get("suggest_delete", True) else None
+            suggested_delete = (
+                review_path if entry.get("suggest_delete", True) else None
+            )
             pair_path = entry.get("pair_path")
             candidates = [review_path] + ([pair_path] if pair_path else [])
             for candidate in candidates:
@@ -842,7 +908,14 @@ class EasyDeleteStepWidget(QWidget):
         sl = QVBoxLayout(single)
         sl.setContentsMargins(0, 0, 0, 0)
         self._single_img = _ScaledImageLabel()
+        self._single_img.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._single_img.clicked.connect(self._toggle_single_choice)
         sl.addWidget(self._single_img, 1)
+        self._single_card = WorkflowDecisionCard(1)
+        self._single_card.set_details_visible(self._info_visible)
+        self._single_card.activated.connect(self._toggle_single_choice)
+        self._single_hdr = self._single_card.state_label
+        sl.addWidget(self._single_card)
 
         # Pair image view
         pair = QWidget()
@@ -854,27 +927,29 @@ class EasyDeleteStepWidget(QWidget):
         ll = QVBoxLayout(lp)
         ll.setContentsMargins(0, 0, 4, 0)
         ll.setSpacing(3)
-        self._pair_left_hdr = QLabel()
-        self._pair_left_hdr.setWordWrap(True)
-        self._pair_left_hdr.setStyleSheet("font-size: 11px;")
         self._pair_left_img = _ScaledImageLabel()
         self._pair_left_img.setCursor(Qt.CursorShape.PointingHandCursor)
         self._pair_left_img.clicked.connect(lambda: self._select_pair_side(0))
-        ll.addWidget(self._pair_left_hdr)
         ll.addWidget(self._pair_left_img, 1)
+        self._pair_left_card = WorkflowDecisionCard(1)
+        self._pair_left_card.set_details_visible(self._info_visible)
+        self._pair_left_card.activated.connect(lambda: self._select_pair_side(0))
+        self._pair_left_hdr = self._pair_left_card.state_label
+        ll.addWidget(self._pair_left_card)
 
         rp = QWidget()
         rl = QVBoxLayout(rp)
         rl.setContentsMargins(4, 0, 0, 0)
         rl.setSpacing(3)
-        self._pair_right_hdr = QLabel()
-        self._pair_right_hdr.setWordWrap(True)
-        self._pair_right_hdr.setStyleSheet("font-size: 11px;")
         self._pair_right_img = _ScaledImageLabel()
         self._pair_right_img.setCursor(Qt.CursorShape.PointingHandCursor)
         self._pair_right_img.clicked.connect(lambda: self._select_pair_side(1))
-        rl.addWidget(self._pair_right_hdr)
         rl.addWidget(self._pair_right_img, 1)
+        self._pair_right_card = WorkflowDecisionCard(2)
+        self._pair_right_card.set_details_visible(self._info_visible)
+        self._pair_right_card.activated.connect(lambda: self._select_pair_side(1))
+        self._pair_right_hdr = self._pair_right_card.state_label
+        rl.addWidget(self._pair_right_card)
 
         pair_splitter.addWidget(lp)
         pair_splitter.addWidget(rp)
