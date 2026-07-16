@@ -31,6 +31,24 @@ QWidget#workflowNav {
     border-radius: 12px;
 }
 
+QWidget#workflowNavHost {
+    background: transparent;
+    border: none;
+}
+
+QWidget#workflowFooterRight,
+QStackedWidget#workflowShortcutStack {
+    background: transparent;
+    border: none;
+}
+
+QLabel#workflowStatusLabel {
+    background: transparent;
+    color: #8FA4B2;
+    font-size: 8.5pt;
+    padding-left: 4px;
+}
+
 QPushButton#workflowStepButton {
     background-color: transparent;
     color: #A9B7C6;
@@ -2138,8 +2156,8 @@ QFrame#workflowShortcutStrip {
 }
 
 QLabel#workflowShortcutHeading {
-    color: #66737E;
-    font-size: 7pt;
+    color: #9AA7B1;
+    font-size: 8pt;
     font-weight: 800;
     letter-spacing: 1px;
     background: transparent;
@@ -2147,19 +2165,19 @@ QLabel#workflowShortcutHeading {
 
 QLabel#workflowKeycap {
     background-color: #343A40;
-    color: #E3E8EC;
+    color: #F4F7F9;
     border: 1px solid #505960;
     border-bottom: 2px solid #202428;
     border-radius: 5px;
-    padding: 1px 5px;
+    padding: 2px 6px;
     min-width: 12px;
-    font-size: 7.5pt;
+    font-size: 8.5pt;
     font-weight: 700;
 }
 
 QLabel#workflowShortcutLabel {
-    color: #7E8A94;
-    font-size: 7.5pt;
+    color: #B5C0C8;
+    font-size: 8.5pt;
     background: transparent;
 }
 

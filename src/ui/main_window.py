@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QSplitter,
     QFileDialog,
     QTreeView,
@@ -18,6 +19,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QLabel,
     QProgressBar,
+    QSizePolicy,
 )
 import os
 from datetime import datetime as datetime_obj, date as date_obj
@@ -68,6 +70,10 @@ from ui.left_panel import LeftPanel
 from ui.app_controller import AppController
 from ui.menu_manager import MenuManager
 from ui.grouping_step_widget import GroupingStepWidget
+from ui.workflow_review_components import (
+    WORKFLOW_SHORTCUTS,
+    WorkflowShortcutStrip,
+)
 from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
 from ui.helpers.index_lookup_utils import find_proxy_index_for_path
@@ -353,6 +359,50 @@ class MainWindow(QMainWindow):
         self.pick_best_step_widget = None
         self.workflow_nav = QWidget()
         self.workflow_nav.setObjectName("workflowNav")
+        self.workflow_nav_host = QWidget()
+        self.workflow_nav_host.setObjectName("workflowNavHost")
+        self.workflow_nav_host_layout = QGridLayout(self.workflow_nav_host)
+        self.workflow_nav_host_layout.setContentsMargins(6, 0, 6, 0)
+        self.workflow_nav_host_layout.setColumnStretch(0, 1)
+        self.workflow_nav_host_layout.setColumnStretch(2, 1)
+        self.workflow_status_label = QLabel()
+        self.workflow_status_label.setObjectName("workflowStatusLabel")
+        self.workflow_status_label.setMinimumWidth(0)
+        self.workflow_status_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.workflow_status_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.workflow_nav_host_layout.addWidget(self.workflow_status_label, 0, 0)
+        self.workflow_nav_host_layout.addWidget(
+            self.workflow_nav, 0, 1, alignment=Qt.AlignmentFlag.AlignCenter
+        )
+        self.workflow_shortcut_stack = QStackedWidget()
+        self.workflow_shortcut_stack.setObjectName("workflowShortcutStack")
+        self.workflow_shortcut_stack.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.workflow_shortcut_strips = {}
+        for workflow_step, shortcuts in WORKFLOW_SHORTCUTS.items():
+            strip = WorkflowShortcutStrip(shortcuts)
+            self.workflow_shortcut_stack.addWidget(strip)
+            self.workflow_shortcut_strips[workflow_step] = strip
+
+        self.workflow_footer_right = QWidget()
+        self.workflow_footer_right.setObjectName("workflowFooterRight")
+        self.workflow_footer_right.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.workflow_footer_right_layout = QHBoxLayout(self.workflow_footer_right)
+        self.workflow_footer_right_layout.setContentsMargins(0, 0, 0, 0)
+        self.workflow_footer_right_layout.setSpacing(6)
+        self.workflow_footer_right_layout.addWidget(self.workflow_shortcut_stack, 1)
+        self.workflow_nav_host_layout.addWidget(
+            self.workflow_footer_right,
+            0,
+            2,
+        )
         self.step_organize_button = QPushButton("1. Organize")
         self.step_organize_button.setObjectName("workflowStepButton")
         self.step_organize_button.setCheckable(True)
@@ -452,6 +502,8 @@ class MainWindow(QMainWindow):
         # No bottom bar - image info will be shown in status bar only
 
         self.statusBar().showMessage("Ready")
+        self.statusBar().messageChanged.connect(self.workflow_status_label.setText)
+        self.workflow_status_label.setText(self.statusBar().currentMessage())
         self.thumbnail_progress_container = QWidget()
         thumbnail_progress_layout = QHBoxLayout(self.thumbnail_progress_container)
         thumbnail_progress_layout.setContentsMargins(6, 0, 6, 0)
@@ -463,8 +515,7 @@ class MainWindow(QMainWindow):
         thumbnail_progress_layout.addWidget(self.thumbnail_progress_label)
         thumbnail_progress_layout.addWidget(self.thumbnail_progress_bar)
         self.thumbnail_progress_container.setVisible(False)
-        self.statusBar().addPermanentWidget(self.thumbnail_progress_container, 0)
-        self.statusBar().addPermanentWidget(self.workflow_nav, 0)
+        self.workflow_footer_right_layout.addWidget(self.thumbnail_progress_container)
         logger.debug(f"Widgets created in {time.perf_counter() - start_time:.4f}s.")
 
     def _create_layout(self):
@@ -485,7 +536,7 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(self.step_fix_rotation_button)
         nav_layout.addWidget(self.step_pick_best_button)
         nav_layout.addWidget(self.step_cull_button)
-        nav_layout.addStretch(1)
+        self.statusBar().addPermanentWidget(self.workflow_nav_host, 1)
 
         self.grouping_page = QWidget()
         grouping_page_layout = QVBoxLayout(self.grouping_page)
@@ -1067,6 +1118,11 @@ class MainWindow(QMainWindow):
         """Update the shared workflow state and log real view transitions once."""
         previous_step = getattr(self.app_state, "workflow_step", "")
         self.app_state.workflow_step = workflow_step
+        shortcut_strip = getattr(self, "workflow_shortcut_strips", {}).get(
+            workflow_step
+        )
+        if shortcut_strip is not None:
+            self.workflow_shortcut_stack.setCurrentWidget(shortcut_strip)
         if previous_step == workflow_step:
             return
         previous_label = WORKFLOW_STEP_LABELS.get(

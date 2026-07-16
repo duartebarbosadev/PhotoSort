@@ -3,7 +3,7 @@ import os
 from collections.abc import Callable
 from typing import override
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -44,11 +44,13 @@ _CATEGORY_NAMES: dict[str, str] = {
     "duplicate": "Duplicates",
 }
 
-_MARKED_COLOR = "#E53935"
+_CONFIRMED_COLOR = "#66BB6A"
 
 
 class _ScaledImageLabel(QLabel):
     """QLabel that scales a stored pixmap to fill its size while keeping aspect ratio."""
+
+    clicked = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -78,6 +80,12 @@ class _ScaledImageLabel(QLabel):
         else:
             super().setPixmap(QPixmap())
 
+    @override
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
 
 class EasyDeleteStepWidget(QWidget):
     """Step 2: Review and mark obviously bad / duplicate images for deletion."""
@@ -98,6 +106,8 @@ class EasyDeleteStepWidget(QWidget):
         self._updating_category_toggles = False
         self._is_marked_func: Callable[[str], bool] | None = None
         self._has_any_marked_func: Callable[[], bool] | None = None
+        self._pending_delete_by_review: dict[str, str | None] = {}
+        self._confirmed_reviews: set[str] = set()
         self._image_pipeline = None
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._setup_ui()
@@ -105,10 +115,12 @@ class EasyDeleteStepWidget(QWidget):
             self,
             EASY_DELETE_SHORTCUTS,
             {
-                "toggle": self._on_mark_toggle,
+                "select_left": lambda: self._select_pair_side(0),
+                "select_right": lambda: self._select_pair_side(1),
                 "previous": self._on_prev,
                 "next": self._on_next,
-                "continue": self._on_done,
+                "confirm": self._on_confirm,
+                "apply_all": self._on_apply_all,
                 "skip": self._on_skip,
             },
         )
@@ -127,7 +139,23 @@ class EasyDeleteStepWidget(QWidget):
 
         if not hasattr(self, "_items_list"):
             return
+        self._discard_stale_confirmations()
         self._refresh_controls()
+
+    def _discard_stale_confirmations(self) -> None:
+        if not self._is_marked_func:
+            return
+        for review_path in list(self._confirmed_reviews):
+            entry = self._results.get(review_path, {})
+            selected_delete = self._pending_delete_by_review.get(review_path)
+            pair_path = entry.get("pair_path")
+            candidates = [review_path] + ([pair_path] if pair_path else [])
+            matches_shared_state = all(
+                self._is_marked_func(candidate) == (candidate == selected_delete)
+                for candidate in candidates
+            )
+            if not matches_shared_state:
+                self._confirmed_reviews.discard(review_path)
 
     # ------------------------------------------------------------------
     # Public state-machine API
@@ -149,6 +177,9 @@ class EasyDeleteStepWidget(QWidget):
         self._content_stack.setCurrentIndex(0)
 
     def show_results(self, results: dict[str, dict]) -> None:
+        if results != self._results:
+            self._pending_delete_by_review.clear()
+            self._confirmed_reviews.clear()
         self._results = results
         self._category_counts = self._build_category_counts(results)
         self._enabled_categories = {
@@ -261,11 +292,11 @@ class EasyDeleteStepWidget(QWidget):
         self._updating_category_toggles = False
         self._category_toggle_container.setVisible(bool(issue_types))
 
-    def _item_text(self, path: str, is_marked: bool) -> str:
+    def _item_text(self, path: str) -> str:
         entry = self._results.get(path, {})
         issue_type = entry.get("type", "")
         badge, _ = _ISSUE_LABELS.get(issue_type, ("?", "#888"))
-        state = "MARKED" if is_marked else "KEEP"
+        state = "CONFIRMED" if path in self._confirmed_reviews else "REVIEW"
         if issue_type == "duplicate":
             pair = entry.get("pair_path", "")
             pair_name = os.path.basename(pair) if pair else ""
@@ -275,8 +306,7 @@ class EasyDeleteStepWidget(QWidget):
     def _populate_list(self) -> None:
         self._items_list.clear()
         for path in self._flagged_paths:
-            is_marked = self._is_marked_func(path) if self._is_marked_func else False
-            item = QListWidgetItem(self._item_text(path, is_marked))
+            item = QListWidgetItem(self._item_text(path))
             item.setData(Qt.ItemDataRole.UserRole, path)
             self._items_list.addItem(item)
 
@@ -296,9 +326,14 @@ class EasyDeleteStepWidget(QWidget):
         for i in range(self._items_list.count()):
             item = self._items_list.item(i)
             path = item.data(Qt.ItemDataRole.UserRole)
-            is_marked = self._is_marked_func(path) if self._is_marked_func else False
-            item.setForeground(QColor(_MARKED_COLOR if is_marked else "#A9B7C6"))
-            item.setText(self._item_text(path, is_marked))
+            item.setForeground(
+                QColor(
+                    _CONFIRMED_COLOR
+                    if path in self._confirmed_reviews
+                    else "#A9B7C6"
+                )
+            )
+            item.setText(self._item_text(path))
 
     def _navigate_to(self, index: int) -> None:
         if not self._flagged_paths:
@@ -353,51 +388,101 @@ class EasyDeleteStepWidget(QWidget):
         self._pair_right_hdr.setToolTip(right_name)
 
         reason = entry.get("reason", "")
-        self._suggestion_label.setText(reason)
-        self._suggestion_label.show()
+        self._suggestion_label.hide()
         _, color = _ISSUE_LABELS.get("duplicate", ("DUP", "#A78BFA"))
+        duplicate_kind = entry.get("duplicate_kind", "near")
+        classification = "Exact duplicate" if duplicate_kind == "exact" else "Near-duplicate"
         self._issue_label.setText(
-            f"<b style='color:{color}'>[DUP]</b>  Near-duplicate pair"
+            f"<b style='color:{color}'>{classification}</b>  ·  {reason}"
         )
-        keep_path = pair_path
         self._update_decision_presentation(path, entry)
         logger.info(
-            "EasyDelete duplicate: keeping %s over %s — %s",
-            os.path.basename(keep_path),
+            "EasyDelete duplicate review: %s and %s — %s",
             os.path.basename(path),
+            os.path.basename(pair_path),
             reason,
         )
 
     def _update_decision_presentation(self, path: str, entry: dict) -> None:
-        is_marked = self._is_marked_func(path) if self._is_marked_func else False
         filename = os.path.basename(path)
-        if is_marked:
+        selected_delete = self._pending_delete(path, entry)
+        confirmed = path in self._confirmed_reviews
+        if confirmed:
             self._state_banner.set_state(
-                "Marked for Trash",
-                f"{filename} is staged only. It has not been moved or deleted.",
-                tone="danger",
+                "Decision confirmed",
+                "The selected photo is marked for Trash, but no file has been moved or deleted.",
+                tone="success",
             )
         else:
             self._state_banner.set_state(
-                "Keeping this photo",
-                f"{filename} is not marked. The suggestion is only a recommendation.",
-                tone="neutral",
+                "Choose, then confirm",
+                "This is only a selection. Nothing changes until you press Confirm.",
+                tone="warning",
             )
 
         if entry.get("type") == "duplicate" and entry.get("pair_path"):
-            pair_name = os.path.basename(entry["pair_path"])
-            if is_marked:
-                left_state = "MARKED FOR TRASH · staged only"
-                left_color = "#FF7B86"
+            pair_path = entry["pair_path"]
+            pair_name = os.path.basename(pair_path)
+            left_is_delete = selected_delete == path
+            if confirmed:
+                delete_state = "MARKED FOR TRASH · staged"
+                keep_state = "KEEP"
             else:
-                left_state = "KEEPING FOR NOW · delete suggested"
-                left_color = "#A9B7C6"
+                delete_state = "SELECTED FOR TRASH · not confirmed"
+                keep_state = "SELECTED TO KEEP · not confirmed"
             self._pair_left_hdr.setText(
-                f"<b style='color:{left_color}'>{left_state}</b><br>{filename}"
+                f"<b style='color:{'#FF7B86' if left_is_delete else '#66BB6A'}'>"
+                f"{delete_state if left_is_delete else keep_state}</b><br>LEFT · {filename}"
             )
             self._pair_right_hdr.setText(
-                f"<b style='color:#66BB6A'>KEEP · comparison photo</b><br>{pair_name}"
+                f"<b style='color:{'#66BB6A' if left_is_delete else '#FF7B86'}'>"
+                f"{keep_state if left_is_delete else delete_state}</b><br>RIGHT · {pair_name}"
             )
+            self._pair_left_img.setStyleSheet(
+                self._image_choice_style(left_is_delete)
+            )
+            self._pair_right_img.setStyleSheet(
+                self._image_choice_style(not left_is_delete)
+            )
+            self._keep_btn.setText("Trash left")
+            self._mark_btn.setText("Trash right")
+            self._set_button_role(self._keep_btn, "workflowDecisionTrash")
+            self._keep_btn.setChecked(left_is_delete)
+            self._mark_btn.setChecked(not left_is_delete)
+        else:
+            delete_selected = selected_delete == path
+            self._keep_btn.setText("Keep")
+            self._mark_btn.setText("Trash")
+            self._set_button_role(self._keep_btn, "workflowDecisionKeep")
+            self._keep_btn.setChecked(not delete_selected)
+            self._mark_btn.setChecked(delete_selected)
+
+    @staticmethod
+    def _set_button_role(button: QPushButton, object_name: str) -> None:
+        if button.objectName() == object_name:
+            return
+        button.setObjectName(object_name)
+        style = button.style()
+        style.unpolish(button)
+        style.polish(button)
+        button.update()
+
+    @staticmethod
+    def _image_choice_style(selected_for_delete: bool) -> str:
+        color = "#E53935" if selected_for_delete else "#2E7D32"
+        return f"background: #232628; border: 3px solid {color}; border-radius: 4px;"
+
+    def _pending_delete(self, path: str, entry: dict) -> str | None:
+        if path not in self._pending_delete_by_review:
+            pair_path = entry.get("pair_path")
+            if pair_path and self._is_marked_func and self._is_marked_func(pair_path):
+                selected = pair_path
+            elif self._is_marked_func and self._is_marked_func(path):
+                selected = path
+            else:
+                selected = path if entry.get("suggest_delete", True) else None
+            self._pending_delete_by_review[path] = selected
+        return self._pending_delete_by_review[path]
 
     def _load_into(self, path: str, label: _ScaledImageLabel) -> bool:
         pixmap = self._load_pixmap(path)
@@ -461,30 +546,29 @@ class EasyDeleteStepWidget(QWidget):
             self._next_btn.setEnabled(False)
             self._mark_btn.setEnabled(False)
             self._keep_btn.setEnabled(False)
+            self._confirm_btn.setEnabled(False)
+            self._apply_all_btn.setEnabled(False)
             self._review_header.set_summary("No suggestions visible")
             return
         self._mark_btn.setEnabled(True)
         self._keep_btn.setEnabled(True)
+        self._confirm_btn.setEnabled(True)
+        self._apply_all_btn.setEnabled(True)
         self._counter_label.setText(f"{self._current_index + 1} of {total}")
         self._prev_btn.setEnabled(self._current_index > 0)
         self._next_btn.setEnabled(self._current_index < total - 1)
 
         path = self._flagged_paths[self._current_index]
-        is_marked = self._is_marked_func(path) if self._is_marked_func else False
         self._decision_group.blockSignals(True)
-        self._keep_btn.setChecked(not is_marked)
-        self._mark_btn.setChecked(is_marked)
-        self._decision_group.blockSignals(False)
         self._update_decision_presentation(path, self._results.get(path, {}))
+        self._decision_group.blockSignals(False)
 
-        marked_here = sum(
-            1
-            for candidate in self._flagged_paths
-            if self._is_marked_func and self._is_marked_func(candidate)
+        confirmed_here = sum(
+            candidate in self._confirmed_reviews for candidate in self._flagged_paths
         )
         self._review_header.set_summary(
-            f"{total} suggestions  ·  {marked_here} marked for Trash",
-            "danger" if marked_here else "neutral",
+            f"{total} suggestions  ·  {confirmed_here} confirmed",
+            "success" if confirmed_here == total else "neutral",
         )
         self._refresh_list_colors()
 
@@ -505,25 +589,88 @@ class EasyDeleteStepWidget(QWidget):
     def _on_next(self) -> None:
         self._navigate_to(self._current_index + 1)
 
-    def _on_mark_toggle(self) -> None:
+    def _select_pair_side(self, side: int) -> None:
         if self._current_index < 0 or not self._flagged_paths:
             return
         path = self._flagged_paths[self._current_index]
-        is_marked = self._is_marked_func(path) if self._is_marked_func else False
-        self._set_current_marked(not is_marked)
+        entry = self._results.get(path, {})
+        pair_path = entry.get("pair_path")
+        if not pair_path:
+            self._select_current_delete(path if side == 1 else None)
+            return
+        self._select_current_delete(path if side == 0 else pair_path)
 
-    def _set_current_marked(self, marked: bool) -> None:
+    def _select_current_delete(self, selected_path: str | None) -> None:
         if self._current_index < 0 or not self._flagged_paths:
             return
-        path = self._flagged_paths[self._current_index]
-        is_marked = self._is_marked_func(path) if self._is_marked_func else False
-        if marked == is_marked:
+        review_path = self._flagged_paths[self._current_index]
+        self._pending_delete_by_review[review_path] = selected_path
+        self._confirmed_reviews.discard(review_path)
+        self._refresh_controls()
+
+    def _on_confirm(self) -> None:
+        if self._current_index < 0 or not self._flagged_paths:
             return
-        if marked:
-            self.mark_for_deletion_requested.emit([path])
+        review_path = self._flagged_paths[self._current_index]
+        entry = self._results.get(review_path, {})
+        selected_delete = self._pending_delete(review_path, entry)
+        pair_path = entry.get("pair_path")
+        candidates = [review_path] + ([pair_path] if pair_path else [])
+        to_mark = [
+            candidate
+            for candidate in candidates
+            if candidate == selected_delete
+            and self._is_marked_func
+            and not self._is_marked_func(candidate)
+        ]
+        to_unmark = [
+            candidate
+            for candidate in candidates
+            if candidate != selected_delete
+            and self._is_marked_func
+            and self._is_marked_func(candidate)
+        ]
+        if to_mark:
+            self.mark_for_deletion_requested.emit(to_mark)
+        if to_unmark:
+            self.unmark_for_deletion_requested.emit(to_unmark)
+        self._confirmed_reviews.add(review_path)
+        next_index = next(
+            (
+                i
+                for i in range(self._current_index + 1, len(self._flagged_paths))
+                if self._flagged_paths[i] not in self._confirmed_reviews
+            ),
+            None,
+        )
+        if next_index is None:
+            self._refresh_controls()
         else:
-            self.unmark_for_deletion_requested.emit([path])
-        QTimer.singleShot(0, self._refresh_controls)
+            self._navigate_to(next_index)
+
+    def _on_apply_all(self) -> None:
+        to_mark: list[str] = []
+        to_unmark: list[str] = []
+        for review_path in self._flagged_paths:
+            entry = self._results.get(review_path, {})
+            suggested_delete = review_path if entry.get("suggest_delete", True) else None
+            pair_path = entry.get("pair_path")
+            candidates = [review_path] + ([pair_path] if pair_path else [])
+            for candidate in candidates:
+                is_marked = bool(
+                    self._is_marked_func and self._is_marked_func(candidate)
+                )
+                if candidate == suggested_delete and not is_marked:
+                    to_mark.append(candidate)
+                elif candidate != suggested_delete and is_marked:
+                    to_unmark.append(candidate)
+            self._pending_delete_by_review[review_path] = suggested_delete
+            self._confirmed_reviews.add(review_path)
+        if to_mark:
+            self.mark_for_deletion_requested.emit(list(dict.fromkeys(to_mark)))
+        if to_unmark:
+            self.unmark_for_deletion_requested.emit(list(dict.fromkeys(to_unmark)))
+        self._refresh_controls()
 
     def _on_category_toggled(self, issue_type: str, checked: bool) -> None:
         if self._updating_category_toggles:
@@ -627,7 +774,6 @@ class EasyDeleteStepWidget(QWidget):
                 "Review automated suggestions. Marking a photo is reversible; "
                 "nothing is moved until you confirm deletion in Cull."
             ),
-            shortcuts=EASY_DELETE_SHORTCUTS,
         )
         self._review_header.skip_button.clicked.connect(self._on_skip)
         page_layout.addWidget(self._review_header)
@@ -712,6 +858,8 @@ class EasyDeleteStepWidget(QWidget):
         self._pair_left_hdr.setWordWrap(True)
         self._pair_left_hdr.setStyleSheet("font-size: 11px;")
         self._pair_left_img = _ScaledImageLabel()
+        self._pair_left_img.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pair_left_img.clicked.connect(lambda: self._select_pair_side(0))
         ll.addWidget(self._pair_left_hdr)
         ll.addWidget(self._pair_left_img, 1)
 
@@ -723,6 +871,8 @@ class EasyDeleteStepWidget(QWidget):
         self._pair_right_hdr.setWordWrap(True)
         self._pair_right_hdr.setStyleSheet("font-size: 11px;")
         self._pair_right_img = _ScaledImageLabel()
+        self._pair_right_img.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pair_right_img.clicked.connect(lambda: self._select_pair_side(1))
         rl.addWidget(self._pair_right_hdr)
         rl.addWidget(self._pair_right_img, 1)
 
@@ -773,17 +923,26 @@ class EasyDeleteStepWidget(QWidget):
         self._keep_btn.setObjectName("workflowDecisionKeep")
         self._keep_btn.setCheckable(True)
         self._keep_btn.setMinimumWidth(90)
-        self._keep_btn.clicked.connect(lambda: self._set_current_marked(False))
+        self._keep_btn.clicked.connect(lambda: self._select_pair_side(0))
         self._decision_group.addButton(self._keep_btn)
 
-        self._mark_btn = QPushButton("Mark for Trash  [X]")
+        self._mark_btn = QPushButton("Trash")
         self._mark_btn.setObjectName("workflowDecisionTrash")
         self._mark_btn.setCheckable(True)
         self._mark_btn.setMinimumWidth(150)
-        self._mark_btn.clicked.connect(lambda: self._set_current_marked(True))
+        self._mark_btn.clicked.connect(lambda: self._select_pair_side(1))
         self._decision_group.addButton(self._mark_btn)
 
-        self._done_btn = QPushButton("Continue to Fix Rotation  →")
+        self._apply_all_btn = QPushButton("Apply suggestions to all visible")
+        self._apply_all_btn.setObjectName("workflowGhostButton")
+        self._apply_all_btn.clicked.connect(self._on_apply_all)
+
+        self._confirm_btn = QPushButton("Confirm  →")
+        self._confirm_btn.setObjectName("workflowPrimaryButton")
+        self._confirm_btn.setMinimumWidth(110)
+        self._confirm_btn.clicked.connect(self._on_confirm)
+
+        self._done_btn = QPushButton("Continue to Fix Rotation")
         self._done_btn.setObjectName("workflowPrimaryButton")
         self._done_btn.clicked.connect(self._on_done)
 
@@ -793,6 +952,8 @@ class EasyDeleteStepWidget(QWidget):
         action.addStretch()
         action.addWidget(self._keep_btn)
         action.addWidget(self._mark_btn)
+        action.addWidget(self._apply_all_btn)
+        action.addWidget(self._confirm_btn)
         action.addWidget(self._done_btn)
         right_layout.addLayout(action)
 

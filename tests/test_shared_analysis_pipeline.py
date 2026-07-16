@@ -26,6 +26,31 @@ def test_easy_delete_reuses_shared_neutral_analysis_image():
     )
 
 
+def test_easy_delete_duplicate_result_has_one_authoritative_classification(
+    tmp_path, monkeypatch
+):
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    first.write_bytes(b"identical image bytes")
+    second.write_bytes(b"identical image bytes")
+    embeddings = {
+        str(first): [1.0, 0.0],
+        str(second): [1.0, 0.0],
+    }
+    worker = EasyDeleteWorker(
+        [str(first), str(second)],
+        cluster_map={1: [str(first), str(second)]},
+        embeddings_cache=embeddings,
+    )
+    monkeypatch.setattr(worker, "_get_sharpness", lambda _path: 10.0)
+
+    results = worker._detect_duplicates()
+
+    assert {entry["duplicate_kind"] for entry in results.values()} == {"exact"}
+    suggested = next(entry for entry in results.values() if entry["suggest_delete"])
+    assert suggested["reason"] == "The files are byte-for-byte identical"
+
+
 def test_completed_empty_easy_delete_result_is_not_recomputed():
     widget = SimpleNamespace(show_results=Mock(), show_loading=Mock())
     worker_manager = SimpleNamespace(

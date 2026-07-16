@@ -83,7 +83,6 @@ from ui.dialog_components import (
 )
 from ui.workflow_review_components import (
     ORGANIZE_SHORTCUTS,
-    WorkflowShortcutStrip,
     install_workflow_shortcuts,
 )
 
@@ -722,8 +721,6 @@ class GroupingStepWidget(QWidget):
         self.open_preview_button.setEnabled(False)
         self.open_preview_button.setVisible(False)
 
-        self.shortcut_strip = WorkflowShortcutStrip(ORGANIZE_SHORTCUTS)
-
         self.output_root_label = QLabel()
         self.output_root_label.setVisible(False)
         self.preview_label = self.loading_label
@@ -736,7 +733,7 @@ class GroupingStepWidget(QWidget):
         root.setSpacing(0)
 
         tb = QHBoxLayout(self.top_bar)
-        tb.setContentsMargins(16, 10, 16, 10)
+        tb.setContentsMargins(16, 8, 16, 8)
         tb.setSpacing(6)
         tb.addWidget(self.back_button)
         tb.addWidget(self.folder_button)
@@ -754,7 +751,6 @@ class GroupingStepWidget(QWidget):
         tb.addWidget(self.skip_button)
         tb.addSpacing(6)
         tb.addWidget(self.primary_button)
-
         root.addWidget(self.top_bar)
         self._add_hsep(root, "groupingBarSep")
 
@@ -852,7 +848,6 @@ class GroupingStepWidget(QWidget):
         info_col.addWidget(self.preview_selection_meta)
         bb.addLayout(info_col)
         bb.addStretch(1)
-        bb.addWidget(self.shortcut_strip)
         loading_col = QVBoxLayout()
         loading_col.setSpacing(4)
         loading_col.addWidget(self.loading_label)

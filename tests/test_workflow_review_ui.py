@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -17,13 +18,15 @@ from ui.workflow_review_components import (
     FIX_ROTATION_SHORTCUTS,
     ORGANIZE_SHORTCUTS,
     PICK_BEST_SHORTCUTS,
+    WORKFLOW_SHORTCUTS,
+    WorkflowShortcutStrip,
 )
 
 
 _app = QApplication.instance() or QApplication([])
 
 
-def test_easy_delete_uses_explicit_staged_trash_state():
+def test_easy_delete_requires_confirmation_before_staging_trash():
     marks: set[str] = set()
     delete_path = "/tmp/delete.jpg"
     keep_path = "/tmp/keep.jpg"
@@ -45,18 +48,189 @@ def test_easy_delete_uses_explicit_staged_trash_state():
         }
     )
 
-    assert widget._state_banner.title_label.text() == "Keeping this photo"
-    assert "KEEP" in widget._items_list.item(0).text()
-    assert "delete suggested" in widget._pair_left_hdr.text()
+    assert widget._state_banner.title_label.text() == "Choose, then confirm"
+    assert "REVIEW" in widget._items_list.item(0).text()
+    assert "SELECTED FOR TRASH" in widget._pair_left_hdr.text()
+    assert "not confirmed" in widget._pair_left_hdr.text()
+    assert not marks
 
-    widget._set_current_marked(True)
+    widget._pair_right_img.clicked.emit()
     _app.processEvents()
 
-    assert delete_path in marks
-    assert widget._state_banner.title_label.text() == "Marked for Trash"
-    assert "has not been moved or deleted" in widget._state_banner.detail_label.text()
-    assert "MARKED" in widget._items_list.item(0).text()
-    assert "staged only" in widget._pair_left_hdr.text()
+    assert not marks
+    assert "SELECTED TO KEEP" in widget._pair_left_hdr.text()
+    assert "SELECTED FOR TRASH" in widget._pair_right_hdr.text()
+
+    widget._on_confirm()
+    _app.processEvents()
+
+    assert keep_path in marks
+    assert delete_path not in marks
+    assert widget._state_banner.title_label.text() == "Decision confirmed"
+    assert "no file has been moved or deleted" in widget._state_banner.detail_label.text()
+    assert "CONFIRMED" in widget._items_list.item(0).text()
+    assert "MARKED FOR TRASH" in widget._pair_right_hdr.text()
+
+
+def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
+    marks: set[str] = set()
+    first = "/tmp/first.jpg"
+    first_keep = "/tmp/first-keep.jpg"
+    second = "/tmp/second.jpg"
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
+    widget.unmark_for_deletion_requested.connect(
+        lambda paths: marks.difference_update(paths)
+    )
+    widget.show_results(
+        {
+            first: {
+                "type": "duplicate",
+                "pair_path": first_keep,
+                "suggest_delete": True,
+                "duplicate_kind": "exact",
+                "reason": "The files are byte-for-byte identical",
+            },
+            second: {
+                "type": "blur",
+                "pair_path": None,
+                "suggest_delete": True,
+                "reason": "Blurry image",
+            },
+        }
+    )
+
+    assert "Exact duplicate" in widget._issue_label.text()
+    assert widget._suggestion_label.isHidden()
+    widget._on_confirm()
+    _app.processEvents()
+
+    assert first in marks
+    assert widget._current_index == 1
+
+    widget._on_apply_all()
+    _app.processEvents()
+
+    assert marks == {first, second}
+    assert widget._confirmed_reviews == {first, second}
+
+
+def test_easy_delete_arrow_shortcuts_separate_choice_from_navigation():
+    first = "/tmp/first.jpg"
+    first_keep = "/tmp/first-keep.jpg"
+    second = "/tmp/second.jpg"
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            first: {
+                "type": "duplicate",
+                "pair_path": first_keep,
+                "suggest_delete": True,
+                "duplicate_kind": "near",
+                "reason": "Suggested choice",
+            },
+            second: {
+                "type": "blur",
+                "pair_path": None,
+                "suggest_delete": True,
+                "reason": "Blurry image",
+            },
+        }
+    )
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["Right"].activated.emit()
+
+    assert widget._current_index == 0
+    assert "SELECTED FOR TRASH" in widget._pair_right_hdr.text()
+
+    shortcuts["Down"].activated.emit()
+
+    assert widget._current_index == 1
+
+
+def test_page_headers_no_longer_duplicate_the_footer_shortcuts():
+    organize = GroupingStepWidget()
+    easy_delete = EasyDeleteStepWidget()
+
+    assert not hasattr(organize, "shortcut_strip")
+    assert not hasattr(easy_delete._review_header, "shortcut_strip")
+
+
+def test_footer_shortcuts_use_the_most_columns_that_fit():
+    strip = WorkflowShortcutStrip(ORGANIZE_SHORTCUTS)
+    stylesheet = Path("src/ui/dark_theme.qss").read_text(encoding="utf-8")
+    strip.setStyleSheet(stylesheet)
+    strip.resize(1200, 100)
+    strip.show()
+    _app.processEvents()
+
+    assert strip._current_columns == len(ORGANIZE_SHORTCUTS)
+
+    strip.resize(320, 100)
+    _app.processEvents()
+
+    assert 1 < strip._current_columns < len(ORGANIZE_SHORTCUTS)
+
+
+def test_organize_top_bar_returns_to_a_single_control_row():
+    organize = GroupingStepWidget()
+    stylesheet = Path("src/ui/dark_theme.qss").read_text(encoding="utf-8")
+    organize.setStyleSheet(stylesheet)
+    organize.resize(1800, 900)
+    organize.show()
+    _app.processEvents()
+
+    assert organize.top_bar.height() == 52
+    assert organize.primary_button.geometry().bottom() <= organize.top_bar.height()
+
+
+def test_workflow_footer_navigation_is_centered_in_the_window():
+    window = MainWindow()
+    stylesheet = Path("src/ui/dark_theme.qss").read_text(encoding="utf-8")
+    window.setStyleSheet(stylesheet)
+    window.resize(1600, 900)
+    window.show()
+    _app.processEvents()
+
+    buttons = (
+        window.step_organize_button,
+        window.step_easy_delete_button,
+        window.step_fix_rotation_button,
+        window.step_pick_best_button,
+        window.step_cull_button,
+    )
+    status_bar = window.statusBar()
+    left = buttons[0].mapTo(status_bar, buttons[0].rect().topLeft()).x()
+    right = buttons[-1].mapTo(status_bar, buttons[-1].rect().bottomRight()).x()
+    button_center = (left + right) / 2
+
+    assert window.workflow_nav_host.width() >= status_bar.width() * 0.9
+    assert window.workflow_nav.width() < window.workflow_nav_host.width() * 0.5
+    nav_left = window.workflow_nav.mapTo(
+        status_bar, window.workflow_nav.rect().topLeft()
+    ).x()
+    nav_right = window.workflow_nav.mapTo(
+        status_bar, window.workflow_nav.rect().bottomRight()
+    ).x()
+    assert nav_left <= left
+    assert nav_right >= right
+    assert left - nav_left <= 12
+    assert nav_right - right <= 12
+    assert abs(button_center - status_bar.width() / 2) <= 16
+
+    status_bar.showMessage("Status text remains visible")
+    _app.processEvents()
+    assert window.workflow_status_label.text() == "Status text remains visible"
+
+    for workflow_step, specs in WORKFLOW_SHORTCUTS.items():
+        window._set_workflow_step(workflow_step)
+        strip = window.workflow_shortcut_strips[workflow_step]
+        assert window.workflow_shortcut_stack.currentWidget() is strip
+        assert strip.shortcut_specs == specs
+    window.close()
 
 
 def test_fix_rotation_distinguishes_preview_queue_and_applied_state():

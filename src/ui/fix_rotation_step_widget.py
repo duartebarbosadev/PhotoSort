@@ -619,7 +619,6 @@ class FixRotationStepWidget(QWidget):
                 "Compare the original with the corrected preview. Queued rotations "
                 "do not change files until you press Apply."
             ),
-            shortcuts=FIX_ROTATION_SHORTCUTS,
         )
         self._review_header.skip_button.clicked.connect(self._on_skip)
         page_layout.addWidget(self._review_header)

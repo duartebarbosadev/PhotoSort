@@ -410,7 +410,6 @@ class PickBestStepWidget(QWidget):
                 "Compare each cluster and choose what to keep. Red choices are "
                 "marked for Trash only; no files move on this screen."
             ),
-            shortcuts=PICK_BEST_SHORTCUTS,
         )
         review_layout.addWidget(self._review_header)
 
