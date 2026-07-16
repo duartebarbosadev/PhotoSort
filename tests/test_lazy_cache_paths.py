@@ -123,3 +123,27 @@ def test_similarity_clustering_eps_setting_clamps_and_validates(monkeypatch):
 
     with pytest.raises(ValueError):
         app_settings.set_similarity_clustering_eps(0.5)
+
+
+def test_workflow_shortcuts_visibility_defaults_on_and_persists(monkeypatch):
+    app_settings = _reload_module("core.app_settings")
+
+    class FakeSettings:
+        def __init__(self):
+            self.values = {}
+
+        def value(self, key, default=None, type=None):
+            value = self.values.get(key, default)
+            return type(value) if type is not None else value
+
+        def setValue(self, key, value):
+            self.values[key] = value
+
+    fake_settings = FakeSettings()
+    monkeypatch.setattr(app_settings, "_get_settings", lambda: fake_settings)
+
+    assert app_settings.get_show_workflow_shortcuts() is True
+
+    app_settings.set_show_workflow_shortcuts(False)
+
+    assert app_settings.get_show_workflow_shortcuts() is False

@@ -35,12 +35,14 @@ from core.app_settings import (
     get_easy_delete_duplicate_distance,
     get_easy_delete_white_threshold,
     get_rotation_confirm_lossy,
+    get_show_workflow_shortcuts,
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
     set_easy_delete_blur_threshold,
     set_easy_delete_dark_threshold,
     set_easy_delete_duplicate_distance,
     set_easy_delete_white_threshold,
+    set_show_workflow_shortcuts,
     ROTATION_MODEL_DOWNLOAD_URL,
 )
 from core.runtime_paths import get_app_cache_root, get_app_log_dir, get_app_models_dir
@@ -452,6 +454,28 @@ class DialogManager:
         content_layout.setSpacing(12)
         content_layout.setContentsMargins(20, 14, 20, 14)
         scroll_area.setWidget(content_frame)
+
+        # --- Interface Card ---
+        interface_card, interface_layout = build_card("dialogCard")
+        interface_title = QLabel("Interface")
+        interface_title.setObjectName("cardSectionTitle")
+        interface_layout.addWidget(interface_title)
+
+        interface_separator = QFrame()
+        interface_separator.setObjectName("cardSeparator")
+        interface_separator.setFrameShape(QFrame.Shape.HLine)
+        interface_separator.setFixedHeight(1)
+        interface_layout.addWidget(interface_separator)
+
+        show_shortcuts_checkbox = QCheckBox("Show shortcuts in the footer")
+        show_shortcuts_checkbox.setObjectName("showWorkflowShortcutsCheckbox")
+        show_shortcuts_checkbox.setChecked(get_show_workflow_shortcuts())
+        show_shortcuts_checkbox.setToolTip(
+            "Show context-sensitive keyboard shortcuts beside the workflow navigation."
+        )
+        interface_layout.addWidget(show_shortcuts_checkbox)
+
+        content_layout.addWidget(interface_card)
 
         # --- Performance Mode Card ---
         perf_card, perf_layout = build_card("dialogCard")
@@ -1087,12 +1111,19 @@ class DialogManager:
             set_easy_delete_dark_threshold(dark_threshold_spin.value())
             set_easy_delete_white_threshold(white_threshold_spin.value())
             set_easy_delete_duplicate_distance(duplicate_distance_spin.value())
+            show_workflow_shortcuts = show_shortcuts_checkbox.isChecked()
+            set_show_workflow_shortcuts(show_workflow_shortcuts)
+            apply_shortcut_visibility = getattr(
+                self.parent, "set_workflow_shortcuts_visible", None
+            )
+            if callable(apply_shortcut_visibility):
+                apply_shortcut_visibility(show_workflow_shortcuts)
 
             logger.info(
                 "Preferences saved: mode=%s, custom_threads=%s, similarity_model=%s, "
                 "similarity_eps=%.3f, easy_delete_blur=%.1f, "
                 "easy_delete_dark=%.1f, easy_delete_white=%.1f, "
-                "easy_delete_duplicate=%.3f",
+                "easy_delete_duplicate=%.3f, show_workflow_shortcuts=%s",
                 get_performance_mode().value,
                 get_custom_thread_count(),
                 get_similarity_embedding_model_name(),
@@ -1101,6 +1132,7 @@ class DialogManager:
                 get_easy_delete_dark_threshold(),
                 get_easy_delete_white_threshold(),
                 get_easy_delete_duplicate_distance(),
+                get_show_workflow_shortcuts(),
             )
             dialog.accept()
 

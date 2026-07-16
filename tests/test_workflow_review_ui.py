@@ -187,7 +187,8 @@ def test_organize_top_bar_returns_to_a_single_control_row():
     assert organize.primary_button.geometry().bottom() <= organize.top_bar.height()
 
 
-def test_workflow_footer_navigation_is_centered_in_the_window():
+def test_workflow_footer_navigation_is_centered_in_the_window(monkeypatch):
+    monkeypatch.setattr("ui.main_window.get_show_workflow_shortcuts", lambda: True)
     window = MainWindow()
     stylesheet = Path("src/ui/dark_theme.qss").read_text(encoding="utf-8")
     window.setStyleSheet(stylesheet)
@@ -230,6 +231,11 @@ def test_workflow_footer_navigation_is_centered_in_the_window():
         strip = window.workflow_shortcut_strips[workflow_step]
         assert window.workflow_shortcut_stack.currentWidget() is strip
         assert strip.shortcut_specs == specs
+
+    window.set_workflow_shortcuts_visible(False)
+    assert window.workflow_shortcut_stack.isHidden()
+    window.set_workflow_shortcuts_visible(True)
+    assert window.workflow_shortcut_stack.isVisible()
     window.close()
 
 

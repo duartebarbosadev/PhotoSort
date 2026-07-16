@@ -61,6 +61,7 @@ from core.app_settings import (
     CENTER_PANEL_STRETCH,
     RIGHT_PANEL_STRETCH,
     DISPLAY_MAX_RESOLUTION,
+    get_show_workflow_shortcuts,
 )
 from ui.app_state import AppState
 from ui.ui_components import LoadingOverlay
@@ -388,6 +389,7 @@ class MainWindow(QMainWindow):
             strip = WorkflowShortcutStrip(shortcuts)
             self.workflow_shortcut_stack.addWidget(strip)
             self.workflow_shortcut_strips[workflow_step] = strip
+        self.workflow_shortcut_stack.setVisible(get_show_workflow_shortcuts())
 
         self.workflow_footer_right = QWidget()
         self.workflow_footer_right.setObjectName("workflowFooterRight")
@@ -1138,6 +1140,12 @@ class MainWindow(QMainWindow):
             next_label,
             item_count,
         )
+
+    def set_workflow_shortcuts_visible(self, visible: bool) -> None:
+        """Apply the persisted shortcut-footer visibility preference immediately."""
+        self.workflow_shortcut_stack.setVisible(bool(visible))
+        self.workflow_nav_host.updateGeometry()
+        self.statusBar().updateGeometry()
 
     def show_grouping_step(self) -> None:
         self.reset_preview_requests()
