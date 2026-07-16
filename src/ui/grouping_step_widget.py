@@ -1,4 +1,5 @@
 import logging
+import copy
 import os
 import sys
 import time
@@ -1278,8 +1279,42 @@ class GroupingStepWidget(QWidget):
             self._current_plan
         )
 
+    def discard_unsaved_grouping_edits(self) -> None:
+        """Restore the editable preview to the worker-produced baseline plan."""
+        if self._current_plan is None:
+            return
+        baseline = copy.deepcopy(self._current_plan)
+        self.set_preview_plan(baseline, self._current_output_root)
+
     def pending_grouping_action_lines(self) -> list[str]:
         return self._build_action_lines(self.get_effective_plan())
+
+    def pending_grouping_deletion_paths(
+        self, action_lines: Iterable[str] | None = None
+    ) -> tuple[list[str], list[str]]:
+        """Return explicit deletion targets and folders removed after file moves."""
+        delete_paths: list[str] = []
+        removed_folders: list[str] = []
+        prefixes = (
+            ("Delete folder ", delete_paths),
+            ("Delete file ", delete_paths),
+            ("Remove empty folder ", removed_folders),
+        )
+        for line in action_lines or self.pending_grouping_action_lines():
+            for prefix, destination in prefixes:
+                if not line.startswith(prefix):
+                    continue
+                displayed_path = line[len(prefix) :].strip()
+                path = (
+                    displayed_path
+                    if os.path.isabs(displayed_path)
+                    else os.path.join(self._source_root or "", displayed_path)
+                )
+                destination.append(os.path.normpath(path))
+                break
+        return list(dict.fromkeys(delete_paths)), list(
+            dict.fromkeys(removed_folders)
+        )
 
     def set_loading_state(
         self, message: str, busy: bool, progress: int | None = None
@@ -3469,7 +3504,9 @@ class GroupingStepWidget(QWidget):
             self._show_status_message(reason, 5000)
             return
         if operation == "mark":
-            self.toggle_deletion_marks_requested.emit(paths)
+            self.toggle_deletion_marks_requested.emit(
+                list(dict.fromkeys([directory_path, *paths]))
+            )
         elif operation == "trash":
             self.trash_requested.emit(directory_path, paths)
 

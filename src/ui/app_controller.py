@@ -26,6 +26,14 @@ PICK_BEST_REFINEMENT_EPS = 0.04
 PICK_BEST_REFINEMENT_MIN_SAMPLES = 2
 
 
+def _workflow_is_cancelled(controller: object, workflow: str) -> bool:
+    return workflow in getattr(controller, "_cancelled_workflows", set())
+
+
+def _reactivate_workflow(controller: object, workflow: str) -> None:
+    getattr(controller, "_cancelled_workflows", set()).discard(workflow)
+
+
 # Forward declarations for type hinting to avoid circular imports.
 class MainWindow:
     pass
@@ -143,6 +151,48 @@ class AppController(QObject):
         self._pick_best_pending_after_similarity: bool = False
         self._easy_delete_pending_after_similarity: bool = False
         self._pending_grouping_preview: tuple[object, str] | None = None
+        self._cancelled_workflows: set[str] = set()
+        self._ignore_similarity_results = False
+
+    def is_workflow_analysis_running(self, workflow: str) -> bool:
+        if workflow == "organize":
+            return self.worker_manager.is_grouping_preview_running()
+        if workflow == "easy_delete":
+            return bool(
+                self.worker_manager.is_easy_delete_running()
+                or self._easy_delete_pending_after_similarity
+            )
+        if workflow == "pick_best":
+            return bool(
+                self.worker_manager.is_pick_best_running()
+                or self._pick_best_pending_after_similarity
+            )
+        if workflow == "fix_rotation":
+            return self.worker_manager.is_fix_rotation_running()
+        return False
+
+    def cancel_workflow_analysis(self, workflow: str) -> None:
+        """Cancel only work owned by the departing workflow."""
+        self._cancelled_workflows.add(workflow)
+        if workflow == "organize":
+            self.worker_manager.stop_grouping_preview()
+            self._pending_grouping_preview = None
+        elif workflow == "easy_delete":
+            depended_on_similarity = self._easy_delete_pending_after_similarity
+            self._easy_delete_pending_after_similarity = False
+            self.worker_manager.stop_easy_delete_analysis()
+            if depended_on_similarity:
+                self._ignore_similarity_results = True
+                self.worker_manager.stop_similarity_analysis()
+        elif workflow == "pick_best":
+            depended_on_similarity = self._pick_best_pending_after_similarity
+            self._pick_best_pending_after_similarity = False
+            self.worker_manager.stop_pick_best_analysis()
+            if depended_on_similarity:
+                self._ignore_similarity_results = True
+                self.worker_manager.stop_similarity_analysis()
+        elif workflow == "fix_rotation":
+            self.worker_manager.stop_fix_rotation_detection()
 
     def _sync_active_image(self, workflow_step: str) -> None:
         controller = getattr(self.main_window, "active_image_controller", None)
@@ -409,6 +459,7 @@ class AppController(QObject):
         )
 
     def start_similarity_analysis(self):
+        self._ignore_similarity_results = False
         logger.info("Starting similarity analysis.")
         if self.worker_manager.is_similarity_worker_running():
             self.main_window.statusBar().showMessage(
@@ -482,6 +533,7 @@ class AppController(QObject):
         )
 
     def refresh_grouping_preview(self):
+        _reactivate_workflow(self, "organize")
         self._pending_grouping_preview = None
         if not self.app_state.image_files_data:
             self.main_window.update_grouping_preview("No files loaded for grouping.")
@@ -1214,6 +1266,11 @@ class AppController(QObject):
             self.main_window.hide_loading_overlay()
 
         self.main_window._update_image_info_label()
+        resume_transition = getattr(
+            self.main_window, "resume_workflow_transition_after_reload", None
+        )
+        if callable(resume_transition):
+            resume_transition()
 
     def handle_scan_error(self, message: str):
         logger.error(f"File scan error: {message}")
@@ -1233,10 +1290,14 @@ class AppController(QObject):
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
 
     def handle_grouping_preview_progress(self, _progress: int, message: str):
+        if _workflow_is_cancelled(self, "organize"):
+            return
         self.main_window.update_grouping_preview(message)
         self.main_window.grouping_step_widget.set_loading_state(message, True, None)
 
     def handle_grouping_preview_ready(self, plan):
+        if _workflow_is_cancelled(self, "organize"):
+            return
         mode_label = str(getattr(plan, "mode", "grouping")).title()
         source_root = (
             self.app_state.grouping_source_root or self.app_state.current_folder_path
@@ -1272,6 +1333,8 @@ class AppController(QObject):
         AppController._sync_active_image(self, "organize")
 
     def handle_grouping_preview_error(self, message: str):
+        if _workflow_is_cancelled(self, "organize"):
+            return
         self.main_window.update_grouping_preview(f"Preview unavailable: {message}")
         self.main_window.grouping_step_widget.set_loading_state(
             f"Preview unavailable: {message}",
@@ -1343,9 +1406,15 @@ class AppController(QObject):
             5000,
         )
         self.main_window.cancel_pending_close_after_grouping()
+        cancel_transition = getattr(
+            self.main_window, "cancel_pending_workflow_transition", None
+        )
+        if callable(cancel_transition):
+            cancel_transition()
 
     def start_pick_best_workflow(self) -> None:
         """Start the Pick Best workflow — auto-runs similarity if not yet done."""
+        _reactivate_workflow(self, "pick_best")
         if not self.app_state.image_files_data:
             self.main_window.statusBar().showMessage("No images loaded.", 3000)
             return
@@ -1387,11 +1456,15 @@ class AppController(QObject):
         self.worker_manager.start_pick_best_analysis(cluster_map)
 
     def handle_pick_best_progress(self, percent: int, message: str) -> None:
+        if _workflow_is_cancelled(self, "pick_best"):
+            return
         self.main_window.pick_best_step_widget.show_loading(
             f"Scoring images… {message}", percent
         )
 
     def handle_pick_best_complete(self, results: PickBestResults) -> None:
+        if _workflow_is_cancelled(self, "pick_best"):
+            return
         logger.info(f"Pick Best complete: {len(results)} clusters scored.")
         self.app_state.pick_best_results = results
         # Build quick path→is_winner lookup
@@ -1404,6 +1477,8 @@ class AppController(QObject):
         AppController._sync_active_image(self, "pick_best")
 
     def handle_pick_best_error(self, message: str) -> None:
+        if _workflow_is_cancelled(self, "pick_best"):
+            return
         logger.error(f"Pick Best error: {message}", exc_info=False)
         self.main_window.pick_best_step_widget.show_error(message)
         self.main_window.statusBar().showMessage(f"Pick Best error: {message}", 6000)
@@ -1413,6 +1488,7 @@ class AppController(QObject):
     # ------------------------------------------------------------------
 
     def start_easy_delete_workflow(self) -> None:
+        _reactivate_workflow(self, "easy_delete")
         if not self.app_state.image_files_data:
             self.main_window.statusBar().showMessage("No images loaded.", 3000)
             return
@@ -1467,15 +1543,21 @@ class AppController(QObject):
         )
 
     def handle_easy_delete_progress(self, percent: int, message: str) -> None:
+        if _workflow_is_cancelled(self, "easy_delete"):
+            return
         self.main_window.easy_delete_step_widget.show_loading(message, percent)
 
     def handle_easy_delete_complete(self, results: dict) -> None:
+        if _workflow_is_cancelled(self, "easy_delete"):
+            return
         logger.info(f"Easy Delete complete: {len(results)} images flagged.")
         self.app_state.easy_delete_results = results
         self.main_window.easy_delete_step_widget.show_results(results)
         AppController._sync_active_image(self, "easy_delete")
 
     def handle_easy_delete_error(self, message: str) -> None:
+        if _workflow_is_cancelled(self, "easy_delete"):
+            return
         logger.error(f"Easy Delete error: {message}", exc_info=False)
         self.main_window.easy_delete_step_widget.show_error(message)
         self.main_window.statusBar().showMessage(f"Easy Delete error: {message}", 6000)
@@ -1485,6 +1567,7 @@ class AppController(QObject):
     # ------------------------------------------------------------------
 
     def start_fix_rotation_workflow(self) -> None:
+        _reactivate_workflow(self, "fix_rotation")
         if not self.app_state.image_files_data:
             self.main_window.statusBar().showMessage("No images loaded.", 3000)
             return
@@ -1510,9 +1593,13 @@ class AppController(QObject):
         self.worker_manager.start_fix_rotation_detection(image_paths)
 
     def handle_fix_rotation_progress(self, percent: int, message: str) -> None:
+        if _workflow_is_cancelled(self, "fix_rotation"):
+            return
         self.main_window.fix_rotation_step_widget.show_loading(message, percent)
 
     def handle_fix_rotation_complete(self, results: dict) -> None:
+        if _workflow_is_cancelled(self, "fix_rotation"):
+            return
         logger.info(
             f"Fix Rotation detection complete: {len(results)} images need rotation."
         )
@@ -1521,10 +1608,14 @@ class AppController(QObject):
         AppController._sync_active_image(self, "fix_rotation")
 
     def handle_fix_rotation_model_not_found(self, message: str) -> None:
+        if _workflow_is_cancelled(self, "fix_rotation"):
+            return
         logger.warning(f"Fix Rotation model not found: {message}")
         self.main_window.fix_rotation_step_widget.show_model_not_found(message)
 
     def handle_fix_rotation_error(self, message: str) -> None:
+        if _workflow_is_cancelled(self, "fix_rotation"):
+            return
         logger.error(f"Fix Rotation error: {message}", exc_info=False)
         self.main_window.fix_rotation_step_widget.show_error(message)
         self.main_window.statusBar().showMessage(f"Fix Rotation error: {message}", 6000)
@@ -1551,6 +1642,11 @@ class AppController(QObject):
             self.main_window.statusBar().showMessage(
                 f"Rotation applied: {successful} OK, {failed} failed.", 5000
             )
+        finish_transition = getattr(
+            self.main_window, "finish_workflow_transition_after_rotations", None
+        )
+        if callable(finish_transition):
+            finish_transition(successful, failed)
 
     def handle_rating_load_progress(self, current: int, total: int, basename: str):
         percentage = int((current / total) * 100) if total > 0 else 0
@@ -1594,6 +1690,8 @@ class AppController(QObject):
         self.main_window.hide_loading_overlay()
 
     def handle_similarity_progress(self, percentage, message):
+        if getattr(self, "_ignore_similarity_results", False):
+            return
         suffix = (
             f" ({percentage}%)" if percentage is not None and percentage >= 0 else ""
         )
@@ -1610,6 +1708,8 @@ class AppController(QObject):
         self.main_window.update_loading_text(f"Similarity: {message}{suffix}")
 
     def handle_embeddings_generated(self, embeddings_dict):
+        if getattr(self, "_ignore_similarity_results", False):
+            return
         self.app_state.embeddings_cache = embeddings_dict
         if self._pick_best_pending_after_similarity:
             self.main_window.pick_best_step_widget.show_loading(
@@ -1624,6 +1724,8 @@ class AppController(QObject):
         self.main_window.update_loading_text("Embeddings generated. Clustering...")
 
     def handle_clustering_complete(self, cluster_results_dict: dict[str, int]):
+        if getattr(self, "_ignore_similarity_results", False):
+            return
         self.app_state.cluster_results = cluster_results_dict
         self.app_state.clear_best_shot_results()
         self.app_state.clear_pick_best_results()
@@ -1703,6 +1805,8 @@ class AppController(QObject):
             self.main_window.hide_loading_overlay()
 
     def handle_similarity_error(self, message):
+        if getattr(self, "_ignore_similarity_results", False):
+            return
         logger.error(f"Similarity analysis failed: {message}", exc_info=True)
         if self._pick_best_pending_after_similarity:
             self._pick_best_pending_after_similarity = False
@@ -2240,3 +2344,8 @@ class AppController(QObject):
         self.main_window.statusBar().showMessage(
             f"Error applying rotations: {error_message}", 5000
         )
+        cancel_transition = getattr(
+            self.main_window, "cancel_pending_workflow_transition", None
+        )
+        if callable(cancel_transition):
+            cancel_transition()

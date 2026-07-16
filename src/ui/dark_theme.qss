@@ -1506,6 +1506,157 @@ QDialog#lossyRotationDialog {
 }
 
 /* --- Delete Confirmation Dialog --- */
+QDialog#workflowTransitionDialog {
+    background: #2B2B2B;
+    border: 1px solid #3C3F41;
+    border-radius: 12px;
+}
+
+QDialog#workflowTransitionDialog[hasTrash="true"] {
+    border-color: #5C3335;
+}
+
+QScrollArea#workflowTransitionScroll,
+QScrollArea#workflowTransitionScroll > QWidget > QWidget,
+QFrame#workflowTransitionContent {
+    background: transparent;
+    border: none;
+}
+
+QLabel#workflowTransitionIntro {
+    background: transparent;
+    color: #A9B7C6;
+    font-size: 10.5pt;
+    padding: 0 0 8px 0;
+}
+
+QLabel#workflowTransitionSectionTitle,
+QLabel#workflowTransitionTrashTitle {
+    background: transparent;
+    color: #D5DEE7;
+    font-size: 12pt;
+    font-weight: bold;
+    padding: 0;
+}
+
+QLabel#workflowTransitionDescription {
+    background: transparent;
+    color: #92A0AD;
+    font-size: 9.5pt;
+    padding: 0 0 4px 0;
+}
+
+QRadioButton#workflowTransitionChoice {
+    background: transparent;
+    color: #C2CCD5;
+    border: 1px solid #454A4E;
+    border-radius: 8px;
+    padding: 10px 12px;
+    spacing: 10px;
+    min-height: 22px;
+}
+
+QRadioButton#workflowTransitionChoice:hover {
+    background: #373A3D;
+    border-color: #5A6268;
+    color: #FFFFFF;
+}
+
+QRadioButton#workflowTransitionChoice:checked {
+    background: #263B57;
+    border-color: #4B6EAF;
+    color: #FFFFFF;
+}
+
+QRadioButton#workflowTransitionChoice::indicator {
+    width: 18px;
+    height: 18px;
+}
+
+QPlainTextEdit#workflowTransitionActionList {
+    background: #1E1F22;
+    color: #A9B7C6;
+    border: 1px solid #3C3F41;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 8.5pt;
+}
+
+QListWidget#workflowTransitionTrashList {
+    background: #252627;
+    border: 1px solid #3C3F41;
+    border-radius: 8px;
+    padding: 14px;
+    outline: none;
+}
+
+QListWidget#workflowTransitionTrashList::item {
+    background: transparent;
+    color: #C6D0DA;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 8px;
+}
+
+QListWidget#workflowTransitionTrashList::item:hover,
+QListWidget#workflowTransitionTrashList::item:selected {
+    background: #303336;
+    border-color: #484D51;
+}
+
+QPushButton#workflowTransitionStayButton,
+QPushButton#workflowTransitionClearButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #3C3F41, stop: 1 #353739);
+    color: #A9B7C6;
+    border: 1px solid #4A4D50;
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-size: 9.5pt;
+}
+
+QPushButton#workflowTransitionStayButton:hover,
+QPushButton#workflowTransitionClearButton:hover {
+    background: #45494A;
+    color: #FFFFFF;
+    border-color: #646A6E;
+}
+
+QPushButton#workflowTransitionResolveButton {
+    background: #4B6EAF;
+    color: #FFFFFF;
+    border: 1px solid #5A7DB8;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-size: 9.5pt;
+    font-weight: bold;
+}
+
+QPushButton#workflowTransitionTrashButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #B93648, stop: 1 #9F2638);
+    color: #FFFFFF;
+    border: 1px solid #C13D4F;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-size: 9.5pt;
+    font-weight: bold;
+}
+
+QPushButton#workflowTransitionTrashButton:hover {
+    background: #C94355;
+    border-color: #D35364;
+}
+
+QPushButton#workflowTransitionResolveButton:disabled,
+QPushButton#workflowTransitionClearButton:disabled,
+QPushButton#workflowTransitionTrashButton:disabled {
+    background: #343638;
+    color: #69737C;
+    border-color: #414447;
+}
+
 QDialog#deleteConfirmationDialog {
     background: #2B2B2B;
     border: 1px solid #5C3335;

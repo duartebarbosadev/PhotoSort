@@ -123,6 +123,28 @@ class FixRotationStepWidget(QWidget):
     def set_image_pipeline(self, pipeline) -> None:
         self._image_pipeline = pipeline
 
+    def pending_rotations(self) -> dict[str, int]:
+        """Return the currently queued, unapplied rotation changes."""
+        if self._applying:
+            return {}
+        return {
+            path: angle
+            for path, angle in self._suggestions.items()
+            if self._marked.get(path, False)
+        }
+
+    def discard_pending_rotations(self) -> None:
+        """Keep detection results while clearing every queued file mutation."""
+        for path in self._ordered_paths:
+            self._marked[path] = False
+        if self._ordered_paths and self._current_index >= 0:
+            self._show_current()
+        self._refresh_controls()
+
+    def apply_pending_rotations(self) -> None:
+        """Apply the current queue through the widget's normal state machine."""
+        self._on_apply()
+
     # ------------------------------------------------------------------
     # Public state-machine API
     # ------------------------------------------------------------------

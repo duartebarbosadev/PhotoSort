@@ -674,7 +674,7 @@ def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path):
 
     assert widget.get_effective_plan().groups[0].source_paths == [first]
     assert widget.get_effective_plan().deleted_paths == []
-    assert marks == {first}
+    assert marks == {str(beach_dir), first}
     assert widget._after_file_items_by_path[first].text(0).endswith("(DELETED)")
     assert widget.pending_grouping_action_lines() == []
 

@@ -201,6 +201,17 @@ class WorkerManager(QObject):
 
         self.update_check_thread: QThread | None = None
         self.update_check_worker: UpdateCheckWorker | None = None
+        self._worker_generations: dict[str, int] = {}
+
+    def _advance_worker_generation(self, name: str) -> int:
+        generation = self._worker_generations.get(name, 0) + 1
+        self._worker_generations[name] = generation
+        return generation
+
+    def _emit_if_current(self, name: str, generation: int, signal, *args) -> None:
+        """Drop queued callbacks belonging to a cancelled or replaced worker."""
+        if self._worker_generations.get(name) == generation:
+            signal.emit(*args)
 
     def _terminate_thread(
         self,
@@ -362,6 +373,7 @@ class WorkerManager(QObject):
         from ui.ui_components import SimilarityWorker
 
         self.stop_similarity_analysis()
+        generation = self._advance_worker_generation("similarity")
         self.similarity_thread = QThread()
         self.similarity_worker = SimilarityWorker(
             file_paths,
@@ -371,14 +383,32 @@ class WorkerManager(QObject):
         self.similarity_worker.moveToThread(self.similarity_thread)
 
         # Connect signals from the new worker to the manager's signals
-        self.similarity_worker.progress_update.connect(self.similarity_progress)
+        self.similarity_worker.progress_update.connect(
+            lambda percent, message: self._emit_if_current(
+                "similarity", generation, self.similarity_progress, percent, message
+            )
+        )
         self.similarity_worker.embeddings_generated.connect(
-            self.similarity_embeddings_generated
+            lambda embeddings: self._emit_if_current(
+                "similarity",
+                generation,
+                self.similarity_embeddings_generated,
+                embeddings,
+            )
         )
         self.similarity_worker.clustering_complete.connect(
-            self.similarity_clustering_complete
+            lambda clusters: self._emit_if_current(
+                "similarity",
+                generation,
+                self.similarity_clustering_complete,
+                clusters,
+            )
         )
-        self.similarity_worker.error.connect(self.similarity_error)
+        self.similarity_worker.error.connect(
+            lambda message: self._emit_if_current(
+                "similarity", generation, self.similarity_error, message
+            )
+        )
         self.similarity_worker.finished.connect(self.similarity_thread.quit)
 
         self.similarity_thread.started.connect(self.similarity_worker.run)
@@ -388,6 +418,7 @@ class WorkerManager(QObject):
         logger.info("Similarity engine thread started.")
 
     def stop_similarity_analysis(self):
+        self._advance_worker_generation("similarity")
         self._stop_worker("similarity_thread", "similarity_worker")
 
     def _cleanup_blur_detection_refs(self):
@@ -570,6 +601,7 @@ class WorkerManager(QObject):
         from workers.grouping_worker import GroupingPreviewWorker
 
         self.stop_grouping_preview()
+        generation = self._advance_worker_generation("grouping_preview")
         self.grouping_preview_thread = QThread()
         self.grouping_preview_worker = GroupingPreviewWorker(
             items,
@@ -581,10 +613,24 @@ class WorkerManager(QObject):
         self.grouping_preview_worker.moveToThread(self.grouping_preview_thread)
 
         self.grouping_preview_worker.progress_update.connect(
-            self.grouping_preview_progress
+            lambda percent, message: self._emit_if_current(
+                "grouping_preview",
+                generation,
+                self.grouping_preview_progress,
+                percent,
+                message,
+            )
         )
-        self.grouping_preview_worker.preview_ready.connect(self.grouping_preview_ready)
-        self.grouping_preview_worker.error.connect(self.grouping_preview_error)
+        self.grouping_preview_worker.preview_ready.connect(
+            lambda plan: self._emit_if_current(
+                "grouping_preview", generation, self.grouping_preview_ready, plan
+            )
+        )
+        self.grouping_preview_worker.error.connect(
+            lambda message: self._emit_if_current(
+                "grouping_preview", generation, self.grouping_preview_error, message
+            )
+        )
         self.grouping_preview_worker.finished.connect(self.grouping_preview_thread.quit)
         self.grouping_preview_thread.started.connect(self.grouping_preview_worker.run)
         self.grouping_preview_thread.finished.connect(
@@ -594,6 +640,7 @@ class WorkerManager(QObject):
         logger.info("Grouping preview thread started.")
 
     def stop_grouping_preview(self):
+        self._advance_worker_generation("grouping_preview")
         self._stop_worker("grouping_preview_thread", "grouping_preview_worker")
 
     def _cleanup_grouping_workflow_refs(self):
@@ -1016,6 +1063,7 @@ class WorkerManager(QObject):
         from workers.pick_best_worker import PickBestWorker
 
         self.stop_pick_best_analysis()
+        generation = self._advance_worker_generation("pick_best")
         if not cluster_map:
             self.pick_best_complete.emit({})
             return
@@ -1027,9 +1075,21 @@ class WorkerManager(QObject):
         )
         self.pick_best_worker.moveToThread(self.pick_best_thread)
 
-        self.pick_best_worker.progress_update.connect(self.pick_best_progress.emit)
-        self.pick_best_worker.completed.connect(self.pick_best_complete.emit)
-        self.pick_best_worker.error.connect(self.pick_best_error.emit)
+        self.pick_best_worker.progress_update.connect(
+            lambda percent, message: self._emit_if_current(
+                "pick_best", generation, self.pick_best_progress, percent, message
+            )
+        )
+        self.pick_best_worker.completed.connect(
+            lambda results: self._emit_if_current(
+                "pick_best", generation, self.pick_best_complete, results
+            )
+        )
+        self.pick_best_worker.error.connect(
+            lambda message: self._emit_if_current(
+                "pick_best", generation, self.pick_best_error, message
+            )
+        )
         self.pick_best_worker.finished.connect(self.pick_best_thread.quit)
         self.pick_best_worker.finished.connect(self.pick_best_worker.deleteLater)
         self.pick_best_thread.finished.connect(self._cleanup_pick_best_worker)
@@ -1039,6 +1099,7 @@ class WorkerManager(QObject):
         logger.info("Pick best analysis thread started.")
 
     def stop_pick_best_analysis(self) -> None:
+        self._advance_worker_generation("pick_best")
         self._stop_worker("pick_best_thread", "pick_best_worker")
 
     def _cleanup_pick_best_worker(self) -> None:
@@ -1056,6 +1117,7 @@ class WorkerManager(QObject):
         from workers.easy_delete_worker import EasyDeleteWorker
 
         self.stop_easy_delete_analysis()
+        generation = self._advance_worker_generation("easy_delete")
         if not image_paths:
             self.easy_delete_complete.emit({})
             return
@@ -1070,9 +1132,25 @@ class WorkerManager(QObject):
         )
         self.easy_delete_worker.moveToThread(self.easy_delete_thread)
 
-        self.easy_delete_worker.progress_update.connect(self.easy_delete_progress.emit)
-        self.easy_delete_worker.completed.connect(self.easy_delete_complete.emit)
-        self.easy_delete_worker.error.connect(self.easy_delete_error.emit)
+        self.easy_delete_worker.progress_update.connect(
+            lambda percent, message: self._emit_if_current(
+                "easy_delete",
+                generation,
+                self.easy_delete_progress,
+                percent,
+                message,
+            )
+        )
+        self.easy_delete_worker.completed.connect(
+            lambda results: self._emit_if_current(
+                "easy_delete", generation, self.easy_delete_complete, results
+            )
+        )
+        self.easy_delete_worker.error.connect(
+            lambda message: self._emit_if_current(
+                "easy_delete", generation, self.easy_delete_error, message
+            )
+        )
         self.easy_delete_worker.finished.connect(self.easy_delete_thread.quit)
         self.easy_delete_worker.finished.connect(self.easy_delete_worker.deleteLater)
         self.easy_delete_thread.finished.connect(self._cleanup_easy_delete_worker)
@@ -1082,6 +1160,7 @@ class WorkerManager(QObject):
         logger.info("Easy delete analysis thread started.")
 
     def stop_easy_delete_analysis(self) -> None:
+        self._advance_worker_generation("easy_delete")
         self._stop_worker("easy_delete_thread", "easy_delete_worker")
 
     def is_easy_delete_running(self) -> bool:
@@ -1102,6 +1181,7 @@ class WorkerManager(QObject):
         from workers.rotation_detection_step_worker import RotationDetectionStepWorker
 
         self.stop_fix_rotation_detection()
+        generation = self._advance_worker_generation("fix_rotation")
         if not image_paths:
             self.fix_rotation_complete.emit({})
             return
@@ -1122,15 +1202,32 @@ class WorkerManager(QObject):
         self.fix_rotation_detect_worker.moveToThread(self.fix_rotation_detect_thread)
 
         self.fix_rotation_detect_worker.progress_update.connect(
-            self.fix_rotation_progress.emit
+            lambda percent, message: self._emit_if_current(
+                "fix_rotation",
+                generation,
+                self.fix_rotation_progress,
+                percent,
+                message,
+            )
         )
         self.fix_rotation_detect_worker.completed.connect(
-            self.fix_rotation_complete.emit
+            lambda results: self._emit_if_current(
+                "fix_rotation", generation, self.fix_rotation_complete, results
+            )
         )
         self.fix_rotation_detect_worker.model_not_found.connect(
-            self.fix_rotation_model_not_found.emit
+            lambda message: self._emit_if_current(
+                "fix_rotation",
+                generation,
+                self.fix_rotation_model_not_found,
+                message,
+            )
         )
-        self.fix_rotation_detect_worker.error.connect(self.fix_rotation_error.emit)
+        self.fix_rotation_detect_worker.error.connect(
+            lambda message: self._emit_if_current(
+                "fix_rotation", generation, self.fix_rotation_error, message
+            )
+        )
         self.fix_rotation_detect_worker.finished.connect(
             self.fix_rotation_detect_thread.quit
         )
@@ -1148,6 +1245,7 @@ class WorkerManager(QObject):
         logger.info("Fix rotation detection thread started.")
 
     def stop_fix_rotation_detection(self) -> None:
+        self._advance_worker_generation("fix_rotation")
         self._stop_worker("fix_rotation_detect_thread", "fix_rotation_detect_worker")
 
     def is_fix_rotation_running(self) -> bool:

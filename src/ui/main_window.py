@@ -75,6 +75,10 @@ from ui.workflow_review_components import (
     WORKFLOW_SHORTCUTS,
     WorkflowShortcutStrip,
 )
+from ui.workflow_transition import (
+    WorkflowPendingState,
+    WorkflowTransitionRequest,
+)
 from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
 from ui.helpers.index_lookup_utils import find_proxy_index_for_path
@@ -131,6 +135,7 @@ class MainWindow(QMainWindow):
         self._filter_apply_count = 0
         self._last_filter_search_text: str | None = None
         self._close_after_grouping_save = False
+        self._pending_workflow_transition: WorkflowTransitionRequest | None = None
 
         self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
@@ -745,37 +750,186 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Folder selection cancelled.")
 
     def _go_to_grouping_step(self) -> None:
-        self.show_grouping_step()
-        if self.app_state.image_files_data:
-            self.app_controller.activate_grouping_preview()
+        self._request_workflow_transition("organize")
 
     def _go_to_easy_delete_step(self) -> None:
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
             return
-        self.show_easy_delete_step()
+        self._request_workflow_transition("easy_delete")
 
     def _go_to_fix_rotation_step(self) -> None:
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
             return
-        self.show_fix_rotation_step()
+        self._request_workflow_transition("fix_rotation")
 
     def _go_to_pick_best_step(self) -> None:
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
             return
-        self.show_pick_best_step()
+        self._request_workflow_transition("pick_best")
 
     def _go_to_cull_step(self) -> None:
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
             return
-        self.show_cull_step()
+        self._request_workflow_transition("cull")
+
+    def _show_workflow_destination(self, destination: str) -> None:
+        """Perform a trusted transition after the navigation guard resolves."""
+        if destination == "organize":
+            self.show_grouping_step()
+            if self.app_state.image_files_data:
+                self.app_controller.activate_grouping_preview()
+        elif destination == "easy_delete":
+            self.show_easy_delete_step()
+        elif destination == "fix_rotation":
+            self.show_fix_rotation_step()
+        elif destination == "pick_best":
+            self.show_pick_best_step()
+        elif destination == "cull":
+            self.show_cull_step()
+
+    def _collect_workflow_pending_state(self, source: str) -> WorkflowPendingState:
+        organize_actions: list[str] = []
+        organize_delete_paths: list[str] = []
+        organize_removed_folders: list[str] = []
+        if source == "organize" and self.grouping_step_widget.has_unsaved_grouping_edits():
+            organize_actions = self.grouping_step_widget.pending_grouping_action_lines()
+            (
+                organize_delete_paths,
+                organize_removed_folders,
+            ) = self.grouping_step_widget.pending_grouping_deletion_paths(
+                organize_actions
+            )
+        rotations: dict[str, int] = {}
+        if source == "fix_rotation" and self.fix_rotation_step_widget is not None:
+            rotations = self.fix_rotation_step_widget.pending_rotations()
+        return WorkflowPendingState(
+            organize_actions=organize_actions,
+            organize_delete_paths=organize_delete_paths,
+            organize_removed_folders=organize_removed_folders,
+            rotation_count=len(rotations),
+            trash_paths=self.app_state.get_marked_files(),
+        )
+
+    def _request_workflow_transition(self, destination: str) -> None:
+        source = self.app_state.workflow_step
+        if source == destination:
+            self.update_workflow_navigation()
+            return
+        if (
+            self.worker_manager.is_grouping_workflow_running()
+            or self.worker_manager.is_rotation_application_running()
+        ):
+            self.statusBar().showMessage(
+                "Files are still being changed. Wait for the operation to finish before switching.",
+                4000,
+            )
+            self.update_workflow_navigation()
+            return
+
+        pending = self._collect_workflow_pending_state(source)
+        if not pending.has_resolvable_work:
+            if self.app_controller.is_workflow_analysis_running(source):
+                self.app_controller.cancel_workflow_analysis(source)
+            self._show_workflow_destination(destination)
+            return
+
+        choices = self.dialog_manager.show_workflow_transition_dialog(
+            WORKFLOW_STEP_LABELS.get(source, source.title()),
+            WORKFLOW_STEP_LABELS.get(destination, destination.title()),
+            pending,
+        )
+        if choices is None:
+            self.update_workflow_navigation()
+            return
+
+        if self.app_controller.is_workflow_analysis_running(source):
+            self.app_controller.cancel_workflow_analysis(source)
+        request = WorkflowTransitionRequest(
+            source=source,
+            destination=destination,
+            organize_resolution=choices.get("organize"),
+            rotation_resolution=choices.get("rotation"),
+            trash_resolution=choices.get("trash"),
+        )
+
+        if request.organize_resolution == "discard":
+            self.grouping_step_widget.discard_unsaved_grouping_edits()
+        if request.rotation_resolution == "discard" and self.fix_rotation_step_widget:
+            self.fix_rotation_step_widget.discard_pending_rotations()
+
+        if request.organize_resolution == "apply":
+            self._pending_workflow_transition = request
+            self._handle_grouping_create_requested(
+                self.grouping_step_widget.current_mode(),
+                self.grouping_step_widget.get_group_name_overrides(),
+                self.grouping_step_widget.get_effective_plan(),
+            )
+            return
+        if request.rotation_resolution == "apply" and self.fix_rotation_step_widget:
+            self._pending_workflow_transition = request
+            self.fix_rotation_step_widget.apply_pending_rotations()
+            return
+        self._finish_workflow_transition(request)
+
+    def _reset_deletion_workflow_decisions(self) -> None:
+        if self.easy_delete_step_widget is not None:
+            self.easy_delete_step_widget.discard_pending_decisions()
+        if self.pick_best_step_widget is not None:
+            self.pick_best_step_widget.discard_pending_decisions()
+        self._refresh_workflow_deletion_state()
+
+    def _finish_workflow_transition(
+        self, request: WorkflowTransitionRequest | None = None
+    ) -> bool:
+        request = request or self._pending_workflow_transition
+        if request is None:
+            return False
+        if request.trash_resolution == "commit":
+            marked = self.app_state.get_marked_files()
+            if marked and not self._perform_deletion_of_marked_files(marked):
+                self._pending_workflow_transition = None
+                self.statusBar().showMessage(
+                    "Some marked files could not be moved to Trash. Resolve them before switching.",
+                    5000,
+                )
+                return False
+            self._reset_deletion_workflow_decisions()
+        elif request.trash_resolution == "clear":
+            if self.app_state.get_marked_files():
+                self._clear_all_deletion_marks()
+            self._reset_deletion_workflow_decisions()
+        self._pending_workflow_transition = None
+        self._show_workflow_destination(request.destination)
+        return True
+
+    def resume_workflow_transition_after_reload(self) -> None:
+        """Continue an Organize-triggered transition after its folder rescan."""
+        if self._pending_workflow_transition is not None:
+            self._finish_workflow_transition()
+
+    def finish_workflow_transition_after_rotations(
+        self, successful: int, failed: int
+    ) -> None:
+        if self._pending_workflow_transition is None:
+            return
+        if failed:
+            self._pending_workflow_transition = None
+            self.statusBar().showMessage(
+                f"{failed} rotation(s) failed. Resolve them before switching.", 5000
+            )
+            return
+        self._finish_workflow_transition()
+
+    def cancel_pending_workflow_transition(self) -> None:
+        self._pending_workflow_transition = None
 
     def _toggle_thumbnail_view(self, checked):
         self._rebuild_model_view()
@@ -1252,8 +1406,12 @@ class MainWindow(QMainWindow):
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
             )
-            widget.skip_requested.connect(self.show_fix_rotation_step)
-            widget.proceed_to_pick_best_requested.connect(self.show_fix_rotation_step)
+            widget.skip_requested.connect(
+                lambda: self._request_workflow_transition("fix_rotation")
+            )
+            widget.proceed_to_pick_best_requested.connect(
+                lambda: self._request_workflow_transition("fix_rotation")
+            )
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
@@ -1272,8 +1430,12 @@ class MainWindow(QMainWindow):
             from ui.fix_rotation_step_widget import FixRotationStepWidget
 
             widget = FixRotationStepWidget(self)
-            widget.skip_requested.connect(self.show_pick_best_step)
-            widget.proceed_requested.connect(self.show_pick_best_step)
+            widget.skip_requested.connect(
+                lambda: self._request_workflow_transition("pick_best")
+            )
+            widget.proceed_requested.connect(
+                lambda: self._request_workflow_transition("pick_best")
+            )
             widget.apply_rotations_requested.connect(
                 self.app_controller.start_fix_rotation_apply
             )
@@ -1298,8 +1460,12 @@ class MainWindow(QMainWindow):
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
             )
-            widget.skip_requested.connect(self.show_cull_step)
-            widget.proceed_to_cull_requested.connect(self.show_cull_step)
+            widget.skip_requested.connect(
+                lambda: self._request_workflow_transition("cull")
+            )
+            widget.proceed_to_cull_requested.connect(
+                lambda: self._request_workflow_transition("cull")
+            )
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
@@ -1428,19 +1594,34 @@ class MainWindow(QMainWindow):
                 widget.refresh_deletion_state()
 
     def _toggle_organize_deletion_marks(self, paths: list[str]) -> None:
+        existing_paths = [
+            path
+            for path in dict.fromkeys(paths)
+            if os.path.isfile(path) or os.path.isdir(path)
+        ]
+        contains_directory = any(os.path.isdir(path) for path in existing_paths)
         toggled = 0
-        for path in dict.fromkeys(paths):
-            if not os.path.isfile(path):
-                continue
-            self.deletion_controller.toggle_mark(path)
-            toggled += 1
+        if contains_directory:
+            should_unmark = all(
+                self.app_state.is_marked_for_deletion(path) for path in existing_paths
+            )
+            for path in existing_paths:
+                if should_unmark:
+                    self.deletion_controller.unmark(path)
+                else:
+                    self.deletion_controller.mark(path)
+                toggled += 1
+        else:
+            for path in existing_paths:
+                self.deletion_controller.toggle_mark(path)
+                toggled += 1
         if not toggled:
-            self.statusBar().showMessage("No files are available to mark.", 3000)
+            self.statusBar().showMessage("No files or folders are available to mark.", 3000)
             return
         self.proxy_model.invalidate()
         self._refresh_visible_items_icons()
         self._refresh_workflow_deletion_state()
-        self.statusBar().showMessage(f"Toggled Trash mark for {toggled} file(s).", 4000)
+        self.statusBar().showMessage(f"Toggled Trash mark for {toggled} item(s).", 4000)
 
     def _trash_from_organize(
         self, target_path: str, represented_paths: list[str]
@@ -4202,30 +4383,66 @@ class MainWindow(QMainWindow):
         """Performs the actual deletion of marked files, updating the view in-place."""
         active_view = self._get_active_file_view()
         if not active_view:
-            return
+            return False
 
         # --- Pre-computation for next selection ---
         visible_paths_before = self._get_all_visible_image_paths()
         logger.debug(f"Visible paths before deletion: {visible_paths_before}")
         logger.debug(f"Marked files for deletion: {marked_files}")
 
+        def is_within(path: str, directory: str) -> bool:
+            try:
+                return os.path.normcase(
+                    os.path.commonpath([os.path.normpath(path), os.path.normpath(directory)])
+                ) == os.path.normcase(os.path.normpath(directory))
+            except ValueError, OSError:
+                return False
+
+        directory_targets = [path for path in marked_files if os.path.isdir(path)]
+        effective_targets = [
+            path
+            for path in marked_files
+            if not any(
+                path != directory and is_within(path, directory)
+                for directory in directory_targets
+            )
+        ]
+
         # --- Delete files and update model ---
         deleted_count = 0
         successfully_deleted: list[str] = []
-        for file_path in marked_files:
+        resolved_marks: set[str] = set()
+        for file_path in effective_targets:
+            is_directory_target = os.path.isdir(file_path)
+            represented_paths = [file_path]
+            if is_directory_target:
+                represented_paths = [
+                    item.get("path")
+                    for item in self.app_state.image_files_data
+                    if item.get("path") and is_within(item["path"], file_path)
+                ]
             try:
                 success, message = self.app_controller.move_to_trash(file_path)
                 if not success:
                     raise RuntimeError(message)
-                self.app_state.remove_data_for_path(file_path)
+                for represented_path in represented_paths:
+                    self.app_state.remove_data_for_path(represented_path)
                 deleted_count += 1
-                successfully_deleted.append(file_path)
+                successfully_deleted.extend(represented_paths)
+                resolved_marks.update(
+                    marked
+                    for marked in marked_files
+                    if marked == file_path
+                    or (is_directory_target and is_within(marked, file_path))
+                )
                 logger.info(f"Moved file to trash: {os.path.basename(file_path)}")
             except Exception as e:
                 logger.error(f"Error moving marked file '{file_path}' to trash: {e}")
 
-        for file_path in successfully_deleted:
+        successfully_deleted = list(dict.fromkeys(successfully_deleted))
+        for file_path in resolved_marks:
             self.app_state.unmark_for_deletion(file_path)
+        for file_path in successfully_deleted:
             self.image_pipeline.invalidate_path(file_path)
         if successfully_deleted:
             self.thumbnail_loader.invalidate_paths(successfully_deleted)
@@ -4342,6 +4559,7 @@ class MainWindow(QMainWindow):
             self._refresh_workflow_deletion_state()
 
         logger.info(f"Completed committing {deleted_count} deletions")
+        return len(resolved_marks) == len(marked_files)
 
     def _commit_marked_deletions_without_confirmation(self):
         """Finds all marked files and moves them to trash without confirmation, updating the view in-place."""

@@ -150,6 +150,14 @@ class EasyDeleteStepWidget(QWidget):
         self._discard_stale_confirmations()
         self._refresh_controls()
 
+    def discard_pending_decisions(self) -> None:
+        """Forget local review confirmations after shared Trash marks are cleared."""
+        self._pending_delete_by_review.clear()
+        self._confirmed_reviews.clear()
+        self._marks_before_confirmation.clear()
+        if hasattr(self, "_items_list"):
+            self._refresh_controls()
+
     def _discard_stale_confirmations(self) -> None:
         if not self._is_marked_func:
             return

@@ -277,6 +277,14 @@ class PickBestStepWidget(QWidget):
                 card.set_marked(self._cluster_mark_state.get(card.path, False))
         self._update_cluster_header_only()
 
+    def discard_pending_decisions(self) -> None:
+        """Clear saved per-cluster marks so revisiting cannot stage them again."""
+        for cluster in self._clusters:
+            cluster.pop("_mark_state", None)
+        for cluster in self._shown_results.values() if self._shown_results else ():
+            cluster.pop("_mark_state", None)
+        self.refresh_deletion_state()
+
     def _create_widgets(self) -> None:
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
