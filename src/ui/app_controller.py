@@ -1430,15 +1430,23 @@ class AppController(QObject):
             AppController._sync_active_image(self, "easy_delete")
             return
 
-        if self.app_state.cluster_results:
+        image_paths = set(self._get_image_paths())
+        clustered_paths = set(self.app_state.cluster_results)
+        embedded_paths = set(getattr(self.app_state, "embeddings_cache", {}) or {})
+        duplicate_inputs_ready = bool(image_paths) and image_paths.issubset(
+            clustered_paths & embedded_paths
+        )
+
+        if duplicate_inputs_ready:
             self._start_easy_delete_detection()
         else:
             logger.info(
-                "Easy Delete: no cluster results yet, running similarity first."
+                "Easy Delete: similarity inputs are missing or incomplete; "
+                "running similarity first."
             )
             self._easy_delete_pending_after_similarity = True
             self.main_window.easy_delete_step_widget.show_loading(
-                "Step 1/2: Computing similarity clusters…", 0
+                "Step 1/2: Computing similarity embeddings and clusters…", 0
             )
             self.start_similarity_analysis()
 

@@ -113,6 +113,7 @@ class EasyDeleteStepWidget(QWidget):
         self._has_any_marked_func: Callable[[], bool] | None = None
         self._pending_delete_by_review: dict[str, str | None] = {}
         self._confirmed_reviews: set[str] = set()
+        self._marks_before_confirmation: dict[str, set[str]] = {}
         self._info_visible = False
         self._image_pipeline = None
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -163,6 +164,7 @@ class EasyDeleteStepWidget(QWidget):
             )
             if not matches_shared_state:
                 self._confirmed_reviews.discard(review_path)
+                self._marks_before_confirmation.pop(review_path, None)
 
     # ------------------------------------------------------------------
     # Public state-machine API
@@ -197,6 +199,7 @@ class EasyDeleteStepWidget(QWidget):
         if results != self._results:
             self._pending_delete_by_review.clear()
             self._confirmed_reviews.clear()
+            self._marks_before_confirmation.clear()
         self._shown_results = results
         self._results = results
         self._category_counts = self._build_category_counts(results)
@@ -652,6 +655,9 @@ class EasyDeleteStepWidget(QWidget):
         self._next_btn.setEnabled(self._current_index < total - 1)
 
         path = self._flagged_paths[self._current_index]
+        self._confirm_btn.setText(
+            "Cancel confirmation" if path in self._confirmed_reviews else "Confirm  →"
+        )
         self._decision_group.blockSignals(True)
         self._update_decision_presentation(path, self._results.get(path, {}))
         self._decision_group.blockSignals(False)
@@ -727,9 +733,18 @@ class EasyDeleteStepWidget(QWidget):
             return
         review_path = self._flagged_paths[self._current_index]
         entry = self._results.get(review_path, {})
-        selected_delete = self._pending_delete(review_path, entry)
         pair_path = entry.get("pair_path")
         candidates = [review_path] + ([pair_path] if pair_path else [])
+        if review_path in self._confirmed_reviews:
+            self._cancel_confirmation(review_path, candidates)
+            return
+
+        selected_delete = self._pending_delete(review_path, entry)
+        self._marks_before_confirmation[review_path] = {
+            candidate
+            for candidate in candidates
+            if self._is_marked_func and self._is_marked_func(candidate)
+        }
         to_mark = [
             candidate
             for candidate in candidates
@@ -762,6 +777,33 @@ class EasyDeleteStepWidget(QWidget):
         else:
             self._navigate_to(next_index)
 
+    def _cancel_confirmation(
+        self, review_path: str, candidates: list[str]
+    ) -> None:
+        """Undo a confirmed review and restore its prior shared deletion marks."""
+
+        prior_marks = self._marks_before_confirmation.pop(review_path, set())
+        to_mark = [
+            candidate
+            for candidate in candidates
+            if candidate in prior_marks
+            and self._is_marked_func
+            and not self._is_marked_func(candidate)
+        ]
+        to_unmark = [
+            candidate
+            for candidate in candidates
+            if candidate not in prior_marks
+            and self._is_marked_func
+            and self._is_marked_func(candidate)
+        ]
+        self._confirmed_reviews.discard(review_path)
+        if to_mark:
+            self.mark_for_deletion_requested.emit(to_mark)
+        if to_unmark:
+            self.unmark_for_deletion_requested.emit(to_unmark)
+        self._refresh_controls()
+
     def _on_apply_all(self) -> None:
         to_mark: list[str] = []
         to_unmark: list[str] = []
@@ -772,6 +814,12 @@ class EasyDeleteStepWidget(QWidget):
             )
             pair_path = entry.get("pair_path")
             candidates = [review_path] + ([pair_path] if pair_path else [])
+            if review_path not in self._confirmed_reviews:
+                self._marks_before_confirmation[review_path] = {
+                    candidate
+                    for candidate in candidates
+                    if self._is_marked_func and self._is_marked_func(candidate)
+                }
             for candidate in candidates:
                 is_marked = bool(
                     self._is_marked_func and self._is_marked_func(candidate)

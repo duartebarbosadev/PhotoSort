@@ -98,6 +98,44 @@ def test_easy_delete_requires_confirmation_before_staging_trash():
     assert "MARKED FOR TRASH" in widget._pair_right_hdr.text()
 
 
+def test_easy_delete_enter_cancels_a_confirmed_pick_and_restores_prior_marks():
+    marks = {"/tmp/already-marked.jpg"}
+    review_path = "/tmp/review.jpg"
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
+    widget.unmark_for_deletion_requested.connect(
+        lambda paths: marks.difference_update(paths)
+    )
+    widget.show_results(
+        {
+            review_path: {
+                "type": "duplicate",
+                "pair_path": "/tmp/already-marked.jpg",
+                "suggest_delete": True,
+                "reason": "Suggested choice",
+            }
+        }
+    )
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["1"].activated.emit()
+    shortcuts["Return"].activated.emit()
+    _app.processEvents()
+
+    assert marks == {review_path}
+    assert widget._confirmed_reviews == {review_path}
+    assert widget._confirm_btn.text() == "Cancel confirmation"
+
+    shortcuts["Return"].activated.emit()
+    _app.processEvents()
+
+    assert marks == {"/tmp/already-marked.jpg"}
+    assert not widget._confirmed_reviews
+    assert widget._state_banner.title_label.text() == "Choose, then confirm"
+    assert widget._confirm_btn.text() == "Confirm  →"
+
+
 def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
     marks: set[str] = set()
     first = "/tmp/first.jpg"
