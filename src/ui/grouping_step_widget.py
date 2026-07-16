@@ -443,7 +443,6 @@ class GroupingStepWidget(QWidget):
     mode_changed = pyqtSignal(str)
     create_requested = pyqtSignal(str, dict, object)
     back_requested = pyqtSignal()
-    skip_requested = pyqtSignal()
     select_folder_requested = pyqtSignal()
     toggle_deletion_marks_requested = pyqtSignal(list)
     commit_deletion_marks_requested = pyqtSignal()
@@ -473,6 +472,7 @@ class GroupingStepWidget(QWidget):
         self._is_marked_func: Callable[[str], bool] = lambda _path: False
         self._folder_validation_request_id = 0
         self._folder_validation_pool = QThreadPool.globalInstance()
+        self._busy = False
 
         self._before_root_item: QTreeWidgetItem | None = None
         self._after_root_item: QTreeWidgetItem | None = None
@@ -573,18 +573,11 @@ class GroupingStepWidget(QWidget):
         self._depth_debounce = QTimer(self)
         self._depth_debounce.setSingleShot(True)
 
-        self.stats_label = QLabel()
-        self.stats_label.setObjectName("groupingSummaryBadge")
-        self.stats_label.setVisible(False)
-
-        self.skip_button = QPushButton("Continue without organizing")
-        self.skip_button.setObjectName("groupingGhostButton")
-        self.skip_button.setEnabled(False)
-
         self.primary_button = QPushButton("Review, then Apply")
         self.primary_button.setObjectName("groupingPrimaryButton")
         self.primary_button.setMinimumHeight(34)
         self.primary_button.setEnabled(False)
+        self.primary_button.setVisible(False)
 
         self.empty_state_frame = QFrame()
         self.empty_state_frame.setObjectName("groupingEmptyState")
@@ -724,7 +717,6 @@ class GroupingStepWidget(QWidget):
         self.output_root_label = QLabel()
         self.output_root_label.setVisible(False)
         self.preview_label = self.loading_label
-        self.preview_stats_label = self.stats_label
         self.preview_image_label = self.large_preview_view
 
     def _create_layout(self) -> None:
@@ -746,11 +738,7 @@ class GroupingStepWidget(QWidget):
             tb.addWidget(self._mode_buttons[value])
         tb.addWidget(self._location_depth_widget)
         tb.addSpacing(10)
-        tb.addWidget(self.stats_label)
         tb.addStretch(1)
-        tb.addWidget(self.skip_button)
-        tb.addSpacing(6)
-        tb.addWidget(self.primary_button)
         root.addWidget(self.top_bar)
         self._add_hsep(root, "groupingBarSep")
 
@@ -853,6 +841,7 @@ class GroupingStepWidget(QWidget):
         loading_col.addWidget(self.loading_label)
         loading_col.addWidget(self.loading_bar)
         bb.addLayout(loading_col)
+        bb.addWidget(self.primary_button)
 
         root.addWidget(self.bottom_bar)
 
@@ -867,7 +856,6 @@ class GroupingStepWidget(QWidget):
         self._mode_button_group.buttonClicked.connect(self._emit_mode_changed)
         self.primary_button.clicked.connect(self._emit_create_requested)
         self.back_button.clicked.connect(self.back_requested.emit)
-        self.skip_button.clicked.connect(self.skip_requested.emit)
         self.folder_button.clicked.connect(self.select_folder_requested.emit)
         self._empty_cta.clicked.connect(self.select_folder_requested.emit)
         self.preview_tree.currentItemChanged.connect(self._handle_after_item_changed)
@@ -1062,12 +1050,12 @@ class GroupingStepWidget(QWidget):
             self.after_desc.setText(text)
 
     def set_busy(self, busy: bool) -> None:
-        self.primary_button.setEnabled(not busy and self._current_plan is not None)
+        self._busy = busy
+        self._update_primary_action_state()
         for btn in self._mode_buttons.values():
             btn.setEnabled(not busy and self.has_source_folder())
         for btn in self._location_depth_buttons.values():
             btn.setEnabled(not busy and self.has_source_folder())
-        self.skip_button.setEnabled(not busy and self.has_source_folder())
         self.folder_button.setEnabled(not busy)
         self.back_button.setEnabled(not busy)
         self.primary_button.setText("Applying…" if busy else "Review, then Apply")
@@ -1171,8 +1159,6 @@ class GroupingStepWidget(QWidget):
 
         for btn in self._mode_buttons.values():
             btn.setEnabled(has_folder)
-        self.skip_button.setEnabled(has_folder)
-        self.primary_button.setEnabled(has_folder and self._current_plan is not None)
         if not has_folder:
             self._current_preview_source_path = None
             self.before_tree.clear()
@@ -1186,10 +1172,10 @@ class GroupingStepWidget(QWidget):
             self._original_group_labels_by_path = {}
             self._original_group_labels_by_group_id = {}
             self._sticky_empty_group_ids.clear()
-            self.stats_label.setVisible(False)
             self.loading_label.setText("Select a folder to start.")
             self.loading_bar.setVisible(False)
             self._clear_selected_preview()
+        self._update_primary_action_state()
 
     def has_source_folder(self) -> bool:
         return self.folder_path_label.text() != "No folder selected"
@@ -1378,20 +1364,52 @@ class GroupingStepWidget(QWidget):
         )
 
     def _update_stats(self) -> None:
-        group_count = len(self._editable_groups)
-        group_label = "folder" if group_count == 1 else "folders"
-        removal_count = sum(
-            1 for path in self._all_source_paths() if self._is_marked_func(path)
-        )
-        removal_label = "mark" if removal_count == 1 else "marks"
-        self.stats_label.setText(
-            f"{group_count} {group_label}  ·  {removal_count} Trash {removal_label}"
-        )
-        self.stats_label.setVisible(True)
         self.loading_label.clear()
         self.loading_bar.setVisible(False)
-        self.primary_button.setEnabled(
-            self.has_source_folder() and self._current_plan is not None
+        self._update_primary_action_state()
+
+    def _update_primary_action_state(self) -> None:
+        has_actions = self._has_pending_grouping_actions()
+        self.primary_button.setVisible(self._busy or has_actions)
+        self.primary_button.setEnabled(not self._busy and has_actions)
+
+    def _has_pending_grouping_actions(self) -> bool:
+        """Return whether applying the effective plan would mutate the filesystem."""
+        if self._current_plan is None or not self.has_source_folder():
+            return False
+
+        plan = self.get_effective_plan()
+        if plan.deleted_paths:
+            return True
+
+        output_root = self._current_output_root or self._source_root or ""
+        for group in plan.groups:
+            destination_dir = os.path.join(
+                output_root,
+                self._normalize_relative_path(group.group_label),
+            )
+            for source_path in group.source_paths:
+                destination_path = os.path.join(
+                    destination_dir,
+                    plan.filename_for_path(source_path),
+                )
+                if os.path.normcase(os.path.normpath(source_path)) != os.path.normcase(
+                    os.path.normpath(destination_path)
+                ):
+                    return True
+
+        unassigned_dir = os.path.join(output_root, "Unassigned")
+        return any(
+            os.path.normcase(os.path.normpath(source_path))
+            != os.path.normcase(
+                os.path.normpath(
+                    os.path.join(
+                        unassigned_dir,
+                        plan.filename_for_path(source_path),
+                    )
+                )
+            )
+            for source_path in plan.unassigned_paths
         )
 
     def _capture_selection_state(self) -> dict[str, object]:
@@ -3682,26 +3700,59 @@ class GroupingStepWidget(QWidget):
         source_root = self._source_root or ""
         if not source_root or not os.path.isdir(source_root):
             return []
-        moving_set = set()
+        normalized_source_root = os.path.normcase(os.path.normpath(source_root))
+        moving_set: set[str] = set()
+        candidate_dirs: dict[str, str] = {}
         for path in moving_paths:
             if path and os.path.exists(path):
-                moving_set.add(os.path.normcase(os.path.normpath(path)))
+                normalized_path = os.path.normcase(os.path.normpath(path))
+                moving_set.add(normalized_path)
+                current_dir = os.path.dirname(os.path.normpath(path))
+                while current_dir:
+                    normalized_dir = os.path.normcase(os.path.normpath(current_dir))
+                    if normalized_dir == normalized_source_root:
+                        break
+                    try:
+                        common_root = os.path.normcase(
+                            os.path.normpath(
+                                os.path.commonpath([source_root, current_dir])
+                            )
+                        )
+                        within_source = common_root == normalized_source_root
+                    except ValueError:
+                        within_source = False
+                    if not within_source:
+                        break
+                    candidate_dirs[normalized_dir] = current_dir
+                    parent_dir = os.path.dirname(current_dir)
+                    if parent_dir == current_dir:
+                        break
+                    current_dir = parent_dir
+
+        if not candidate_dirs:
+            return []
+
         removable_dirs: set[str] = set()
         removable_dirs_by_key: dict[str, str] = {}
-        normalized_source_root = os.path.normcase(os.path.normpath(source_root))
-        for current_root, dirnames, filenames in os.walk(source_root, topdown=False):
-            normalized_current = os.path.normcase(os.path.normpath(current_root))
-            if normalized_current == normalized_source_root:
+        ordered_candidates = sorted(
+            candidate_dirs.items(),
+            key=lambda item: item[1].count(os.sep),
+            reverse=True,
+        )
+        for normalized_current, current_root in ordered_candidates:
+            try:
+                entries = list(os.scandir(current_root))
+            except OSError:
                 continue
             remaining_files = any(
-                os.path.normcase(os.path.normpath(os.path.join(current_root, filename)))
-                not in moving_set
-                for filename in filenames
+                os.path.normcase(os.path.normpath(entry.path)) not in moving_set
+                for entry in entries
+                if not entry.is_dir(follow_symlinks=False)
             )
             remaining_children = any(
-                os.path.normcase(os.path.normpath(os.path.join(current_root, dirname)))
-                not in removable_dirs
-                for dirname in dirnames
+                os.path.normcase(os.path.normpath(entry.path)) not in removable_dirs
+                for entry in entries
+                if entry.is_dir(follow_symlinks=False)
             )
             if not remaining_files and not remaining_children:
                 removable_dirs.add(normalized_current)

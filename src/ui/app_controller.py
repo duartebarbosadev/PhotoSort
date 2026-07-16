@@ -510,7 +510,7 @@ class AppController(QObject):
             return
         plan, output_root = pending
         self.main_window.grouping_step_widget.set_preview_plan(plan, output_root)
-        self.main_window.grouping_step_widget.set_loading_state("Preview ready", False)
+        self.main_window.grouping_step_widget.set_loading_state("", False)
         self.main_window.notify_thumbnail_items_rebuilt()
 
     def start_grouping_workflow(
@@ -552,15 +552,6 @@ class AppController(QObject):
             location_depth=self.main_window.grouping_step_widget.get_location_depth(),
             move_companions=get_companion_files_preference() == "always",
         )
-
-    def skip_grouping_to_cull(self):
-        if not self.app_state.image_files_data:
-            self.main_window.statusBar().showMessage("Select a folder first.", 3000)
-            return
-        self.main_window.grouping_step_widget.set_loading_state(
-            "Grouping skipped", False
-        )
-        self.main_window.show_cull_step()
 
     def start_blur_detection_analysis(self):
         logger.info("Starting blur detection analysis.")
@@ -1270,7 +1261,7 @@ class AppController(QObject):
             return
         self._pending_grouping_preview = None
         self.main_window.grouping_step_widget.set_preview_plan(plan, output_root)
-        self.main_window.grouping_step_widget.set_loading_state("Preview ready", False)
+        self.main_window.grouping_step_widget.set_loading_state("", False)
         self.main_window.notify_thumbnail_items_rebuilt()
 
     def handle_grouping_preview_error(self, message: str):

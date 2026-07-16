@@ -184,7 +184,9 @@ def test_organize_top_bar_returns_to_a_single_control_row():
     _app.processEvents()
 
     assert organize.top_bar.height() == 52
-    assert organize.primary_button.geometry().bottom() <= organize.top_bar.height()
+    assert not hasattr(organize, "stats_label")
+    assert organize.primary_button.parentWidget() is organize.bottom_bar
+    assert not hasattr(organize, "skip_button")
 
 
 def test_workflow_footer_navigation_is_centered_in_the_window(monkeypatch):

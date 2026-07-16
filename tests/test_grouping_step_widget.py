@@ -107,6 +107,47 @@ def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
     ]
 
 
+def test_grouping_apply_button_is_hidden_until_plan_has_real_changes(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    (beach_dir / "a.jpg").write_bytes(b"preview")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    assert widget.primary_button.isHidden()
+    assert not widget.primary_button.isEnabled()
+
+    after_item = widget._after_file_items_by_path[first]
+    after_item.setText(0, "renamed.jpg")
+    widget._handle_preview_item_changed(after_item, 0)
+
+    assert not widget.primary_button.isHidden()
+    assert widget.primary_button.isEnabled()
+
+    restored_item = widget._after_file_items_by_path[first]
+    restored_item.setText(0, "a.jpg")
+    widget._handle_preview_item_changed(restored_item, 0)
+
+    assert widget.primary_button.isHidden()
+    assert not widget.primary_button.isEnabled()
+
+
 def test_unchanged_grouping_edit_check_does_not_build_filesystem_action_preview(
     tmp_path, monkeypatch
 ):
@@ -1125,6 +1166,7 @@ def test_grouping_step_widget_builds_collision_aware_action_list(tmp_path):
     second_dir = source_root / "B"
     first_dir.mkdir(parents=True)
     second_dir.mkdir(parents=True)
+    (source_root / "Untouched empty folder").mkdir()
     first = str(first_dir / "same.jpg")
     second = str(second_dir / "same.jpg")
     (first_dir / "same.jpg").write_bytes(b"a")
@@ -1160,6 +1202,40 @@ def test_grouping_step_widget_builds_collision_aware_action_list(tmp_path):
         "Remove empty folder A",
         "Remove empty folder B",
     }
+
+
+def test_grouping_apply_ignores_preexisting_empty_folders_without_changes(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    untouched_empty_folder = source_root / "Folder"
+    untouched_empty_folder.mkdir()
+    photo = source_root / "photo.jpg"
+    photo.write_bytes(b"photo")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="",
+                    source_paths=[str(photo)],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    action_lines = widget._build_action_lines(widget.get_effective_plan())
+
+    assert action_lines == []
+    assert untouched_empty_folder.is_dir()
 
 
 def test_grouping_step_widget_selects_original_items_for_renamed_entries(tmp_path):

@@ -682,7 +682,6 @@ class MainWindow(QMainWindow):
         self.grouping_step_widget.back_requested.connect(
             self._return_to_grouping_source
         )
-        self.grouping_step_widget.skip_requested.connect(self._skip_grouping_step)
         self.grouping_step_widget.select_folder_requested.connect(
             self._open_folder_dialog
         )
@@ -737,9 +736,6 @@ class MainWindow(QMainWindow):
             self.app_controller.load_folder(folder_path)
         else:
             self.statusBar().showMessage("Folder selection cancelled.")
-
-    def _skip_grouping_step(self) -> None:
-        self.app_controller.skip_grouping_to_cull()
 
     def _go_to_grouping_step(self) -> None:
         self.show_grouping_step()
