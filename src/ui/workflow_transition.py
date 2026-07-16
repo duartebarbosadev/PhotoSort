@@ -19,7 +19,7 @@ class WorkflowPendingState:
 @dataclass(slots=True)
 class WorkflowTransitionRequest:
     source: str
-    destination: str
+    destination: str | None
     organize_resolution: str | None = None
     rotation_resolution: str | None = None
     trash_resolution: str | None = None

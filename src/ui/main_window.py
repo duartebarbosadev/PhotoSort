@@ -215,6 +215,9 @@ class MainWindow(QMainWindow):
         self.grouping_step_widget.set_is_marked_func(
             self.app_state.is_marked_for_deletion
         )
+        self.grouping_step_widget.set_has_any_marked_func(
+            lambda: bool(self.app_state.marked_for_deletion)
+        )
         self.thumbnail_loader = ViewportThumbnailLoader(self, self)
 
         # At this point _create_widgets() built file_system_model + proxy_model and wired it;
@@ -688,8 +691,8 @@ class MainWindow(QMainWindow):
                 path, source="organize"
             )
         )
-        self.grouping_step_widget.create_requested.connect(
-            self._handle_grouping_create_requested
+        self.grouping_step_widget.apply_requested.connect(
+            self._request_workflow_resolution
         )
         self.grouping_step_widget.back_requested.connect(
             self._return_to_grouping_source
@@ -818,9 +821,10 @@ class MainWindow(QMainWindow):
             trash_paths=self.app_state.get_marked_files(),
         )
 
-    def _request_workflow_transition(self, destination: str) -> None:
+    def _request_workflow_transition(self, destination: str | None) -> None:
         source = self.app_state.workflow_step
-        if source == destination:
+        switching = destination is not None
+        if switching and source == destination:
             self.update_workflow_navigation()
             return
         if (
@@ -836,21 +840,29 @@ class MainWindow(QMainWindow):
 
         pending = self._collect_workflow_pending_state(source)
         if not pending.has_resolvable_work:
-            if self.app_controller.is_workflow_analysis_running(source):
+            if switching and self.app_controller.is_workflow_analysis_running(source):
                 self.app_controller.cancel_workflow_analysis(source)
-            self._show_workflow_destination(destination)
+            if destination is not None:
+                self._show_workflow_destination(destination)
+            else:
+                self.statusBar().showMessage("No pending changes to apply.", 3000)
             return
 
         choices = self.dialog_manager.show_workflow_transition_dialog(
             WORKFLOW_STEP_LABELS.get(source, source.title()),
-            WORKFLOW_STEP_LABELS.get(destination, destination.title()),
+            (
+                WORKFLOW_STEP_LABELS.get(destination, destination.title())
+                if destination is not None
+                else WORKFLOW_STEP_LABELS.get(source, source.title())
+            ),
             pending,
+            switching=switching,
         )
         if choices is None:
             self.update_workflow_navigation()
             return
 
-        if self.app_controller.is_workflow_analysis_running(source):
+        if switching and self.app_controller.is_workflow_analysis_running(source):
             self.app_controller.cancel_workflow_analysis(source)
         request = WorkflowTransitionRequest(
             source=source,
@@ -867,10 +879,12 @@ class MainWindow(QMainWindow):
 
         if request.organize_resolution == "apply":
             self._pending_workflow_transition = request
+            plan = self.grouping_step_widget.get_effective_plan()
+            self.grouping_step_widget.prepare_plan_for_apply(plan)
             self._handle_grouping_create_requested(
                 self.grouping_step_widget.current_mode(),
                 self.grouping_step_widget.get_group_name_overrides(),
-                self.grouping_step_widget.get_effective_plan(),
+                plan,
             )
             return
         if request.rotation_resolution == "apply" and self.fix_rotation_step_widget:
@@ -878,6 +892,10 @@ class MainWindow(QMainWindow):
             self.fix_rotation_step_widget.apply_pending_rotations()
             return
         self._finish_workflow_transition(request)
+
+    def _request_workflow_resolution(self) -> None:
+        """Resolve pending work without leaving the current workflow."""
+        self._request_workflow_transition(None)
 
     def _reset_deletion_workflow_decisions(self) -> None:
         if self.easy_delete_step_widget is not None:
@@ -907,7 +925,10 @@ class MainWindow(QMainWindow):
                 self._clear_all_deletion_marks()
             self._reset_deletion_workflow_decisions()
         self._pending_workflow_transition = None
-        self._show_workflow_destination(request.destination)
+        if request.destination is not None:
+            self._show_workflow_destination(request.destination)
+        else:
+            self.update_workflow_navigation()
         return True
 
     def resume_workflow_transition_after_reload(self) -> None:
@@ -1409,9 +1430,7 @@ class MainWindow(QMainWindow):
             widget.skip_requested.connect(
                 lambda: self._request_workflow_transition("fix_rotation")
             )
-            widget.proceed_to_pick_best_requested.connect(
-                lambda: self._request_workflow_transition("fix_rotation")
-            )
+            widget.apply_requested.connect(self._request_workflow_resolution)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion

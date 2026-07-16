@@ -69,6 +69,43 @@ def test_stay_here_preserves_pending_work_and_running_analysis():
     window.update_workflow_navigation.assert_called_once()
 
 
+def test_apply_resolves_pending_work_without_switching_workflow():
+    controller = SimpleNamespace(
+        is_workflow_analysis_running=lambda _workflow: True,
+        cancel_workflow_analysis=Mock(),
+    )
+    dialog = Mock(return_value={"trash": "commit"})
+    pending = SimpleNamespace(
+        has_resolvable_work=True,
+        organize_actions=[],
+        rotation_count=0,
+        trash_paths=["/tmp/a.jpg"],
+    )
+    window = SimpleNamespace(
+        app_state=SimpleNamespace(workflow_step="easy_delete"),
+        worker_manager=_worker_manager(),
+        app_controller=controller,
+        dialog_manager=SimpleNamespace(show_workflow_transition_dialog=dialog),
+        _collect_workflow_pending_state=lambda _source: pending,
+        grouping_step_widget=SimpleNamespace(),
+        fix_rotation_step_widget=None,
+        _finish_workflow_transition=Mock(return_value=True),
+    )
+
+    MainWindow._request_workflow_transition(window, None)
+
+    request = window._finish_workflow_transition.call_args.args[0]
+    assert request.destination is None
+    assert request.trash_resolution == "commit"
+    dialog.assert_called_once_with(
+        "Easy Delete",
+        "Easy Delete",
+        pending,
+        switching=False,
+    )
+    controller.cancel_workflow_analysis.assert_not_called()
+
+
 def test_combined_discard_and_clear_resolves_every_category_before_switch():
     grouping = SimpleNamespace(discard_unsaved_grouping_edits=Mock())
     window = SimpleNamespace(
@@ -171,6 +208,27 @@ def test_failed_trash_move_prevents_destination_switch():
     window._reset_deletion_workflow_decisions.assert_not_called()
 
 
+def test_successful_in_place_resolution_does_not_open_another_workflow():
+    state = SimpleNamespace(get_marked_files=lambda: ["/tmp/a.jpg"])
+    window = SimpleNamespace(
+        _pending_workflow_transition=None,
+        app_state=state,
+        _perform_deletion_of_marked_files=Mock(return_value=True),
+        _reset_deletion_workflow_decisions=Mock(),
+        _show_workflow_destination=Mock(),
+        update_workflow_navigation=Mock(),
+    )
+    request = WorkflowTransitionRequest(
+        source="easy_delete", destination=None, trash_resolution="commit"
+    )
+
+    assert MainWindow._finish_workflow_transition(window, request) is True
+    window._perform_deletion_of_marked_files.assert_called_once_with(["/tmp/a.jpg"])
+    window._reset_deletion_workflow_decisions.assert_called_once()
+    window._show_workflow_destination.assert_not_called()
+    window.update_workflow_navigation.assert_called_once()
+
+
 def test_cancelled_workflow_discards_late_analysis_results():
     worker = SimpleNamespace(
         stop_easy_delete_analysis=Mock(),
@@ -241,6 +299,37 @@ def test_transition_dialog_shows_marked_photo_gallery_and_direct_actions():
         "move_text": "Move to Trash and Switch",
     }
     assert result == {"trash": "clear"}
+
+
+def test_in_place_resolution_dialog_does_not_offer_switch_actions():
+    parent = QWidget()
+    parent.image_pipeline = SimpleNamespace(
+        get_cached_thumbnail_qpixmap=lambda *_args, **_kwargs: QPixmap()
+    )
+    manager = DialogManager(parent)
+    observed = {}
+
+    def interact():
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QDialog)
+        observed["stay_text"] = dialog.findChild(
+            QPushButton, "workflowTransitionStayButton"
+        ).text()
+        observed["move_text"] = dialog.findChild(
+            QPushButton, "workflowTransitionTrashButton"
+        ).text()
+        dialog.findChild(QPushButton, "workflowTransitionTrashButton").click()
+
+    QTimer.singleShot(0, interact)
+    result = manager.show_workflow_transition_dialog(
+        "Easy Delete",
+        "Easy Delete",
+        WorkflowPendingState(trash_paths=["/tmp/a.jpg"]),
+        switching=False,
+    )
+
+    assert observed == {"stay_text": "Keep Reviewing", "move_text": "Move to Trash"}
+    assert result == {"trash": "commit"}
 
 
 def test_deletion_preview_expands_folders_and_shows_non_media_files(tmp_path):

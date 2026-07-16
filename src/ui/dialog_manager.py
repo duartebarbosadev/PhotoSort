@@ -101,8 +101,10 @@ class DialogManager:
         source_label: str,
         destination_label: str,
         pending: WorkflowPendingState,
+        *,
+        switching: bool = True,
     ) -> dict[str, str] | None:
-        """Resolve every pending category before a workflow transition."""
+        """Resolve every pending category, optionally before switching workflow."""
         deletion_entries = self._build_deletion_preview_entries(pending)
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Resolve Pending Work")
@@ -130,10 +132,17 @@ class DialogManager:
         body = QVBoxLayout(content)
         body.setContentsMargins(28, 22, 28, 20)
         body.setSpacing(12)
-        intro = QLabel(
-            f"Before switching from {source_label} to {destination_label}, review "
-            "the pending work below. Nothing will change until you confirm."
-        )
+        if switching:
+            intro_text = (
+                f"Before switching from {source_label} to {destination_label}, review "
+                "the pending work below. Nothing will change until you confirm."
+            )
+        else:
+            intro_text = (
+                f"Review the pending work from {source_label} below. "
+                "Nothing will change until you confirm."
+            )
+        intro = QLabel(intro_text)
         intro.setObjectName("workflowTransitionIntro")
         intro.setWordWrap(True)
         body.addWidget(intro)
@@ -260,24 +269,30 @@ class DialogManager:
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(22, 10, 22, 14)
         footer_layout.addStretch()
-        stay_button = QPushButton("Stay Here")
+        stay_button = QPushButton("Stay Here" if switching else "Keep Reviewing")
         stay_button.setObjectName("workflowTransitionStayButton")
         stay_button.setDefault(True)
         stay_button.clicked.connect(dialog.reject)
         footer_layout.addWidget(stay_button)
         if pending.trash_paths:
-            clear_button = QPushButton("Clear Marks and Switch")
+            clear_button = QPushButton(
+                "Clear Marks and Switch" if switching else "Clear Marks"
+            )
             clear_button.setObjectName("workflowTransitionClearButton")
             clear_button.clicked.connect(lambda: accept_resolutions("clear"))
             footer_layout.addWidget(clear_button)
             action_buttons.append(clear_button)
-            trash_button = QPushButton("Move to Trash and Switch")
+            trash_button = QPushButton(
+                "Move to Trash and Switch" if switching else "Move to Trash"
+            )
             trash_button.setObjectName("workflowTransitionTrashButton")
             trash_button.clicked.connect(lambda: accept_resolutions("commit"))
             footer_layout.addWidget(trash_button)
             action_buttons.append(trash_button)
         else:
-            resolve_button = QPushButton("Apply Choice and Switch")
+            resolve_button = QPushButton(
+                "Apply Choice and Switch" if switching else "Apply Choice"
+            )
             resolve_button.setObjectName("workflowTransitionResolveButton")
             resolve_button.clicked.connect(lambda: accept_resolutions())
             footer_layout.addWidget(resolve_button)

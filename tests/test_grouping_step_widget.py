@@ -133,6 +133,22 @@ def test_grouping_apply_button_is_hidden_until_plan_has_real_changes(tmp_path):
     assert widget.primary_button.isHidden()
     assert not widget.primary_button.isEnabled()
 
+    marks = {first}
+    apply_requests: list[bool] = []
+    widget.apply_requested.connect(lambda: apply_requests.append(True))
+    widget.set_has_any_marked_func(lambda: bool(marks))
+
+    assert not widget.primary_button.isHidden()
+    assert widget.primary_button.isEnabled()
+    widget.primary_button.click()
+    assert apply_requests == [True]
+
+    marks.clear()
+    widget.refresh_deletion_state()
+
+    assert widget.primary_button.isHidden()
+    assert not widget.primary_button.isEnabled()
+
     after_item = widget._after_file_items_by_path[first]
     after_item.setText(0, "renamed.jpg")
     widget._handle_preview_item_changed(after_item, 0)
@@ -667,6 +683,7 @@ def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path):
 
     marks: set[str] = set()
     widget.set_is_marked_func(marks.__contains__)
+    widget.set_has_any_marked_func(lambda: bool(marks))
     widget._folder_validation_pool = SimpleNamespace(start=lambda task: task.run())
     widget.toggle_deletion_marks_requested.connect(marks.update)
     widget._delete_item(widget._after_group_items_by_id["1"])
@@ -675,6 +692,8 @@ def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path):
     assert widget.get_effective_plan().groups[0].source_paths == [first]
     assert widget.get_effective_plan().deleted_paths == []
     assert marks == {str(beach_dir), first}
+    assert not widget.primary_button.isHidden()
+    assert widget.primary_button.isEnabled()
     assert widget._after_file_items_by_path[first].text(0).endswith("(DELETED)")
     assert widget.pending_grouping_action_lines() == []
 

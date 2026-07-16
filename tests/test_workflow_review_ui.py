@@ -184,6 +184,50 @@ def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
     assert widget._confirmed_reviews == {first, second}
 
 
+def test_easy_delete_apply_all_only_uses_visible_categories():
+    duplicate = "/tmp/duplicate.jpg"
+    duplicate_keep = "/tmp/duplicate-keep.jpg"
+    blurry = "/tmp/blurry.jpg"
+    marks: set[str] = set()
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
+    widget.show_results(
+        {
+            duplicate: {
+                "type": "duplicate",
+                "pair_path": duplicate_keep,
+                "suggest_delete": True,
+            },
+            blurry: {
+                "type": "blur",
+                "pair_path": None,
+                "suggest_delete": True,
+            },
+        }
+    )
+
+    widget._category_checkboxes["blur"].setChecked(False)
+    widget._on_apply_all()
+
+    assert widget._apply_all_btn.text() == "Confirm All"
+    assert "currently visible categories" in widget._apply_all_btn.toolTip()
+    assert "review or revise" in widget._apply_all_btn.toolTip()
+    assert marks == {duplicate}
+    assert widget._confirmed_reviews == {duplicate}
+
+
+def test_easy_delete_apply_requests_resolution_without_naming_next_step():
+    widget = EasyDeleteStepWidget()
+    requests: list[bool] = []
+    widget.apply_requested.connect(lambda: requests.append(True))
+
+    widget._apply_btn.click()
+
+    assert widget._apply_btn.text() == "Apply"
+    assert requests == [True]
+
+
 def test_easy_delete_arrow_shortcuts_separate_choice_from_navigation():
     first = "/tmp/first.jpg"
     first_keep = "/tmp/first-keep.jpg"

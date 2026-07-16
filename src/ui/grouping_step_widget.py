@@ -49,7 +49,6 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSplitter,
@@ -78,11 +77,6 @@ from core.app_settings import (
     THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
 )
 from ui.advanced_image_viewer import ZoomableImageView
-from ui.dialog_components import (
-    build_dialog_footer,
-    build_dialog_header,
-    make_dialog_draggable,
-)
 from ui.workflow_review_components import (
     ORGANIZE_SHORTCUTS,
     install_workflow_shortcuts,
@@ -444,7 +438,7 @@ class DroppableGroupingTree(QTreeWidget):
 class GroupingStepWidget(QWidget):
     active_image_changed = pyqtSignal(str)
     mode_changed = pyqtSignal(str)
-    create_requested = pyqtSignal(str, dict, object)
+    apply_requested = pyqtSignal()
     back_requested = pyqtSignal()
     select_folder_requested = pyqtSignal()
     toggle_deletion_marks_requested = pyqtSignal(list)
@@ -474,6 +468,7 @@ class GroupingStepWidget(QWidget):
         self._drag_in_progress = False
         self._current_preview_source_path: str | None = None
         self._is_marked_func: Callable[[str], bool] = lambda _path: False
+        self._has_any_marked_func: Callable[[], bool] = lambda: False
         self._folder_validation_request_id = 0
         self._folder_validation_pool = QThreadPool.globalInstance()
         self._busy = False
@@ -858,7 +853,7 @@ class GroupingStepWidget(QWidget):
 
     def _connect_signals(self) -> None:
         self._mode_button_group.buttonClicked.connect(self._emit_mode_changed)
-        self.primary_button.clicked.connect(self._emit_create_requested)
+        self.primary_button.clicked.connect(self._emit_apply_requested)
         self.back_button.clicked.connect(self.back_requested.emit)
         self.folder_button.clicked.connect(self.select_folder_requested.emit)
         self._empty_cta.clicked.connect(self.select_folder_requested.emit)
@@ -930,7 +925,7 @@ class GroupingStepWidget(QWidget):
 
     def _shortcut_apply(self) -> None:
         if self.primary_button.isEnabled():
-            self._emit_create_requested()
+            self._emit_apply_requested()
 
     def _on_location_depth_changed(self) -> None:
         self._depth_debounce.start(600)
@@ -951,21 +946,15 @@ class GroupingStepWidget(QWidget):
                 return val
         return 3
 
-    def _emit_create_requested(self) -> None:
-        effective_plan = self.get_effective_plan()
-        if not self._confirm_grouping_actions(effective_plan):
-            return
-        all_source_paths = [
-            p
-            for g in (effective_plan.groups if effective_plan else [])
-            for p in g.source_paths
-        ] + (effective_plan.unassigned_paths if effective_plan else [])
-        self._check_and_handle_companion_preference(all_source_paths)
-        self.create_requested.emit(
-            self.current_mode(),
-            self.get_group_name_overrides(),
-            effective_plan,
-        )
+    def _emit_apply_requested(self) -> None:
+        self.apply_requested.emit()
+
+    def prepare_plan_for_apply(self, plan: GroupingPlan) -> None:
+        """Resolve companion-file handling before a shared workflow apply."""
+        source_paths = [
+            path for group in plan.groups for path in group.source_paths
+        ] + list(plan.unassigned_paths)
+        self._check_and_handle_companion_preference(source_paths)
 
     def _check_and_handle_companion_preference(self, source_paths) -> None:
         """Show dialog if companion files (.xmp / same-stem images) exist and preference not set."""
@@ -1071,6 +1060,11 @@ class GroupingStepWidget(QWidget):
         """Use the application-wide deletion state as Organize's source of truth."""
         self._is_marked_func = func
         self.refresh_deletion_state()
+
+    def set_has_any_marked_func(self, func: Callable[[], bool]) -> None:
+        """Use shared deletion state to expose Organize's Apply action."""
+        self._has_any_marked_func = func
+        self._update_primary_action_state()
 
     def refresh_deletion_state(self) -> None:
         """Refresh mark presentation without rebuilding either tree or its icons."""
@@ -1413,6 +1407,8 @@ class GroupingStepWidget(QWidget):
 
     def _has_pending_grouping_actions(self) -> bool:
         """Return whether applying the effective plan would mutate the filesystem."""
+        if self._has_any_marked_func():
+            return True
         if self._current_plan is None or not self.has_source_folder():
             return False
 
@@ -3593,76 +3589,6 @@ class GroupingStepWidget(QWidget):
             "Path Conflicts",
             preview,
         )
-
-    def _confirm_grouping_actions(self, plan: GroupingPlan) -> bool:
-        action_lines = self._build_action_lines(plan)
-        if not action_lines:
-            QMessageBox.information(
-                self,
-                "No Changes To Apply",
-                "There are no changes to apply in the current grouping plan.",
-            )
-            return False
-
-        move_count = sum(1 for ln in action_lines if ln.startswith("Move "))
-        rename_count = sum(1 for ln in action_lines if ln.startswith("Rename folder "))
-        delete_count = sum(1 for ln in action_lines if ln.startswith("Delete "))
-        remove_count = sum(
-            1 for ln in action_lines if ln.startswith("Remove empty folder ")
-        )
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Confirm Grouping Actions")
-        dialog.setObjectName("groupingConfirmDialog")
-        dialog.setModal(True)
-        dialog.setMinimumSize(620, 420)
-        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        make_dialog_draggable(dialog)
-
-        outer = QVBoxLayout(dialog)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        build_dialog_header("Confirm Changes", "📁", outer)
-
-        body = QVBoxLayout()
-        body.setContentsMargins(22, 16, 22, 10)
-        body.setSpacing(12)
-
-        parts: list[str] = []
-        if move_count:
-            parts.append(f"{move_count} file move(s)")
-        if rename_count:
-            parts.append(f"{rename_count} folder rename(s)")
-        if delete_count:
-            parts.append(f"{delete_count} deletion(s)")
-        if remove_count:
-            parts.append(f"{remove_count} empty folder removal(s)")
-        summary_text = "This will apply " + ", ".join(parts) + "."
-
-        summary = QLabel(summary_text)
-        summary.setObjectName("groupingConfirmMessage")
-        summary.setWordWrap(True)
-        body.addWidget(summary)
-
-        action_list = QPlainTextEdit()
-        action_list.setObjectName("groupingConfirmActionList")
-        action_list.setReadOnly(True)
-        action_list.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        action_list.setPlainText("\n".join(action_lines))
-        body.addWidget(action_list, 1)
-
-        outer.addLayout(body)
-
-        build_dialog_footer(
-            outer,
-            [
-                ("Cancel", "groupingConfirmCancelButton", dialog.reject, False),
-                ("Apply Changes", "groupingConfirmApplyButton", dialog.accept, True),
-            ],
-        )
-
-        return dialog.exec() == int(QDialog.DialogCode.Accepted)
 
     def _build_action_lines(self, plan: GroupingPlan) -> list[str]:
         lines: list[str] = []

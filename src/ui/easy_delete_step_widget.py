@@ -90,7 +90,7 @@ class _ScaledImageLabel(QLabel):
 class EasyDeleteStepWidget(QWidget):
     """Step 2: Review and mark obviously bad / duplicate images for deletion."""
 
-    proceed_to_pick_best_requested = pyqtSignal()
+    apply_requested = pyqtSignal()
     skip_requested = pyqtSignal()
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
@@ -855,8 +855,8 @@ class EasyDeleteStepWidget(QWidget):
         self._suggestion_label.hide()
         self._refresh_controls()
 
-    def _on_done(self) -> None:
-        self.proceed_to_pick_best_requested.emit()
+    def _on_apply(self) -> None:
+        self.apply_requested.emit()
 
     def _on_skip(self) -> None:
         self.skip_requested.emit()
@@ -1070,8 +1070,13 @@ class EasyDeleteStepWidget(QWidget):
         self._next_btn.setFixedWidth(70)
         self._next_btn.clicked.connect(self._on_next)
 
-        self._apply_all_btn = QPushButton("Apply suggestions to all visible")
+        self._apply_all_btn = QPushButton("Confirm All")
         self._apply_all_btn.setObjectName("workflowGhostButton")
+        self._apply_all_btn.setToolTip(
+            "Confirms suggestions only for currently visible categories. For example, "
+            "if Duplicates is enabled and Blurry is disabled, only duplicate "
+            "suggestions are confirmed. You can still review or revise them afterward."
+        )
         self._apply_all_btn.clicked.connect(self._on_apply_all)
 
         self._confirm_btn = QPushButton("Confirm  →")
@@ -1079,9 +1084,12 @@ class EasyDeleteStepWidget(QWidget):
         self._confirm_btn.setMinimumWidth(110)
         self._confirm_btn.clicked.connect(self._on_confirm)
 
-        self._done_btn = QPushButton("Continue to Fix Rotation")
-        self._done_btn.setObjectName("workflowPrimaryButton")
-        self._done_btn.clicked.connect(self._on_done)
+        self._apply_btn = QPushButton("Apply")
+        self._apply_btn.setObjectName("workflowPrimaryButton")
+        self._apply_btn.setToolTip(
+            "Review and apply pending changes without leaving Easy Delete."
+        )
+        self._apply_btn.clicked.connect(self._on_apply)
 
         action.addWidget(self._prev_btn)
         action.addWidget(self._counter_label)
@@ -1089,7 +1097,7 @@ class EasyDeleteStepWidget(QWidget):
         action.addStretch()
         action.addWidget(self._apply_all_btn)
         action.addWidget(self._confirm_btn)
-        action.addWidget(self._done_btn)
+        action.addWidget(self._apply_btn)
         right_layout.addLayout(action)
 
         splitter.addWidget(left)
@@ -1110,10 +1118,11 @@ class EasyDeleteStepWidget(QWidget):
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet("font-size: 16px; color: #66BB6A;")
 
-        btn = QPushButton("Continue to Fix Rotation →")
+        btn = QPushButton("Apply")
         btn.setObjectName("acceptButton")
         btn.setFixedWidth(230)
-        btn.clicked.connect(self._on_done)
+        btn.setToolTip("Review and apply pending changes without leaving Easy Delete.")
+        btn.clicked.connect(self._on_apply)
 
         layout.addWidget(lbl)
         layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
