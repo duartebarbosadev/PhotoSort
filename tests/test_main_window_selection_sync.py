@@ -61,6 +61,29 @@ def test_viewer_focus_sync_releases_guard_before_next_event_loop_turn():
     assert not context._is_syncing_selection
 
 
+def test_cull_active_focus_preserves_existing_multiselection():
+    path = "/tmp/focused.jpg"
+    proxy_index = Mock()
+    proxy_index.isValid.return_value = True
+    selection_model = Mock()
+    selection_model.selectedIndexes.return_value = [Mock(), Mock()]
+    active_view = Mock()
+    active_view.selectionModel.return_value = selection_model
+    context = SimpleNamespace(
+        app_state=SimpleNamespace(workflow_step="organize"),
+        _is_syncing_selection=False,
+        _get_active_file_view=Mock(return_value=active_view),
+        _find_proxy_index_for_path=Mock(return_value=proxy_index),
+    )
+
+    assert MainWindow.focus_image(context, path)
+
+    selection_model.select.assert_not_called()
+    selection_model.setCurrentIndex.assert_called_once()
+    active_view.scrollTo.assert_called_once()
+    assert not context._is_syncing_selection
+
+
 def test_multi_selection_uses_placeholders_and_one_background_request(tmp_path):
     paths = [str(tmp_path / "one.arw"), str(tmp_path / "two.arw")]
     for path in paths:

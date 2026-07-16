@@ -195,15 +195,18 @@ class PickBestStepWidget(QWidget):
     proceed_to_cull_requested = pyqtSignal()
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
+    active_image_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._clusters: list[PickBestClusterResult] = []
+        self._shown_results: PickBestResults | None = None
         self._cluster_index = 0
         self._subset_index = 0
         self._subset_paths: list[str] = []
         self._compare_cards: list[CompareCard] = []
         self._focused_slot_index = 0
+        self._syncing_active_image = False
         self._current_winner_path = ""
         self._current_all_paths: list[str] = []
         self._cluster_ordered_paths: list[str] = []
@@ -232,6 +235,13 @@ class PickBestStepWidget(QWidget):
         self._progress_bar.setValue(0)
 
     def show_results(self, results: PickBestResults) -> None:
+        if self._shown_results is not None and results == self._shown_results:
+            self.refresh_deletion_state()
+            if self._clusters:
+                self._stack.setCurrentWidget(self._page_review)
+                self.setFocus()
+            return
+        self._shown_results = results
         self._clusters = [r for r in results.values() if r.get("winner_path")]
         self._metadata_cache.clear()
         if not self._clusters:
@@ -467,7 +477,7 @@ class PickBestStepWidget(QWidget):
             },
         )
 
-    def _load_cluster(self, index: int) -> None:
+    def _load_cluster(self, index: int, *, publish_initial_marks: bool = True) -> None:
         if not self._clusters:
             return
 
@@ -511,7 +521,44 @@ class PickBestStepWidget(QWidget):
         self._update_cluster_ui(score_by_path, failure_reason_by_path)
         # The cards describe application-level staged state, so write their
         # initial recommendations to that shared source of truth immediately.
-        self._commit_current_cluster_marks()
+        if publish_initial_marks:
+            self._commit_current_cluster_marks()
+
+    def focus_image(self, path: str) -> bool:
+        """Open and focus the comparison containing path without changing decisions."""
+
+        cluster_index = next(
+            (
+                index
+                for index, cluster in enumerate(self._clusters)
+                if path in cluster.get("all_paths", [])
+            ),
+            None,
+        )
+        if cluster_index is None:
+            return False
+
+        self._syncing_active_image = True
+        try:
+            self._load_cluster(cluster_index, publish_initial_marks=False)
+            if path != self._current_winner_path:
+                non_winners = [
+                    candidate
+                    for candidate in self._cluster_ordered_paths
+                    if candidate != self._current_winner_path
+                ]
+                self._subset_index = non_winners.index(path) // 2
+                cluster = self._clusters[self._cluster_index]
+                score_map, failure_map = self._cluster_score_maps(cluster)
+                self._update_cluster_ui(score_map, failure_map)
+            if path in self._subset_paths:
+                self._focused_slot_index = self._subset_paths.index(path)
+                self._update_focus_state()
+                if self._focus_mode:
+                    self._sync_viewer.set_focused_viewer(self._focused_slot_index)
+        finally:
+            self._syncing_active_image = False
+        return True
 
     def _update_cluster_ui(
         self,
@@ -829,12 +876,14 @@ class PickBestStepWidget(QWidget):
             self._exit_focus_mode()
             self._commit_current_cluster_marks()
             self._load_cluster(self._cluster_index + 1)
+            self._publish_focused_path()
 
     def _prev_cluster(self) -> None:
         if self._cluster_index > 0:
             self._exit_focus_mode()
             self._commit_current_cluster_marks()
             self._load_cluster(self._cluster_index - 1)
+            self._publish_focused_path()
 
     def _next_subset(self) -> None:
         max_subset = self._subset_count() - 1
@@ -843,6 +892,7 @@ class PickBestStepWidget(QWidget):
             cluster = self._clusters[self._cluster_index]
             score_by_path, failure_reason_by_path = self._cluster_score_maps(cluster)
             self._update_cluster_ui(score_by_path, failure_reason_by_path)
+            self._publish_focused_path()
 
     def _prev_subset(self) -> None:
         if self._subset_index > 0:
@@ -850,6 +900,7 @@ class PickBestStepWidget(QWidget):
             cluster = self._clusters[self._cluster_index]
             score_by_path, failure_reason_by_path = self._cluster_score_maps(cluster)
             self._update_cluster_ui(score_by_path, failure_reason_by_path)
+            self._publish_focused_path()
 
     def _keep_visible(self) -> None:
         paths = self._visible_paths()
@@ -879,15 +930,17 @@ class PickBestStepWidget(QWidget):
             self.unmark_for_deletion_requested.emit([path])
 
     def _on_card_toggled(self, path: str, is_marked: bool) -> None:
+        self._publish_active_image(path)
         self._set_path_marked(path, is_marked)
         if is_marked:
             self.mark_for_deletion_requested.emit([path])
         else:
             self.unmark_for_deletion_requested.emit([path])
 
-    def _on_viewer_clicked(self, slot_index: int, _path: str) -> None:
+    def _on_viewer_clicked(self, slot_index: int, path: str) -> None:
         self._focused_slot_index = slot_index
         self._update_focus_state()
+        self._publish_active_image(path)
         self._toggle_slot(slot_index)
 
     def _on_viewer_mark(self, path: str) -> None:
@@ -919,10 +972,19 @@ class PickBestStepWidget(QWidget):
     def _activate_slot_shortcut(self, slot_index: int) -> None:
         self._focused_slot_index = slot_index
         self._update_focus_state()
+        self._publish_focused_path()
         if self._focus_mode:
             self._sync_viewer.set_focused_viewer(slot_index)
         else:
             self._toggle_slot(slot_index)
+
+    def _publish_focused_path(self) -> None:
+        if 0 <= self._focused_slot_index < len(self._subset_paths):
+            self._publish_active_image(self._subset_paths[self._focused_slot_index])
+
+    def _publish_active_image(self, path: str) -> None:
+        if path and not self._syncing_active_image:
+            self.active_image_changed.emit(path)
 
     def _exit_focus_mode(self) -> None:
         """Reset to compare mode (flag + hint). No-op if already in compare mode."""

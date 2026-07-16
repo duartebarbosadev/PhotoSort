@@ -41,14 +41,32 @@ def test_assignment_removal_and_rename_keep_index_consistent():
         {"path": "old.jpg", "media_type": "image", "file_size": 42}
     ]
     state.mark_for_deletion("old.jpg")
+    state.focused_image_path = "old.jpg"
+    state.easy_delete_results = {
+        "other.jpg": {"pair_path": "old.jpg"},
+    }
+    state.fix_rotation_results = {"old.jpg": 90}
+    state.pick_best_results = {
+        1: {
+            "winner_path": "old.jpg",
+            "all_paths": ["old.jpg", "other.jpg"],
+            "ranked": [{"path": "old.jpg"}],
+            "failed": [],
+        }
+    }
 
     state.update_path("old.jpg", "new.jpg")
     assert state.get_file_data_by_path("old.jpg") is None
     assert state.get_file_data_by_path("new.jpg")["path"] == "new.jpg"
     assert not state.is_marked_for_deletion("old.jpg")
     assert state.is_marked_for_deletion("new.jpg")
+    assert state.focused_image_path == "new.jpg"
+    assert state.easy_delete_results["other.jpg"]["pair_path"] == "new.jpg"
+    assert state.fix_rotation_results == {"new.jpg": 90}
+    assert state.pick_best_results[1]["winner_path"] == "new.jpg"
 
     state.remove_data_for_path("new.jpg")
     assert state.get_file_data_by_path("new.jpg") is None
     assert not state.is_marked_for_deletion("new.jpg")
+    assert state.focused_image_path is None
     assert state.media_summary() == MediaSummary()

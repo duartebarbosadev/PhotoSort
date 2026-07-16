@@ -192,6 +192,8 @@ class AppState:
 
         self.ai_rating_results.pop(file_path, None)
         self.marked_for_deletion.discard(file_path)
+        if self.focused_image_path == file_path:
+            self.focused_image_path = None
 
         logger.debug(
             f"Removed data for {os.path.basename(file_path)}: "
@@ -249,6 +251,33 @@ class AppState:
 
         if self.focused_image_path == old_path:
             self.focused_image_path = new_path
+        if self.easy_delete_results is not None:
+            easy_entry = self.easy_delete_results.pop(old_path, None)
+            if easy_entry is not None:
+                self.easy_delete_results[new_path] = easy_entry
+            for entry in self.easy_delete_results.values():
+                if entry.get("pair_path") == old_path:
+                    entry["pair_path"] = new_path
+        if self.fix_rotation_results is not None and old_path in self.fix_rotation_results:
+            self.fix_rotation_results[new_path] = self.fix_rotation_results.pop(old_path)
+        for cluster in self.pick_best_results.values():
+            if cluster.get("winner_path") == old_path:
+                cluster["winner_path"] = new_path
+            cluster["all_paths"] = [
+                new_path if path == old_path else path
+                for path in cluster.get("all_paths", [])
+            ]
+            for collection_name in ("ranked", "failed"):
+                for entry in cluster.get(collection_name, []):
+                    if entry.get("path") == old_path:
+                        entry["path"] = new_path
+            mark_state = cluster.get("_mark_state")
+            if isinstance(mark_state, dict) and old_path in mark_state:
+                mark_state[new_path] = mark_state.pop(old_path)
+        if old_path in self.pick_best_winners_by_path:
+            self.pick_best_winners_by_path[new_path] = self.pick_best_winners_by_path.pop(
+                old_path
+            )
         if old_path in self.marked_for_deletion:
             self.marked_for_deletion.discard(old_path)
             self.marked_for_deletion.add(new_path)

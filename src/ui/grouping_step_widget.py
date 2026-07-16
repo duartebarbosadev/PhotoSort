@@ -10,6 +10,7 @@ from typing import override
 from PyQt6.QtCore import (
     QEvent,
     QObject,
+    QItemSelectionModel,
     QPoint,
     QRunnable,
     QSize,
@@ -440,6 +441,7 @@ class DroppableGroupingTree(QTreeWidget):
 
 
 class GroupingStepWidget(QWidget):
+    active_image_changed = pyqtSignal(str)
     mode_changed = pyqtSignal(str)
     create_requested = pyqtSignal(str, dict, object)
     back_requested = pyqtSignal()
@@ -467,6 +469,7 @@ class GroupingStepWidget(QWidget):
         self._supported_items: int = 0
         self._ignore_preview_item_change = False
         self._syncing_tree_selection = False
+        self._syncing_active_image = False
         self._drag_in_progress = False
         self._current_preview_source_path: str | None = None
         self._is_marked_func: Callable[[str], bool] = lambda _path: False
@@ -2186,6 +2189,8 @@ class GroupingStepWidget(QWidget):
         if source_path:
             self._update_selected_preview(source_path)
             self._sync_selection_to_other_tree(current, from_after=True)
+            if not self._syncing_active_image:
+                self.active_image_changed.emit(source_path)
         elif current is not None:
             self._update_folder_preview(current)
             self._sync_selection_to_other_tree(current, from_after=True)
@@ -2199,6 +2204,8 @@ class GroupingStepWidget(QWidget):
         if source_path:
             self._update_selected_preview(source_path)
             self._sync_selection_to_other_tree(current, from_after=False)
+            if not self._syncing_active_image:
+                self.active_image_changed.emit(source_path)
         elif current is not None:
             self._update_folder_preview(current)
             self._sync_selection_to_other_tree(current, from_after=False)
@@ -2556,6 +2563,42 @@ class GroupingStepWidget(QWidget):
             self.before_tree.setCurrentItem(before_item)
             before_item.setSelected(True)
             self.before_tree.scrollToItem(before_item)
+
+    def focus_image(self, source_path: str) -> bool:
+        """Focus and highlight a file without clearing other selected files."""
+
+        after_item = self._after_file_items_by_path.get(source_path)
+        before_item = self._before_file_items_by_path.get(source_path)
+        if after_item is None and before_item is None:
+            return False
+
+        self._syncing_active_image = True
+        self.before_tree.blockSignals(True)
+        self.preview_tree.blockSignals(True)
+        try:
+            if after_item is not None:
+                self.preview_tree.setCurrentItem(
+                    after_item,
+                    0,
+                    QItemSelectionModel.SelectionFlag.NoUpdate,
+                )
+                after_item.setSelected(True)
+                self.preview_tree.scrollToItem(after_item)
+            if before_item is not None:
+                self.before_tree.setCurrentItem(
+                    before_item,
+                    0,
+                    QItemSelectionModel.SelectionFlag.NoUpdate,
+                )
+                before_item.setSelected(True)
+                self.before_tree.scrollToItem(before_item)
+            self._update_selected_preview(source_path)
+            self.large_preview_view.fit_in_view()
+        finally:
+            self.preview_tree.blockSignals(False)
+            self.before_tree.blockSignals(False)
+            self._syncing_active_image = False
+        return True
 
     def _show_before_context_menu(self, position: QPoint) -> None:
         item = self.before_tree.itemAt(position)

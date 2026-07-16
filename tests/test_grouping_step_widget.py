@@ -853,6 +853,45 @@ def test_grouping_step_widget_syncs_selection_between_trees(tmp_path):
     assert after_item.isSelected()
 
 
+def test_grouping_active_focus_highlights_item_and_preserves_multiselection(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+    second = str(source_root / "Beach" / "b.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=2,
+            supported_items=2,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[first, second],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    first_item = widget._after_file_items_by_path[first]
+    second_item = widget._after_file_items_by_path[second]
+    widget.preview_tree.clearSelection()
+    first_item.setSelected(True)
+    widget.large_preview_view.fit_in_view = Mock()
+
+    assert widget.focus_image(second)
+
+    assert widget.preview_tree.currentItem() is second_item
+    assert first_item.isSelected()
+    assert second_item.isSelected()
+    widget.large_preview_view.fit_in_view.assert_called_once_with()
+
+
 def test_grouping_step_widget_syncs_folder_selection_between_trees(tmp_path):
     source_root = tmp_path / "demo"
     source_root.mkdir()

@@ -135,6 +135,9 @@ class WorkflowDecisionCard(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._focused = False
+        self._border_color = "#3A4654"
+        self._background = "#20252C"
 
         self._content_layout = QVBoxLayout(self)
         self._content_layout.setContentsMargins(12, 10, 12, 10)
@@ -225,11 +228,23 @@ class WorkflowDecisionCard(QFrame):
             f"font-size: 11px; font-weight: bold; color: {state_color};"
         )
         self._hint_label.setText(hint)
+        self._border_color = border_color
+        self._background = background
+        self._apply_card_style()
+
+    def set_focused(self, focused: bool) -> None:
+        if self._focused == focused:
+            return
+        self._focused = focused
+        self._apply_card_style()
+
+    def _apply_card_style(self) -> None:
+        border_width = 4 if self._focused else 2
         self.setStyleSheet(
             f"WorkflowDecisionCard, QFrame#workflowCompareCard {{"
-            f"border: 2px solid {border_color};"
+            f"border: {border_width}px solid {self._border_color};"
             "border-radius: 10px;"
-            f"background: {background};"
+            f"background: {self._background};"
             "}"
         )
 

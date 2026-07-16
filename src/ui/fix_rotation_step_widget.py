@@ -87,6 +87,7 @@ class FixRotationStepWidget(QWidget):
     """Step 3: Detect and fix wrongly-rotated images before culling."""
 
     apply_rotations_requested = pyqtSignal(dict)  # {path: angle_degrees}
+    active_image_changed = pyqtSignal(str)
     proceed_requested = pyqtSignal()
     skip_requested = pyqtSignal()
     retry_requested = pyqtSignal()
@@ -94,9 +95,11 @@ class FixRotationStepWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._suggestions: dict[str, int] = {}  # path -> suggested angle
+        self._shown_suggestions: dict[str, int] | None = None
         self._marked: dict[str, bool] = {}  # path -> True if marked for rotation
         self._ordered_paths: list[str] = []
         self._current_index: int = -1
+        self._syncing_active_image = False
         self._image_pipeline = None
         self._applying = False
         self._submitted_paths: set[str] = set()
@@ -166,6 +169,19 @@ class FixRotationStepWidget(QWidget):
         self._content_stack.setCurrentIndex(0)
 
     def show_results(self, suggestions: dict[str, int]) -> None:
+        if (
+            self._shown_suggestions is not None
+            and suggestions == self._shown_suggestions
+        ):
+            if self._ordered_paths:
+                self._content_stack.setCurrentIndex(1)
+                self._show_current()
+                self._refresh_controls()
+            else:
+                self._content_stack.setCurrentIndex(2)
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
+        self._shown_suggestions = suggestions
         self._suggestions = dict(suggestions)
         # Pre-mark all suggestions for rotation
         self._marked = dict.fromkeys(suggestions, True)
@@ -179,7 +195,11 @@ class FixRotationStepWidget(QWidget):
         if self._ordered_paths:
             self._populate_list()
             self._content_stack.setCurrentIndex(1)
-            self._navigate_to(0)
+            self._syncing_active_image = True
+            try:
+                self._navigate_to(0)
+            finally:
+                self._syncing_active_image = False
             self.setFocus(Qt.FocusReason.OtherFocusReason)
         else:
             self._configure_empty_state(
@@ -310,6 +330,22 @@ class FixRotationStepWidget(QWidget):
 
         self._show_current()
         self._refresh_controls()
+        if not self._syncing_active_image:
+            self.active_image_changed.emit(self._ordered_paths[index])
+
+    def focus_image(self, path: str) -> bool:
+        """Navigate to a rotation suggestion without modifying its queued state."""
+
+        try:
+            index = self._ordered_paths.index(path)
+        except ValueError:
+            return False
+        self._syncing_active_image = True
+        try:
+            self._navigate_to(index)
+        finally:
+            self._syncing_active_image = False
+        return True
 
     def _show_current(self) -> None:
         if self._current_index < 0 or self._current_index >= len(self._ordered_paths):
@@ -423,9 +459,7 @@ class FixRotationStepWidget(QWidget):
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         row = self._items_list.row(item)
         if row != self._current_index:
-            self._current_index = row
-            self._show_current()
-            self._refresh_controls()
+            self._navigate_to(row)
 
     def _on_prev(self) -> None:
         self._navigate_to(self._current_index - 1)

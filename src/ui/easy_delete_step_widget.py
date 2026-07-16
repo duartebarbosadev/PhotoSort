@@ -95,12 +95,16 @@ class EasyDeleteStepWidget(QWidget):
     skip_requested = pyqtSignal()
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
+    active_image_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._results: dict[str, dict] = {}
+        self._shown_results: dict[str, dict] | None = None
         self._flagged_paths: list[str] = []
         self._current_index: int = -1
+        self._focused_path: str | None = None
+        self._syncing_active_image = False
         self._category_counts: dict[str, int] = {}
         self._enabled_categories: dict[str, bool] = {}
         self._category_checkboxes: dict[str, QCheckBox] = {}
@@ -180,9 +184,20 @@ class EasyDeleteStepWidget(QWidget):
         self._content_stack.setCurrentIndex(0)
 
     def show_results(self, results: dict[str, dict]) -> None:
+        if self._shown_results is not None and results == self._shown_results:
+            self.refresh_deletion_state()
+            if self._flagged_paths:
+                self._content_stack.setCurrentIndex(1)
+                self._show_current()
+                self._refresh_controls()
+            else:
+                self._content_stack.setCurrentIndex(2)
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
         if results != self._results:
             self._pending_delete_by_review.clear()
             self._confirmed_reviews.clear()
+        self._shown_results = results
         self._results = results
         self._category_counts = self._build_category_counts(results)
         self._enabled_categories = {
@@ -206,7 +221,11 @@ class EasyDeleteStepWidget(QWidget):
         if self._flagged_paths:
             self._populate_list()
             self._content_stack.setCurrentIndex(1)
-            self._navigate_to(0)
+            self._syncing_active_image = True
+            try:
+                self._navigate_to(0)
+            finally:
+                self._syncing_active_image = False
             self.setFocus(Qt.FocusReason.OtherFocusReason)
         else:
             self._content_stack.setCurrentIndex(2)
@@ -341,6 +360,10 @@ class EasyDeleteStepWidget(QWidget):
             return
         index = max(0, min(index, len(self._flagged_paths) - 1))
         self._current_index = index
+        review_path = self._flagged_paths[index]
+        pair_path = self._results.get(review_path, {}).get("pair_path")
+        if self._focused_path not in {review_path, pair_path}:
+            self._focused_path = review_path
 
         self._items_list.blockSignals(True)
         self._items_list.setCurrentRow(index)
@@ -348,6 +371,24 @@ class EasyDeleteStepWidget(QWidget):
 
         self._show_current()
         self._refresh_controls()
+        if not self._syncing_active_image and self._focused_path:
+            self.active_image_changed.emit(self._focused_path)
+
+    def focus_image(self, path: str) -> bool:
+        """Navigate to a matching review or duplicate side without changing decisions."""
+
+        for index, review_path in enumerate(self._flagged_paths):
+            pair_path = self._results.get(review_path, {}).get("pair_path")
+            if path not in {review_path, pair_path}:
+                continue
+            self._focused_path = path
+            self._syncing_active_image = True
+            try:
+                self._navigate_to(index)
+            finally:
+                self._syncing_active_image = False
+            return True
+        return False
 
     def _show_current(self) -> None:
         if self._current_index < 0 or self._current_index >= len(self._flagged_paths):
@@ -447,6 +488,8 @@ class EasyDeleteStepWidget(QWidget):
                 confirmed=confirmed,
                 slot=2,
             )
+            self._pair_left_card.set_focused(self._focused_path == path)
+            self._pair_right_card.set_focused(self._focused_path == pair_path)
             self._keep_btn.setText("Trash left")
             self._mark_btn.setText("Trash right")
             self._set_button_role(self._keep_btn, "workflowDecisionTrash")
@@ -464,6 +507,7 @@ class EasyDeleteStepWidget(QWidget):
                 confirmed=confirmed,
                 slot=1,
             )
+            self._single_card.set_focused(self._focused_path == path)
             self._keep_btn.setText("Keep")
             self._mark_btn.setText("Trash")
             self._set_button_role(self._keep_btn, "workflowDecisionKeep")
@@ -628,9 +672,7 @@ class EasyDeleteStepWidget(QWidget):
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         row = self._items_list.row(item)
         if row != self._current_index:
-            self._current_index = row
-            self._show_current()
-            self._refresh_controls()
+            self._navigate_to(row)
 
     def _on_prev(self) -> None:
         self._navigate_to(self._current_index - 1)
@@ -645,19 +687,27 @@ class EasyDeleteStepWidget(QWidget):
         entry = self._results.get(path, {})
         pair_path = entry.get("pair_path")
         if not pair_path:
+            self._publish_active_image(path)
             self._select_current_delete(path if side == 1 else None)
             return
+        self._publish_active_image(path if side == 0 else pair_path)
         self._select_current_delete(path if side == 0 else pair_path)
 
     def _toggle_single_choice(self) -> None:
         if self._current_index < 0 or not self._flagged_paths:
             return
         review_path = self._flagged_paths[self._current_index]
+        self._publish_active_image(review_path)
         entry = self._results.get(review_path, {})
         selected_delete = self._pending_delete(review_path, entry)
         self._select_current_delete(
             None if selected_delete == review_path else review_path
         )
+
+    def _publish_active_image(self, path: str) -> None:
+        self._focused_path = path
+        if not self._syncing_active_image:
+            self.active_image_changed.emit(path)
 
     def _toggle_info(self) -> None:
         self._info_visible = not self._info_visible

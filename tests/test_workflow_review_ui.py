@@ -338,6 +338,98 @@ def test_pick_best_stages_initial_recommendations_in_shared_state():
     )
 
 
+def test_easy_delete_focuses_exact_duplicate_without_changing_decision():
+    left = "/tmp/left.jpg"
+    right = "/tmp/right.jpg"
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            left: {
+                "type": "duplicate",
+                "pair_path": right,
+                "suggest_delete": True,
+                "reason": "Similar",
+            }
+        }
+    )
+    pending_before = dict(widget._pending_delete_by_review)
+
+    assert widget.focus_image(right)
+
+    assert widget._focused_path == right
+    assert widget._pair_right_card._focused
+    assert widget._pending_delete_by_review == pending_before
+
+
+def test_easy_delete_reentry_keeps_position_when_active_image_is_not_flagged():
+    first = "/tmp/first.jpg"
+    second = "/tmp/second.jpg"
+    results = {
+        first: {
+            "type": "blur",
+            "pair_path": None,
+            "suggest_delete": True,
+            "reason": "Blurry",
+        },
+        second: {
+            "type": "dark",
+            "pair_path": None,
+            "suggest_delete": True,
+            "reason": "Dark",
+        },
+    }
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(results)
+    assert widget.focus_image(second)
+
+    widget.show_results(results)
+    assert not widget.focus_image("/tmp/not-flagged.jpg")
+
+    assert widget._flagged_paths[widget._current_index] == second
+
+
+def test_fix_rotation_focus_does_not_change_queued_state():
+    first = "/tmp/first.jpg"
+    second = "/tmp/second.jpg"
+    widget = FixRotationStepWidget()
+    widget.show_results({first: 90, second: -90})
+    marked_before = dict(widget._marked)
+
+    assert widget.focus_image(second)
+
+    assert widget._ordered_paths[widget._current_index] == second
+    assert widget._marked == marked_before
+
+
+def test_pick_best_focus_finds_challenger_subset_without_changing_marks():
+    challengers = [f"/tmp/challenger-{index}.jpg" for index in range(3)]
+    winner = "/tmp/winner.jpg"
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            1: {
+                "winner_path": winner,
+                "ranked": [
+                    {"path": path, "final_score": 0.8 - index * 0.1}
+                    for index, path in enumerate([winner, *challengers])
+                ],
+                "failed": [],
+                "all_paths": [*challengers, winner],
+            }
+        }
+    )
+    marks_before = dict(widget._cluster_mark_state)
+
+    assert widget.focus_image(challengers[2])
+
+    assert challengers[2] in widget._subset_paths
+    assert widget._subset_paths[widget._focused_slot_index] == challengers[2]
+    assert widget._cluster_mark_state == marks_before
+
+
 def test_visible_shortcut_specs_are_the_installed_source_of_truth():
     widgets_and_specs = (
         (GroupingStepWidget(), ORGANIZE_SHORTCUTS),

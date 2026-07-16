@@ -96,6 +96,7 @@ from ui.controllers.metadata_controller import MetadataController
 from ui.controllers.cache_controller import CacheController
 from ui.controllers.status_controller import StatusController
 from ui.controllers.preview_load_controller import PreviewLoadController
+from ui.controllers.active_image_controller import ActiveImageController
 from ui.thumbnail_load_coordinator import ViewportThumbnailLoader
 from ui.models.media_filter_proxy import (
     MediaFilterProxyModel,
@@ -173,6 +174,7 @@ class MainWindow(QMainWindow):
         # Navigation & selection controllers use this MainWindow as context
         self.navigation_controller = NavigationController(self)
         self.selection_controller = SelectionController(self)
+        self.active_image_controller = ActiveImageController(self)
         self.filter_controller = FilterController(self)
         self.similarity_controller = SimilarityController(self)
         self.metadata_controller = MetadataController(self)
@@ -676,6 +678,11 @@ class MainWindow(QMainWindow):
         self.grouping_step_widget.mode_changed.connect(
             self._handle_grouping_mode_changed
         )
+        self.grouping_step_widget.active_image_changed.connect(
+            lambda path: self.active_image_controller.publish(
+                path, source="organize"
+            )
+        )
         self.grouping_step_widget.create_requested.connect(
             self._handle_grouping_create_requested
         )
@@ -1106,6 +1113,65 @@ class MainWindow(QMainWindow):
             thumbnail_loader.model_rebuilt()
 
     # --- Controller adapter helpers (SimilarityContext / PreviewContext / MetadataContext) ---
+    def _publish_active_image(
+        self, file_path: str | None, *, source: str | None = None
+    ) -> None:
+        controller = getattr(self, "active_image_controller", None)
+        if controller is not None:
+            controller.publish(file_path, source=source)
+        else:
+            self.app_state.focused_image_path = file_path
+
+    def get_active_image_adapter(self, workflow_step: str):
+        """Return an initialized path-focus adapter for a workflow."""
+
+        if workflow_step == "organize":
+            return self.grouping_step_widget
+        if workflow_step == "easy_delete":
+            return self.easy_delete_step_widget
+        if workflow_step == "fix_rotation":
+            return self.fix_rotation_step_widget
+        if workflow_step == "pick_best":
+            return self.pick_best_step_widget
+        if workflow_step == "cull":
+            return self
+        return None
+
+    def focus_image(self, file_path: str) -> bool:
+        """Focus a Cull row without replacing an existing local multi-selection."""
+
+        active_view = self._get_active_file_view()
+        if active_view is None:
+            return False
+        proxy_index = self._find_proxy_index_for_path(file_path)
+        if not proxy_index.isValid():
+            return False
+
+        selection_model = active_view.selectionModel()
+        if selection_model is None:
+            return False
+        self._is_syncing_selection = True
+        try:
+            if not selection_model.selectedIndexes():
+                selection_model.select(
+                    proxy_index,
+                    QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                )
+            selection_model.setCurrentIndex(
+                proxy_index,
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
+            active_view.scrollTo(
+                proxy_index, QAbstractItemView.ScrollHint.PositionAtCenter
+            )
+            active_view.viewport().update()
+        finally:
+            self._is_syncing_selection = False
+
+        if self.app_state.workflow_step == "cull":
+            self._handle_file_selection_changed(override_selected_paths=[file_path])
+        return True
+
     def status_message(self, msg: str, timeout: int = 3000) -> None:
         self.statusBar().showMessage(msg, timeout)
 
@@ -1164,6 +1230,7 @@ class MainWindow(QMainWindow):
             != self.app_state.grouping_source_root
         )
         self.update_workflow_navigation()
+        self.active_image_controller.sync_workflow("organize")
 
     def show_cull_step(self) -> None:
         self.reset_preview_requests()
@@ -1174,6 +1241,7 @@ class MainWindow(QMainWindow):
         self._ensure_cull_model_ready()
         self.schedule_visible_thumbnail_load()
         self.update_workflow_navigation()
+        self.active_image_controller.sync_workflow("cull")
 
     def _ensure_easy_delete_widget(self):
         if self.easy_delete_step_widget is None:
@@ -1190,6 +1258,11 @@ class MainWindow(QMainWindow):
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
             )
+            widget.active_image_changed.connect(
+                lambda path: self.active_image_controller.publish(
+                    path, source="easy_delete"
+                )
+            )
             self.easy_delete_page_layout.addWidget(widget)
             self.easy_delete_step_widget = widget
         return self.easy_delete_step_widget
@@ -1203,6 +1276,11 @@ class MainWindow(QMainWindow):
             widget.proceed_requested.connect(self.show_pick_best_step)
             widget.apply_rotations_requested.connect(
                 self.app_controller.start_fix_rotation_apply
+            )
+            widget.active_image_changed.connect(
+                lambda path: self.active_image_controller.publish(
+                    path, source="fix_rotation"
+                )
             )
             widget.retry_requested.connect(
                 self.app_controller.start_fix_rotation_workflow
@@ -1226,6 +1304,11 @@ class MainWindow(QMainWindow):
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
             )
+            widget.active_image_changed.connect(
+                lambda path: self.active_image_controller.publish(
+                    path, source="pick_best"
+                )
+            )
             self.pick_best_page_layout.addWidget(widget)
             self.pick_best_step_widget = widget
         return self.pick_best_step_widget
@@ -1241,6 +1324,7 @@ class MainWindow(QMainWindow):
         self.update_workflow_navigation()
         if self.app_state.easy_delete_results is not None:
             widget.show_results(self.app_state.easy_delete_results)
+            self.active_image_controller.sync_workflow("easy_delete")
             return
         self.app_controller.start_easy_delete_workflow()
 
@@ -1253,6 +1337,7 @@ class MainWindow(QMainWindow):
         widget.set_image_pipeline(self.image_pipeline)
         self.workflow_stack.setCurrentWidget(self.fix_rotation_page)
         self.update_workflow_navigation()
+        self.active_image_controller.sync_workflow("fix_rotation")
         self.app_controller.start_fix_rotation_workflow()
 
     def show_pick_best_step(self) -> None:
@@ -1265,7 +1350,9 @@ class MainWindow(QMainWindow):
             action.setEnabled(False)
         self.update_workflow_navigation()
         if self.app_state.pick_best_results:
+            widget.show_results(self.app_state.pick_best_results)
             widget.refresh_deletion_state()
+            self.active_image_controller.sync_workflow("pick_best")
             return
         self.app_controller.start_pick_best_workflow()
 
@@ -2956,7 +3043,7 @@ class MainWindow(QMainWindow):
         # Clear focused image path and repaint view to remove underline
         if self.app_state.focused_image_path:
             logger.debug("Clearing focused image path")
-            self.app_state.focused_image_path = None
+            MainWindow._publish_active_image(self, None, source="cull")
             self._get_active_file_view().viewport().update()
 
         logger.debug("Clearing viewer and setting 'Select an image or video' text")
@@ -2985,6 +3072,16 @@ class MainWindow(QMainWindow):
             logger.debug(
                 f"_handle_file_selection_changed: Retrieved {len(selected_file_paths)} paths from view"
             )
+
+        current_path = self._get_current_selected_image_path()
+        if current_path and current_path in selected_file_paths:
+            MainWindow._publish_active_image(self, current_path, source="cull")
+        elif len(selected_file_paths) == 1:
+            MainWindow._publish_active_image(
+                self, selected_file_paths[0], source="cull"
+            )
+        elif not selected_file_paths:
+            MainWindow._publish_active_image(self, None, source="cull")
 
         if not self.app_state.image_files_data:
             logger.debug(
@@ -3041,22 +3138,15 @@ class MainWindow(QMainWindow):
             self.refuse_button.setVisible(False)
             self.refuse_all_button.setVisible(False)
 
-        # When selection changes, clear the focused image path unless it's a single selection
         if len(selected_file_paths) != 1:
             logger.debug(f"Selection is not single (count={len(selected_file_paths)})")
-            if self.app_state.focused_image_path:
-                logger.debug("Clearing focused image path")
-                self.app_state.focused_image_path = None
-                active_view = self._get_active_file_view()
-                if active_view:
-                    active_view.viewport().update()  # Trigger repaint to remove underline
 
         if len(selected_file_paths) == 1:
             file_path = selected_file_paths[0]
             # Avoid logging full path each change; keep concise
             logger.debug("Handling single selection")
             # This is a single selection, so it's also the "focused" image.
-            self.app_state.focused_image_path = file_path
+            MainWindow._publish_active_image(self, file_path, source="cull")
             active_view = self._get_active_file_view()
             if active_view:
                 active_view.viewport().update()
@@ -4527,7 +4617,7 @@ class MainWindow(QMainWindow):
         if not file_path:
             # If the focused image is cleared, remove the underline
             if self.app_state.focused_image_path:
-                self.app_state.focused_image_path = None
+                MainWindow._publish_active_image(self, None, source="cull")
                 view = self._get_active_file_view()
                 if view:
                     view.viewport().update()
@@ -4538,7 +4628,7 @@ class MainWindow(QMainWindow):
             return
 
         # Update the app state with the new focused path
-        self.app_state.focused_image_path = file_path
+        MainWindow._publish_active_image(self, file_path, source="cull")
         # Trigger a repaint of the view to draw the underline
         active_view.viewport().update()
 

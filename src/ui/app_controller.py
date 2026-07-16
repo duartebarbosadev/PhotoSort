@@ -144,6 +144,11 @@ class AppController(QObject):
         self._easy_delete_pending_after_similarity: bool = False
         self._pending_grouping_preview: tuple[object, str] | None = None
 
+    def _sync_active_image(self, workflow_step: str) -> None:
+        controller = getattr(self.main_window, "active_image_controller", None)
+        if controller is not None:
+            controller.sync_workflow(workflow_step)
+
     def connect_signals(self):
         """Connects signals from the WorkerManager to the controller's slots."""
         # File Scan Worker
@@ -512,6 +517,7 @@ class AppController(QObject):
         self.main_window.grouping_step_widget.set_preview_plan(plan, output_root)
         self.main_window.grouping_step_widget.set_loading_state("", False)
         self.main_window.notify_thumbnail_items_rebuilt()
+        AppController._sync_active_image(self, "organize")
 
     def start_grouping_workflow(
         self,
@@ -1263,6 +1269,7 @@ class AppController(QObject):
         self.main_window.grouping_step_widget.set_preview_plan(plan, output_root)
         self.main_window.grouping_step_widget.set_loading_state("", False)
         self.main_window.notify_thumbnail_items_rebuilt()
+        AppController._sync_active_image(self, "organize")
 
     def handle_grouping_preview_error(self, message: str):
         self.main_window.update_grouping_preview(f"Preview unavailable: {message}")
@@ -1395,6 +1402,7 @@ class AppController(QObject):
             if winner:
                 self.app_state.pick_best_winners_by_path[winner] = True
         self.main_window.pick_best_step_widget.show_results(results)
+        AppController._sync_active_image(self, "pick_best")
 
     def handle_pick_best_error(self, message: str) -> None:
         logger.error(f"Pick Best error: {message}", exc_info=False)
@@ -1420,6 +1428,7 @@ class AppController(QObject):
             self.main_window.easy_delete_step_widget.show_results(
                 self.app_state.easy_delete_results
             )
+            AppController._sync_active_image(self, "easy_delete")
             return
 
         if self.app_state.cluster_results:
@@ -1457,6 +1466,7 @@ class AppController(QObject):
         logger.info(f"Easy Delete complete: {len(results)} images flagged.")
         self.app_state.easy_delete_results = results
         self.main_window.easy_delete_step_widget.show_results(results)
+        AppController._sync_active_image(self, "easy_delete")
 
     def handle_easy_delete_error(self, message: str) -> None:
         logger.error(f"Easy Delete error: {message}", exc_info=False)
@@ -1479,6 +1489,7 @@ class AppController(QObject):
             self.main_window.fix_rotation_step_widget.show_results(
                 self.app_state.fix_rotation_results
             )
+            AppController._sync_active_image(self, "fix_rotation")
             return
 
         image_paths = self._get_image_paths()
@@ -1500,6 +1511,7 @@ class AppController(QObject):
         )
         self.app_state.fix_rotation_results = results
         self.main_window.fix_rotation_step_widget.show_results(results)
+        AppController._sync_active_image(self, "fix_rotation")
 
     def handle_fix_rotation_model_not_found(self, message: str) -> None:
         logger.warning(f"Fix Rotation model not found: {message}")
