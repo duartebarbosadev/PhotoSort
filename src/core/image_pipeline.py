@@ -367,6 +367,25 @@ class ImagePipeline:
             if memory_only
             else self._cache_get(self.thumbnail_cache, cache_key)
         )
+        if cached_img is None and apply_orientation:
+            # Folder warming intentionally creates one canonical, un-oriented
+            # thumbnail.  Review surfaces still need display orientation, so
+            # derive that tiny variant from the shared cached image instead of
+            # decoding the source file again.
+            source_key = self.thumbnail_cache_key(
+                normalized_path,
+                False,
+                file_size=file_size,
+                mtime_ns=mtime_ns,
+            )
+            source_img = (
+                self._memory_get(source_key)
+                if memory_only
+                else self._cache_get(self.thumbnail_cache, source_key)
+            )
+            if source_img is not None:
+                cached_img = self.image_orientation_handler.exif_transpose(source_img)
+                self._memory_set(cache_key, cached_img)
         if cached_img is None:
             return None
 
@@ -1109,7 +1128,7 @@ class ImagePipeline:
         self,
         image_path: str,
         *,
-        thumbnail_apply_orientation: bool = False,
+        thumbnail_apply_orientation: bool = True,
         memory_only: bool = True,
     ) -> QPixmap | None:
         """Return the best cached review image without generating or decoding work."""

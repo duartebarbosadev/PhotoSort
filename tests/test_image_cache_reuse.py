@@ -5,11 +5,15 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from PIL import Image
+from PyQt6.QtWidgets import QApplication
 
 from core.caching.preview_cache import PreviewCache
 from core.caching.thumbnail_cache import ThumbnailCache
 from core.image_pipeline import CACHE_SCHEMA_VERSION, ImagePipeline
+from core.image_processing.standard_image_processor import StandardImageProcessor
 from core.grouping import _run_ml_similarity_pipeline
+
+_app = QApplication.instance() or QApplication([])
 
 
 def test_review_pixmap_reuses_highest_quality_cache_without_redundant_lookups():
@@ -33,6 +37,33 @@ def test_review_pixmap_reuses_highest_quality_cache_without_redundant_lookups():
     )
     pipeline.get_cached_preview_qpixmap.assert_not_called()
     pipeline.get_cached_thumbnail_qpixmap.assert_not_called()
+
+
+def test_review_pixmap_orients_shared_thumbnail_without_redecoding(tmp_path):
+    source = tmp_path / "rotated.jpg"
+    image = Image.new("RGB", (80, 40), "teal")
+    exif = image.getexif()
+    exif[274] = 6
+    image.save(source, exif=exif)
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+
+    with patch(
+        "core.image_pipeline.StandardImageProcessor.process_for_thumbnail",
+        wraps=StandardImageProcessor.process_for_thumbnail,
+    ) as processor:
+        unrotated = pipeline._get_pil_thumbnail(str(source))
+        pixmap = pipeline.get_cached_review_qpixmap(str(source))
+        second_pixmap = pipeline.get_cached_review_qpixmap(str(source))
+
+    assert unrotated is not None
+    assert unrotated.width > unrotated.height
+    assert pixmap is not None
+    assert pixmap.height() > pixmap.width()
+    assert second_pixmap is not None
+    assert processor.call_count == 1
 
 
 def test_disk_caches_store_compressed_payloads_and_return_images(tmp_path):

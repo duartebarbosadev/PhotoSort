@@ -318,11 +318,12 @@ def test_review_pages_do_not_render_redundant_headers():
     assert not hasattr(pick_best, "_review_header")
 
 
-def test_easy_delete_and_fix_rotation_share_compact_review_list_panel():
+def test_review_workflows_share_compact_review_list_panel():
     easy_delete = EasyDeleteStepWidget()
     fix_rotation = FixRotationStepWidget()
+    pick_best = PickBestStepWidget()
 
-    for widget in (easy_delete, fix_rotation):
+    for widget in (easy_delete, fix_rotation, pick_best):
         panel = widget._review_list_panel
         assert panel.objectName() == "workflowReviewListPanel"
         assert panel.frameShape() == QFrame.Shape.NoFrame
@@ -345,6 +346,7 @@ def test_easy_delete_and_fix_rotation_share_compact_review_list_panel():
     assert fix_rotation._review_list_panel.count_label.text() == "1 item"
     assert easy_delete._review_list_panel.filters.isVisibleTo(easy_delete)
     assert not fix_rotation._review_list_panel.filters.isVisible()
+    assert not pick_best._review_list_panel.filters.isVisible()
 
 
 def test_footer_shortcuts_use_the_most_columns_that_fit():
@@ -476,7 +478,7 @@ def test_fix_rotation_distinguishes_preview_queue_and_applied_state():
     assert not widget._ordered_paths
 
 
-def test_pick_best_stages_initial_recommendations_in_shared_state():
+def test_pick_best_stages_recommendations_only_after_cluster_confirmation():
     marks: set[str] = set()
     challenger = "/tmp/challenger.jpg"
     winner = "/tmp/winner.jpg"
@@ -501,12 +503,143 @@ def test_pick_best_stages_initial_recommendations_in_shared_state():
         }
     )
 
-    assert challenger in marks
+    assert not marks
     assert winner not in marks
     assert isinstance(widget._compare_cards[0], WorkflowDecisionCard)
-    assert widget._compare_cards[0]._state_label.text() == "MARKED FOR TRASH · staged"
-    assert widget._compare_cards[1]._state_label.text() == "AI PICK · KEEP"
+    assert (
+        widget._compare_cards[0]._state_label.text()
+        == "SELECTED FOR TRASH · not confirmed"
+    )
+    assert (
+        widget._compare_cards[1]._state_label.text()
+        == "AI PICK · KEEP · not confirmed"
+    )
+    assert widget._review_list_panel.count_label.text() == "1 item"
+    assert widget._items_list.item(0).text() == "Cluster 1  ·  2 photos"
+    assert not widget._done_btn.isEnabled()
     assert "Cluster 1 of 1" in widget._cluster_info_label.text()
+    assert widget._sync_viewer.is_marked_for_deletion(challenger)
+    assert not widget._sync_viewer.is_marked_for_deletion(winner)
+
+    widget._on_confirm()
+
+    assert challenger in marks
+    assert winner not in marks
+    assert widget._items_list.item(0).text().startswith("Confirmed")
+    assert widget._compare_cards[0]._state_label.text() == "MARKED FOR TRASH · staged"
+    assert widget._compare_cards[1]._state_label.text() == "AI PICK · KEEP · confirmed"
+    assert widget._done_btn.isEnabled()
+
+
+def test_pick_best_revised_confirmed_choice_waits_for_reconfirmation():
+    marks: set[str] = set()
+    challenger = "/tmp/challenger.jpg"
+    winner = "/tmp/winner.jpg"
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
+    widget.unmark_for_deletion_requested.connect(
+        lambda paths: marks.difference_update(paths)
+    )
+    widget.show_results(
+        {
+            1: {
+                "winner_path": winner,
+                "ranked": [
+                    {"path": winner, "final_score": 0.9},
+                    {"path": challenger, "final_score": 0.7},
+                ],
+                "failed": [],
+                "all_paths": [challenger, winner],
+            }
+        }
+    )
+    widget._on_confirm()
+    assert marks == {challenger}
+
+    widget._set_path_marked(challenger, False)
+
+    assert marks == {challenger}
+    assert not widget._confirmed_clusters
+    assert "not confirmed" in widget._compare_cards[0]._state_label.text()
+    assert not widget._done_btn.isEnabled()
+
+    widget._on_confirm()
+
+    assert not marks
+    assert widget._confirmed_clusters == {0}
+
+
+def test_pick_best_confirmation_advances_through_left_cluster_queue():
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            index: {
+                "winner_path": f"/tmp/winner-{index}.jpg",
+                "ranked": [
+                    {"path": f"/tmp/winner-{index}.jpg", "final_score": 0.9},
+                    {"path": f"/tmp/challenger-{index}.jpg", "final_score": 0.7},
+                ],
+                "failed": [],
+                "all_paths": [
+                    f"/tmp/challenger-{index}.jpg",
+                    f"/tmp/winner-{index}.jpg",
+                ],
+            }
+            for index in (1, 2)
+        }
+    )
+
+    assert widget._items_list.count() == 2
+    assert widget._cluster_index == 0
+
+    widget._on_confirm()
+
+    assert widget._confirmed_clusters == {0}
+    assert widget._cluster_index == 1
+    assert widget._items_list.item(0).text().startswith("Confirmed")
+    assert not widget._items_list.item(1).text().startswith("Confirmed")
+    assert not widget._done_btn.isEnabled()
+
+    widget._on_confirm()
+
+    assert widget._confirmed_clusters == {0, 1}
+    assert widget._done_btn.isEnabled()
+
+
+def test_pick_best_up_and_down_shortcuts_navigate_cluster_queue():
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            index: {
+                "winner_path": f"/tmp/winner-{index}.jpg",
+                "ranked": [
+                    {"path": f"/tmp/winner-{index}.jpg", "final_score": 0.9},
+                    {"path": f"/tmp/challenger-{index}.jpg", "final_score": 0.7},
+                ],
+                "failed": [],
+                "all_paths": [
+                    f"/tmp/challenger-{index}.jpg",
+                    f"/tmp/winner-{index}.jpg",
+                ],
+            }
+            for index in (1, 2)
+        }
+    )
+    widget.resize(1000, 700)
+    widget.show()
+    widget.setFocus()
+    _app.processEvents()
+
+    QTest.keyClick(widget, Qt.Key.Key_Down)
+    assert widget._cluster_index == 1
+    assert widget._items_list.currentRow() == 1
+
+    QTest.keyClick(widget, Qt.Key.Key_Up)
+    assert widget._cluster_index == 0
+    assert widget._items_list.currentRow() == 0
 
 
 def test_easy_delete_focuses_exact_duplicate_without_changing_decision():

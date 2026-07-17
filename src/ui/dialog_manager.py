@@ -377,6 +377,7 @@ class DialogManager:
         try:
             pixmap = self.parent.image_pipeline.get_cached_thumbnail_qpixmap(
                 file_path,
+                apply_orientation=True,
                 memory_only=True,
             )
         except Exception:
