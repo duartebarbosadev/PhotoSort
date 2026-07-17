@@ -478,7 +478,7 @@ def install_workflow_shortcuts(
     specs: Iterable[WorkflowShortcutSpec],
     handlers: Mapping[str, Callable[[], None]],
 ) -> list[QShortcut]:
-    """Install bindings from the same specs rendered by the shortcut strip."""
+    """Install bindings that remain active while their workflow page is visible."""
 
     installed: list[QShortcut] = []
     for spec in specs:
@@ -489,7 +489,7 @@ def install_workflow_shortcuts(
             if handler is None:
                 continue
             shortcut = QShortcut(QKeySequence(sequence), owner)
-            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
             shortcut.activated.connect(handler)
             installed.append(shortcut)
     return installed

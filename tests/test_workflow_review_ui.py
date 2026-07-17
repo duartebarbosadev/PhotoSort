@@ -6,7 +6,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from types import SimpleNamespace
 
 from PyQt6.QtGui import QAction, QKeySequence
-from PyQt6.QtWidgets import QApplication, QFrame, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QFrame, QPushButton, QVBoxLayout, QWidget
 
 from ui.easy_delete_step_widget import EasyDeleteStepWidget
 from ui.fix_rotation_step_widget import FixRotationStepWidget
@@ -263,6 +265,45 @@ def test_easy_delete_arrow_shortcuts_separate_choice_from_navigation():
     shortcuts["Down"].activated.emit()
 
     assert widget._current_index == 1
+
+
+def test_easy_delete_shortcuts_survive_focus_leaving_workflow_contents():
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    widget = EasyDeleteStepWidget()
+    outside_button = QPushButton("Outside workflow contents")
+    layout.addWidget(widget)
+    layout.addWidget(outside_button)
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            "/tmp/first.jpg": {
+                "type": "blur",
+                "pair_path": None,
+                "suggest_delete": True,
+                "reason": "Blurry image",
+            },
+            "/tmp/second.jpg": {
+                "type": "dark",
+                "pair_path": None,
+                "suggest_delete": True,
+                "reason": "Dark image",
+            },
+        }
+    )
+    host.show()
+    widget.setFocus()
+    _app.processEvents()
+
+    QTest.keyClick(widget, Qt.Key.Key_Down)
+    assert widget._current_index == 1
+
+    outside_button.setFocus()
+    QTest.keyClick(outside_button, Qt.Key.Key_Up)
+    assert widget._current_index == 0
+
+    QTest.keyClick(outside_button, Qt.Key.Key_Return)
+    assert widget._confirmed_reviews == {"/tmp/first.jpg"}
 
 
 def test_review_pages_do_not_render_redundant_headers():
