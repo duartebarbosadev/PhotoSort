@@ -478,7 +478,44 @@ def test_fix_rotation_distinguishes_preview_queue_and_applied_state():
     assert not widget._ordered_paths
 
 
-def test_pick_best_stages_recommendations_only_after_cluster_confirmation():
+def _pick_best_payload(paths: list[str], scores: dict[str, float] | None = None):
+    scores = scores or {}
+    winner = max(paths, key=lambda path: scores.get(path, 0.0))
+    return {
+        "winner_path": winner,
+        "ranked": [
+            {"path": path, "final_score": scores.get(path)} for path in paths
+        ],
+        "failed": [],
+        "all_paths": paths,
+    }
+
+
+def _pick_best_item(widget: PickBestStepWidget, path: str):
+    return next(
+        widget._items_list.item(index)
+        for index in range(widget._items_list.count())
+        if widget._items_list.item(index).data(Qt.ItemDataRole.UserRole) == path
+    )
+
+
+def _pick_best_section_titles(widget: PickBestStepWidget) -> list[str]:
+    return [
+        widget._items_list.item(index).text()
+        for index in range(widget._items_list.count())
+        if widget._items_list.item(index).flags() == Qt.ItemFlag.NoItemFlags
+    ]
+
+
+def _pick_best_cluster_items(widget: PickBestStepWidget):
+    return [
+        widget._items_list.item(index)
+        for index in range(widget._items_list.count())
+        if widget._items_list.item(index).text().startswith("Cluster ")
+    ]
+
+
+def test_pick_best_publishes_trash_mark_as_soon_as_comparison_is_confirmed():
     marks: set[str] = set()
     challenger = "/tmp/challenger.jpg"
     winner = "/tmp/winner.jpg"
@@ -491,47 +528,36 @@ def test_pick_best_stages_recommendations_only_after_cluster_confirmation():
 
     widget.show_results(
         {
-            1: {
-                "winner_path": winner,
-                "ranked": [
-                    {"path": winner, "final_score": 0.9},
-                    {"path": challenger, "final_score": 0.7},
-                ],
-                "failed": [],
-                "all_paths": [challenger, winner],
-            }
+            1: _pick_best_payload(
+                [challenger, winner], {challenger: 0.7, winner: 0.9}
+            )
         }
     )
 
     assert not marks
-    assert winner not in marks
     assert isinstance(widget._compare_cards[0], WorkflowDecisionCard)
-    assert (
-        widget._compare_cards[0]._state_label.text()
-        == "SELECTED FOR TRASH · not confirmed"
-    )
-    assert (
-        widget._compare_cards[1]._state_label.text()
-        == "AI PICK · KEEP · not confirmed"
-    )
-    assert widget._review_list_panel.count_label.text() == "1 item"
-    assert widget._items_list.item(0).text() == "Cluster 1  ·  2 photos"
+    assert widget._compare_cards[0]._state_label.text() == "TRASH · not confirmed"
+    assert widget._compare_cards[1]._state_label.text() == "KEEP · not confirmed"
+    assert widget._review_list_panel.count_label.text() == "0/1 done"
+    assert _pick_best_section_titles(widget) == ["CURRENT GROUP  ·  2"]
+    assert _pick_best_item(widget, challenger).text() == "challenger.jpg\nCurrent"
+    assert _pick_best_item(widget, winner).text() == "winner.jpg\nCurrent"
     assert not widget._done_btn.isEnabled()
     assert "Cluster 1 of 1" in widget._cluster_info_label.text()
-    assert widget._sync_viewer.is_marked_for_deletion(challenger)
-    assert not widget._sync_viewer.is_marked_for_deletion(winner)
+    assert len(widget._subset_paths) == 2
 
     widget._on_confirm()
 
-    assert challenger in marks
-    assert winner not in marks
-    assert widget._items_list.item(0).text().startswith("Confirmed")
-    assert widget._compare_cards[0]._state_label.text() == "MARKED FOR TRASH · staged"
-    assert widget._compare_cards[1]._state_label.text() == "AI PICK · KEEP · confirmed"
+    assert marks == {challenger}
+    assert widget._current_tournament().final_winner == winner
+    assert _pick_best_item(widget, challenger).text() == "challenger.jpg\nTrash"
+    assert _pick_best_item(widget, winner).text() == "winner.jpg\nWinner"
+    assert widget._compare_cards[0]._state_label.text() == "TRASH · confirmed"
+    assert widget._compare_cards[1]._state_label.text() == "KEPT · confirmed"
     assert widget._done_btn.isEnabled()
 
 
-def test_pick_best_revised_confirmed_choice_waits_for_reconfirmation():
+def test_pick_best_revising_final_choice_restores_prior_marks_until_reconfirmed():
     marks: set[str] = set()
     challenger = "/tmp/challenger.jpg"
     winner = "/tmp/winner.jpg"
@@ -541,90 +567,320 @@ def test_pick_best_revised_confirmed_choice_waits_for_reconfirmation():
     widget.unmark_for_deletion_requested.connect(
         lambda paths: marks.difference_update(paths)
     )
-    widget.show_results(
-        {
-            1: {
-                "winner_path": winner,
-                "ranked": [
-                    {"path": winner, "final_score": 0.9},
-                    {"path": challenger, "final_score": 0.7},
-                ],
-                "failed": [],
-                "all_paths": [challenger, winner],
-            }
-        }
-    )
+    widget.show_results({1: _pick_best_payload([challenger, winner], {winner: 0.9})})
     widget._on_confirm()
     assert marks == {challenger}
 
-    widget._set_path_marked(challenger, False)
+    widget._select_path(challenger)
 
-    assert marks == {challenger}
-    assert not widget._confirmed_clusters
+    assert not marks
+    assert widget._current_tournament().final_winner is None
     assert "not confirmed" in widget._compare_cards[0]._state_label.text()
     assert not widget._done_btn.isEnabled()
 
     widget._on_confirm()
 
-    assert not marks
-    assert widget._confirmed_clusters == {0}
+    assert marks == {winner}
+    assert widget._current_tournament().final_winner == challenger
 
 
-def test_pick_best_confirmation_advances_through_left_cluster_queue():
+def test_pick_best_33_photo_cluster_uses_rolling_pairwise_comparisons():
+    paths = [f"/tmp/photo-{index:02}.jpg" for index in range(33)]
+    scores = {path: float(33 - index) for index, path in enumerate(paths)}
+    marks: set[str] = set()
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda selected: marks.update(selected))
+    widget.unmark_for_deletion_requested.connect(
+        lambda selected: marks.difference_update(selected)
+    )
+    widget.show_results({7: _pick_best_payload(paths, scores)})
+    tournament = widget._current_tournament()
+
+    assert tournament.rounds[0].groups[0].paths == paths[:2]
+    assert len(widget._subset_paths) == 2
+
+    for comparison in range(31):
+        widget._on_confirm()
+        assert marks == set(paths[1 : comparison + 2])
+        assert tournament.rounds[tournament.current_round].groups[0].paths == [
+            paths[0],
+            paths[comparison + 2],
+        ]
+
+    widget._on_confirm()
+
+    assert tournament.final_winner == paths[0]
+    assert tournament.finalized
+    assert len(tournament.rounds) == 32
+    assert len(marks) == 32
+    assert paths[0] not in marks
+    assert widget._done_btn.isEnabled()
+
+
+def test_pick_best_total_comparisons_are_one_less_than_cluster_size():
+    assert PickBestStepWidget._total_round_count(2) == 1
+    assert PickBestStepWidget._total_round_count(3) == 2
+    assert PickBestStepWidget._total_round_count(7) == 6
+    assert PickBestStepWidget._total_round_count(33) == 32
+
+
+def test_pick_best_missing_scores_preselects_first_photo_without_reordering():
+    paths = ["/tmp/third.jpg", "/tmp/first.jpg", "/tmp/second.jpg"]
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths)})
+
+    group = widget._current_group()
+    assert group.paths == paths[:2]
+    assert group.selected_path == paths[0]
+
+    widget._on_confirm()
+
+    assert widget._current_group().paths == [paths[0], paths[2]]
+
+
+def test_pick_best_revising_earlier_round_restores_marks_and_rebuilds_dependents():
+    paths = [f"/tmp/photo-{index}.jpg" for index in range(7)]
+    scores = {path: float(7 - index) for index, path in enumerate(paths)}
+    marks: set[str] = set()
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda selected: marks.update(selected))
+    widget.unmark_for_deletion_requested.connect(
+        lambda selected: marks.difference_update(selected)
+    )
+    widget.show_results({1: _pick_best_payload(paths, scores)})
+    tournament = widget._current_tournament()
+
+    while tournament.final_winner is None:
+        widget._on_confirm()
+
+    assert len(marks) == 6
+    assert len(tournament.rounds) == 6
+
+    widget._prev_round()
+    original = widget._current_group().selected_path
+    replacement = next(path for path in widget._current_group().paths if path != original)
+    widget._select_path(replacement)
+
+    assert tournament.final_winner is None
+    assert len(tournament.rounds) == 5
+    assert not widget._current_group().confirmed
+    assert marks == set(paths[1:5])
+
+    widget._on_confirm()
+
+    assert len(tournament.rounds) == 6
+    assert tournament.current_round == 5
+
+
+def test_pick_best_up_and_down_shortcuts_navigate_comparison_history():
+    paths = [f"/tmp/photo-{index}.jpg" for index in range(7)]
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths)})
+    widget.resize(1000, 700)
+    widget.show()
+    widget.setFocus()
+    _app.processEvents()
+
+    widget._on_confirm()
+    widget._on_confirm()
+    assert widget._current_tournament().current_round == 2
+
+    QTest.keyClick(widget, Qt.Key.Key_Up)
+    assert widget._current_tournament().current_round == 1
+
+    QTest.keyClick(widget, Qt.Key.Key_Down)
+    assert widget._current_tournament().current_round == 2
+
+
+def test_pick_best_left_panel_keeps_every_photo_and_uses_simple_states():
+    paths = [f"/tmp/photo-{index}.jpg" for index in range(7)]
+    scores = {path: float(7 - index) for index, path in enumerate(paths)}
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths, scores)})
+    original_items = {path: _pick_best_item(widget, path) for path in paths}
+
+    assert _pick_best_section_titles(widget) == [
+        "CURRENT GROUP  ·  2",
+        "STILL IN PLAY  ·  5",
+    ]
+    assert widget._review_list_panel.count_label.text() == "0/1 done"
+
+    for _ in range(3):
+        widget._on_confirm()
+
+    assert widget._current_tournament().current_round == 3
+    assert all(
+        _pick_best_item(widget, path) is original_items[path] for path in paths
+    )
+    assert _pick_best_section_titles(widget) == [
+        "CURRENT GROUP  ·  2",
+        "STILL IN PLAY  ·  2",
+        "DECIDED  ·  3",
+    ]
+    for survivor_index in (0, 4):
+        assert _pick_best_item(widget, paths[survivor_index]).text().endswith(
+            "\nCurrent"
+        )
+    for eliminated_index in (1, 2, 3):
+        assert _pick_best_item(widget, paths[eliminated_index]).text().endswith(
+            "\nTrash"
+        )
+    assert widget._review_list_panel.count_label.text() == "0/1 done"
+
+    widget._on_photo_item_clicked(_pick_best_item(widget, paths[2]))
+
+    tournament = widget._current_tournament()
+    assert tournament.current_round == 1
+    assert tournament.current_group == 0
+    assert paths[2] in widget._subset_paths
+
+
+def test_pick_best_left_panel_shows_every_cluster_and_switches_from_summary():
+    first_paths = ["/tmp/first-a.jpg", "/tmp/first-b.jpg"]
+    second_paths = [
+        "/tmp/second-a.jpg",
+        "/tmp/second-b.jpg",
+        "/tmp/second-c.jpg",
+    ]
     widget = PickBestStepWidget()
     widget.set_is_marked_func(lambda _path: False)
     widget.show_results(
         {
-            index: {
-                "winner_path": f"/tmp/winner-{index}.jpg",
-                "ranked": [
-                    {"path": f"/tmp/winner-{index}.jpg", "final_score": 0.9},
-                    {"path": f"/tmp/challenger-{index}.jpg", "final_score": 0.7},
-                ],
-                "failed": [],
-                "all_paths": [
-                    f"/tmp/challenger-{index}.jpg",
-                    f"/tmp/winner-{index}.jpg",
-                ],
-            }
-            for index in (1, 2)
+            10: _pick_best_payload(first_paths),
+            20: _pick_best_payload(second_paths),
         }
     )
 
-    assert widget._items_list.count() == 2
-    assert widget._cluster_index == 0
+    cluster_items = _pick_best_cluster_items(widget)
+    assert len(cluster_items) == 2
+    assert cluster_items[0].text() == "Cluster 1 · 2 photos\nCurrent · 2 active"
+    assert cluster_items[1].text() == "Cluster 2 · 3 photos\nNot started"
+    assert widget._review_list_panel.count_label.text() == "0/2 done"
+    assert _pick_best_item(widget, first_paths[0]) is not None
 
+    widget._on_photo_item_clicked(cluster_items[1])
+
+    assert widget._cluster_index == 1
+    assert _pick_best_item(widget, second_paths[0]) is not None
+    assert all(
+        widget._items_list.item(index).data(Qt.ItemDataRole.UserRole)
+        not in first_paths
+        for index in range(widget._items_list.count())
+    )
+
+    widget._on_keep_all()
+    widget._on_keep_all()
+
+    cluster_items = _pick_best_cluster_items(widget)
+    assert cluster_items[1].text() == "Cluster 2 · 3 photos\nComplete · 3 kept"
+    assert widget._review_list_panel.count_label.text() == "1/2 done"
+
+    widget._on_photo_item_clicked(cluster_items[0])
+
+    assert widget._cluster_index == 0
+    assert _pick_best_item(widget, first_paths[0]) is not None
+
+
+def test_pick_best_keep_all_protects_group_and_completes_without_forced_winner():
+    paths = ["/tmp/left.jpg", "/tmp/right.jpg"]
+    marks = {paths[1]}
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda selected: marks.update(selected))
+    widget.unmark_for_deletion_requested.connect(
+        lambda selected: marks.difference_update(selected)
+    )
+    widget.show_results({1: _pick_best_payload(paths)})
+
+    widget._on_keep_all()
+
+    tournament = widget._current_tournament()
+    assert tournament.finalized
+    assert tournament.final_winner == paths[0]
+    assert not marks
+    assert widget._done_btn.isEnabled()
+    assert widget._review_list_panel.count_label.text() == "1/1 done"
+    assert all(
+        _pick_best_item(widget, path).text().endswith("\nKept") for path in paths
+    )
+    assert all(
+        card._state_label.text() == "KEPT · confirmed"
+        for card in widget._compare_cards[:2]
+    )
+
+
+def test_pick_best_keep_all_can_mix_with_a_winner_in_the_same_round():
+    paths = [f"/tmp/photo-{index}.jpg" for index in range(7)]
+    scores = {path: float(7 - index) for index, path in enumerate(paths)}
+    marks: set[str] = set()
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda selected: marks.update(selected))
+    widget.unmark_for_deletion_requested.connect(
+        lambda selected: marks.difference_update(selected)
+    )
+    widget.show_results({1: _pick_best_payload(paths, scores)})
+
+    widget._on_keep_all()
+    widget._on_confirm()
+    widget._on_keep_all()
+    widget._on_confirm()
+    widget._on_confirm()
     widget._on_confirm()
 
-    assert widget._confirmed_clusters == {0}
-    assert widget._cluster_index == 1
-    assert widget._items_list.item(0).text().startswith("Confirmed")
-    assert not widget._items_list.item(1).text().startswith("Confirmed")
+    tournament = widget._current_tournament()
+    assert tournament.finalized
+    assert tournament.final_winner == paths[0]
+    assert marks == {paths[2], paths[4], paths[5], paths[6]}
+    assert PickBestStepWidget._kept_paths(tournament) == {
+        paths[0],
+        paths[1],
+        paths[3],
+    }
+
+
+def test_pick_best_revising_kept_group_restores_marks_until_reconfirmed():
+    paths = ["/tmp/left.jpg", "/tmp/right.jpg"]
+    initial_marks = {paths[1]}
+    marks = set(initial_marks)
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda selected: marks.update(selected))
+    widget.unmark_for_deletion_requested.connect(
+        lambda selected: marks.difference_update(selected)
+    )
+    widget.show_results({1: _pick_best_payload(paths)})
+    widget._on_keep_all()
+
+    widget._select_path(paths[0])
+
+    tournament = widget._current_tournament()
+    assert not tournament.finalized
+    assert not tournament.rounds[0].groups[0].keep_all
+    assert marks == initial_marks
     assert not widget._done_btn.isEnabled()
 
     widget._on_confirm()
 
-    assert widget._confirmed_clusters == {0, 1}
-    assert widget._done_btn.isEnabled()
+    assert tournament.finalized
+    assert tournament.final_winner == paths[0]
+    assert marks == {paths[1]}
 
 
-def test_pick_best_up_and_down_shortcuts_navigate_cluster_queue():
+def test_pick_best_left_right_and_enter_shortcuts_control_tournament():
     widget = PickBestStepWidget()
     widget.set_is_marked_func(lambda _path: False)
     widget.show_results(
         {
-            index: {
-                "winner_path": f"/tmp/winner-{index}.jpg",
-                "ranked": [
-                    {"path": f"/tmp/winner-{index}.jpg", "final_score": 0.9},
-                    {"path": f"/tmp/challenger-{index}.jpg", "final_score": 0.7},
-                ],
-                "failed": [],
-                "all_paths": [
-                    f"/tmp/challenger-{index}.jpg",
-                    f"/tmp/winner-{index}.jpg",
-                ],
-            }
+            index: _pick_best_payload(
+                [f"/tmp/challenger-{index}.jpg", f"/tmp/winner-{index}.jpg"],
+                {f"/tmp/winner-{index}.jpg": 0.9},
+            )
             for index in (1, 2)
         }
     )
@@ -633,13 +889,41 @@ def test_pick_best_up_and_down_shortcuts_navigate_cluster_queue():
     widget.setFocus()
     _app.processEvents()
 
-    QTest.keyClick(widget, Qt.Key.Key_Down)
+    QTest.keyClick(widget, Qt.Key.Key_Right)
     assert widget._cluster_index == 1
-    assert widget._items_list.currentRow() == 1
 
-    QTest.keyClick(widget, Qt.Key.Key_Up)
+    QTest.keyClick(widget, Qt.Key.Key_Left)
     assert widget._cluster_index == 0
-    assert widget._items_list.currentRow() == 0
+
+    QTest.keyClick(widget, Qt.Key.Key_Return)
+    assert widget._tournaments[0].final_winner == "/tmp/winner-1.jpg"
+    assert widget._cluster_index == 1
+
+
+def test_pick_best_requests_previews_only_for_current_pair():
+    class PreviewHost(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.requests: list[list[str]] = []
+            self.image_pipeline = None
+
+        def request_interactive_previews(self, paths):
+            self.requests.append(list(paths))
+
+    paths = [f"/tmp/photo-{index}.jpg" for index in range(7)]
+    host = PreviewHost()
+    layout = QVBoxLayout(host)
+    widget = PickBestStepWidget()
+    layout.addWidget(widget)
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths)})
+
+    assert host.requests[-1] == paths[:2]
+
+    widget._on_confirm()
+
+    assert host.requests[-1] == [paths[0], paths[2]]
+    assert all(len(request) <= 2 for request in host.requests)
 
 
 def test_easy_delete_focuses_exact_duplicate_without_changing_decision():
@@ -707,7 +991,7 @@ def test_fix_rotation_focus_does_not_change_queued_state():
     assert widget._marked == marked_before
 
 
-def test_pick_best_focus_finds_challenger_subset_without_changing_marks():
+def test_pick_best_focus_finds_photo_group_without_changing_selection():
     challengers = [f"/tmp/challenger-{index}.jpg" for index in range(3)]
     winner = "/tmp/winner.jpg"
     widget = PickBestStepWidget()
@@ -725,13 +1009,16 @@ def test_pick_best_focus_finds_challenger_subset_without_changing_marks():
             }
         }
     )
-    marks_before = dict(widget._cluster_mark_state)
+    tournament = widget._current_tournament()
+    selections_before = [
+        group.selected_path for group in tournament.rounds[0].groups
+    ]
 
-    assert widget.focus_image(challengers[2])
+    assert widget.focus_image(challengers[1])
 
-    assert challengers[2] in widget._subset_paths
-    assert widget._subset_paths[widget._focused_slot_index] == challengers[2]
-    assert widget._cluster_mark_state == marks_before
+    assert challengers[1] in widget._subset_paths
+    assert widget._subset_paths[widget._focused_slot_index] == challengers[1]
+    assert [group.selected_path for group in tournament.rounds[0].groups] == selections_before
 
 
 def test_visible_shortcut_specs_are_the_installed_source_of_truth():

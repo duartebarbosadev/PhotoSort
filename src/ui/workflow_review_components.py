@@ -88,11 +88,8 @@ FIX_ROTATION_SHORTCUTS = (
 
 PICK_BEST_SHORTCUTS = (
     WorkflowShortcutSpec("slots", ("1", "2", "3"), "1  2  3", "Choice"),
-    WorkflowShortcutSpec(
-        "clusters", ("Left", "Up", "Right", "Down"), "←  ↑  →  ↓", "Cluster"
-    ),
-    WorkflowShortcutSpec("sets", ("[", "]"), "[  ]", "Set"),
-    WorkflowShortcutSpec("bulk", ("K", "X"), "K / X", "Bulk"),
+    WorkflowShortcutSpec("clusters", ("Left", "Right"), "←  →", "Cluster"),
+    WorkflowShortcutSpec("groups", ("Up", "Down"), "↑  ↓", "Group"),
     WorkflowShortcutSpec("focus", ("C",), "C", "Compare"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm"),
@@ -370,7 +367,9 @@ class WorkflowReviewListPanel(QFrame):
     def __init__(
         self,
         *,
-        bulk_action_text: str,
+        bulk_action_text: str | None,
+        title_text: str = "Review queue",
+        count_noun: str = "item",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -389,7 +388,8 @@ class WorkflowReviewListPanel(QFrame):
         header_layout.setContentsMargins(4, 0, 4, 2)
         header_layout.setSpacing(6)
 
-        title = QLabel("Review queue")
+        self._count_noun = count_noun
+        title = QLabel(title_text)
         title.setObjectName("workflowReviewListTitle")
         self.count_label = QLabel("0 items")
         self.count_label.setObjectName("workflowReviewListCount")
@@ -415,20 +415,21 @@ class WorkflowReviewListPanel(QFrame):
         self.list_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         root.addWidget(self.list_widget, 1)
 
-        footer = QWidget()
-        footer.setObjectName("workflowReviewListFooter")
-        footer_layout = QHBoxLayout(footer)
+        self.footer = QWidget()
+        self.footer.setObjectName("workflowReviewListFooter")
+        footer_layout = QHBoxLayout(self.footer)
         footer_layout.setContentsMargins(0, 2, 0, 0)
-        self.bulk_button = QPushButton(bulk_action_text)
+        self.bulk_button = QPushButton(bulk_action_text or "")
         self.bulk_button.setObjectName("workflowGhostButton")
         footer_layout.addWidget(self.bulk_button)
-        root.addWidget(footer)
+        self.footer.setVisible(bulk_action_text is not None)
+        root.addWidget(self.footer)
 
     def set_count(self, visible: int, total: int | None = None) -> None:
         if total is not None and visible != total:
             text = f"{visible} of {total}"
         else:
-            text = f"{visible} item{'s' if visible != 1 else ''}"
+            text = f"{visible} {self._count_noun}{'s' if visible != 1 else ''}"
         self.count_label.setText(text)
 
 
