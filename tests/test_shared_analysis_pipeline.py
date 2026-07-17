@@ -26,6 +26,31 @@ def test_easy_delete_reuses_shared_neutral_analysis_image():
     )
 
 
+def test_easy_delete_duplicate_result_has_one_authoritative_classification(
+    tmp_path, monkeypatch
+):
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    first.write_bytes(b"identical image bytes")
+    second.write_bytes(b"identical image bytes")
+    embeddings = {
+        str(first): [1.0, 0.0],
+        str(second): [1.0, 0.0],
+    }
+    worker = EasyDeleteWorker(
+        [str(first), str(second)],
+        cluster_map={1: [str(first), str(second)]},
+        embeddings_cache=embeddings,
+    )
+    monkeypatch.setattr(worker, "_get_sharpness", lambda _path: 10.0)
+
+    results = worker._detect_duplicates()
+
+    assert {entry["duplicate_kind"] for entry in results.values()} == {"exact"}
+    suggested = next(entry for entry in results.values() if entry["suggest_delete"])
+    assert suggested["reason"] == "The files are byte-for-byte identical"
+
+
 def test_completed_empty_easy_delete_result_is_not_recomputed():
     widget = SimpleNamespace(show_results=Mock(), show_loading=Mock())
     worker_manager = SimpleNamespace(
@@ -51,6 +76,61 @@ def test_completed_empty_easy_delete_result_is_not_recomputed():
 
     widget.show_results.assert_called_once_with({})
     controller._start_easy_delete_detection.assert_not_called()
+
+
+def test_easy_delete_rebuilds_embeddings_after_restoring_clusters_only():
+    widget = SimpleNamespace(show_results=Mock(), show_loading=Mock())
+    controller = SimpleNamespace(
+        app_state=SimpleNamespace(
+            image_files_data=[{"path": "photo.jpg", "media_type": "image"}],
+            easy_delete_results=None,
+            cluster_results={"photo.jpg": 1},
+            embeddings_cache={},
+        ),
+        main_window=SimpleNamespace(
+            easy_delete_step_widget=widget,
+            statusBar=lambda: Mock(),
+        ),
+        worker_manager=SimpleNamespace(is_easy_delete_running=lambda: False),
+        _easy_delete_pending_after_similarity=False,
+        _get_image_paths=Mock(return_value=["photo.jpg"]),
+        _start_easy_delete_detection=Mock(),
+        start_similarity_analysis=Mock(),
+    )
+
+    AppController.start_easy_delete_workflow(controller)
+
+    assert controller._easy_delete_pending_after_similarity
+    widget.show_loading.assert_called_once_with(
+        "Step 1/2: Computing similarity embeddings and clusters…", 0
+    )
+    controller.start_similarity_analysis.assert_called_once_with()
+    controller._start_easy_delete_detection.assert_not_called()
+
+
+def test_easy_delete_reuses_complete_similarity_inputs_without_recomputing():
+    controller = SimpleNamespace(
+        app_state=SimpleNamespace(
+            image_files_data=[{"path": "photo.jpg", "media_type": "image"}],
+            easy_delete_results=None,
+            cluster_results={"photo.jpg": 1},
+            embeddings_cache={"photo.jpg": [1.0, 0.0]},
+        ),
+        main_window=SimpleNamespace(
+            easy_delete_step_widget=SimpleNamespace(show_loading=Mock()),
+            statusBar=lambda: Mock(),
+        ),
+        worker_manager=SimpleNamespace(is_easy_delete_running=lambda: False),
+        _easy_delete_pending_after_similarity=False,
+        _get_image_paths=Mock(return_value=["photo.jpg"]),
+        _start_easy_delete_detection=Mock(),
+        start_similarity_analysis=Mock(),
+    )
+
+    AppController.start_easy_delete_workflow(controller)
+
+    controller._start_easy_delete_detection.assert_called_once_with()
+    controller.start_similarity_analysis.assert_not_called()
 
 
 def test_pick_best_reuses_shared_analysis_image():
@@ -83,6 +163,8 @@ def test_similarity_uses_shared_analysis_images_instead_of_full_processing():
             [np.asarray([[1.0, 0.0]], dtype=np.float32)],
         )
     )
+    regional_results = []
+    engine.regional_embeddings_generated.connect(regional_results.append)
 
     engine.generate_embeddings_for_files(["photo.arw"])
 
@@ -90,4 +172,5 @@ def test_similarity_uses_shared_analysis_images_instead_of_full_processing():
         "photo.arw",
         target_size=ANALYSIS_CACHE_RESOLUTION,
     )
+    assert regional_results == [{"photo.arw": [[1.0, 0.0]]}]
     assert not pipeline.get_pil_image_for_processing.called

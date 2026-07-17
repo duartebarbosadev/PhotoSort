@@ -16,6 +16,7 @@ from core.similarity_embedding_model import (
     SimilarityModelNotInstalledError,
 )
 from core.similarity_utils import (
+    build_regional_distance_matrix,
     adaptive_dbscan_eps,
     build_orientation_map,
     normalize_embedding_dict,
@@ -45,6 +46,7 @@ class SimilarityEngine(QObject):
 
     progress_update = pyqtSignal(int, str)
     embeddings_generated = pyqtSignal(dict)
+    regional_embeddings_generated = pyqtSignal(dict)
     clustering_complete = pyqtSignal(dict)
     error = pyqtSignal(str)
 
@@ -396,6 +398,9 @@ class SimilarityEngine(QObject):
             if path in all_regional_embeddings
         }
         self.embeddings_generated.emit(final_embeddings_for_requested_files)
+        self.regional_embeddings_generated.emit(
+            final_regional_embeddings_for_requested_files
+        )
         logger.info(
             f"Finished. Emitted {len(final_embeddings_for_requested_files)} embeddings."
         )
@@ -419,27 +424,10 @@ class SimilarityEngine(QObject):
         regional_embeddings: dict[str, list[list[float]]],
         subset_paths: list[str],
     ) -> np.ndarray:
-        """Build a distance matrix using the best matching large region pair."""
-        region_sets: list[np.ndarray] = []
-        for path in subset_paths:
-            region_vectors = regional_embeddings.get(path)
-            if region_vectors:
-                region_matrix = np.asarray(region_vectors, dtype=np.float32)
-            else:
-                region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
-            if region_matrix.ndim != 2 or region_matrix.shape[0] == 0:
-                region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
-            region_sets.append(l2_normalize_rows(region_matrix))
-
-        count = len(subset_paths)
-        distances = np.zeros((count, count), dtype=np.float32)
-        for i in range(count):
-            for j in range(i + 1, count):
-                similarity = float(np.max(region_sets[i] @ region_sets[j].T))
-                distance = max(0.0, min(2.0, 1.0 - similarity))
-                distances[i, j] = distance
-                distances[j, i] = distance
-        return distances
+        """Build a distance matrix from corresponding large image regions."""
+        return build_regional_distance_matrix(
+            embeddings, regional_embeddings, subset_paths
+        )
 
     def _run_dbscan_on_subset(
         self,

@@ -78,6 +78,32 @@ def test_loading_placeholder_preserves_path_for_async_upgrade():
     viewer.deleteLater()
 
 
+def test_side_by_side_keeps_pending_preview_slot_visible():
+    viewer = SynchronizedImageViewer()
+    viewer.resize(800, 500)
+    viewer.show()
+    _app.processEvents()
+
+    viewer.set_images_data(
+        [
+            _make_image("cached-winner.jpg"),
+            {"pixmap": None, "path": "loading-challenger.arw", "rating": 0},
+        ]
+    )
+    _app.processEvents()
+
+    assert len(viewer.image_viewers) == 2
+    assert all(not slot.isHidden() for slot in viewer.image_viewers)
+    assert all(size > 0 for size in viewer.viewer_splitter.sizes())
+    assert viewer.image_viewers[1].get_file_path() == "loading-challenger.arw"
+
+    upgraded = _make_image("loading-challenger.arw", size=32)
+    assert viewer.update_image_pixmap(upgraded["path"], upgraded["pixmap"])
+    assert all(not slot.isHidden() for slot in viewer.image_viewers)
+
+    viewer.deleteLater()
+
+
 def test_preview_upgrade_updates_every_slot_showing_same_rotation_source():
     viewer = SynchronizedImageViewer()
     loading = {"pixmap": None, "path": "rotation.arw", "rating": 0}

@@ -1,5 +1,7 @@
 import logging
+import copy
 import os
+import sys
 import time
 import subprocess
 from contextlib import suppress
@@ -7,7 +9,9 @@ from collections.abc import Callable, Iterable
 from typing import override
 
 from PyQt6.QtCore import (
+    QEvent,
     QObject,
+    QItemSelectionModel,
     QPoint,
     QRunnable,
     QSize,
@@ -27,6 +31,7 @@ from PyQt6.QtGui import (
     QDragMoveEvent,
     QDropEvent,
     QIcon,
+    QKeyEvent,
     QPixmap,
 )
 from PyQt6.QtWidgets import (
@@ -44,7 +49,6 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSplitter,
@@ -73,14 +77,8 @@ from core.app_settings import (
     THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
 )
 from ui.advanced_image_viewer import ZoomableImageView
-from ui.dialog_components import (
-    build_dialog_footer,
-    build_dialog_header,
-    make_dialog_draggable,
-)
 from ui.workflow_review_components import (
     ORGANIZE_SHORTCUTS,
-    WorkflowShortcutStrip,
     install_workflow_shortcuts,
 )
 
@@ -438,10 +436,10 @@ class DroppableGroupingTree(QTreeWidget):
 
 
 class GroupingStepWidget(QWidget):
+    active_image_changed = pyqtSignal(str)
     mode_changed = pyqtSignal(str)
-    create_requested = pyqtSignal(str, dict, object)
+    apply_requested = pyqtSignal()
     back_requested = pyqtSignal()
-    skip_requested = pyqtSignal()
     select_folder_requested = pyqtSignal()
     toggle_deletion_marks_requested = pyqtSignal(list)
     commit_deletion_marks_requested = pyqtSignal()
@@ -466,11 +464,14 @@ class GroupingStepWidget(QWidget):
         self._supported_items: int = 0
         self._ignore_preview_item_change = False
         self._syncing_tree_selection = False
+        self._syncing_active_image = False
         self._drag_in_progress = False
         self._current_preview_source_path: str | None = None
         self._is_marked_func: Callable[[str], bool] = lambda _path: False
+        self._has_any_marked_func: Callable[[], bool] = lambda: False
         self._folder_validation_request_id = 0
         self._folder_validation_pool = QThreadPool.globalInstance()
+        self._busy = False
 
         self._before_root_item: QTreeWidgetItem | None = None
         self._after_root_item: QTreeWidgetItem | None = None
@@ -571,18 +572,11 @@ class GroupingStepWidget(QWidget):
         self._depth_debounce = QTimer(self)
         self._depth_debounce.setSingleShot(True)
 
-        self.stats_label = QLabel()
-        self.stats_label.setObjectName("groupingSummaryBadge")
-        self.stats_label.setVisible(False)
-
-        self.skip_button = QPushButton("Continue without organizing")
-        self.skip_button.setObjectName("groupingGhostButton")
-        self.skip_button.setEnabled(False)
-
         self.primary_button = QPushButton("Review, then Apply")
         self.primary_button.setObjectName("groupingPrimaryButton")
         self.primary_button.setMinimumHeight(34)
         self.primary_button.setEnabled(False)
+        self.primary_button.setVisible(False)
 
         self.empty_state_frame = QFrame()
         self.empty_state_frame.setObjectName("groupingEmptyState")
@@ -719,12 +713,9 @@ class GroupingStepWidget(QWidget):
         self.open_preview_button.setEnabled(False)
         self.open_preview_button.setVisible(False)
 
-        self.shortcut_strip = WorkflowShortcutStrip(ORGANIZE_SHORTCUTS)
-
         self.output_root_label = QLabel()
         self.output_root_label.setVisible(False)
         self.preview_label = self.loading_label
-        self.preview_stats_label = self.stats_label
         self.preview_image_label = self.large_preview_view
 
     def _create_layout(self) -> None:
@@ -733,7 +724,7 @@ class GroupingStepWidget(QWidget):
         root.setSpacing(0)
 
         tb = QHBoxLayout(self.top_bar)
-        tb.setContentsMargins(16, 10, 16, 10)
+        tb.setContentsMargins(16, 8, 16, 8)
         tb.setSpacing(6)
         tb.addWidget(self.back_button)
         tb.addWidget(self.folder_button)
@@ -746,12 +737,7 @@ class GroupingStepWidget(QWidget):
             tb.addWidget(self._mode_buttons[value])
         tb.addWidget(self._location_depth_widget)
         tb.addSpacing(10)
-        tb.addWidget(self.stats_label)
         tb.addStretch(1)
-        tb.addWidget(self.skip_button)
-        tb.addSpacing(6)
-        tb.addWidget(self.primary_button)
-
         root.addWidget(self.top_bar)
         self._add_hsep(root, "groupingBarSep")
 
@@ -849,12 +835,12 @@ class GroupingStepWidget(QWidget):
         info_col.addWidget(self.preview_selection_meta)
         bb.addLayout(info_col)
         bb.addStretch(1)
-        bb.addWidget(self.shortcut_strip)
         loading_col = QVBoxLayout()
         loading_col.setSpacing(4)
         loading_col.addWidget(self.loading_label)
         loading_col.addWidget(self.loading_bar)
         bb.addLayout(loading_col)
+        bb.addWidget(self.primary_button)
 
         root.addWidget(self.bottom_bar)
 
@@ -867,9 +853,8 @@ class GroupingStepWidget(QWidget):
 
     def _connect_signals(self) -> None:
         self._mode_button_group.buttonClicked.connect(self._emit_mode_changed)
-        self.primary_button.clicked.connect(self._emit_create_requested)
+        self.primary_button.clicked.connect(self._emit_apply_requested)
         self.back_button.clicked.connect(self.back_requested.emit)
-        self.skip_button.clicked.connect(self.skip_requested.emit)
         self.folder_button.clicked.connect(self.select_folder_requested.emit)
         self._empty_cta.clicked.connect(self.select_folder_requested.emit)
         self.preview_tree.currentItemChanged.connect(self._handle_after_item_changed)
@@ -893,6 +878,8 @@ class GroupingStepWidget(QWidget):
             self._on_location_depth_changed
         )
         self._depth_debounce.timeout.connect(self._fire_depth_change)
+        self.before_tree.installEventFilter(self)
+        self.preview_tree.installEventFilter(self)
 
     def _shortcut_item(self) -> QTreeWidgetItem | None:
         focus = QApplication.focusWidget()
@@ -938,7 +925,7 @@ class GroupingStepWidget(QWidget):
 
     def _shortcut_apply(self) -> None:
         if self.primary_button.isEnabled():
-            self._emit_create_requested()
+            self._emit_apply_requested()
 
     def _on_location_depth_changed(self) -> None:
         self._depth_debounce.start(600)
@@ -959,21 +946,15 @@ class GroupingStepWidget(QWidget):
                 return val
         return 3
 
-    def _emit_create_requested(self) -> None:
-        effective_plan = self.get_effective_plan()
-        if not self._confirm_grouping_actions(effective_plan):
-            return
-        all_source_paths = [
-            p
-            for g in (effective_plan.groups if effective_plan else [])
-            for p in g.source_paths
-        ] + (effective_plan.unassigned_paths if effective_plan else [])
-        self._check_and_handle_companion_preference(all_source_paths)
-        self.create_requested.emit(
-            self.current_mode(),
-            self.get_group_name_overrides(),
-            effective_plan,
-        )
+    def _emit_apply_requested(self) -> None:
+        self.apply_requested.emit()
+
+    def prepare_plan_for_apply(self, plan: GroupingPlan) -> None:
+        """Resolve companion-file handling before a shared workflow apply."""
+        source_paths = [
+            path for group in plan.groups for path in group.source_paths
+        ] + list(plan.unassigned_paths)
+        self._check_and_handle_companion_preference(source_paths)
 
     def _check_and_handle_companion_preference(self, source_paths) -> None:
         """Show dialog if companion files (.xmp / same-stem images) exist and preference not set."""
@@ -1062,12 +1043,12 @@ class GroupingStepWidget(QWidget):
             self.after_desc.setText(text)
 
     def set_busy(self, busy: bool) -> None:
-        self.primary_button.setEnabled(not busy and self._current_plan is not None)
+        self._busy = busy
+        self._update_primary_action_state()
         for btn in self._mode_buttons.values():
             btn.setEnabled(not busy and self.has_source_folder())
         for btn in self._location_depth_buttons.values():
             btn.setEnabled(not busy and self.has_source_folder())
-        self.skip_button.setEnabled(not busy and self.has_source_folder())
         self.folder_button.setEnabled(not busy)
         self.back_button.setEnabled(not busy)
         self.primary_button.setText("Applying…" if busy else "Review, then Apply")
@@ -1079,6 +1060,11 @@ class GroupingStepWidget(QWidget):
         """Use the application-wide deletion state as Organize's source of truth."""
         self._is_marked_func = func
         self.refresh_deletion_state()
+
+    def set_has_any_marked_func(self, func: Callable[[], bool]) -> None:
+        """Use shared deletion state to expose Organize's Apply action."""
+        self._has_any_marked_func = func
+        self._update_primary_action_state()
 
     def refresh_deletion_state(self) -> None:
         """Refresh mark presentation without rebuilding either tree or its icons."""
@@ -1171,8 +1157,6 @@ class GroupingStepWidget(QWidget):
 
         for btn in self._mode_buttons.values():
             btn.setEnabled(has_folder)
-        self.skip_button.setEnabled(has_folder)
-        self.primary_button.setEnabled(has_folder and self._current_plan is not None)
         if not has_folder:
             self._current_preview_source_path = None
             self.before_tree.clear()
@@ -1186,10 +1170,10 @@ class GroupingStepWidget(QWidget):
             self._original_group_labels_by_path = {}
             self._original_group_labels_by_group_id = {}
             self._sticky_empty_group_ids.clear()
-            self.stats_label.setVisible(False)
             self.loading_label.setText("Select a folder to start.")
             self.loading_bar.setVisible(False)
             self._clear_selected_preview()
+        self._update_primary_action_state()
 
     def has_source_folder(self) -> bool:
         return self.folder_path_label.text() != "No folder selected"
@@ -1289,8 +1273,42 @@ class GroupingStepWidget(QWidget):
             self._current_plan
         )
 
+    def discard_unsaved_grouping_edits(self) -> None:
+        """Restore the editable preview to the worker-produced baseline plan."""
+        if self._current_plan is None:
+            return
+        baseline = copy.deepcopy(self._current_plan)
+        self.set_preview_plan(baseline, self._current_output_root)
+
     def pending_grouping_action_lines(self) -> list[str]:
         return self._build_action_lines(self.get_effective_plan())
+
+    def pending_grouping_deletion_paths(
+        self, action_lines: Iterable[str] | None = None
+    ) -> tuple[list[str], list[str]]:
+        """Return explicit deletion targets and folders removed after file moves."""
+        delete_paths: list[str] = []
+        removed_folders: list[str] = []
+        prefixes = (
+            ("Delete folder ", delete_paths),
+            ("Delete file ", delete_paths),
+            ("Remove empty folder ", removed_folders),
+        )
+        for line in action_lines or self.pending_grouping_action_lines():
+            for prefix, destination in prefixes:
+                if not line.startswith(prefix):
+                    continue
+                displayed_path = line[len(prefix) :].strip()
+                path = (
+                    displayed_path
+                    if os.path.isabs(displayed_path)
+                    else os.path.join(self._source_root or "", displayed_path)
+                )
+                destination.append(os.path.normpath(path))
+                break
+        return list(dict.fromkeys(delete_paths)), list(
+            dict.fromkeys(removed_folders)
+        )
 
     def set_loading_state(
         self, message: str, busy: bool, progress: int | None = None
@@ -1378,20 +1396,54 @@ class GroupingStepWidget(QWidget):
         )
 
     def _update_stats(self) -> None:
-        group_count = len(self._editable_groups)
-        group_label = "folder" if group_count == 1 else "folders"
-        removal_count = sum(
-            1 for path in self._all_source_paths() if self._is_marked_func(path)
-        )
-        removal_label = "mark" if removal_count == 1 else "marks"
-        self.stats_label.setText(
-            f"{group_count} {group_label}  ·  {removal_count} Trash {removal_label}"
-        )
-        self.stats_label.setVisible(True)
         self.loading_label.clear()
         self.loading_bar.setVisible(False)
-        self.primary_button.setEnabled(
-            self.has_source_folder() and self._current_plan is not None
+        self._update_primary_action_state()
+
+    def _update_primary_action_state(self) -> None:
+        has_actions = self._has_pending_grouping_actions()
+        self.primary_button.setVisible(self._busy or has_actions)
+        self.primary_button.setEnabled(not self._busy and has_actions)
+
+    def _has_pending_grouping_actions(self) -> bool:
+        """Return whether applying the effective plan would mutate the filesystem."""
+        if self._has_any_marked_func():
+            return True
+        if self._current_plan is None or not self.has_source_folder():
+            return False
+
+        plan = self.get_effective_plan()
+        if plan.deleted_paths:
+            return True
+
+        output_root = self._current_output_root or self._source_root or ""
+        for group in plan.groups:
+            destination_dir = os.path.join(
+                output_root,
+                self._normalize_relative_path(group.group_label),
+            )
+            for source_path in group.source_paths:
+                destination_path = os.path.join(
+                    destination_dir,
+                    plan.filename_for_path(source_path),
+                )
+                if os.path.normcase(os.path.normpath(source_path)) != os.path.normcase(
+                    os.path.normpath(destination_path)
+                ):
+                    return True
+
+        unassigned_dir = os.path.join(output_root, "Unassigned")
+        return any(
+            os.path.normcase(os.path.normpath(source_path))
+            != os.path.normcase(
+                os.path.normpath(
+                    os.path.join(
+                        unassigned_dir,
+                        plan.filename_for_path(source_path),
+                    )
+                )
+            )
+            for source_path in plan.unassigned_paths
         )
 
     def _capture_selection_state(self) -> dict[str, object]:
@@ -2168,6 +2220,8 @@ class GroupingStepWidget(QWidget):
         if source_path:
             self._update_selected_preview(source_path)
             self._sync_selection_to_other_tree(current, from_after=True)
+            if not self._syncing_active_image:
+                self.active_image_changed.emit(source_path)
         elif current is not None:
             self._update_folder_preview(current)
             self._sync_selection_to_other_tree(current, from_after=True)
@@ -2181,6 +2235,8 @@ class GroupingStepWidget(QWidget):
         if source_path:
             self._update_selected_preview(source_path)
             self._sync_selection_to_other_tree(current, from_after=False)
+            if not self._syncing_active_image:
+                self.active_image_changed.emit(source_path)
         elif current is not None:
             self._update_folder_preview(current)
             self._sync_selection_to_other_tree(current, from_after=False)
@@ -2538,6 +2594,42 @@ class GroupingStepWidget(QWidget):
             self.before_tree.setCurrentItem(before_item)
             before_item.setSelected(True)
             self.before_tree.scrollToItem(before_item)
+
+    def focus_image(self, source_path: str) -> bool:
+        """Focus and highlight a file without clearing other selected files."""
+
+        after_item = self._after_file_items_by_path.get(source_path)
+        before_item = self._before_file_items_by_path.get(source_path)
+        if after_item is None and before_item is None:
+            return False
+
+        self._syncing_active_image = True
+        self.before_tree.blockSignals(True)
+        self.preview_tree.blockSignals(True)
+        try:
+            if after_item is not None:
+                self.preview_tree.setCurrentItem(
+                    after_item,
+                    0,
+                    QItemSelectionModel.SelectionFlag.NoUpdate,
+                )
+                after_item.setSelected(True)
+                self.preview_tree.scrollToItem(after_item)
+            if before_item is not None:
+                self.before_tree.setCurrentItem(
+                    before_item,
+                    0,
+                    QItemSelectionModel.SelectionFlag.NoUpdate,
+                )
+                before_item.setSelected(True)
+                self.before_tree.scrollToItem(before_item)
+            self._update_selected_preview(source_path)
+            self.large_preview_view.fit_in_view()
+        finally:
+            self.preview_tree.blockSignals(False)
+            self.before_tree.blockSignals(False)
+            self._syncing_active_image = False
+        return True
 
     def _show_before_context_menu(self, position: QPoint) -> None:
         item = self.before_tree.itemAt(position)
@@ -3408,7 +3500,9 @@ class GroupingStepWidget(QWidget):
             self._show_status_message(reason, 5000)
             return
         if operation == "mark":
-            self.toggle_deletion_marks_requested.emit(paths)
+            self.toggle_deletion_marks_requested.emit(
+                list(dict.fromkeys([directory_path, *paths]))
+            )
         elif operation == "trash":
             self.trash_requested.emit(directory_path, paths)
 
@@ -3495,76 +3589,6 @@ class GroupingStepWidget(QWidget):
             "Path Conflicts",
             preview,
         )
-
-    def _confirm_grouping_actions(self, plan: GroupingPlan) -> bool:
-        action_lines = self._build_action_lines(plan)
-        if not action_lines:
-            QMessageBox.information(
-                self,
-                "No Changes To Apply",
-                "There are no changes to apply in the current grouping plan.",
-            )
-            return False
-
-        move_count = sum(1 for ln in action_lines if ln.startswith("Move "))
-        rename_count = sum(1 for ln in action_lines if ln.startswith("Rename folder "))
-        delete_count = sum(1 for ln in action_lines if ln.startswith("Delete "))
-        remove_count = sum(
-            1 for ln in action_lines if ln.startswith("Remove empty folder ")
-        )
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Confirm Grouping Actions")
-        dialog.setObjectName("groupingConfirmDialog")
-        dialog.setModal(True)
-        dialog.setMinimumSize(620, 420)
-        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        make_dialog_draggable(dialog)
-
-        outer = QVBoxLayout(dialog)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        build_dialog_header("Confirm Changes", "📁", outer)
-
-        body = QVBoxLayout()
-        body.setContentsMargins(22, 16, 22, 10)
-        body.setSpacing(12)
-
-        parts: list[str] = []
-        if move_count:
-            parts.append(f"{move_count} file move(s)")
-        if rename_count:
-            parts.append(f"{rename_count} folder rename(s)")
-        if delete_count:
-            parts.append(f"{delete_count} deletion(s)")
-        if remove_count:
-            parts.append(f"{remove_count} empty folder removal(s)")
-        summary_text = "This will apply " + ", ".join(parts) + "."
-
-        summary = QLabel(summary_text)
-        summary.setObjectName("groupingConfirmMessage")
-        summary.setWordWrap(True)
-        body.addWidget(summary)
-
-        action_list = QPlainTextEdit()
-        action_list.setObjectName("groupingConfirmActionList")
-        action_list.setReadOnly(True)
-        action_list.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        action_list.setPlainText("\n".join(action_lines))
-        body.addWidget(action_list, 1)
-
-        outer.addLayout(body)
-
-        build_dialog_footer(
-            outer,
-            [
-                ("Cancel", "groupingConfirmCancelButton", dialog.reject, False),
-                ("Apply Changes", "groupingConfirmApplyButton", dialog.accept, True),
-            ],
-        )
-
-        return dialog.exec() == int(QDialog.DialogCode.Accepted)
 
     def _build_action_lines(self, plan: GroupingPlan) -> list[str]:
         lines: list[str] = []
@@ -3682,26 +3706,59 @@ class GroupingStepWidget(QWidget):
         source_root = self._source_root or ""
         if not source_root or not os.path.isdir(source_root):
             return []
-        moving_set = set()
+        normalized_source_root = os.path.normcase(os.path.normpath(source_root))
+        moving_set: set[str] = set()
+        candidate_dirs: dict[str, str] = {}
         for path in moving_paths:
             if path and os.path.exists(path):
-                moving_set.add(os.path.normcase(os.path.normpath(path)))
+                normalized_path = os.path.normcase(os.path.normpath(path))
+                moving_set.add(normalized_path)
+                current_dir = os.path.dirname(os.path.normpath(path))
+                while current_dir:
+                    normalized_dir = os.path.normcase(os.path.normpath(current_dir))
+                    if normalized_dir == normalized_source_root:
+                        break
+                    try:
+                        common_root = os.path.normcase(
+                            os.path.normpath(
+                                os.path.commonpath([source_root, current_dir])
+                            )
+                        )
+                        within_source = common_root == normalized_source_root
+                    except ValueError:
+                        within_source = False
+                    if not within_source:
+                        break
+                    candidate_dirs[normalized_dir] = current_dir
+                    parent_dir = os.path.dirname(current_dir)
+                    if parent_dir == current_dir:
+                        break
+                    current_dir = parent_dir
+
+        if not candidate_dirs:
+            return []
+
         removable_dirs: set[str] = set()
         removable_dirs_by_key: dict[str, str] = {}
-        normalized_source_root = os.path.normcase(os.path.normpath(source_root))
-        for current_root, dirnames, filenames in os.walk(source_root, topdown=False):
-            normalized_current = os.path.normcase(os.path.normpath(current_root))
-            if normalized_current == normalized_source_root:
+        ordered_candidates = sorted(
+            candidate_dirs.items(),
+            key=lambda item: item[1].count(os.sep),
+            reverse=True,
+        )
+        for normalized_current, current_root in ordered_candidates:
+            try:
+                entries = list(os.scandir(current_root))
+            except OSError:
                 continue
             remaining_files = any(
-                os.path.normcase(os.path.normpath(os.path.join(current_root, filename)))
-                not in moving_set
-                for filename in filenames
+                os.path.normcase(os.path.normpath(entry.path)) not in moving_set
+                for entry in entries
+                if not entry.is_dir(follow_symlinks=False)
             )
             remaining_children = any(
-                os.path.normcase(os.path.normpath(os.path.join(current_root, dirname)))
-                not in removable_dirs
-                for dirname in dirnames
+                os.path.normcase(os.path.normpath(entry.path)) not in removable_dirs
+                for entry in entries
+                if entry.is_dir(follow_symlinks=False)
             )
             if not remaining_files and not remaining_children:
                 removable_dirs.add(normalized_current)
@@ -3721,3 +3778,47 @@ class GroupingStepWidget(QWidget):
         except Exception:
             pass
         return path
+
+    @override
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.KeyPress:
+            if obj in (self.before_tree, self.preview_tree):
+                key_event: QKeyEvent = event
+                key = key_event.key()
+                modifiers = key_event.modifiers()
+                is_up = key in (Qt.Key.Key_Up, Qt.Key.Key_K)
+                is_down = key in (Qt.Key.Key_Down, Qt.Key.Key_J)
+                if is_up or is_down:
+                    has_shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+                    has_alt = bool(modifiers & Qt.KeyboardModifier.AltModifier)
+                    if not has_shift and not has_alt:
+                        has_special = (
+                            bool(modifiers & Qt.KeyboardModifier.MetaModifier)
+                            if sys.platform == "darwin"
+                            else bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+                        )
+                        skip_deleted = not has_special
+                        tree: QTreeWidget = obj
+                        current_item = tree.currentItem()
+                        if current_item is not None:
+                            candidate = current_item
+                            while True:
+                                candidate = (
+                                    tree.itemAbove(candidate)
+                                    if is_up
+                                    else tree.itemBelow(candidate)
+                                )
+                                if candidate is None:
+                                    break
+                                # If skipping is enabled, check if the candidate is marked for deletion
+                                if skip_deleted:
+                                    source_path = self._item_source_path(candidate)
+                                    if source_path and self._is_marked_func(source_path):
+                                        continue
+                                # Found a valid item!
+                                tree.setCurrentItem(candidate)
+                                return True
+                            # If we reached the end of the tree and found no valid item,
+                            # consume the event to prevent selecting an invalid item.
+                            return True
+        return super().eventFilter(obj, event)

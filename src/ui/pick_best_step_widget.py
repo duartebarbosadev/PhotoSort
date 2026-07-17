@@ -1,18 +1,18 @@
 import logging
 import os
+from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import override
 from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListWidgetItem,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -27,7 +27,8 @@ from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResul
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.workflow_review_components import (
     PICK_BEST_SHORTCUTS,
-    WorkflowReviewHeader,
+    WorkflowDecisionCard,
+    WorkflowReviewListPanel,
     WorkflowStateBanner,
     install_workflow_shortcuts,
 )
@@ -38,10 +39,11 @@ logger = logging.getLogger(__name__)
 WINNER_BORDER_COLOR = "#F5B700"
 MARKED_BORDER_COLOR = "#E53935"
 KEEP_BORDER_COLOR = "#66BB6A"
-FOCUSED_BORDER_COLOR = "#4FC3F7"
 CARD_BG = "#20252C"
 CARD_BG_WINNER = "#2C2616"
 CARD_BORDER_COLOR = "#3A434C"
+LIST_SECTION_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+LIST_CLUSTER_ROLE = int(Qt.ItemDataRole.UserRole) + 2
 
 
 def _first_present(metadata: dict, *keys: str):
@@ -97,185 +99,144 @@ def _format_capture_date(metadata: dict) -> str | None:
     return None
 
 
-class CompareCard(QFrame):
-    toggled = pyqtSignal(str, bool)
+class CompareCard(WorkflowDecisionCard):
+    chosen = pyqtSignal(str)
 
     def __init__(self, slot_number: int, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
+        super().__init__(slot_number, parent, filename_in_header=True)
         self.path: str = ""
-        self.is_winner = False
-        self._marked = False
+        self.is_ai_pick = False
+        self._selected = False
+        self._group_confirmed = False
+        self._group_keep_all = False
         self._focused = False
         self._slot_number = slot_number
+        self._display_name = ""
 
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setObjectName("workflowCompareCard")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._meta_grid = self._details_grid
+        self._meta_rows = self._detail_rows
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
-
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.setSpacing(8)
-
-        self._slot_label = QLabel(f"{slot_number}")
-        self._slot_label.setObjectName("workflowCompareSlot")
-        self._slot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._slot_label.setFixedSize(22, 22)
-        self._slot_label.setStyleSheet(
-            "border-radius: 11px; background: #11161C; color: #B8C2CC; font-weight: bold;"
-        )
-        top_row.addWidget(self._slot_label, alignment=Qt.AlignmentFlag.AlignLeft)
-
-        self._state_label = QLabel()
-        self._state_label.setObjectName("workflowCompareState")
-        self._state_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        top_row.addWidget(self._state_label, stretch=1)
-        layout.addLayout(top_row)
-
-        self._name_label = QLabel("")
-        self._name_label.setObjectName("workflowCompareName")
-        self._name_label.setWordWrap(False)
-        self._name_label.setStyleSheet(
-            "font-size: 12px; font-weight: 600; color: #F5F7FA;"
-        )
-        layout.addWidget(self._name_label)
-
-        self._score_label = QLabel("")
-        self._score_label.setObjectName("workflowCompareScore")
-        self._score_label.setStyleSheet("font-size: 11px; color: #AAB4BE;")
-        layout.addWidget(self._score_label)
-
-        self._meta_grid = QGridLayout()
-        self._meta_grid.setContentsMargins(0, 0, 0, 0)
-        self._meta_grid.setHorizontalSpacing(10)
-        self._meta_grid.setVerticalSpacing(4)
-        layout.addLayout(self._meta_grid)
-
-        self._meta_rows: list[tuple[QLabel, QLabel]] = []
-        for row in range(6):
-            key = QLabel("")
-            key.setObjectName("workflowCompareMetaKey")
-            key.setStyleSheet("font-size: 10px; color: #7D8792;")
-            value = QLabel("")
-            value.setObjectName("workflowCompareMetaValue")
-            value.setStyleSheet("font-size: 10px; color: #D5DBE1;")
-            self._meta_grid.addWidget(key, row, 0)
-            self._meta_grid.addWidget(value, row, 1)
-            self._meta_rows.append((key, value))
-
-        self._hint_label = QLabel("Click image/card or press number key")
-        self._hint_label.setObjectName("workflowCompareHint")
-        self._hint_label.setStyleSheet("font-size: 10px; color: #6D7782;")
-        layout.addWidget(self._hint_label)
-
+        self.activated.connect(self._choose)
         self._update_style()
 
     def configure(
         self,
         *,
         path: str,
-        is_winner: bool,
-        marked: bool,
+        is_ai_pick: bool,
+        selected: bool,
+        group_confirmed: bool,
+        group_keep_all: bool,
         score: float | None,
         failure_reason: str | None,
         metadata_rows: list[tuple[str, str]],
     ) -> None:
         self.path = path
-        self.is_winner = is_winner
-        self._marked = marked
-        self._name_label.setText(os.path.basename(path))
+        self.is_ai_pick = is_ai_pick
+        self._selected = selected
+        self._group_confirmed = group_confirmed
+        self._group_keep_all = group_keep_all
+        name = os.path.basename(path)
+        name_parts = [name]
+        if is_ai_pick:
+            name_parts.append("AI suggestion")
         if score is None:
-            self._score_label.setText("Score unavailable")
-            self._score_label.setToolTip(failure_reason or "")
+            name_parts.append("score unavailable")
+            self._name_label.setToolTip(failure_reason or "")
         else:
-            self._score_label.setText(f"Final score {score:.3f}")
-            self._score_label.setToolTip("")
+            name_parts.append(f"score {score:.3f}")
+            self._name_label.setToolTip("")
+        self._display_name = " · ".join(name_parts)
 
-        for idx, (key_label, value_label) in enumerate(self._meta_rows):
-            if idx < len(metadata_rows):
-                key_text, value_text = metadata_rows[idx]
-                key_label.setText(key_text)
-                value_label.setText(value_text)
-                key_label.show()
-                value_label.show()
-            else:
-                key_label.hide()
-                value_label.hide()
+        self.set_details(metadata_rows)
 
         self._update_style()
 
-    def set_marked(self, marked: bool) -> None:
-        self._marked = marked
+    def set_selected(self, selected: bool) -> None:
+        self._selected = selected
+        self._update_style()
+
+    def set_group_confirmed(self, confirmed: bool) -> None:
+        self._group_confirmed = confirmed
         self._update_style()
 
     def set_focused(self, focused: bool) -> None:
         self._focused = focused
         self._update_style()
 
-    @override
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.path:
-            self._toggle()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def _toggle(self) -> None:
+    def _choose(self) -> None:
         if not self.path:
             return
-        self._marked = not self._marked
-        self._update_style()
-        self.toggled.emit(self.path, self._marked)
+        self.chosen.emit(self.path)
 
     def set_info_visible(self, visible: bool) -> None:
-        self._score_label.setVisible(visible)
         self._hint_label.setVisible(visible)
-        for key_label, value_label in self._meta_rows:
-            key_label.setVisible(visible)
-            value_label.setVisible(visible)
+        self.set_details_visible(visible)
 
     def _update_style(self) -> None:
-        if self._marked:
-            border_color = MARKED_BORDER_COLOR
-            status = "MARKED FOR TRASH · staged"
-            color = "#FF7B86"
-        elif self.is_winner:
-            border_color = WINNER_BORDER_COLOR
-            status = "AI PICK · KEEP"
-            color = WINNER_BORDER_COLOR
-        else:
-            border_color = FOCUSED_BORDER_COLOR if self._focused else CARD_BORDER_COLOR
+        if self._group_confirmed and self._group_keep_all:
+            border_color = KEEP_BORDER_COLOR
             status = "KEEP"
             color = KEEP_BORDER_COLOR
-
-        bg = CARD_BG_WINNER if self.is_winner else CARD_BG
-        self._state_label.setText(status)
-        self._state_label.setStyleSheet(
-            f"font-size: 11px; font-weight: bold; color: {color};"
-        )
-        if self.is_winner:
-            self._hint_label.setText(
-                f"AI pick. Click or press {self._slot_number} to change the choice"
-            )
+        elif self._group_confirmed and self._selected:
+            border_color = KEEP_BORDER_COLOR
+            status = "KEEP"
+            color = KEEP_BORDER_COLOR
+        elif self._group_confirmed:
+            border_color = MARKED_BORDER_COLOR
+            status = "TRASH"
+            color = "#FF7B86"
+        elif self._selected:
+            border_color = WINNER_BORDER_COLOR
+            status = "KEEP"
+            color = WINNER_BORDER_COLOR
         else:
-            self._hint_label.setText(
-                f"Click image/card or press {self._slot_number} to change the choice"
-            )
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+            border_color = CARD_BORDER_COLOR
+            status = "TRASH"
+            color = "#FF9AA3"
 
-        self.setStyleSheet(
-            f"CompareCard {{"
-            f"border: 2px solid {border_color};"
-            f"border-radius: 10px;"
-            f"background: {bg};"
-            f"}}"
+        bg = CARD_BG_WINNER if self._selected or self._group_keep_all else CARD_BG
+        if self._group_keep_all:
+            hint = "Kept. Select a photo to change this decision"
+        elif self._selected:
+            hint = "Selected. Click another photo or press 1–3 to change the choice"
+        else:
+            hint = f"Click image/card or press {self._slot_number} to select"
+        self.set_decision(
+            filename=self._display_name,
+            state=status,
+            state_color=color,
+            border_color=border_color,
+            background=bg,
+            hint=hint,
         )
+
+
+@dataclass(slots=True)
+class TournamentGroup:
+    paths: list[str]
+    ai_pick: str
+    selected_path: str
+    confirmed: bool = False
+    keep_all: bool = False
+
+
+@dataclass(slots=True)
+class TournamentRound:
+    groups: list[TournamentGroup]
+
+
+@dataclass(slots=True)
+class ClusterTournament:
+    cluster_key: object
+    payload: PickBestClusterResult
+    rounds: list[TournamentRound] = field(default_factory=list)
+    current_round: int = 0
+    current_group: int = 0
+    final_winner: str | None = None
+    finalized: bool = False
+    prior_marks: dict[str, bool] | None = None
+    next_path_index: int = 0
 
 
 class PickBestStepWidget(QWidget):
@@ -283,24 +244,30 @@ class PickBestStepWidget(QWidget):
     proceed_to_cull_requested = pyqtSignal()
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
+    active_image_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._clusters: list[PickBestClusterResult] = []
+        self._cluster_keys: list[object] = []
+        self._tournaments: list[ClusterTournament] = []
+        self._shown_results: PickBestResults | None = None
         self._cluster_index = 0
-        self._subset_index = 0
+        self._subset_index = 0  # compatibility alias for the current group index
         self._subset_paths: list[str] = []
         self._compare_cards: list[CompareCard] = []
         self._focused_slot_index = 0
+        self._syncing_active_image = False
         self._current_winner_path = ""
         self._current_all_paths: list[str] = []
         self._cluster_ordered_paths: list[str] = []
-        self._cluster_mark_state: dict[str, bool] = {}
+        self._publishing_confirmation = False
         self._metadata_cache: dict[str, list[tuple[str, str]]] = {}
         self._focus_mode = False
         self._current_images_data: list[dict] = []
         self._info_visible = True
         self._is_marked_func: Callable[[str], bool] | None = None
+        self._has_any_marked_func: Callable[[], bool] | None = None
         self._create_widgets()
         self._connect_signals()
         self._create_shortcuts()
@@ -320,9 +287,28 @@ class PickBestStepWidget(QWidget):
         self._progress_bar.setValue(0)
 
     def show_results(self, results: PickBestResults) -> None:
-        self._clusters = [r for r in results.values() if r.get("winner_path")]
+        if self._shown_results is not None and results == self._shown_results:
+            if self._tournaments:
+                self._stack.setCurrentWidget(self._page_review)
+                self._load_cluster(self._cluster_index)
+                self.setFocus()
+            return
+        for tournament in self._tournaments:
+            if tournament.prior_marks is not None:
+                self._publish_confirmed_state(dict(tournament.prior_marks))
+        self._shown_results = results
+        cluster_entries = [
+            (key, payload)
+            for key, payload in results.items()
+            if payload.get("winner_path")
+        ]
+        self._cluster_keys = [key for key, _payload in cluster_entries]
+        self._clusters = [payload for _key, payload in cluster_entries]
+        self._tournaments = [
+            self._build_tournament(key, payload) for key, payload in cluster_entries
+        ]
         self._metadata_cache.clear()
-        if not self._clusters:
+        if not self._tournaments:
             self.show_loading(
                 "No comparable clusters found.\nClick 'Done' to continue to Cull."
             )
@@ -335,25 +321,31 @@ class PickBestStepWidget(QWidget):
         self._cluster_index = 0
         self._load_cluster(0)
         self._stack.setCurrentWidget(self._page_review)
+        self.setFocus()
 
     def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
         self._is_marked_func = func
-        self._sync_viewer.set_is_marked_for_deletion_func(func)
+        self._sync_viewer.set_is_marked_for_deletion_func(lambda _path: False)
 
     def set_has_any_marked_func(self, func: Callable[[], bool]) -> None:
-        self._sync_viewer.set_has_any_marked_for_deletion_func(func)
+        self._has_any_marked_func = func
+        self._sync_viewer.set_has_any_marked_for_deletion_func(lambda: False)
 
     def refresh_deletion_state(self) -> None:
-        """Synchronize cards when marks are changed from another workflow."""
+        """Tournament choices remain local until a final winner is confirmed."""
 
-        if not self._is_marked_func or not self._cluster_mark_state:
-            return
-        for path in list(self._cluster_mark_state):
-            self._cluster_mark_state[path] = bool(self._is_marked_func(path))
-        for card in self._compare_cards:
-            if card.isVisible() and card.path:
-                card.set_marked(self._cluster_mark_state.get(card.path, False))
-        self._update_cluster_header_only()
+    def discard_pending_decisions(self) -> None:
+        """Reset every local tournament while retaining worker analysis results."""
+        for tournament in self._tournaments:
+            if tournament.prior_marks is not None:
+                self._publish_confirmed_state(dict(tournament.prior_marks))
+        self._tournaments = [
+            self._build_tournament(key, payload)
+            for key, payload in zip(self._cluster_keys, self._clusters, strict=True)
+        ]
+        if self._tournaments:
+            self._cluster_index = min(self._cluster_index, len(self._tournaments) - 1)
+            self._load_cluster(self._cluster_index)
 
     def _create_widgets(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -403,21 +395,27 @@ class PickBestStepWidget(QWidget):
         review_layout.setContentsMargins(0, 0, 0, 0)
         review_layout.setSpacing(0)
 
-        self._review_header = WorkflowReviewHeader(
-            step_number=4,
-            title="Pick Best",
-            description=(
-                "Compare each cluster and choose what to keep. Red choices are "
-                "marked for Trash only; no files move on this screen."
-            ),
-            shortcuts=PICK_BEST_SHORTCUTS,
-        )
-        review_layout.addWidget(self._review_header)
-
         review_content = QWidget()
         content_layout = QVBoxLayout(review_content)
         content_layout.setContentsMargins(12, 10, 12, 10)
         content_layout.setSpacing(8)
+
+        review_splitter = QSplitter(Qt.Orientation.Horizontal)
+        review_splitter.setHandleWidth(4)
+        review_splitter.setChildrenCollapsible(False)
+        self._review_list_panel = WorkflowReviewListPanel(
+            bulk_action_text=None,
+            title_text="Tournament",
+            count_noun="photo",
+        )
+        self._items_list = self._review_list_panel.list_widget
+        self._items_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        review_splitter.addWidget(self._review_list_panel)
+        review_splitter.addWidget(review_content)
+        review_splitter.setStretchFactor(0, 0)
+        review_splitter.setStretchFactor(1, 1)
 
         cluster_bar = QWidget()
         cluster_bar.setObjectName("workflowClusterBar")
@@ -441,18 +439,18 @@ class PickBestStepWidget(QWidget):
         header_layout.addWidget(self._next_cluster_btn)
         content_layout.addWidget(cluster_bar)
 
-        self._subset_info_label = QLabel()
-        self._subset_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._subset_info_label.setStyleSheet("font-size: 11px; color: #92A0AD;")
-        content_layout.addWidget(self._subset_info_label)
-
-        self._hint_label = QLabel(
-            "The AI pick stays on the right as a reference, and every choice remains editable."
-        )
-        self._hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._hint_label.setWordWrap(True)
-        self._hint_label.setStyleSheet("font-size: 11px; color: #888888;")
-        content_layout.addWidget(self._hint_label)
+        round_bar = QWidget()
+        round_layout = QHBoxLayout(round_bar)
+        round_layout.setContentsMargins(0, 0, 0, 0)
+        round_layout.setSpacing(8)
+        self._prev_round_btn = QPushButton("◀ Previous Comparison")
+        self._prev_round_btn.setObjectName("workflowGhostButton")
+        self._next_round_btn = QPushButton("Next Comparison ▶")
+        self._next_round_btn.setObjectName("workflowGhostButton")
+        round_layout.addWidget(self._prev_round_btn)
+        round_layout.addStretch(1)
+        round_layout.addWidget(self._next_round_btn)
+        content_layout.addWidget(round_bar)
 
         self._sync_viewer = SynchronizedImageViewer()
         self._sync_viewer.controls_frame.hide()
@@ -460,9 +458,9 @@ class PickBestStepWidget(QWidget):
 
         self._state_banner = WorkflowStateBanner()
         self._state_banner.set_state(
-            "Staged choices",
-            "Marked photos remain on disk until you confirm moving them to Trash in Cull.",
-            tone="info",
+            "Choose, then confirm",
+            "Confirm applies the Keep and Trash marks immediately.",
+            tone="warning",
         )
         content_layout.addWidget(self._state_banner)
 
@@ -481,23 +479,26 @@ class PickBestStepWidget(QWidget):
         action_layout.setContentsMargins(0, 2, 0, 2)
         action_layout.setSpacing(8)
 
-        self._prev_set_btn = QPushButton("◀ Prev Set")
+        self._prev_set_btn = QPushButton("◀ Prev Group")
         self._prev_set_btn.setObjectName("workflowGhostButton")
         action_layout.addWidget(self._prev_set_btn)
 
-        self._keep_all_btn = QPushButton("Keep visible  [K]")
-        self._keep_all_btn.setObjectName("workflowDecisionKeep")
-        self._keep_all_btn.setToolTip("Keep every currently visible photo")
-        action_layout.addWidget(self._keep_all_btn)
-
-        self._mark_rest_btn = QPushButton("Mark visible for Trash  [X]")
-        self._mark_rest_btn.setObjectName("workflowDecisionTrash")
-        self._mark_rest_btn.setToolTip("Stage every currently visible photo for Trash")
-        action_layout.addWidget(self._mark_rest_btn)
-
-        self._next_set_btn = QPushButton("Next Set ▶")
+        self._next_set_btn = QPushButton("Next Group ▶")
         self._next_set_btn.setObjectName("workflowGhostButton")
         action_layout.addWidget(self._next_set_btn)
+        self._prev_set_btn.hide()
+        self._next_set_btn.hide()
+
+        self._confirm_btn = QPushButton("Confirm  →")
+        self._confirm_btn.setObjectName("workflowPrimaryButton")
+        action_layout.addWidget(self._confirm_btn)
+
+        self._keep_all_btn = QPushButton("Keep all")
+        self._keep_all_btn.setObjectName("workflowGhostButton")
+        self._keep_all_btn.setToolTip(
+            "Keep every photo in this group and continue without eliminating one (K)"
+        )
+        action_layout.addWidget(self._keep_all_btn)
 
         action_layout.addStretch()
 
@@ -506,34 +507,27 @@ class PickBestStepWidget(QWidget):
         action_layout.addWidget(self._done_btn)
 
         content_layout.addWidget(action_bar)
-        review_layout.addWidget(review_content, 1)
+        review_layout.addWidget(review_splitter, 1)
         self._stack.addWidget(self._page_review)
         self._stack.setCurrentWidget(self._page_loading)
 
     def _connect_signals(self) -> None:
         self._skip_btn_loading.clicked.connect(self.skip_requested)
-        self._review_header.skip_button.clicked.connect(self.skip_requested)
         self._done_btn.clicked.connect(self._on_done)
+        self._confirm_btn.clicked.connect(self._on_confirm)
+        self._keep_all_btn.clicked.connect(self._on_keep_all)
+        self._items_list.itemClicked.connect(self._on_photo_item_clicked)
         self._prev_cluster_btn.clicked.connect(self._prev_cluster)
         self._next_cluster_btn.clicked.connect(self._next_cluster)
-        self._prev_set_btn.clicked.connect(self._prev_subset)
-        self._next_set_btn.clicked.connect(self._next_subset)
-        self._keep_all_btn.clicked.connect(self._keep_visible)
-        self._mark_rest_btn.clicked.connect(self._delete_visible)
-
-        self._sync_viewer.markAsDeletedRequested.connect(self._on_viewer_mark)
-        self._sync_viewer.unmarkAsDeletedRequested.connect(self._on_viewer_unmark)
-        self._sync_viewer.markOthersAsDeletedRequested.connect(
-            self._on_viewer_mark_others
-        )
-        self._sync_viewer.unmarkOthersAsDeletedRequested.connect(
-            self._on_viewer_unmark_others
-        )
+        self._prev_set_btn.clicked.connect(self._prev_group)
+        self._next_set_btn.clicked.connect(self._next_group)
+        self._prev_round_btn.clicked.connect(self._prev_round)
+        self._next_round_btn.clicked.connect(self._next_round)
         self._sync_viewer.imageClicked.connect(self._on_viewer_clicked)
         self._sync_viewer.installEventFilter(self)
 
         for card in self._compare_cards:
-            card.toggled.connect(self._on_card_toggled)
+            card.chosen.connect(self._select_path)
 
     def _create_shortcuts(self) -> None:
         self._shortcuts = install_workflow_shortcuts(
@@ -545,108 +539,349 @@ class PickBestStepWidget(QWidget):
                 "slots:3": lambda: self._activate_slot_shortcut(2),
                 "clusters:Left": self._prev_cluster,
                 "clusters:Right": self._next_cluster,
-                "sets:[": self._prev_subset,
-                "sets:]": self._next_subset,
-                "bulk:K": self._keep_visible,
-                "bulk:X": self._delete_visible,
+                "groups:Up": self._prev_group,
+                "groups:Down": self._next_group,
                 "focus": self._toggle_focus_mode,
                 "info": self._toggle_info,
-                "continue": self._on_done,
+                "keep_all": self._on_keep_all,
+                "confirm": self._on_confirm,
                 "skip": self.skip_requested.emit,
             },
         )
 
-    def _load_cluster(self, index: int) -> None:
-        if not self._clusters:
-            return
-
-        self._cluster_index = index
-        cluster = self._clusters[index]
-        winner_path = cluster.get("winner_path", "")
-        all_paths: list[str] = cluster.get("all_paths", [])
-
-        self._current_winner_path = winner_path
-        self._current_all_paths = list(all_paths)
-
-        score_by_path, failure_reason_by_path = self._cluster_score_maps(cluster)
-
-        non_winners = [path for path in all_paths if path != winner_path]
-        non_winners.sort(
+    def _make_round(
+        self, paths: list[str], payload: PickBestClusterResult
+    ) -> TournamentRound:
+        score_by_path, _failures = self._cluster_score_maps(payload)
+        ai_pick = max(
+            paths,
             key=lambda path: (
-                score_by_path.get(path) is None,
-                -(score_by_path.get(path) or 0.0),
-                os.path.basename(path).lower(),
-            )
+                score_by_path.get(path) is not None,
+                score_by_path.get(path) or float("-inf"),
+                -paths.index(path),
+            ),
         )
-        self._cluster_ordered_paths = non_winners + (
-            [winner_path] if winner_path else []
-        )
-        saved_mark_state = cluster.get("_mark_state")
-        if isinstance(saved_mark_state, dict):
-            self._cluster_mark_state = {
-                path: bool(saved_mark_state.get(path, path != winner_path))
-                for path in self._cluster_ordered_paths
-            }
-        else:
-            self._cluster_mark_state = {
-                path: (
-                    bool(self._is_marked_func(path))
-                    if self._is_marked_func and self._is_marked_func(path)
-                    else path != winner_path
+        return TournamentRound(
+            [
+                TournamentGroup(
+                    paths=list(paths),
+                    ai_pick=ai_pick,
+                    selected_path=ai_pick,
                 )
-                for path in self._cluster_ordered_paths
-            }
-        self._subset_index = 0
-        self._update_cluster_ui(score_by_path, failure_reason_by_path)
-        # The cards describe application-level staged state, so write their
-        # initial recommendations to that shared source of truth immediately.
-        self._commit_current_cluster_marks()
+            ]
+        )
 
-    def _update_cluster_ui(
-        self,
-        score_by_path: dict[str, float | None],
-        failure_reason_by_path: dict[str, str],
-    ) -> None:
-        self._show_subset(score_by_path, failure_reason_by_path)
-        total_clusters = len(self._clusters)
-        total_sets = self._subset_count()
-        visible_kept = sum(
-            1 for marked in self._cluster_mark_state.values() if not marked
+    def _build_tournament(
+        self, cluster_key: object, payload: PickBestClusterResult
+    ) -> ClusterTournament:
+        paths = list(dict.fromkeys(payload.get("all_paths", [])))
+        tournament = ClusterTournament(
+            cluster_key=cluster_key,
+            payload=payload,
+            next_path_index=min(2, len(paths)),
         )
-        visible_deleted = sum(
-            1 for marked in self._cluster_mark_state.values() if marked
-        )
-        self._cluster_info_label.setText(
-            f"Cluster {self._cluster_index + 1} of {total_clusters}  ·  {len(self._current_all_paths)} photos"
-        )
-        self._review_header.set_summary(
-            f"{visible_kept} keep  ·  {visible_deleted} marked for Trash",
-            "danger" if visible_deleted else "neutral",
-        )
-        self._subset_info_label.setText(
-            f"Set {self._subset_index + 1} of {total_sets}  ·  challengers on the left, editable AI pick on the right"
-        )
-        self._prev_cluster_btn.setEnabled(self._cluster_index > 0)
-        self._next_cluster_btn.setEnabled(self._cluster_index < total_clusters - 1)
-        self._prev_set_btn.setEnabled(self._subset_index > 0)
-        self._next_set_btn.setEnabled(self._subset_index < total_sets - 1)
+        if len(paths) >= 2:
+            tournament.rounds.append(self._make_round(paths[:2], payload))
+        elif paths:
+            tournament.final_winner = paths[0]
+            tournament.finalized = True
+        return tournament
 
-    def _show_subset(
-        self,
-        score_by_path: dict[str, float | None],
-        failure_reason_by_path: dict[str, str],
-    ) -> None:
-        non_winners = [
-            path
-            for path in self._cluster_ordered_paths
-            if path != self._current_winner_path
+    @staticmethod
+    def _total_round_count(photo_count: int) -> int:
+        return max(0, photo_count - 1)
+
+    def _current_tournament(self) -> ClusterTournament:
+        return self._tournaments[self._cluster_index]
+
+    def _current_group(self) -> TournamentGroup:
+        tournament = self._current_tournament()
+        return tournament.rounds[tournament.current_round].groups[
+            tournament.current_group
         ]
-        start = self._subset_index * 2
-        subset_non_winners = non_winners[start : start + 2]
-        subset_paths = list(subset_non_winners)
-        if self._current_winner_path:
-            subset_paths.append(self._current_winner_path)
+
+    @staticmethod
+    def _path_matchup_count(tournament: ClusterTournament, path: str) -> int:
+        return sum(
+            path in group.paths
+            for round_ in tournament.rounds
+            for group in round_.groups
+        )
+
+    @staticmethod
+    def _path_elimination_round(
+        tournament: ClusterTournament, path: str
+    ) -> int | None:
+        for round_index, round_ in enumerate(tournament.rounds):
+            for group in round_.groups:
+                if (
+                    group.confirmed
+                    and not group.keep_all
+                    and path in group.paths
+                    and path != group.selected_path
+                ):
+                    return round_index + 1
+        return None
+
+    @staticmethod
+    def _kept_paths(tournament: ClusterTournament) -> set[str]:
+        kept_paths: set[str] = set()
+        for round_ in tournament.rounds:
+            for group in round_.groups:
+                if not group.confirmed:
+                    continue
+                if group.keep_all:
+                    kept_paths.update(group.paths)
+                    continue
+                kept_paths.add(group.selected_path)
+                kept_paths.difference_update(
+                    path for path in group.paths if path != group.selected_path
+                )
+        return kept_paths
+
+    def _photo_item_presentation(self, path: str) -> tuple[str, QColor, QColor]:
+        tournament = self._current_tournament()
+        group = self._current_group()
+        matchup_count = self._path_matchup_count(tournament, path)
+        elimination_round = self._path_elimination_round(tournament, path)
+        kept_paths = self._kept_paths(tournament)
+
+        if path in group.paths and not group.confirmed:
+            state = "Current"
+            foreground = QColor(
+                "#F4C95D" if path == group.selected_path else "#C9D8E5"
+            )
+            background = QColor("#2B3035")
+        elif tournament.final_winner == path:
+            state = "Winner"
+            foreground = QColor("#78D58A")
+            background = QColor("#203529")
+        elif path in kept_paths:
+            state = "Kept"
+            foreground = QColor("#78D58A")
+            background = QColor("#203529")
+        elif elimination_round is not None:
+            state = "Trash"
+            foreground = QColor("#7F8B96")
+            background = QColor(Qt.GlobalColor.transparent)
+        elif path in group.paths:
+            if group.confirmed:
+                state = (
+                    "Advanced"
+                    if path == group.selected_path
+                    else "Trash"
+                )
+            foreground = QColor(
+                "#F4C95D" if path == group.selected_path else "#C9D8E5"
+            )
+            background = QColor("#2B3035")
+        else:
+            has_advanced = any(
+                candidate.confirmed
+                and not candidate.keep_all
+                and candidate.selected_path == path
+                for round_ in tournament.rounds
+                for candidate in round_.groups
+            )
+            state = "Advanced" if matchup_count > 1 or has_advanced else "Waiting"
+            foreground = QColor("#A9B7C6")
+            background = QColor(Qt.GlobalColor.transparent)
+
+        text = f"   {os.path.basename(path)}\n   {state}"
+        return text, foreground, background
+
+    def _populate_photo_list(self) -> None:
+        self._refresh_photo_list()
+
+    def _cluster_summary(self, index: int) -> tuple[str, QColor, QColor]:
+        tournament = self._tournaments[index]
+        paths = list(tournament.payload.get("all_paths", []))
+        kept_paths = self._kept_paths(tournament)
+        active_paths = {
+            path
+            for path in paths
+            if path not in kept_paths
+            and self._path_elimination_round(tournament, path) is None
+        }
+        if not tournament.finalized and tournament.rounds:
+            latest_group = tournament.rounds[-1].groups[0]
+            if not latest_group.confirmed:
+                active_paths.update(latest_group.paths)
+        active_count = len(active_paths)
+        retained_paths = set(kept_paths)
+        if tournament.final_winner is not None:
+            retained_paths.add(tournament.final_winner)
+        retained_count = len(retained_paths)
+        has_progress = any(
+            group.confirmed for round_ in tournament.rounds for group in round_.groups
+        )
+
+        if tournament.finalized:
+            status = f"Complete · {retained_count} kept"
+            foreground = QColor("#78D58A")
+        elif index == self._cluster_index:
+            status = f"Current · {active_count} active"
+            foreground = QColor("#D8E6F2")
+        elif has_progress:
+            status = f"In progress · {active_count} active"
+            foreground = QColor("#F4C95D")
+        else:
+            status = "Not started"
+            foreground = QColor("#8D99A3")
+        background = QColor("#2B3035" if index == self._cluster_index else "transparent")
+        return f"Cluster {index + 1} · {len(paths)} photos\n{status}", foreground, background
+
+    def _sync_photo_sections(self) -> dict[str, QListWidgetItem]:
+        photo_items: dict[str, QListWidgetItem] = {}
+        cluster_items: dict[int, QListWidgetItem] = {}
+        self._items_list.setUpdatesEnabled(False)
+        while self._items_list.count():
+            item = self._items_list.takeItem(0)
+            path = item.data(Qt.ItemDataRole.UserRole)
+            cluster_index = item.data(LIST_CLUSTER_ROLE)
+            if isinstance(path, str):
+                photo_items[path] = item
+            elif isinstance(cluster_index, int):
+                cluster_items[cluster_index] = item
+
+        try:
+            for cluster_index, tournament in enumerate(self._tournaments):
+                cluster_item = cluster_items.get(cluster_index, QListWidgetItem())
+                text, foreground, background = self._cluster_summary(cluster_index)
+                cluster_item.setText(text)
+                cluster_item.setData(Qt.ItemDataRole.UserRole, None)
+                cluster_item.setData(LIST_SECTION_ROLE, None)
+                cluster_item.setData(LIST_CLUSTER_ROLE, cluster_index)
+                cluster_item.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                )
+                cluster_item.setForeground(foreground)
+                cluster_item.setBackground(background)
+                cluster_item.setToolTip(
+                    f"Open cluster {cluster_index + 1} of {len(self._tournaments)}"
+                )
+                font = cluster_item.font()
+                font.setBold(cluster_index == self._cluster_index)
+                cluster_item.setFont(font)
+                self._items_list.addItem(cluster_item)
+
+                if cluster_index == self._cluster_index:
+                    for path in tournament.payload.get("all_paths", []):
+                        item = photo_items.get(path, QListWidgetItem())
+                        item.setData(Qt.ItemDataRole.UserRole, path)
+                        item.setData(LIST_SECTION_ROLE, None)
+                        item.setData(LIST_CLUSTER_ROLE, cluster_index)
+                        item.setToolTip(path)
+                        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                        self._items_list.addItem(item)
+        finally:
+            self._items_list.setUpdatesEnabled(True)
+        return {
+            item.data(Qt.ItemDataRole.UserRole): item
+            for index in range(self._items_list.count())
+            if isinstance(
+                (item := self._items_list.item(index)).data(Qt.ItemDataRole.UserRole),
+                str,
+            )
+        }
+
+    def _refresh_photo_list(self) -> None:
+        tournament = self._current_tournament()
+        paths = list(tournament.payload.get("all_paths", []))
+        photo_items = self._sync_photo_sections()
+        for path in paths:
+            item = photo_items[path]
+            text, foreground, background = self._photo_item_presentation(path)
+            item.setText(text)
+            item.setForeground(foreground)
+            item.setBackground(background)
+        self._review_list_panel.count_label.setText(
+            f"{sum(tournament.finalized for tournament in self._tournaments)}/{len(self._tournaments)} done"
+        )
+        self._items_list.setCurrentRow(-1)
+
+    def _on_photo_item_clicked(self, item: QListWidgetItem) -> None:
+        cluster_index = item.data(LIST_CLUSTER_ROLE)
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(cluster_index, int) and not isinstance(path, str):
+            if cluster_index != self._cluster_index:
+                self._exit_focus_mode()
+                self._load_cluster(cluster_index)
+                self._publish_focused_path()
+            return
+        # Photo rows are status-only. Comparisons advance through the main controls.
+
+    def _load_cluster(self, index: int) -> None:
+        if not self._tournaments:
+            return
+        self._cluster_index = max(0, min(index, len(self._tournaments) - 1))
+        tournament = self._current_tournament()
+        all_paths = list(tournament.payload.get("all_paths", []))
+        self._current_all_paths = all_paths
+        self._cluster_ordered_paths = all_paths
+        if tournament.final_winner and not tournament.rounds:
+            self._current_winner_path = tournament.final_winner
+            return
+        tournament.current_round = min(
+            tournament.current_round, len(tournament.rounds) - 1
+        )
+        groups = tournament.rounds[tournament.current_round].groups
+        tournament.current_group = min(tournament.current_group, len(groups) - 1)
+        self._subset_index = tournament.current_group
+        self._populate_photo_list()
+        self._show_current_group()
+
+    def focus_image(self, path: str) -> bool:
+        """Open and focus the comparison containing path without changing decisions."""
+
+        cluster_index = next(
+            (
+                index for index, tournament in enumerate(self._tournaments)
+                if path in tournament.payload.get("all_paths", [])
+            ),
+            None,
+        )
+        if cluster_index is None:
+            return False
+
+        self._syncing_active_image = True
+        try:
+            self._load_cluster(cluster_index)
+            tournament = self._current_tournament()
+            match = next(
+                (
+                    (round_index, group_index)
+                    for round_index in range(len(tournament.rounds) - 1, -1, -1)
+                    for group_index, group in enumerate(
+                        tournament.rounds[round_index].groups
+                    )
+                    if path in group.paths
+                ),
+                None,
+            )
+            if match is not None:
+                tournament.current_round, tournament.current_group = match
+                self._subset_index = tournament.current_group
+                self._refresh_photo_list()
+                self._show_current_group()
+            if path in self._subset_paths:
+                self._focused_slot_index = self._subset_paths.index(path)
+                self._update_focus_state()
+                if self._focus_mode:
+                    self._sync_viewer.set_focused_viewer(self._focused_slot_index)
+        finally:
+            self._syncing_active_image = False
+        return True
+
+    def _show_current_group(self) -> None:
+        tournament = self._current_tournament()
+        group = self._current_group()
+        subset_paths = list(group.paths)
         self._subset_paths = subset_paths
+        self._current_winner_path = group.selected_path
+        score_by_path, failure_reason_by_path = self._cluster_score_maps(
+            tournament.payload
+        )
 
         image_pipeline = getattr(self.window(), "image_pipeline", None)
         images_data = []
@@ -655,21 +890,10 @@ class PickBestStepWidget(QWidget):
             pixmap = None
             if image_pipeline is not None:
                 try:
-                    pixmap = image_pipeline.get_cached_analysis_qpixmap(
+                    pixmap = image_pipeline.get_cached_review_qpixmap(
                         path,
-                        memory_only=True,
+                        thumbnail_apply_orientation=True,
                     )
-                    if pixmap is None:
-                        pixmap = image_pipeline.get_cached_preview_qpixmap(
-                            path,
-                            memory_only=True,
-                        )
-                    if pixmap is None:
-                        pixmap = image_pipeline.get_cached_thumbnail_qpixmap(
-                            path,
-                            apply_orientation=True,
-                            memory_only=True,
-                        )
                 except Exception as exc:
                     logger.debug("Could not load preview for %s: %s", path, exc)
             if pixmap is None or pixmap.isNull():
@@ -690,8 +914,10 @@ class PickBestStepWidget(QWidget):
                 card.show()
                 card.configure(
                     path=path,
-                    is_winner=path == self._current_winner_path,
-                    marked=self._cluster_mark_state.get(path, False),
+                    is_ai_pick=path == group.ai_pick,
+                    selected=path == group.selected_path,
+                    group_confirmed=group.confirmed,
+                    group_keep_all=group.keep_all,
                     score=score_by_path.get(path),
                     failure_reason=failure_reason_by_path.get(path),
                     metadata_rows=self._metadata_rows_for_path(
@@ -712,7 +938,54 @@ class PickBestStepWidget(QWidget):
         self._update_focus_state()
         if self._focus_mode:
             self._sync_viewer.set_focused_viewer(self._focused_slot_index)
+        self._refresh_photo_list()
+        self._update_tournament_controls()
         self.setFocus()
+
+    def _update_tournament_controls(self) -> None:
+        tournament = self._current_tournament()
+        group = self._current_group()
+        self._cluster_info_label.setText(
+            f"Cluster {self._cluster_index + 1} of {len(self._tournaments)}  ·  {len(self._current_all_paths)} photos"
+        )
+        self._prev_cluster_btn.setEnabled(self._cluster_index > 0)
+        self._next_cluster_btn.setEnabled(self._cluster_index < len(self._tournaments) - 1)
+        self._prev_round_btn.setEnabled(tournament.current_round > 0)
+        self._next_round_btn.setEnabled(
+            tournament.current_round + 1 < len(tournament.rounds)
+        )
+        self._prev_set_btn.setEnabled(tournament.current_round > 0)
+        self._next_set_btn.setEnabled(
+            tournament.current_round + 1 < len(tournament.rounds)
+        )
+        self._confirm_btn.setEnabled(not group.confirmed)
+        self._confirm_btn.setText("Confirmed" if group.confirmed else "Confirm  →")
+        self._keep_all_btn.setEnabled(not (group.confirmed and group.keep_all))
+        self._keep_all_btn.setText(
+            "All kept" if group.confirmed and group.keep_all else f"Keep all {len(group.paths)}"
+        )
+        all_complete = bool(self._tournaments) and all(
+            candidate.finalized for candidate in self._tournaments
+        )
+        self._done_btn.setEnabled(all_complete)
+        if group.confirmed and group.keep_all:
+            self._state_banner.set_state(
+                "All kept",
+                "Both photos are kept; the selected photo continues.",
+                tone="success",
+            )
+        elif group.confirmed:
+            self._state_banner.set_state(
+                "Choice confirmed",
+                f"{os.path.basename(group.selected_path)} stays; the other photo is now marked Trash.",
+                tone="success",
+            )
+        else:
+            self._state_banner.set_state(
+                "Choose, then confirm",
+                "Confirm applies Keep and Trash immediately.",
+                tone="warning",
+            )
 
     def handle_preview_ready(self, path: str) -> None:
         if path not in self._subset_paths:
@@ -865,171 +1138,235 @@ class PickBestStepWidget(QWidget):
             if card.isVisible():
                 card.set_focused(index == self._focused_slot_index)
 
-    def _set_path_marked(self, path: str, marked: bool) -> None:
-        if not path:
+    def _publish_confirmed_state(self, mark_state: dict[str, bool]) -> None:
+        to_mark = [path for path, marked in mark_state.items() if marked]
+        to_unmark = [path for path, marked in mark_state.items() if not marked]
+        self._publishing_confirmation = True
+        try:
+            if to_mark:
+                self.mark_for_deletion_requested.emit(to_mark)
+            if to_unmark:
+                self.unmark_for_deletion_requested.emit(to_unmark)
+        finally:
+            self._publishing_confirmation = False
+
+    def _restore_prior_marks(self, tournament: ClusterTournament) -> None:
+        if tournament.prior_marks is not None:
+            self._publish_confirmed_state(dict(tournament.prior_marks))
+        tournament.prior_marks = None
+        tournament.final_winner = None
+        tournament.finalized = False
+
+    def _invalidate_later_rounds(self, tournament: ClusterTournament) -> None:
+        if tournament.prior_marks is not None:
+            replayed_state = dict(tournament.prior_marks)
+            for round_ in tournament.rounds[: tournament.current_round]:
+                group = round_.groups[0]
+                if not group.confirmed:
+                    continue
+                for path in group.paths:
+                    replayed_state[path] = (
+                        False
+                        if group.keep_all or path == group.selected_path
+                        else True
+                    )
+            self._publish_confirmed_state(replayed_state)
+        tournament.rounds = tournament.rounds[: tournament.current_round + 1]
+        tournament.next_path_index = tournament.current_round + 2
+        tournament.final_winner = None
+        tournament.finalized = False
+
+    def _ensure_prior_marks(self, tournament: ClusterTournament) -> None:
+        if tournament.prior_marks is not None:
             return
-        self._cluster_mark_state[path] = marked
-        for card in self._compare_cards:
-            if card.isVisible() and card.path == path:
-                card.set_marked(marked)
-        self._update_cluster_header_only()
+        tournament.prior_marks = {
+            path: bool(self._is_marked_func(path)) if self._is_marked_func else False
+            for path in tournament.payload.get("all_paths", [])
+        }
 
-    def _update_cluster_header_only(self) -> None:
-        total_clusters = len(self._clusters)
-        kept = sum(1 for marked in self._cluster_mark_state.values() if not marked)
-        deleted = sum(1 for marked in self._cluster_mark_state.values() if marked)
-        self._cluster_info_label.setText(
-            f"Cluster {self._cluster_index + 1} of {total_clusters}  ·  {len(self._current_all_paths)} photos"
-        )
-        self._review_header.set_summary(
-            f"{kept} keep  ·  {deleted} marked for Trash",
-            "danger" if deleted else "neutral",
+    def _publish_group_decision(self, group: TournamentGroup) -> None:
+        self._publish_confirmed_state(
+            {
+                path: False
+                if group.keep_all or path == group.selected_path
+                else True
+                for path in group.paths
+            }
         )
 
-    def _subset_count(self) -> int:
-        non_winner_count = len(
-            [
-                path
-                for path in self._cluster_ordered_paths
-                if path != self._current_winner_path
-            ]
-        )
-        return max(1, (non_winner_count + 1) // 2)
+    def _select_path(self, path: str) -> None:
+        group = self._current_group()
+        if path not in group.paths:
+            return
+        if group.confirmed and group.keep_all:
+            self._invalidate_later_rounds(self._current_tournament())
+            group.confirmed = False
+            group.keep_all = False
+        elif path == group.selected_path:
+            return
+        if group.confirmed:
+            self._invalidate_later_rounds(self._current_tournament())
+            group.confirmed = False
+        group.selected_path = path
+        self._focused_slot_index = group.paths.index(path)
+        self._show_current_group()
+        self._refresh_photo_list()
+        self._publish_active_image(path)
 
-    def _visible_paths(self) -> list[str]:
-        return [path for path in self._subset_paths if path]
+    def _finalize_current_tournament(self, winner_path: str) -> None:
+        tournament = self._current_tournament()
+        tournament.final_winner = winner_path
+        tournament.finalized = True
 
-    def _commit_current_cluster_marks(self) -> None:
-        if 0 <= self._cluster_index < len(self._clusters):
-            self._clusters[self._cluster_index]["_mark_state"] = dict(
-                self._cluster_mark_state
+    def _advance_after_confirmation(self) -> None:
+        # A confirmation finishes the current decision. Do not carry the
+        # single-photo inspection mode into the next matchup, where it would make
+        # a valid two-photo comparison appear to contain only one image.
+        self._exit_focus_mode()
+        tournament = self._current_tournament()
+        winner_path = self._current_group().selected_path
+        all_paths = list(tournament.payload.get("all_paths", []))
+        if tournament.next_path_index >= len(all_paths):
+            self._finalize_current_tournament(winner_path)
+            next_cluster = next(
+                (
+                    index
+                    for index in range(self._cluster_index + 1, len(self._tournaments))
+                    if not self._tournaments[index].finalized
+                ),
+                None,
             )
-        to_mark = [path for path, marked in self._cluster_mark_state.items() if marked]
-        to_unmark = [
-            path for path, marked in self._cluster_mark_state.items() if not marked
-        ]
-        if to_mark:
-            self.mark_for_deletion_requested.emit(to_mark)
-        if to_unmark:
-            self.unmark_for_deletion_requested.emit(to_unmark)
+            if next_cluster is not None:
+                self._load_cluster(next_cluster)
+            else:
+                self._show_current_group()
+            return
+
+        tournament.rounds = tournament.rounds[: tournament.current_round + 1]
+        challenger = all_paths[tournament.next_path_index]
+        tournament.next_path_index += 1
+        tournament.rounds.append(
+            self._make_round([winner_path, challenger], tournament.payload)
+        )
+        tournament.current_round += 1
+        tournament.current_group = 0
+        self._subset_index = 0
+        self._refresh_photo_list()
+        self._show_current_group()
+
+    def _on_confirm(self) -> None:
+        if not self._tournaments:
+            return
+        group = self._current_group()
+        if group.confirmed or not group.selected_path:
+            return
+        tournament = self._current_tournament()
+        self._ensure_prior_marks(tournament)
+        group.keep_all = False
+        group.confirmed = True
+        self._publish_group_decision(group)
+        self._refresh_photo_list()
+        self._advance_after_confirmation()
+
+    def _on_keep_all(self) -> None:
+        if not self._tournaments:
+            return
+        tournament = self._current_tournament()
+        group = self._current_group()
+        if group.confirmed and group.keep_all:
+            return
+        if group.confirmed or tournament.finalized:
+            self._invalidate_later_rounds(tournament)
+        self._ensure_prior_marks(tournament)
+        group.keep_all = True
+        group.confirmed = True
+        self._publish_group_decision(group)
+        self._refresh_photo_list()
+        self._advance_after_confirmation()
 
     def _next_cluster(self) -> None:
-        if self._cluster_index < len(self._clusters) - 1:
+        if self._cluster_index < len(self._tournaments) - 1:
             self._exit_focus_mode()
-            self._commit_current_cluster_marks()
             self._load_cluster(self._cluster_index + 1)
+            self._publish_focused_path()
 
     def _prev_cluster(self) -> None:
         if self._cluster_index > 0:
             self._exit_focus_mode()
-            self._commit_current_cluster_marks()
             self._load_cluster(self._cluster_index - 1)
+            self._publish_focused_path()
 
-    def _next_subset(self) -> None:
-        max_subset = self._subset_count() - 1
-        if self._subset_index < max_subset:
-            self._subset_index += 1
-            cluster = self._clusters[self._cluster_index]
-            score_by_path, failure_reason_by_path = self._cluster_score_maps(cluster)
-            self._update_cluster_ui(score_by_path, failure_reason_by_path)
+    def _next_group(self) -> None:
+        self._next_round()
 
-    def _prev_subset(self) -> None:
-        if self._subset_index > 0:
-            self._subset_index -= 1
-            cluster = self._clusters[self._cluster_index]
-            score_by_path, failure_reason_by_path = self._cluster_score_maps(cluster)
-            self._update_cluster_ui(score_by_path, failure_reason_by_path)
+    def _prev_group(self) -> None:
+        self._prev_round()
 
-    def _keep_visible(self) -> None:
-        paths = self._visible_paths()
-        for path in paths:
-            self._set_path_marked(path, False)
-        if paths:
-            self.unmark_for_deletion_requested.emit(paths)
+    def _next_round(self) -> None:
+        tournament = self._current_tournament()
+        if tournament.current_round + 1 < len(tournament.rounds):
+            tournament.current_round += 1
+            tournament.current_group = 0
+            self._subset_index = 0
+            self._refresh_photo_list()
+            self._show_current_group()
 
-    def _delete_visible(self) -> None:
-        paths = self._visible_paths()
-        for path in paths:
-            self._set_path_marked(path, True)
-        if paths:
-            self.mark_for_deletion_requested.emit(paths)
+    def _prev_round(self) -> None:
+        tournament = self._current_tournament()
+        if tournament.current_round > 0:
+            tournament.current_round -= 1
+            tournament.current_group = 0
+            self._subset_index = 0
+            self._refresh_photo_list()
+            self._show_current_group()
 
-    def _toggle_slot(self, slot_index: int) -> None:
-        if not (0 <= slot_index < len(self._subset_paths)):
-            return
-        path = self._subset_paths[slot_index]
-        if not path:
-            return
-        new_marked = not self._cluster_mark_state.get(path, True)
-        self._set_path_marked(path, new_marked)
-        if new_marked:
-            self.mark_for_deletion_requested.emit([path])
-        else:
-            self.unmark_for_deletion_requested.emit([path])
-
-    def _on_card_toggled(self, path: str, is_marked: bool) -> None:
-        self._set_path_marked(path, is_marked)
-        if is_marked:
-            self.mark_for_deletion_requested.emit([path])
-        else:
-            self.unmark_for_deletion_requested.emit([path])
-
-    def _on_viewer_clicked(self, slot_index: int, _path: str) -> None:
+    def _on_viewer_clicked(self, slot_index: int, path: str) -> None:
         self._focused_slot_index = slot_index
         self._update_focus_state()
-        self._toggle_slot(slot_index)
-
-    def _on_viewer_mark(self, path: str) -> None:
-        self._set_path_marked(path, True)
-        self.mark_for_deletion_requested.emit([path])
-
-    def _on_viewer_unmark(self, path: str) -> None:
-        self._set_path_marked(path, False)
-        self.unmark_for_deletion_requested.emit([path])
-
-    def _on_viewer_mark_others(self, keeper_path: str) -> None:
-        paths = [path for path in self._visible_paths() if path != keeper_path]
-        for path in paths:
-            self._set_path_marked(path, True)
-        if paths:
-            self.mark_for_deletion_requested.emit(paths)
-
-    def _on_viewer_unmark_others(self, keeper_path: str) -> None:
-        paths = [path for path in self._visible_paths() if path != keeper_path]
-        for path in paths:
-            self._set_path_marked(path, False)
-        if paths:
-            self.unmark_for_deletion_requested.emit(paths)
+        self._publish_active_image(path)
+        self._select_path(path)
 
     def _on_done(self) -> None:
-        self._commit_current_cluster_marks()
+        if not self._tournaments or not all(
+            tournament.finalized for tournament in self._tournaments
+        ):
+            self._state_banner.set_state(
+                "Confirm every cluster first",
+                "Finish every rolling comparison before continuing.",
+                tone="warning",
+            )
+            return
         self.proceed_to_cull_requested.emit()
 
     def _activate_slot_shortcut(self, slot_index: int) -> None:
+        if not 0 <= slot_index < len(self._subset_paths):
+            return
         self._focused_slot_index = slot_index
         self._update_focus_state()
+        self._publish_focused_path()
         if self._focus_mode:
             self._sync_viewer.set_focused_viewer(slot_index)
-        else:
-            self._toggle_slot(slot_index)
+        self._select_path(self._subset_paths[slot_index])
+
+    def _publish_focused_path(self) -> None:
+        if 0 <= self._focused_slot_index < len(self._subset_paths):
+            self._publish_active_image(self._subset_paths[self._focused_slot_index])
+
+    def _publish_active_image(self, path: str) -> None:
+        if path and not self._syncing_active_image:
+            self.active_image_changed.emit(path)
 
     def _exit_focus_mode(self) -> None:
-        """Reset to compare mode (flag + hint). No-op if already in compare mode."""
+        """Reset to compare mode. No-op if already in compare mode."""
         if not self._focus_mode:
             return
         self._focus_mode = False
-        self._hint_label.setText(
-            "The AI pick stays on the right as a reference, and every choice remains editable."
-        )
 
     def _toggle_focus_mode(self) -> None:
         if not self._focus_mode:
             self._focus_mode = True
             slot = min(self._focused_slot_index, max(0, len(self._subset_paths) - 1))
             self._sync_viewer.set_focused_viewer(slot)
-            self._hint_label.setText(
-                "Focus mode · press 1, 2, or 3 to switch photos · press C to compare again."
-            )
         else:
             self._exit_focus_mode()
             self._sync_viewer.set_images_data(self._current_images_data)

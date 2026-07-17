@@ -367,6 +367,25 @@ class ImagePipeline:
             if memory_only
             else self._cache_get(self.thumbnail_cache, cache_key)
         )
+        if cached_img is None and apply_orientation:
+            # Folder warming intentionally creates one canonical, un-oriented
+            # thumbnail.  Review surfaces still need display orientation, so
+            # derive that tiny variant from the shared cached image instead of
+            # decoding the source file again.
+            source_key = self.thumbnail_cache_key(
+                normalized_path,
+                False,
+                file_size=file_size,
+                mtime_ns=mtime_ns,
+            )
+            source_img = (
+                self._memory_get(source_key)
+                if memory_only
+                else self._cache_get(self.thumbnail_cache, source_key)
+            )
+            if source_img is not None:
+                cached_img = self.image_orientation_handler.exif_transpose(source_img)
+                self._memory_set(cache_key, cached_img)
         if cached_img is None:
             return None
 
@@ -1104,6 +1123,35 @@ class ImagePipeline:
                 exc_info=True,
             )
             return None
+
+    def get_cached_review_qpixmap(
+        self,
+        image_path: str,
+        *,
+        thumbnail_apply_orientation: bool = True,
+        memory_only: bool = True,
+    ) -> QPixmap | None:
+        """Return the best cached review image without generating or decoding work."""
+        pixmap = self.get_cached_analysis_qpixmap(
+            image_path,
+            memory_only=memory_only,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        pixmap = self.get_cached_preview_qpixmap(
+            image_path,
+            memory_only=memory_only,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        pixmap = self.get_cached_thumbnail_qpixmap(
+            image_path,
+            apply_orientation=thumbnail_apply_orientation,
+            memory_only=memory_only,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        return None
 
     def clear_all_image_caches(self):
         """Clears both thumbnail and preview caches."""

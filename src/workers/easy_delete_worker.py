@@ -230,23 +230,26 @@ class EasyDeleteWorker(QObject):
                         else:
                             delete_path, keep_path = path_i, path_j
 
+                        identical = self._files_are_identical(delete_path, keep_path)
+                        duplicate_kind = "exact" if identical else "near"
+
                         results[delete_path] = {
                             "type": "duplicate",
                             "pair_path": keep_path,
                             "suggest_delete": True,
-                            "reason": self._duplicate_reason(delete_path, keep_path),
+                            "duplicate_kind": duplicate_kind,
+                            "reason": self._duplicate_reason(
+                                delete_path, keep_path, identical=identical
+                            ),
                             "sharpness": self._get_sharpness(delete_path),
                         }
                         if keep_path not in results:
-                            identical = self._files_are_identical(
-                                delete_path, keep_path
-                            )
-                            dup_label = "Exact" if identical else "Near"
                             results[keep_path] = {
                                 "type": "duplicate",
                                 "pair_path": delete_path,
                                 "suggest_delete": False,
-                                "reason": f"{dup_label}-duplicate of {os.path.basename(delete_path)} — suggested to keep",
+                                "duplicate_kind": duplicate_kind,
+                                "reason": "Suggested to keep this photo",
                                 "sharpness": self._get_sharpness(keep_path),
                             }
 
@@ -309,10 +312,13 @@ class EasyDeleteWorker(QObject):
         hash_a = self._file_hash(path_a)
         return hash_a is not None and hash_a == self._file_hash(path_b)
 
-    def _duplicate_reason(self, delete_path: str, keep_path: str) -> str:
-        keep_name = os.path.basename(keep_path)
-        if self._files_are_identical(delete_path, keep_path):
-            return f"Exact duplicate of {keep_name} — identical file"
+    def _duplicate_reason(
+        self, delete_path: str, keep_path: str, *, identical: bool | None = None
+    ) -> str:
+        if identical is None:
+            identical = self._files_are_identical(delete_path, keep_path)
+        if identical:
+            return "The files are byte-for-byte identical"
 
         reasons = []
         delete_sharpness = self._get_sharpness(delete_path)
@@ -338,6 +344,6 @@ class EasyDeleteWorker(QObject):
             pass
 
         if not reasons:
-            reasons.append("near-identical duplicate")
+            reasons.append("the files are visually almost identical")
 
-        return f"Near-duplicate of {keep_name} — {', '.join(reasons)}"
+        return f"Suggested choice: {', '.join(reasons)}"

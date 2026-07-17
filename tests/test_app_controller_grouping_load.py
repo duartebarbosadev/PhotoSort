@@ -86,7 +86,6 @@ def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch
         entries=[],
         mode="current",
         output_root="/tmp/demo",
-        manifest_path="/tmp/demo/grouping-manifest.json",
         moved_count=1,
         unassigned_count=0,
         skipped_count=0,

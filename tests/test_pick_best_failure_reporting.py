@@ -207,9 +207,9 @@ def test_pick_best_widget_shows_failure_reason_for_unscored_image(monkeypatch):
 
     failed_card = widget._compare_cards[0]
     assert failed_card.path == "/tmp/failed.jpg"
-    assert failed_card._score_label.text() == "Score unavailable"
+    assert failed_card._name_label.text() == "failed.jpg · score unavailable"
     assert (
-        failed_card._score_label.toolTip()
+        failed_card._name_label.toolTip()
         == "Aesthetic model did not return a score for this image."
     )
     assert failed_card._meta_rows[0][0].text() == "Scoring"

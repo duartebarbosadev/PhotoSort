@@ -44,6 +44,7 @@ SETTINGS_APPLICATION = "PhotoSort"
 PREVIEW_CACHE_SIZE_GB_KEY = "Cache/PreviewCacheSizeGB"
 EXIF_CACHE_SIZE_MB_KEY = "Cache/ExifCacheSizeMB"  # For EXIF metadata cache
 ROTATION_CONFIRM_LOSSY_KEY = "UI/RotationConfirmLossy"  # Ask before lossy rotation
+SHOW_WORKFLOW_SHORTCUTS_KEY = "UI/ShowWorkflowShortcuts"
 RECENT_FOLDERS_KEY = "UI/RecentFolders"  # Key for recent folders list
 ORIENTATION_MODEL_NAME_KEY = (
     "Models/OrientationModelName"  # Key for the orientation model file name
@@ -85,8 +86,12 @@ def get_huggingface_cache_dir() -> str:
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
 DEFAULT_EXIF_CACHE_SIZE_MB = 256  # Default to 256 MB for EXIF cache
 DEFAULT_ROTATION_CONFIRM_LOSSY = True  # Default to asking before lossy rotation
+DEFAULT_SHOW_WORKFLOW_SHORTCUTS = True
 MAX_RECENT_FOLDERS = 10  # Max number of recent folders to store
 DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
+ROTATION_MODEL_DOWNLOAD_URL = (
+    "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"
+)
 DEFAULT_UPDATE_CHECK_ENABLED = True  # Default to enable automatic update checks
 DEFAULT_PERFORMANCE_MODE = PerformanceMode.BALANCED  # Default to balanced mode
 DEFAULT_CUSTOM_THREAD_COUNT = 4  # Default custom thread count
@@ -290,6 +295,20 @@ def set_rotation_confirm_lossy(confirm: bool):
     """Set whether to confirm lossy rotations."""
     settings = _get_settings()
     settings.setValue(ROTATION_CONFIRM_LOSSY_KEY, confirm)
+
+
+def get_show_workflow_shortcuts() -> bool:
+    """Return whether the shared workflow shortcut footer is visible."""
+    settings = _get_settings()
+    return settings.value(
+        SHOW_WORKFLOW_SHORTCUTS_KEY, DEFAULT_SHOW_WORKFLOW_SHORTCUTS, type=bool
+    )
+
+
+def set_show_workflow_shortcuts(visible: bool) -> None:
+    """Persist whether the shared workflow shortcut footer is visible."""
+    settings = _get_settings()
+    settings.setValue(SHOW_WORKFLOW_SHORTCUTS_KEY, bool(visible))
 
 
 # --- Easy Delete Detection Thresholds ---

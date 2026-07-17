@@ -25,9 +25,11 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QSpinBox,
     QDoubleSpinBox,
+    QButtonGroup,
+    QWidget,
 )
 from PyQt6.QtCore import Qt, QSize, QUrl
-from PyQt6.QtGui import QIcon, QDesktopServices
+from PyQt6.QtGui import QIcon, QDesktopServices, QTransform
 
 from core.app_settings import (
     get_easy_delete_blur_threshold,
@@ -35,15 +37,19 @@ from core.app_settings import (
     get_easy_delete_duplicate_distance,
     get_easy_delete_white_threshold,
     get_rotation_confirm_lossy,
+    get_show_workflow_shortcuts,
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
     set_easy_delete_blur_threshold,
     set_easy_delete_dark_threshold,
     set_easy_delete_duplicate_distance,
     set_easy_delete_white_threshold,
+    set_show_workflow_shortcuts,
+    ROTATION_MODEL_DOWNLOAD_URL,
 )
 from core.runtime_paths import get_app_cache_root, get_app_log_dir, get_app_models_dir
 from core.image_processing.raw_image_processor import is_raw_file
+from core.media_utils import is_image_extension, is_video_extension
 from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
     ModelNotFoundError,
@@ -54,6 +60,7 @@ from ui.dialog_components import (
     build_dialog_header,
     make_dialog_draggable,
 )
+from ui.workflow_transition import WorkflowPendingState
 
 logger = logging.getLogger(__name__)
 
@@ -90,19 +97,450 @@ class DialogManager:
         # Instance-level placeholder for non-blocking About dialog reference
         self._about_dialog_ref = None
 
+    def show_workflow_transition_dialog(
+        self,
+        source_label: str,
+        destination_label: str,
+        pending: WorkflowPendingState,
+        *,
+        switching: bool = True,
+    ) -> dict[str, str] | None:
+        """Resolve every pending category, optionally before switching workflow."""
+        deletion_entries = self._build_deletion_preview_entries(pending)
+        rotation_changes = getattr(pending, "rotation_changes", {}) or {}
+        direct_rotation_actions = bool(
+            pending.rotation_count
+            and not pending.organize_actions
+            and not deletion_entries
+        )
+        dialog = QDialog(self.parent)
+        dialog.setWindowTitle("Resolve Pending Work")
+        dialog.setObjectName("workflowTransitionDialog")
+        dialog.setProperty("hasTrash", bool(deletion_entries))
+        dialog.setModal(True)
+        dialog.setMinimumSize(760, 520)
+        if deletion_entries or rotation_changes:
+            dialog.resize(960, 720)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
+
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        build_dialog_header("Review Pending Changes", "⚠", outer)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("workflowTransitionScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QFrame()
+        content.setObjectName("workflowTransitionContent")
+        scroll.setWidget(content)
+        body = QVBoxLayout(content)
+        body.setContentsMargins(28, 22, 28, 20)
+        body.setSpacing(12)
+        if switching:
+            intro_text = (
+                f"Before switching from {source_label} to {destination_label}, review "
+                "the pending work below. Nothing will change until you confirm."
+            )
+        else:
+            intro_text = (
+                f"Review the pending work from {source_label} below. "
+                "Nothing will change until you confirm."
+            )
+        intro = QLabel(intro_text)
+        intro.setObjectName("workflowTransitionIntro")
+        intro.setWordWrap(True)
+        body.addWidget(intro)
+
+        choices: dict[str, QButtonGroup] = {}
+        accepted_resolutions: dict[str, str] = {}
+        action_buttons: list[QPushButton] = []
+
+        def add_choice_card(
+            key: str,
+            title: str,
+            summary: str,
+            options: tuple[tuple[str, str], ...],
+            details: str = "",
+        ) -> None:
+            card, layout = build_card("dialogCard")
+            heading = QLabel(title)
+            heading.setObjectName("workflowTransitionSectionTitle")
+            layout.addWidget(heading)
+            description = QLabel(summary)
+            description.setObjectName("workflowTransitionDescription")
+            description.setWordWrap(True)
+            layout.addWidget(description)
+            if details:
+                preview = QPlainTextEdit()
+                preview.setObjectName("workflowTransitionActionList")
+                preview.setReadOnly(True)
+                preview.setMaximumHeight(110)
+                preview.setPlainText(details)
+                layout.addWidget(preview)
+            group = QButtonGroup(dialog)
+            group.setExclusive(True)
+            for value, label in options:
+                button = QRadioButton(label)
+                button.setObjectName("workflowTransitionChoice")
+                button.setProperty("resolution", value)
+                group.addButton(button)
+                layout.addWidget(button)
+                button.toggled.connect(update_action_buttons)
+            choices[key] = group
+            body.addWidget(card)
+
+        def selected_local_resolutions() -> dict[str, str] | None:
+            result: dict[str, str] = {}
+            for key, group in choices.items():
+                button = group.checkedButton()
+                if button is None:
+                    return None
+                result[key] = str(button.property("resolution"))
+            return result
+
+        def update_action_buttons(*_args) -> None:
+            enabled = selected_local_resolutions() is not None
+            for button in action_buttons:
+                button.setEnabled(enabled)
+
+        def accept_resolutions(trash_resolution: str | None = None) -> None:
+            resolutions = selected_local_resolutions()
+            if resolutions is None:
+                return
+            accepted_resolutions.clear()
+            accepted_resolutions.update(resolutions)
+            if trash_resolution:
+                accepted_resolutions["trash"] = trash_resolution
+            dialog.accept()
+
+        def accept_direct_resolution(key: str, value: str) -> None:
+            accepted_resolutions.clear()
+            accepted_resolutions[key] = value
+            dialog.accept()
+
+        if pending.organize_actions:
+            preview_lines = pending.organize_actions[:12]
+            if len(pending.organize_actions) > len(preview_lines):
+                preview_lines.append(
+                    f"… and {len(pending.organize_actions) - len(preview_lines)} more"
+                )
+            add_choice_card(
+                "organize",
+                "Organize changes",
+                f"{len(pending.organize_actions)} unapplied filesystem change(s).",
+                (("apply", "Apply changes"), ("discard", "Discard edits")),
+                "\n".join(preview_lines),
+            )
+        if pending.rotation_count:
+            if direct_rotation_actions:
+                rotation_heading = QLabel(
+                    f"{pending.rotation_count} confirmed rotation(s)"
+                )
+                rotation_heading.setObjectName("workflowTransitionRotationTitle")
+                body.addWidget(rotation_heading)
+                rotation_description = QLabel(
+                    "Review the photos below, then apply the rotations or discard "
+                    "the confirmed queue."
+                )
+                rotation_description.setObjectName("workflowTransitionDescription")
+                rotation_description.setWordWrap(True)
+                body.addWidget(rotation_description)
+
+                if rotation_changes:
+                    rotation_list = QListWidget()
+                    rotation_list.setObjectName("workflowTransitionRotationList")
+                    rotation_list.setIconSize(QSize(180, 130))
+                    rotation_list.setViewMode(QListWidget.ViewMode.IconMode)
+                    rotation_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+                    rotation_list.setMovement(QListWidget.Movement.Static)
+                    rotation_list.setWordWrap(True)
+                    rotation_list.setSpacing(14)
+                    rotation_list.setMinimumHeight(260)
+                    for file_path, angle in rotation_changes.items():
+                        item = QListWidgetItem()
+                        item.setSizeHint(QSize(430, 210))
+                        item.setToolTip(file_path)
+                        rotation_list.addItem(item)
+                        rotation_list.setItemWidget(
+                            item,
+                            self._rotation_comparison_widget(file_path, angle),
+                        )
+                    body.addWidget(rotation_list, 1)
+            else:
+                add_choice_card(
+                    "rotation",
+                    "Queued rotations",
+                    f"{pending.rotation_count} photo rotation(s) are queued but unapplied.",
+                    (("apply", "Apply rotations"), ("discard", "Discard queue")),
+                )
+        if deletion_entries:
+            trash_heading = QLabel(f"{len(deletion_entries)} item(s) will be removed")
+            trash_heading.setObjectName("workflowTransitionTrashTitle")
+            body.addWidget(trash_heading)
+            trash_description = QLabel(
+                "This includes marked files, folders, their contents, and empty folders "
+                "removed by Organize. Review the complete list before continuing."
+            )
+            trash_description.setObjectName("workflowTransitionDescription")
+            trash_description.setWordWrap(True)
+            body.addWidget(trash_description)
+
+            list_widget = QListWidget()
+            list_widget.setObjectName("workflowTransitionTrashList")
+            list_widget.setIconSize(QSize(180, 130))
+            list_widget.setViewMode(QListWidget.ViewMode.IconMode)
+            list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
+            list_widget.setMovement(QListWidget.Movement.Static)
+            list_widget.setWordWrap(True)
+            list_widget.setSpacing(14)
+            list_widget.setMinimumHeight(260)
+            for file_path, display_name, detail, is_directory in deletion_entries:
+                item = QListWidgetItem(
+                    self._deletion_preview_icon(file_path, is_directory),
+                    f"{display_name}\n{detail}",
+                )
+                item.setSizeHint(QSize(205, 180))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setToolTip(file_path)
+                list_widget.addItem(item)
+            body.addWidget(list_widget, 1)
+
+        body.addStretch()
+        outer.addWidget(scroll, 1)
+
+        footer = QFrame()
+        footer.setObjectName("dialogFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(22, 10, 22, 14)
+        footer_layout.addStretch()
+        stay_button = QPushButton("Stay Here" if switching else "Keep Reviewing")
+        stay_button.setObjectName("workflowTransitionStayButton")
+        stay_button.setDefault(True)
+        stay_button.clicked.connect(dialog.reject)
+        footer_layout.addWidget(stay_button)
+        if direct_rotation_actions:
+            discard_button = QPushButton(
+                "Discard Rotations and Switch" if switching else "Discard Rotations"
+            )
+            discard_button.setObjectName("workflowTransitionRotationDiscardButton")
+            discard_button.clicked.connect(
+                lambda: accept_direct_resolution("rotation", "discard")
+            )
+            footer_layout.addWidget(discard_button)
+            apply_button = QPushButton(
+                "Apply Rotations and Switch" if switching else "Apply Rotations"
+            )
+            apply_button.setObjectName("workflowTransitionRotationApplyButton")
+            apply_button.clicked.connect(
+                lambda: accept_direct_resolution("rotation", "apply")
+            )
+            footer_layout.addWidget(apply_button)
+        elif pending.trash_paths:
+            clear_button = QPushButton(
+                "Clear Marks and Switch" if switching else "Clear Marks"
+            )
+            clear_button.setObjectName("workflowTransitionClearButton")
+            clear_button.clicked.connect(lambda: accept_resolutions("clear"))
+            footer_layout.addWidget(clear_button)
+            action_buttons.append(clear_button)
+            trash_button = QPushButton(
+                "Move to Trash and Switch" if switching else "Move to Trash"
+            )
+            trash_button.setObjectName("workflowTransitionTrashButton")
+            trash_button.clicked.connect(lambda: accept_resolutions("commit"))
+            footer_layout.addWidget(trash_button)
+            action_buttons.append(trash_button)
+        else:
+            resolve_button = QPushButton(
+                "Apply Choice and Switch" if switching else "Apply Choice"
+            )
+            resolve_button.setObjectName("workflowTransitionResolveButton")
+            resolve_button.clicked.connect(lambda: accept_resolutions())
+            footer_layout.addWidget(resolve_button)
+            action_buttons.append(resolve_button)
+        update_action_buttons()
+        outer.addWidget(footer)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dict(accepted_resolutions)
+
     def _should_apply_raw_processing(self, file_path: str) -> bool:
         """Determine if RAW processing should be applied to the given file."""
         return is_raw_file(file_path)
 
+    def _cached_thumbnail_pixmap(self, file_path: str):
+        """Read a thumbnail only from shared memory caches."""
+        try:
+            pixmap = self.parent.image_pipeline.get_cached_thumbnail_qpixmap(
+                file_path,
+                apply_orientation=True,
+                memory_only=True,
+            )
+        except Exception:
+            pixmap = None
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        return None
+
+    def _cached_review_pixmap(self, file_path: str):
+        """Use the same cache priority as workflow review previews."""
+        try:
+            pixmap = self.parent.image_pipeline.get_cached_review_qpixmap(file_path)
+        except Exception:
+            pixmap = None
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        return None
+
     def _cached_thumbnail_icon(self, file_path: str) -> QIcon:
         """Build a dialog icon without decoding media on the UI thread."""
-        pixmap = self.parent.image_pipeline.get_cached_thumbnail_qpixmap(
-            file_path,
-            memory_only=True,
-        )
-        if pixmap is not None and not pixmap.isNull():
+        pixmap = self._cached_thumbnail_pixmap(file_path)
+        if pixmap is not None:
             return QIcon(pixmap)
         return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+    def _rotation_comparison_widget(self, file_path: str, angle: int) -> QWidget:
+        """Build a cache-only before/after rotation comparison card."""
+        card = QFrame()
+        card.setObjectName("workflowTransitionRotationComparison")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(5)
+
+        filename = QLabel(os.path.basename(file_path))
+        filename.setObjectName("workflowTransitionRotationFilename")
+        filename.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(filename)
+
+        comparison = QHBoxLayout()
+        comparison.setSpacing(8)
+        source = self._cached_review_pixmap(file_path)
+        if source is None:
+            source = self.parent.style().standardIcon(
+                QStyle.StandardPixmap.SP_FileIcon
+            ).pixmap(96, 96)
+        rotated = source.transformed(
+            QTransform().rotate(angle),
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+        def add_preview(caption: str, pixmap) -> None:
+            column = QVBoxLayout()
+            column.setSpacing(3)
+            heading = QLabel(caption)
+            heading.setObjectName("workflowTransitionRotationCaption")
+            heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image = QLabel()
+            image.setObjectName("workflowTransitionRotationPreview")
+            image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image.setFixedSize(170, 120)
+            image.setPixmap(
+                pixmap.scaled(
+                    image.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            column.addWidget(heading)
+            column.addWidget(image)
+            comparison.addLayout(column)
+
+        add_preview("BEFORE", source)
+        arrow = QLabel("→")
+        arrow.setObjectName("workflowTransitionRotationArrow")
+        arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        comparison.addWidget(arrow)
+        add_preview("AFTER", rotated)
+        layout.addLayout(comparison)
+
+        angle_text = {
+            90: "90° clockwise",
+            180: "180°",
+            -90: "90° counterclockwise",
+        }.get(angle, f"{angle}°")
+        detail = QLabel(f"Rotate {angle_text}")
+        detail.setObjectName("workflowTransitionRotationDetail")
+        detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(detail)
+        return card
+
+    def _deletion_preview_icon(self, path: str, is_directory: bool) -> QIcon:
+        if is_directory:
+            return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        if is_image_extension(path) or is_video_extension(path):
+            return self._cached_thumbnail_icon(path)
+        return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+    def _build_deletion_preview_entries(
+        self, pending: WorkflowPendingState
+    ) -> list[tuple[str, str, str, bool]]:
+        """Expand deletion targets into every affected file and folder."""
+        entries: list[tuple[str, str, str, bool]] = []
+        seen: set[str] = set()
+
+        def add(path: str, display_name: str, detail: str, is_directory: bool) -> None:
+            normalized = os.path.normcase(os.path.normpath(path))
+            if normalized in seen:
+                return
+            seen.add(normalized)
+            entries.append((path, display_name, detail, is_directory))
+
+        def add_target(path: str, detail: str, expand_directory: bool) -> None:
+            is_directory = os.path.isdir(path)
+            name = os.path.basename(os.path.normpath(path)) or path
+            add(path, name, detail, is_directory)
+            if not is_directory or not expand_directory:
+                return
+            for current_root, dirnames, filenames in os.walk(path, followlinks=False):
+                dirnames.sort(key=str.casefold)
+                filenames.sort(key=str.casefold)
+                for dirname in dirnames:
+                    child = os.path.join(current_root, dirname)
+                    relative = os.path.relpath(child, path)
+                    add(child, relative, f"Folder inside {name}", True)
+                for filename in filenames:
+                    child = os.path.join(current_root, filename)
+                    relative = os.path.relpath(child, path)
+                    add(child, relative, f"Inside {name}", False)
+
+        def canonical_targets(paths: list[str]) -> list[str]:
+            directories = [path for path in paths if os.path.isdir(path)]
+            retained = []
+            for path in paths:
+                covered = False
+                for directory in directories:
+                    if path == directory:
+                        continue
+                    try:
+                        covered = os.path.normcase(
+                            os.path.commonpath([path, directory])
+                        ) == os.path.normcase(os.path.normpath(directory))
+                    except ValueError, OSError:
+                        covered = False
+                    if covered:
+                        break
+                if not covered:
+                    retained.append(path)
+            return sorted(
+                dict.fromkeys(retained),
+                key=lambda path: (not os.path.isdir(path), path.casefold()),
+            )
+
+        for path in canonical_targets(pending.trash_paths):
+            add_target(path, "Marked for Trash", expand_directory=True)
+        for path in canonical_targets(pending.organize_delete_paths):
+            add_target(path, "Deleted by Organize", expand_directory=True)
+        for path in pending.organize_removed_folders:
+            add_target(
+                path,
+                "Empty folder removed after organizing",
+                expand_directory=False,
+            )
+        return entries
 
     def _has_raw_images(self, file_paths: list[str]) -> bool:
         """Check if any of the provided file paths are RAW image files."""
@@ -451,6 +889,28 @@ class DialogManager:
         content_layout.setSpacing(12)
         content_layout.setContentsMargins(20, 14, 20, 14)
         scroll_area.setWidget(content_frame)
+
+        # --- Interface Card ---
+        interface_card, interface_layout = build_card("dialogCard")
+        interface_title = QLabel("Interface")
+        interface_title.setObjectName("cardSectionTitle")
+        interface_layout.addWidget(interface_title)
+
+        interface_separator = QFrame()
+        interface_separator.setObjectName("cardSeparator")
+        interface_separator.setFrameShape(QFrame.Shape.HLine)
+        interface_separator.setFixedHeight(1)
+        interface_layout.addWidget(interface_separator)
+
+        show_shortcuts_checkbox = QCheckBox("Show shortcuts in the footer")
+        show_shortcuts_checkbox.setObjectName("showWorkflowShortcutsCheckbox")
+        show_shortcuts_checkbox.setChecked(get_show_workflow_shortcuts())
+        show_shortcuts_checkbox.setToolTip(
+            "Show context-sensitive keyboard shortcuts beside the workflow navigation."
+        )
+        interface_layout.addWidget(show_shortcuts_checkbox)
+
+        content_layout.addWidget(interface_card)
 
         # --- Performance Mode Card ---
         perf_card, perf_layout = build_card("dialogCard")
@@ -1086,12 +1546,19 @@ class DialogManager:
             set_easy_delete_dark_threshold(dark_threshold_spin.value())
             set_easy_delete_white_threshold(white_threshold_spin.value())
             set_easy_delete_duplicate_distance(duplicate_distance_spin.value())
+            show_workflow_shortcuts = show_shortcuts_checkbox.isChecked()
+            set_show_workflow_shortcuts(show_workflow_shortcuts)
+            apply_shortcut_visibility = getattr(
+                self.parent, "set_workflow_shortcuts_visible", None
+            )
+            if callable(apply_shortcut_visibility):
+                apply_shortcut_visibility(show_workflow_shortcuts)
 
             logger.info(
                 "Preferences saved: mode=%s, custom_threads=%s, similarity_model=%s, "
                 "similarity_eps=%.3f, easy_delete_blur=%.1f, "
                 "easy_delete_dark=%.1f, easy_delete_white=%.1f, "
-                "easy_delete_duplicate=%.3f",
+                "easy_delete_duplicate=%.3f, show_workflow_shortcuts=%s",
                 get_performance_mode().value,
                 get_custom_thread_count(),
                 get_similarity_embedding_model_name(),
@@ -1100,6 +1567,7 @@ class DialogManager:
                 get_easy_delete_dark_threshold(),
                 get_easy_delete_white_threshold(),
                 get_easy_delete_duplicate_distance(),
+                get_show_workflow_shortcuts(),
             )
             dialog.accept()
 
@@ -1844,9 +2312,7 @@ class DialogManager:
 
         if download_button:
             download_button.clicked.connect(
-                lambda: webbrowser.open(
-                    "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"
-                )
+                lambda: webbrowser.open(ROTATION_MODEL_DOWNLOAD_URL)
             )
         if open_models_button:
             open_models_button.clicked.connect(self._open_models_folder)

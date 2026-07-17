@@ -107,6 +107,63 @@ def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
     ]
 
 
+def test_grouping_apply_button_is_hidden_until_plan_has_real_changes(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    (beach_dir / "a.jpg").write_bytes(b"preview")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    assert widget.primary_button.isHidden()
+    assert not widget.primary_button.isEnabled()
+
+    marks = {first}
+    apply_requests: list[bool] = []
+    widget.apply_requested.connect(lambda: apply_requests.append(True))
+    widget.set_has_any_marked_func(lambda: bool(marks))
+
+    assert not widget.primary_button.isHidden()
+    assert widget.primary_button.isEnabled()
+    widget.primary_button.click()
+    assert apply_requests == [True]
+
+    marks.clear()
+    widget.refresh_deletion_state()
+
+    assert widget.primary_button.isHidden()
+    assert not widget.primary_button.isEnabled()
+
+    after_item = widget._after_file_items_by_path[first]
+    after_item.setText(0, "renamed.jpg")
+    widget._handle_preview_item_changed(after_item, 0)
+
+    assert not widget.primary_button.isHidden()
+    assert widget.primary_button.isEnabled()
+
+    restored_item = widget._after_file_items_by_path[first]
+    restored_item.setText(0, "a.jpg")
+    widget._handle_preview_item_changed(restored_item, 0)
+
+    assert widget.primary_button.isHidden()
+    assert not widget.primary_button.isEnabled()
+
+
 def test_unchanged_grouping_edit_check_does_not_build_filesystem_action_preview(
     tmp_path, monkeypatch
 ):
@@ -626,6 +683,7 @@ def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path):
 
     marks: set[str] = set()
     widget.set_is_marked_func(marks.__contains__)
+    widget.set_has_any_marked_func(lambda: bool(marks))
     widget._folder_validation_pool = SimpleNamespace(start=lambda task: task.run())
     widget.toggle_deletion_marks_requested.connect(marks.update)
     widget._delete_item(widget._after_group_items_by_id["1"])
@@ -633,7 +691,9 @@ def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path):
 
     assert widget.get_effective_plan().groups[0].source_paths == [first]
     assert widget.get_effective_plan().deleted_paths == []
-    assert marks == {first}
+    assert marks == {str(beach_dir), first}
+    assert not widget.primary_button.isHidden()
+    assert widget.primary_button.isEnabled()
     assert widget._after_file_items_by_path[first].text(0).endswith("(DELETED)")
     assert widget.pending_grouping_action_lines() == []
 
@@ -810,6 +870,45 @@ def test_grouping_step_widget_syncs_selection_between_trees(tmp_path):
     widget._handle_before_item_changed(before_item, None)
     assert widget.preview_tree.currentItem() is after_item
     assert after_item.isSelected()
+
+
+def test_grouping_active_focus_highlights_item_and_preserves_multiselection(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+    second = str(source_root / "Beach" / "b.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=2,
+            supported_items=2,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[first, second],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    first_item = widget._after_file_items_by_path[first]
+    second_item = widget._after_file_items_by_path[second]
+    widget.preview_tree.clearSelection()
+    first_item.setSelected(True)
+    widget.large_preview_view.fit_in_view = Mock()
+
+    assert widget.focus_image(second)
+
+    assert widget.preview_tree.currentItem() is second_item
+    assert first_item.isSelected()
+    assert second_item.isSelected()
+    widget.large_preview_view.fit_in_view.assert_called_once_with()
 
 
 def test_grouping_step_widget_syncs_folder_selection_between_trees(tmp_path):
@@ -1125,6 +1224,7 @@ def test_grouping_step_widget_builds_collision_aware_action_list(tmp_path):
     second_dir = source_root / "B"
     first_dir.mkdir(parents=True)
     second_dir.mkdir(parents=True)
+    (source_root / "Untouched empty folder").mkdir()
     first = str(first_dir / "same.jpg")
     second = str(second_dir / "same.jpg")
     (first_dir / "same.jpg").write_bytes(b"a")
@@ -1160,6 +1260,40 @@ def test_grouping_step_widget_builds_collision_aware_action_list(tmp_path):
         "Remove empty folder A",
         "Remove empty folder B",
     }
+
+
+def test_grouping_apply_ignores_preexisting_empty_folders_without_changes(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    untouched_empty_folder = source_root / "Folder"
+    untouched_empty_folder.mkdir()
+    photo = source_root / "photo.jpg"
+    photo.write_bytes(b"photo")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="",
+                    source_paths=[str(photo)],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    action_lines = widget._build_action_lines(widget.get_effective_plan())
+
+    assert action_lines == []
+    assert untouched_empty_folder.is_dir()
 
 
 def test_grouping_step_widget_selects_original_items_for_renamed_entries(tmp_path):
@@ -1585,3 +1719,73 @@ def test_group_items_have_drag_flag(tmp_path):
     assert group_item.flags() & Qt.ItemFlag.ItemIsDragEnabled
     assert file_item.flags() & Qt.ItemFlag.ItemIsDragEnabled
     assert group_item.data(0, ROLE_KIND) == ITEM_GROUP
+
+
+def test_grouping_step_widget_keyboard_navigation_skips_deleted(tmp_path):
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtGui import QKeyEvent
+    import sys
+
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+    second = str(source_root / "Beach" / "b.jpg")
+    third = str(source_root / "Beach" / "c.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=3,
+            supported_items=3,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[first, second, third],
+                ),
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    # Mark the second file for deletion
+    marks = {second}
+    widget.set_is_marked_func(marks.__contains__)
+
+    first_item = widget._after_file_items_by_path[first]
+    second_item = widget._after_file_items_by_path[second]
+    third_item = widget._after_file_items_by_path[third]
+
+    # Focus on first item
+    widget.preview_tree.setCurrentItem(first_item)
+
+    # 1. Press Down without override modifier -> should skip second and select third
+    event_down = QKeyEvent(
+        QEvent.Type.KeyPress, Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier
+    )
+    handled = widget.eventFilter(widget.preview_tree, event_down)
+    assert handled is True
+    assert widget.preview_tree.currentItem() is third_item
+
+    # 2. Press Up without override modifier -> should skip second and select first
+    event_up = QKeyEvent(
+        QEvent.Type.KeyPress, Qt.Key.Key_Up, Qt.KeyboardModifier.NoModifier
+    )
+    handled = widget.eventFilter(widget.preview_tree, event_up)
+    assert handled is True
+    assert widget.preview_tree.currentItem() is first_item
+
+    # 3. Press Down with override modifier (Ctrl on Win/Linux, Cmd on macOS)
+    modifier = (
+        Qt.KeyboardModifier.MetaModifier
+        if sys.platform == "darwin"
+        else Qt.KeyboardModifier.ControlModifier
+    )
+    event_down_override = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Down, modifier)
+    handled_override = widget.eventFilter(widget.preview_tree, event_down_override)
+    assert handled_override is True
+    assert widget.preview_tree.currentItem() is second_item
