@@ -3,7 +3,7 @@ import os
 from collections.abc import Callable
 from typing import override
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -41,6 +41,12 @@ _CATEGORY_NAMES: dict[str, str] = {
     "dark": "Dark",
     "white": "Bright",
     "duplicate": "Similar",
+}
+_CATEGORY_HEADER_NAMES: dict[str, str] = {
+    "blur": "BLURRY PHOTOS",
+    "dark": "DARK PHOTOS",
+    "white": "BRIGHT PHOTOS",
+    "duplicate": "SIMILAR PHOTOS",
 }
 
 _CONFIRMED_COLOR = "#66BB6A"
@@ -106,6 +112,7 @@ class EasyDeleteStepWidget(QWidget):
         self._category_counts: dict[str, int] = {}
         self._enabled_categories: dict[str, bool] = {}
         self._category_checkboxes: dict[str, QCheckBox] = {}
+        self._list_row_by_path: dict[str, int] = {}
         self._updating_category_toggles = False
         self._is_marked_func: Callable[[str], bool] | None = None
         self._has_any_marked_func: Callable[[], bool] | None = None
@@ -318,20 +325,45 @@ class EasyDeleteStepWidget(QWidget):
     def _item_text(self, path: str) -> str:
         entry = self._results.get(path, {})
         issue_type = entry.get("type", "")
-        issue = _CATEGORY_NAMES.get(issue_type, issue_type.title())
-        prefix = "Confirmed  ·  " if path in self._confirmed_reviews else ""
+        prefix = "✓  " if path in self._confirmed_reviews else ""
         if issue_type == "duplicate":
             pair = entry.get("pair_path", "")
             pair_name = os.path.basename(pair) if pair else ""
-            return f"{prefix}{issue}  ·  {os.path.basename(path)}  ↔  {pair_name}"
-        return f"{prefix}{issue}  ·  {os.path.basename(path)}"
+            return f"{prefix}{os.path.basename(path)}  ↔  {pair_name}"
+        return f"{prefix}{os.path.basename(path)}"
+
+    def _add_category_header(self, issue_type: str, count: int) -> None:
+        """Add a visual-only heading without making it part of queue navigation."""
+
+        category = _CATEGORY_HEADER_NAMES.get(issue_type, issue_type.upper())
+        header = QListWidgetItem(f"{category}  ·  {count}")
+        header.setFlags(Qt.ItemFlag.NoItemFlags)
+        header.setForeground(QColor("#8795A1"))
+        header.setBackground(QColor("#282D31"))
+        font = header.font()
+        font.setBold(True)
+        font.setPointSizeF(8.0)
+        header.setFont(font)
+        header.setSizeHint(QSize(0, 30))
+        self._items_list.addItem(header)
 
     def _populate_list(self) -> None:
         self._items_list.clear()
-        for path in self._flagged_paths:
-            item = QListWidgetItem(self._item_text(path))
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            self._items_list.addItem(item)
+        self._list_row_by_path.clear()
+        for issue_type in self._enabled_issue_types():
+            category_paths = [
+                path
+                for path in self._flagged_paths
+                if self._results.get(path, {}).get("type") == issue_type
+            ]
+            if not category_paths:
+                continue
+            self._add_category_header(issue_type, len(category_paths))
+            for path in category_paths:
+                item = QListWidgetItem(self._item_text(path))
+                item.setData(Qt.ItemDataRole.UserRole, path)
+                self._items_list.addItem(item)
+                self._list_row_by_path[path] = self._items_list.row(item)
 
         self._review_list_panel.set_count(
             len(self._flagged_paths), sum(self._category_counts.values())
@@ -342,6 +374,8 @@ class EasyDeleteStepWidget(QWidget):
         for i in range(self._items_list.count()):
             item = self._items_list.item(i)
             path = item.data(Qt.ItemDataRole.UserRole)
+            if not path:
+                continue
             item.setForeground(
                 QColor(
                     _CONFIRMED_COLOR if path in self._confirmed_reviews else "#A9B7C6"
@@ -360,7 +394,7 @@ class EasyDeleteStepWidget(QWidget):
             self._focused_path = review_path
 
         self._items_list.blockSignals(True)
-        self._items_list.setCurrentRow(index)
+        self._items_list.setCurrentRow(self._list_row_by_path[review_path])
         self._items_list.blockSignals(False)
 
         self._show_current()
@@ -620,9 +654,12 @@ class EasyDeleteStepWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
-        row = self._items_list.row(item)
-        if row != self._current_index:
-            self._navigate_to(row)
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if not path:
+            return
+        index = self._flagged_paths.index(path)
+        if index != self._current_index:
+            self._navigate_to(index)
 
     def _on_prev(self) -> None:
         self._navigate_to(self._current_index - 1)

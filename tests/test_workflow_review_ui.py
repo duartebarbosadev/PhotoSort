@@ -59,7 +59,9 @@ def test_easy_delete_requires_confirmation_before_staging_trash():
     )
 
     assert widget._state_banner.title_label.text() == "Choose, then confirm"
-    assert widget._items_list.item(0).text() == "Similar  ·  delete.jpg  ↔  keep.jpg"
+    assert widget._items_list.item(0).text() == "SIMILAR PHOTOS  ·  1"
+    assert widget._items_list.item(1).text() == "delete.jpg  ↔  keep.jpg"
+    assert not (widget._items_list.item(0).flags() & Qt.ItemFlag.ItemIsSelectable)
     assert "SELECTED FOR TRASH" in widget._pair_left_hdr.text()
     assert "not confirmed" in widget._pair_left_hdr.text()
     assert widget._pair_left_card._name_label.text() == "delete.jpg"
@@ -105,7 +107,7 @@ def test_easy_delete_requires_confirmation_before_staging_trash():
     assert (
         "no file has been moved or deleted" in widget._state_banner.detail_label.text()
     )
-    assert "Confirmed" in widget._items_list.item(0).text()
+    assert widget._items_list.item(1).text().startswith("✓")
     assert "MARKED FOR TRASH" in widget._pair_right_hdr.text()
 
 
@@ -191,6 +193,49 @@ def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
 
     assert marks == {first, second}
     assert widget._confirmed_reviews == {first, second}
+
+
+def test_easy_delete_groups_queue_under_category_headers():
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            "/tmp/similar-a.jpg": {
+                "type": "duplicate",
+                "pair_path": "/tmp/similar-b.jpg",
+                "suggest_delete": True,
+            },
+            "/tmp/blurry.jpg": {
+                "type": "blur",
+                "pair_path": None,
+                "suggest_delete": True,
+            },
+            "/tmp/dark.jpg": {
+                "type": "dark",
+                "pair_path": None,
+                "suggest_delete": True,
+            },
+        }
+    )
+
+    texts = [
+        widget._items_list.item(row).text()
+        for row in range(widget._items_list.count())
+    ]
+    assert texts == [
+        "SIMILAR PHOTOS  ·  1",
+        "similar-a.jpg  ↔  similar-b.jpg",
+        "BLURRY PHOTOS  ·  1",
+        "blurry.jpg",
+        "DARK PHOTOS  ·  1",
+        "dark.jpg",
+    ]
+    assert all(
+        "Similar" not in text for text in texts if "↔" in text
+    )
+
+    widget._navigate_to(2)
+    assert widget._items_list.currentItem().text() == "dark.jpg"
 
 
 def test_easy_delete_apply_all_only_uses_visible_categories():
