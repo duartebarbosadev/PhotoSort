@@ -635,6 +635,39 @@ def test_pick_best_missing_scores_preselects_first_photo_without_reordering():
     assert widget._current_group().paths == [paths[0], paths[2]]
 
 
+def test_pick_best_confirm_leaves_single_photo_focus_for_next_comparison():
+    paths = ["/tmp/first.jpg", "/tmp/second.jpg", "/tmp/third.jpg"]
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths)})
+
+    widget._toggle_focus_mode()
+    assert widget._focus_mode
+    assert widget._sync_viewer._view_mode == "focused"
+
+    widget._on_confirm()
+
+    assert not widget._focus_mode
+    assert widget._sync_viewer._view_mode == "side_by_side"
+    assert widget._subset_paths == [paths[0], paths[2]]
+    assert len(widget._sync_viewer.image_viewers) == 2
+    assert all(not viewer.isHidden() for viewer in widget._sync_viewer.image_viewers)
+
+
+def test_pick_best_keep_all_leaves_single_photo_focus_for_next_comparison():
+    paths = ["/tmp/first.jpg", "/tmp/second.jpg", "/tmp/third.jpg"]
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths)})
+
+    widget._toggle_focus_mode()
+    widget._on_keep_all()
+
+    assert not widget._focus_mode
+    assert widget._sync_viewer._view_mode == "side_by_side"
+    assert len(widget._subset_paths) == 2
+
+
 def test_pick_best_revising_earlier_round_restores_marks_and_rebuilds_dependents():
     paths = [f"/tmp/photo-{index}.jpg" for index in range(7)]
     scores = {path: float(7 - index) for index, path in enumerate(paths)}

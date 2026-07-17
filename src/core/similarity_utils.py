@@ -117,6 +117,59 @@ def l2_normalize_rows(matrix: np.ndarray) -> np.ndarray:
     return matrix / norms
 
 
+def regional_embedding_distance(
+    first_regions: np.ndarray, second_regions: np.ndarray
+) -> float:
+    """Return a subject-aware distance between two ordered regional embeddings.
+
+    Region generation is deterministic: the whole image and each large crop occupy
+    the same position in every matrix. Comparing aligned regions prevents one
+    coincidentally similar background crop from making otherwise different photos
+    appear equivalent. Older or partial caches can contain unequal region counts;
+    retain the previous best-pair fallback for those incomplete records.
+    """
+    first = l2_normalize_rows(np.asarray(first_regions, dtype=np.float32))
+    second = l2_normalize_rows(np.asarray(second_regions, dtype=np.float32))
+    if first.ndim != 2 or second.ndim != 2 or not len(first) or not len(second):
+        return 2.0
+
+    similarities = first @ second.T
+    if first.shape[0] == second.shape[0] and first.shape[0] > 1:
+        similarity = float(np.mean(np.diag(similarities)))
+    else:
+        similarity = float(np.max(similarities))
+    return max(0.0, min(2.0, 1.0 - similarity))
+
+
+def build_regional_distance_matrix(
+    embeddings: dict[str, list[float]],
+    regional_embeddings: dict[str, list[list[float]]],
+    subset_paths: list[str],
+) -> np.ndarray:
+    """Build a symmetric distance matrix from shared regional embedding data."""
+    region_sets: list[np.ndarray] = []
+    for path in subset_paths:
+        region_vectors = regional_embeddings.get(path)
+        if region_vectors:
+            region_matrix = np.asarray(region_vectors, dtype=np.float32)
+        else:
+            region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
+        if region_matrix.ndim != 2 or region_matrix.shape[0] == 0:
+            region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
+        region_sets.append(region_matrix)
+
+    count = len(subset_paths)
+    distances = np.zeros((count, count), dtype=np.float32)
+    for first_index in range(count):
+        for second_index in range(first_index + 1, count):
+            distance = regional_embedding_distance(
+                region_sets[first_index], region_sets[second_index]
+            )
+            distances[first_index, second_index] = distance
+            distances[second_index, first_index] = distance
+    return distances
+
+
 def normalize_embedding_vector(values: list[float]) -> tuple[list[float], bool]:
     """Normalize a single embedding vector, returning (normalized_list, changed_flag)."""
     arr = np.asarray(values, dtype=np.float32)

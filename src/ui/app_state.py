@@ -40,6 +40,7 @@ class AppState:
         self.embeddings_cache: dict[
             str, list[float]
         ] = {}  # {image_path: embedding_vector}
+        self.regional_embeddings_cache: dict[str, list[list[float]]] = {}
         self.rating_disk_cache = (
             RatingCache()
         )  # Instance of the new disk cache for ratings
@@ -142,6 +143,7 @@ class AppState:
         self.date_cache.clear()
         self.cluster_results.clear()
         self.embeddings_cache.clear()
+        self.regional_embeddings_cache.clear()
         self.marked_for_deletion.clear()  # Clear marked for deletion set
         if clear_disk_caches and self.rating_disk_cache:
             self.rating_disk_cache.clear()
@@ -175,6 +177,7 @@ class AppState:
         date_removed = self.date_cache.pop(file_path, None)
         cluster_removed = self.cluster_results.pop(file_path, None)
         embedding_removed = self.embeddings_cache.pop(file_path, None)
+        self.regional_embeddings_cache.pop(file_path, None)
         removed_best = self.best_shot_scores_by_path.pop(file_path, None)
         if cluster_removed is None and removed_best:
             cluster_removed = removed_best.get("cluster_id")
@@ -222,6 +225,10 @@ class AppState:
             self.cluster_results[new_path] = self.cluster_results.pop(old_path)
         if old_path in self.embeddings_cache:
             self.embeddings_cache[new_path] = self.embeddings_cache.pop(old_path)
+        if old_path in self.regional_embeddings_cache:
+            self.regional_embeddings_cache[new_path] = self.regional_embeddings_cache.pop(
+                old_path
+            )
         if old_path in self.best_shot_scores_by_path:
             self.best_shot_scores_by_path[new_path] = self.best_shot_scores_by_path.pop(
                 old_path

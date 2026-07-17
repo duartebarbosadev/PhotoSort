@@ -57,6 +57,7 @@ class WorkerManager(QObject):
     # Similarity Engine Signals
     similarity_progress = pyqtSignal(int, str)  # percentage, message
     similarity_embeddings_generated = pyqtSignal(dict)  # {image_path: embedding_vector}
+    similarity_regional_embeddings_generated = pyqtSignal(dict)
     similarity_clustering_complete = pyqtSignal(dict)  # {image_path: cluster_id}
     similarity_error = pyqtSignal(str)
 
@@ -393,6 +394,14 @@ class WorkerManager(QObject):
                 "similarity",
                 generation,
                 self.similarity_embeddings_generated,
+                embeddings,
+            )
+        )
+        self.similarity_worker.regional_embeddings_generated.connect(
+            lambda embeddings: self._emit_if_current(
+                "similarity",
+                generation,
+                self.similarity_regional_embeddings_generated,
                 embeddings,
             )
         )

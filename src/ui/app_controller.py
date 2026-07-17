@@ -17,7 +17,11 @@ from core.media_utils import is_image_extension
 from core.image_file_ops import ImageFileOperations
 from core.pyexiv2_wrapper import PyExiv2Operations
 from core.grouping import build_grouping_output_root
-from core.similarity_utils import adaptive_dbscan_eps, l2_normalize_rows
+from core.similarity_utils import (
+    adaptive_dbscan_eps,
+    build_regional_distance_matrix,
+    l2_normalize_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +214,9 @@ class AppController(QObject):
         self.worker_manager.similarity_progress.connect(self.handle_similarity_progress)
         self.worker_manager.similarity_embeddings_generated.connect(
             self.handle_embeddings_generated
+        )
+        self.worker_manager.similarity_regional_embeddings_generated.connect(
+            self.handle_regional_embeddings_generated
         )
         self.worker_manager.similarity_clustering_complete.connect(
             self.handle_clustering_complete
@@ -710,6 +717,9 @@ class AppController(QObject):
 
         base_cluster_map = raw_cluster_map
         embeddings = getattr(self.app_state, "embeddings_cache", {}) or {}
+        regional_embeddings = (
+            getattr(self.app_state, "regional_embeddings_cache", {}) or {}
+        )
         if not base_cluster_map or not embeddings:
             return base_cluster_map
 
@@ -747,12 +757,23 @@ class AppController(QObject):
             )
             from sklearn.cluster import DBSCAN
 
-            dbscan = DBSCAN(
-                eps=strict_eps,
-                min_samples=PICK_BEST_REFINEMENT_MIN_SAMPLES,
-                metric="cosine",
-            )
-            labels = dbscan.fit_predict(embedding_matrix)
+            if regional_embeddings:
+                distance_matrix = build_regional_distance_matrix(
+                    embeddings, regional_embeddings, embedded_paths
+                )
+                dbscan = DBSCAN(
+                    eps=strict_eps,
+                    min_samples=PICK_BEST_REFINEMENT_MIN_SAMPLES,
+                    metric="precomputed",
+                )
+                labels = dbscan.fit_predict(distance_matrix)
+            else:
+                dbscan = DBSCAN(
+                    eps=strict_eps,
+                    min_samples=PICK_BEST_REFINEMENT_MIN_SAMPLES,
+                    metric="cosine",
+                )
+                labels = dbscan.fit_predict(embedding_matrix)
 
             grouped: dict[int, list[str]] = {}
             next_noise_label = 0
@@ -1430,12 +1451,23 @@ class AppController(QObject):
 
         widget = self.main_window.pick_best_step_widget
 
-        if self.app_state.cluster_results:
-            # Similarity already done — go straight to scoring
+        image_paths = set(self._get_image_paths())
+        clustered_paths = set(self.app_state.cluster_results)
+        embedded_paths = set(getattr(self.app_state, "embeddings_cache", {}) or {})
+        regional_paths = set(
+            getattr(self.app_state, "regional_embeddings_cache", {}) or {}
+        )
+        similarity_inputs_ready = bool(image_paths) and image_paths.issubset(
+            clustered_paths & embedded_paths & regional_paths
+        )
+
+        if similarity_inputs_ready:
             self._start_pick_best_scoring()
         else:
-            # Need to run similarity first
-            logger.info("Pick Best: no cluster results yet, running similarity first.")
+            logger.info(
+                "Pick Best: similarity or regional inputs are incomplete; "
+                "running shared similarity analysis first."
+            )
             self._pick_best_pending_after_similarity = True
             widget.show_loading("Step 1/2: Computing similarity clusters…", 0)
             self.start_similarity_analysis()
@@ -1722,6 +1754,11 @@ class AppController(QObject):
             )
             return
         self.main_window.update_loading_text("Embeddings generated. Clustering...")
+
+    def handle_regional_embeddings_generated(self, embeddings_dict):
+        if getattr(self, "_ignore_similarity_results", False):
+            return
+        self.app_state.regional_embeddings_cache = embeddings_dict
 
     def handle_clustering_complete(self, cluster_results_dict: dict[str, int]):
         if getattr(self, "_ignore_similarity_results", False):

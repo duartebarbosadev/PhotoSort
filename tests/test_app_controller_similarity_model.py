@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from ui.app_controller import AppController
 
 
@@ -71,6 +73,9 @@ class _WorkerManager:
         self.kwargs = None
 
     def is_similarity_worker_running(self):
+        return False
+
+    def is_pick_best_running(self):
         return False
 
     def start_similarity_analysis(self, paths, **kwargs):
@@ -154,3 +159,56 @@ def test_pick_best_similarity_uses_step_progress_not_global_overlay(monkeypatch)
         ("Step 1/2: Downloading facebook/dinov2-small", 42),
         ("Step 1/2: Embeddings generated. Clustering...", -1),
     ]
+
+
+def test_pick_best_refinement_splits_shared_background_with_different_subjects():
+    paths = ["/tmp/person.jpg", "/tmp/landscape.jpg"]
+    app_state = SimpleNamespace(
+        image_files_data=[{"path": path, "media_type": "image"} for path in paths],
+        cluster_results={path: 7 for path in paths},
+        marked_for_deletion=set(),
+        embeddings_cache={path: [1.0, 0.0] for path in paths},
+        regional_embeddings_cache={
+            paths[0]: [[1.0, 0.0]] * 6,
+            paths[1]: [[1.0, 0.0]] * 3 + [[0.0, 1.0]] * 3,
+        },
+    )
+    controller = AppController(object(), app_state, object())
+
+    refined = controller._build_pick_best_cluster_map()
+
+    assert {tuple(group) for group in refined.values()} == {
+        (paths[0],),
+        (paths[1],),
+    }
+
+
+def test_regional_embedding_results_respect_cancelled_similarity_run():
+    state = SimpleNamespace(regional_embeddings_cache={})
+    controller = AppController(object(), state, object())
+    controller._ignore_similarity_results = True
+
+    controller.handle_regional_embeddings_generated({"/tmp/a.jpg": [[1.0, 0.0]]})
+
+    assert state.regional_embeddings_cache == {}
+
+
+def test_pick_best_refreshes_cached_clusters_without_regional_inputs(monkeypatch):
+    state = SimpleNamespace(
+        image_files_data=[{"path": "/tmp/a.jpg", "media_type": "image"}],
+        cluster_results={"/tmp/a.jpg": 1},
+        embeddings_cache={"/tmp/a.jpg": [1.0, 0.0]},
+        regional_embeddings_cache={},
+        pick_best_results={},
+    )
+    main_window = _MainWindow()
+    worker_manager = _WorkerManager()
+    controller = AppController(main_window, state, worker_manager)
+    monkeypatch.setattr(
+        "ui.app_controller.is_similarity_model_installed", lambda _: True
+    )
+
+    controller.start_pick_best_workflow()
+
+    assert worker_manager.started is True
+    assert controller._pick_best_pending_after_similarity is True

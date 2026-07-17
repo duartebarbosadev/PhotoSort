@@ -561,6 +561,7 @@ class SimilarityWorker(QObject):
 
     progress_update = pyqtSignal(int, str)
     embeddings_generated = pyqtSignal(object)  # Using object to pass dict
+    regional_embeddings_generated = pyqtSignal(object)
     clustering_complete = pyqtSignal(object)  # Using object to pass dict
     error = pyqtSignal(str)
     finished = pyqtSignal()
@@ -610,6 +611,9 @@ class SimilarityWorker(QObject):
             self.similarity_engine.progress_update.connect(self.progress_update)
             self.similarity_engine.embeddings_generated.connect(
                 self.embeddings_generated
+            )
+            self.similarity_engine.regional_embeddings_generated.connect(
+                self.regional_embeddings_generated
             )
             self.similarity_engine.clustering_complete.connect(self.clustering_complete)
             self.similarity_engine.error.connect(self.error)

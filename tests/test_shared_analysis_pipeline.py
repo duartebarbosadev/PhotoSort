@@ -163,6 +163,8 @@ def test_similarity_uses_shared_analysis_images_instead_of_full_processing():
             [np.asarray([[1.0, 0.0]], dtype=np.float32)],
         )
     )
+    regional_results = []
+    engine.regional_embeddings_generated.connect(regional_results.append)
 
     engine.generate_embeddings_for_files(["photo.arw"])
 
@@ -170,4 +172,5 @@ def test_similarity_uses_shared_analysis_images_instead_of_full_processing():
         "photo.arw",
         target_size=ANALYSIS_CACHE_RESOLUTION,
     )
+    assert regional_results == [{"photo.arw": [[1.0, 0.0]]}]
     assert not pipeline.get_pil_image_for_processing.called

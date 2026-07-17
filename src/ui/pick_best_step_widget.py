@@ -1244,6 +1244,10 @@ class PickBestStepWidget(QWidget):
         tournament.finalized = True
 
     def _advance_after_confirmation(self) -> None:
+        # A confirmation finishes the current decision. Do not carry the
+        # single-photo inspection mode into the next matchup, where it would make
+        # a valid two-photo comparison appear to contain only one image.
+        self._exit_focus_mode()
         tournament = self._current_tournament()
         winner_path = self._current_group().selected_path
         all_paths = list(tournament.payload.get("all_paths", []))

@@ -7,10 +7,44 @@ pytest.importorskip("sklearn")
 from core.similarity_engine import SimilarityEngine
 from core.similarity_utils import (
     adaptive_dbscan_eps,
+    build_regional_distance_matrix,
     classify_orientation,
     l2_normalize_rows,
     normalize_embedding_vector,
 )
+
+
+def test_regional_distance_requires_corresponding_scene_regions_to_match():
+    embeddings = {
+        "/tmp/person.jpg": [1.0, 0.0],
+        "/tmp/landscape.jpg": [1.0, 0.0],
+    }
+    regional_embeddings = {
+        "/tmp/person.jpg": [[1.0, 0.0]] * 6,
+        "/tmp/landscape.jpg": [[1.0, 0.0]] * 3 + [[0.0, 1.0]] * 3,
+    }
+
+    distances = build_regional_distance_matrix(
+        embeddings, regional_embeddings, list(embeddings)
+    )
+
+    # A single/shared background region still matches perfectly, but half of the
+    # corresponding frame regions describe different content.
+    assert distances[0, 1] == pytest.approx(0.5)
+    assert distances[1, 0] == pytest.approx(0.5)
+
+
+def test_regional_distance_keeps_identical_ordered_regions_together():
+    embeddings = {"/tmp/a.jpg": [1.0, 0.0], "/tmp/b.jpg": [1.0, 0.0]}
+    regions = [[1.0, 0.0], [0.8, 0.2], [0.0, 1.0]]
+
+    distances = build_regional_distance_matrix(
+        embeddings,
+        {"/tmp/a.jpg": regions, "/tmp/b.jpg": regions},
+        list(embeddings),
+    )
+
+    assert distances[0, 1] == pytest.approx(0.0, abs=1e-6)
 
 
 def test_l2_normalize_rows_produces_unit_norm_rows():
