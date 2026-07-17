@@ -1269,8 +1269,10 @@ class SynchronizedImageViewer(QWidget):
         visible_viewers = sum(1 for v in self.image_viewers if v.isVisible())
         self.sync_button.setVisible(visible_viewers > 1)
 
-        num_images_loaded = sum(1 for v in self.image_viewers if v.has_image())
-        is_available = num_images_loaded >= 2
+        num_images_assigned = sum(
+            1 for viewer in self.image_viewers if viewer.get_file_path() is not None
+        )
+        is_available = num_images_assigned >= 2
         self.side_by_side_btn.setEnabled(is_available)
         self.side_by_side_availability_changed.emit(is_available)
 
@@ -1279,7 +1281,9 @@ class SynchronizedImageViewer(QWidget):
         logger.debug(
             f"Setting view mode to '{mode}' with focused index: {focused_index}"
         )
-        num_images = sum(1 for v in self.image_viewers if v.has_image())
+        num_images = sum(
+            1 for viewer in self.image_viewers if viewer.get_file_path() is not None
+        )
         logger.debug(f"Number of viewers with images: {num_images}")
 
         if focused_index != -1:
@@ -1337,7 +1341,11 @@ class SynchronizedImageViewer(QWidget):
             )
             self.focused_image_changed.emit(-1, "")  # index=-1, empty path
 
-            num_active_viewers = sum(1 for v in self.image_viewers if v.has_image())
+            num_active_viewers = sum(
+                1
+                for viewer in self.image_viewers
+                if viewer.get_file_path() is not None
+            )
             logger.debug(f"Number of active viewers: {num_active_viewers}")
             if num_active_viewers == 0:
                 num_active_viewers = 1  # Show at least one empty viewer
@@ -1381,7 +1389,9 @@ class SynchronizedImageViewer(QWidget):
 
     def set_focused_viewer(self, index: int):
         """Public method to set the focused viewer by index."""
-        num_images = sum(1 for v in self.image_viewers if v.has_image())
+        num_images = sum(
+            1 for viewer in self.image_viewers if viewer.get_file_path() is not None
+        )
         if 0 <= index < num_images:
             self._set_view_mode("focused", focused_index=index)
 
