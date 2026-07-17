@@ -2566,11 +2566,6 @@ QLabel#workflowCompareName {
     font-weight: 650;
 }
 
-QLabel#workflowCompareScore {
-    color: #9CA8B2;
-    font-size: 8.25pt;
-}
-
 QLabel#workflowCompareMetaKey {
     color: #71808B;
     font-size: 7.75pt;

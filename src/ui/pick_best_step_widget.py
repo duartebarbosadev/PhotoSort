@@ -39,7 +39,6 @@ logger = logging.getLogger(__name__)
 WINNER_BORDER_COLOR = "#F5B700"
 MARKED_BORDER_COLOR = "#E53935"
 KEEP_BORDER_COLOR = "#66BB6A"
-FOCUSED_BORDER_COLOR = "#4FC3F7"
 CARD_BG = "#20252C"
 CARD_BG_WINNER = "#2C2616"
 CARD_BORDER_COLOR = "#3A434C"
@@ -104,7 +103,7 @@ class CompareCard(WorkflowDecisionCard):
     chosen = pyqtSignal(str)
 
     def __init__(self, slot_number: int, parent: QWidget | None = None) -> None:
-        super().__init__(slot_number, parent)
+        super().__init__(slot_number, parent, filename_in_header=True)
         self.path: str = ""
         self.is_ai_pick = False
         self._selected = False
@@ -112,11 +111,7 @@ class CompareCard(WorkflowDecisionCard):
         self._group_keep_all = False
         self._focused = False
         self._slot_number = slot_number
-
-        self._score_label = QLabel("")
-        self._score_label.setObjectName("workflowCompareScore")
-        self._score_label.setStyleSheet("font-size: 11px; color: #AAB4BE;")
-        self._content_layout.insertWidget(2, self._score_label)
+        self._display_name = ""
 
         self._meta_grid = self._details_grid
         self._meta_rows = self._detail_rows
@@ -141,14 +136,17 @@ class CompareCard(WorkflowDecisionCard):
         self._selected = selected
         self._group_confirmed = group_confirmed
         self._group_keep_all = group_keep_all
-        self._name_label.setText(os.path.basename(path))
+        name = os.path.basename(path)
+        name_parts = [name]
+        if is_ai_pick:
+            name_parts.append("AI suggestion")
         if score is None:
-            self._score_label.setText("Score unavailable")
-            self._score_label.setToolTip(failure_reason or "")
+            name_parts.append("score unavailable")
+            self._name_label.setToolTip(failure_reason or "")
         else:
-            prefix = "AI suggestion · " if is_ai_pick else ""
-            self._score_label.setText(f"{prefix}score {score:.3f}")
-            self._score_label.setToolTip("")
+            name_parts.append(f"score {score:.3f}")
+            self._name_label.setToolTip("")
+        self._display_name = " · ".join(name_parts)
 
         self.set_details(metadata_rows)
 
@@ -172,30 +170,29 @@ class CompareCard(WorkflowDecisionCard):
         self.chosen.emit(self.path)
 
     def set_info_visible(self, visible: bool) -> None:
-        self._score_label.setVisible(visible)
         self._hint_label.setVisible(visible)
         self.set_details_visible(visible)
 
     def _update_style(self) -> None:
         if self._group_confirmed and self._group_keep_all:
             border_color = KEEP_BORDER_COLOR
-            status = "KEPT · confirmed"
+            status = "KEEP"
             color = KEEP_BORDER_COLOR
         elif self._group_confirmed and self._selected:
             border_color = KEEP_BORDER_COLOR
-            status = "KEPT · confirmed"
+            status = "KEEP"
             color = KEEP_BORDER_COLOR
         elif self._group_confirmed:
             border_color = MARKED_BORDER_COLOR
-            status = "TRASH · confirmed"
+            status = "TRASH"
             color = "#FF7B86"
         elif self._selected:
             border_color = WINNER_BORDER_COLOR
-            status = "KEEP · not confirmed"
+            status = "KEEP"
             color = WINNER_BORDER_COLOR
         else:
-            border_color = FOCUSED_BORDER_COLOR if self._focused else CARD_BORDER_COLOR
-            status = "TRASH · not confirmed"
+            border_color = CARD_BORDER_COLOR
+            status = "TRASH"
             color = "#FF9AA3"
 
         bg = CARD_BG_WINNER if self._selected or self._group_keep_all else CARD_BG
@@ -206,7 +203,7 @@ class CompareCard(WorkflowDecisionCard):
         else:
             hint = f"Click image/card or press {self._slot_number} to select"
         self.set_decision(
-            filename=os.path.basename(self.path) if self.path else "",
+            filename=self._display_name,
             state=status,
             state_color=color,
             border_color=border_color,
@@ -448,28 +445,12 @@ class PickBestStepWidget(QWidget):
         round_layout.setSpacing(8)
         self._prev_round_btn = QPushButton("◀ Previous Comparison")
         self._prev_round_btn.setObjectName("workflowGhostButton")
-        self._round_info_label = QLabel()
-        self._round_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._round_info_label.setStyleSheet("font-size: 12px; font-weight: bold;")
         self._next_round_btn = QPushButton("Next Comparison ▶")
         self._next_round_btn.setObjectName("workflowGhostButton")
         round_layout.addWidget(self._prev_round_btn)
-        round_layout.addWidget(self._round_info_label, 1)
+        round_layout.addStretch(1)
         round_layout.addWidget(self._next_round_btn)
         content_layout.addWidget(round_bar)
-
-        self._subset_info_label = QLabel()
-        self._subset_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._subset_info_label.setStyleSheet("font-size: 11px; color: #92A0AD;")
-        content_layout.addWidget(self._subset_info_label)
-
-        self._hint_label = QLabel(
-            "Confirm keeps the selection and sends the other photo to Trash. Keep all protects both."
-        )
-        self._hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._hint_label.setWordWrap(True)
-        self._hint_label.setStyleSheet("font-size: 11px; color: #888888;")
-        content_layout.addWidget(self._hint_label)
 
         self._sync_viewer = SynchronizedImageViewer()
         self._sync_viewer.controls_frame.hide()
@@ -515,7 +496,7 @@ class PickBestStepWidget(QWidget):
         self._keep_all_btn = QPushButton("Keep all")
         self._keep_all_btn.setObjectName("workflowGhostButton")
         self._keep_all_btn.setToolTip(
-            "Keep every photo in this group and continue without eliminating one"
+            "Keep every photo in this group and continue without eliminating one (K)"
         )
         action_layout.addWidget(self._keep_all_btn)
 
@@ -562,6 +543,7 @@ class PickBestStepWidget(QWidget):
                 "groups:Down": self._next_group,
                 "focus": self._toggle_focus_mode,
                 "info": self._toggle_info,
+                "keep_all": self._on_keep_all,
                 "confirm": self._on_confirm,
                 "skip": self.skip_requested.emit,
             },
@@ -963,15 +945,8 @@ class PickBestStepWidget(QWidget):
     def _update_tournament_controls(self) -> None:
         tournament = self._current_tournament()
         group = self._current_group()
-        total_rounds = self._total_round_count(len(self._current_all_paths))
         self._cluster_info_label.setText(
             f"Cluster {self._cluster_index + 1} of {len(self._tournaments)}  ·  {len(self._current_all_paths)} photos"
-        )
-        self._round_info_label.setText(
-            f"Comparison {tournament.current_round + 1} of {total_rounds}"
-        )
-        self._subset_info_label.setText(
-            "Choose the photo that continues"
         )
         self._prev_cluster_btn.setEnabled(self._cluster_index > 0)
         self._next_cluster_btn.setEnabled(self._cluster_index < len(self._tournaments) - 1)
@@ -1382,22 +1357,16 @@ class PickBestStepWidget(QWidget):
             self.active_image_changed.emit(path)
 
     def _exit_focus_mode(self) -> None:
-        """Reset to compare mode (flag + hint). No-op if already in compare mode."""
+        """Reset to compare mode. No-op if already in compare mode."""
         if not self._focus_mode:
             return
         self._focus_mode = False
-        self._hint_label.setText(
-            "Choose one photo from this group. The AI selection is only a suggestion."
-        )
 
     def _toggle_focus_mode(self) -> None:
         if not self._focus_mode:
             self._focus_mode = True
             slot = min(self._focused_slot_index, max(0, len(self._subset_paths) - 1))
             self._sync_viewer.set_focused_viewer(slot)
-            self._hint_label.setText(
-                "Focus mode · press 1, 2, or 3 to switch photos · press C to compare again."
-            )
         else:
             self._exit_focus_mode()
             self._sync_viewer.set_images_data(self._current_images_data)

@@ -92,6 +92,7 @@ PICK_BEST_SHORTCUTS = (
     WorkflowShortcutSpec("groups", ("Up", "Down"), "↑  ↓", "Group"),
     WorkflowShortcutSpec("focus", ("C",), "C", "Compare"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
+    WorkflowShortcutSpec("keep_all", ("K",), "K", "Keep all"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm"),
     WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
 )
@@ -130,7 +131,13 @@ class WorkflowDecisionCard(QFrame):
 
     activated = pyqtSignal()
 
-    def __init__(self, slot_number: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        slot_number: int,
+        parent: QWidget | None = None,
+        *,
+        filename_in_header: bool = False,
+    ) -> None:
         super().__init__(parent)
         self._slot_number = slot_number
         self.setObjectName("workflowCompareCard")
@@ -155,18 +162,22 @@ class WorkflowDecisionCard(QFrame):
         self._slot_label.setFixedSize(22, 22)
         top_row.addWidget(self._slot_label, alignment=Qt.AlignmentFlag.AlignLeft)
 
+        self._name_label = QLabel()
+        self._name_label.setObjectName("workflowCompareName")
+        self._name_label.setWordWrap(False)
+        if filename_in_header:
+            top_row.addWidget(self._name_label, stretch=1)
+
         self._state_label = QLabel()
         self._state_label.setObjectName("workflowCompareState")
         self._state_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        top_row.addWidget(self._state_label, stretch=1)
+        top_row.addWidget(self._state_label, stretch=0 if filename_in_header else 1)
         self._content_layout.addLayout(top_row)
 
-        self._name_label = QLabel()
-        self._name_label.setObjectName("workflowCompareName")
-        self._name_label.setWordWrap(False)
-        self._content_layout.addWidget(self._name_label)
+        if not filename_in_header:
+            self._content_layout.addWidget(self._name_label)
 
         self._details_grid = QGridLayout()
         self._details_grid.setContentsMargins(0, 0, 0, 0)

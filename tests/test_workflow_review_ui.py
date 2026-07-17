@@ -8,7 +8,14 @@ from types import SimpleNamespace
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtCore import Qt
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QFrame, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ui.easy_delete_step_widget import EasyDeleteStepWidget
 from ui.fix_rotation_step_widget import FixRotationStepWidget
@@ -532,8 +539,25 @@ def test_pick_best_publishes_trash_mark_as_soon_as_comparison_is_confirmed():
 
     assert not marks
     assert isinstance(widget._compare_cards[0], WorkflowDecisionCard)
-    assert widget._compare_cards[0]._state_label.text() == "TRASH · not confirmed"
-    assert widget._compare_cards[1]._state_label.text() == "KEEP · not confirmed"
+    assert widget._compare_cards[0]._state_label.text() == "TRASH"
+    assert widget._compare_cards[1]._state_label.text() == "KEEP"
+    assert (
+        widget._compare_cards[0]._name_label.text()
+        == "challenger.jpg · score 0.700"
+    )
+    assert (
+        widget._compare_cards[1]._name_label.text()
+        == "winner.jpg · AI suggestion · score 0.900"
+    )
+    assert widget._compare_cards[1]._content_layout.indexOf(
+        widget._compare_cards[1]._name_label
+    ) == -1
+    visible_text = "\n".join(
+        label.text() for label in widget._page_review.findChildren(QLabel)
+    )
+    assert "Comparison 1 of 1" not in visible_text
+    assert "Choose the photo that continues" not in visible_text
+    assert "The AI selection is only a suggestion" not in visible_text
     assert widget._review_list_panel.count_label.text() == "0/1 done"
     assert _pick_best_state(widget, challenger) == "Current"
     assert _pick_best_state(widget, winner) == "Current"
@@ -547,8 +571,8 @@ def test_pick_best_publishes_trash_mark_as_soon_as_comparison_is_confirmed():
     assert widget._current_tournament().final_winner == winner
     assert _pick_best_state(widget, challenger) == "Trash"
     assert _pick_best_state(widget, winner) == "Winner"
-    assert widget._compare_cards[0]._state_label.text() == "TRASH · confirmed"
-    assert widget._compare_cards[1]._state_label.text() == "KEPT · confirmed"
+    assert widget._compare_cards[0]._state_label.text() == "TRASH"
+    assert widget._compare_cards[1]._state_label.text() == "KEEP"
     assert widget._done_btn.isEnabled()
 
 
@@ -570,7 +594,7 @@ def test_pick_best_revising_final_choice_restores_prior_marks_until_reconfirmed(
 
     assert not marks
     assert widget._current_tournament().final_winner is None
-    assert "not confirmed" in widget._compare_cards[0]._state_label.text()
+    assert widget._compare_cards[0]._state_label.text() == "KEEP"
     assert not widget._done_btn.isEnabled()
 
     widget._on_confirm()
@@ -666,6 +690,21 @@ def test_pick_best_keep_all_leaves_single_photo_focus_for_next_comparison():
     assert not widget._focus_mode
     assert widget._sync_viewer._view_mode == "side_by_side"
     assert len(widget._subset_paths) == 2
+
+
+def test_pick_best_keep_all_shortcut_confirms_the_current_group():
+    paths = ["/tmp/first.jpg", "/tmp/second.jpg"]
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths)})
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["K"].activated.emit()
+
+    group = widget._current_group()
+    assert group.keep_all
+    assert group.confirmed
+    assert widget._done_btn.isEnabled()
 
 
 def test_pick_best_revising_earlier_round_restores_marks_and_rebuilds_dependents():
@@ -843,7 +882,7 @@ def test_pick_best_keep_all_protects_group_and_completes_without_forced_winner()
     assert _pick_best_state(widget, paths[0]) == "Winner"
     assert _pick_best_state(widget, paths[1]) == "Kept"
     assert all(
-        card._state_label.text() == "KEPT · confirmed"
+        card._state_label.text() == "KEEP"
         for card in widget._compare_cards[:2]
     )
 
@@ -1086,6 +1125,11 @@ def test_pick_best_focus_finds_photo_group_without_changing_selection():
 
     assert challengers[1] in widget._subset_paths
     assert widget._subset_paths[widget._focused_slot_index] == challengers[1]
+    focused_card = next(
+        card for card in widget._compare_cards if card.path == challengers[1]
+    )
+    assert "#3A434C" in focused_card.styleSheet()
+    assert "#4FC3F7" not in focused_card.styleSheet()
     assert [group.selected_path for group in tournament.rounds[0].groups] == selections_before
 
 
