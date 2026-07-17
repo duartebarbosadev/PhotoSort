@@ -265,12 +265,16 @@ def test_easy_delete_arrow_shortcuts_separate_choice_from_navigation():
     assert widget._current_index == 1
 
 
-def test_page_headers_no_longer_duplicate_the_footer_shortcuts():
+def test_review_pages_do_not_render_redundant_headers():
     organize = GroupingStepWidget()
     easy_delete = EasyDeleteStepWidget()
+    fix_rotation = FixRotationStepWidget()
+    pick_best = PickBestStepWidget()
 
     assert not hasattr(organize, "shortcut_strip")
-    assert not hasattr(easy_delete._review_header, "shortcut_strip")
+    assert not hasattr(easy_delete, "_review_header")
+    assert not hasattr(fix_rotation, "_review_header")
+    assert not hasattr(pick_best, "_review_header")
 
 
 def test_footer_shortcuts_use_the_most_columns_that_fit():
@@ -432,13 +436,7 @@ def test_pick_best_stages_initial_recommendations_in_shared_state():
     assert isinstance(widget._compare_cards[0], WorkflowDecisionCard)
     assert widget._compare_cards[0]._state_label.text() == "MARKED FOR TRASH · staged"
     assert widget._compare_cards[1]._state_label.text() == "AI PICK · KEEP"
-    assert "marked for Trash" in widget._review_header.summary_label.text()
-    assert (
-        "no files move"
-        in widget._review_header.findChild(
-            type(widget._review_header.summary_label), "workflowReviewDescription"
-        ).text()
-    )
+    assert "Cluster 1 of 1" in widget._cluster_info_label.text()
 
 
 def test_easy_delete_focuses_exact_duplicate_without_changing_decision():

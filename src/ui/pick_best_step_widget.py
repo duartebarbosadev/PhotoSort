@@ -24,7 +24,6 @@ from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.workflow_review_components import (
     PICK_BEST_SHORTCUTS,
     WorkflowDecisionCard,
-    WorkflowReviewHeader,
     WorkflowStateBanner,
     install_workflow_shortcuts,
 )
@@ -333,16 +332,6 @@ class PickBestStepWidget(QWidget):
         review_layout.setContentsMargins(0, 0, 0, 0)
         review_layout.setSpacing(0)
 
-        self._review_header = WorkflowReviewHeader(
-            step_number=4,
-            title="Pick Best",
-            description=(
-                "Compare each cluster and choose what to keep. Red choices are "
-                "marked for Trash only; no files move on this screen."
-            ),
-        )
-        review_layout.addWidget(self._review_header)
-
         review_content = QWidget()
         content_layout = QVBoxLayout(review_content)
         content_layout.setContentsMargins(12, 10, 12, 10)
@@ -441,7 +430,6 @@ class PickBestStepWidget(QWidget):
 
     def _connect_signals(self) -> None:
         self._skip_btn_loading.clicked.connect(self.skip_requested)
-        self._review_header.skip_button.clicked.connect(self.skip_requested)
         self._done_btn.clicked.connect(self._on_done)
         self._prev_cluster_btn.clicked.connect(self._prev_cluster)
         self._next_cluster_btn.clicked.connect(self._next_cluster)
@@ -576,18 +564,8 @@ class PickBestStepWidget(QWidget):
         self._show_subset(score_by_path, failure_reason_by_path)
         total_clusters = len(self._clusters)
         total_sets = self._subset_count()
-        visible_kept = sum(
-            1 for marked in self._cluster_mark_state.values() if not marked
-        )
-        visible_deleted = sum(
-            1 for marked in self._cluster_mark_state.values() if marked
-        )
         self._cluster_info_label.setText(
             f"Cluster {self._cluster_index + 1} of {total_clusters}  ·  {len(self._current_all_paths)} photos"
-        )
-        self._review_header.set_summary(
-            f"{visible_kept} keep  ·  {visible_deleted} marked for Trash",
-            "danger" if visible_deleted else "neutral",
         )
         self._subset_info_label.setText(
             f"Set {self._subset_index + 1} of {total_sets}  ·  challengers on the left, editable AI pick on the right"
@@ -831,14 +809,8 @@ class PickBestStepWidget(QWidget):
 
     def _update_cluster_header_only(self) -> None:
         total_clusters = len(self._clusters)
-        kept = sum(1 for marked in self._cluster_mark_state.values() if not marked)
-        deleted = sum(1 for marked in self._cluster_mark_state.values() if marked)
         self._cluster_info_label.setText(
             f"Cluster {self._cluster_index + 1} of {total_clusters}  ·  {len(self._current_all_paths)} photos"
-        )
-        self._review_header.set_summary(
-            f"{kept} keep  ·  {deleted} marked for Trash",
-            "danger" if deleted else "neutral",
         )
 
     def _subset_count(self) -> int:

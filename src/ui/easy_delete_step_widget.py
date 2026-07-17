@@ -23,7 +23,6 @@ from PyQt6.QtWidgets import (
 from ui.workflow_review_components import (
     EASY_DELETE_SHORTCUTS,
     WorkflowDecisionCard,
-    WorkflowReviewHeader,
     WorkflowStateBanner,
     install_workflow_shortcuts,
 )
@@ -342,16 +341,6 @@ class EasyDeleteStepWidget(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, path)
             self._items_list.addItem(item)
 
-        total = len(self._flagged_paths)
-        all_total = sum(self._category_counts.values())
-        if total == all_total:
-            self._summary_label.setText(
-                f"{total} image{'s' if total != 1 else ''} flagged for review"
-            )
-        else:
-            self._summary_label.setText(
-                f"{total} of {all_total} flagged image{'s' if all_total != 1 else ''} visible"
-            )
         self._refresh_list_colors()
 
     def _refresh_list_colors(self) -> None:
@@ -616,7 +605,6 @@ class EasyDeleteStepWidget(QWidget):
             self._next_btn.setEnabled(False)
             self._confirm_btn.setEnabled(False)
             self._apply_all_btn.setEnabled(False)
-            self._review_header.set_summary("No suggestions visible")
             return
         self._confirm_btn.setEnabled(True)
         self._apply_all_btn.setEnabled(True)
@@ -630,13 +618,6 @@ class EasyDeleteStepWidget(QWidget):
         )
         self._update_decision_presentation(path, self._results.get(path, {}))
 
-        confirmed_here = sum(
-            candidate in self._confirmed_reviews for candidate in self._flagged_paths
-        )
-        self._review_header.set_summary(
-            f"{total} suggestions  ·  {confirmed_here} confirmed",
-            "success" if confirmed_here == total else "neutral",
-        )
         self._refresh_list_colors()
 
     # ------------------------------------------------------------------
@@ -899,24 +880,10 @@ class EasyDeleteStepWidget(QWidget):
         page_layout.setContentsMargins(0, 0, 0, 0)
         page_layout.setSpacing(0)
 
-        self._review_header = WorkflowReviewHeader(
-            step_number=2,
-            title="Easy Delete",
-            description=(
-                "Review automated suggestions. Marking a photo is reversible; "
-                "nothing is moved until you confirm deletion in Cull."
-            ),
-        )
-        self._review_header.skip_button.clicked.connect(self._on_skip)
-        page_layout.addWidget(self._review_header)
-
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(12, 10, 12, 10)
         content_layout.setSpacing(8)
-
-        self._summary_label = QLabel()
-        self._summary_label.hide()
 
         # Main split: list | viewer
         splitter = QSplitter(Qt.Orientation.Horizontal)

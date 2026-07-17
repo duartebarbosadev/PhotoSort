@@ -22,7 +22,6 @@ from core.app_settings import ROTATION_MODEL_DOWNLOAD_URL
 
 from ui.workflow_review_components import (
     FIX_ROTATION_SHORTCUTS,
-    WorkflowReviewHeader,
     WorkflowStateBanner,
     install_workflow_shortcuts,
 )
@@ -325,25 +324,7 @@ class FixRotationStepWidget(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, path)
             self._items_list.addItem(item)
 
-        self._update_summary()
         self._refresh_list_colors()
-
-    def _update_summary(self) -> None:
-        total = len(self._ordered_paths)
-        confirmed = len(self._confirmed & set(self._ordered_paths))
-        queued = sum(
-            1
-            for path in self._ordered_paths
-            if path in self._confirmed and self._marked.get(path, False)
-        )
-        leave_as_is = confirmed - queued
-        self._summary_label.setText(
-            f"{total} suggestion{'s' if total != 1 else ''} · {confirmed} confirmed"
-        )
-        self._review_header.set_summary(
-            f"{queued} queued  ·  {leave_as_is} leave as-is  ·  {total - confirmed} to review",
-            "warning" if queued else "neutral",
-        )
 
     def _decision_state(self, path: str) -> str:
         if path not in self._confirmed:
@@ -489,7 +470,6 @@ class FixRotationStepWidget(QWidget):
 
         self._refresh_apply_button()
         self._refresh_list_colors()
-        self._update_summary()
 
     def _refresh_apply_button(self) -> None:
         marked_count = sum(
@@ -712,24 +692,10 @@ class FixRotationStepWidget(QWidget):
         page_layout.setContentsMargins(0, 0, 0, 0)
         page_layout.setSpacing(0)
 
-        self._review_header = WorkflowReviewHeader(
-            step_number=3,
-            title="Fix Rotation",
-            description=(
-                "Select the original or corrected preview, then confirm each choice. "
-                "Confirmed rotations do not change files until you press Apply."
-            ),
-        )
-        self._review_header.skip_button.clicked.connect(self._on_skip)
-        page_layout.addWidget(self._review_header)
-
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(12, 10, 12, 10)
         content_layout.setSpacing(8)
-
-        self._summary_label = QLabel()
-        self._summary_label.hide()
 
         # Main splitter: list | dual-preview
         splitter = QSplitter(Qt.Orientation.Horizontal)

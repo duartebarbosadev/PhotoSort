@@ -2299,58 +2299,6 @@ QWidget#workflowReviewPage {
     background-color: #202326;
 }
 
-QFrame#workflowReviewHeader {
-    background-color: #292D31;
-    border: none;
-    border-bottom: 1px solid #3B4248;
-}
-
-QLabel#workflowStepPill {
-    background-color: #183B68;
-    color: #8FC5FF;
-    border: 1px solid #285789;
-    border-radius: 7px;
-    padding: 3px 8px;
-    font-size: 7.5pt;
-    font-weight: 800;
-    letter-spacing: 1px;
-}
-
-QLabel#workflowReviewTitle {
-    color: #F2F5F7;
-    font-size: 14pt;
-    font-weight: 750;
-    background: transparent;
-}
-
-QLabel#workflowReviewDescription {
-    color: #83919C;
-    font-size: 8.5pt;
-    background: transparent;
-}
-
-QLabel#workflowReviewSummary {
-    color: #B7C2CB;
-    background-color: #22272B;
-    border: 1px solid #3B4248;
-    border-radius: 8px;
-    padding: 4px 10px;
-    font-size: 8.5pt;
-    font-weight: 650;
-}
-
-QLabel#workflowReviewSummary[tone="danger"] {
-    color: #FF9AA3;
-    background-color: #3A2429;
-    border-color: #6E343D;
-}
-
-QLabel#workflowReviewSummary[tone="warning"] {
-    color: #F2C96D;
-    background-color: #352F20;
-    border-color: #66552B;
-}
-
 QFrame#workflowShortcutStrip {
     background-color: #22262A;
     border: 1px solid #3A4147;

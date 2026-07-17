@@ -1,9 +1,9 @@
 """Shared visual and keyboard language for PhotoSort workflow pages.
 
-The workflow pages intentionally use the same footer shortcut registry, review
-header, state banner, and button roles. This keeps presentation code out of the
-individual pages and makes a shortcut's visible label and actual binding share
-one source of truth.
+The workflow pages intentionally use the same footer shortcut registry, state
+banner, and button roles. This keeps presentation code out of the individual
+pages and makes a shortcut's visible label and actual binding share one source
+of truth.
 """
 
 import sys
@@ -17,7 +17,6 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -359,62 +358,6 @@ class WorkflowShortcutStrip(QFrame):
             self._items_layout.addWidget(
                 item, index // selected_columns, index % selected_columns
             )
-
-
-class WorkflowReviewHeader(QFrame):
-    """Shared header for analysis/review steps two through four."""
-
-    def __init__(
-        self,
-        *,
-        step_number: int,
-        title: str,
-        description: str,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setObjectName("workflowReviewHeader")
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(14, 10, 14, 8)
-        root.setSpacing(6)
-
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(10)
-
-        step = QLabel(f"STEP {step_number} OF 5")
-        step.setObjectName("workflowStepPill")
-        title_label = QLabel(title)
-        title_label.setObjectName("workflowReviewTitle")
-        self.summary_label = QLabel()
-        self.summary_label.setObjectName("workflowReviewSummary")
-        self.summary_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        self.skip_button = QPushButton("Skip step")
-        self.skip_button.setObjectName("workflowGhostButton")
-
-        top.addWidget(step)
-        top.addWidget(title_label)
-        top.addStretch(1)
-        top.addWidget(self.summary_label)
-        top.addWidget(self.skip_button)
-        root.addLayout(top)
-
-        lower = QHBoxLayout()
-        lower.setContentsMargins(0, 0, 0, 0)
-        lower.setSpacing(12)
-        description_label = QLabel(description)
-        description_label.setObjectName("workflowReviewDescription")
-        description_label.setWordWrap(True)
-        lower.addWidget(description_label, 1)
-        root.addLayout(lower)
-
-    def set_summary(self, text: str, tone: str = "neutral") -> None:
-        self.summary_label.setText(text)
-        self.summary_label.setProperty("tone", tone)
-        _refresh_style(self.summary_label)
 
 
 class WorkflowStateBanner(QFrame):
