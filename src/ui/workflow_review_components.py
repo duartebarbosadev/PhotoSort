@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -358,6 +360,74 @@ class WorkflowShortcutStrip(QFrame):
             self._items_layout.addWidget(
                 item, index // selected_columns, index % selected_columns
             )
+
+
+class WorkflowReviewListPanel(QFrame):
+    """Compact shared queue used by the review workflows."""
+
+    def __init__(
+        self,
+        *,
+        bulk_action_text: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("workflowReviewListPanel")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setMinimumWidth(220)
+        self.setMaximumWidth(310)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(5)
+
+        header = QWidget()
+        header.setObjectName("workflowReviewListHeader")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(4, 0, 4, 2)
+        header_layout.setSpacing(6)
+
+        title = QLabel("Review queue")
+        title.setObjectName("workflowReviewListTitle")
+        self.count_label = QLabel("0 items")
+        self.count_label.setObjectName("workflowReviewListCount")
+        self.count_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        header_layout.addWidget(title)
+        header_layout.addStretch(1)
+        header_layout.addWidget(self.count_label)
+        root.addWidget(header)
+
+        self.filters = QWidget()
+        self.filters.setObjectName("workflowReviewListFilters")
+        self.filters_layout = QGridLayout(self.filters)
+        self.filters_layout.setContentsMargins(4, 2, 4, 3)
+        self.filters_layout.setHorizontalSpacing(8)
+        self.filters_layout.setVerticalSpacing(2)
+        self.filters.hide()
+        root.addWidget(self.filters)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setObjectName("workflowReviewList")
+        self.list_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        root.addWidget(self.list_widget, 1)
+
+        footer = QWidget()
+        footer.setObjectName("workflowReviewListFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 2, 0, 0)
+        self.bulk_button = QPushButton(bulk_action_text)
+        self.bulk_button.setObjectName("workflowGhostButton")
+        footer_layout.addWidget(self.bulk_button)
+        root.addWidget(footer)
+
+    def set_count(self, visible: int, total: int | None = None) -> None:
+        if total is not None and visible != total:
+            text = f"{visible} of {total}"
+        else:
+            text = f"{visible} item{'s' if visible != 1 else ''}"
+        self.count_label.setText(text)
 
 
 class WorkflowStateBanner(QFrame):

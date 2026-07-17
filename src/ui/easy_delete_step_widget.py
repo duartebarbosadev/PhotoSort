@@ -9,7 +9,6 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QListWidgetItem,
     QProgressBar,
     QPushButton,
@@ -23,6 +22,7 @@ from PyQt6.QtWidgets import (
 from ui.workflow_review_components import (
     EASY_DELETE_SHORTCUTS,
     WorkflowDecisionCard,
+    WorkflowReviewListPanel,
     WorkflowStateBanner,
     install_workflow_shortcuts,
 )
@@ -37,10 +37,10 @@ _ISSUE_LABELS: dict[str, tuple] = {
 }
 _ISSUE_ORDER = ("duplicate", "blur", "dark", "white")
 _CATEGORY_NAMES: dict[str, str] = {
-    "blur": "Blurry",
-    "dark": "Near-black",
-    "white": "Overexposed",
-    "duplicate": "Duplicates",
+    "blur": "Blur",
+    "dark": "Dark",
+    "white": "Bright",
+    "duplicate": "Similar",
 }
 
 _CONFIRMED_COLOR = "#66BB6A"
@@ -290,13 +290,6 @@ class EasyDeleteStepWidget(QWidget):
 
     def _refresh_category_controls(self) -> None:
         issue_types = self._issue_types_with_counts()
-        summary_parts = [
-            f"{_CATEGORY_NAMES.get(issue_type, issue_type.title())}: {self._category_counts[issue_type]}"
-            for issue_type in issue_types
-        ]
-        self._category_summary_label.setText(" · ".join(summary_parts))
-        self._category_summary_label.setVisible(bool(summary_parts))
-
         while self._category_toggle_layout.count():
             item = self._category_toggle_layout.takeAt(0)
             widget = item.widget()
@@ -305,34 +298,33 @@ class EasyDeleteStepWidget(QWidget):
 
         self._category_checkboxes = {}
         self._updating_category_toggles = True
-        for issue_type in issue_types:
+        for index, issue_type in enumerate(issue_types):
             count = self._category_counts[issue_type]
             checkbox = QCheckBox(
                 f"{_CATEGORY_NAMES.get(issue_type, issue_type.title())} ({count})"
             )
+            checkbox.setObjectName("workflowReviewFilter")
             checkbox.setChecked(self._enabled_categories.get(issue_type, True))
-            checkbox.setStyleSheet("font-size: 11px; color: #A9B7C6;")
             checkbox.toggled.connect(
                 lambda checked, issue_type=issue_type: self._on_category_toggled(
                     issue_type, checked
                 )
             )
             self._category_checkboxes[issue_type] = checkbox
-            self._category_toggle_layout.addWidget(checkbox)
-        self._category_toggle_layout.addStretch()
+            self._category_toggle_layout.addWidget(checkbox, index // 2, index % 2)
         self._updating_category_toggles = False
-        self._category_toggle_container.setVisible(bool(issue_types))
+        self._review_list_panel.filters.setVisible(bool(issue_types))
 
     def _item_text(self, path: str) -> str:
         entry = self._results.get(path, {})
         issue_type = entry.get("type", "")
-        badge, _ = _ISSUE_LABELS.get(issue_type, ("?", "#888"))
-        state = "CONFIRMED" if path in self._confirmed_reviews else "REVIEW"
+        issue = _CATEGORY_NAMES.get(issue_type, issue_type.title())
+        prefix = "Confirmed  ·  " if path in self._confirmed_reviews else ""
         if issue_type == "duplicate":
             pair = entry.get("pair_path", "")
             pair_name = os.path.basename(pair) if pair else ""
-            return f"{state}  ·  [{badge}] {os.path.basename(path)}  ↔  {pair_name}"
-        return f"{state}  ·  [{badge}] {os.path.basename(path)}"
+            return f"{prefix}{issue}  ·  {os.path.basename(path)}  ↔  {pair_name}"
+        return f"{prefix}{issue}  ·  {os.path.basename(path)}"
 
     def _populate_list(self) -> None:
         self._items_list.clear()
@@ -341,6 +333,9 @@ class EasyDeleteStepWidget(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, path)
             self._items_list.addItem(item)
 
+        self._review_list_panel.set_count(
+            len(self._flagged_paths), sum(self._category_counts.values())
+        )
         self._refresh_list_colors()
 
     def _refresh_list_colors(self) -> None:
@@ -890,47 +885,19 @@ class EasyDeleteStepWidget(QWidget):
         splitter.setHandleWidth(4)
         splitter.setChildrenCollapsible(False)
 
-        # Left list
-        left = QWidget()
-        left.setMinimumWidth(200)
-        left.setMaximumWidth(300)
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(4)
-
-        self._category_summary_label = QLabel()
-        self._category_summary_label.setWordWrap(True)
-        self._category_summary_label.setStyleSheet(
-            "font-size: 11px; color: #A9B7C6; padding: 0 4px 2px 4px;"
+        self._review_list_panel = WorkflowReviewListPanel(
+            bulk_action_text="Confirm visible"
         )
-        left_layout.addWidget(self._category_summary_label)
-
-        self._category_toggle_container = QWidget()
-        self._category_toggle_layout = QHBoxLayout(self._category_toggle_container)
-        self._category_toggle_layout.setContentsMargins(4, 0, 4, 4)
-        self._category_toggle_layout.setSpacing(6)
-        left_layout.addWidget(self._category_toggle_container)
-
-        self._items_list = QListWidget()
-        self._items_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._items_list.setStyleSheet(
-            "QListWidget { background: #242729; border: none; border-right: 1px solid #3C3F41; color: #A9B7C6; }"
-            "QListWidget::item { padding: 7px 12px; border-bottom: 1px solid #303538; font-size: 11px; }"
-            "QListWidget::item:selected { background: #1E3F62; color: #E0E8F0; }"
-            "QListWidget::item:hover { background: #2C3438; }"
-        )
+        self._category_toggle_layout = self._review_list_panel.filters_layout
+        self._items_list = self._review_list_panel.list_widget
         self._items_list.itemClicked.connect(self._on_item_clicked)
-        left_layout.addWidget(self._items_list)
-
-        self._apply_all_btn = QPushButton("Confirm All")
-        self._apply_all_btn.setObjectName("workflowGhostButton")
+        self._apply_all_btn = self._review_list_panel.bulk_button
         self._apply_all_btn.setToolTip(
             "Confirms suggestions only for currently visible categories. For example, "
             "if Duplicates is enabled and Blurry is disabled, only duplicate "
             "suggestions are confirmed. You can still review or revise them afterward."
         )
         self._apply_all_btn.clicked.connect(self._on_apply_all)
-        left_layout.addWidget(self._apply_all_btn)
 
         # Right viewer
         right = QWidget()
@@ -1055,7 +1022,7 @@ class EasyDeleteStepWidget(QWidget):
         action.addWidget(self._apply_btn)
         right_layout.addLayout(action)
 
-        splitter.addWidget(left)
+        splitter.addWidget(self._review_list_panel)
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)

@@ -2299,6 +2299,70 @@ QWidget#workflowReviewPage {
     background-color: #202326;
 }
 
+QFrame#workflowReviewListPanel {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+}
+
+QWidget#workflowReviewListHeader,
+QWidget#workflowReviewListFooter {
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#workflowReviewListTitle {
+    color: #D6DCE1;
+    font-size: 9pt;
+    font-weight: 650;
+    background: transparent;
+}
+
+QLabel#workflowReviewListCount {
+    color: #8D99A3;
+    font-size: 8pt;
+    background: transparent;
+}
+
+QWidget#workflowReviewListFilters {
+    background-color: transparent;
+    border: none;
+}
+
+QCheckBox#workflowReviewFilter {
+    color: #AAB4BC;
+    font-size: 8pt;
+    spacing: 4px;
+}
+
+QListWidget#workflowReviewList {
+    color: #B9C2C9;
+    background-color: transparent;
+    border: none;
+    outline: none;
+    padding: 2px;
+}
+
+QListWidget#workflowReviewList::item {
+    background-color: transparent;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    margin: 1px 0;
+    font-size: 8.5pt;
+}
+
+QListWidget#workflowReviewList::item:selected {
+    color: #FFFFFF;
+    background-color: #214283;
+    border: 1px solid #214283;
+}
+
+QListWidget#workflowReviewList::item:hover:!selected {
+    color: #FFFFFF;
+    background-color: #353739;
+}
+
 QFrame#workflowShortcutStrip {
     background-color: #22262A;
     border: 1px solid #3A4147;

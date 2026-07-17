@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from types import SimpleNamespace
 
 from PyQt6.QtGui import QAction, QKeySequence
-from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication, QFrame, QWidget
 
 from ui.easy_delete_step_widget import EasyDeleteStepWidget
 from ui.fix_rotation_step_widget import FixRotationStepWidget
@@ -50,7 +50,7 @@ def test_easy_delete_requires_confirmation_before_staging_trash():
     )
 
     assert widget._state_banner.title_label.text() == "Choose, then confirm"
-    assert "REVIEW" in widget._items_list.item(0).text()
+    assert widget._items_list.item(0).text() == "Similar  ·  delete.jpg  ↔  keep.jpg"
     assert "SELECTED FOR TRASH" in widget._pair_left_hdr.text()
     assert "not confirmed" in widget._pair_left_hdr.text()
     assert widget._pair_left_card._name_label.text() == "delete.jpg"
@@ -96,7 +96,7 @@ def test_easy_delete_requires_confirmation_before_staging_trash():
     assert (
         "no file has been moved or deleted" in widget._state_banner.detail_label.text()
     )
-    assert "CONFIRMED" in widget._items_list.item(0).text()
+    assert "Confirmed" in widget._items_list.item(0).text()
     assert "MARKED FOR TRASH" in widget._pair_right_hdr.text()
 
 
@@ -210,7 +210,7 @@ def test_easy_delete_apply_all_only_uses_visible_categories():
     widget._category_checkboxes["blur"].setChecked(False)
     widget._on_apply_all()
 
-    assert widget._apply_all_btn.text() == "Confirm All"
+    assert widget._apply_all_btn.text() == "Confirm visible"
     assert "currently visible categories" in widget._apply_all_btn.toolTip()
     assert "review or revise" in widget._apply_all_btn.toolTip()
     assert widget._apply_all_btn.parentWidget() is not widget._confirm_btn.parentWidget()
@@ -275,6 +275,35 @@ def test_review_pages_do_not_render_redundant_headers():
     assert not hasattr(easy_delete, "_review_header")
     assert not hasattr(fix_rotation, "_review_header")
     assert not hasattr(pick_best, "_review_header")
+
+
+def test_easy_delete_and_fix_rotation_share_compact_review_list_panel():
+    easy_delete = EasyDeleteStepWidget()
+    fix_rotation = FixRotationStepWidget()
+
+    for widget in (easy_delete, fix_rotation):
+        panel = widget._review_list_panel
+        assert panel.objectName() == "workflowReviewListPanel"
+        assert panel.frameShape() == QFrame.Shape.NoFrame
+        assert panel.minimumWidth() == 220
+        assert panel.maximumWidth() == 310
+        assert widget._items_list is panel.list_widget
+
+    easy_delete.show_results(
+        {
+            "/tmp/blur.jpg": {
+                "type": "blur",
+                "suggest_delete": True,
+                "reason": "Blurry image",
+            }
+        }
+    )
+    fix_rotation.show_results({"/tmp/rotated.jpg": 90})
+
+    assert easy_delete._review_list_panel.count_label.text() == "1 item"
+    assert fix_rotation._review_list_panel.count_label.text() == "1 item"
+    assert easy_delete._review_list_panel.filters.isVisibleTo(easy_delete)
+    assert not fix_rotation._review_list_panel.filters.isVisible()
 
 
 def test_footer_shortcuts_use_the_most_columns_that_fit():
@@ -373,7 +402,7 @@ def test_fix_rotation_distinguishes_preview_queue_and_applied_state():
     assert not widget._apply_btn.isEnabled()
     assert not hasattr(widget, "_mark_btn")
     assert not hasattr(widget, "_keep_btn")
-    assert "REVIEW" in widget._items_list.item(0).text()
+    assert widget._items_list.item(0).text() == "first.jpg  ·  90° CW"
     assert widget._confirm_all_btn.parentWidget() is not widget._confirm_btn.parentWidget()
     assert widget._action_layout.indexOf(widget._confirm_btn) == 3
     assert all(
@@ -383,7 +412,7 @@ def test_fix_rotation_distinguishes_preview_queue_and_applied_state():
 
     widget._on_confirm()
     assert widget.pending_rotations() == {first: 90}
-    assert "CONFIRMED" in widget._items_list.item(0).text()
+    assert "Confirmed" in widget._items_list.item(0).text()
     assert "QUEUED" not in widget._items_list.item(0).text()
     assert widget._current_index == 1
 

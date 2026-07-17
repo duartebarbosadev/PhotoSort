@@ -7,7 +7,6 @@ from PyQt6.QtGui import QColor, QPixmap, QTransform, QDesktopServices
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QListWidgetItem,
     QProgressBar,
     QPushButton,
@@ -22,6 +21,7 @@ from core.app_settings import ROTATION_MODEL_DOWNLOAD_URL
 
 from ui.workflow_review_components import (
     FIX_ROTATION_SHORTCUTS,
+    WorkflowReviewListPanel,
     WorkflowStateBanner,
     install_workflow_shortcuts,
 )
@@ -34,7 +34,7 @@ _ANGLE_LABELS: dict[int, tuple] = {
     -90: ("90° CCW", "#00D4FF"),
 }
 
-_UNMARKED_COLOR = "#00D4FF"
+_UNMARKED_COLOR = "#B9C2C9"
 _MARKED_COLOR = "#66BB6A"
 _SKIP_COLOR = "#607080"
 
@@ -313,23 +313,21 @@ class FixRotationStepWidget(QWidget):
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _item_text(self, path: str) -> str:
+        angle = self._suggestions.get(path, 0)
+        orientation, _ = _ANGLE_LABELS.get(angle, (f"{angle}°", "#888"))
+        prefix = "Confirmed  ·  " if path in self._confirmed else ""
+        return f"{prefix}{os.path.basename(path)}  ·  {orientation}"
+
     def _populate_list(self) -> None:
         self._items_list.clear()
         for path in self._ordered_paths:
-            angle = self._suggestions.get(path, 0)
-            badge, _ = _ANGLE_LABELS.get(angle, (f"{angle}°", "#888"))
-            state = self._decision_state(path)
-            item_text = f"{state}  ·  [{badge}]  {os.path.basename(path)}"
-            item = QListWidgetItem(item_text)
+            item = QListWidgetItem(self._item_text(path))
             item.setData(Qt.ItemDataRole.UserRole, path)
             self._items_list.addItem(item)
 
+        self._review_list_panel.set_count(len(self._ordered_paths))
         self._refresh_list_colors()
-
-    def _decision_state(self, path: str) -> str:
-        if path not in self._confirmed:
-            return "REVIEW"
-        return "CONFIRMED"
 
     def _refresh_list_colors(self) -> None:
         for i in range(self._items_list.count()):
@@ -345,10 +343,7 @@ class FixRotationStepWidget(QWidget):
                 else _UNMARKED_COLOR
             )
             item.setForeground(QColor(color))
-            angle = self._suggestions.get(path, 0)
-            badge, _ = _ANGLE_LABELS.get(angle, (f"{angle}°", "#888"))
-            state = self._decision_state(path)
-            item.setText(f"{state}  ·  [{badge}]  {os.path.basename(path)}")
+            item.setText(self._item_text(path))
 
     def _navigate_to(self, index: int) -> None:
         if not self._ordered_paths:
@@ -702,34 +697,17 @@ class FixRotationStepWidget(QWidget):
         splitter.setHandleWidth(4)
         splitter.setChildrenCollapsible(False)
 
-        # Left: image list
-        list_pane = QWidget()
-        list_pane.setMinimumWidth(230)
-        list_pane.setMaximumWidth(330)
-        list_layout = QVBoxLayout(list_pane)
-        list_layout.setContentsMargins(0, 0, 0, 0)
-        list_layout.setSpacing(0)
-
-        self._items_list = QListWidget()
-        self._items_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._items_list.setStyleSheet(
-            "QListWidget { background: #242729; border: none; border-right: 1px solid #3C3F41; color: #A9B7C6; }"
-            "QListWidget::item { padding: 7px 10px; border-bottom: 1px solid #303538; font-size: 11px; }"
-            "QListWidget::item:selected { background: #1E3F62; color: #E0E8F0; }"
-            "QListWidget::item:hover { background: #2C3438; }"
+        self._review_list_panel = WorkflowReviewListPanel(
+            bulk_action_text="Confirm all"
         )
+        self._items_list = self._review_list_panel.list_widget
         self._items_list.itemClicked.connect(self._on_item_clicked)
-        list_layout.addWidget(self._items_list, 1)
-
-        self._confirm_all_btn = QPushButton("Confirm All")
-        self._confirm_all_btn.setObjectName("workflowGhostButton")
+        self._confirm_all_btn = self._review_list_panel.bulk_button
         self._confirm_all_btn.setToolTip(
             "Confirm every suggested rotation. You can still review or revise each choice."
         )
         self._confirm_all_btn.clicked.connect(self._on_confirm_all)
-        list_layout.addWidget(self._confirm_all_btn)
-
-        splitter.addWidget(list_pane)
+        splitter.addWidget(self._review_list_panel)
 
         # Right: preview area + controls
         right_pane = QWidget()
