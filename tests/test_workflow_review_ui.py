@@ -1397,8 +1397,36 @@ def test_visible_shortcut_specs_are_the_installed_source_of_truth():
     )
 
     for widget, specs in widgets_and_specs:
-        expected = sum(len(spec.sequences) for spec in specs)
+        expected = sum(
+            len(spec.sequences)
+            for spec in specs
+            if spec.action != "toggle_left_panel"
+        )
         assert len(widget._shortcuts) == expected
+
+
+def test_shared_shortcut_toggles_the_active_workflow_left_panel():
+    window = MainWindow()
+    window.show()
+    _app.processEvents()
+
+    window._set_workflow_step("organize")
+    organize_panel = window.grouping_step_widget.before_panel
+    assert not organize_panel.isHidden()
+
+    window._toggle_workflow_left_panel_shortcut.activated.emit()
+    assert organize_panel.isHidden()
+    window._toggle_workflow_left_panel_shortcut.activated.emit()
+    assert not organize_panel.isHidden()
+
+    window.show_cull_step()
+    _app.processEvents()
+    assert not window.left_panel.isHidden()
+    window._toggle_workflow_left_panel_shortcut.activated.emit()
+    assert window.left_panel.isHidden()
+    window._toggle_workflow_left_panel_shortcut.activated.emit()
+    assert not window.left_panel.isHidden()
+    window.close()
 
 
 def test_guided_workflows_suspend_and_restore_cull_shortcuts():

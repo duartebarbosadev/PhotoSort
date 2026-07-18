@@ -48,6 +48,7 @@ from PyQt6.QtGui import (
     QStandardItem,
     QResizeEvent,
     QPixmap,
+    QShortcut,
 )
 import sys
 
@@ -400,6 +401,15 @@ class MainWindow(QMainWindow):
             self.workflow_shortcut_stack.addWidget(strip)
             self.workflow_shortcut_strips[workflow_step] = strip
         self.workflow_shortcut_stack.setVisible(get_show_workflow_shortcuts())
+        self._toggle_workflow_left_panel_shortcut = QShortcut(
+            QKeySequence("Ctrl+Shift+L"), self
+        )
+        self._toggle_workflow_left_panel_shortcut.setContext(
+            Qt.ShortcutContext.WindowShortcut
+        )
+        self._toggle_workflow_left_panel_shortcut.activated.connect(
+            self.toggle_workflow_left_panel
+        )
 
         self.workflow_footer_right = QWidget()
         self.workflow_footer_right.setObjectName("workflowFooterRight")
@@ -1384,6 +1394,30 @@ class MainWindow(QMainWindow):
         self.workflow_shortcut_stack.setVisible(bool(visible))
         self.workflow_nav_host.updateGeometry()
         self.statusBar().updateGeometry()
+
+    def _active_workflow_left_panel(self) -> QWidget | None:
+        """Return the left-side panel owned by the active workflow."""
+
+        workflow_step = getattr(self.app_state, "workflow_step", "organize")
+        if workflow_step == "organize":
+            return self.grouping_step_widget.before_panel
+        if workflow_step == "easy_delete" and self.easy_delete_step_widget:
+            return self.easy_delete_step_widget._review_list_panel
+        if workflow_step == "fix_rotation" and self.fix_rotation_step_widget:
+            return self.fix_rotation_step_widget._review_list_panel
+        if workflow_step == "pick_best" and self.pick_best_step_widget:
+            return self.pick_best_step_widget._review_list_panel
+        if workflow_step == "cull":
+            return self.left_panel
+        return None
+
+    def toggle_workflow_left_panel(self) -> None:
+        """Hide or restore the left panel for the active workflow step."""
+
+        panel = self._active_workflow_left_panel()
+        if panel is None:
+            return
+        panel.setVisible(panel.isHidden())
 
     def show_grouping_step(self) -> None:
         self.reset_preview_requests()

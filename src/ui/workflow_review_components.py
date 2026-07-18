@@ -38,6 +38,13 @@ class WorkflowShortcutSpec:
 _PRIMARY_MODIFIER = "⌘" if sys.platform == "darwin" else "Ctrl"
 _ALT_MODIFIER = "⌥" if sys.platform == "darwin" else "Alt"
 
+_TOGGLE_LEFT_PANEL_SHORTCUT = WorkflowShortcutSpec(
+    "toggle_left_panel",
+    ("Ctrl+Shift+L",),
+    f"{_PRIMARY_MODIFIER}⇧L",
+    "Left panel",
+)
+
 
 ORGANIZE_SHORTCUTS = (
     WorkflowShortcutSpec(
@@ -62,6 +69,7 @@ ORGANIZE_SHORTCUTS = (
         f"{_PRIMARY_MODIFIER}↵",
         "Apply",
     ),
+    _TOGGLE_LEFT_PANEL_SHORTCUT,
 )
 
 EASY_DELETE_SHORTCUTS = (
@@ -75,6 +83,7 @@ EASY_DELETE_SHORTCUTS = (
     WorkflowShortcutSpec("apply_all", ("A",), "A", "All"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
+    _TOGGLE_LEFT_PANEL_SHORTCUT,
 )
 
 FIX_ROTATION_SHORTCUTS = (
@@ -88,6 +97,7 @@ FIX_ROTATION_SHORTCUTS = (
     WorkflowShortcutSpec("next", ("Right", "Down"), "→  ↓", "Next"),
     WorkflowShortcutSpec("primary", ("Return", "Enter"), "Enter", "Confirm"),
     WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
+    _TOGGLE_LEFT_PANEL_SHORTCUT,
 )
 
 PICK_BEST_SHORTCUTS = (
@@ -101,6 +111,7 @@ PICK_BEST_SHORTCUTS = (
     WorkflowShortcutSpec("keep_all", ("K",), "K", "Keep all"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm"),
     WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
+    _TOGGLE_LEFT_PANEL_SHORTCUT,
 )
 
 CULL_SHORTCUTS = (
@@ -114,6 +125,7 @@ CULL_SHORTCUTS = (
     WorkflowShortcutSpec("details", ("I",), "I", "Details"),
     WorkflowShortcutSpec("fit", ("0",), "0", "Fit"),
     WorkflowShortcutSpec("views", ("F1", "F2"), "F1 / F2", "View"),
+    _TOGGLE_LEFT_PANEL_SHORTCUT,
 )
 
 WORKFLOW_SHORTCUTS = {
