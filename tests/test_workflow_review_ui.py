@@ -1400,9 +1400,44 @@ def test_visible_shortcut_specs_are_the_installed_source_of_truth():
         expected = sum(
             len(spec.sequences)
             for spec in specs
-            if spec.action != "toggle_left_panel"
+            if spec.action not in {"toggle_left_panel", "workflow_steps"}
         )
         assert len(widget._shortcuts) == expected
+
+
+def test_easy_delete_has_no_escape_workflow_shortcut():
+    assert all(
+        "Escape" not in spec.sequences for spec in EASY_DELETE_SHORTCUTS
+    )
+    widget = EasyDeleteStepWidget()
+    installed = {shortcut.key().toString() for shortcut in widget._shortcuts}
+    assert "Esc" not in installed
+
+
+def test_direct_workflow_shortcuts_use_unclaimed_modified_number_keys(monkeypatch):
+    window = MainWindow()
+    transitions: list[str] = []
+    window.app_state.image_files_data = [{"path": "/tmp/photo.jpg"}]
+    monkeypatch.setattr(
+        window, "_request_workflow_transition", transitions.append
+    )
+
+    assert [
+        shortcut.key().toString() for shortcut in window._workflow_step_shortcuts
+    ] == [f"Ctrl+Alt+{index}" for index in range(1, 6)]
+
+    for shortcut in window._workflow_step_shortcuts:
+        shortcut.activated.emit()
+
+    assert transitions == [
+        "organize",
+        "easy_delete",
+        "fix_rotation",
+        "pick_best",
+        "cull",
+    ]
+    assert window.menu_manager.back_to_grouping_action.shortcut().isEmpty()
+    window.close()
 
 
 def test_shared_shortcut_toggles_the_active_workflow_left_panel():

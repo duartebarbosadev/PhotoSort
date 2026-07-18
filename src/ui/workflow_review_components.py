@@ -44,6 +44,12 @@ _TOGGLE_LEFT_PANEL_SHORTCUT = WorkflowShortcutSpec(
     f"{_PRIMARY_MODIFIER}⇧L",
     "Left panel",
 )
+_WORKFLOW_STEP_SHORTCUT = WorkflowShortcutSpec(
+    "workflow_steps",
+    tuple(f"Ctrl+Alt+{index}" for index in range(1, 6)),
+    f"{_PRIMARY_MODIFIER}{_ALT_MODIFIER}1–5",
+    "Step",
+)
 
 
 ORGANIZE_SHORTCUTS = (
@@ -70,6 +76,7 @@ ORGANIZE_SHORTCUTS = (
         "Apply",
     ),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
+    _WORKFLOW_STEP_SHORTCUT,
 )
 
 EASY_DELETE_SHORTCUTS = (
@@ -82,8 +89,8 @@ EASY_DELETE_SHORTCUTS = (
     ),
     WorkflowShortcutSpec("apply_all", ("A",), "A", "All"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
-    WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
+    _WORKFLOW_STEP_SHORTCUT,
 )
 
 FIX_ROTATION_SHORTCUTS = (
@@ -98,6 +105,7 @@ FIX_ROTATION_SHORTCUTS = (
     WorkflowShortcutSpec("primary", ("Return", "Enter"), "Enter", "Confirm"),
     WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
+    _WORKFLOW_STEP_SHORTCUT,
 )
 
 PICK_BEST_SHORTCUTS = (
@@ -112,6 +120,7 @@ PICK_BEST_SHORTCUTS = (
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm"),
     WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
+    _WORKFLOW_STEP_SHORTCUT,
 )
 
 CULL_SHORTCUTS = (
@@ -126,6 +135,7 @@ CULL_SHORTCUTS = (
     WorkflowShortcutSpec("fit", ("0",), "0", "Fit"),
     WorkflowShortcutSpec("views", ("F1", "F2"), "F1 / F2", "View"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
+    _WORKFLOW_STEP_SHORTCUT,
 )
 
 WORKFLOW_SHORTCUTS = {

@@ -410,6 +410,18 @@ class MainWindow(QMainWindow):
         self._toggle_workflow_left_panel_shortcut.activated.connect(
             self.toggle_workflow_left_panel
         )
+        self._workflow_step_shortcuts: list[QShortcut] = []
+        for step_number in range(1, 6):
+            shortcut = QShortcut(
+                QKeySequence(f"Ctrl+Alt+{step_number}"), self
+            )
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(
+                lambda step_number=step_number: self._go_to_workflow_step_by_shortcut(
+                    step_number
+                )
+            )
+            self._workflow_step_shortcuts.append(shortcut)
 
         self.workflow_footer_right = QWidget()
         self.workflow_footer_right.setObjectName("workflowFooterRight")
@@ -792,6 +804,20 @@ class MainWindow(QMainWindow):
             self.update_workflow_navigation()
             return
         self._request_workflow_transition("cull")
+
+    def _go_to_workflow_step_by_shortcut(self, step_number: int) -> None:
+        """Navigate directly to a numbered workflow step through its normal guard."""
+
+        handlers = {
+            1: self._go_to_grouping_step,
+            2: self._go_to_easy_delete_step,
+            3: self._go_to_fix_rotation_step,
+            4: self._go_to_pick_best_step,
+            5: self._go_to_cull_step,
+        }
+        handler = handlers.get(step_number)
+        if handler is not None:
+            handler()
 
     def _show_workflow_destination(self, destination: str) -> None:
         """Perform a trusted transition after the navigation guard resolves."""
