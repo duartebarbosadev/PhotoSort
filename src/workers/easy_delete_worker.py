@@ -232,6 +232,11 @@ class EasyDeleteWorker(QObject):
 
                         identical = self._files_are_identical(delete_path, keep_path)
                         duplicate_kind = "exact" if identical else "near"
+                        delete_suggestion_reason, keep_suggestion_reason = (
+                            self._duplicate_suggestion_reasons(
+                                delete_path, keep_path, identical=identical
+                            )
+                        )
 
                         results[delete_path] = {
                             "type": "duplicate",
@@ -241,6 +246,8 @@ class EasyDeleteWorker(QObject):
                             "reason": self._duplicate_reason(
                                 delete_path, keep_path, identical=identical
                             ),
+                            "delete_suggestion_reason": delete_suggestion_reason,
+                            "keep_suggestion_reason": keep_suggestion_reason,
                             "sharpness": self._get_sharpness(delete_path),
                         }
                         if keep_path not in results:
@@ -250,6 +257,8 @@ class EasyDeleteWorker(QObject):
                                 "suggest_delete": False,
                                 "duplicate_kind": duplicate_kind,
                                 "reason": "Suggested to keep this photo",
+                                "delete_suggestion_reason": delete_suggestion_reason,
+                                "keep_suggestion_reason": keep_suggestion_reason,
                                 "sharpness": self._get_sharpness(keep_path),
                             }
 
@@ -347,3 +356,41 @@ class EasyDeleteWorker(QObject):
             reasons.append("the files are visually almost identical")
 
         return f"Suggested choice: {', '.join(reasons)}"
+
+    def _duplicate_suggestion_reasons(
+        self, delete_path: str, keep_path: str, *, identical: bool
+    ) -> tuple[str, str]:
+        """Explain the decisive keep-score signal from each photo's perspective."""
+        if identical:
+            reason = "byte-for-byte identical"
+            return reason, reason
+
+        delete_sharpness = self._get_sharpness(delete_path)
+        keep_sharpness = self._get_sharpness(keep_path)
+        if round(keep_sharpness) > round(delete_sharpness):
+            values = f"{keep_sharpness:.1f} vs {delete_sharpness:.1f}"
+            return (
+                f"lower sharpness ({delete_sharpness:.1f} vs {keep_sharpness:.1f})",
+                f"higher sharpness ({values})",
+            )
+
+        delete_exif = self._exif_field_count(delete_path)
+        keep_exif = self._exif_field_count(keep_path)
+        if keep_exif > delete_exif:
+            return (
+                f"less EXIF data ({delete_exif} vs {keep_exif} fields)",
+                f"more EXIF data ({keep_exif} vs {delete_exif} fields)",
+            )
+
+        delete_size = self._file_size(delete_path)
+        keep_size = self._file_size(keep_path)
+        if min(keep_size, _MAX_FILE_SIZE_SCORE) > min(
+            delete_size, _MAX_FILE_SIZE_SCORE
+        ):
+            return (
+                f"smaller file ({delete_size // 1024}KB vs {keep_size // 1024}KB)",
+                f"larger file ({keep_size // 1024}KB vs {delete_size // 1024}KB)",
+            )
+
+        reason = "quality signals tied; pair order used as the tie-breaker"
+        return reason, reason

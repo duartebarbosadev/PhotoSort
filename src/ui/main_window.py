@@ -1428,6 +1428,7 @@ class MainWindow(QMainWindow):
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
             )
+            widget.set_exif_disk_cache(self.app_state.exif_disk_cache)
             widget.skip_requested.connect(
                 lambda: self._request_workflow_transition("fix_rotation")
             )

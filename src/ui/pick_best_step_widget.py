@@ -1,7 +1,6 @@
 import logging
 import os
 from dataclasses import dataclass, field
-from fractions import Fraction
 from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -18,11 +17,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core.metadata_processor import (
-    DATE_TAGS_PREFERENCE,
-    MetadataProcessor,
-    _parse_exif_date,
-)
 from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResults
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.workflow_review_components import (
@@ -32,6 +26,7 @@ from ui.workflow_review_components import (
     WorkflowStateBanner,
     install_workflow_shortcuts,
 )
+from ui.workflow_metadata import build_workflow_metadata_rows
 import contextlib
 
 logger = logging.getLogger(__name__)
@@ -44,59 +39,6 @@ CARD_BG_WINNER = "#2C2616"
 CARD_BORDER_COLOR = "#3A434C"
 LIST_SECTION_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 LIST_CLUSTER_ROLE = int(Qt.ItemDataRole.UserRole) + 2
-
-
-def _first_present(metadata: dict, *keys: str):
-    for key in keys:
-        value = metadata.get(key)
-        if value not in (None, "", "None"):
-            return value
-    return None
-
-
-def _fraction_text(value: object) -> str | None:
-    if value in (None, ""):
-        return None
-    text = str(value).strip()
-    try:
-        if "/" in text:
-            frac = Fraction(text)
-            if frac >= 1:
-                return f"{float(frac):.1f}s"
-            return f"1/{round(1 / float(frac))}s"
-        numeric = float(text)
-    except TypeError, ValueError, ZeroDivisionError:
-        return text
-    if numeric >= 1:
-        return f"{numeric:.1f}s"
-    if numeric <= 0:
-        return text
-    return f"1/{round(1 / numeric)}s"
-
-
-def _float_text(
-    value: object, prefix: str = "", suffix: str = "", digits: int = 1
-) -> str | None:
-    if value in (None, ""):
-        return None
-    try:
-        return f"{prefix}{float(value):.{digits}f}{suffix}"
-    except TypeError, ValueError:
-        return f"{prefix}{value}{suffix}"
-
-
-def _format_capture_date(metadata: dict) -> str | None:
-    for key in DATE_TAGS_PREFERENCE:
-        raw_value = metadata.get(key)
-        if raw_value in (None, "", "None"):
-            continue
-        parsed = _parse_exif_date(str(raw_value))
-        if parsed is not None:
-            if parsed.hour == 0 and parsed.minute == 0 and parsed.second == 0:
-                return parsed.strftime("%Y-%m-%d")
-            return parsed.strftime("%Y-%m-%d %H:%M")
-        return str(raw_value)
-    return None
 
 
 class CompareCard(WorkflowDecisionCard):
@@ -1016,105 +958,15 @@ class PickBestStepWidget(QWidget):
         return rows[:6]
 
     def _build_metadata_rows(self, path: str) -> list[tuple[str, str]]:
-        rows: list[tuple[str, str]] = []
-        metadata = None
         app_state = getattr(self.window(), "app_state", None)
         cache = getattr(app_state, "exif_disk_cache", None) if app_state else None
         try:
-            metadata = MetadataProcessor.get_cached_detailed_metadata(path, cache)
+            rows = build_workflow_metadata_rows(path, cache)
         except Exception:
             logger.debug("Cached EXIF lookup failed for %s", path, exc_info=True)
+            rows = [("Metadata", "No EXIF details available")]
 
-        if isinstance(metadata, dict):
-            capture_date = _format_capture_date(metadata)
-            if capture_date:
-                rows.append(("Date", capture_date))
-
-            camera_make = _first_present(
-                metadata, "Exif.Image.Make", "Xmp.tiff.Make", "Make"
-            )
-            camera_model = _first_present(
-                metadata, "Exif.Image.Model", "Xmp.tiff.Model", "Model"
-            )
-            if camera_make or camera_model:
-                camera_text = " ".join(
-                    str(part).strip() for part in (camera_make, camera_model) if part
-                )
-                rows.append(("Camera", camera_text))
-
-            lens = _first_present(
-                metadata,
-                "Exif.Photo.LensModel",
-                "Xmp.aux.Lens",
-                "LensModel",
-                "LensInfo",
-            )
-            if lens:
-                rows.append(("Lens", str(lens)))
-
-            focal = _float_text(
-                _first_present(metadata, "Exif.Photo.FocalLength", "FocalLength"),
-                suffix=" mm",
-                digits=0,
-            )
-            aperture = _float_text(
-                _first_present(
-                    metadata,
-                    "Exif.Photo.FNumber",
-                    "Exif.Photo.ApertureValue",
-                    "FNumber",
-                ),
-                prefix="f/",
-                digits=1,
-            )
-            if focal or aperture:
-                rows.append(
-                    ("Lens", "  ".join(part for part in (focal, aperture) if part))
-                )
-
-            shutter = _fraction_text(
-                _first_present(
-                    metadata,
-                    "Exif.Photo.ExposureTime",
-                    "ExposureTime",
-                    "Exif.Photo.ShutterSpeedValue",
-                )
-            )
-            iso = _first_present(
-                metadata,
-                "Exif.Photo.ISOSpeedRatings",
-                "ISO",
-                "EXIF:ISO",
-                "EXIF:ISOSpeedRatings",
-            )
-            if shutter or iso:
-                iso_text = f"ISO {iso}" if iso not in (None, "") else None
-                rows.append(
-                    (
-                        "Exposure",
-                        "  ".join(part for part in (shutter, iso_text) if part),
-                    )
-                )
-
-            width = _first_present(
-                metadata,
-                "pixel_width",
-                "Exif.Photo.PixelXDimension",
-                "Exif.Image.ImageWidth",
-            )
-            height = _first_present(
-                metadata,
-                "pixel_height",
-                "Exif.Photo.PixelYDimension",
-                "Exif.Image.ImageLength",
-            )
-            if width and height:
-                rows.append(("Size", f"{width} × {height}"))
-
-        if not rows:
-            rows.append(("Metadata", "No EXIF details available"))
-
-        self._metadata_cache[path] = rows[:6]
+        self._metadata_cache[path] = rows
         return self._metadata_cache[path]
 
     def _cluster_score_maps(

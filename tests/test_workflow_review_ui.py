@@ -36,11 +36,20 @@ from ui.workflow_review_components import (
 _app = QApplication.instance() or QApplication([])
 
 
-def test_easy_delete_requires_confirmation_before_staging_trash():
+def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
     marks: set[str] = set()
     delete_path = "/tmp/delete.jpg"
     keep_path = "/tmp/keep.jpg"
+    metadata_by_path = {
+        delete_path: [("Camera", "Canon EOS R5"), ("Exposure", "1/250s  ISO 200")],
+        keep_path: [("Camera", "Canon EOS R5"), ("Lens", "RF 50mm F1.2")],
+    }
+    monkeypatch.setattr(
+        "ui.easy_delete_step_widget.build_workflow_metadata_rows",
+        lambda path, _cache: metadata_by_path[path],
+    )
     widget = EasyDeleteStepWidget()
+    widget.set_exif_disk_cache(object())
     widget.set_is_marked_func(marks.__contains__)
     widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
     widget.unmark_for_deletion_requested.connect(
@@ -54,18 +63,33 @@ def test_easy_delete_requires_confirmation_before_staging_trash():
                 "pair_path": keep_path,
                 "suggest_delete": True,
                 "reason": "Lower sharpness",
+                "delete_suggestion_reason": "lower sharpness (10.0 vs 25.0)",
+                "keep_suggestion_reason": "higher sharpness (25.0 vs 10.0)",
             }
         }
     )
 
     assert widget._state_banner.title_label.text() == "Choose, then confirm"
-    assert widget._items_list.item(0).text() == "SIMILAR PHOTOS  ·  1"
+    assert widget._items_list.item(0).text() == "NEAR-DUPLICATES  ·  1"
+    assert widget._category_checkboxes["near_duplicate"].text() == (
+        "Near-duplicates (1)"
+    )
+    assert "exact_duplicate" not in widget._category_checkboxes
     assert widget._items_list.item(1).text() == "delete.jpg  ↔  keep.jpg"
     assert not (widget._items_list.item(0).flags() & Qt.ItemFlag.ItemIsSelectable)
     assert "SELECTED FOR TRASH" in widget._pair_left_hdr.text()
     assert "not confirmed" in widget._pair_left_hdr.text()
-    assert widget._pair_left_card._name_label.text() == "delete.jpg"
-    assert widget._pair_right_card._name_label.text() == "keep.jpg"
+    assert (
+        widget._pair_left_card._name_label.text()
+        == "delete.jpg · Suggested for trash · lower sharpness (10.0 vs 25.0)"
+    )
+    assert (
+        widget._pair_right_card._name_label.text()
+        == "keep.jpg · Suggested to keep · higher sharpness (25.0 vs 10.0)"
+    )
+    assert widget._pair_left_card._content_layout.indexOf(
+        widget._pair_left_card._name_label
+    ) == -1
     assert isinstance(widget._pair_left_card, WorkflowDecisionCard)
     assert not hasattr(widget, "_keep_btn")
     assert not hasattr(widget, "_mark_btn")
@@ -80,14 +104,15 @@ def test_easy_delete_requires_confirmation_before_staging_trash():
     shortcuts["I"].activated.emit()
     _app.processEvents()
 
-    detail_values = [
-        value.text() for _key, value in widget._pair_left_card._detail_rows
-    ]
-    assert delete_path in detail_values
-    assert "Lower sharpness" in detail_values
+    detail_keys = [key.text() for key, _value in widget._pair_left_card._detail_rows]
+    detail_values = [value.text() for _key, value in widget._pair_left_card._detail_rows]
+    assert detail_keys[:2] == ["Camera", "Exposure"]
+    assert detail_values[:2] == ["Canon EOS R5", "1/250s  ISO 200"]
+    assert "Reason" not in detail_keys
+    assert "Lower sharpness" not in detail_values
     assert all(
         not label.isHidden()
-        for row in widget._pair_left_card._detail_rows[:3]
+        for row in widget._pair_left_card._detail_rows[:2]
         for label in row
     )
 
@@ -200,10 +225,17 @@ def test_easy_delete_groups_queue_under_category_headers():
     widget.set_is_marked_func(lambda _path: False)
     widget.show_results(
         {
+            "/tmp/exact-a.jpg": {
+                "type": "duplicate",
+                "pair_path": "/tmp/exact-b.jpg",
+                "suggest_delete": True,
+                "duplicate_kind": "exact",
+            },
             "/tmp/similar-a.jpg": {
                 "type": "duplicate",
                 "pair_path": "/tmp/similar-b.jpg",
                 "suggest_delete": True,
+                "duplicate_kind": "near",
             },
             "/tmp/blurry.jpg": {
                 "type": "blur",
@@ -223,7 +255,9 @@ def test_easy_delete_groups_queue_under_category_headers():
         for row in range(widget._items_list.count())
     ]
     assert texts == [
-        "SIMILAR PHOTOS  ·  1",
+        "DUPLICATES  ·  1",
+        "exact-a.jpg  ↔  exact-b.jpg",
+        "NEAR-DUPLICATES  ·  1",
         "similar-a.jpg  ↔  similar-b.jpg",
         "BLURRY PHOTOS  ·  1",
         "blurry.jpg",
@@ -234,8 +268,46 @@ def test_easy_delete_groups_queue_under_category_headers():
         "Similar" not in text for text in texts if "↔" in text
     )
 
-    widget._navigate_to(2)
+    assert widget._category_checkboxes["exact_duplicate"].text() == "Duplicates (1)"
+    assert (
+        widget._category_checkboxes["near_duplicate"].text()
+        == "Near-duplicates (1)"
+    )
+
+    widget._navigate_to(3)
     assert widget._items_list.currentItem().text() == "dark.jpg"
+
+
+def test_easy_delete_duplicate_filters_can_be_selected_independently():
+    exact = "/tmp/exact.jpg"
+    near = "/tmp/near.jpg"
+    marks: set[str] = set()
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
+    widget.show_results(
+        {
+            exact: {
+                "type": "duplicate",
+                "pair_path": "/tmp/exact-keep.jpg",
+                "suggest_delete": True,
+                "duplicate_kind": "exact",
+            },
+            near: {
+                "type": "duplicate",
+                "pair_path": "/tmp/near-keep.jpg",
+                "suggest_delete": True,
+                "duplicate_kind": "near",
+            },
+        }
+    )
+
+    widget._category_checkboxes["exact_duplicate"].setChecked(False)
+    widget._on_apply_all()
+
+    assert marks == {near}
+    assert widget._confirmed_reviews == {near}
+    assert widget._items_list.item(0).text() == "NEAR-DUPLICATES  ·  1"
 
 
 def test_easy_delete_apply_all_only_uses_visible_categories():
