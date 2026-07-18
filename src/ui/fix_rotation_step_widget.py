@@ -119,7 +119,7 @@ class FixRotationStepWidget(QWidget):
             self,
             FIX_ROTATION_SHORTCUTS,
             {
-                "toggle": self._on_mark_toggle,
+                "rotate_counterclockwise": self._on_rotate_counterclockwise,
                 "rotate_clockwise": self._on_rotate_clockwise,
                 "previous": self._on_prev,
                 "next": self._on_next,
@@ -323,12 +323,6 @@ class FixRotationStepWidget(QWidget):
 
         return self._angle_overrides.get(path, self._suggestions.get(path, 0))
 
-    @staticmethod
-    def _clockwise_angle(angle: int) -> int:
-        """Advance an image preview clockwise, keeping worker-supported angles."""
-
-        return {0: 90, 90: 180, 180: -90, -90: 0}.get(angle % 360, 0)
-
     def _item_text(self, path: str) -> str:
         angle = self._selected_angle(path)
         orientation, _ = _ANGLE_LABELS.get(angle, (f"{angle}°", "#888"))
@@ -521,12 +515,6 @@ class FixRotationStepWidget(QWidget):
     def _on_next(self) -> None:
         self._navigate_to(self._current_index + 1)
 
-    def _on_mark_toggle(self) -> None:
-        if self._current_index < 0 or not self._ordered_paths:
-            return
-        path = self._ordered_paths[self._current_index]
-        self._set_current_marked(not self._marked.get(path, False))
-
     def _set_current_marked(self, marked: bool) -> None:
         if self._current_index < 0 or not self._ordered_paths:
             return
@@ -540,8 +528,8 @@ class FixRotationStepWidget(QWidget):
         self._show_current()
         QTimer.singleShot(0, self._refresh_controls)
 
-    def _on_rotate_clockwise(self) -> None:
-        """Override the model by rotating the selected preview 90° clockwise."""
+    def _rotate_current_preview(self, degrees: int) -> None:
+        """Rotate the selected preview by one quarter turn in either direction."""
 
         if self._current_index < 0 or not self._ordered_paths:
             return
@@ -549,7 +537,8 @@ class FixRotationStepWidget(QWidget):
         current_angle = (
             self._selected_angle(path) if self._marked.get(path, False) else 0
         )
-        angle = self._clockwise_angle(current_angle)
+        normalized_angle = (current_angle + degrees) % 360
+        angle = -90 if normalized_angle == 270 else normalized_angle
         if angle == self._suggestions.get(path, 0):
             self._angle_overrides.pop(path, None)
         else:
@@ -558,6 +547,16 @@ class FixRotationStepWidget(QWidget):
         self._confirmed.discard(path)
         self._show_current()
         QTimer.singleShot(0, self._refresh_controls)
+
+    def _on_rotate_counterclockwise(self) -> None:
+        """Override the model by rotating the preview 90° counterclockwise."""
+
+        self._rotate_current_preview(-90)
+
+    def _on_rotate_clockwise(self) -> None:
+        """Override the model by rotating the preview 90° clockwise."""
+
+        self._rotate_current_preview(90)
 
     def _on_confirm_all(self) -> None:
         for path in self._ordered_paths:
@@ -852,6 +851,15 @@ class FixRotationStepWidget(QWidget):
         self._confirm_btn.setMinimumWidth(110)
         self._confirm_btn.clicked.connect(self._on_confirm)
 
+        self._rotate_counterclockwise_btn = QPushButton("Rotate −90°  [R]")
+        self._rotate_counterclockwise_btn.setObjectName("workflowGhostButton")
+        self._rotate_counterclockwise_btn.setToolTip(
+            "Override the suggestion and rotate the preview 90° counterclockwise"
+        )
+        self._rotate_counterclockwise_btn.clicked.connect(
+            self._on_rotate_counterclockwise
+        )
+
         self._rotate_clockwise_btn = QPushButton("Rotate +90°  [Shift+R]")
         self._rotate_clockwise_btn.setObjectName("workflowGhostButton")
         self._rotate_clockwise_btn.setToolTip(
@@ -868,6 +876,7 @@ class FixRotationStepWidget(QWidget):
         action.addWidget(self._counter_label)
         action.addWidget(self._next_btn)
         action.addWidget(self._confirm_btn)
+        action.addWidget(self._rotate_counterclockwise_btn)
         action.addWidget(self._rotate_clockwise_btn)
         action.addStretch(1)
         action.addWidget(self._apply_btn)

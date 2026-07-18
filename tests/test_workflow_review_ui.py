@@ -608,6 +608,7 @@ def test_fix_rotation_manual_shortcut_cycles_clockwise_and_queues_override():
     widget.show_results({path: 90})
     shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
     assert "A" not in shortcuts
+    assert "Space" not in shortcuts
 
     shortcuts["Shift+R"].activated.emit()
     _app.processEvents()
@@ -638,6 +639,31 @@ def test_fix_rotation_manual_shortcut_cycles_clockwise_and_queues_override():
     assert widget._marked[path]
 
 
+def test_fix_rotation_r_rotates_counterclockwise_instead_of_toggling_selection():
+    path = "/tmp/upside-down.jpg"
+    widget = FixRotationStepWidget()
+    widget.show_results({path: 180})
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["R"].activated.emit()
+    _app.processEvents()
+
+    assert widget._selected_angle(path) == 90
+    assert widget._preview_img._preview_angle == 90
+    assert widget._marked[path]
+    assert "Manual override" in widget._angle_label.text()
+
+    widget._on_confirm()
+    assert widget.pending_rotations() == {path: 90}
+
+    shortcuts["R"].activated.emit()
+    _app.processEvents()
+
+    assert widget._selected_angle(path) == 0
+    assert not widget._marked[path]
+    assert path not in widget._confirmed
+
+
 def test_fix_rotation_clockwise_override_starts_from_original_when_unselected():
     path = "/tmp/upside-down.jpg"
     widget = FixRotationStepWidget()
@@ -664,16 +690,29 @@ def _pick_best_payload(paths: list[str], scores: dict[str, float] | None = None)
     }
 
 
-def _pick_best_item(widget: PickBestStepWidget, path: str):
-    return next(
+def _pick_best_comparison_items(widget: PickBestStepWidget):
+    return [
         widget._items_list.item(index)
         for index in range(widget._items_list.count())
-        if widget._items_list.item(index).data(Qt.ItemDataRole.UserRole) == path
+        if "↔" in widget._items_list.item(index).text()
+    ]
+
+
+def _pick_best_current_comparison_item(widget: PickBestStepWidget):
+    current_paths = tuple(widget._subset_paths)
+    return next(
+        item
+        for item in _pick_best_comparison_items(widget)
+        if item.data(Qt.ItemDataRole.UserRole) == current_paths
     )
 
 
-def _pick_best_state(widget: PickBestStepWidget, path: str) -> str:
-    return _pick_best_item(widget, path).text().splitlines()[-1].strip()
+def _pick_best_up_next_items(widget: PickBestStepWidget):
+    return [
+        widget._items_list.item(index)
+        for index in range(widget._items_list.count())
+        if widget._items_list.item(index).text().startswith("Up next · ")
+    ]
 
 
 def _pick_best_cluster_items(widget: PickBestStepWidget):
@@ -725,8 +764,10 @@ def test_pick_best_publishes_trash_mark_as_soon_as_comparison_is_confirmed():
     assert "Choose the photo that continues" not in visible_text
     assert "The AI selection is only a suggestion" not in visible_text
     assert widget._review_list_panel.count_label.text() == "0/1 done"
-    assert _pick_best_state(widget, challenger) == "Current"
-    assert _pick_best_state(widget, winner) == "Current"
+    comparison_item = _pick_best_current_comparison_item(widget)
+    assert comparison_item.text() == (
+        "challenger.jpg  ↔  winner.jpg\nCurrent comparison"
+    )
     assert not widget._done_btn.isEnabled()
     assert "Cluster 1 of 1" in widget._cluster_info_label.text()
     assert len(widget._subset_paths) == 2
@@ -735,8 +776,9 @@ def test_pick_best_publishes_trash_mark_as_soon_as_comparison_is_confirmed():
 
     assert marks == {challenger}
     assert widget._current_tournament().final_winner == winner
-    assert _pick_best_state(widget, challenger) == "Trash"
-    assert _pick_best_state(widget, winner) == "Winner"
+    assert comparison_item.text() == (
+        "challenger.jpg  ↔  winner.jpg\nComplete · winner.jpg advanced"
+    )
     assert widget._compare_cards[0]._state_label.text() == "TRASH"
     assert widget._compare_cards[1]._state_label.text() == "KEEP"
     assert widget._done_btn.isEnabled()
@@ -954,22 +996,25 @@ def test_pick_best_up_and_down_fall_back_to_clusters_without_more_comparisons():
     assert widget._current_tournament().current_round == 0
 
 
-def test_pick_best_left_panel_keeps_every_photo_and_uses_simple_states():
+def test_pick_best_left_panel_shows_pair_rows_and_preserves_comparison_history():
     paths = [f"/tmp/photo-{index}.jpg" for index in range(7)]
     scores = {path: float(7 - index) for index, path in enumerate(paths)}
     widget = PickBestStepWidget()
     widget.set_is_marked_func(lambda _path: False)
     widget.show_results({1: _pick_best_payload(paths, scores)})
-    original_items = {path: _pick_best_item(widget, path) for path in paths}
+    first_comparison = _pick_best_current_comparison_item(widget)
 
     assert widget._items_list.item(0).text().startswith("Cluster 1 · 7 photos")
-    assert [
-        widget._items_list.item(index).data(Qt.ItemDataRole.UserRole)
-        for index in range(1, 8)
-    ] == paths
+    assert first_comparison.text() == (
+        "photo-0.jpg  ↔  photo-1.jpg\nCurrent comparison"
+    )
+    assert first_comparison.flags() & Qt.ItemFlag.ItemIsSelectable
+    assert [item.text() for item in _pick_best_up_next_items(widget)] == [
+        f"Up next · photo-{index}.jpg" for index in range(2, 7)
+    ]
     assert all(
-        not (_pick_best_item(widget, path).flags() & Qt.ItemFlag.ItemIsSelectable)
-        for path in paths
+        not (item.flags() & Qt.ItemFlag.ItemIsSelectable)
+        for item in _pick_best_up_next_items(widget)
     )
     assert widget._review_list_panel.count_label.text() == "0/1 done"
 
@@ -977,22 +1022,28 @@ def test_pick_best_left_panel_keeps_every_photo_and_uses_simple_states():
         widget._on_confirm()
 
     assert widget._current_tournament().current_round == 3
-    assert all(
-        _pick_best_item(widget, path) is original_items[path] for path in paths
+    comparison_items = _pick_best_comparison_items(widget)
+    assert len(comparison_items) == 4
+    assert comparison_items[0] is first_comparison
+    assert comparison_items[-1].text() == (
+        "photo-0.jpg  ↔  photo-4.jpg\nCurrent comparison"
     )
-    for survivor_index in (0, 4):
-        assert _pick_best_state(widget, paths[survivor_index]) == "Current"
-    for eliminated_index in (1, 2, 3):
-        assert _pick_best_state(widget, paths[eliminated_index]) == "Trash"
+    assert all(
+        item.text().splitlines()[-1].startswith("Complete ·")
+        for item in comparison_items[:-1]
+    )
+    assert [item.text() for item in _pick_best_up_next_items(widget)] == [
+        "Up next · photo-5.jpg",
+        "Up next · photo-6.jpg",
+    ]
     assert widget._review_list_panel.count_label.text() == "0/1 done"
 
-    subset_before = list(widget._subset_paths)
-    widget._on_photo_item_clicked(_pick_best_item(widget, paths[2]))
+    widget._on_photo_item_clicked(first_comparison)
 
     tournament = widget._current_tournament()
-    assert tournament.current_round == 3
+    assert tournament.current_round == 0
     assert tournament.current_group == 0
-    assert widget._subset_paths == subset_before
+    assert widget._subset_paths == paths[:2]
 
 
 def test_pick_best_left_panel_shows_every_cluster_and_switches_from_summary():
@@ -1013,29 +1064,35 @@ def test_pick_best_left_panel_shows_every_cluster_and_switches_from_summary():
 
     cluster_items = _pick_best_cluster_items(widget)
     assert len(cluster_items) == 2
-    assert cluster_items[0].text() == "Cluster 1 · 2 photos\nCurrent · 2 active"
+    assert cluster_items[0].text() == (
+        "Cluster 1 · 2 photos\nCurrent · comparison 1 of 1"
+    )
     assert cluster_items[1].text() == "Cluster 2 · 3 photos\nNot started"
     assert widget._review_list_panel.count_label.text() == "0/2 done"
-    assert _pick_best_item(widget, first_paths[0]) is not None
+    assert _pick_best_current_comparison_item(widget).data(
+        Qt.ItemDataRole.UserRole
+    ) == tuple(first_paths)
     first_cluster_row = widget._items_list.row(cluster_items[0])
     assert (
         widget._items_list.item(first_cluster_row + 1).data(Qt.ItemDataRole.UserRole)
-        == first_paths[0]
+        == tuple(first_paths)
     )
 
     widget._on_photo_item_clicked(cluster_items[1])
 
     assert widget._cluster_index == 1
-    assert _pick_best_item(widget, second_paths[0]) is not None
+    assert _pick_best_current_comparison_item(widget).data(
+        Qt.ItemDataRole.UserRole
+    ) == tuple(second_paths[:2])
     assert all(
         widget._items_list.item(index).data(Qt.ItemDataRole.UserRole)
-        not in first_paths
+        != tuple(first_paths)
         for index in range(widget._items_list.count())
     )
     second_cluster_row = widget._items_list.row(_pick_best_cluster_items(widget)[1])
     assert (
         widget._items_list.item(second_cluster_row + 1).data(Qt.ItemDataRole.UserRole)
-        == second_paths[0]
+        == tuple(second_paths[:2])
     )
 
     widget._on_keep_all()
@@ -1048,7 +1105,9 @@ def test_pick_best_left_panel_shows_every_cluster_and_switches_from_summary():
     widget._on_photo_item_clicked(cluster_items[0])
 
     assert widget._cluster_index == 0
-    assert _pick_best_item(widget, first_paths[0]) is not None
+    assert _pick_best_current_comparison_item(widget).data(
+        Qt.ItemDataRole.UserRole
+    ) == tuple(first_paths)
 
 
 def test_pick_best_keep_all_protects_group_and_completes_without_forced_winner():
@@ -1070,8 +1129,9 @@ def test_pick_best_keep_all_protects_group_and_completes_without_forced_winner()
     assert not marks
     assert widget._done_btn.isEnabled()
     assert widget._review_list_panel.count_label.text() == "1/1 done"
-    assert _pick_best_state(widget, paths[0]) == "Winner"
-    assert _pick_best_state(widget, paths[1]) == "Kept"
+    assert _pick_best_current_comparison_item(widget).text().endswith(
+        "Complete · both kept"
+    )
     assert all(
         card._state_label.text() == "KEEP"
         for card in widget._compare_cards[:2]
@@ -1125,8 +1185,10 @@ def test_pick_best_kept_incumbent_can_be_replaced_by_next_challenger():
     assert widget._current_group().paths == [paths[0], paths[2]]
     assert widget._current_group().selected_path == paths[2]
     assert not marks
-    assert _pick_best_state(widget, paths[0]) == "Current"
-    assert "Current · 2 active" in _pick_best_cluster_items(widget)[0].text()
+    assert _pick_best_current_comparison_item(widget).text() == (
+        "incumbent.jpg  ↔  challenger.jpg\nCurrent comparison"
+    )
+    assert "Current · comparison 2 of 2" in _pick_best_cluster_items(widget)[0].text()
 
     widget._on_confirm()
 
@@ -1135,9 +1197,11 @@ def test_pick_best_kept_incumbent_can_be_replaced_by_next_challenger():
     assert tournament.final_winner == paths[2]
     assert marks == {paths[0]}
     assert PickBestStepWidget._kept_paths(tournament) == {paths[1], paths[2]}
-    assert _pick_best_state(widget, paths[0]) == "Trash"
-    assert _pick_best_state(widget, paths[1]) == "Kept"
-    assert _pick_best_state(widget, paths[2]) == "Winner"
+    comparison_items = _pick_best_comparison_items(widget)
+    assert comparison_items[0].text().endswith("Complete · both kept")
+    assert comparison_items[1].text().endswith(
+        "Complete · challenger.jpg advanced"
+    )
 
 
 def test_pick_best_revising_kept_group_restores_marks_until_reconfirmed():

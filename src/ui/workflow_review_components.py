@@ -78,7 +78,9 @@ EASY_DELETE_SHORTCUTS = (
 )
 
 FIX_ROTATION_SHORTCUTS = (
-    WorkflowShortcutSpec("toggle", ("R", "Space"), "R / Space", "Rotate"),
+    WorkflowShortcutSpec(
+        "rotate_counterclockwise", ("R",), "R", "−90° override"
+    ),
     WorkflowShortcutSpec(
         "rotate_clockwise", ("Shift+R",), "Shift+R", "+90° override"
     ),
