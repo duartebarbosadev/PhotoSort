@@ -91,7 +91,9 @@ FIX_ROTATION_SHORTCUTS = (
 PICK_BEST_SHORTCUTS = (
     WorkflowShortcutSpec("slots", ("1", "2", "3"), "1  2  3", "Choice"),
     WorkflowShortcutSpec("clusters", ("Left", "Right"), "←  →", "Cluster"),
-    WorkflowShortcutSpec("groups", ("Up", "Down"), "↑  ↓", "Group"),
+    WorkflowShortcutSpec(
+        "groups", ("Up", "Down"), "↑  ↓", "Comparison / cluster"
+    ),
     WorkflowShortcutSpec("focus", ("C",), "C", "Compare"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     WorkflowShortcutSpec("keep_all", ("K",), "K", "Keep all"),

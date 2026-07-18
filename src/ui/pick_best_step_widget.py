@@ -1149,10 +1149,25 @@ class PickBestStepWidget(QWidget):
             self._publish_focused_path()
 
     def _next_group(self) -> None:
-        self._next_round()
+        """Move down within comparison history, then into the next cluster."""
+
+        if not self._tournaments:
+            return
+        tournament = self._current_tournament()
+        if tournament.current_round + 1 < len(tournament.rounds):
+            self._next_round()
+        else:
+            self._next_cluster()
 
     def _prev_group(self) -> None:
-        self._prev_round()
+        """Move up within comparison history, then into the previous cluster."""
+
+        if not self._tournaments:
+            return
+        if self._current_tournament().current_round > 0:
+            self._prev_round()
+        else:
+            self._prev_cluster()
 
     def _next_round(self) -> None:
         tournament = self._current_tournament()

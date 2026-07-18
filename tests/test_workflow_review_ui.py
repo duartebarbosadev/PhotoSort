@@ -929,6 +929,31 @@ def test_pick_best_up_and_down_shortcuts_navigate_comparison_history():
     assert widget._current_tournament().current_round == 2
 
 
+def test_pick_best_up_and_down_fall_back_to_clusters_without_more_comparisons():
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            cluster: _pick_best_payload(
+                [f"/tmp/photo-{cluster}-a.jpg", f"/tmp/photo-{cluster}-b.jpg"]
+            )
+            for cluster in (1, 2)
+        }
+    )
+    widget.resize(1000, 700)
+    widget.show()
+    widget.setFocus()
+    _app.processEvents()
+
+    QTest.keyClick(widget, Qt.Key.Key_Down)
+    assert widget._cluster_index == 1
+    assert widget._current_tournament().current_round == 0
+
+    QTest.keyClick(widget, Qt.Key.Key_Up)
+    assert widget._cluster_index == 0
+    assert widget._current_tournament().current_round == 0
+
+
 def test_pick_best_left_panel_keeps_every_photo_and_uses_simple_states():
     paths = [f"/tmp/photo-{index}.jpg" for index in range(7)]
     scores = {path: float(7 - index) for index, path in enumerate(paths)}
