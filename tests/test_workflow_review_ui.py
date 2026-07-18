@@ -602,6 +602,55 @@ def test_fix_rotation_distinguishes_preview_queue_and_applied_state():
     assert not widget._ordered_paths
 
 
+def test_fix_rotation_manual_shortcut_cycles_clockwise_and_queues_override():
+    path = "/tmp/sideways.jpg"
+    widget = FixRotationStepWidget()
+    widget.show_results({path: 90})
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+    assert "A" not in shortcuts
+
+    shortcuts["Shift+R"].activated.emit()
+    _app.processEvents()
+
+    assert widget._selected_angle(path) == 180
+    assert widget._preview_img._preview_angle == 180
+    assert "Manual override" in widget._angle_label.text()
+    assert "Manual" in widget._items_list.item(0).text()
+    assert widget.pending_rotations() == {}
+
+    widget._on_confirm()
+    assert widget.pending_rotations() == {path: 180}
+
+    shortcuts["Shift+R"].activated.emit()
+    shortcuts["Shift+R"].activated.emit()
+    _app.processEvents()
+
+    assert widget._selected_angle(path) == 0
+    assert not widget._marked[path]
+    assert path not in widget._confirmed
+    assert widget.pending_rotations() == {}
+
+    shortcuts["Shift+R"].activated.emit()
+    _app.processEvents()
+
+    assert widget._selected_angle(path) == 90
+    assert path not in widget._angle_overrides
+    assert widget._marked[path]
+
+
+def test_fix_rotation_clockwise_override_starts_from_original_when_unselected():
+    path = "/tmp/upside-down.jpg"
+    widget = FixRotationStepWidget()
+    widget.show_results({path: 180})
+    widget._current_img.clicked.emit()
+    _app.processEvents()
+
+    widget._on_rotate_clockwise()
+    widget._on_confirm()
+
+    assert widget.pending_rotations() == {path: 90}
+
+
 def _pick_best_payload(paths: list[str], scores: dict[str, float] | None = None):
     scores = scores or {}
     winner = max(paths, key=lambda path: scores.get(path, 0.0))
