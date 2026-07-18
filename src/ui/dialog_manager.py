@@ -39,6 +39,7 @@ from core.app_settings import (
     get_easy_delete_white_threshold,
     get_rotation_confirm_lossy,
     get_show_workflow_shortcuts,
+    get_workflow_step_visibility,
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
     set_easy_delete_blur_threshold,
@@ -46,6 +47,7 @@ from core.app_settings import (
     set_easy_delete_duplicate_distance,
     set_easy_delete_white_threshold,
     set_show_workflow_shortcuts,
+    set_workflow_step_visibility,
     ROTATION_MODEL_DOWNLOAD_URL,
 )
 from core.runtime_paths import get_app_cache_root, get_app_log_dir, get_app_models_dir
@@ -978,6 +980,45 @@ class DialogManager:
         )
         interface_layout.addWidget(show_shortcuts_checkbox)
 
+        workflow_steps_title = QLabel("Workflow steps")
+        workflow_steps_title.setObjectName("cardSectionTitle")
+        interface_layout.addWidget(workflow_steps_title)
+        workflow_steps_description = QLabel(
+            "Choose which review steps appear between Organize and Cull."
+        )
+        workflow_steps_description.setObjectName("cardDescription")
+        workflow_steps_description.setWordWrap(True)
+        interface_layout.addWidget(workflow_steps_description)
+
+        workflow_visibility = get_workflow_step_visibility()
+        workflow_step_checkboxes: dict[str, QCheckBox] = {}
+        workflow_step_labels = {
+            "organize": "Organize (required)",
+            "easy_delete": "Easy Delete",
+            "fix_rotation": "Fix Rotation",
+            "pick_best": "Pick Best",
+            "cull": "Cull (required)",
+        }
+        workflow_steps_widget = QWidget()
+        workflow_steps_layout = QGridLayout(workflow_steps_widget)
+        workflow_steps_layout.setContentsMargins(0, 0, 0, 0)
+        workflow_steps_layout.setHorizontalSpacing(18)
+        workflow_steps_layout.setVerticalSpacing(4)
+        for index, (step, label) in enumerate(workflow_step_labels.items()):
+            checkbox = QCheckBox(label)
+            checkbox.setObjectName(
+                f"show{''.join(part.title() for part in step.split('_'))}StepCheckbox"
+            )
+            checkbox.setChecked(workflow_visibility.get(step, True))
+            if step in {"organize", "cull"}:
+                checkbox.setEnabled(False)
+                checkbox.setToolTip(
+                    "Organize and Cull remain visible so the workflow has a start and finish."
+                )
+            workflow_step_checkboxes[step] = checkbox
+            workflow_steps_layout.addWidget(checkbox, index // 2, index % 2)
+        interface_layout.addWidget(workflow_steps_widget)
+
         content_layout.addWidget(interface_card)
 
         # --- Performance Mode Card ---
@@ -1621,12 +1662,23 @@ class DialogManager:
             )
             if callable(apply_shortcut_visibility):
                 apply_shortcut_visibility(show_workflow_shortcuts)
+            selected_workflow_visibility = {
+                step: checkbox.isChecked()
+                for step, checkbox in workflow_step_checkboxes.items()
+            }
+            set_workflow_step_visibility(selected_workflow_visibility)
+            apply_step_visibility = getattr(
+                self.parent, "apply_workflow_step_visibility", None
+            )
+            if callable(apply_step_visibility):
+                apply_step_visibility(selected_workflow_visibility)
 
             logger.info(
                 "Preferences saved: mode=%s, custom_threads=%s, similarity_model=%s, "
                 "similarity_eps=%.3f, easy_delete_blur=%.1f, "
                 "easy_delete_dark=%.1f, easy_delete_white=%.1f, "
-                "easy_delete_duplicate=%.3f, show_workflow_shortcuts=%s",
+                "easy_delete_duplicate=%.3f, show_workflow_shortcuts=%s, "
+                "workflow_steps=%s",
                 get_performance_mode().value,
                 get_custom_thread_count(),
                 get_similarity_embedding_model_name(),
@@ -1636,6 +1688,11 @@ class DialogManager:
                 get_easy_delete_white_threshold(),
                 get_easy_delete_duplicate_distance(),
                 get_show_workflow_shortcuts(),
+                [
+                    step
+                    for step, visible in get_workflow_step_visibility().items()
+                    if visible
+                ],
             )
             dialog.accept()
 

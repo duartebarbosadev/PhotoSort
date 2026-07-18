@@ -6,6 +6,7 @@ Manages persistent application settings using QSettings.
 import ctypes
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from PyQt6.QtCore import QSettings
@@ -45,6 +46,13 @@ PREVIEW_CACHE_SIZE_GB_KEY = "Cache/PreviewCacheSizeGB"
 EXIF_CACHE_SIZE_MB_KEY = "Cache/ExifCacheSizeMB"  # For EXIF metadata cache
 ROTATION_CONFIRM_LOSSY_KEY = "UI/RotationConfirmLossy"  # Ask before lossy rotation
 SHOW_WORKFLOW_SHORTCUTS_KEY = "UI/ShowWorkflowShortcuts"
+WORKFLOW_STEP_VISIBILITY_KEYS = {
+    "organize": "Workflow/ShowOrganize",
+    "easy_delete": "Workflow/ShowEasyDelete",
+    "fix_rotation": "Workflow/ShowFixRotation",
+    "pick_best": "Workflow/ShowPickBest",
+    "cull": "Workflow/ShowCull",
+}
 RECENT_FOLDERS_KEY = "UI/RecentFolders"  # Key for recent folders list
 ORIENTATION_MODEL_NAME_KEY = (
     "Models/OrientationModelName"  # Key for the orientation model file name
@@ -87,6 +95,7 @@ DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
 DEFAULT_EXIF_CACHE_SIZE_MB = 256  # Default to 256 MB for EXIF cache
 DEFAULT_ROTATION_CONFIRM_LOSSY = True  # Default to asking before lossy rotation
 DEFAULT_SHOW_WORKFLOW_SHORTCUTS = True
+DEFAULT_WORKFLOW_STEP_VISIBILITY = dict.fromkeys(WORKFLOW_STEP_VISIBILITY_KEYS, True)
 MAX_RECENT_FOLDERS = 10  # Max number of recent folders to store
 DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
 ROTATION_MODEL_DOWNLOAD_URL = (
@@ -309,6 +318,33 @@ def set_show_workflow_shortcuts(visible: bool) -> None:
     """Persist whether the shared workflow shortcut footer is visible."""
     settings = _get_settings()
     settings.setValue(SHOW_WORKFLOW_SHORTCUTS_KEY, bool(visible))
+
+
+def get_workflow_step_visibility() -> dict[str, bool]:
+    """Return persisted workflow navigation visibility for every step."""
+
+    settings = _get_settings()
+    visibility = {
+        step: settings.value(
+            key, DEFAULT_WORKFLOW_STEP_VISIBILITY[step], type=bool
+        )
+        for step, key in WORKFLOW_STEP_VISIBILITY_KEYS.items()
+    }
+    # These endpoints keep the application usable before and after review.
+    visibility["organize"] = True
+    visibility["cull"] = True
+    return visibility
+
+
+def set_workflow_step_visibility(visibility: Mapping[str, bool]) -> None:
+    """Persist optional workflow steps while keeping endpoints available."""
+
+    settings = _get_settings()
+    for step, key in WORKFLOW_STEP_VISIBILITY_KEYS.items():
+        value = visibility.get(step, DEFAULT_WORKFLOW_STEP_VISIBILITY[step])
+        if step in {"organize", "cull"}:
+            value = True
+        settings.setValue(key, bool(value))
 
 
 # --- Easy Delete Detection Thresholds ---

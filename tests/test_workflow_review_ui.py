@@ -1440,6 +1440,39 @@ def test_direct_workflow_shortcuts_use_unclaimed_modified_number_keys(monkeypatc
     window.close()
 
 
+def test_hidden_workflow_steps_leave_organize_and_cull_navigation(monkeypatch):
+    monkeypatch.setattr(
+        "ui.main_window.get_workflow_step_visibility",
+        lambda: {
+            "organize": True,
+            "easy_delete": False,
+            "fix_rotation": False,
+            "pick_best": False,
+            "cull": True,
+        },
+    )
+    window = MainWindow()
+
+    assert not window.step_organize_button.isHidden()
+    assert window.step_easy_delete_button.isHidden()
+    assert window.step_fix_rotation_button.isHidden()
+    assert window.step_pick_best_button.isHidden()
+    assert not window.step_cull_button.isHidden()
+    assert window._next_visible_workflow_step("organize") == "cull"
+
+    transitions: list[str] = []
+    window.app_state.image_files_data = [{"path": "/tmp/photo.jpg"}]
+    monkeypatch.setattr(
+        window, "_request_workflow_transition", transitions.append
+    )
+    window._go_to_fix_rotation_step()
+    assert transitions == []
+    assert "hidden in Preferences" in window.statusBar().currentMessage()
+    window._request_next_visible_workflow_transition("easy_delete")
+    assert transitions == ["cull"]
+    window.close()
+
+
 def test_shared_shortcut_toggles_the_active_workflow_left_panel():
     window = MainWindow()
     window.show()

@@ -63,6 +63,7 @@ from core.app_settings import (
     RIGHT_PANEL_STRETCH,
     DISPLAY_MAX_RESOLUTION,
     get_show_workflow_shortcuts,
+    get_workflow_step_visibility,
 )
 from ui.app_state import AppState
 from ui.ui_components import LoadingOverlay
@@ -118,6 +119,7 @@ WORKFLOW_STEP_LABELS = {
     "pick_best": "Pick Best",
     "cull": "Cull",
 }
+WORKFLOW_STEP_ORDER = tuple(WORKFLOW_STEP_LABELS)
 
 
 class MainWindow(QMainWindow):
@@ -231,6 +233,9 @@ class MainWindow(QMainWindow):
             logger.debug(f"FilterController ensure_initialized skipped: {e}")
 
         self._create_layout()
+        self.apply_workflow_step_visibility(
+            get_workflow_step_visibility(), transition_if_hidden=False
+        )
         self._create_loading_overlay()
         self.left_panel.thumbnail_delegate = self.thumbnail_delegate
         self._connect_signals()
@@ -778,6 +783,11 @@ class MainWindow(QMainWindow):
         self._request_workflow_transition("organize")
 
     def _go_to_easy_delete_step(self) -> None:
+        if not self._is_workflow_step_visible("easy_delete"):
+            self.statusBar().showMessage(
+                "Easy Delete is hidden in Preferences.", 3000
+            )
+            return
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
@@ -785,6 +795,11 @@ class MainWindow(QMainWindow):
         self._request_workflow_transition("easy_delete")
 
     def _go_to_fix_rotation_step(self) -> None:
+        if not self._is_workflow_step_visible("fix_rotation"):
+            self.statusBar().showMessage(
+                "Fix Rotation is hidden in Preferences.", 3000
+            )
+            return
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
@@ -792,6 +807,11 @@ class MainWindow(QMainWindow):
         self._request_workflow_transition("fix_rotation")
 
     def _go_to_pick_best_step(self) -> None:
+        if not self._is_workflow_step_visible("pick_best"):
+            self.statusBar().showMessage(
+                "Pick Best is hidden in Preferences.", 3000
+            )
+            return
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
@@ -818,6 +838,30 @@ class MainWindow(QMainWindow):
         handler = handlers.get(step_number)
         if handler is not None:
             handler()
+
+    def _is_workflow_step_visible(self, workflow_step: str) -> bool:
+        return self._workflow_step_visibility.get(workflow_step, True)
+
+    def _next_visible_workflow_step(self, workflow_step: str) -> str:
+        """Return the next configured step, always ending at Cull."""
+
+        try:
+            current_index = WORKFLOW_STEP_ORDER.index(workflow_step)
+        except ValueError:
+            return "cull"
+        return next(
+            (
+                step
+                for step in WORKFLOW_STEP_ORDER[current_index + 1 :]
+                if self._is_workflow_step_visible(step)
+            ),
+            "cull",
+        )
+
+    def _request_next_visible_workflow_transition(self, workflow_step: str) -> None:
+        self._request_workflow_transition(
+            self._next_visible_workflow_step(workflow_step)
+        )
 
     def _show_workflow_destination(self, destination: str) -> None:
         """Perform a trusted transition after the navigation guard resolves."""
@@ -1421,6 +1465,39 @@ class MainWindow(QMainWindow):
         self.workflow_nav_host.updateGeometry()
         self.statusBar().updateGeometry()
 
+    def apply_workflow_step_visibility(
+        self,
+        visibility: dict[str, bool],
+        *,
+        transition_if_hidden: bool = True,
+    ) -> None:
+        """Apply persisted step visibility to navigation and transition policy."""
+
+        normalized = {
+            step: bool(visibility.get(step, True)) for step in WORKFLOW_STEP_ORDER
+        }
+        normalized["organize"] = True
+        normalized["cull"] = True
+        self._workflow_step_visibility = normalized
+        buttons = {
+            "organize": self.step_organize_button,
+            "easy_delete": self.step_easy_delete_button,
+            "fix_rotation": self.step_fix_rotation_button,
+            "pick_best": self.step_pick_best_button,
+            "cull": self.step_cull_button,
+        }
+        for step, button in buttons.items():
+            button.setVisible(normalized[step])
+        self.workflow_nav.updateGeometry()
+        self.update_workflow_navigation()
+
+        current_step = getattr(self.app_state, "workflow_step", "organize")
+        if transition_if_hidden and not normalized.get(current_step, True):
+            destination = self._next_visible_workflow_step(current_step)
+            QTimer.singleShot(
+                0, lambda: self._request_workflow_transition(destination)
+            )
+
     def _active_workflow_left_panel(self) -> QWidget | None:
         """Return the left-side panel owned by the active workflow."""
 
@@ -1490,7 +1567,9 @@ class MainWindow(QMainWindow):
             )
             widget.set_exif_disk_cache(self.app_state.exif_disk_cache)
             widget.skip_requested.connect(
-                lambda: self._request_workflow_transition("fix_rotation")
+                lambda: self._request_next_visible_workflow_transition(
+                    "easy_delete"
+                )
             )
             widget.apply_requested.connect(self._request_workflow_resolution)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
@@ -1512,10 +1591,14 @@ class MainWindow(QMainWindow):
 
             widget = FixRotationStepWidget(self)
             widget.skip_requested.connect(
-                lambda: self._request_workflow_transition("pick_best")
+                lambda: self._request_next_visible_workflow_transition(
+                    "fix_rotation"
+                )
             )
             widget.proceed_requested.connect(
-                lambda: self._request_workflow_transition("pick_best")
+                lambda: self._request_next_visible_workflow_transition(
+                    "fix_rotation"
+                )
             )
             widget.apply_rotations_requested.connect(
                 self.app_controller.start_fix_rotation_apply
@@ -1542,10 +1625,10 @@ class MainWindow(QMainWindow):
                 lambda: bool(self.app_state.marked_for_deletion)
             )
             widget.skip_requested.connect(
-                lambda: self._request_workflow_transition("cull")
+                lambda: self._request_next_visible_workflow_transition("pick_best")
             )
             widget.proceed_to_cull_requested.connect(
-                lambda: self._request_workflow_transition("cull")
+                lambda: self._request_next_visible_workflow_transition("pick_best")
             )
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
