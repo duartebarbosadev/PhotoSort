@@ -2,6 +2,7 @@ import webbrowser
 import os
 import logging
 import time
+import contextlib
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -297,16 +298,31 @@ class DialogManager:
             list_widget.setWordWrap(True)
             list_widget.setSpacing(14)
             list_widget.setMinimumHeight(260)
+            missing_thumbnail_items: dict[str, QListWidgetItem] = {}
             for file_path, display_name, detail, is_directory in deletion_entries:
-                item = QListWidgetItem(
-                    self._deletion_preview_icon(file_path, is_directory),
-                    f"{display_name}\n{detail}",
+                cached_icon = None
+                is_media = not is_directory and (
+                    is_image_extension(file_path) or is_video_extension(file_path)
                 )
+                if is_media:
+                    cached_icon = self._cached_media_icon(file_path)
+                if cached_icon is not None:
+                    icon = cached_icon
+                elif is_media:
+                    icon = self.parent.style().standardIcon(
+                        QStyle.StandardPixmap.SP_FileIcon
+                    )
+                else:
+                    icon = self._deletion_preview_icon(file_path, is_directory)
+                item = QListWidgetItem(icon, f"{display_name}\n{detail}")
                 item.setSizeHint(QSize(205, 180))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setToolTip(file_path)
                 list_widget.addItem(item)
+                if is_media and cached_icon is None:
+                    missing_thumbnail_items[file_path] = item
             body.addWidget(list_widget, 1)
+            self._load_transition_thumbnails(dialog, missing_thumbnail_items)
 
         body.addStretch()
         outer.addWidget(scroll, 1)
@@ -398,10 +414,62 @@ class DialogManager:
 
     def _cached_thumbnail_icon(self, file_path: str) -> QIcon:
         """Build a dialog icon without decoding media on the UI thread."""
-        pixmap = self._cached_thumbnail_pixmap(file_path)
-        if pixmap is not None:
-            return QIcon(pixmap)
+        icon = self._cached_media_icon(file_path)
+        if icon is not None:
+            return icon
         return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+    def _cached_media_icon(self, file_path: str) -> QIcon | None:
+        """Return the best memory-cached media image using workflow cache priority."""
+        review_getter = getattr(
+            self.parent.image_pipeline, "get_cached_review_qpixmap", None
+        )
+        if callable(review_getter):
+            pixmap = self._cached_review_pixmap(file_path)
+        else:
+            # Compatibility for lightweight contexts that only expose thumbnails.
+            pixmap = self._cached_thumbnail_pixmap(file_path)
+        if pixmap is None:
+            return None
+        return QIcon(pixmap)
+
+    def _load_transition_thumbnails(
+        self,
+        dialog: QDialog,
+        items_by_path: dict[str, QListWidgetItem],
+    ) -> None:
+        """Load missing gallery thumbnails asynchronously and update live items."""
+        if not items_by_path:
+            return
+        loader = getattr(self.parent, "thumbnail_loader", None)
+        request_paths = getattr(loader, "request_paths", None)
+        worker_manager = getattr(self.parent, "worker_manager", None)
+        batch_ready = getattr(worker_manager, "thumbnail_session_batch_ready", None)
+        if not callable(request_paths) or batch_ready is None:
+            return
+
+        pending = dict(items_by_path)
+
+        def update_items(_session_id: str, ready_paths) -> None:
+            if not dialog.isVisible():
+                return
+            for path in ready_paths or []:
+                item = pending.get(path)
+                if item is None:
+                    continue
+                icon = self._cached_media_icon(path)
+                if icon is None:
+                    continue
+                item.setIcon(icon)
+                pending.pop(path, None)
+
+        def disconnect_loader(*_args) -> None:
+            with contextlib.suppress(TypeError, RuntimeError):
+                batch_ready.disconnect(update_items)
+
+        batch_ready.connect(update_items)
+        dialog.finished.connect(disconnect_loader)
+        request_paths(list(pending))
 
     def _rotation_comparison_widget(self, file_path: str, angle: int) -> QWidget:
         """Build a cache-only before/after rotation comparison card."""
