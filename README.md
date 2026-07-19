@@ -193,6 +193,16 @@ Logs will be saved to `~/.photosort_logs/photosort_app.log`.
 > **Note:** For the "Focus on image (1-9)" actions, if multiple images are highlighted, pressing `1` will show the first highlighted image, `2` the second, and so on.
 
 
+## Security Notes
+
+`diskcache` (used for our thumbnail/preview/EXIF/rating/analysis caches) has
+an open advisory (PYSEC-2026-2447) for unsafe pickle deserialization. We're
+intentionally ignoring it in CI for now — there's no patched `diskcache`
+release. It's a non-issue in practice anyway:
+exploiting it needs write access to your own private cache folder, which
+means you'd already have code execution as yourself. We'll revisit if a real
+fix or safe replacement shows up.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a pull request or open an issue for bugs, feature requests, or suggestions.
