@@ -22,6 +22,7 @@ from core.runtime_paths import (  # noqa: E402
     iter_bundle_roots,
     is_frozen_runtime,
     resolve_runtime_root,
+    resolve_intro_video_path,
     get_app_log_dir,
 )
 
@@ -411,7 +412,11 @@ def main():
 
     from ui.main_window import MainWindow
     from ui.app_controller import AppController
-    from core.app_settings import get_recent_folders
+    from core.app_settings import (
+        get_recent_folders,
+        get_intro_video_shown,
+        set_intro_video_shown,
+    )
 
     # Handle clear-cache argument
     if args.clear_cache:
@@ -436,6 +441,37 @@ def main():
     logging.debug(
         f"MainWindow instantiated in {time.perf_counter() - mainwindow_instantiation_start_time:.4f}s"
     )
+
+    # --- First-run intro video ---
+    # Shown once, before the main window appears, so new users get a quick
+    # welcome tour. Skipped for smoke tests to keep CI fast and deterministic.
+    if not args.smoke_test and not get_intro_video_shown():
+        intro_video_path = resolve_intro_video_path()
+        if intro_video_path:
+            # Apply the stylesheet synchronously so the intro dialog is
+            # correctly themed (it would otherwise still be deferred below).
+            try:
+                stylesheet = load_stylesheet()
+                if stylesheet:
+                    app.setStyleSheet(stylesheet)
+            except Exception as e:
+                logging.warning(f"Failed to apply stylesheet before intro video: {e}")
+
+            splash.close()
+
+            from ui.intro_video_dialog import IntroVideoDialog
+
+            intro_start_time = time.perf_counter()
+            intro_dialog = IntroVideoDialog(intro_video_path)
+            intro_dialog.exec()
+            logging.info(
+                f"Intro video shown in {time.perf_counter() - intro_start_time:.4f}s"
+            )
+        else:
+            logging.info(
+                "First launch detected, but intro video was not found; skipping."
+            )
+        set_intro_video_shown(True)
 
     window_show_start_time = time.perf_counter()
     window.show()

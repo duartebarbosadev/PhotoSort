@@ -51,6 +51,8 @@ datas = [
         "models",
     ),
 ]
+if (PROJECT_ROOT / "art" / "video.mp4").exists():
+    datas.append((str(PROJECT_ROOT / "art" / "video.mp4"), "art"))
 datas += copy_metadata("pyexiv2")
 
 binaries = collect_dynamic_libs("pyexiv2")

@@ -54,6 +54,7 @@ WORKFLOW_STEP_VISIBILITY_KEYS = {
     "cull": "Workflow/ShowCull",
 }
 RECENT_FOLDERS_KEY = "UI/RecentFolders"  # Key for recent folders list
+INTRO_VIDEO_SHOWN_KEY = "UI/IntroVideoShown"  # Whether the first-run intro video played
 ORIENTATION_MODEL_NAME_KEY = (
     "Models/OrientationModelName"  # Key for the orientation model file name
 )
@@ -402,6 +403,19 @@ def set_easy_delete_duplicate_distance(value: float):
     """Set the Easy Delete near-duplicate cosine-distance threshold."""
     settings = _get_settings()
     settings.setValue(EASY_DELETE_DUPLICATE_DISTANCE_KEY, float(value))
+
+
+# --- First-Run Intro Video ---
+def get_intro_video_shown() -> bool:
+    """Whether the first-run intro video has already been shown to this user."""
+    settings = _get_settings()
+    return settings.value(INTRO_VIDEO_SHOWN_KEY, False, type=bool)
+
+
+def set_intro_video_shown(value: bool):
+    """Record that the first-run intro video has been shown (or reset it)."""
+    settings = _get_settings()
+    settings.setValue(INTRO_VIDEO_SHOWN_KEY, bool(value))
 
 
 # --- Recent Folders ---

@@ -618,6 +618,34 @@ class DialogManager:
         """Check if any of the provided file paths are RAW image files."""
         return any(self._should_apply_raw_processing(path) for path in file_paths)
 
+    def show_intro_video_dialog(self, block: bool = True):
+        """Replay the first-run intro video on demand (e.g. from the Help menu).
+
+        Args:
+            block: If True (default) runs dialog.exec() modally. If False, uses
+                   dialog.show() and returns immediately (useful for tests).
+        """
+        from core.runtime_paths import resolve_intro_video_path
+        from ui.intro_video_dialog import IntroVideoDialog
+
+        video_path = resolve_intro_video_path()
+        if not video_path:
+            logger.warning("Intro video requested but not found; showing notice.")
+            QMessageBox.information(
+                self.parent,
+                "Intro Video Unavailable",
+                "The PhotoSort intro video could not be found.",
+            )
+            return
+
+        logger.info("Showing intro video on demand")
+        dialog = IntroVideoDialog(video_path, parent=self.parent)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        if block:
+            dialog.exec()
+        else:
+            dialog.show()
+
     def show_about_dialog(self, block: bool = True):
         """Show the 'About' dialog.
 
