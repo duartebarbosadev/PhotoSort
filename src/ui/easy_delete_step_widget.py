@@ -26,6 +26,7 @@ from ui.workflow_review_components import (
     WorkflowStateBanner,
     install_workflow_shortcuts,
 )
+from ui.workflow_metadata import build_workflow_metadata_rows
 
 logger = logging.getLogger(__name__)
 
@@ -35,18 +36,20 @@ _ISSUE_LABELS: dict[str, tuple] = {
     "white": ("WHITE", "#F5B700"),
     "duplicate": ("DUP", "#A78BFA"),
 }
-_ISSUE_ORDER = ("duplicate", "blur", "dark", "white")
+_CATEGORY_ORDER = ("exact_duplicate", "near_duplicate", "blur", "dark", "white")
 _CATEGORY_NAMES: dict[str, str] = {
+    "exact_duplicate": "Duplicates",
+    "near_duplicate": "Near-duplicates",
     "blur": "Blur",
     "dark": "Dark",
     "white": "Bright",
-    "duplicate": "Similar",
 }
 _CATEGORY_HEADER_NAMES: dict[str, str] = {
+    "exact_duplicate": "DUPLICATES",
+    "near_duplicate": "NEAR-DUPLICATES",
     "blur": "BLURRY PHOTOS",
     "dark": "DARK PHOTOS",
     "white": "BRIGHT PHOTOS",
-    "duplicate": "SIMILAR PHOTOS",
 }
 
 _CONFIRMED_COLOR = "#66BB6A"
@@ -121,6 +124,8 @@ class EasyDeleteStepWidget(QWidget):
         self._marks_before_confirmation: dict[str, set[str]] = {}
         self._info_visible = False
         self._image_pipeline = None
+        self._exif_disk_cache = None
+        self._metadata_cache: dict[str, list[tuple[str, str]]] = {}
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._setup_ui()
         self._shortcuts = install_workflow_shortcuts(
@@ -146,6 +151,10 @@ class EasyDeleteStepWidget(QWidget):
 
     def set_image_pipeline(self, pipeline) -> None:
         self._image_pipeline = pipeline
+
+    def set_exif_disk_cache(self, cache) -> None:
+        self._exif_disk_cache = cache
+        self._metadata_cache.clear()
 
     def refresh_deletion_state(self) -> None:
         """Refresh staged decisions after another workflow changes shared state."""
@@ -213,13 +222,14 @@ class EasyDeleteStepWidget(QWidget):
             self._pending_delete_by_review.clear()
             self._confirmed_reviews.clear()
             self._marks_before_confirmation.clear()
+            self._metadata_cache.clear()
         self._shown_results = results
         self._results = results
         self._category_counts = self._build_category_counts(results)
         self._enabled_categories = {
-            issue_type: True
-            for issue_type in _ISSUE_ORDER
-            if self._category_counts.get(issue_type, 0) > 0
+            category: True
+            for category in _CATEGORY_ORDER
+            if self._category_counts.get(category, 0) > 0
         }
         self._flagged_paths = self._build_ordered_paths(results)
         self._current_index = -1
@@ -251,52 +261,64 @@ class EasyDeleteStepWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ordered_paths(self, results: dict) -> list[str]:
-        return self._build_ordered_paths_for_issue_types(
-            results, self._enabled_issue_types()
+        return self._build_ordered_paths_for_categories(
+            results, self._enabled_categories_in_order()
         )
 
-    def _build_ordered_paths_for_issue_types(
-        self, results: dict, issue_types: list[str] | tuple[str, ...]
+    @staticmethod
+    def _entry_category(entry: dict) -> str:
+        if entry.get("type") != "duplicate":
+            return entry.get("type", "")
+        if entry.get("duplicate_kind", "near") == "exact":
+            return "exact_duplicate"
+        return "near_duplicate"
+
+    def _build_ordered_paths_for_categories(
+        self, results: dict, categories: list[str] | tuple[str, ...]
     ) -> list[str]:
         ordered: list[str] = []
         seen: set = set()
-        for issue_type in issue_types:
-            for path, entry in results.items():
-                if (
-                    path not in seen
-                    and entry["type"] == issue_type
-                    and entry["suggest_delete"]
-                ):
-                    ordered.append(path)
-                    seen.add(path)
-                    if entry.get("pair_path"):
-                        seen.add(entry["pair_path"])
+        for category in categories:
+            category_entries = [
+                (path, entry)
+                for path, entry in results.items()
+                if self._entry_category(entry) == category and entry["suggest_delete"]
+            ]
+            for path, entry in category_entries:
+                if path in seen:
+                    continue
+                ordered.append(path)
+                seen.add(path)
+                if entry.get("pair_path"):
+                    seen.add(entry["pair_path"])
         return ordered
 
     def _build_category_counts(self, results: dict) -> dict[str, int]:
         counts: dict[str, int] = {}
-        ordered_paths = self._build_ordered_paths_for_issue_types(results, _ISSUE_ORDER)
+        ordered_paths = self._build_ordered_paths_for_categories(
+            results, _CATEGORY_ORDER
+        )
         for path in ordered_paths:
-            issue_type = results.get(path, {}).get("type", "")
-            counts[issue_type] = counts.get(issue_type, 0) + 1
+            category = self._entry_category(results.get(path, {}))
+            counts[category] = counts.get(category, 0) + 1
         return counts
 
-    def _enabled_issue_types(self) -> list[str]:
+    def _enabled_categories_in_order(self) -> list[str]:
         return [
-            issue_type
-            for issue_type in _ISSUE_ORDER
-            if self._enabled_categories.get(issue_type, False)
+            category
+            for category in _CATEGORY_ORDER
+            if self._enabled_categories.get(category, False)
         ]
 
-    def _issue_types_with_counts(self) -> list[str]:
+    def _categories_with_counts(self) -> list[str]:
         return [
-            issue_type
-            for issue_type in _ISSUE_ORDER
-            if self._category_counts.get(issue_type, 0) > 0
+            category
+            for category in _CATEGORY_ORDER
+            if self._category_counts.get(category, 0) > 0
         ]
 
     def _refresh_category_controls(self) -> None:
-        issue_types = self._issue_types_with_counts()
+        categories = self._categories_with_counts()
         while self._category_toggle_layout.count():
             item = self._category_toggle_layout.takeAt(0)
             widget = item.widget()
@@ -305,22 +327,22 @@ class EasyDeleteStepWidget(QWidget):
 
         self._category_checkboxes = {}
         self._updating_category_toggles = True
-        for index, issue_type in enumerate(issue_types):
-            count = self._category_counts[issue_type]
+        for index, category in enumerate(categories):
+            count = self._category_counts[category]
             checkbox = QCheckBox(
-                f"{_CATEGORY_NAMES.get(issue_type, issue_type.title())} ({count})"
+                f"{_CATEGORY_NAMES.get(category, category.title())} ({count})"
             )
             checkbox.setObjectName("workflowReviewFilter")
-            checkbox.setChecked(self._enabled_categories.get(issue_type, True))
+            checkbox.setChecked(self._enabled_categories.get(category, True))
             checkbox.toggled.connect(
-                lambda checked, issue_type=issue_type: self._on_category_toggled(
-                    issue_type, checked
+                lambda checked, category=category: self._on_category_toggled(
+                    category, checked
                 )
             )
-            self._category_checkboxes[issue_type] = checkbox
+            self._category_checkboxes[category] = checkbox
             self._category_toggle_layout.addWidget(checkbox, index // 2, index % 2)
         self._updating_category_toggles = False
-        self._review_list_panel.filters.setVisible(bool(issue_types))
+        self._review_list_panel.filters.setVisible(bool(categories))
 
     def _item_text(self, path: str) -> str:
         entry = self._results.get(path, {})
@@ -332,11 +354,11 @@ class EasyDeleteStepWidget(QWidget):
             return f"{prefix}{os.path.basename(path)}  ↔  {pair_name}"
         return f"{prefix}{os.path.basename(path)}"
 
-    def _add_category_header(self, issue_type: str, count: int) -> None:
+    def _add_category_header(self, category: str, count: int) -> None:
         """Add a visual-only heading without making it part of queue navigation."""
 
-        category = _CATEGORY_HEADER_NAMES.get(issue_type, issue_type.upper())
-        header = QListWidgetItem(f"{category}  ·  {count}")
+        heading = _CATEGORY_HEADER_NAMES.get(category, category.upper())
+        header = QListWidgetItem(f"{heading}  ·  {count}")
         header.setFlags(Qt.ItemFlag.NoItemFlags)
         header.setForeground(QColor("#8795A1"))
         header.setBackground(QColor("#282D31"))
@@ -350,15 +372,15 @@ class EasyDeleteStepWidget(QWidget):
     def _populate_list(self) -> None:
         self._items_list.clear()
         self._list_row_by_path.clear()
-        for issue_type in self._enabled_issue_types():
+        for category in self._enabled_categories_in_order():
             category_paths = [
                 path
                 for path in self._flagged_paths
-                if self._results.get(path, {}).get("type") == issue_type
+                if self._entry_category(self._results.get(path, {})) == category
             ]
             if not category_paths:
                 continue
-            self._add_category_header(issue_type, len(category_paths))
+            self._add_category_header(category, len(category_paths))
             for path in category_paths:
                 item = QListWidgetItem(self._item_text(path))
                 item.setData(Qt.ItemDataRole.UserRole, path)
@@ -503,6 +525,7 @@ class EasyDeleteStepWidget(QWidget):
                 entry=entry,
                 filename=filename,
                 selected_for_delete=left_is_delete,
+                suggested_for_delete=True,
                 confirmed=confirmed,
                 slot=1,
             )
@@ -513,6 +536,7 @@ class EasyDeleteStepWidget(QWidget):
                 entry=entry,
                 filename=pair_name,
                 selected_for_delete=not left_is_delete,
+                suggested_for_delete=False,
                 confirmed=confirmed,
                 slot=2,
             )
@@ -527,13 +551,14 @@ class EasyDeleteStepWidget(QWidget):
                 entry=entry,
                 filename=filename,
                 selected_for_delete=delete_selected,
+                suggested_for_delete=None,
                 confirmed=confirmed,
                 slot=1,
             )
             self._single_card.set_focused(self._focused_path == path)
 
-    @staticmethod
     def _set_choice_card(
+        self,
         card: WorkflowDecisionCard,
         state_label: QLabel,
         *,
@@ -541,6 +566,7 @@ class EasyDeleteStepWidget(QWidget):
         entry: dict,
         filename: str,
         selected_for_delete: bool,
+        suggested_for_delete: bool | None,
         confirmed: bool,
         slot: int,
     ) -> None:
@@ -557,21 +583,35 @@ class EasyDeleteStepWidget(QWidget):
             color = "#66BB6A"
             border = "#2E7D32"
         state_label.setText(state)
+        display_parts = [filename]
+        if suggested_for_delete is not None:
+            if suggested_for_delete:
+                suggestion = "Suggested for trash"
+                suggestion_reason = entry.get("delete_suggestion_reason")
+            else:
+                suggestion = "Suggested to keep"
+                suggestion_reason = entry.get("keep_suggestion_reason")
+            display_parts.append(suggestion)
+            if suggestion_reason:
+                display_parts.append(suggestion_reason)
         card.set_decision(
-            filename=filename,
+            filename=" · ".join(display_parts),
             state=state,
             state_color=color,
             border_color=border,
             hint=f"Click image/card or press {slot} to change the choice · I toggles details",
         )
-        issue_type = entry.get("type", "")
-        card.set_details(
-            [
-                ("Path", path),
-                ("Issue", _CATEGORY_NAMES.get(issue_type, issue_type.title())),
-                ("Reason", entry.get("reason", "Not provided")),
-            ]
-        )
+        card.set_details(self._metadata_rows_for_path(path))
+
+    def _metadata_rows_for_path(self, path: str) -> list[tuple[str, str]]:
+        if path not in self._metadata_cache:
+            try:
+                rows = build_workflow_metadata_rows(path, self._exif_disk_cache)
+            except Exception:
+                logger.debug("Cached EXIF lookup failed for %s", path, exc_info=True)
+                rows = [("Metadata", "No EXIF details available")]
+            self._metadata_cache[path] = rows
+        return self._metadata_cache[path]
 
     def _pending_delete(self, path: str, entry: dict) -> str | None:
         if path not in self._pending_delete_by_review:
@@ -758,9 +798,7 @@ class EasyDeleteStepWidget(QWidget):
         else:
             self._navigate_to(next_index)
 
-    def _cancel_confirmation(
-        self, review_path: str, candidates: list[str]
-    ) -> None:
+    def _cancel_confirmation(self, review_path: str, candidates: list[str]) -> None:
         """Undo a confirmed review and restore its prior shared deletion marks."""
 
         prior_marks = self._marks_before_confirmation.pop(review_path, set())
@@ -817,10 +855,10 @@ class EasyDeleteStepWidget(QWidget):
             self.unmark_for_deletion_requested.emit(list(dict.fromkeys(to_unmark)))
         self._refresh_controls()
 
-    def _on_category_toggled(self, issue_type: str, checked: bool) -> None:
+    def _on_category_toggled(self, category: str, checked: bool) -> None:
         if self._updating_category_toggles:
             return
-        self._enabled_categories[issue_type] = checked
+        self._enabled_categories[category] = checked
         self._apply_category_filter()
 
     def _apply_category_filter(self) -> None:
@@ -978,7 +1016,7 @@ class EasyDeleteStepWidget(QWidget):
         self._pair_left_img.setCursor(Qt.CursorShape.PointingHandCursor)
         self._pair_left_img.clicked.connect(lambda: self._select_pair_side(0))
         ll.addWidget(self._pair_left_img, 1)
-        self._pair_left_card = WorkflowDecisionCard(1)
+        self._pair_left_card = WorkflowDecisionCard(1, filename_in_header=True)
         self._pair_left_card.set_details_visible(self._info_visible)
         self._pair_left_card.activated.connect(lambda: self._select_pair_side(0))
         self._pair_left_hdr = self._pair_left_card.state_label
@@ -992,7 +1030,7 @@ class EasyDeleteStepWidget(QWidget):
         self._pair_right_img.setCursor(Qt.CursorShape.PointingHandCursor)
         self._pair_right_img.clicked.connect(lambda: self._select_pair_side(1))
         rl.addWidget(self._pair_right_img, 1)
-        self._pair_right_card = WorkflowDecisionCard(2)
+        self._pair_right_card = WorkflowDecisionCard(2, filename_in_header=True)
         self._pair_right_card.set_details_visible(self._info_visible)
         self._pair_right_card.activated.connect(lambda: self._select_pair_side(1))
         self._pair_right_hdr = self._pair_right_card.state_label

@@ -58,6 +58,34 @@ def test_scroll_request_is_reprioritized_while_session_is_active():
     )
 
 
+def test_explicit_dialog_request_reuses_active_thumbnail_session():
+    context = _context(item_count=2)
+    loader = ViewportThumbnailLoader(context)
+    loader._session_id = "folder-session"
+
+    loader.request_paths(["image-1.jpg", "image-1.jpg"])
+
+    context.worker_manager.prioritize_thumbnail_paths.assert_called_once_with(
+        "folder-session", ["image-1.jpg"]
+    )
+    context.worker_manager.start_thumbnail_session.assert_not_called()
+
+
+def test_explicit_dialog_request_starts_bounded_foreground_session_when_idle():
+    context = _context(item_count=2)
+    loader = ViewportThumbnailLoader(context)
+
+    loader.request_paths(["image-0.jpg", "image-1.jpg"])
+
+    session_id, all_paths, foreground_paths = (
+        context.worker_manager.start_thumbnail_session.call_args.args
+    )
+    assert session_id.startswith("dialog:")
+    assert all_paths == ["image-0.jpg", "image-1.jpg"]
+    assert foreground_paths == all_paths
+    assert session_id in loader._foreground_session_ids
+
+
 def test_visible_inventory_files_outside_media_session_are_not_requested():
     context = _context(item_count=1)
     loader = ViewportThumbnailLoader(context)

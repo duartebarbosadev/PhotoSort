@@ -1,7 +1,6 @@
 import logging
 import os
 from dataclasses import dataclass, field
-from fractions import Fraction
 from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -18,11 +17,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core.metadata_processor import (
-    DATE_TAGS_PREFERENCE,
-    MetadataProcessor,
-    _parse_exif_date,
-)
 from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResults
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.workflow_review_components import (
@@ -32,6 +26,7 @@ from ui.workflow_review_components import (
     WorkflowStateBanner,
     install_workflow_shortcuts,
 )
+from ui.workflow_metadata import build_workflow_metadata_rows
 import contextlib
 
 logger = logging.getLogger(__name__)
@@ -44,59 +39,6 @@ CARD_BG_WINNER = "#2C2616"
 CARD_BORDER_COLOR = "#3A434C"
 LIST_SECTION_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 LIST_CLUSTER_ROLE = int(Qt.ItemDataRole.UserRole) + 2
-
-
-def _first_present(metadata: dict, *keys: str):
-    for key in keys:
-        value = metadata.get(key)
-        if value not in (None, "", "None"):
-            return value
-    return None
-
-
-def _fraction_text(value: object) -> str | None:
-    if value in (None, ""):
-        return None
-    text = str(value).strip()
-    try:
-        if "/" in text:
-            frac = Fraction(text)
-            if frac >= 1:
-                return f"{float(frac):.1f}s"
-            return f"1/{round(1 / float(frac))}s"
-        numeric = float(text)
-    except TypeError, ValueError, ZeroDivisionError:
-        return text
-    if numeric >= 1:
-        return f"{numeric:.1f}s"
-    if numeric <= 0:
-        return text
-    return f"1/{round(1 / numeric)}s"
-
-
-def _float_text(
-    value: object, prefix: str = "", suffix: str = "", digits: int = 1
-) -> str | None:
-    if value in (None, ""):
-        return None
-    try:
-        return f"{prefix}{float(value):.{digits}f}{suffix}"
-    except TypeError, ValueError:
-        return f"{prefix}{value}{suffix}"
-
-
-def _format_capture_date(metadata: dict) -> str | None:
-    for key in DATE_TAGS_PREFERENCE:
-        raw_value = metadata.get(key)
-        if raw_value in (None, "", "None"):
-            continue
-        parsed = _parse_exif_date(str(raw_value))
-        if parsed is not None:
-            if parsed.hour == 0 and parsed.minute == 0 and parsed.second == 0:
-                return parsed.strftime("%Y-%m-%d")
-            return parsed.strftime("%Y-%m-%d %H:%M")
-        return str(raw_value)
-    return None
 
 
 class CompareCard(WorkflowDecisionCard):
@@ -601,29 +543,6 @@ class PickBestStepWidget(QWidget):
         ]
 
     @staticmethod
-    def _path_matchup_count(tournament: ClusterTournament, path: str) -> int:
-        return sum(
-            path in group.paths
-            for round_ in tournament.rounds
-            for group in round_.groups
-        )
-
-    @staticmethod
-    def _path_elimination_round(
-        tournament: ClusterTournament, path: str
-    ) -> int | None:
-        for round_index, round_ in enumerate(tournament.rounds):
-            for group in round_.groups:
-                if (
-                    group.confirmed
-                    and not group.keep_all
-                    and path in group.paths
-                    and path != group.selected_path
-                ):
-                    return round_index + 1
-        return None
-
-    @staticmethod
     def _kept_paths(tournament: ClusterTournament) -> set[str]:
         kept_paths: set[str] = set()
         for round_ in tournament.rounds:
@@ -639,56 +558,26 @@ class PickBestStepWidget(QWidget):
                 )
         return kept_paths
 
-    def _photo_item_presentation(self, path: str) -> tuple[str, QColor, QColor]:
-        tournament = self._current_tournament()
-        group = self._current_group()
-        matchup_count = self._path_matchup_count(tournament, path)
-        elimination_round = self._path_elimination_round(tournament, path)
-        kept_paths = self._kept_paths(tournament)
+    @staticmethod
+    def _comparison_item_presentation(
+        tournament: ClusterTournament, round_index: int
+    ) -> tuple[str, QColor, QColor]:
+        """Describe one rolling comparison as the pair users see on screen."""
 
-        if path in group.paths and not group.confirmed:
-            state = "Current"
-            foreground = QColor(
-                "#F4C95D" if path == group.selected_path else "#C9D8E5"
-            )
-            background = QColor("#2B3035")
-        elif tournament.final_winner == path:
-            state = "Winner"
+        group = tournament.rounds[round_index].groups[0]
+        pair_text = "  ↔  ".join(os.path.basename(path) for path in group.paths)
+        is_current = round_index == tournament.current_round
+        if not group.confirmed:
+            state = "Current comparison" if is_current else "Needs review"
+            foreground = QColor("#F4C95D")
+        elif group.keep_all:
+            state = "Complete · both kept"
             foreground = QColor("#78D58A")
-            background = QColor("#203529")
-        elif path in kept_paths:
-            state = "Kept"
-            foreground = QColor("#78D58A")
-            background = QColor("#203529")
-        elif elimination_round is not None:
-            state = "Trash"
-            foreground = QColor("#7F8B96")
-            background = QColor(Qt.GlobalColor.transparent)
-        elif path in group.paths:
-            if group.confirmed:
-                state = (
-                    "Advanced"
-                    if path == group.selected_path
-                    else "Trash"
-                )
-            foreground = QColor(
-                "#F4C95D" if path == group.selected_path else "#C9D8E5"
-            )
-            background = QColor("#2B3035")
         else:
-            has_advanced = any(
-                candidate.confirmed
-                and not candidate.keep_all
-                and candidate.selected_path == path
-                for round_ in tournament.rounds
-                for candidate in round_.groups
-            )
-            state = "Advanced" if matchup_count > 1 or has_advanced else "Waiting"
+            state = f"Complete · {os.path.basename(group.selected_path)} advanced"
             foreground = QColor("#A9B7C6")
-            background = QColor(Qt.GlobalColor.transparent)
-
-        text = f"   {os.path.basename(path)}\n   {state}"
-        return text, foreground, background
+        background = QColor("#2B3035" if is_current else Qt.GlobalColor.transparent)
+        return f"{pair_text}\n{state}", foreground, background
 
     def _populate_photo_list(self) -> None:
         self._refresh_photo_list()
@@ -697,17 +586,6 @@ class PickBestStepWidget(QWidget):
         tournament = self._tournaments[index]
         paths = list(tournament.payload.get("all_paths", []))
         kept_paths = self._kept_paths(tournament)
-        active_paths = {
-            path
-            for path in paths
-            if path not in kept_paths
-            and self._path_elimination_round(tournament, path) is None
-        }
-        if not tournament.finalized and tournament.rounds:
-            latest_group = tournament.rounds[-1].groups[0]
-            if not latest_group.confirmed:
-                active_paths.update(latest_group.paths)
-        active_count = len(active_paths)
         retained_paths = set(kept_paths)
         if tournament.final_winner is not None:
             retained_paths.add(tournament.final_winner)
@@ -720,27 +598,43 @@ class PickBestStepWidget(QWidget):
             status = f"Complete · {retained_count} kept"
             foreground = QColor("#78D58A")
         elif index == self._cluster_index:
-            status = f"Current · {active_count} active"
+            comparison_number = tournament.current_round + 1
+            comparison_total = max(1, len(paths) - 1)
+            status = f"Current · comparison {comparison_number} of {comparison_total}"
             foreground = QColor("#D8E6F2")
         elif has_progress:
-            status = f"In progress · {active_count} active"
+            comparison_number = tournament.current_round + 1
+            comparison_total = max(1, len(paths) - 1)
+            status = (
+                f"In progress · comparison {comparison_number} of {comparison_total}"
+            )
             foreground = QColor("#F4C95D")
         else:
             status = "Not started"
             foreground = QColor("#8D99A3")
-        background = QColor("#2B3035" if index == self._cluster_index else "transparent")
-        return f"Cluster {index + 1} · {len(paths)} photos\n{status}", foreground, background
+        background = QColor(
+            "#2B3035" if index == self._cluster_index else "transparent"
+        )
+        return (
+            f"Cluster {index + 1} · {len(paths)} photos\n{status}",
+            foreground,
+            background,
+        )
 
-    def _sync_photo_sections(self) -> dict[str, QListWidgetItem]:
-        photo_items: dict[str, QListWidgetItem] = {}
+    def _sync_photo_sections(self) -> dict[int, QListWidgetItem]:
+        comparison_items: dict[tuple[int, int], QListWidgetItem] = {}
+        waiting_items: dict[tuple[int, str], QListWidgetItem] = {}
         cluster_items: dict[int, QListWidgetItem] = {}
         self._items_list.setUpdatesEnabled(False)
         while self._items_list.count():
             item = self._items_list.takeItem(0)
             path = item.data(Qt.ItemDataRole.UserRole)
             cluster_index = item.data(LIST_CLUSTER_ROLE)
-            if isinstance(path, str):
-                photo_items[path] = item
+            round_index = item.data(LIST_SECTION_ROLE)
+            if isinstance(cluster_index, int) and isinstance(round_index, int):
+                comparison_items[(cluster_index, round_index)] = item
+            elif isinstance(cluster_index, int) and isinstance(path, str):
+                waiting_items[(cluster_index, path)] = item
             elif isinstance(cluster_index, int):
                 cluster_items[cluster_index] = item
 
@@ -766,32 +660,51 @@ class PickBestStepWidget(QWidget):
                 self._items_list.addItem(cluster_item)
 
                 if cluster_index == self._cluster_index:
-                    for path in tournament.payload.get("all_paths", []):
-                        item = photo_items.get(path, QListWidgetItem())
+                    for round_index, round_ in enumerate(tournament.rounds):
+                        group = round_.groups[0]
+                        item = comparison_items.get(
+                            (cluster_index, round_index), QListWidgetItem()
+                        )
+                        item.setData(Qt.ItemDataRole.UserRole, tuple(group.paths))
+                        item.setData(LIST_SECTION_ROLE, round_index)
+                        item.setData(LIST_CLUSTER_ROLE, cluster_index)
+                        item.setToolTip("\n↔\n".join(group.paths))
+                        item.setFlags(
+                            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                        )
+                        self._items_list.addItem(item)
+
+                    all_paths = list(tournament.payload.get("all_paths", []))
+                    for path in all_paths[tournament.next_path_index :]:
+                        item = waiting_items.get(
+                            (cluster_index, path), QListWidgetItem()
+                        )
+                        item.setText(f"Up next · {os.path.basename(path)}")
                         item.setData(Qt.ItemDataRole.UserRole, path)
                         item.setData(LIST_SECTION_ROLE, None)
                         item.setData(LIST_CLUSTER_ROLE, cluster_index)
                         item.setToolTip(path)
                         item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                        item.setForeground(QColor("#8D99A3"))
+                        item.setBackground(QColor(Qt.GlobalColor.transparent))
                         self._items_list.addItem(item)
         finally:
             self._items_list.setUpdatesEnabled(True)
         return {
-            item.data(Qt.ItemDataRole.UserRole): item
+            item.data(LIST_SECTION_ROLE): item
             for index in range(self._items_list.count())
             if isinstance(
-                (item := self._items_list.item(index)).data(Qt.ItemDataRole.UserRole),
-                str,
+                (item := self._items_list.item(index)).data(LIST_SECTION_ROLE), int
             )
         }
 
     def _refresh_photo_list(self) -> None:
         tournament = self._current_tournament()
-        paths = list(tournament.payload.get("all_paths", []))
-        photo_items = self._sync_photo_sections()
-        for path in paths:
-            item = photo_items[path]
-            text, foreground, background = self._photo_item_presentation(path)
+        comparison_items = self._sync_photo_sections()
+        for round_index, item in comparison_items.items():
+            text, foreground, background = self._comparison_item_presentation(
+                tournament, round_index
+            )
             item.setText(text)
             item.setForeground(foreground)
             item.setBackground(background)
@@ -802,14 +715,22 @@ class PickBestStepWidget(QWidget):
 
     def _on_photo_item_clicked(self, item: QListWidgetItem) -> None:
         cluster_index = item.data(LIST_CLUSTER_ROLE)
-        path = item.data(Qt.ItemDataRole.UserRole)
-        if isinstance(cluster_index, int) and not isinstance(path, str):
+        round_index = item.data(LIST_SECTION_ROLE)
+        if isinstance(cluster_index, int):
             if cluster_index != self._cluster_index:
                 self._exit_focus_mode()
                 self._load_cluster(cluster_index)
-                self._publish_focused_path()
+            if isinstance(round_index, int):
+                tournament = self._current_tournament()
+                tournament.current_round = max(
+                    0, min(round_index, len(tournament.rounds) - 1)
+                )
+                tournament.current_group = 0
+                self._subset_index = 0
+                self._refresh_photo_list()
+                self._show_current_group()
+            self._publish_focused_path()
             return
-        # Photo rows are status-only. Comparisons advance through the main controls.
 
     def _load_cluster(self, index: int) -> None:
         if not self._tournaments:
@@ -836,7 +757,8 @@ class PickBestStepWidget(QWidget):
 
         cluster_index = next(
             (
-                index for index, tournament in enumerate(self._tournaments)
+                index
+                for index, tournament in enumerate(self._tournaments)
                 if path in tournament.payload.get("all_paths", [])
             ),
             None,
@@ -949,7 +871,9 @@ class PickBestStepWidget(QWidget):
             f"Cluster {self._cluster_index + 1} of {len(self._tournaments)}  ·  {len(self._current_all_paths)} photos"
         )
         self._prev_cluster_btn.setEnabled(self._cluster_index > 0)
-        self._next_cluster_btn.setEnabled(self._cluster_index < len(self._tournaments) - 1)
+        self._next_cluster_btn.setEnabled(
+            self._cluster_index < len(self._tournaments) - 1
+        )
         self._prev_round_btn.setEnabled(tournament.current_round > 0)
         self._next_round_btn.setEnabled(
             tournament.current_round + 1 < len(tournament.rounds)
@@ -962,7 +886,9 @@ class PickBestStepWidget(QWidget):
         self._confirm_btn.setText("Confirmed" if group.confirmed else "Confirm  →")
         self._keep_all_btn.setEnabled(not (group.confirmed and group.keep_all))
         self._keep_all_btn.setText(
-            "All kept" if group.confirmed and group.keep_all else f"Keep all {len(group.paths)}"
+            "All kept"
+            if group.confirmed and group.keep_all
+            else f"Keep all {len(group.paths)}"
         )
         all_complete = bool(self._tournaments) and all(
             candidate.finalized for candidate in self._tournaments
@@ -1016,105 +942,15 @@ class PickBestStepWidget(QWidget):
         return rows[:6]
 
     def _build_metadata_rows(self, path: str) -> list[tuple[str, str]]:
-        rows: list[tuple[str, str]] = []
-        metadata = None
         app_state = getattr(self.window(), "app_state", None)
         cache = getattr(app_state, "exif_disk_cache", None) if app_state else None
         try:
-            metadata = MetadataProcessor.get_cached_detailed_metadata(path, cache)
+            rows = build_workflow_metadata_rows(path, cache)
         except Exception:
             logger.debug("Cached EXIF lookup failed for %s", path, exc_info=True)
+            rows = [("Metadata", "No EXIF details available")]
 
-        if isinstance(metadata, dict):
-            capture_date = _format_capture_date(metadata)
-            if capture_date:
-                rows.append(("Date", capture_date))
-
-            camera_make = _first_present(
-                metadata, "Exif.Image.Make", "Xmp.tiff.Make", "Make"
-            )
-            camera_model = _first_present(
-                metadata, "Exif.Image.Model", "Xmp.tiff.Model", "Model"
-            )
-            if camera_make or camera_model:
-                camera_text = " ".join(
-                    str(part).strip() for part in (camera_make, camera_model) if part
-                )
-                rows.append(("Camera", camera_text))
-
-            lens = _first_present(
-                metadata,
-                "Exif.Photo.LensModel",
-                "Xmp.aux.Lens",
-                "LensModel",
-                "LensInfo",
-            )
-            if lens:
-                rows.append(("Lens", str(lens)))
-
-            focal = _float_text(
-                _first_present(metadata, "Exif.Photo.FocalLength", "FocalLength"),
-                suffix=" mm",
-                digits=0,
-            )
-            aperture = _float_text(
-                _first_present(
-                    metadata,
-                    "Exif.Photo.FNumber",
-                    "Exif.Photo.ApertureValue",
-                    "FNumber",
-                ),
-                prefix="f/",
-                digits=1,
-            )
-            if focal or aperture:
-                rows.append(
-                    ("Lens", "  ".join(part for part in (focal, aperture) if part))
-                )
-
-            shutter = _fraction_text(
-                _first_present(
-                    metadata,
-                    "Exif.Photo.ExposureTime",
-                    "ExposureTime",
-                    "Exif.Photo.ShutterSpeedValue",
-                )
-            )
-            iso = _first_present(
-                metadata,
-                "Exif.Photo.ISOSpeedRatings",
-                "ISO",
-                "EXIF:ISO",
-                "EXIF:ISOSpeedRatings",
-            )
-            if shutter or iso:
-                iso_text = f"ISO {iso}" if iso not in (None, "") else None
-                rows.append(
-                    (
-                        "Exposure",
-                        "  ".join(part for part in (shutter, iso_text) if part),
-                    )
-                )
-
-            width = _first_present(
-                metadata,
-                "pixel_width",
-                "Exif.Photo.PixelXDimension",
-                "Exif.Image.ImageWidth",
-            )
-            height = _first_present(
-                metadata,
-                "pixel_height",
-                "Exif.Photo.PixelYDimension",
-                "Exif.Image.ImageLength",
-            )
-            if width and height:
-                rows.append(("Size", f"{width} × {height}"))
-
-        if not rows:
-            rows.append(("Metadata", "No EXIF details available"))
-
-        self._metadata_cache[path] = rows[:6]
+        self._metadata_cache[path] = rows
         return self._metadata_cache[path]
 
     def _cluster_score_maps(
@@ -1166,9 +1002,7 @@ class PickBestStepWidget(QWidget):
                     continue
                 for path in group.paths:
                     replayed_state[path] = (
-                        False
-                        if group.keep_all or path == group.selected_path
-                        else True
+                        False if group.keep_all or path == group.selected_path else True
                     )
             self._publish_confirmed_state(replayed_state)
         tournament.rounds = tournament.rounds[: tournament.current_round + 1]
@@ -1187,9 +1021,7 @@ class PickBestStepWidget(QWidget):
     def _publish_group_decision(self, group: TournamentGroup) -> None:
         self._publish_confirmed_state(
             {
-                path: False
-                if group.keep_all or path == group.selected_path
-                else True
+                path: False if group.keep_all or path == group.selected_path else True
                 for path in group.paths
             }
         )
@@ -1297,10 +1129,25 @@ class PickBestStepWidget(QWidget):
             self._publish_focused_path()
 
     def _next_group(self) -> None:
-        self._next_round()
+        """Move down within comparison history, then into the next cluster."""
+
+        if not self._tournaments:
+            return
+        tournament = self._current_tournament()
+        if tournament.current_round + 1 < len(tournament.rounds):
+            self._next_round()
+        else:
+            self._next_cluster()
 
     def _prev_group(self) -> None:
-        self._prev_round()
+        """Move up within comparison history, then into the previous cluster."""
+
+        if not self._tournaments:
+            return
+        if self._current_tournament().current_round > 0:
+            self._prev_round()
+        else:
+            self._prev_cluster()
 
     def _next_round(self) -> None:
         tournament = self._current_tournament()

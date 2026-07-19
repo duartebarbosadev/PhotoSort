@@ -7,8 +7,8 @@ from src.ui.worker_manager import WorkerManager
 from src.ui.workflow_transition import WorkflowTransitionRequest
 from src.ui.workflow_transition import WorkflowPendingState
 from src.ui.dialog_manager import DialogManager
-from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -17,6 +17,10 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QWidget,
 )
+
+
+class _ThumbnailSignals(QObject):
+    thumbnail_session_batch_ready = pyqtSignal(str, object)
 
 
 def _worker_manager(*, grouping=False, rotations=False):
@@ -266,12 +270,8 @@ def test_worker_generation_drops_callback_from_replaced_run():
     signal = SimpleNamespace(emit=Mock())
     manager = SimpleNamespace(_worker_generations={"easy_delete": 3})
 
-    WorkerManager._emit_if_current(
-        manager, "easy_delete", 2, signal, {"stale": True}
-    )
-    WorkerManager._emit_if_current(
-        manager, "easy_delete", 3, signal, {"current": True}
-    )
+    WorkerManager._emit_if_current(manager, "easy_delete", 2, signal, {"stale": True})
+    WorkerManager._emit_if_current(manager, "easy_delete", 3, signal, {"current": True})
 
     signal.emit.assert_called_once_with({"current": True})
 
@@ -305,6 +305,55 @@ def test_transition_dialog_shows_marked_photo_gallery_and_direct_actions():
         "count": 2,
         "move_text": "Move to Trash and Switch",
     }
+    assert result == {"trash": "clear"}
+
+
+def test_transition_dialog_loads_missing_thumbnails_and_updates_live_items(tmp_path):
+    photo = tmp_path / "photo.jpg"
+    photo.write_bytes(b"image")
+    loaded = False
+    thumbnail = QPixmap(40, 30)
+    thumbnail.fill(QColor("red"))
+
+    def cached_review(_path):
+        return thumbnail if loaded else QPixmap()
+
+    parent = QWidget()
+    parent.image_pipeline = SimpleNamespace(
+        get_cached_review_qpixmap=Mock(side_effect=cached_review),
+        get_cached_thumbnail_qpixmap=Mock(return_value=QPixmap()),
+    )
+    parent.worker_manager = _ThumbnailSignals()
+    parent.thumbnail_loader = SimpleNamespace(request_paths=Mock())
+    manager = DialogManager(parent)
+    observed = {}
+
+    def interact():
+        nonlocal loaded
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QDialog)
+        gallery = dialog.findChild(QListWidget, "workflowTransitionTrashList")
+        item = gallery.item(0)
+        loaded = True
+        parent.worker_manager.thumbnail_session_batch_ready.emit(
+            "dialog-session", [str(photo)]
+        )
+        QApplication.processEvents()
+        rendered = item.icon().pixmap(24, 24).toImage()
+        observed["color"] = rendered.pixelColor(
+            rendered.width() // 2, rendered.height() // 2
+        )
+        dialog.findChild(QPushButton, "workflowTransitionClearButton").click()
+
+    QTimer.singleShot(0, interact)
+    result = manager.show_workflow_transition_dialog(
+        "Easy Delete",
+        "Fix Rotation",
+        WorkflowPendingState(trash_paths=[str(photo)]),
+    )
+
+    parent.thumbnail_loader.request_paths.assert_called_once_with([str(photo)])
+    assert observed["color"] == QColor("red")
     assert result == {"trash": "clear"}
 
 
@@ -413,7 +462,10 @@ def test_deletion_preview_expands_folders_and_shows_non_media_files(tmp_path):
         )
     )
 
-    by_path = {path: (name, detail, is_directory) for path, name, detail, is_directory in entries}
+    by_path = {
+        path: (name, detail, is_directory)
+        for path, name, detail, is_directory in entries
+    }
     assert set(by_path) == {
         str(folder),
         str(nested),

@@ -1306,9 +1306,7 @@ class GroupingStepWidget(QWidget):
                 )
                 destination.append(os.path.normpath(path))
                 break
-        return list(dict.fromkeys(delete_paths)), list(
-            dict.fromkeys(removed_folders)
-        )
+        return list(dict.fromkeys(delete_paths)), list(dict.fromkeys(removed_folders))
 
     def set_loading_state(
         self, message: str, busy: bool, progress: int | None = None
@@ -3813,7 +3811,9 @@ class GroupingStepWidget(QWidget):
                                 # If skipping is enabled, check if the candidate is marked for deletion
                                 if skip_deleted:
                                     source_path = self._item_source_path(candidate)
-                                    if source_path and self._is_marked_func(source_path):
+                                    if source_path and self._is_marked_func(
+                                        source_path
+                                    ):
                                         continue
                                 # Found a valid item!
                                 tree.setCurrentItem(candidate)

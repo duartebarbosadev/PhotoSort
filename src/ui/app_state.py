@@ -226,8 +226,8 @@ class AppState:
         if old_path in self.embeddings_cache:
             self.embeddings_cache[new_path] = self.embeddings_cache.pop(old_path)
         if old_path in self.regional_embeddings_cache:
-            self.regional_embeddings_cache[new_path] = self.regional_embeddings_cache.pop(
-                old_path
+            self.regional_embeddings_cache[new_path] = (
+                self.regional_embeddings_cache.pop(old_path)
             )
         if old_path in self.best_shot_scores_by_path:
             self.best_shot_scores_by_path[new_path] = self.best_shot_scores_by_path.pop(
@@ -262,11 +262,16 @@ class AppState:
             easy_entry = self.easy_delete_results.pop(old_path, None)
             if easy_entry is not None:
                 self.easy_delete_results[new_path] = easy_entry
-            for entry in self.easy_delete_results.values():
-                if entry.get("pair_path") == old_path:
-                    entry["pair_path"] = new_path
-        if self.fix_rotation_results is not None and old_path in self.fix_rotation_results:
-            self.fix_rotation_results[new_path] = self.fix_rotation_results.pop(old_path)
+            for easy_delete_entry in self.easy_delete_results.values():
+                if easy_delete_entry.get("pair_path") == old_path:
+                    easy_delete_entry["pair_path"] = new_path
+        if (
+            self.fix_rotation_results is not None
+            and old_path in self.fix_rotation_results
+        ):
+            self.fix_rotation_results[new_path] = self.fix_rotation_results.pop(
+                old_path
+            )
         for cluster in self.pick_best_results.values():
             if cluster.get("winner_path") == old_path:
                 cluster["winner_path"] = new_path
@@ -274,16 +279,23 @@ class AppState:
                 new_path if path == old_path else path
                 for path in cluster.get("all_paths", [])
             ]
-            for collection_name in ("ranked", "failed"):
-                for entry in cluster.get(collection_name, []):
-                    if entry.get("path") == old_path:
-                        entry["path"] = new_path
+            cluster["unsupported_paths"] = [
+                new_path if path == old_path else path
+                for path in cluster.get("unsupported_paths", [])
+            ]
+            for entries in (
+                cluster.get("ranked", []),
+                cluster.get("failed", []),
+            ):
+                for score_entry in entries:
+                    if score_entry.get("path") == old_path:
+                        score_entry["path"] = new_path
             mark_state = cluster.get("_mark_state")
             if isinstance(mark_state, dict) and old_path in mark_state:
                 mark_state[new_path] = mark_state.pop(old_path)
         if old_path in self.pick_best_winners_by_path:
-            self.pick_best_winners_by_path[new_path] = self.pick_best_winners_by_path.pop(
-                old_path
+            self.pick_best_winners_by_path[new_path] = (
+                self.pick_best_winners_by_path.pop(old_path)
             )
         if old_path in self.marked_for_deletion:
             self.marked_for_deletion.discard(old_path)

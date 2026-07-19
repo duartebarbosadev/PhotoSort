@@ -147,3 +147,41 @@ def test_workflow_shortcuts_visibility_defaults_on_and_persists(monkeypatch):
     app_settings.set_show_workflow_shortcuts(False)
 
     assert app_settings.get_show_workflow_shortcuts() is False
+
+
+def test_workflow_step_visibility_defaults_on_and_keeps_endpoints(monkeypatch):
+    app_settings = _reload_module("core.app_settings")
+
+    class FakeSettings:
+        def __init__(self):
+            self.values = {}
+
+        def value(self, key, default=None, type=None):
+            value = self.values.get(key, default)
+            return type(value) if type is not None else value
+
+        def setValue(self, key, value):
+            self.values[key] = value
+
+    fake_settings = FakeSettings()
+    monkeypatch.setattr(app_settings, "_get_settings", lambda: fake_settings)
+
+    assert all(app_settings.get_workflow_step_visibility().values())
+
+    app_settings.set_workflow_step_visibility(
+        {
+            "organize": False,
+            "easy_delete": False,
+            "fix_rotation": False,
+            "pick_best": False,
+            "cull": False,
+        }
+    )
+
+    assert app_settings.get_workflow_step_visibility() == {
+        "organize": True,
+        "easy_delete": False,
+        "fix_rotation": False,
+        "pick_best": False,
+        "cull": True,
+    }

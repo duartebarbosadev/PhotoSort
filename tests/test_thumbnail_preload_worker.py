@@ -59,14 +59,26 @@ class TestThumbnailPreloadWorker:
 
     def test_session_reprioritizes_scroll_request_during_background_work(self):
         pipeline = Mock()
-        background_started = threading.Event()
+        initial_batch_started = threading.Event()
         release_background = threading.Event()
+        state_lock = threading.Lock()
         calls = []
+        initial_background_count = 0
 
         def ensure(path, *, promote_to_memory):
-            calls.append((path, promote_to_memory))
-            if path == "background-1":
-                background_started.set()
+            nonlocal initial_background_count
+            with state_lock:
+                calls.append((path, promote_to_memory))
+                if path in {
+                    "background-1",
+                    "background-2",
+                    "background-3",
+                    "background-4",
+                }:
+                    initial_background_count += 1
+                    if initial_background_count == 4:
+                        initial_batch_started.set()
+            if path.startswith("background-") and path != "background-5":
                 release_background.wait(timeout=2)
             return True
 
@@ -85,15 +97,20 @@ class TestThumbnailPreloadWorker:
         )
         thread = threading.Thread(target=worker.run_session)
         thread.start()
-        assert background_started.wait(timeout=2)
+        assert initial_batch_started.wait(timeout=2)
 
         worker.prioritize(["jump-target"])
         release_background.set()
         thread.join(timeout=2)
 
         assert not thread.is_alive()
-        assert calls[0] == ("background-1", True)
-        assert calls.index(("jump-target", True)) <= 4
+        assert set(calls[:4]) == {
+            ("background-1", True),
+            ("background-2", True),
+            ("background-3", True),
+            ("background-4", True),
+        }
+        assert calls[4] == ("jump-target", True)
 
     def test_session_warms_background_with_four_workers(self):
         pipeline = Mock()

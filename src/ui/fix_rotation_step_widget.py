@@ -102,6 +102,7 @@ class FixRotationStepWidget(QWidget):
         super().__init__(parent)
         self._suggestions: dict[str, int] = {}  # path -> suggested angle
         self._shown_suggestions: dict[str, int] | None = None
+        self._angle_overrides: dict[str, int] = {}  # path -> manual preview angle
         self._marked: dict[str, bool] = {}  # path -> currently selected choice
         self._confirmed: set[str] = set()
         self._ordered_paths: list[str] = []
@@ -118,10 +119,10 @@ class FixRotationStepWidget(QWidget):
             self,
             FIX_ROTATION_SHORTCUTS,
             {
-                "toggle": self._on_mark_toggle,
+                "rotate_counterclockwise": self._on_rotate_counterclockwise,
+                "rotate_clockwise": self._on_rotate_clockwise,
                 "previous": self._on_prev,
                 "next": self._on_next,
-                "apply": self._on_apply,
                 "primary": self._on_confirm,
                 "skip": self._on_skip,
             },
@@ -135,9 +136,11 @@ class FixRotationStepWidget(QWidget):
         if self._applying:
             return {}
         return {
-            path: angle
-            for path, angle in self._suggestions.items()
-            if path in self._confirmed and self._marked.get(path, False)
+            path: self._selected_angle(path)
+            for path in self._ordered_paths
+            if path in self._confirmed
+            and self._marked.get(path, False)
+            and self._selected_angle(path) != 0
         }
 
     def discard_pending_rotations(self) -> None:
@@ -181,7 +184,7 @@ class FixRotationStepWidget(QWidget):
             "Rotation model not found. Follow the instructions below to install it."
         )
         self._model_path_label.setText(message)
-        
+
         instructions_text = (
             "<p style='color: #a9b7c6; font-size: 13px; font-weight: bold; margin-bottom: 8px; text-align: left;'>"
             "Follow these steps to enable this feature:</p>"
@@ -193,7 +196,7 @@ class FixRotationStepWidget(QWidget):
             "</ol>"
         )
         self._instructions_label.setText(instructions_text)
-        
+
         self._missing_model_widget.setVisible(True)
         self._progress_bar.setVisible(False)
         self._content_stack.setCurrentIndex(0)
@@ -213,6 +216,7 @@ class FixRotationStepWidget(QWidget):
             return
         self._shown_suggestions = suggestions
         self._suggestions = dict(suggestions)
+        self._angle_overrides.clear()
         # Preview the suggested choice, but require confirmation before queueing it.
         self._marked = dict.fromkeys(suggestions, True)
         self._confirmed.clear()
@@ -272,6 +276,7 @@ class FixRotationStepWidget(QWidget):
         if completed:
             for path in completed:
                 self._suggestions.pop(path, None)
+                self._angle_overrides.pop(path, None)
                 self._marked.pop(path, None)
                 self._confirmed.discard(path)
             self._ordered_paths = [
@@ -313,11 +318,17 @@ class FixRotationStepWidget(QWidget):
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _selected_angle(self, path: str) -> int:
+        """Return the manual override when present, otherwise the model angle."""
+
+        return self._angle_overrides.get(path, self._suggestions.get(path, 0))
+
     def _item_text(self, path: str) -> str:
-        angle = self._suggestions.get(path, 0)
+        angle = self._selected_angle(path)
         orientation, _ = _ANGLE_LABELS.get(angle, (f"{angle}°", "#888"))
         prefix = "Confirmed  ·  " if path in self._confirmed else ""
-        return f"{prefix}{os.path.basename(path)}  ·  {orientation}"
+        override = "Manual  ·  " if path in self._angle_overrides else ""
+        return f"{prefix}{override}{os.path.basename(path)}  ·  {orientation}"
 
     def _populate_list(self) -> None:
         self._items_list.clear()
@@ -378,7 +389,8 @@ class FixRotationStepWidget(QWidget):
         if self._current_index < 0 or self._current_index >= len(self._ordered_paths):
             return
         path = self._ordered_paths[self._current_index]
-        angle = self._suggestions.get(path, 0)
+        suggested_angle = self._suggestions.get(path, 0)
+        angle = self._selected_angle(path)
         is_marked = self._marked.get(path, False)
         confirmed = path in self._confirmed
 
@@ -424,9 +436,18 @@ class FixRotationStepWidget(QWidget):
                 tone="success",
             )
 
-        self._angle_label.setText(
-            f"<b style='color:{color}'>[{badge}]</b>  Suggested rotation: <b>{badge}</b>"
+        suggested_badge, _ = _ANGLE_LABELS.get(
+            suggested_angle, (f"{suggested_angle}°", "#888888")
         )
+        if path in self._angle_overrides:
+            self._angle_label.setText(
+                f"<b style='color:{color}'>[{badge}]</b>  Manual override: "
+                f"<b>{badge}</b> · Suggested: {suggested_badge}"
+            )
+        else:
+            self._angle_label.setText(
+                f"<b style='color:{color}'>[{badge}]</b>  Suggested rotation: <b>{badge}</b>"
+            )
 
     def _load_pixmap(self, path: str) -> QPixmap | None:
         try:
@@ -458,9 +479,7 @@ class FixRotationStepWidget(QWidget):
 
         path = self._ordered_paths[self._current_index]
         self._confirm_btn.setText(
-            "Cancel confirmation"
-            if path in self._confirmed
-            else "Confirm  →"
+            "Cancel confirmation" if path in self._confirmed else "Confirm  →"
         )
 
         self._refresh_apply_button()
@@ -474,7 +493,7 @@ class FixRotationStepWidget(QWidget):
         )
         self._apply_btn.setEnabled(marked_count > 0 and not self._applying)
         self._apply_btn.setText(
-            f"Apply {marked_count} Rotation{'s' if marked_count != 1 else ''} Now  [A]"
+            f"Apply {marked_count} Rotation{'s' if marked_count != 1 else ''} Now"
             if marked_count > 0
             else "Nothing to Apply"
         )
@@ -494,23 +513,53 @@ class FixRotationStepWidget(QWidget):
     def _on_next(self) -> None:
         self._navigate_to(self._current_index + 1)
 
-    def _on_mark_toggle(self) -> None:
-        if self._current_index < 0 or not self._ordered_paths:
-            return
-        path = self._ordered_paths[self._current_index]
-        self._set_current_marked(not self._marked.get(path, False))
-
     def _set_current_marked(self, marked: bool) -> None:
         if self._current_index < 0 or not self._ordered_paths:
             return
         path = self._ordered_paths[self._current_index]
+        if marked and self._selected_angle(path) == 0:
+            # A zero-degree manual choice is the original image. Selecting the
+            # rotated side again restores the model suggestion.
+            self._angle_overrides.pop(path, None)
         self._marked[path] = marked
         self._confirmed.discard(path)
         self._show_current()
         QTimer.singleShot(0, self._refresh_controls)
 
+    def _rotate_current_preview(self, degrees: int) -> None:
+        """Rotate the selected preview by one quarter turn in either direction."""
+
+        if self._current_index < 0 or not self._ordered_paths:
+            return
+        path = self._ordered_paths[self._current_index]
+        current_angle = (
+            self._selected_angle(path) if self._marked.get(path, False) else 0
+        )
+        normalized_angle = (current_angle + degrees) % 360
+        angle = -90 if normalized_angle == 270 else normalized_angle
+        if angle == self._suggestions.get(path, 0):
+            self._angle_overrides.pop(path, None)
+        else:
+            self._angle_overrides[path] = angle
+        self._marked[path] = angle != 0
+        self._confirmed.discard(path)
+        self._show_current()
+        QTimer.singleShot(0, self._refresh_controls)
+
+    def _on_rotate_counterclockwise(self) -> None:
+        """Override the model by rotating the preview 90° counterclockwise."""
+
+        self._rotate_current_preview(-90)
+
+    def _on_rotate_clockwise(self) -> None:
+        """Override the model by rotating the preview 90° clockwise."""
+
+        self._rotate_current_preview(90)
+
     def _on_confirm_all(self) -> None:
         for path in self._ordered_paths:
+            if self._selected_angle(path) == 0:
+                self._angle_overrides.pop(path, None)
             self._marked[path] = True
         self._confirmed.update(self._ordered_paths)
         if self._current_index >= 0:
@@ -543,11 +592,7 @@ class FixRotationStepWidget(QWidget):
             self._navigate_to(next_index)
 
     def _on_apply(self) -> None:
-        rotations = {
-            p: a
-            for p, a in self._suggestions.items()
-            if p in self._confirmed and self._marked.get(p, False)
-        }
+        rotations = self.pending_rotations()
         if rotations:
             self._submitted_paths = set(rotations)
             self._successful_paths.clear()
@@ -609,7 +654,9 @@ class FixRotationStepWidget(QWidget):
         missing_layout.setSpacing(12)
         missing_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self._error_summary_label = QLabel("The automatic rotation feature requires a model file that was not found:")
+        self._error_summary_label = QLabel(
+            "The automatic rotation feature requires a model file that was not found:"
+        )
         self._error_summary_label.setObjectName("errorSummaryLabel")
         self._error_summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._error_summary_label.setWordWrap(True)
@@ -651,9 +698,15 @@ class FixRotationStepWidget(QWidget):
         btn_layout.addWidget(self._retry_btn)
 
         missing_layout.addWidget(self._error_summary_label)
-        missing_layout.addWidget(self._model_path_label, alignment=Qt.AlignmentFlag.AlignCenter)
-        missing_layout.addWidget(self._instructions_label, alignment=Qt.AlignmentFlag.AlignCenter)
-        missing_layout.addWidget(self._download_btn_container, alignment=Qt.AlignmentFlag.AlignCenter)
+        missing_layout.addWidget(
+            self._model_path_label, alignment=Qt.AlignmentFlag.AlignCenter
+        )
+        missing_layout.addWidget(
+            self._instructions_label, alignment=Qt.AlignmentFlag.AlignCenter
+        )
+        missing_layout.addWidget(
+            self._download_btn_container, alignment=Qt.AlignmentFlag.AlignCenter
+        )
 
         self._missing_model_widget.setVisible(False)
 
@@ -804,7 +857,23 @@ class FixRotationStepWidget(QWidget):
         self._confirm_btn.setMinimumWidth(110)
         self._confirm_btn.clicked.connect(self._on_confirm)
 
-        self._apply_btn = QPushButton("Apply Marked Rotations  [A]")
+        self._rotate_counterclockwise_btn = QPushButton("Rotate −90°  [R]")
+        self._rotate_counterclockwise_btn.setObjectName("workflowGhostButton")
+        self._rotate_counterclockwise_btn.setToolTip(
+            "Override the suggestion and rotate the preview 90° counterclockwise"
+        )
+        self._rotate_counterclockwise_btn.clicked.connect(
+            self._on_rotate_counterclockwise
+        )
+
+        self._rotate_clockwise_btn = QPushButton("Rotate +90°  [Shift+R]")
+        self._rotate_clockwise_btn.setObjectName("workflowGhostButton")
+        self._rotate_clockwise_btn.setToolTip(
+            "Override the suggestion and rotate the preview 90° clockwise"
+        )
+        self._rotate_clockwise_btn.clicked.connect(self._on_rotate_clockwise)
+
+        self._apply_btn = QPushButton("Apply Marked Rotations")
         self._apply_btn.setObjectName("workflowPrimaryButton")
         self._apply_btn.setEnabled(False)
         self._apply_btn.clicked.connect(self._on_apply)
@@ -813,6 +882,8 @@ class FixRotationStepWidget(QWidget):
         action.addWidget(self._counter_label)
         action.addWidget(self._next_btn)
         action.addWidget(self._confirm_btn)
+        action.addWidget(self._rotate_counterclockwise_btn)
+        action.addWidget(self._rotate_clockwise_btn)
         action.addStretch(1)
         action.addWidget(self._apply_btn)
         right_layout.addLayout(action)

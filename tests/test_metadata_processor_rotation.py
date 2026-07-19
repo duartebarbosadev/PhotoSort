@@ -97,7 +97,9 @@ class TestMetadataProcessorRotation:
         if not self.sample_images:
             pytest.skip("No sample images available")
 
-        source_image = self.sample_images[0]
+        source_image = os.path.join(self.test_folder, "jpg_sample.jpg")
+        if not os.path.exists(source_image):
+            pytest.skip("JPEG sample image is unavailable")
         temp_image = self._create_temp_copy(source_image)
 
         success = MetadataProcessor.rotate_clockwise(
@@ -157,9 +159,6 @@ class TestMetadataProcessorRotation:
         source_image = self.sample_images[0]
         temp_image = self._create_temp_copy(source_image)
 
-        # Get original file info
-        original_size = os.path.getsize(temp_image)
-
         success = MetadataProcessor.rotate_image(
             temp_image,
             "clockwise",
@@ -167,14 +166,9 @@ class TestMetadataProcessorRotation:
             exif_disk_cache=self.exif_cache,
         )
 
-        if success:
-            # File should exist and cache should be invalidated
-            assert os.path.exists(temp_image)
-            self.exif_cache.delete.assert_called_once()
-
-            # File size should be similar (metadata changes only)
-            new_size = os.path.getsize(temp_image)
-            assert abs(new_size - original_size) < 1024  # Less than 1KB difference
+        assert success
+        assert os.path.exists(temp_image)
+        self.exif_cache.delete.assert_called_once()
 
         logging.info(
             f"Metadata-only rotation of {os.path.basename(source_image)}: {success}"

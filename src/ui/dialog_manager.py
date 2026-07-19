@@ -2,6 +2,7 @@ import webbrowser
 import os
 import logging
 import time
+import contextlib
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -38,6 +39,7 @@ from core.app_settings import (
     get_easy_delete_white_threshold,
     get_rotation_confirm_lossy,
     get_show_workflow_shortcuts,
+    get_workflow_step_visibility,
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
     set_easy_delete_blur_threshold,
@@ -45,6 +47,7 @@ from core.app_settings import (
     set_easy_delete_duplicate_distance,
     set_easy_delete_white_threshold,
     set_show_workflow_shortcuts,
+    set_workflow_step_visibility,
     ROTATION_MODEL_DOWNLOAD_URL,
 )
 from core.runtime_paths import get_app_cache_root, get_app_log_dir, get_app_models_dir
@@ -297,16 +300,31 @@ class DialogManager:
             list_widget.setWordWrap(True)
             list_widget.setSpacing(14)
             list_widget.setMinimumHeight(260)
+            missing_thumbnail_items: dict[str, QListWidgetItem] = {}
             for file_path, display_name, detail, is_directory in deletion_entries:
-                item = QListWidgetItem(
-                    self._deletion_preview_icon(file_path, is_directory),
-                    f"{display_name}\n{detail}",
+                cached_icon = None
+                is_media = not is_directory and (
+                    is_image_extension(file_path) or is_video_extension(file_path)
                 )
+                if is_media:
+                    cached_icon = self._cached_media_icon(file_path)
+                if cached_icon is not None:
+                    icon = cached_icon
+                elif is_media:
+                    icon = self.parent.style().standardIcon(
+                        QStyle.StandardPixmap.SP_FileIcon
+                    )
+                else:
+                    icon = self._deletion_preview_icon(file_path, is_directory)
+                item = QListWidgetItem(icon, f"{display_name}\n{detail}")
                 item.setSizeHint(QSize(205, 180))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setToolTip(file_path)
                 list_widget.addItem(item)
+                if is_media and cached_icon is None:
+                    missing_thumbnail_items[file_path] = item
             body.addWidget(list_widget, 1)
+            self._load_transition_thumbnails(dialog, missing_thumbnail_items)
 
         body.addStretch()
         outer.addWidget(scroll, 1)
@@ -398,10 +416,62 @@ class DialogManager:
 
     def _cached_thumbnail_icon(self, file_path: str) -> QIcon:
         """Build a dialog icon without decoding media on the UI thread."""
-        pixmap = self._cached_thumbnail_pixmap(file_path)
-        if pixmap is not None:
-            return QIcon(pixmap)
+        icon = self._cached_media_icon(file_path)
+        if icon is not None:
+            return icon
         return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+    def _cached_media_icon(self, file_path: str) -> QIcon | None:
+        """Return the best memory-cached media image using workflow cache priority."""
+        review_getter = getattr(
+            self.parent.image_pipeline, "get_cached_review_qpixmap", None
+        )
+        if callable(review_getter):
+            pixmap = self._cached_review_pixmap(file_path)
+        else:
+            # Compatibility for lightweight contexts that only expose thumbnails.
+            pixmap = self._cached_thumbnail_pixmap(file_path)
+        if pixmap is None:
+            return None
+        return QIcon(pixmap)
+
+    def _load_transition_thumbnails(
+        self,
+        dialog: QDialog,
+        items_by_path: dict[str, QListWidgetItem],
+    ) -> None:
+        """Load missing gallery thumbnails asynchronously and update live items."""
+        if not items_by_path:
+            return
+        loader = getattr(self.parent, "thumbnail_loader", None)
+        request_paths = getattr(loader, "request_paths", None)
+        worker_manager = getattr(self.parent, "worker_manager", None)
+        batch_ready = getattr(worker_manager, "thumbnail_session_batch_ready", None)
+        if not callable(request_paths) or batch_ready is None:
+            return
+
+        pending = dict(items_by_path)
+
+        def update_items(_session_id: str, ready_paths) -> None:
+            if not dialog.isVisible():
+                return
+            for path in ready_paths or []:
+                item = pending.get(path)
+                if item is None:
+                    continue
+                icon = self._cached_media_icon(path)
+                if icon is None:
+                    continue
+                item.setIcon(icon)
+                pending.pop(path, None)
+
+        def disconnect_loader(*_args) -> None:
+            with contextlib.suppress(TypeError, RuntimeError):
+                batch_ready.disconnect(update_items)
+
+        batch_ready.connect(update_items)
+        dialog.finished.connect(disconnect_loader)
+        request_paths(list(pending))
 
     def _rotation_comparison_widget(self, file_path: str, angle: int) -> QWidget:
         """Build a cache-only before/after rotation comparison card."""
@@ -420,9 +490,11 @@ class DialogManager:
         comparison.setSpacing(8)
         source = self._cached_review_pixmap(file_path)
         if source is None:
-            source = self.parent.style().standardIcon(
-                QStyle.StandardPixmap.SP_FileIcon
-            ).pixmap(96, 96)
+            source = (
+                self.parent.style()
+                .standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+                .pixmap(96, 96)
+            )
         rotated = source.transformed(
             QTransform().rotate(angle),
             Qt.TransformationMode.SmoothTransformation,
@@ -909,6 +981,45 @@ class DialogManager:
             "Show context-sensitive keyboard shortcuts beside the workflow navigation."
         )
         interface_layout.addWidget(show_shortcuts_checkbox)
+
+        workflow_steps_title = QLabel("Workflow steps")
+        workflow_steps_title.setObjectName("cardSectionTitle")
+        interface_layout.addWidget(workflow_steps_title)
+        workflow_steps_description = QLabel(
+            "Choose which review steps appear between Organize and Cull."
+        )
+        workflow_steps_description.setObjectName("cardDescription")
+        workflow_steps_description.setWordWrap(True)
+        interface_layout.addWidget(workflow_steps_description)
+
+        workflow_visibility = get_workflow_step_visibility()
+        workflow_step_checkboxes: dict[str, QCheckBox] = {}
+        workflow_step_labels = {
+            "organize": "Organize (required)",
+            "easy_delete": "Easy Delete",
+            "fix_rotation": "Fix Rotation",
+            "pick_best": "Pick Best",
+            "cull": "Cull (required)",
+        }
+        workflow_steps_widget = QWidget()
+        workflow_steps_layout = QGridLayout(workflow_steps_widget)
+        workflow_steps_layout.setContentsMargins(0, 0, 0, 0)
+        workflow_steps_layout.setHorizontalSpacing(18)
+        workflow_steps_layout.setVerticalSpacing(4)
+        for index, (step, label) in enumerate(workflow_step_labels.items()):
+            checkbox = QCheckBox(label)
+            checkbox.setObjectName(
+                f"show{''.join(part.title() for part in step.split('_'))}StepCheckbox"
+            )
+            checkbox.setChecked(workflow_visibility.get(step, True))
+            if step in {"organize", "cull"}:
+                checkbox.setEnabled(False)
+                checkbox.setToolTip(
+                    "Organize and Cull remain visible so the workflow has a start and finish."
+                )
+            workflow_step_checkboxes[step] = checkbox
+            workflow_steps_layout.addWidget(checkbox, index // 2, index % 2)
+        interface_layout.addWidget(workflow_steps_widget)
 
         content_layout.addWidget(interface_card)
 
@@ -1553,12 +1664,23 @@ class DialogManager:
             )
             if callable(apply_shortcut_visibility):
                 apply_shortcut_visibility(show_workflow_shortcuts)
+            selected_workflow_visibility = {
+                step: checkbox.isChecked()
+                for step, checkbox in workflow_step_checkboxes.items()
+            }
+            set_workflow_step_visibility(selected_workflow_visibility)
+            apply_step_visibility = getattr(
+                self.parent, "apply_workflow_step_visibility", None
+            )
+            if callable(apply_step_visibility):
+                apply_step_visibility(selected_workflow_visibility)
 
             logger.info(
                 "Preferences saved: mode=%s, custom_threads=%s, similarity_model=%s, "
                 "similarity_eps=%.3f, easy_delete_blur=%.1f, "
                 "easy_delete_dark=%.1f, easy_delete_white=%.1f, "
-                "easy_delete_duplicate=%.3f, show_workflow_shortcuts=%s",
+                "easy_delete_duplicate=%.3f, show_workflow_shortcuts=%s, "
+                "workflow_steps=%s",
                 get_performance_mode().value,
                 get_custom_thread_count(),
                 get_similarity_embedding_model_name(),
@@ -1568,6 +1690,11 @@ class DialogManager:
                 get_easy_delete_white_threshold(),
                 get_easy_delete_duplicate_distance(),
                 get_show_workflow_shortcuts(),
+                [
+                    step
+                    for step, visible in get_workflow_step_visibility().items()
+                    if visible
+                ],
             )
             dialog.accept()
 

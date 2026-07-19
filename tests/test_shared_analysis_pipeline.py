@@ -49,6 +49,31 @@ def test_easy_delete_duplicate_result_has_one_authoritative_classification(
     assert {entry["duplicate_kind"] for entry in results.values()} == {"exact"}
     suggested = next(entry for entry in results.values() if entry["suggest_delete"])
     assert suggested["reason"] == "The files are byte-for-byte identical"
+    assert suggested["delete_suggestion_reason"] == "byte-for-byte identical"
+    assert suggested["keep_suggestion_reason"] == "byte-for-byte identical"
+
+
+def test_easy_delete_duplicate_result_explains_sharpness_recommendation(
+    tmp_path, monkeypatch
+):
+    softer = tmp_path / "softer.jpg"
+    sharper = tmp_path / "sharper.jpg"
+    softer.write_bytes(b"soft image")
+    sharper.write_bytes(b"sharp image")
+    worker = EasyDeleteWorker(
+        [str(softer), str(sharper)],
+        cluster_map={1: [str(softer), str(sharper)]},
+        embeddings_cache={str(softer): [1.0, 0.0], str(sharper): [1.0, 0.0]},
+    )
+    sharpness = {str(softer): 10.0, str(sharper): 25.0}
+    monkeypatch.setattr(worker, "_get_sharpness", sharpness.__getitem__)
+
+    results = worker._detect_duplicates()
+
+    suggested = results[str(softer)]
+    assert suggested["suggest_delete"]
+    assert suggested["delete_suggestion_reason"] == "lower sharpness (10.0 vs 25.0)"
+    assert suggested["keep_suggestion_reason"] == "higher sharpness (25.0 vs 10.0)"
 
 
 def test_completed_empty_easy_delete_result_is_not_recomputed():

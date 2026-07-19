@@ -281,7 +281,6 @@ class MenuManager:
         view_menu.addAction(self.group_by_similarity_action)
 
         self.back_to_grouping_action = QAction("Back to Grouping", main_win)
-        self.back_to_grouping_action.setShortcut(QKeySequence("Ctrl+1"))
         view_menu.addAction(self.back_to_grouping_action)
 
         self.toggle_thumbnails_action = QAction("Show Thumbnails", main_win)
