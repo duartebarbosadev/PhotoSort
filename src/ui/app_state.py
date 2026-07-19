@@ -262,9 +262,9 @@ class AppState:
             easy_entry = self.easy_delete_results.pop(old_path, None)
             if easy_entry is not None:
                 self.easy_delete_results[new_path] = easy_entry
-            for entry in self.easy_delete_results.values():
-                if entry.get("pair_path") == old_path:
-                    entry["pair_path"] = new_path
+            for easy_delete_entry in self.easy_delete_results.values():
+                if easy_delete_entry.get("pair_path") == old_path:
+                    easy_delete_entry["pair_path"] = new_path
         if (
             self.fix_rotation_results is not None
             and old_path in self.fix_rotation_results
@@ -279,10 +279,17 @@ class AppState:
                 new_path if path == old_path else path
                 for path in cluster.get("all_paths", [])
             ]
-            for collection_name in ("ranked", "failed"):
-                for entry in cluster.get(collection_name, []):
-                    if entry.get("path") == old_path:
-                        entry["path"] = new_path
+            cluster["unsupported_paths"] = [
+                new_path if path == old_path else path
+                for path in cluster.get("unsupported_paths", [])
+            ]
+            for entries in (
+                cluster.get("ranked", []),
+                cluster.get("failed", []),
+            ):
+                for score_entry in entries:
+                    if score_entry.get("path") == old_path:
+                        score_entry["path"] = new_path
             mark_state = cluster.get("_mark_state")
             if isinstance(mark_state, dict) and old_path in mark_state:
                 mark_state[new_path] = mark_state.pop(old_path)

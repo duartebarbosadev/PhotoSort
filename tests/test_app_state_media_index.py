@@ -51,9 +51,12 @@ def test_assignment_removal_and_rename_keep_index_consistent():
             "winner_path": "old.jpg",
             "all_paths": ["old.jpg", "other.jpg"],
             "ranked": [{"path": "old.jpg"}],
-            "failed": [],
+            "failed": [{"path": "old.jpg", "failure_reason": "unreadable"}],
+            "unsupported_paths": ["old.jpg"],
+            "_mark_state": {"old.jpg": True},
         }
     }
+    state.pick_best_winners_by_path = {"old.jpg": True}
 
     state.update_path("old.jpg", "new.jpg")
     assert state.get_file_data_by_path("old.jpg") is None
@@ -64,6 +67,12 @@ def test_assignment_removal_and_rename_keep_index_consistent():
     assert state.easy_delete_results["other.jpg"]["pair_path"] == "new.jpg"
     assert state.fix_rotation_results == {"new.jpg": 90}
     assert state.pick_best_results[1]["winner_path"] == "new.jpg"
+    assert state.pick_best_results[1]["all_paths"] == ["new.jpg", "other.jpg"]
+    assert state.pick_best_results[1]["ranked"][0]["path"] == "new.jpg"
+    assert state.pick_best_results[1]["failed"][0]["path"] == "new.jpg"
+    assert state.pick_best_results[1]["unsupported_paths"] == ["new.jpg"]
+    assert state.pick_best_results[1]["_mark_state"] == {"new.jpg": True}
+    assert state.pick_best_winners_by_path == {"new.jpg": True}
 
     state.remove_data_for_path("new.jpg")
     assert state.get_file_data_by_path("new.jpg") is None
