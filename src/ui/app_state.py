@@ -226,8 +226,8 @@ class AppState:
         if old_path in self.embeddings_cache:
             self.embeddings_cache[new_path] = self.embeddings_cache.pop(old_path)
         if old_path in self.regional_embeddings_cache:
-            self.regional_embeddings_cache[new_path] = self.regional_embeddings_cache.pop(
-                old_path
+            self.regional_embeddings_cache[new_path] = (
+                self.regional_embeddings_cache.pop(old_path)
             )
         if old_path in self.best_shot_scores_by_path:
             self.best_shot_scores_by_path[new_path] = self.best_shot_scores_by_path.pop(
@@ -265,8 +265,13 @@ class AppState:
             for entry in self.easy_delete_results.values():
                 if entry.get("pair_path") == old_path:
                     entry["pair_path"] = new_path
-        if self.fix_rotation_results is not None and old_path in self.fix_rotation_results:
-            self.fix_rotation_results[new_path] = self.fix_rotation_results.pop(old_path)
+        if (
+            self.fix_rotation_results is not None
+            and old_path in self.fix_rotation_results
+        ):
+            self.fix_rotation_results[new_path] = self.fix_rotation_results.pop(
+                old_path
+            )
         for cluster in self.pick_best_results.values():
             if cluster.get("winner_path") == old_path:
                 cluster["winner_path"] = new_path
@@ -282,8 +287,8 @@ class AppState:
             if isinstance(mark_state, dict) and old_path in mark_state:
                 mark_state[new_path] = mark_state.pop(old_path)
         if old_path in self.pick_best_winners_by_path:
-            self.pick_best_winners_by_path[new_path] = self.pick_best_winners_by_path.pop(
-                old_path
+            self.pick_best_winners_by_path[new_path] = (
+                self.pick_best_winners_by_path.pop(old_path)
             )
         if old_path in self.marked_for_deletion:
             self.marked_for_deletion.discard(old_path)

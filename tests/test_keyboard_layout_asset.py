@@ -9,9 +9,9 @@ def _layout_source() -> str:
 
 
 def _section(source: str, heading: str, next_heading: str | None = None) -> str:
-    section = source.split(f'>{heading}</h3>', 1)[1]
+    section = source.split(f">{heading}</h3>", 1)[1]
     if next_heading is not None:
-        section = section.split(f'>{next_heading}</h3>', 1)[0]
+        section = section.split(f">{next_heading}</h3>", 1)[0]
     return section
 
 
@@ -29,7 +29,7 @@ def test_keyboard_layout_stays_editable_in_map_maker():
         "Step 4 — Pick Best",
         "Step 5 — Cull",
     ):
-        assert f'>{heading}</h3>' in source
+        assert f">{heading}</h3>" in source
 
 
 def test_keyboard_layout_documents_current_workflow_shortcuts():
@@ -39,12 +39,8 @@ def test_keyboard_layout_documents_current_workflow_shortcuts():
         "Shared controls — available in every workflow step",
         "Step 1 — Organize",
     )
-    easy_delete = _section(
-        source, "Step 2 — Easy Delete", "Step 3 — Fix Rotation"
-    )
-    fix_rotation = _section(
-        source, "Step 3 — Fix Rotation", "Step 4 — Pick Best"
-    )
+    easy_delete = _section(source, "Step 2 — Easy Delete", "Step 3 — Fix Rotation")
+    fix_rotation = _section(source, "Step 3 — Fix Rotation", "Step 4 — Pick Best")
     pick_best = _section(source, "Step 4 — Pick Best", "Step 5 — Cull")
 
     assert "Cmd/Ctrl+Shift · Hide left panel" in shared

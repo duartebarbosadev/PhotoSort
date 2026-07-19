@@ -282,8 +282,7 @@ class EasyDeleteStepWidget(QWidget):
             category_entries = [
                 (path, entry)
                 for path, entry in results.items()
-                if self._entry_category(entry) == category
-                and entry["suggest_delete"]
+                if self._entry_category(entry) == category and entry["suggest_delete"]
             ]
             for path, entry in category_entries:
                 if path in seen:
@@ -358,9 +357,7 @@ class EasyDeleteStepWidget(QWidget):
     def _add_category_header(self, category: str, count: int) -> None:
         """Add a visual-only heading without making it part of queue navigation."""
 
-        heading = _CATEGORY_HEADER_NAMES.get(
-            category, category.upper()
-        )
+        heading = _CATEGORY_HEADER_NAMES.get(category, category.upper())
         header = QListWidgetItem(f"{heading}  ·  {count}")
         header.setFlags(Qt.ItemFlag.NoItemFlags)
         header.setForeground(QColor("#8795A1"))
@@ -801,9 +798,7 @@ class EasyDeleteStepWidget(QWidget):
         else:
             self._navigate_to(next_index)
 
-    def _cancel_confirmation(
-        self, review_path: str, candidates: list[str]
-    ) -> None:
+    def _cancel_confirmation(self, review_path: str, candidates: list[str]) -> None:
         """Undo a confirmed review and restore its prior shared deletion marks."""
 
         prior_marks = self._marks_before_confirmation.pop(review_path, set())

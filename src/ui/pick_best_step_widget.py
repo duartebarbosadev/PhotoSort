@@ -576,9 +576,7 @@ class PickBestStepWidget(QWidget):
         else:
             state = f"Complete · {os.path.basename(group.selected_path)} advanced"
             foreground = QColor("#A9B7C6")
-        background = QColor(
-            "#2B3035" if is_current else Qt.GlobalColor.transparent
-        )
+        background = QColor("#2B3035" if is_current else Qt.GlobalColor.transparent)
         return f"{pair_text}\n{state}", foreground, background
 
     def _populate_photo_list(self) -> None:
@@ -614,8 +612,14 @@ class PickBestStepWidget(QWidget):
         else:
             status = "Not started"
             foreground = QColor("#8D99A3")
-        background = QColor("#2B3035" if index == self._cluster_index else "transparent")
-        return f"Cluster {index + 1} · {len(paths)} photos\n{status}", foreground, background
+        background = QColor(
+            "#2B3035" if index == self._cluster_index else "transparent"
+        )
+        return (
+            f"Cluster {index + 1} · {len(paths)} photos\n{status}",
+            foreground,
+            background,
+        )
 
     def _sync_photo_sections(self) -> dict[int, QListWidgetItem]:
         comparison_items: dict[tuple[int, int], QListWidgetItem] = {}
@@ -661,9 +665,7 @@ class PickBestStepWidget(QWidget):
                         item = comparison_items.get(
                             (cluster_index, round_index), QListWidgetItem()
                         )
-                        item.setData(
-                            Qt.ItemDataRole.UserRole, tuple(group.paths)
-                        )
+                        item.setData(Qt.ItemDataRole.UserRole, tuple(group.paths))
                         item.setData(LIST_SECTION_ROLE, round_index)
                         item.setData(LIST_CLUSTER_ROLE, cluster_index)
                         item.setToolTip("\n↔\n".join(group.paths))
@@ -691,7 +693,9 @@ class PickBestStepWidget(QWidget):
         return {
             item.data(LIST_SECTION_ROLE): item
             for index in range(self._items_list.count())
-            if isinstance((item := self._items_list.item(index)).data(LIST_SECTION_ROLE), int)
+            if isinstance(
+                (item := self._items_list.item(index)).data(LIST_SECTION_ROLE), int
+            )
         }
 
     def _refresh_photo_list(self) -> None:
@@ -753,7 +757,8 @@ class PickBestStepWidget(QWidget):
 
         cluster_index = next(
             (
-                index for index, tournament in enumerate(self._tournaments)
+                index
+                for index, tournament in enumerate(self._tournaments)
                 if path in tournament.payload.get("all_paths", [])
             ),
             None,
@@ -866,7 +871,9 @@ class PickBestStepWidget(QWidget):
             f"Cluster {self._cluster_index + 1} of {len(self._tournaments)}  ·  {len(self._current_all_paths)} photos"
         )
         self._prev_cluster_btn.setEnabled(self._cluster_index > 0)
-        self._next_cluster_btn.setEnabled(self._cluster_index < len(self._tournaments) - 1)
+        self._next_cluster_btn.setEnabled(
+            self._cluster_index < len(self._tournaments) - 1
+        )
         self._prev_round_btn.setEnabled(tournament.current_round > 0)
         self._next_round_btn.setEnabled(
             tournament.current_round + 1 < len(tournament.rounds)
@@ -879,7 +886,9 @@ class PickBestStepWidget(QWidget):
         self._confirm_btn.setText("Confirmed" if group.confirmed else "Confirm  →")
         self._keep_all_btn.setEnabled(not (group.confirmed and group.keep_all))
         self._keep_all_btn.setText(
-            "All kept" if group.confirmed and group.keep_all else f"Keep all {len(group.paths)}"
+            "All kept"
+            if group.confirmed and group.keep_all
+            else f"Keep all {len(group.paths)}"
         )
         all_complete = bool(self._tournaments) and all(
             candidate.finalized for candidate in self._tournaments
@@ -993,9 +1002,7 @@ class PickBestStepWidget(QWidget):
                     continue
                 for path in group.paths:
                     replayed_state[path] = (
-                        False
-                        if group.keep_all or path == group.selected_path
-                        else True
+                        False if group.keep_all or path == group.selected_path else True
                     )
             self._publish_confirmed_state(replayed_state)
         tournament.rounds = tournament.rounds[: tournament.current_round + 1]
@@ -1014,9 +1021,7 @@ class PickBestStepWidget(QWidget):
     def _publish_group_decision(self, group: TournamentGroup) -> None:
         self._publish_confirmed_state(
             {
-                path: False
-                if group.keep_all or path == group.selected_path
-                else True
+                path: False if group.keep_all or path == group.selected_path else True
                 for path in group.paths
             }
         )

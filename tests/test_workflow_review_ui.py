@@ -87,9 +87,12 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
         widget._pair_right_card._name_label.text()
         == "keep.jpg · Suggested to keep · higher sharpness (25.0 vs 10.0)"
     )
-    assert widget._pair_left_card._content_layout.indexOf(
-        widget._pair_left_card._name_label
-    ) == -1
+    assert (
+        widget._pair_left_card._content_layout.indexOf(
+            widget._pair_left_card._name_label
+        )
+        == -1
+    )
     assert isinstance(widget._pair_left_card, WorkflowDecisionCard)
     assert not hasattr(widget, "_keep_btn")
     assert not hasattr(widget, "_mark_btn")
@@ -105,7 +108,9 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
     _app.processEvents()
 
     detail_keys = [key.text() for key, _value in widget._pair_left_card._detail_rows]
-    detail_values = [value.text() for _key, value in widget._pair_left_card._detail_rows]
+    detail_values = [
+        value.text() for _key, value in widget._pair_left_card._detail_rows
+    ]
     assert detail_keys[:2] == ["Camera", "Exposure"]
     assert detail_values[:2] == ["Canon EOS R5", "1/250s  ISO 200"]
     assert "Reason" not in detail_keys
@@ -251,8 +256,7 @@ def test_easy_delete_groups_queue_under_category_headers():
     )
 
     texts = [
-        widget._items_list.item(row).text()
-        for row in range(widget._items_list.count())
+        widget._items_list.item(row).text() for row in range(widget._items_list.count())
     ]
     assert texts == [
         "DUPLICATES  ·  1",
@@ -264,15 +268,10 @@ def test_easy_delete_groups_queue_under_category_headers():
         "DARK PHOTOS  ·  1",
         "dark.jpg",
     ]
-    assert all(
-        "Similar" not in text for text in texts if "↔" in text
-    )
+    assert all("Similar" not in text for text in texts if "↔" in text)
 
     assert widget._category_checkboxes["exact_duplicate"].text() == "Duplicates (1)"
-    assert (
-        widget._category_checkboxes["near_duplicate"].text()
-        == "Near-duplicates (1)"
-    )
+    assert widget._category_checkboxes["near_duplicate"].text() == "Near-duplicates (1)"
 
     widget._navigate_to(3)
     assert widget._items_list.currentItem().text() == "dark.jpg"
@@ -339,7 +338,9 @@ def test_easy_delete_apply_all_only_uses_visible_categories():
     assert widget._apply_all_btn.text() == "Confirm visible"
     assert "currently visible categories" in widget._apply_all_btn.toolTip()
     assert "review or revise" in widget._apply_all_btn.toolTip()
-    assert widget._apply_all_btn.parentWidget() is not widget._confirm_btn.parentWidget()
+    assert (
+        widget._apply_all_btn.parentWidget() is not widget._confirm_btn.parentWidget()
+    )
     assert widget._action_layout.indexOf(widget._confirm_btn) == 3
     assert marks == {duplicate}
     assert widget._confirmed_reviews == {duplicate}
@@ -570,7 +571,9 @@ def test_fix_rotation_distinguishes_preview_queue_and_applied_state():
     assert not hasattr(widget, "_mark_btn")
     assert not hasattr(widget, "_keep_btn")
     assert widget._items_list.item(0).text() == "first.jpg  ·  90° CW"
-    assert widget._confirm_all_btn.parentWidget() is not widget._confirm_btn.parentWidget()
+    assert (
+        widget._confirm_all_btn.parentWidget() is not widget._confirm_btn.parentWidget()
+    )
     assert widget._action_layout.indexOf(widget._confirm_btn) == 3
     assert all(
         child.text() != "Continue without applying  →"
@@ -682,9 +685,7 @@ def _pick_best_payload(paths: list[str], scores: dict[str, float] | None = None)
     winner = max(paths, key=lambda path: scores.get(path, 0.0))
     return {
         "winner_path": winner,
-        "ranked": [
-            {"path": path, "final_score": scores.get(path)} for path in paths
-        ],
+        "ranked": [{"path": path, "final_score": scores.get(path)} for path in paths],
         "failed": [],
         "all_paths": paths,
     }
@@ -735,28 +736,24 @@ def test_pick_best_publishes_trash_mark_as_soon_as_comparison_is_confirmed():
     )
 
     widget.show_results(
-        {
-            1: _pick_best_payload(
-                [challenger, winner], {challenger: 0.7, winner: 0.9}
-            )
-        }
+        {1: _pick_best_payload([challenger, winner], {challenger: 0.7, winner: 0.9})}
     )
 
     assert not marks
     assert isinstance(widget._compare_cards[0], WorkflowDecisionCard)
     assert widget._compare_cards[0]._state_label.text() == "TRASH"
     assert widget._compare_cards[1]._state_label.text() == "KEEP"
-    assert (
-        widget._compare_cards[0]._name_label.text()
-        == "challenger.jpg · score 0.700"
-    )
+    assert widget._compare_cards[0]._name_label.text() == "challenger.jpg · score 0.700"
     assert (
         widget._compare_cards[1]._name_label.text()
         == "winner.jpg · AI suggestion · score 0.900"
     )
-    assert widget._compare_cards[1]._content_layout.indexOf(
-        widget._compare_cards[1]._name_label
-    ) == -1
+    assert (
+        widget._compare_cards[1]._content_layout.indexOf(
+            widget._compare_cards[1]._name_label
+        )
+        == -1
+    )
     visible_text = "\n".join(
         label.text() for label in widget._page_review.findChildren(QLabel)
     )
@@ -936,7 +933,9 @@ def test_pick_best_revising_earlier_round_restores_marks_and_rebuilds_dependents
 
     widget._prev_round()
     original = widget._current_group().selected_path
-    replacement = next(path for path in widget._current_group().paths if path != original)
+    replacement = next(
+        path for path in widget._current_group().paths if path != original
+    )
     widget._select_path(replacement)
 
     assert tournament.final_winner is None
@@ -1073,10 +1072,9 @@ def test_pick_best_left_panel_shows_every_cluster_and_switches_from_summary():
         Qt.ItemDataRole.UserRole
     ) == tuple(first_paths)
     first_cluster_row = widget._items_list.row(cluster_items[0])
-    assert (
-        widget._items_list.item(first_cluster_row + 1).data(Qt.ItemDataRole.UserRole)
-        == tuple(first_paths)
-    )
+    assert widget._items_list.item(first_cluster_row + 1).data(
+        Qt.ItemDataRole.UserRole
+    ) == tuple(first_paths)
 
     widget._on_photo_item_clicked(cluster_items[1])
 
@@ -1090,10 +1088,9 @@ def test_pick_best_left_panel_shows_every_cluster_and_switches_from_summary():
         for index in range(widget._items_list.count())
     )
     second_cluster_row = widget._items_list.row(_pick_best_cluster_items(widget)[1])
-    assert (
-        widget._items_list.item(second_cluster_row + 1).data(Qt.ItemDataRole.UserRole)
-        == tuple(second_paths[:2])
-    )
+    assert widget._items_list.item(second_cluster_row + 1).data(
+        Qt.ItemDataRole.UserRole
+    ) == tuple(second_paths[:2])
 
     widget._on_keep_all()
     widget._on_keep_all()
@@ -1129,13 +1126,12 @@ def test_pick_best_keep_all_protects_group_and_completes_without_forced_winner()
     assert not marks
     assert widget._done_btn.isEnabled()
     assert widget._review_list_panel.count_label.text() == "1/1 done"
-    assert _pick_best_current_comparison_item(widget).text().endswith(
-        "Complete · both kept"
+    assert (
+        _pick_best_current_comparison_item(widget)
+        .text()
+        .endswith("Complete · both kept")
     )
-    assert all(
-        card._state_label.text() == "KEEP"
-        for card in widget._compare_cards[:2]
-    )
+    assert all(card._state_label.text() == "KEEP" for card in widget._compare_cards[:2])
 
 
 def test_pick_best_keep_all_can_mix_with_a_winner_in_the_same_round():
@@ -1199,9 +1195,7 @@ def test_pick_best_kept_incumbent_can_be_replaced_by_next_challenger():
     assert PickBestStepWidget._kept_paths(tournament) == {paths[1], paths[2]}
     comparison_items = _pick_best_comparison_items(widget)
     assert comparison_items[0].text().endswith("Complete · both kept")
-    assert comparison_items[1].text().endswith(
-        "Complete · challenger.jpg advanced"
-    )
+    assert comparison_items[1].text().endswith("Complete · challenger.jpg advanced")
 
 
 def test_pick_best_revising_kept_group_restores_marks_until_reconfirmed():
@@ -1372,9 +1366,7 @@ def test_pick_best_focus_finds_photo_group_without_changing_selection():
         }
     )
     tournament = widget._current_tournament()
-    selections_before = [
-        group.selected_path for group in tournament.rounds[0].groups
-    ]
+    selections_before = [group.selected_path for group in tournament.rounds[0].groups]
 
     assert widget.focus_image(challengers[1])
 
@@ -1385,7 +1377,9 @@ def test_pick_best_focus_finds_photo_group_without_changing_selection():
     )
     assert "#3A434C" in focused_card.styleSheet()
     assert "#4FC3F7" not in focused_card.styleSheet()
-    assert [group.selected_path for group in tournament.rounds[0].groups] == selections_before
+    assert [
+        group.selected_path for group in tournament.rounds[0].groups
+    ] == selections_before
 
 
 def test_visible_shortcut_specs_are_the_installed_source_of_truth():
@@ -1406,9 +1400,7 @@ def test_visible_shortcut_specs_are_the_installed_source_of_truth():
 
 
 def test_easy_delete_has_no_escape_workflow_shortcut():
-    assert all(
-        "Escape" not in spec.sequences for spec in EASY_DELETE_SHORTCUTS
-    )
+    assert all("Escape" not in spec.sequences for spec in EASY_DELETE_SHORTCUTS)
     widget = EasyDeleteStepWidget()
     installed = {shortcut.key().toString() for shortcut in widget._shortcuts}
     assert "Esc" not in installed
@@ -1418,9 +1410,7 @@ def test_direct_workflow_shortcuts_use_unclaimed_modified_number_keys(monkeypatc
     window = MainWindow()
     transitions: list[str] = []
     window.app_state.image_files_data = [{"path": "/tmp/photo.jpg"}]
-    monkeypatch.setattr(
-        window, "_request_workflow_transition", transitions.append
-    )
+    monkeypatch.setattr(window, "_request_workflow_transition", transitions.append)
 
     assert [
         shortcut.key().toString() for shortcut in window._workflow_step_shortcuts
@@ -1462,9 +1452,7 @@ def test_hidden_workflow_steps_leave_organize_and_cull_navigation(monkeypatch):
 
     transitions: list[str] = []
     window.app_state.image_files_data = [{"path": "/tmp/photo.jpg"}]
-    monkeypatch.setattr(
-        window, "_request_workflow_transition", transitions.append
-    )
+    monkeypatch.setattr(window, "_request_workflow_transition", transitions.append)
     window._go_to_fix_rotation_step()
     assert transitions == []
     assert "hidden in Preferences" in window.statusBar().currentMessage()

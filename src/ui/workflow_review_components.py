@@ -84,9 +84,7 @@ EASY_DELETE_SHORTCUTS = (
     WorkflowShortcutSpec("select_right", ("2", "Right"), "2 / →", "Trash right"),
     WorkflowShortcutSpec("previous", ("Up",), "↑", "Previous"),
     WorkflowShortcutSpec("next", ("Down",), "↓", "Next"),
-    WorkflowShortcutSpec(
-        "confirm", ("Return", "Enter"), "Enter", "Confirm / cancel"
-    ),
+    WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm / cancel"),
     WorkflowShortcutSpec("apply_all", ("A",), "A", "All"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
@@ -94,12 +92,8 @@ EASY_DELETE_SHORTCUTS = (
 )
 
 FIX_ROTATION_SHORTCUTS = (
-    WorkflowShortcutSpec(
-        "rotate_counterclockwise", ("R",), "R", "−90° override"
-    ),
-    WorkflowShortcutSpec(
-        "rotate_clockwise", ("Shift+R",), "Shift+R", "+90° override"
-    ),
+    WorkflowShortcutSpec("rotate_counterclockwise", ("R",), "R", "−90° override"),
+    WorkflowShortcutSpec("rotate_clockwise", ("Shift+R",), "Shift+R", "+90° override"),
     WorkflowShortcutSpec("previous", ("Left", "Up"), "←  ↑", "Previous"),
     WorkflowShortcutSpec("next", ("Right", "Down"), "→  ↓", "Next"),
     WorkflowShortcutSpec("primary", ("Return", "Enter"), "Enter", "Confirm"),
@@ -111,9 +105,7 @@ FIX_ROTATION_SHORTCUTS = (
 PICK_BEST_SHORTCUTS = (
     WorkflowShortcutSpec("slots", ("1", "2", "3"), "1  2  3", "Choice"),
     WorkflowShortcutSpec("clusters", ("Left", "Right"), "←  →", "Cluster"),
-    WorkflowShortcutSpec(
-        "groups", ("Up", "Down"), "↑  ↓", "Comparison / cluster"
-    ),
+    WorkflowShortcutSpec("groups", ("Up", "Down"), "↑  ↓", "Comparison / cluster"),
     WorkflowShortcutSpec("focus", ("C",), "C", "Compare"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     WorkflowShortcutSpec("keep_all", ("K",), "K", "Keep all"),

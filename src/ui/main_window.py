@@ -417,9 +417,7 @@ class MainWindow(QMainWindow):
         )
         self._workflow_step_shortcuts: list[QShortcut] = []
         for step_number in range(1, 6):
-            shortcut = QShortcut(
-                QKeySequence(f"Ctrl+Alt+{step_number}"), self
-            )
+            shortcut = QShortcut(QKeySequence(f"Ctrl+Alt+{step_number}"), self)
             shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
             shortcut.activated.connect(
                 lambda step_number=step_number: self._go_to_workflow_step_by_shortcut(
@@ -714,9 +712,7 @@ class MainWindow(QMainWindow):
             self._handle_grouping_mode_changed
         )
         self.grouping_step_widget.active_image_changed.connect(
-            lambda path: self.active_image_controller.publish(
-                path, source="organize"
-            )
+            lambda path: self.active_image_controller.publish(path, source="organize")
         )
         self.grouping_step_widget.apply_requested.connect(
             self._request_workflow_resolution
@@ -784,9 +780,7 @@ class MainWindow(QMainWindow):
 
     def _go_to_easy_delete_step(self) -> None:
         if not self._is_workflow_step_visible("easy_delete"):
-            self.statusBar().showMessage(
-                "Easy Delete is hidden in Preferences.", 3000
-            )
+            self.statusBar().showMessage("Easy Delete is hidden in Preferences.", 3000)
             return
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
@@ -796,9 +790,7 @@ class MainWindow(QMainWindow):
 
     def _go_to_fix_rotation_step(self) -> None:
         if not self._is_workflow_step_visible("fix_rotation"):
-            self.statusBar().showMessage(
-                "Fix Rotation is hidden in Preferences.", 3000
-            )
+            self.statusBar().showMessage("Fix Rotation is hidden in Preferences.", 3000)
             return
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
@@ -808,9 +800,7 @@ class MainWindow(QMainWindow):
 
     def _go_to_pick_best_step(self) -> None:
         if not self._is_workflow_step_visible("pick_best"):
-            self.statusBar().showMessage(
-                "Pick Best is hidden in Preferences.", 3000
-            )
+            self.statusBar().showMessage("Pick Best is hidden in Preferences.", 3000)
             return
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
@@ -882,7 +872,10 @@ class MainWindow(QMainWindow):
         organize_actions: list[str] = []
         organize_delete_paths: list[str] = []
         organize_removed_folders: list[str] = []
-        if source == "organize" and self.grouping_step_widget.has_unsaved_grouping_edits():
+        if (
+            source == "organize"
+            and self.grouping_step_widget.has_unsaved_grouping_edits()
+        ):
             organize_actions = self.grouping_step_widget.pending_grouping_action_lines()
             (
                 organize_delete_paths,
@@ -1494,9 +1487,7 @@ class MainWindow(QMainWindow):
         current_step = getattr(self.app_state, "workflow_step", "organize")
         if transition_if_hidden and not normalized.get(current_step, True):
             destination = self._next_visible_workflow_step(current_step)
-            QTimer.singleShot(
-                0, lambda: self._request_workflow_transition(destination)
-            )
+            QTimer.singleShot(0, lambda: self._request_workflow_transition(destination))
 
     def _active_workflow_left_panel(self) -> QWidget | None:
         """Return the left-side panel owned by the active workflow."""
@@ -1567,9 +1558,7 @@ class MainWindow(QMainWindow):
             )
             widget.set_exif_disk_cache(self.app_state.exif_disk_cache)
             widget.skip_requested.connect(
-                lambda: self._request_next_visible_workflow_transition(
-                    "easy_delete"
-                )
+                lambda: self._request_next_visible_workflow_transition("easy_delete")
             )
             widget.apply_requested.connect(self._request_workflow_resolution)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
@@ -1591,14 +1580,10 @@ class MainWindow(QMainWindow):
 
             widget = FixRotationStepWidget(self)
             widget.skip_requested.connect(
-                lambda: self._request_next_visible_workflow_transition(
-                    "fix_rotation"
-                )
+                lambda: self._request_next_visible_workflow_transition("fix_rotation")
             )
             widget.proceed_requested.connect(
-                lambda: self._request_next_visible_workflow_transition(
-                    "fix_rotation"
-                )
+                lambda: self._request_next_visible_workflow_transition("fix_rotation")
             )
             widget.apply_rotations_requested.connect(
                 self.app_controller.start_fix_rotation_apply
@@ -1780,7 +1765,9 @@ class MainWindow(QMainWindow):
                 self.deletion_controller.toggle_mark(path)
                 toggled += 1
         if not toggled:
-            self.statusBar().showMessage("No files or folders are available to mark.", 3000)
+            self.statusBar().showMessage(
+                "No files or folders are available to mark.", 3000
+            )
             return
         self.proxy_model.invalidate()
         self._refresh_visible_items_icons()
@@ -4557,7 +4544,9 @@ class MainWindow(QMainWindow):
         def is_within(path: str, directory: str) -> bool:
             try:
                 return os.path.normcase(
-                    os.path.commonpath([os.path.normpath(path), os.path.normpath(directory)])
+                    os.path.commonpath(
+                        [os.path.normpath(path), os.path.normpath(directory)]
+                    )
                 ) == os.path.normcase(os.path.normpath(directory))
             except ValueError, OSError:
                 return False

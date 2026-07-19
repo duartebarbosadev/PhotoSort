@@ -1,4 +1,5 @@
 import os
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication
@@ -30,9 +31,11 @@ def test_fix_rotation_step_widget_shows_download_instructions_when_model_missing
 
     # Verify that retry button emits retry_requested signal
     retried = False
+
     def on_retry():
         nonlocal retried
         retried = True
+
     widget.retry_requested.connect(on_retry)
     widget._retry_btn.click()
     assert retried is True

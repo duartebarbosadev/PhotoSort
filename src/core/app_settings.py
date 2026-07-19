@@ -325,9 +325,7 @@ def get_workflow_step_visibility() -> dict[str, bool]:
 
     settings = _get_settings()
     visibility = {
-        step: settings.value(
-            key, DEFAULT_WORKFLOW_STEP_VISIBILITY[step], type=bool
-        )
+        step: settings.value(key, DEFAULT_WORKFLOW_STEP_VISIBILITY[step], type=bool)
         for step, key in WORKFLOW_STEP_VISIBILITY_KEYS.items()
     }
     # These endpoints keep the application usable before and after review.

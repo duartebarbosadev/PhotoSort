@@ -270,12 +270,8 @@ def test_worker_generation_drops_callback_from_replaced_run():
     signal = SimpleNamespace(emit=Mock())
     manager = SimpleNamespace(_worker_generations={"easy_delete": 3})
 
-    WorkerManager._emit_if_current(
-        manager, "easy_delete", 2, signal, {"stale": True}
-    )
-    WorkerManager._emit_if_current(
-        manager, "easy_delete", 3, signal, {"current": True}
-    )
+    WorkerManager._emit_if_current(manager, "easy_delete", 2, signal, {"stale": True})
+    WorkerManager._emit_if_current(manager, "easy_delete", 3, signal, {"current": True})
 
     signal.emit.assert_called_once_with({"current": True})
 
@@ -466,7 +462,10 @@ def test_deletion_preview_expands_folders_and_shows_non_media_files(tmp_path):
         )
     )
 
-    by_path = {path: (name, detail, is_directory) for path, name, detail, is_directory in entries}
+    by_path = {
+        path: (name, detail, is_directory)
+        for path, name, detail, is_directory in entries
+    }
     assert set(by_path) == {
         str(folder),
         str(nested),

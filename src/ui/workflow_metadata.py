@@ -110,9 +110,7 @@ def build_workflow_metadata_rows(
             digits=1,
         )
         if focal or aperture:
-            rows.append(
-                ("Lens", "  ".join(part for part in (focal, aperture) if part))
-            )
+            rows.append(("Lens", "  ".join(part for part in (focal, aperture) if part)))
 
         shutter = _fraction_text(
             _first_present(

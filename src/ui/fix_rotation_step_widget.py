@@ -184,7 +184,7 @@ class FixRotationStepWidget(QWidget):
             "Rotation model not found. Follow the instructions below to install it."
         )
         self._model_path_label.setText(message)
-        
+
         instructions_text = (
             "<p style='color: #a9b7c6; font-size: 13px; font-weight: bold; margin-bottom: 8px; text-align: left;'>"
             "Follow these steps to enable this feature:</p>"
@@ -196,7 +196,7 @@ class FixRotationStepWidget(QWidget):
             "</ol>"
         )
         self._instructions_label.setText(instructions_text)
-        
+
         self._missing_model_widget.setVisible(True)
         self._progress_bar.setVisible(False)
         self._content_stack.setCurrentIndex(0)
@@ -479,9 +479,7 @@ class FixRotationStepWidget(QWidget):
 
         path = self._ordered_paths[self._current_index]
         self._confirm_btn.setText(
-            "Cancel confirmation"
-            if path in self._confirmed
-            else "Confirm  →"
+            "Cancel confirmation" if path in self._confirmed else "Confirm  →"
         )
 
         self._refresh_apply_button()
@@ -656,7 +654,9 @@ class FixRotationStepWidget(QWidget):
         missing_layout.setSpacing(12)
         missing_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self._error_summary_label = QLabel("The automatic rotation feature requires a model file that was not found:")
+        self._error_summary_label = QLabel(
+            "The automatic rotation feature requires a model file that was not found:"
+        )
         self._error_summary_label.setObjectName("errorSummaryLabel")
         self._error_summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._error_summary_label.setWordWrap(True)
@@ -698,9 +698,15 @@ class FixRotationStepWidget(QWidget):
         btn_layout.addWidget(self._retry_btn)
 
         missing_layout.addWidget(self._error_summary_label)
-        missing_layout.addWidget(self._model_path_label, alignment=Qt.AlignmentFlag.AlignCenter)
-        missing_layout.addWidget(self._instructions_label, alignment=Qt.AlignmentFlag.AlignCenter)
-        missing_layout.addWidget(self._download_btn_container, alignment=Qt.AlignmentFlag.AlignCenter)
+        missing_layout.addWidget(
+            self._model_path_label, alignment=Qt.AlignmentFlag.AlignCenter
+        )
+        missing_layout.addWidget(
+            self._instructions_label, alignment=Qt.AlignmentFlag.AlignCenter
+        )
+        missing_layout.addWidget(
+            self._download_btn_container, alignment=Qt.AlignmentFlag.AlignCenter
+        )
 
         self._missing_model_widget.setVisible(False)
 

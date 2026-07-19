@@ -490,9 +490,11 @@ class DialogManager:
         comparison.setSpacing(8)
         source = self._cached_review_pixmap(file_path)
         if source is None:
-            source = self.parent.style().standardIcon(
-                QStyle.StandardPixmap.SP_FileIcon
-            ).pixmap(96, 96)
+            source = (
+                self.parent.style()
+                .standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+                .pixmap(96, 96)
+            )
         rotated = source.transformed(
             QTransform().rotate(angle),
             Qt.TransformationMode.SmoothTransformation,

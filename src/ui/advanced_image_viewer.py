@@ -1342,9 +1342,7 @@ class SynchronizedImageViewer(QWidget):
             self.focused_image_changed.emit(-1, "")  # index=-1, empty path
 
             num_active_viewers = sum(
-                1
-                for viewer in self.image_viewers
-                if viewer.get_file_path() is not None
+                1 for viewer in self.image_viewers if viewer.get_file_path() is not None
             )
             logger.debug(f"Number of active viewers: {num_active_viewers}")
             if num_active_viewers == 0:
