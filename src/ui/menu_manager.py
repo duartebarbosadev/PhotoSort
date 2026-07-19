@@ -244,6 +244,10 @@ class MenuManager:
         self.check_updates_action = QAction("Check for &Updates...", main_win)
         main_win.addAction(self.check_updates_action)
 
+        # Replay intro video action
+        self.show_intro_video_action = QAction("Show &Intro Video...", main_win)
+        main_win.addAction(self.show_intro_video_action)
+
         logger.debug("Actions created.")
 
     def _create_file_menu(self, menu_bar):
@@ -606,6 +610,8 @@ class MenuManager:
         help_menu = menu_bar.addMenu("&Help")
         help_menu.addAction(self.check_updates_action)
         help_menu.addSeparator()
+        help_menu.addAction(self.show_intro_video_action)
+        help_menu.addSeparator()
         help_menu.addAction(self.about_action)
 
     def connect_signals(self):
@@ -736,6 +742,9 @@ class MenuManager:
         for action in self.image_focus_actions.values():
             action.triggered.connect(main_win._handle_image_focus_shortcut)
         self.about_action.triggered.connect(self.dialog_manager.show_about_dialog)
+        self.show_intro_video_action.triggered.connect(
+            self.dialog_manager.show_intro_video_dialog
+        )
         self.check_updates_action.triggered.connect(
             main_win.app_controller.manual_check_for_updates
         )
