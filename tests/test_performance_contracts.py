@@ -4,14 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from core.app_settings import (
-    DISPLAY_MAX_RESOLUTION,
-    FILE_SCAN_EMIT_BATCH_SIZE,
-    THUMBNAIL_PRELOAD_BATCH_SIZE,
-    PerformanceMode,
-    calculate_high_memory_decode_workers,
-    calculate_thumbnail_workers,
-)
+from core import app_settings
 from core.packaging_smoke import REQUIRED_PACKAGED_MODULES
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -53,21 +46,23 @@ print(json.dumps({
 
 
 def test_image_work_budgets_follow_performance_mode(monkeypatch):
-    monkeypatch.setattr("core.app_settings.get_available_cpu_count", lambda: 14)
+    monkeypatch.setattr(app_settings, "get_available_cpu_count", lambda: 14)
     monkeypatch.setattr(
-        "core.app_settings.get_performance_mode",
-        lambda: PerformanceMode.PERFORMANCE,
+        app_settings,
+        "get_performance_mode",
+        lambda: app_settings.PerformanceMode.PERFORMANCE,
     )
     monkeypatch.setattr(
-        "core.app_settings.get_usable_memory_bytes",
+        app_settings,
+        "get_usable_memory_bytes",
         lambda: 36 * 1024**3,
     )
 
-    assert calculate_thumbnail_workers() == 14
-    assert calculate_high_memory_decode_workers() == 4
-    assert FILE_SCAN_EMIT_BATCH_SIZE >= 32
-    assert THUMBNAIL_PRELOAD_BATCH_SIZE <= 32
-    assert max(DISPLAY_MAX_RESOLUTION) <= 2560
+    assert app_settings.calculate_thumbnail_workers() == 14
+    assert app_settings.calculate_high_memory_decode_workers() == 4
+    assert app_settings.FILE_SCAN_EMIT_BATCH_SIZE >= 32
+    assert app_settings.THUMBNAIL_PRELOAD_BATCH_SIZE <= 32
+    assert max(app_settings.DISPLAY_MAX_RESOLUTION) <= 2560
 
 
 def test_packaging_contract_covers_every_lazy_workflow():
