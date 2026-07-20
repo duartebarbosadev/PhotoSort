@@ -150,7 +150,12 @@ jobs:
           pip install -r requirements.txt
       - name: pip-audit
         run: |
-          pip-audit -r requirements.txt -f json -o pip-audit.json
+          # DiskCache has no patched release.
+          pip-audit \
+            -r requirements.txt \
+            --ignore-vuln PYSEC-2026-2447 \
+            -f json \
+            -o pip-audit.json
       - name: Upload pip-audit report
         uses: actions/upload-artifact@v7
         with:
