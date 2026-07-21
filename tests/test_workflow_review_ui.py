@@ -228,6 +228,41 @@ def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
     assert widget._confirmed_reviews == {first, second}
 
 
+def test_easy_delete_rebuilds_queue_when_shared_results_are_pruned_in_place():
+    deleted = "/tmp/deleted.jpg"
+    paired = "/tmp/paired.jpg"
+    remaining = "/tmp/remaining.jpg"
+    results = {
+        deleted: {
+            "type": "duplicate",
+            "pair_path": paired,
+            "suggest_delete": True,
+        },
+        remaining: {
+            "type": "blur",
+            "pair_path": None,
+            "suggest_delete": True,
+        },
+    }
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(results)
+
+    results.pop(deleted)
+    widget.show_results(results)
+
+    assert widget._flagged_paths == [remaining]
+    assert widget._visible_image_paths == (remaining,)
+    assert widget._content_stack.currentIndex() == 1
+
+    results.pop(remaining)
+    widget.show_results(results)
+
+    assert widget._flagged_paths == []
+    assert widget._visible_image_paths == ()
+    assert widget._content_stack.currentIndex() == 2
+
+
 def test_easy_delete_groups_queue_under_category_headers():
     widget = EasyDeleteStepWidget()
     widget.set_is_marked_func(lambda _path: False)

@@ -4801,6 +4801,13 @@ class MainWindow(QMainWindow):
             self._update_image_info_label()
 
             self.grouping_step_widget.remove_deleted_paths(successfully_deleted)
+            if (
+                self.easy_delete_step_widget is not None
+                and self.app_state.easy_delete_results is not None
+            ):
+                self.easy_delete_step_widget.show_results(
+                    self.app_state.easy_delete_results
+                )
             self.mark_cull_model_dirty()
             self._refresh_workflow_deletion_state()
 

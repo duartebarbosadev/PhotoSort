@@ -1,5 +1,6 @@
 import logging
 import os
+from copy import deepcopy
 from collections.abc import Callable
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
@@ -180,12 +181,13 @@ class EasyDeleteStepWidget(QWidget):
                 self._content_stack.setCurrentIndex(2)
             self.setFocus(Qt.FocusReason.OtherFocusReason)
             return
-        if results != self._results:
-            self._pending_delete_by_review.clear()
-            self._confirmed_reviews.clear()
-            self._marks_before_confirmation.clear()
-            self._metadata_cache.clear()
-        self._shown_results = results
+        self._pending_delete_by_review.clear()
+        self._confirmed_reviews.clear()
+        self._marks_before_confirmation.clear()
+        self._metadata_cache.clear()
+        # Keep a value snapshot. AppState owns and mutates the live result mapping
+        # when files move, so retaining the same object here would hide changes.
+        self._shown_results = deepcopy(results)
         self._results = results
         self._category_counts = self._build_category_counts(results)
         self._enabled_categories = {
@@ -216,6 +218,7 @@ class EasyDeleteStepWidget(QWidget):
                 self._syncing_active_image = False
             self.setFocus(Qt.FocusReason.OtherFocusReason)
         else:
+            self._clear_viewer_images()
             self._content_stack.setCurrentIndex(2)
 
     # ------------------------------------------------------------------
@@ -876,14 +879,21 @@ class EasyDeleteStepWidget(QWidget):
     def _show_no_enabled_categories(self) -> None:
         self._current_index = -1
         self._items_list.clearSelection()
-        self._visible_image_paths = ()
-        self._sync_viewer.clear()
+        self._clear_viewer_images()
         self._decision_stack.setCurrentIndex(0)
         self._issue_label.setText(
             "No enabled categories. Re-enable a category on the left to review those images."
         )
         self._suggestion_label.hide()
         self._refresh_controls()
+
+    def _clear_viewer_images(self) -> None:
+        clear_inspection = getattr(self.window(), "clear_image_inspection", None)
+        if callable(clear_inspection):
+            clear_inspection(self._sync_viewer)
+        self._visible_image_paths = ()
+        self._fallback_detail_requested = False
+        self._sync_viewer.clear()
 
     def _on_apply(self) -> None:
         self.apply_requested.emit()

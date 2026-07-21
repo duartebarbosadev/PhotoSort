@@ -44,6 +44,7 @@ def test_assignment_removal_and_rename_keep_index_consistent():
     state.focused_image_path = "old.jpg"
     state.easy_delete_results = {
         "other.jpg": {"pair_path": "old.jpg"},
+        "unrelated.jpg": {"pair_path": "keep.jpg"},
     }
     state.fix_rotation_results = {"old.jpg": 90}
     state.pick_best_results = {
@@ -78,4 +79,8 @@ def test_assignment_removal_and_rename_keep_index_consistent():
     assert state.get_file_data_by_path("new.jpg") is None
     assert not state.is_marked_for_deletion("new.jpg")
     assert state.focused_image_path is None
+    assert state.easy_delete_results == {"unrelated.jpg": {"pair_path": "keep.jpg"}}
+    assert state.fix_rotation_results == {}
+    assert state.pick_best_results == {}
+    assert state.pick_best_winners_by_path == {}
     assert state.media_summary() == MediaSummary()
