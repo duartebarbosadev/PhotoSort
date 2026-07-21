@@ -6,10 +6,9 @@ from collections.abc import Iterable
 from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal
 
 from core.image_pipeline import ImagePipeline
+from core.app_settings import INSPECTION_DETAIL_BUDGET_BYTES
 from workers.preview_prefetch_worker import PreviewPrefetchWorker
 from workers.detail_prefetch_worker import DetailPrefetchWorker
-
-DETAIL_DISPLAY_BUDGET_BYTES = 512 * 1024 * 1024
 
 
 class PreviewLoadController(QObject):
@@ -19,6 +18,7 @@ class PreviewLoadController(QObject):
     preview_failed = pyqtSignal(str)
     detail_ready = pyqtSignal(str, object)
     detail_failed = pyqtSignal(str)
+    detail_batch_finished = pyqtSignal()
 
     def __init__(
         self,
@@ -85,7 +85,7 @@ class PreviewLoadController(QObject):
         self,
         image_paths: Iterable[str],
         *,
-        max_display_bytes: int = DETAIL_DISPLAY_BUDGET_BYTES,
+        max_display_bytes: int = INSPECTION_DETAIL_BUDGET_BYTES,
     ) -> None:
         ordered_paths = tuple(dict.fromkeys(path for path in image_paths if path))
         if not ordered_paths:
@@ -166,3 +166,4 @@ class PreviewLoadController(QObject):
     def _handle_detail_finished(self, request_id: int) -> None:
         if request_id == self._detail_request_id:
             self._detail_cancel_event = None
+            self.detail_batch_finished.emit()

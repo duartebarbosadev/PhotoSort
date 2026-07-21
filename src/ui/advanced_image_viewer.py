@@ -24,6 +24,7 @@ from PyQt6.QtGui import (
     QAction,
     QIcon,
     QNativeGestureEvent,
+    QTransform,
 )
 from PyQt6.QtWidgets import (
     QWidget,
@@ -560,6 +561,8 @@ class IndividualViewer(QWidget):
         self._file_path = None
         self._is_selected = False
         self._media_type: str | None = None
+        self._source_pixmap: QPixmap | None = None
+        self._display_rotation_degrees = 0
         self._is_seeking = False
 
         self._setup_ui()
@@ -890,15 +893,41 @@ class IndividualViewer(QWidget):
         self.video_widget.setFocus()
         self.update_rating_display(rating)
 
-    def set_data(self, pixmap: QPixmap, file_path: str, rating: int, label: str | None):
+    def set_data(
+        self,
+        pixmap: QPixmap,
+        file_path: str,
+        rating: int,
+        label: str | None,
+        rotation_degrees: int = 0,
+    ):
         """Set all data for the viewer at once."""
         logger.debug(f"IndividualViewer.set_data called with file_path: {file_path}")
         self._file_path = file_path
         self._stop_video()
         self._set_media_mode("image")
-        self.image_view.set_image(pixmap)
+        self._source_pixmap = pixmap
+        self._display_rotation_degrees = rotation_degrees % 360
+        self.image_view.set_image(self._transformed_pixmap(pixmap))
         logger.debug(f"Updating rating display to {rating}")
         self.update_rating_display(rating)
+
+    def replace_source_pixmap(self, pixmap: QPixmap, *, preserve_view: bool) -> None:
+        """Replace the decoded source while retaining this slot's display transform."""
+        self._source_pixmap = pixmap
+        displayed = self._transformed_pixmap(pixmap)
+        if preserve_view:
+            self.image_view.replace_image_preserving_view(displayed)
+        else:
+            self.image_view.set_image(displayed)
+
+    def _transformed_pixmap(self, pixmap: QPixmap) -> QPixmap:
+        if self._display_rotation_degrees:
+            return pixmap.transformed(
+                QTransform().rotate(self._display_rotation_degrees),
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        return pixmap
 
     def set_loading(
         self,
@@ -922,6 +951,8 @@ class IndividualViewer(QWidget):
         """Clear the viewer and its associated data."""
         logger.debug("Clearing image_view")
         self._file_path = None
+        self._source_pixmap = None
+        self._display_rotation_degrees = 0
         self._stop_video()
         self._set_media_mode("image")
         self.image_view.clear()
@@ -1095,6 +1126,7 @@ class SynchronizedImageViewer(QWidget):
         self._view_mode = "single"
         self._is_marked_for_deletion_func = None
         self._has_any_marked_for_deletion_func = None
+        self._defer_actual_size = False
         self._layout_fit_timer = QTimer(self)
         self._layout_fit_timer.setSingleShot(True)
         self._layout_fit_timer.setInterval(50)
@@ -1560,6 +1592,7 @@ class SynchronizedImageViewer(QWidget):
                         image_data.get("path", ""),  # Ensure path is always a string
                         image_data.get("rating", 0),
                         image_data.get("label"),
+                        image_data.get("rotation_degrees", 0),
                     )
                 elif image_data.get("path"):
                     viewer.set_loading(
@@ -1603,11 +1636,11 @@ class SynchronizedImageViewer(QWidget):
                 was_updating_sync = self._updating_sync
                 self._updating_sync = True
                 try:
-                    viewer.image_view.replace_image_preserving_view(pixmap)
+                    viewer.replace_source_pixmap(pixmap, preserve_view=True)
                 finally:
                     self._updating_sync = was_updating_sync
             else:
-                viewer.image_view.set_image(pixmap)
+                viewer.replace_source_pixmap(pixmap, preserve_view=False)
             viewer.update_rating_display(rating)
             updated = True
         return updated
@@ -1656,6 +1689,7 @@ class SynchronizedImageViewer(QWidget):
                             data["path"],
                             data.get("rating", 0),
                             data.get("label"),
+                            data.get("rotation_degrees", 0),
                         )
                     elif data.get("path"):
                         viewer.set_loading(
@@ -1711,6 +1745,8 @@ class SynchronizedImageViewer(QWidget):
 
     def _actual_size_all(self):
         self.detail_requested.emit("actual_size")
+        if self._defer_actual_size:
+            return
         for viewer in self.image_viewers:
             if viewer.isVisible():
                 viewer.image_view.zoom_to_actual_size()
@@ -1752,6 +1788,41 @@ class SynchronizedImageViewer(QWidget):
         """Configure reusable toolbar sections for workflow-specific viewers."""
         self.view_mode_container.setVisible(show_view_modes)
         self.view_mode_separator.setVisible(show_view_modes)
+
+    def defer_actual_size_until_detail(self, enabled: bool = True) -> None:
+        """Let an inspection controller apply 1:1 after its detail batch."""
+        self._defer_actual_size = enabled
+
+    def show_comparison(self) -> None:
+        """Return a comparison session from focused mode without rebuilding slots."""
+        self._set_view_mode("side_by_side")
+
+    def set_inspection_images(self, specs, pixmaps_by_path: dict[str, QPixmap]) -> None:
+        """Populate slots from shared inspection specs and already-available frames."""
+        self.set_images_data(
+            [
+                {
+                    "path": spec.path,
+                    "pixmap": pixmaps_by_path.get(spec.path),
+                    "rating": spec.rating,
+                    "label": spec.label,
+                    "media_type": spec.media_type,
+                    "rotation_degrees": spec.rotation_degrees,
+                }
+                for spec in specs
+            ]
+        )
+
+    def current_pixmap(self) -> QPixmap | None:
+        viewer = self.get_primary_viewer()
+        return viewer.get_current_pixmap() if viewer is not None else None
+
+    def has_image(self) -> bool:
+        viewer = self.get_primary_viewer()
+        return bool(viewer and viewer.has_image())
+
+    def fit_in_view(self) -> None:
+        self._fit_all()
 
     def zoom_to_actual_size(self) -> None:
         """Apply 1:1 without treating a completed detail load as new intent."""

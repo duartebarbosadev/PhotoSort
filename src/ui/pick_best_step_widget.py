@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 
 from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResults
 from ui.advanced_image_viewer import SynchronizedImageViewer
+from ui.controllers.image_inspection_controller import InspectionImageSpec
 from ui.workflow_review_components import (
     PICK_BEST_SHORTCUTS,
     WorkflowDecisionCard,
@@ -395,7 +396,7 @@ class PickBestStepWidget(QWidget):
         content_layout.addWidget(round_bar)
 
         self._sync_viewer = SynchronizedImageViewer()
-        self._sync_viewer.controls_frame.hide()
+        self._sync_viewer.configure_toolbar(show_view_modes=False)
         content_layout.addWidget(self._sync_viewer, stretch=1)
 
         self._state_banner = WorkflowStateBanner()
@@ -805,25 +806,34 @@ class PickBestStepWidget(QWidget):
             tournament.payload
         )
 
-        image_pipeline = getattr(self.window(), "image_pipeline", None)
-        images_data = []
-        for path in subset_paths:
-            pixmap = None
-            if image_pipeline is not None:
-                try:
-                    pixmap, _ = image_pipeline.get_immediate_review_qpixmap(
-                        path,
-                        thumbnail_apply_orientation=True,
-                    )
-                except Exception as exc:
-                    logger.debug("Could not load preview for %s: %s", path, exc)
-            images_data.append({"path": path, "pixmap": pixmap, "rating": 0})
-
-        self._current_images_data = images_data
-        self._sync_viewer.set_images_data(images_data)
-        request = getattr(self.window(), "request_interactive_previews", None)
-        if subset_paths and callable(request):
-            request(subset_paths)
+        activate = getattr(self.window(), "activate_image_inspection", None)
+        if callable(activate):
+            activate(
+                self._sync_viewer,
+                [InspectionImageSpec(path=path) for path in subset_paths],
+            )
+            self._current_images_data = [
+                {"path": path, "pixmap": None, "rating": 0} for path in subset_paths
+            ]
+        else:
+            image_pipeline = getattr(self.window(), "image_pipeline", None)
+            images_data = []
+            for path in subset_paths:
+                pixmap = None
+                if image_pipeline is not None:
+                    try:
+                        pixmap, _ = image_pipeline.get_immediate_review_qpixmap(
+                            path,
+                            thumbnail_apply_orientation=True,
+                        )
+                    except Exception as exc:
+                        logger.debug("Could not load preview for %s: %s", path, exc)
+                images_data.append({"path": path, "pixmap": pixmap, "rating": 0})
+            self._current_images_data = images_data
+            self._sync_viewer.set_images_data(images_data)
+            request = getattr(self.window(), "request_interactive_previews", None)
+            if subset_paths and callable(request):
+                request(subset_paths)
         for viewer in self._sync_viewer.image_viewers:
             viewer.control_bar.hide()
 
@@ -1213,9 +1223,7 @@ class PickBestStepWidget(QWidget):
             self._sync_viewer.set_focused_viewer(slot)
         else:
             self._exit_focus_mode()
-            self._sync_viewer.set_images_data(self._current_images_data)
-            for viewer in self._sync_viewer.image_viewers:
-                viewer.control_bar.hide()
+            self._sync_viewer.show_comparison()
 
     def _toggle_info(self) -> None:
         self._info_visible = not self._info_visible

@@ -26,6 +26,7 @@ from ui.workflow_review_components import (
 )
 from ui.workflow_metadata import build_workflow_metadata_rows
 from ui.advanced_image_viewer import SynchronizedImageViewer
+from ui.controllers.image_inspection_controller import InspectionImageSpec
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +87,7 @@ class EasyDeleteStepWidget(QWidget):
         self._exif_disk_cache = None
         self._metadata_cache: dict[str, list[tuple[str, str]]] = {}
         self._visible_image_paths: tuple[str, ...] = ()
-        self._detail_paths_loaded: set[str] = set()
-        self._detail_request_paths: tuple[str, ...] = ()
-        self._pending_actual_size = False
+        self._fallback_detail_requested = False
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._setup_ui()
         self._shortcuts = install_workflow_shortcuts(
@@ -419,7 +418,6 @@ class EasyDeleteStepWidget(QWidget):
     def _show_single(self, path: str, entry: dict) -> None:
         self._set_viewer_images([path])
         self._decision_stack.setCurrentIndex(0)
-        self._request_previews([path])
         issue_type = entry.get("type", "")
         label, color = _ISSUE_LABELS.get(issue_type, ("ISSUE", "#888"))
         reason = entry.get("reason", "")
@@ -431,7 +429,6 @@ class EasyDeleteStepWidget(QWidget):
     def _show_pair(self, path: str, pair_path: str, entry: dict) -> None:
         self._set_viewer_images([path, pair_path])
         self._decision_stack.setCurrentIndex(1)
-        self._request_previews([path, pair_path])
 
         left_name = os.path.basename(path)
         right_name = os.path.basename(pair_path)
@@ -591,25 +588,25 @@ class EasyDeleteStepWidget(QWidget):
         ):
             return
         if visible_paths != self._visible_image_paths:
-            cancel_details = getattr(self.window(), "cancel_interactive_details", None)
-            if callable(cancel_details):
-                cancel_details()
-            self._visible_image_paths = visible_paths
-            self._detail_paths_loaded.clear()
-            self._detail_request_paths = ()
-            self._pending_actual_size = False
-        images_data = [
-            {"path": path, "pixmap": self._load_pixmap(path), "rating": 0}
-            for path in paths
-        ]
-        self._sync_viewer.set_images_data(images_data)
+            self._fallback_detail_requested = False
+        self._visible_image_paths = visible_paths
+        activate = getattr(self.window(), "activate_image_inspection", None)
+        if callable(activate):
+            activate(
+                self._sync_viewer,
+                [InspectionImageSpec(path=path) for path in paths],
+            )
+        else:
+            images_data = [
+                {"path": path, "pixmap": self._load_pixmap(path), "rating": 0}
+                for path in paths
+            ]
+            self._sync_viewer.set_images_data(images_data)
+            request = getattr(self.window(), "request_interactive_previews", None)
+            if paths and callable(request):
+                request(paths)
         for viewer in self._sync_viewer.image_viewers:
             viewer.control_bar.hide()
-
-    def _request_previews(self, paths: list[str]) -> None:
-        request = getattr(self.window(), "request_interactive_previews", None)
-        if paths and callable(request):
-            request(paths)
 
     def _load_pixmap(self, path: str) -> QPixmap | None:
         try:
@@ -634,35 +631,23 @@ class EasyDeleteStepWidget(QWidget):
             self._sync_viewer.update_image_pixmap(path, pixmap, preserve_view=True)
 
     def _request_detail_images(self, reason: str) -> None:
-        paths = self._visible_image_paths
-        if not paths or all(path in self._detail_paths_loaded for path in paths):
-            if reason == "actual_size":
-                self._sync_viewer.zoom_to_actual_size()
+        """Compatibility path for embedding the widget without the app controller."""
+        if callable(getattr(self.window(), "activate_image_inspection", None)):
             return
-        if reason == "actual_size":
-            self._pending_actual_size = True
-        if paths == self._detail_request_paths:
+        if self._fallback_detail_requested:
             return
         request = getattr(self.window(), "request_interactive_details", None)
-        if callable(request):
-            self._detail_request_paths = paths
-            request(list(paths))
+        if callable(request) and self._visible_image_paths:
+            self._fallback_detail_requested = True
+            request(list(self._visible_image_paths))
 
     def handle_detail_ready(self, path: str, pixmap: QPixmap) -> None:
-        if path not in self._visible_image_paths or pixmap.isNull():
-            return
-        self._detail_paths_loaded.add(path)
-        self._sync_viewer.update_image_pixmap(path, pixmap, preserve_view=True)
-        if self._pending_actual_size and all(
-            visible in self._detail_paths_loaded
-            for visible in self._visible_image_paths
-        ):
-            self._pending_actual_size = False
-            self._sync_viewer.zoom_to_actual_size()
+        if path in self._visible_image_paths and not pixmap.isNull():
+            self._sync_viewer.update_image_pixmap(path, pixmap, preserve_view=True)
 
     def handle_detail_failed(self, path: str) -> None:
         if path in self._visible_image_paths:
-            self._detail_request_paths = ()
+            self._fallback_detail_requested = False
 
     def _refresh_controls(self) -> None:
         total = len(self._flagged_paths)
