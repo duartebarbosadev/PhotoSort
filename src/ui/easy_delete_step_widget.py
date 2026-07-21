@@ -100,6 +100,7 @@ class EasyDeleteStepWidget(QWidget):
                 "previous": self._on_prev,
                 "next": self._on_next,
                 "confirm": self._on_confirm,
+                "apply": self._on_apply,
                 "apply_all": self._on_apply_all,
                 "info": self._toggle_info,
                 "skip": self._on_skip,

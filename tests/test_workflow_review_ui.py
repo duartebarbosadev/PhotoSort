@@ -182,6 +182,20 @@ def test_easy_delete_enter_cancels_a_confirmed_pick_and_restores_prior_marks():
     assert widget._confirm_btn.text() == "Confirm  →"
 
 
+def test_easy_delete_shift_enter_requests_apply():
+    widget = EasyDeleteStepWidget()
+    apply_requests: list[bool] = []
+    widget.apply_requested.connect(lambda: apply_requests.append(True))
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["Shift+Return"].activated.emit()
+
+    assert apply_requests == [True]
+    apply_spec = next(spec for spec in EASY_DELETE_SHORTCUTS if spec.action == "apply")
+    assert apply_spec.sequences == ("Shift+Return", "Shift+Enter")
+    assert apply_spec.keys == "Shift+Enter"
+
+
 def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
     marks: set[str] = set()
     first = "/tmp/first.jpg"
