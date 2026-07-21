@@ -186,8 +186,7 @@ class EasyDeleteWorker(QObject):
 
     def _detect_duplicates(self) -> dict[str, dict]:
         results: dict[str, dict] = {}
-        # Track which paths are already part of a reported pair to avoid duplicates
-        already_paired: set = set()
+        assigned_paths: set[str] = set()
         duplicate_distance = app_settings.get_easy_delete_duplicate_distance()
 
         for paths in self.cluster_map.values():
@@ -202,16 +201,13 @@ class EasyDeleteWorker(QObject):
             if len(embedded) < 2:
                 continue
 
+            candidates: list[tuple[bool, float, int, int, str, str, bool]] = []
             for i in range(len(embedded)):
                 for j in range(i + 1, len(embedded)):
                     if self._should_stop:
                         break
                     path_i, emb_i = embedded[i]
                     path_j, emb_j = embedded[j]
-
-                    pair_key = frozenset((path_i, path_j))
-                    if pair_key in already_paired:
-                        continue
 
                     norm_i = float(np.linalg.norm(emb_i))
                     norm_j = float(np.linalg.norm(emb_j))
@@ -222,45 +218,73 @@ class EasyDeleteWorker(QObject):
                     cosine_dist = max(0.0, 1.0 - cosine_sim)
 
                     if cosine_dist < duplicate_distance:
-                        already_paired.add(pair_key)
-                        score_i = self._keep_score(path_i)
-                        score_j = self._keep_score(path_j)
-                        if score_i >= score_j:
-                            delete_path, keep_path = path_j, path_i
-                        else:
-                            delete_path, keep_path = path_i, path_j
-
-                        identical = self._files_are_identical(delete_path, keep_path)
-                        duplicate_kind = "exact" if identical else "near"
-                        delete_suggestion_reason, keep_suggestion_reason = (
-                            self._duplicate_suggestion_reasons(
-                                delete_path, keep_path, identical=identical
+                        identical = self._files_are_identical(path_i, path_j)
+                        candidates.append(
+                            (
+                                not identical,
+                                cosine_dist,
+                                i,
+                                j,
+                                path_i,
+                                path_j,
+                                identical,
                             )
                         )
 
-                        results[delete_path] = {
-                            "type": "duplicate",
-                            "pair_path": keep_path,
-                            "suggest_delete": True,
-                            "duplicate_kind": duplicate_kind,
-                            "reason": self._duplicate_reason(
-                                delete_path, keep_path, identical=identical
-                            ),
-                            "delete_suggestion_reason": delete_suggestion_reason,
-                            "keep_suggestion_reason": keep_suggestion_reason,
-                            "sharpness": self._get_sharpness(delete_path),
-                        }
-                        if keep_path not in results:
-                            results[keep_path] = {
-                                "type": "duplicate",
-                                "pair_path": delete_path,
-                                "suggest_delete": False,
-                                "duplicate_kind": duplicate_kind,
-                                "reason": "Suggested to keep this photo",
-                                "delete_suggestion_reason": delete_suggestion_reason,
-                                "keep_suggestion_reason": keep_suggestion_reason,
-                                "sharpness": self._get_sharpness(keep_path),
-                            }
+            # Exact duplicates come first, then the visually closest pairs.
+            # Stable source indexes make equal-distance choices deterministic.
+            candidates.sort(key=lambda candidate: candidate[:4])
+            for (
+                _near_duplicate,
+                _distance,
+                _i,
+                _j,
+                path_i,
+                path_j,
+                identical,
+            ) in candidates:
+                if self._should_stop:
+                    break
+                if path_i in assigned_paths or path_j in assigned_paths:
+                    continue
+                assigned_paths.update((path_i, path_j))
+
+                score_i = self._keep_score(path_i)
+                score_j = self._keep_score(path_j)
+                if score_i >= score_j:
+                    delete_path, keep_path = path_j, path_i
+                else:
+                    delete_path, keep_path = path_i, path_j
+
+                duplicate_kind = "exact" if identical else "near"
+                delete_suggestion_reason, keep_suggestion_reason = (
+                    self._duplicate_suggestion_reasons(
+                        delete_path, keep_path, identical=identical
+                    )
+                )
+
+                results[delete_path] = {
+                    "type": "duplicate",
+                    "pair_path": keep_path,
+                    "suggest_delete": True,
+                    "duplicate_kind": duplicate_kind,
+                    "reason": self._duplicate_reason(
+                        delete_path, keep_path, identical=identical
+                    ),
+                    "delete_suggestion_reason": delete_suggestion_reason,
+                    "keep_suggestion_reason": keep_suggestion_reason,
+                    "sharpness": self._get_sharpness(delete_path),
+                }
+                results[keep_path] = {
+                    "type": "duplicate",
+                    "pair_path": delete_path,
+                    "suggest_delete": False,
+                    "duplicate_kind": duplicate_kind,
+                    "reason": "Suggested to keep this photo",
+                    "delete_suggestion_reason": delete_suggestion_reason,
+                    "keep_suggestion_reason": keep_suggestion_reason,
+                    "sharpness": self._get_sharpness(keep_path),
+                }
 
         return results
 
