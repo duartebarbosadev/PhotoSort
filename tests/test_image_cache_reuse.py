@@ -82,12 +82,29 @@ def test_immediate_review_uses_disk_thumbnail_without_source_decode(tmp_path):
         "core.image_pipeline.StandardImageProcessor.process_for_thumbnail",
         side_effect=AssertionError("source image must not be decoded on the UI path"),
     ):
-        pixmap, preview_is_cached = pipeline.get_immediate_review_qpixmap(
-            str(source)
-        )
+        pixmap, preview_is_cached = pipeline.get_immediate_review_qpixmap(str(source))
 
     assert pixmap is not None and not pixmap.isNull()
     assert preview_is_cached is False
+
+
+def test_detail_decode_preserves_oriented_source_quality_and_honors_target(tmp_path):
+    source = tmp_path / "portrait.jpg"
+    image = Image.new("RGB", (120, 60), "teal")
+    exif = image.getexif()
+    exif[274] = 6
+    image.save(source, exif=exif)
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+
+    assert pipeline.get_source_dimensions(str(source)) == (60, 120)
+    full = pipeline.load_detail_image(str(source))
+    bounded = pipeline.load_detail_image(str(source), (20, 20))
+
+    assert full is not None and full.size == (60, 120)
+    assert bounded is not None and bounded.size == (10, 20)
 
 
 def test_disk_caches_store_compressed_payloads_and_return_images(tmp_path):

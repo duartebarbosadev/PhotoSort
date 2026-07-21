@@ -1,7 +1,6 @@
 import logging
 import os
 from collections.abc import Callable
-from typing import override
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
@@ -12,7 +11,6 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QVBoxLayout,
@@ -27,6 +25,7 @@ from ui.workflow_review_components import (
     install_workflow_shortcuts,
 )
 from ui.workflow_metadata import build_workflow_metadata_rows
+from ui.advanced_image_viewer import SynchronizedImageViewer
 
 logger = logging.getLogger(__name__)
 
@@ -53,46 +52,6 @@ _CATEGORY_HEADER_NAMES: dict[str, str] = {
 }
 
 _CONFIRMED_COLOR = "#66BB6A"
-
-
-class _ScaledImageLabel(QLabel):
-    """QLabel that scales a stored pixmap to fill its size while keeping aspect ratio."""
-
-    clicked = pyqtSignal()
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._source_pixmap: QPixmap | None = None
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumSize(80, 80)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setStyleSheet("background: #232628;")
-
-    def set_pixmap(self, pixmap: QPixmap | None) -> None:
-        self._source_pixmap = pixmap
-        self._refresh()
-
-    @override
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._refresh()
-
-    def _refresh(self) -> None:
-        if self._source_pixmap and not self._source_pixmap.isNull():
-            scaled = self._source_pixmap.scaled(
-                self.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            super().setPixmap(scaled)
-        else:
-            super().setPixmap(QPixmap())
-
-    @override
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
 
 
 class EasyDeleteStepWidget(QWidget):
@@ -126,6 +85,10 @@ class EasyDeleteStepWidget(QWidget):
         self._image_pipeline = None
         self._exif_disk_cache = None
         self._metadata_cache: dict[str, list[tuple[str, str]]] = {}
+        self._visible_image_paths: tuple[str, ...] = ()
+        self._detail_paths_loaded: set[str] = set()
+        self._detail_request_paths: tuple[str, ...] = ()
+        self._pending_actual_size = False
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._setup_ui()
         self._shortcuts = install_workflow_shortcuts(
@@ -454,8 +417,8 @@ class EasyDeleteStepWidget(QWidget):
             self._show_single(path, entry)
 
     def _show_single(self, path: str, entry: dict) -> None:
-        self._image_stack.setCurrentIndex(0)
-        self._load_into(path, self._single_img)
+        self._set_viewer_images([path])
+        self._decision_stack.setCurrentIndex(0)
         self._request_previews([path])
         issue_type = entry.get("type", "")
         label, color = _ISSUE_LABELS.get(issue_type, ("ISSUE", "#888"))
@@ -466,9 +429,8 @@ class EasyDeleteStepWidget(QWidget):
         logger.info(f"Showing [{label}] {os.path.basename(path)} — {reason}")
 
     def _show_pair(self, path: str, pair_path: str, entry: dict) -> None:
-        self._image_stack.setCurrentIndex(1)
-        self._load_into(path, self._pair_left_img)
-        self._load_into(pair_path, self._pair_right_img)
+        self._set_viewer_images([path, pair_path])
+        self._decision_stack.setCurrentIndex(1)
         self._request_previews([path, pair_path])
 
         left_name = os.path.basename(path)
@@ -622,10 +584,27 @@ class EasyDeleteStepWidget(QWidget):
             self._pending_delete_by_review[path] = selected
         return self._pending_delete_by_review[path]
 
-    def _load_into(self, path: str, label: _ScaledImageLabel) -> bool:
-        pixmap = self._load_pixmap(path)
-        label.set_pixmap(pixmap)
-        return pixmap is not None and not pixmap.isNull()
+    def _set_viewer_images(self, paths: list[str]) -> None:
+        visible_paths = tuple(paths)
+        if visible_paths == self._visible_image_paths and all(
+            self._sync_viewer.displays_path(path) for path in visible_paths
+        ):
+            return
+        if visible_paths != self._visible_image_paths:
+            cancel_details = getattr(self.window(), "cancel_interactive_details", None)
+            if callable(cancel_details):
+                cancel_details()
+            self._visible_image_paths = visible_paths
+            self._detail_paths_loaded.clear()
+            self._detail_request_paths = ()
+            self._pending_actual_size = False
+        images_data = [
+            {"path": path, "pixmap": self._load_pixmap(path), "rating": 0}
+            for path in paths
+        ]
+        self._sync_viewer.set_images_data(images_data)
+        for viewer in self._sync_viewer.image_viewers:
+            viewer.control_bar.hide()
 
     def _request_previews(self, paths: list[str]) -> None:
         request = getattr(self.window(), "request_interactive_previews", None)
@@ -648,20 +627,42 @@ class EasyDeleteStepWidget(QWidget):
 
     def handle_preview_ready(self, path: str) -> None:
         """Upgrade only the currently visible card when its preview arrives."""
-        if not (0 <= self._current_index < len(self._flagged_paths)):
+        if path not in self._visible_image_paths or self._image_pipeline is None:
             return
-        current_path = self._flagged_paths[self._current_index]
-        entry = self._results.get(current_path, {})
-        pair_path = entry.get("pair_path")
-        if path == current_path:
-            target = (
-                self._pair_left_img
-                if entry.get("type") == "duplicate" and pair_path
-                else self._single_img
-            )
-            self._load_into(path, target)
-        elif path == pair_path:
-            self._load_into(path, self._pair_right_img)
+        pixmap = self._image_pipeline.get_cached_preview_qpixmap(path, memory_only=True)
+        if pixmap is not None and not pixmap.isNull():
+            self._sync_viewer.update_image_pixmap(path, pixmap, preserve_view=True)
+
+    def _request_detail_images(self, reason: str) -> None:
+        paths = self._visible_image_paths
+        if not paths or all(path in self._detail_paths_loaded for path in paths):
+            if reason == "actual_size":
+                self._sync_viewer.zoom_to_actual_size()
+            return
+        if reason == "actual_size":
+            self._pending_actual_size = True
+        if paths == self._detail_request_paths:
+            return
+        request = getattr(self.window(), "request_interactive_details", None)
+        if callable(request):
+            self._detail_request_paths = paths
+            request(list(paths))
+
+    def handle_detail_ready(self, path: str, pixmap: QPixmap) -> None:
+        if path not in self._visible_image_paths or pixmap.isNull():
+            return
+        self._detail_paths_loaded.add(path)
+        self._sync_viewer.update_image_pixmap(path, pixmap, preserve_view=True)
+        if self._pending_actual_size and all(
+            visible in self._detail_paths_loaded
+            for visible in self._visible_image_paths
+        ):
+            self._pending_actual_size = False
+            self._sync_viewer.zoom_to_actual_size()
+
+    def handle_detail_failed(self, path: str) -> None:
+        if path in self._visible_image_paths:
+            self._detail_request_paths = ()
 
     def _refresh_controls(self) -> None:
         total = len(self._flagged_paths)
@@ -716,6 +717,16 @@ class EasyDeleteStepWidget(QWidget):
             return
         self._publish_active_image(path if side == 0 else pair_path)
         self._select_current_delete(path if side == 0 else pair_path)
+
+    def _on_viewer_image_clicked(self, _slot: int, path: str) -> None:
+        if len(self._visible_image_paths) == 1:
+            self._toggle_single_choice()
+            return
+        try:
+            side = self._visible_image_paths.index(path)
+        except ValueError:
+            return
+        self._select_pair_side(side)
 
     def _toggle_single_choice(self) -> None:
         if self._current_index < 0 or not self._flagged_paths:
@@ -880,10 +891,9 @@ class EasyDeleteStepWidget(QWidget):
     def _show_no_enabled_categories(self) -> None:
         self._current_index = -1
         self._items_list.clearSelection()
-        self._single_img.set_pixmap(None)
-        self._pair_left_img.set_pixmap(None)
-        self._pair_right_img.set_pixmap(None)
-        self._image_stack.setCurrentIndex(0)
+        self._visible_image_paths = ()
+        self._sync_viewer.clear()
+        self._decision_stack.setCurrentIndex(0)
         self._issue_label.setText(
             "No enabled categories. Re-enable a category on the left to review those images."
         )
@@ -982,64 +992,41 @@ class EasyDeleteStepWidget(QWidget):
         self._issue_label.setStyleSheet("font-size: 12px; color: #A9B7C6;")
         right_layout.addWidget(self._issue_label)
 
-        # Image display: 0=single, 1=pair
-        self._image_stack = QStackedWidget()
+        self._sync_viewer = SynchronizedImageViewer()
+        self._sync_viewer.configure_toolbar(show_view_modes=False)
+        self._sync_viewer.imageClicked.connect(self._on_viewer_image_clicked)
+        self._sync_viewer.detail_requested.connect(self._request_detail_images)
+        right_layout.addWidget(self._sync_viewer, 1)
 
-        # Single image view
+        # Decision cards remain separate from the reusable image viewer.
+        self._decision_stack = QStackedWidget()
         single = QWidget()
         sl = QVBoxLayout(single)
         sl.setContentsMargins(0, 0, 0, 0)
-        self._single_img = _ScaledImageLabel()
-        self._single_img.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._single_img.clicked.connect(self._toggle_single_choice)
-        sl.addWidget(self._single_img, 1)
         self._single_card = WorkflowDecisionCard(1)
         self._single_card.set_details_visible(self._info_visible)
         self._single_card.activated.connect(self._toggle_single_choice)
         self._single_hdr = self._single_card.state_label
         sl.addWidget(self._single_card)
 
-        # Pair image view
         pair = QWidget()
-        pl = QVBoxLayout(pair)
+        pl = QHBoxLayout(pair)
         pl.setContentsMargins(0, 0, 0, 0)
-        pair_splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        lp = QWidget()
-        ll = QVBoxLayout(lp)
-        ll.setContentsMargins(0, 0, 4, 0)
-        ll.setSpacing(3)
-        self._pair_left_img = _ScaledImageLabel()
-        self._pair_left_img.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._pair_left_img.clicked.connect(lambda: self._select_pair_side(0))
-        ll.addWidget(self._pair_left_img, 1)
+        pl.setSpacing(8)
         self._pair_left_card = WorkflowDecisionCard(1, filename_in_header=True)
         self._pair_left_card.set_details_visible(self._info_visible)
         self._pair_left_card.activated.connect(lambda: self._select_pair_side(0))
         self._pair_left_hdr = self._pair_left_card.state_label
-        ll.addWidget(self._pair_left_card)
-
-        rp = QWidget()
-        rl = QVBoxLayout(rp)
-        rl.setContentsMargins(4, 0, 0, 0)
-        rl.setSpacing(3)
-        self._pair_right_img = _ScaledImageLabel()
-        self._pair_right_img.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._pair_right_img.clicked.connect(lambda: self._select_pair_side(1))
-        rl.addWidget(self._pair_right_img, 1)
         self._pair_right_card = WorkflowDecisionCard(2, filename_in_header=True)
         self._pair_right_card.set_details_visible(self._info_visible)
         self._pair_right_card.activated.connect(lambda: self._select_pair_side(1))
         self._pair_right_hdr = self._pair_right_card.state_label
-        rl.addWidget(self._pair_right_card)
+        pl.addWidget(self._pair_left_card, 1)
+        pl.addWidget(self._pair_right_card, 1)
 
-        pair_splitter.addWidget(lp)
-        pair_splitter.addWidget(rp)
-        pl.addWidget(pair_splitter, 1)
-
-        self._image_stack.addWidget(single)  # 0
-        self._image_stack.addWidget(pair)  # 1
-        right_layout.addWidget(self._image_stack, 1)
+        self._decision_stack.addWidget(single)
+        self._decision_stack.addWidget(pair)
+        right_layout.addWidget(self._decision_stack)
 
         # Suggestion banner (duplicate hint)
         self._suggestion_label = QLabel()

@@ -191,6 +191,8 @@ class MainWindow(QMainWindow):
         self.preview_load_controller = PreviewLoadController(self.image_pipeline, self)
         self.preview_load_controller.preview_ready.connect(self._handle_preview_ready)
         self.preview_load_controller.preview_failed.connect(self._handle_preview_failed)
+        self.preview_load_controller.detail_ready.connect(self._handle_detail_ready)
+        self.preview_load_controller.detail_failed.connect(self._handle_detail_failed)
 
         # Hotkey controller wraps navigation key handling
         self.hotkey_controller = HotkeyController(self)
@@ -1132,6 +1134,14 @@ class MainWindow(QMainWindow):
                 paths,
                 force_default_brightness=force_default_brightness,
             )
+
+    def request_interactive_details(self, image_paths) -> None:
+        paths = [path for path in image_paths if path and not is_video_extension(path)]
+        if paths:
+            self.preview_load_controller.request_details(paths)
+
+    def cancel_interactive_details(self) -> None:
+        self.preview_load_controller.cancel_details()
 
     def _get_cached_interactive_pixmap(
         self,
@@ -3137,6 +3147,31 @@ class MainWindow(QMainWindow):
             7000,
         )
         self.invalidate_last_displayed_preview()
+
+    def _handle_detail_ready(self, file_path: str, image) -> None:
+        if self.app_state.workflow_step != "easy_delete":
+            return
+        widget = self.easy_delete_step_widget
+        if widget is None:
+            return
+        try:
+            pixmap = self.image_pipeline.qpixmap_from_pil(image)
+        except Exception:
+            logger.error(
+                "Could not materialize detail image for %s", file_path, exc_info=True
+            )
+            self._handle_detail_failed(file_path)
+            return
+        widget.handle_detail_ready(file_path, pixmap)
+
+    def _handle_detail_failed(self, file_path: str) -> None:
+        widget = self.easy_delete_step_widget
+        if self.app_state.workflow_step == "easy_delete" and widget is not None:
+            widget.handle_detail_failed(file_path)
+            self.statusBar().showMessage(
+                f"Could not load original detail for {os.path.basename(file_path)}; using the prepared preview.",
+                5000,
+            )
 
     def _render_rotation_comparison(
         self, file_path: str, current_pixmap: QPixmap

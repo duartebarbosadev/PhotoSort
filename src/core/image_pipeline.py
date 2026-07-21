@@ -197,6 +197,82 @@ class ImagePipeline:
         qt_image = ImageQt(image).copy()
         return QPixmap.fromImage(qt_image).copy()
 
+    def qpixmap_from_pil(self, image: Image.Image) -> QPixmap:
+        """Convert a worker-produced PIL image on the UI thread."""
+        return self._qpixmap_from_pil(image)
+
+    def get_source_dimensions(self, image_path: str) -> tuple[int, int] | None:
+        """Read source dimensions without performing a full image decode."""
+        normalized_path = os.path.normpath(image_path)
+        ext = os.path.splitext(normalized_path)[1].lower()
+        try:
+            if is_raw_extension(ext):
+                import rawpy
+
+                with rawpy.imread(normalized_path) as raw:
+                    return int(raw.sizes.width), int(raw.sizes.height)
+            with Image.open(normalized_path) as image:
+                width, height = image.size
+                orientation = image.getexif().get(274, 1)
+                if orientation in {5, 6, 7, 8}:
+                    width, height = height, width
+                return int(width), int(height)
+        except Exception:
+            logger.error(
+                "Could not inspect source dimensions for %s",
+                os.path.basename(normalized_path),
+                exc_info=True,
+            )
+            return None
+
+    def load_detail_image(
+        self,
+        image_path: str,
+        target_size: tuple[int, int] | None = None,
+    ) -> Image.Image | None:
+        """Decode an oriented, display-edited detail image off the UI thread.
+
+        Detail images intentionally bypass the disk and shared memory caches. Their
+        lifetime is owned by the active viewer so large originals cannot evict the
+        navigation working set.
+        """
+        normalized_path = os.path.normpath(image_path)
+        ext = os.path.splitext(normalized_path)[1].lower()
+        decode_gate = (
+            self._high_memory_decode_gate
+            if is_raw_extension(ext) or ext in {".heic", ".heif"}
+            else None
+        )
+        if decode_gate:
+            decode_gate.acquire()
+        try:
+            if is_raw_extension(ext):
+                image = RawImageProcessor.load_raw_as_pil(
+                    normalized_path,
+                    target_mode="RGBA",
+                    apply_auto_edits=True,
+                    half_size=False,
+                )
+            elif ext in SUPPORTED_STANDARD_EXTENSIONS:
+                image = StandardImageProcessor.load_as_pil(
+                    normalized_path,
+                    target_mode="RGBA",
+                    apply_exif_transpose=True,
+                )
+            else:
+                return None
+        finally:
+            if decode_gate:
+                decode_gate.release()
+
+        if image is None:
+            return None
+        if target_size and (
+            image.width > target_size[0] or image.height > target_size[1]
+        ):
+            image.thumbnail(target_size, Image.Resampling.LANCZOS)
+        return image
+
     def _memory_get(self, key: tuple) -> Image.Image | None:
         with self._memory_cache_lock:
             image = self._memory_cache.pop(key, None)
