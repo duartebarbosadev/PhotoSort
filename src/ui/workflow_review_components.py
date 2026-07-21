@@ -6,6 +6,7 @@ pages and makes a shortcut's visible label and actual binding share one source
 of truth.
 """
 
+import math
 import sys
 from dataclasses import dataclass
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -295,7 +296,7 @@ class WorkflowShortcutStrip(QFrame):
     def __init__(
         self,
         shortcuts: Sequence[WorkflowShortcutSpec],
-        max_columns: int | None = None,
+        max_rows: int = 3,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -316,8 +317,11 @@ class WorkflowShortcutStrip(QFrame):
         items_layout.setContentsMargins(0, 0, 0, 0)
         items_layout.setHorizontalSpacing(8)
         items_layout.setVerticalSpacing(3)
-        columns = max_columns or max(1, len(shortcuts))
+        columns = max(1, len(shortcuts))
         self._column_limit = columns
+        self._minimum_columns = max(
+            1, math.ceil(len(shortcuts) / max(1, max_rows))
+        )
         self._current_columns = columns
         self._items_layout = items_layout
         self.shortcut_specs = tuple(shortcuts)
@@ -381,6 +385,7 @@ class WorkflowShortcutStrip(QFrame):
             if max(row_widths, default=0) <= available_width:
                 selected_columns = columns
                 break
+        selected_columns = max(selected_columns, self._minimum_columns)
         if selected_columns == self._current_columns:
             return
         self._current_columns = selected_columns
