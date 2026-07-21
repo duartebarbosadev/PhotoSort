@@ -74,6 +74,7 @@ class WorkerManager(QObject):
     )  # List of tuples: [(image_path, metadata_dict), ...]
     rating_load_finished = pyqtSignal()
     rating_load_error = pyqtSignal(str)
+    rating_load_cache_capacity_warning = pyqtSignal(int, int, object)
 
     # Rotation Detection Signals
     rotation_detection_progress = pyqtSignal(int, int, str)  # current, total, basename
@@ -504,6 +505,9 @@ class WorkerManager(QObject):
         )  # Connect to the new batched signal
         self.rating_loader_worker.finished.connect(self.rating_load_finished)
         self.rating_loader_worker.error.connect(self.rating_load_error)
+        self.rating_loader_worker.cache_capacity_warning.connect(
+            self.rating_load_cache_capacity_warning
+        )
 
         self.rating_loader_thread.started.connect(self.rating_loader_worker.run_load)
         self.rating_load_finished.connect(self.rating_loader_thread.quit)

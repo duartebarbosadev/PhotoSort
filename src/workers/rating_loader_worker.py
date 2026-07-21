@@ -39,6 +39,8 @@ class RatingLoaderWorker(QObject):
     )  # List of tuples: [(image_path, metadata_dict), ...]
     finished = pyqtSignal()
     error = pyqtSignal(str)
+    cache_capacity_warning = pyqtSignal(int, int, object)
+    # unique dataset entries, resident entries, configured limit bytes
 
     def __init__(
         self,
@@ -96,6 +98,7 @@ class RatingLoaderWorker(QObject):
 
         total_load_start_time = time.perf_counter()
         logger.info(f"Starting metadata load for {total_files} files.")
+        self._emit(self.progress_update, 0, total_files, "")
 
         try:
             # Single batch call to the refactored MetadataHandler
@@ -103,6 +106,19 @@ class RatingLoaderWorker(QObject):
                 image_paths_to_process,
                 self._rating_disk_cache,
                 self._app_state.exif_disk_cache,
+            )
+
+            resident_entries, dataset_entries = (
+                self._app_state.exif_disk_cache.dataset_residency(
+                    image_paths_to_process
+                )
+            )
+            cache_limit_bytes = (
+                self._app_state.exif_disk_cache.get_current_size_limit_bytes()
+            )
+            dataset_exceeds_cache = (
+                resident_entries < dataset_entries
+                and self._app_state.exif_disk_cache.is_near_capacity()
             )
 
             metadata_batch_to_emit = []
@@ -192,6 +208,21 @@ class RatingLoaderWorker(QObject):
                 )
                 self._emit(self.metadata_batch_loaded, list(metadata_batch_to_emit))
                 metadata_batch_to_emit.clear()
+
+            if dataset_exceeds_cache:
+                logger.warning(
+                    "Current dataset does not fit in the EXIF cache: "
+                    "resident=%d total=%d limit=%.2f GB",
+                    resident_entries,
+                    dataset_entries,
+                    cache_limit_bytes / (1024 * 1024 * 1024),
+                )
+                self._emit(
+                    self.cache_capacity_warning,
+                    dataset_entries,
+                    resident_entries,
+                    cache_limit_bytes,
+                )
 
         except Exception as e:
             error_msg = f"An error occurred during metadata loading: {e}"

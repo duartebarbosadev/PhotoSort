@@ -3,6 +3,8 @@ import os
 import logging
 import time
 import threading
+import unicodedata
+from collections.abc import Iterable
 from typing import Any
 from core.runtime_paths import resolve_user_cache_dir
 
@@ -156,6 +158,31 @@ class ExifCache:
         except Exception as e:
             logger.error(f"Error getting EXIF cache volume: {e}", exc_info=True)
             return 0
+
+    def dataset_residency(self, keys: Iterable[str]) -> tuple[int, int]:
+        """Return how many unique dataset keys are still present in the cache."""
+        canonical_keys = {
+            unicodedata.normalize("NFC", os.path.normpath(key))
+            for key in keys
+            if key
+        }
+        try:
+            resident_count = sum(key in self._cache for key in canonical_keys)
+            return resident_count, len(canonical_keys)
+        except Exception:
+            logger.error("Error checking EXIF dataset cache residency.", exc_info=True)
+            # Suppress a capacity warning when residency could not be measured.
+            return len(canonical_keys), len(canonical_keys)
+
+    def is_near_capacity(self, threshold: float = 0.95) -> bool:
+        """Whether disk usage is close enough to the limit for eviction churn."""
+        if self._size_limit_bytes <= 0:
+            return False
+        return self.volume() >= int(self._size_limit_bytes * threshold)
+
+    def get_current_size_limit_bytes(self) -> int:
+        """Return the configured cache limit in bytes."""
+        return self._size_limit_bytes
 
     def get_current_size_limit_mb(self) -> int:
         """Returns the current configured size limit in MB."""
