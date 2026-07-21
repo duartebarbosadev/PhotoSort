@@ -397,10 +397,9 @@ class FixRotationStepWidget(QWidget):
         badge, color = _ANGLE_LABELS.get(angle, (f"{angle}°", "#888888"))
 
         pixmap = self._load_pixmap(path)
-        if pixmap is None:
-            request = getattr(self.window(), "request_interactive_previews", None)
-            if callable(request):
-                request([path])
+        request = getattr(self.window(), "request_interactive_previews", None)
+        if callable(request):
+            request([path])
 
         # Left panel: current (as-is) — no rotation applied
         self._current_img.set_pixmap_and_angle(pixmap, 0)
@@ -452,7 +451,7 @@ class FixRotationStepWidget(QWidget):
     def _load_pixmap(self, path: str) -> QPixmap | None:
         try:
             if self._image_pipeline:
-                pixmap = self._image_pipeline.get_cached_review_qpixmap(path)
+                pixmap, _ = self._image_pipeline.get_immediate_review_qpixmap(path)
                 if pixmap is not None and not pixmap.isNull():
                     return pixmap
         except Exception as exc:

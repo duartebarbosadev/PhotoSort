@@ -455,8 +455,8 @@ class EasyDeleteStepWidget(QWidget):
 
     def _show_single(self, path: str, entry: dict) -> None:
         self._image_stack.setCurrentIndex(0)
-        if not self._load_into(path, self._single_img):
-            self._request_previews([path])
+        self._load_into(path, self._single_img)
+        self._request_previews([path])
         issue_type = entry.get("type", "")
         label, color = _ISSUE_LABELS.get(issue_type, ("ISSUE", "#888"))
         reason = entry.get("reason", "")
@@ -467,12 +467,9 @@ class EasyDeleteStepWidget(QWidget):
 
     def _show_pair(self, path: str, pair_path: str, entry: dict) -> None:
         self._image_stack.setCurrentIndex(1)
-        missing_paths = []
-        if not self._load_into(path, self._pair_left_img):
-            missing_paths.append(path)
-        if not self._load_into(pair_path, self._pair_right_img):
-            missing_paths.append(pair_path)
-        self._request_previews(missing_paths)
+        self._load_into(path, self._pair_left_img)
+        self._load_into(pair_path, self._pair_right_img)
+        self._request_previews([path, pair_path])
 
         left_name = os.path.basename(path)
         right_name = os.path.basename(pair_path)
@@ -638,7 +635,7 @@ class EasyDeleteStepWidget(QWidget):
     def _load_pixmap(self, path: str) -> QPixmap | None:
         try:
             if self._image_pipeline:
-                pixmap = self._image_pipeline.get_cached_review_qpixmap(path)
+                pixmap, _ = self._image_pipeline.get_immediate_review_qpixmap(path)
                 if pixmap is not None and not pixmap.isNull():
                     return pixmap
         except Exception as exc:

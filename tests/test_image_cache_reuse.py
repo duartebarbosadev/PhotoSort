@@ -66,6 +66,30 @@ def test_review_pixmap_orients_shared_thumbnail_without_redecoding(tmp_path):
     assert processor.call_count == 1
 
 
+def test_immediate_review_uses_disk_thumbnail_without_source_decode(tmp_path):
+    source = tmp_path / "photo.jpg"
+    Image.new("RGB", (320, 200), "teal").save(source)
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+    assert pipeline.ensure_thumbnail_cached(str(source))
+    with pipeline._memory_cache_lock:
+        pipeline._memory_cache.clear()
+        pipeline._memory_cache_bytes = 0
+
+    with patch(
+        "core.image_pipeline.StandardImageProcessor.process_for_thumbnail",
+        side_effect=AssertionError("source image must not be decoded on the UI path"),
+    ):
+        pixmap, preview_is_cached = pipeline.get_immediate_review_qpixmap(
+            str(source)
+        )
+
+    assert pixmap is not None and not pixmap.isNull()
+    assert preview_is_cached is False
+
+
 def test_disk_caches_store_compressed_payloads_and_return_images(tmp_path):
     image = Image.new("RGB", (800, 600), "teal")
     thumbnail_cache = ThumbnailCache(str(tmp_path / "thumb"))

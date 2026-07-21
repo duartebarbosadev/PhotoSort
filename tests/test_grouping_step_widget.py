@@ -28,6 +28,12 @@ class _CacheOnlyPipeline:
     ):
         self.get_cached_thumbnail_qpixmap = Mock(return_value=cached_thumbnail)
         self.get_cached_preview_qpixmap = Mock(return_value=cached_preview)
+        self.get_immediate_review_qpixmap = Mock(
+            return_value=(
+                cached_preview if cached_preview is not None else cached_thumbnail,
+                cached_preview is not None,
+            )
+        )
         self.get_thumbnail_qpixmap = Mock(return_value=None)
         self.get_preview_qpixmap = Mock(return_value=cached_preview)
 
@@ -326,7 +332,7 @@ def test_grouping_step_widget_selected_preview_uses_cached_preview_immediately(
 
     widget._update_selected_preview(first)
 
-    assert pipeline.get_cached_preview_qpixmap.call_count == 1
+    assert pipeline.get_immediate_review_qpixmap.call_count == 1
     assert pipeline.get_preview_qpixmap.call_count == 0
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     request_preview.assert_not_called()
@@ -356,8 +362,7 @@ def test_grouping_step_widget_selected_preview_queues_upgrade_from_cached_thumbn
 
     widget._update_selected_preview(first)
 
-    assert pipeline.get_cached_preview_qpixmap.call_count == 1
-    assert pipeline.get_cached_thumbnail_qpixmap.call_count == 1
+    assert pipeline.get_immediate_review_qpixmap.call_count == 1
     assert pipeline.get_preview_qpixmap.call_count == 0
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     request_preview.assert_called_once_with(first)

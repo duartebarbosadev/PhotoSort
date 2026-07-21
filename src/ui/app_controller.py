@@ -1283,6 +1283,13 @@ class AppController(QObject):
             self.main_window.start_thumbnail_warming(
                 [item["path"] for item in media_file_data if item.get("path")]
             )
+            self.worker_manager.start_preview_warming(
+                [
+                    item["path"]
+                    for item in self._get_image_file_data()
+                    if item.get("path")
+                ]
+            )
 
             self.worker_manager.start_rating_load(
                 media_file_data.copy(),

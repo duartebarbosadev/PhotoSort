@@ -2295,17 +2295,11 @@ class GroupingStepWidget(QWidget):
         pixmap: QPixmap | None = None
         preview_is_cached = False
         if image_pipeline and ext in SUPPORTED_MEDIA_EXTENSIONS:
-            pixmap = image_pipeline.get_cached_preview_qpixmap(
+            pixmap, preview_is_cached = image_pipeline.get_immediate_review_qpixmap(
                 source_path,
                 display_max_size=SELECTED_PREVIEW_DISPLAY_SIZE,
-                memory_only=True,
+                thumbnail_apply_orientation=False,
             )
-            preview_is_cached = bool(pixmap and not pixmap.isNull())
-            if pixmap is None or pixmap.isNull():
-                pixmap = image_pipeline.get_cached_thumbnail_qpixmap(
-                    source_path,
-                    memory_only=True,
-                )
         if pixmap and not pixmap.isNull():
             self.large_preview_view.set_image(pixmap)
         else:

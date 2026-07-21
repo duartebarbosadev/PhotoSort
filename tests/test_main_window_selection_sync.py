@@ -6,6 +6,7 @@ from src.ui.main_window import MainWindow
 
 def _cache_only_pipeline():
     return SimpleNamespace(
+        get_immediate_review_qpixmap=Mock(return_value=(None, False)),
         get_cached_preview_qpixmap=Mock(return_value=None),
         get_cached_thumbnail_qpixmap=Mock(return_value=None),
         get_preview_qpixmap=Mock(side_effect=AssertionError("synchronous preview")),

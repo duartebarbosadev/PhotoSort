@@ -1140,21 +1140,11 @@ class MainWindow(QMainWindow):
         apply_thumbnail_orientation: bool = False,
     ) -> tuple[QPixmap | None, bool]:
         """Return an immediately available pixmap without decoding on the UI thread."""
-        pixmap = self.image_pipeline.get_cached_preview_qpixmap(
+        return self.image_pipeline.get_immediate_review_qpixmap(
             image_path,
             display_max_size=DISPLAY_MAX_RESOLUTION,
-            memory_only=True,
+            thumbnail_apply_orientation=apply_thumbnail_orientation,
         )
-        preview_is_cached = bool(pixmap and not pixmap.isNull())
-        if not preview_is_cached:
-            pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
-                image_path,
-                apply_orientation=apply_thumbnail_orientation,
-                memory_only=True,
-            )
-        if pixmap is not None and pixmap.isNull():
-            pixmap = None
-        return pixmap, preview_is_cached
 
     def schedule_visible_thumbnail_load(self, *_args) -> None:
         self.thumbnail_loader.schedule()

@@ -807,26 +807,23 @@ class PickBestStepWidget(QWidget):
 
         image_pipeline = getattr(self.window(), "image_pipeline", None)
         images_data = []
-        missing_preview_paths = []
         for path in subset_paths:
             pixmap = None
             if image_pipeline is not None:
                 try:
-                    pixmap = image_pipeline.get_cached_review_qpixmap(
+                    pixmap, _ = image_pipeline.get_immediate_review_qpixmap(
                         path,
                         thumbnail_apply_orientation=True,
                     )
                 except Exception as exc:
                     logger.debug("Could not load preview for %s: %s", path, exc)
-            if pixmap is None or pixmap.isNull():
-                missing_preview_paths.append(path)
             images_data.append({"path": path, "pixmap": pixmap, "rating": 0})
 
         self._current_images_data = images_data
         self._sync_viewer.set_images_data(images_data)
         request = getattr(self.window(), "request_interactive_previews", None)
-        if missing_preview_paths and callable(request):
-            request(missing_preview_paths)
+        if subset_paths and callable(request):
+            request(subset_paths)
         for viewer in self._sync_viewer.image_viewers:
             viewer.control_bar.hide()
 
