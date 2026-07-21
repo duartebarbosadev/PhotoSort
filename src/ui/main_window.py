@@ -1147,11 +1147,37 @@ class MainWindow(QMainWindow):
         *,
         force_default_brightness: bool = False,
     ) -> None:
+        active_viewer = self._active_workflow_inspection_viewer()
+        if viewer is not active_viewer:
+            logger.debug(
+                "Ignoring inspection activation from an inactive workflow viewer"
+            )
+            return
         self.image_inspection_controller.activate(
             viewer,
             specs,
             force_default_brightness=force_default_brightness,
         )
+
+    def _active_workflow_inspection_viewer(
+        self,
+    ) -> SynchronizedImageViewer | None:
+        """Return the sole viewer allowed to own the application inspection session."""
+        workflow_step = getattr(self.app_state, "workflow_step", "organize")
+        if workflow_step == "organize":
+            return self.grouping_step_widget.large_preview_view
+        if workflow_step == "easy_delete":
+            widget = self.easy_delete_step_widget
+            return widget._sync_viewer if widget is not None else None
+        if workflow_step == "fix_rotation":
+            widget = self.fix_rotation_step_widget
+            return widget._sync_viewer if widget is not None else None
+        if workflow_step == "pick_best":
+            widget = self.pick_best_step_widget
+            return widget._sync_viewer if widget is not None else None
+        if workflow_step == "cull":
+            return self.advanced_image_viewer
+        return None
 
     def clear_image_inspection(
         self, viewer: SynchronizedImageViewer | None = None

@@ -1501,13 +1501,17 @@ class SynchronizedImageViewer(QWidget):
                 return
 
     def _fit_visible_images_after_layout_change(self):
-        for viewer in self.image_viewers:
-            if (
-                viewer.isVisible()
-                and viewer.has_image()
-                and not viewer.is_video_loaded()
-            ):
-                viewer.image_view.fit_in_view()
+        self._updating_sync = True
+        try:
+            for viewer in self.image_viewers:
+                if (
+                    viewer.isVisible()
+                    and viewer.has_image()
+                    and not viewer.is_video_loaded()
+                ):
+                    viewer.image_view.fit_in_view()
+        finally:
+            self._updating_sync = False
 
     def get_focused_image_path_if_any(self) -> str | None:
         """
@@ -1729,27 +1733,35 @@ class SynchronizedImageViewer(QWidget):
 
     def _zoom_in_all(self):
         self.detail_requested.emit("zoom")
-        for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.image_view.zoom_in()
+        viewers = [viewer for viewer in self.image_viewers if viewer.isVisible()]
+        if self.sync_enabled and viewers:
+            viewers[0].image_view.zoom_in()
+            return
+        for viewer in viewers:
+            viewer.image_view.zoom_in()
 
     def _zoom_out_all(self):
-        for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.image_view.zoom_out()
+        viewers = [viewer for viewer in self.image_viewers if viewer.isVisible()]
+        if self.sync_enabled and viewers:
+            viewers[0].image_view.zoom_out()
+            return
+        for viewer in viewers:
+            viewer.image_view.zoom_out()
 
     def _fit_all(self):
-        for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.image_view.fit_in_view()
+        self._updating_sync = True
+        try:
+            for viewer in self.image_viewers:
+                if viewer.isVisible():
+                    viewer.image_view.fit_in_view()
+        finally:
+            self._updating_sync = False
 
     def _actual_size_all(self):
         self.detail_requested.emit("actual_size")
         if self._defer_actual_size:
             return
-        for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.image_view.zoom_to_actual_size()
+        self.zoom_to_actual_size()
 
     def _ui_initialized(self) -> bool:
         return hasattr(self, "viewer_splitter")
@@ -1760,8 +1772,13 @@ class SynchronizedImageViewer(QWidget):
         if value > 0:
             self.detail_requested.emit("zoom")
 
-        # Convert display percentage back to actual zoom factor
-        for viewer in self.image_viewers:
+        # With Sync enabled one pane drives the others. Iterating every pane
+        # would apply the same toolbar step repeatedly through signal feedback.
+        visible_viewers = [
+            viewer for viewer in self.image_viewers if viewer.isVisible()
+        ]
+        target_viewers = visible_viewers[:1] if self.sync_enabled else visible_viewers
+        for viewer in target_viewers:
             if viewer.isVisible():
                 view = viewer.image_view
                 if value == 0:
@@ -1826,9 +1843,13 @@ class SynchronizedImageViewer(QWidget):
 
     def zoom_to_actual_size(self) -> None:
         """Apply 1:1 without treating a completed detail load as new intent."""
-        for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.image_view.zoom_to_actual_size()
+        self._updating_sync = True
+        try:
+            for viewer in self.image_viewers:
+                if viewer.isVisible():
+                    viewer.image_view.zoom_to_actual_size()
+        finally:
+            self._updating_sync = False
 
     def _on_zoom_changed(self, zoom_factor: float, center_point: QPointF):
         if self._updating_sync:
@@ -1847,6 +1868,8 @@ class SynchronizedImageViewer(QWidget):
         self._updating_sync = False
 
         if self.sync_enabled:
+            sender_fit_zoom = max(sender_view._min_zoom, 0.000001)
+            fit_relative_zoom = zoom_factor / sender_fit_zoom
             sender_scene_rect = sender_view.sceneRect()
             norm_x = (
                 (center_point.x() - sender_scene_rect.left())
@@ -1880,10 +1903,13 @@ class SynchronizedImageViewer(QWidget):
                             + normalized_pos.y() * target_scene_rect.height()
                         )
                         viewer.image_view.set_zoom_factor(
-                            zoom_factor, QPointF(target_x, target_y)
+                            viewer.image_view._min_zoom * fit_relative_zoom,
+                            QPointF(target_x, target_y),
                         )
                     else:
-                        viewer.image_view.set_zoom_factor(zoom_factor)
+                        viewer.image_view.set_zoom_factor(
+                            viewer.image_view._min_zoom * fit_relative_zoom
+                        )
             self._updating_sync = False
 
     def _on_pan_changed(self, center_point: QPointF):
@@ -1926,6 +1952,4 @@ class SynchronizedImageViewer(QWidget):
             self.deleteMultipleRequested.emit(file_paths_to_delete)
 
     def fit_to_viewport(self):
-        for viewer in self.image_viewers:
-            if viewer.isVisible() and viewer.has_image():
-                viewer.image_view.fit_in_view()
+        self._fit_all()

@@ -168,6 +168,46 @@ def test_fit_stays_on_preview_but_zoom_and_actual_size_request_detail():
     viewer.deleteLater()
 
 
+def test_sync_zoom_uses_fit_relative_scale_for_asymmetric_panes():
+    viewer = SynchronizedImageViewer()
+    viewer.resize(900, 500)
+    viewer.show()
+    viewer.set_images_data(
+        [_make_image("left.jpg", size=300), _make_image("right.jpg", size=1200)]
+    )
+    QTest.qWait(80)
+    left = viewer.image_viewers[0].image_view
+    right = viewer.image_viewers[1].image_view
+
+    # Different raster sizes naturally produce different absolute Fit scales.
+    assert left._min_zoom != right._min_zoom
+    left_fit = left._min_zoom
+    right_fit = right._min_zoom
+
+    right.zoom_in()
+
+    assert abs(left.get_zoom_factor() / left_fit - 1.15) < 0.001
+    assert abs(right.get_zoom_factor() / right_fit - 1.15) < 0.001
+    viewer.deleteLater()
+
+
+def test_synced_toolbar_zoom_applies_exactly_one_step():
+    viewer = SynchronizedImageViewer()
+    viewer.resize(900, 500)
+    viewer.show()
+    viewer.set_images_data(
+        [_make_image("left.jpg", size=300), _make_image("right.jpg", size=1200)]
+    )
+    QTest.qWait(80)
+    fit_scales = [slot.image_view._min_zoom for slot in viewer.image_viewers]
+
+    viewer._zoom_in_all()
+
+    for slot, fit_scale in zip(viewer.image_viewers, fit_scales, strict=True):
+        assert abs(slot.image_view.get_zoom_factor() / fit_scale - 1.15) < 0.001
+    viewer.deleteLater()
+
+
 def test_individual_viewer_context_menu_includes_show_in_explorer(monkeypatch):
     viewer = IndividualViewer()
     viewer._file_path = "/tmp/example.jpg"
