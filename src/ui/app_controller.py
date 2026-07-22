@@ -1733,10 +1733,12 @@ class AppController(QObject):
             dataset_entries, resident_entries, cache_limit_bytes = warning
             QTimer.singleShot(
                 0,
-                lambda: self.main_window.dialog_manager.show_exif_cache_capacity_warning(
-                    dataset_entries,
-                    resident_entries,
-                    cache_limit_bytes,
+                lambda: (
+                    self.main_window.dialog_manager.show_exif_cache_capacity_warning(
+                        dataset_entries,
+                        resident_entries,
+                        cache_limit_bytes,
+                    )
                 ),
             )
 

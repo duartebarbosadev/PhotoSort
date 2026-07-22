@@ -162,9 +162,7 @@ class ExifCache:
     def dataset_residency(self, keys: Iterable[str]) -> tuple[int, int]:
         """Return how many unique dataset keys are still present in the cache."""
         canonical_keys = {
-            unicodedata.normalize("NFC", os.path.normpath(key))
-            for key in keys
-            if key
+            unicodedata.normalize("NFC", os.path.normpath(key)) for key in keys if key
         }
         try:
             resident_count = sum(key in self._cache for key in canonical_keys)

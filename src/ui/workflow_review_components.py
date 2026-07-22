@@ -322,9 +322,7 @@ class WorkflowShortcutStrip(QFrame):
         items_layout.setVerticalSpacing(3)
         columns = max(1, len(shortcuts))
         self._column_limit = columns
-        self._minimum_columns = max(
-            1, math.ceil(len(shortcuts) / max(1, max_rows))
-        )
+        self._minimum_columns = max(1, math.ceil(len(shortcuts) / max(1, max_rows)))
         self._current_columns = columns
         self._items_layout = items_layout
         self.shortcut_specs = tuple(shortcuts)

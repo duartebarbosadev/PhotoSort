@@ -7,7 +7,9 @@ def test_preview_warmer_deduplicates_folder_paths_and_uses_shared_pipeline():
     pipeline = Mock()
     worker = PreviewWarmWorker(pipeline, ["a.jpg", "b.jpg", "a.jpg"])
     finished = []
-    worker.finished.connect(lambda processed, total: finished.append((processed, total)))
+    worker.finished.connect(
+        lambda processed, total: finished.append((processed, total))
+    )
 
     def preload(paths, progress_callback, should_continue_callback):
         assert should_continue_callback()

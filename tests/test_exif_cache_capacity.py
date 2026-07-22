@@ -54,10 +54,7 @@ def test_rating_loader_reports_dataset_eviction(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "workers.rating_loader_worker.MetadataProcessor.get_batch_display_metadata",
-        lambda *_args: {
-            path: {"rating": 0, "date": None}
-            for path in paths
-        },
+        lambda *_args: {path: {"rating": 0, "date": None} for path in paths},
     )
     warnings = []
     worker.cache_capacity_warning.connect(lambda *args: warnings.append(args))
