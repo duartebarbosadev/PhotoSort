@@ -55,7 +55,6 @@ class FixRotationStepWidget(QWidget):
     apply_rotations_requested = pyqtSignal(dict)  # {path: angle_degrees}
     active_image_changed = pyqtSignal(str)
     proceed_requested = pyqtSignal()
-    skip_requested = pyqtSignal()
     retry_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -84,7 +83,6 @@ class FixRotationStepWidget(QWidget):
                 "previous": self._on_prev,
                 "next": self._on_next,
                 "primary": self._on_confirm,
-                "skip": self._on_skip,
             },
         )
 
@@ -585,9 +583,6 @@ class FixRotationStepWidget(QWidget):
 
     def _on_proceed(self) -> None:
         self.proceed_requested.emit()
-
-    def _on_skip(self) -> None:
-        self.skip_requested.emit()
 
     # ------------------------------------------------------------------
     # UI construction

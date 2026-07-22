@@ -46,6 +46,8 @@ def test_keyboard_layout_documents_current_workflow_shortcuts():
     assert "Cmd/Ctrl+Shift · Hide left panel" in shared
     assert "Cmd/Ctrl+Alt/Option · Step 5 Cull" in shared
     assert "Skip" not in easy_delete
+    assert "Skip" not in fix_rotation
+    assert "Skip" not in pick_best
     assert "Shift+Enter Apply" in easy_delete
     assert "1 · R −90° · Shift+R +90° override" in fix_rotation
     assert "Previous comparison / cluster" in pick_best

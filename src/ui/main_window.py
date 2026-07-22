@@ -1652,9 +1652,6 @@ class MainWindow(QMainWindow):
             from ui.fix_rotation_step_widget import FixRotationStepWidget
 
             widget = FixRotationStepWidget(self)
-            widget.skip_requested.connect(
-                lambda: self._request_next_visible_workflow_transition("fix_rotation")
-            )
             widget.proceed_requested.connect(
                 lambda: self._request_next_visible_workflow_transition("fix_rotation")
             )
@@ -1681,9 +1678,6 @@ class MainWindow(QMainWindow):
             widget.set_is_marked_func(self.app_state.is_marked_for_deletion)
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
-            )
-            widget.skip_requested.connect(
-                lambda: self._request_next_visible_workflow_transition("pick_best")
             )
             widget.proceed_to_cull_requested.connect(
                 lambda: self._request_next_visible_workflow_transition("pick_best")

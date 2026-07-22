@@ -101,7 +101,6 @@ FIX_ROTATION_SHORTCUTS = (
     WorkflowShortcutSpec("previous", ("Left", "Up"), "←  ↑", "Previous"),
     WorkflowShortcutSpec("next", ("Right", "Down"), "→  ↓", "Next"),
     WorkflowShortcutSpec("primary", ("Return", "Enter"), "Enter", "Confirm"),
-    WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
     _WORKFLOW_STEP_SHORTCUT,
 )
@@ -114,7 +113,6 @@ PICK_BEST_SHORTCUTS = (
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     WorkflowShortcutSpec("keep_all", ("K",), "K", "Keep all"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm"),
-    WorkflowShortcutSpec("skip", ("Escape",), "Esc", "Skip"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
     _WORKFLOW_STEP_SHORTCUT,
 )

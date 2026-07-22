@@ -6,6 +6,7 @@ from collections.abc import Callable
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QLabel,
     QListWidgetItem,
@@ -13,6 +14,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStackedWidget,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -28,7 +31,6 @@ from ui.workflow_review_components import (
     install_workflow_shortcuts,
 )
 from ui.workflow_metadata import build_workflow_metadata_rows
-import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,22 @@ CARD_BG_WINNER = "#2C2616"
 CARD_BORDER_COLOR = "#3A434C"
 LIST_SECTION_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 LIST_CLUSTER_ROLE = int(Qt.ItemDataRole.UserRole) + 2
+LIST_DEPTH_ROLE = int(Qt.ItemDataRole.UserRole) + 3
+
+
+class TournamentItemDelegate(QStyledItemDelegate):
+    """Paint comparison rows as children of their cluster heading."""
+
+    CHILD_INDENT = 20
+
+    def _indented_option(self, option, index) -> QStyleOptionViewItem:
+        adjusted = QStyleOptionViewItem(option)
+        if index.data(LIST_DEPTH_ROLE) == 1:
+            adjusted.rect = adjusted.rect.adjusted(self.CHILD_INDENT, 0, 0, 0)
+        return adjusted
+
+    def paint(self, painter, option, index) -> None:
+        super().paint(painter, self._indented_option(option, index), index)
 
 
 class CompareCard(WorkflowDecisionCard):
@@ -183,7 +201,6 @@ class ClusterTournament:
 
 
 class PickBestStepWidget(QWidget):
-    skip_requested = pyqtSignal()
     proceed_to_cull_requested = pyqtSignal()
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
@@ -253,12 +270,8 @@ class PickBestStepWidget(QWidget):
         self._metadata_cache.clear()
         if not self._tournaments:
             self.show_loading(
-                "No comparable clusters found.\nClick 'Done' to continue to Cull."
+                "No comparable clusters found.\nUse the workflow footer to continue."
             )
-            self._skip_btn_loading.setText("Done: Go to Cull →")
-            with contextlib.suppress(TypeError):
-                self._skip_btn_loading.clicked.disconnect()
-            self._skip_btn_loading.clicked.connect(self.proceed_to_cull_requested)
             return
 
         self._cluster_index = 0
@@ -324,12 +337,6 @@ class PickBestStepWidget(QWidget):
             self._progress_bar, alignment=Qt.AlignmentFlag.AlignCenter
         )
 
-        self._skip_btn_loading = QPushButton("Skip Step")
-        self._skip_btn_loading.setFixedWidth(160)
-        self._skip_btn_loading.setStyleSheet("margin-top: 16px;")
-        loading_layout.addWidget(
-            self._skip_btn_loading, alignment=Qt.AlignmentFlag.AlignCenter
-        )
         self._stack.addWidget(self._page_loading)
 
         self._page_review = QWidget()
@@ -348,10 +355,12 @@ class PickBestStepWidget(QWidget):
         review_splitter.setChildrenCollapsible(False)
         self._review_list_panel = WorkflowReviewListPanel(
             bulk_action_text=None,
-            title_text="Tournament",
+            title_text="",
             count_noun="photo",
         )
         self._items_list = self._review_list_panel.list_widget
+        self._tournament_item_delegate = TournamentItemDelegate(self._items_list)
+        self._items_list.setItemDelegate(self._tournament_item_delegate)
         self._items_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
@@ -455,7 +464,6 @@ class PickBestStepWidget(QWidget):
         self._stack.setCurrentWidget(self._page_loading)
 
     def _connect_signals(self) -> None:
-        self._skip_btn_loading.clicked.connect(self.skip_requested)
         self._done_btn.clicked.connect(self._on_done)
         self._confirm_btn.clicked.connect(self._on_confirm)
         self._keep_all_btn.clicked.connect(self._on_keep_all)
@@ -488,7 +496,6 @@ class PickBestStepWidget(QWidget):
                 "info": self._toggle_info,
                 "keep_all": self._on_keep_all,
                 "confirm": self._on_confirm,
-                "skip": self.skip_requested.emit,
             },
         )
 
@@ -647,6 +654,7 @@ class PickBestStepWidget(QWidget):
                 cluster_item.setData(Qt.ItemDataRole.UserRole, None)
                 cluster_item.setData(LIST_SECTION_ROLE, None)
                 cluster_item.setData(LIST_CLUSTER_ROLE, cluster_index)
+                cluster_item.setData(LIST_DEPTH_ROLE, 0)
                 cluster_item.setFlags(
                     Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                 )
@@ -669,6 +677,7 @@ class PickBestStepWidget(QWidget):
                         item.setData(Qt.ItemDataRole.UserRole, tuple(group.paths))
                         item.setData(LIST_SECTION_ROLE, round_index)
                         item.setData(LIST_CLUSTER_ROLE, cluster_index)
+                        item.setData(LIST_DEPTH_ROLE, 1)
                         item.setToolTip("\n↔\n".join(group.paths))
                         item.setFlags(
                             Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
@@ -684,6 +693,7 @@ class PickBestStepWidget(QWidget):
                         item.setData(Qt.ItemDataRole.UserRole, path)
                         item.setData(LIST_SECTION_ROLE, None)
                         item.setData(LIST_CLUSTER_ROLE, cluster_index)
+                        item.setData(LIST_DEPTH_ROLE, 1)
                         item.setToolTip(path)
                         item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                         item.setForeground(QColor("#8D99A3"))
@@ -712,7 +722,15 @@ class PickBestStepWidget(QWidget):
         self._review_list_panel.count_label.setText(
             f"{sum(tournament.finalized for tournament in self._tournaments)}/{len(self._tournaments)} done"
         )
-        self._items_list.setCurrentRow(-1)
+        current_item = comparison_items.get(tournament.current_round)
+        if current_item is None:
+            self._items_list.setCurrentRow(-1)
+            return
+        self._items_list.setCurrentItem(current_item)
+        self._items_list.scrollToItem(
+            current_item,
+            QAbstractItemView.ScrollHint.EnsureVisible,
+        )
 
     def _on_photo_item_clicked(self, item: QListWidgetItem) -> None:
         cluster_index = item.data(LIST_CLUSTER_ROLE)

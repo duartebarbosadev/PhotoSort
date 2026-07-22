@@ -4,15 +4,17 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from PyQt6.QtGui import QAction, QKeySequence, QPixmap
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QRect, QSize, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
     QLabel,
     QPushButton,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -1026,6 +1028,32 @@ def test_pick_best_up_and_down_shortcuts_navigate_comparison_history():
     assert widget._current_tournament().current_round == 2
 
 
+def test_pick_best_left_panel_scrolls_with_navigation_and_confirmation():
+    paths = [f"/tmp/photo-{index}.jpg" for index in range(7)]
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths)})
+    widget._items_list.scrollToItem = Mock()
+
+    widget._on_confirm()
+
+    current_item = _pick_best_current_comparison_item(widget)
+    assert widget._items_list.currentItem() is current_item
+    widget._items_list.scrollToItem.assert_called_with(
+        current_item,
+        widget._items_list.ScrollHint.EnsureVisible,
+    )
+
+    widget._prev_round()
+
+    current_item = _pick_best_current_comparison_item(widget)
+    assert widget._items_list.currentItem() is current_item
+    widget._items_list.scrollToItem.assert_called_with(
+        current_item,
+        widget._items_list.ScrollHint.EnsureVisible,
+    )
+
+
 def test_pick_best_up_and_down_fall_back_to_clusters_without_more_comparisons():
     widget = PickBestStepWidget()
     widget.set_is_marked_func(lambda _path: False)
@@ -1072,6 +1100,19 @@ def test_pick_best_left_panel_shows_pair_rows_and_preserves_comparison_history()
         for item in _pick_best_up_next_items(widget)
     )
     assert widget._review_list_panel.count_label.text() == "0/1 done"
+
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 280, 50)
+    cluster_index = widget._items_list.model().index(0, 0)
+    comparison_index = widget._items_list.indexFromItem(first_comparison)
+    cluster_option = widget._tournament_item_delegate._indented_option(
+        option, cluster_index
+    )
+    comparison_option = widget._tournament_item_delegate._indented_option(
+        option, comparison_index
+    )
+    assert cluster_option.rect == QRect(0, 0, 280, 50)
+    assert comparison_option.rect == QRect(20, 0, 260, 50)
 
     for _ in range(3):
         widget._on_confirm()
@@ -1525,11 +1566,41 @@ def test_visible_shortcut_specs_are_the_installed_source_of_truth():
         assert len(widget._shortcuts) == expected
 
 
-def test_easy_delete_has_no_escape_workflow_shortcut():
-    assert all("Escape" not in spec.sequences for spec in EASY_DELETE_SHORTCUTS)
-    widget = EasyDeleteStepWidget()
-    installed = {shortcut.key().toString() for shortcut in widget._shortcuts}
-    assert "Esc" not in installed
+def test_review_workflows_have_no_escape_skip_shortcut():
+    widgets_and_specs = (
+        (EasyDeleteStepWidget(), EASY_DELETE_SHORTCUTS),
+        (FixRotationStepWidget(), FIX_ROTATION_SHORTCUTS),
+        (PickBestStepWidget(), PICK_BEST_SHORTCUTS),
+    )
+    for widget, specs in widgets_and_specs:
+        assert all("Escape" not in spec.sequences for spec in specs)
+        installed = {shortcut.key().toString() for shortcut in widget._shortcuts}
+        assert "Esc" not in installed
+
+
+def test_pick_best_loading_page_has_no_skip_navigation_button():
+    widget = PickBestStepWidget()
+    widget.show_results({})
+
+    button_texts = {
+        button.text() for button in widget._page_loading.findChildren(QPushButton)
+    }
+
+    assert "Skip Step" not in button_texts
+    assert not hasattr(widget, "_skip_btn_loading")
+    assert "workflow footer" in widget._loading_label.text()
+
+
+def test_pick_best_left_panel_omits_tournament_title():
+    widget = PickBestStepWidget()
+
+    titles = {
+        label.text()
+        for label in widget._review_list_panel.findChildren(QLabel)
+        if label.objectName() == "workflowReviewListTitle"
+    }
+
+    assert titles == {""}
 
 
 def test_direct_workflow_shortcuts_use_unclaimed_modified_number_keys(monkeypatch):
