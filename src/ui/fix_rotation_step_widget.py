@@ -1,16 +1,14 @@
 import logging
 import os
-from typing import override
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
-from PyQt6.QtGui import QColor, QPixmap, QTransform, QDesktopServices
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal, QUrl
+from PyQt6.QtGui import QColor, QPixmap, QDesktopServices
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidgetItem,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QVBoxLayout,
@@ -18,6 +16,8 @@ from PyQt6.QtWidgets import (
 )
 from core.runtime_paths import get_app_models_dir, is_frozen_runtime
 from core.app_settings import ROTATION_MODEL_DOWNLOAD_URL
+from ui.advanced_image_viewer import SynchronizedImageViewer
+from ui.controllers.image_inspection_controller import InspectionImageSpec
 
 from ui.workflow_review_components import (
     FIX_ROTATION_SHORTCUTS,
@@ -39,54 +39,14 @@ _MARKED_COLOR = "#66BB6A"
 _SKIP_COLOR = "#607080"
 
 
-class _RotatedImageLabel(QLabel):
-    """QLabel that displays an image and an optional rotation-preview overlay."""
+class _RotationChoiceProxy(QObject):
+    """Compatibility/action proxy; rendering belongs to the shared viewer."""
 
     clicked = pyqtSignal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QObject) -> None:
         super().__init__(parent)
-        self._source_pixmap: QPixmap | None = None
-        self._preview_angle: int = 0
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumSize(80, 80)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setStyleSheet("background: #0D1117;")
-
-    def set_pixmap_and_angle(
-        self, pixmap: QPixmap | None, preview_angle: int = 0
-    ) -> None:
-        self._source_pixmap = pixmap
-        self._preview_angle = preview_angle
-        self._refresh()
-
-    @override
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._refresh()
-
-    @override
-    def mouseReleaseEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mouseReleaseEvent(event)
-
-    def _refresh(self) -> None:
-        if not self._source_pixmap or self._source_pixmap.isNull():
-            super().setPixmap(QPixmap())
-            return
-
-        px = self._source_pixmap
-        if self._preview_angle != 0:
-            transform = QTransform().rotate(self._preview_angle)
-            px = px.transformed(transform, Qt.TransformationMode.SmoothTransformation)
-
-        scaled = px.scaled(
-            self.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        super().setPixmap(scaled)
+        self._preview_angle = 0
 
 
 class FixRotationStepWidget(QWidget):
@@ -396,21 +356,40 @@ class FixRotationStepWidget(QWidget):
 
         badge, color = _ANGLE_LABELS.get(angle, (f"{angle}°", "#888888"))
 
-        pixmap = self._load_pixmap(path)
-        if pixmap is None:
-            request = getattr(self.window(), "request_interactive_previews", None)
-            if callable(request):
-                request([path])
-
-        # Left panel: current (as-is) — no rotation applied
-        self._current_img.set_pixmap_and_angle(pixmap, 0)
+        # One decoded source is displayed through two independent transforms.
         self._current_hdr.setText(
             "ORIGINAL · SELECTED" if not is_marked else "ORIGINAL · unchanged"
         )
 
         # Right panel: preview after suggested rotation
-        preview_angle = angle if is_marked else 0
-        self._preview_img.set_pixmap_and_angle(pixmap, preview_angle)
+        preview_angle = angle
+        self._preview_img._preview_angle = preview_angle
+        activate = getattr(self.window(), "activate_image_inspection", None)
+        if callable(activate):
+            activate(
+                self._sync_viewer,
+                [
+                    InspectionImageSpec(path=path, label="Original"),
+                    InspectionImageSpec(
+                        path=path,
+                        rotation_degrees=preview_angle,
+                        label="Rotated preview",
+                    ),
+                ],
+                force_default_brightness=True,
+            )
+        else:
+            pixmap = self._load_pixmap(path)
+            self._sync_viewer.set_images_data(
+                [
+                    {"path": path, "pixmap": pixmap},
+                    {
+                        "path": path,
+                        "pixmap": pixmap,
+                        "rotation_degrees": preview_angle,
+                    },
+                ]
+            )
         if is_marked:
             selected = " · SELECTED" if not confirmed else ""
             self._preview_hdr.setText(f"ROTATED PREVIEW · {badge}{selected}")
@@ -452,7 +431,7 @@ class FixRotationStepWidget(QWidget):
     def _load_pixmap(self, path: str) -> QPixmap | None:
         try:
             if self._image_pipeline:
-                pixmap = self._image_pipeline.get_cached_review_qpixmap(path)
+                pixmap, _ = self._image_pipeline.get_immediate_review_qpixmap(path)
                 if pixmap is not None and not pixmap.isNull():
                     return pixmap
         except Exception as exc:
@@ -464,10 +443,8 @@ class FixRotationStepWidget(QWidget):
         return None
 
     def handle_preview_ready(self, path: str) -> None:
-        if not (0 <= self._current_index < len(self._ordered_paths)):
-            return
-        if self._ordered_paths[self._current_index] == path:
-            self._show_current()
+        # Preview upgrades are owned by ImageInspectionController.
+        return
 
     def _refresh_controls(self) -> None:
         total = len(self._ordered_paths)
@@ -768,35 +745,12 @@ class FixRotationStepWidget(QWidget):
         right_layout.setContentsMargins(8, 0, 0, 0)
         right_layout.setSpacing(6)
 
-        # Dual image view: current vs. proposed
-        image_row = QWidget()
-        image_row_layout = QHBoxLayout(image_row)
-        image_row_layout.setContentsMargins(0, 0, 0, 0)
-        image_row_layout.setSpacing(6)
-
-        # Current panel
-        current_pane = QWidget()
-        current_pane_layout = QVBoxLayout(current_pane)
-        current_pane_layout.setContentsMargins(0, 0, 0, 0)
-        current_pane_layout.setSpacing(3)
-
+        headers = QHBoxLayout()
         self._current_hdr = QLabel("CURRENT")
         self._current_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._current_hdr.setStyleSheet(
             "font-size: 11px; color: #808080; letter-spacing: 1px;"
         )
-
-        self._current_img = _RotatedImageLabel()
-        self._current_img.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._current_img.clicked.connect(lambda: self._set_current_marked(False))
-        current_pane_layout.addWidget(self._current_hdr)
-        current_pane_layout.addWidget(self._current_img, 1)
-
-        # After-rotation panel
-        preview_pane = QWidget()
-        preview_pane_layout = QVBoxLayout(preview_pane)
-        preview_pane_layout.setContentsMargins(0, 0, 0, 0)
-        preview_pane_layout.setSpacing(3)
 
         self._preview_hdr = QLabel("AFTER ROTATION")
         self._preview_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -804,15 +758,19 @@ class FixRotationStepWidget(QWidget):
             "font-size: 11px; color: #4B6EAF; font-weight: bold; letter-spacing: 1px;"
         )
 
-        self._preview_img = _RotatedImageLabel()
-        self._preview_img.setCursor(Qt.CursorShape.PointingHandCursor)
+        headers.addWidget(self._current_hdr, 1)
+        headers.addWidget(self._preview_hdr, 1)
+        right_layout.addLayout(headers)
+        self._sync_viewer = SynchronizedImageViewer()
+        self._sync_viewer.configure_toolbar(show_view_modes=False)
+        self._sync_viewer.imageClicked.connect(
+            lambda index, _path: self._set_current_marked(index == 1)
+        )
+        self._current_img = _RotationChoiceProxy(self)
+        self._preview_img = _RotationChoiceProxy(self)
+        self._current_img.clicked.connect(lambda: self._set_current_marked(False))
         self._preview_img.clicked.connect(lambda: self._set_current_marked(True))
-        preview_pane_layout.addWidget(self._preview_hdr)
-        preview_pane_layout.addWidget(self._preview_img, 1)
-
-        image_row_layout.addWidget(current_pane, 1)
-        image_row_layout.addWidget(preview_pane, 1)
-        right_layout.addWidget(image_row, 1)
+        right_layout.addWidget(self._sync_viewer, 1)
 
         # Info + status row
         info_row = QHBoxLayout()

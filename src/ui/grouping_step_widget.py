@@ -32,7 +32,6 @@ from PyQt6.QtGui import (
     QDropEvent,
     QIcon,
     QKeyEvent,
-    QPixmap,
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -66,7 +65,7 @@ from core.grouping import (
     augment_grouping_plan_with_filesystem_paths,
     find_directory_rename_candidates,
 )
-from core.media_utils import SUPPORTED_MEDIA_EXTENSIONS
+from core.media_utils import is_video_extension
 from core.app_settings import (
     get_location_grouping_depth,
     set_location_grouping_depth,
@@ -76,7 +75,8 @@ from core.app_settings import (
     THUMBNAIL_PRELOAD_BATCH_SIZE,
     THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
 )
-from ui.advanced_image_viewer import ZoomableImageView
+from ui.advanced_image_viewer import SynchronizedImageViewer
+from ui.controllers.image_inspection_controller import InspectionImageSpec
 from ui.workflow_review_components import (
     ORGANIZE_SHORTCUTS,
     install_workflow_shortcuts,
@@ -644,7 +644,8 @@ class GroupingStepWidget(QWidget):
         self.preview_hint_label = QLabel("Select a photo or folder to preview")
         self.preview_hint_label.setObjectName("groupingPreviewHint")
         self.preview_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.large_preview_view = ZoomableImageView()
+        self.large_preview_view = SynchronizedImageViewer()
+        self.large_preview_view.configure_toolbar(show_view_modes=False)
         self.large_preview_view.setObjectName("groupingLargePreview")
         self.large_preview_name = QLabel()
         self.large_preview_name.setObjectName("groupingSelectionName")
@@ -2251,6 +2252,9 @@ class GroupingStepWidget(QWidget):
 
     def _clear_selected_preview(self) -> None:
         self._current_preview_source_path = None
+        clear_inspection = getattr(self._parent_window, "clear_image_inspection", None)
+        if callable(clear_inspection):
+            clear_inspection(self.large_preview_view)
         self.large_preview_view.clear()
         self.large_preview_name.clear()
         self.folder_preview_title.clear()
@@ -2290,26 +2294,36 @@ class GroupingStepWidget(QWidget):
                 source_path,
             )
             return
-        ext = os.path.splitext(source_path)[1].lower()
-        image_pipeline = getattr(self._parent_window, "image_pipeline", None)
-        pixmap: QPixmap | None = None
-        preview_is_cached = False
-        if image_pipeline and ext in SUPPORTED_MEDIA_EXTENSIONS:
-            pixmap = image_pipeline.get_cached_preview_qpixmap(
-                source_path,
-                display_max_size=SELECTED_PREVIEW_DISPLAY_SIZE,
-                memory_only=True,
+        activate = getattr(self._parent_window, "activate_image_inspection", None)
+        if callable(activate):
+            activate(
+                self.large_preview_view,
+                [
+                    InspectionImageSpec(
+                        path=source_path,
+                        media_type="video"
+                        if is_video_extension(source_path)
+                        else "image",
+                    )
+                ],
             )
-            preview_is_cached = bool(pixmap and not pixmap.isNull())
-            if pixmap is None or pixmap.isNull():
-                pixmap = image_pipeline.get_cached_thumbnail_qpixmap(
-                    source_path,
-                    memory_only=True,
-                )
-        if pixmap and not pixmap.isNull():
-            self.large_preview_view.set_image(pixmap)
         else:
-            self.large_preview_view.setText("Loading preview…")
+            image_pipeline = getattr(self._parent_window, "image_pipeline", None)
+            pixmap = None
+            preview_is_cached = False
+            if image_pipeline:
+                pixmap, preview_is_cached = image_pipeline.get_immediate_review_qpixmap(
+                    source_path
+                )
+            self.large_preview_view.set_images_data(
+                [{"path": source_path, "pixmap": pixmap, "rating": 0}]
+            )
+            if not preview_is_cached:
+                request_preview = getattr(
+                    self._parent_window, "request_interactive_preview", None
+                )
+                if callable(request_preview):
+                    request_preview(source_path)
         display_name = self._preview_deletion_display_name(source_path)
         self.large_preview_name.setText(display_name)
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
@@ -2319,26 +2333,17 @@ class GroupingStepWidget(QWidget):
         self.preview_selection_label.setVisible(True)
         self.preview_selection_meta.setText(source_path)
         self.preview_selection_meta.setVisible(True)
-        if not preview_is_cached and self._parent_window is not None:
-            request_preview = getattr(
-                self._parent_window,
-                "request_interactive_preview",
-                None,
-            )
-            if callable(request_preview):
-                request_preview(source_path)
         logger.debug(
-            "Organize selected preview updated in %.3fs (path=%s cached_preview=%s pixmap=%s queued=%s)",
+            "Organize selected preview updated in %.3fs (path=%s)",
             time.perf_counter() - start_time,
             source_path,
-            preview_is_cached,
-            bool(pixmap and not pixmap.isNull()),
-            not preview_is_cached,
         )
 
     def handle_preview_ready(self, source_path: str) -> None:
-        """Upgrade the selected placeholder only if this result is still current."""
+        """Compatibility hook; shared inspection owns preview upgrades."""
         if source_path != self._current_preview_source_path:
+            return
+        if callable(getattr(self._parent_window, "activate_image_inspection", None)):
             return
         image_pipeline = getattr(self._parent_window, "image_pipeline", None)
         if image_pipeline is None:
@@ -2349,7 +2354,9 @@ class GroupingStepWidget(QWidget):
             memory_only=True,
         )
         if pixmap is not None and not pixmap.isNull():
-            self.large_preview_view.set_image(pixmap)
+            self.large_preview_view.update_image_pixmap(
+                source_path, pixmap, preserve_view=True
+            )
 
     def handle_preview_failed(self, source_path: str) -> None:
         if source_path != self._current_preview_source_path:
@@ -2360,6 +2367,9 @@ class GroupingStepWidget(QWidget):
     def _update_folder_preview(self, item: QTreeWidgetItem) -> None:
         start_time = time.perf_counter()
         self._current_preview_source_path = None
+        clear_inspection = getattr(self._parent_window, "clear_image_inspection", None)
+        if callable(clear_inspection):
+            clear_inspection(self.large_preview_view)
         preview_paths = self._folder_preview_paths_for_item(item)
         if not preview_paths:
             self._clear_selected_preview()
@@ -2511,7 +2521,9 @@ class GroupingStepWidget(QWidget):
         )
         if pixmap is None or pixmap.isNull():
             return
-        self.large_preview_view.set_image(pixmap)
+        self.large_preview_view.update_image_pixmap(
+            current_path, pixmap, preserve_view=True
+        )
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
 
     def _refresh_all_tree_icons_from_cache(self) -> None:

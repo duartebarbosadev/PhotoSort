@@ -86,6 +86,9 @@ EASY_DELETE_SHORTCUTS = (
     WorkflowShortcutSpec("previous", ("Up",), "↑", "Previous"),
     WorkflowShortcutSpec("next", ("Down",), "↓", "Next"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm / cancel"),
+    WorkflowShortcutSpec(
+        "apply", ("Shift+Return", "Shift+Enter"), "Shift+Enter", "Apply"
+    ),
     WorkflowShortcutSpec("apply_all", ("A",), "A", "All"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,

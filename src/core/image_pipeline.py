@@ -197,6 +197,82 @@ class ImagePipeline:
         qt_image = ImageQt(image).copy()
         return QPixmap.fromImage(qt_image).copy()
 
+    def qpixmap_from_pil(self, image: Image.Image) -> QPixmap:
+        """Convert a worker-produced PIL image on the UI thread."""
+        return self._qpixmap_from_pil(image)
+
+    def get_source_dimensions(self, image_path: str) -> tuple[int, int] | None:
+        """Read source dimensions without performing a full image decode."""
+        normalized_path = os.path.normpath(image_path)
+        ext = os.path.splitext(normalized_path)[1].lower()
+        try:
+            if is_raw_extension(ext):
+                import rawpy
+
+                with rawpy.imread(normalized_path) as raw:
+                    return int(raw.sizes.width), int(raw.sizes.height)
+            with Image.open(normalized_path) as image:
+                width, height = image.size
+                orientation = image.getexif().get(274, 1)
+                if orientation in {5, 6, 7, 8}:
+                    width, height = height, width
+                return int(width), int(height)
+        except Exception:
+            logger.error(
+                "Could not inspect source dimensions for %s",
+                os.path.basename(normalized_path),
+                exc_info=True,
+            )
+            return None
+
+    def load_detail_image(
+        self,
+        image_path: str,
+        target_size: tuple[int, int] | None = None,
+    ) -> Image.Image | None:
+        """Decode an oriented, display-edited detail image off the UI thread.
+
+        Detail images intentionally bypass the disk and shared memory caches. Their
+        lifetime is owned by the active viewer so large originals cannot evict the
+        navigation working set.
+        """
+        normalized_path = os.path.normpath(image_path)
+        ext = os.path.splitext(normalized_path)[1].lower()
+        decode_gate = (
+            self._high_memory_decode_gate
+            if is_raw_extension(ext) or ext in {".heic", ".heif"}
+            else None
+        )
+        if decode_gate:
+            decode_gate.acquire()
+        try:
+            if is_raw_extension(ext):
+                image = RawImageProcessor.load_raw_as_pil(
+                    normalized_path,
+                    target_mode="RGBA",
+                    apply_auto_edits=True,
+                    half_size=False,
+                )
+            elif ext in SUPPORTED_STANDARD_EXTENSIONS:
+                image = StandardImageProcessor.load_as_pil(
+                    normalized_path,
+                    target_mode="RGBA",
+                    apply_exif_transpose=True,
+                )
+            else:
+                return None
+        finally:
+            if decode_gate:
+                decode_gate.release()
+
+        if image is None:
+            return None
+        if target_size and (
+            image.width > target_size[0] or image.height > target_size[1]
+        ):
+            image.thumbnail(target_size, Image.Resampling.LANCZOS)
+        return image
+
     def _memory_get(self, key: tuple) -> Image.Image | None:
         with self._memory_cache_lock:
             image = self._memory_cache.pop(key, None)
@@ -902,38 +978,47 @@ class ImagePipeline:
             f"Preloading previews for {total_files} files (workers: {self._num_workers})..."
         )
 
+        path_iterator = iter(image_paths)
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._num_workers
         ) as executor:
             futures_map: dict[concurrent.futures.Future, str] = {}
-            for image_path in image_paths:
-                if should_continue_callback and not should_continue_callback():
-                    logger.info(
-                        "Preview preload cancelled by request. Halting new tasks."
-                    )
-                    break
-                future = executor.submit(
-                    self.ensure_preview_cached,
-                    image_path,
+
+            def submit_until_full() -> None:
+                while len(futures_map) < self._num_workers:
+                    if should_continue_callback and not should_continue_callback():
+                        return
+                    try:
+                        image_path = next(path_iterator)
+                    except StopIteration:
+                        return
+                    future = executor.submit(self.ensure_preview_cached, image_path)
+                    futures_map[future] = image_path
+
+            submit_until_full()
+            while futures_map:
+                done, _ = concurrent.futures.wait(
+                    futures_map,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
                 )
-                futures_map[future] = image_path
+                for future in done:
+                    futures_map.pop(future, None)
+                    try:
+                        future.result()
+                    except Exception:
+                        logger.error(
+                            "Error during preview preloading task", exc_info=True
+                        )
+                    processed_count += 1
+                    if progress_callback:
+                        progress_callback(processed_count, total_files)
 
-            for future in concurrent.futures.as_completed(futures_map):
-                _ = futures_map[future]  # path
-                try:
-                    future.result()  # Check for exceptions
-                except Exception:
-                    logger.error("Error during preview preloading task", exc_info=True)
-
-                processed_count += 1
-                if progress_callback:
-                    progress_callback(processed_count, total_files)
                 if should_continue_callback and not should_continue_callback():
-                    for f_cancel in futures_map:
-                        if not f_cancel.done():
-                            f_cancel.cancel()
+                    for pending in futures_map:
+                        pending.cancel()
                     logger.info("Preview preload cancelled during processing.")
                     break
+                submit_until_full()
         logger.info(
             f"Preview preloading finished. Processed {processed_count}/{total_files}."
         )
@@ -1152,6 +1237,52 @@ class ImagePipeline:
         if pixmap is not None and not pixmap.isNull():
             return pixmap
         return None
+
+    def get_immediate_review_qpixmap(
+        self,
+        image_path: str,
+        display_max_size: tuple[int, int] | None = None,
+        *,
+        thumbnail_apply_orientation: bool = True,
+    ) -> tuple[QPixmap | None, bool]:
+        """Return an instant review frame and whether it is full preview quality.
+
+        Latency-sensitive UI paths first use memory only.  If the high-quality
+        preview is not resident, a previously prepared disk thumbnail is allowed
+        as the final fallback: reading that small payload is quick and prevents
+        an empty/loading frame while the preview is promoted in the background.
+        No source image is decoded by this method.
+        """
+        pixmap = self.get_cached_preview_qpixmap(
+            image_path,
+            display_max_size=display_max_size,
+            memory_only=True,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap, True
+
+        pixmap = self.get_cached_analysis_qpixmap(
+            image_path,
+            target_size=display_max_size or ANALYSIS_CACHE_RESOLUTION,
+            memory_only=True,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap, False
+
+        pixmap = self.get_cached_thumbnail_qpixmap(
+            image_path,
+            apply_orientation=thumbnail_apply_orientation,
+            memory_only=True,
+        )
+        if pixmap is None or pixmap.isNull():
+            pixmap = self.get_cached_thumbnail_qpixmap(
+                image_path,
+                apply_orientation=thumbnail_apply_orientation,
+                memory_only=False,
+            )
+        if pixmap is not None and pixmap.isNull():
+            pixmap = None
+        return pixmap, False
 
     def clear_all_image_caches(self):
         """Clears both thumbnail and preview caches."""

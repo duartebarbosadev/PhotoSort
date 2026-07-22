@@ -24,6 +24,7 @@ from PyQt6.QtGui import (
     QAction,
     QIcon,
     QNativeGestureEvent,
+    QTransform,
 )
 from PyQt6.QtWidgets import (
     QWidget,
@@ -57,6 +58,8 @@ class ZoomableImageView(QGraphicsView):
     zoom_changed = pyqtSignal(float, QPointF)  # zoom_factor, center_on
     pan_changed = pyqtSignal(QPointF)  # center_point
     coordinates_changed = pyqtSignal(QPointF)  # mouse coordinates in scene
+    detail_requested = pyqtSignal()
+    clicked = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,6 +74,7 @@ class ZoomableImageView(QGraphicsView):
         self._empty = True
         self._last_pan_point = QPointF()
         self._is_panning = False
+        self._pan_distance = 0.0
         self._pending_pixmap = None  # For smooth transitions
 
         # Setup scene and view
@@ -122,6 +126,8 @@ class ZoomableImageView(QGraphicsView):
                 # Native gesture 'value' is a delta scale; 1.0 + delta gives a multiplier.
                 scale_delta = 1.0 + event.value()
                 if scale_delta > 0:  # Guard against invalid/negative deltas
+                    if scale_delta > 1.0:
+                        self.detail_requested.emit()
                     # Map the gesture center (global) into scene coordinates for precise anchoring
                     gesture_pos_viewport = self.viewport().mapFromGlobal(
                         event.globalPosition().toPoint()
@@ -182,6 +188,56 @@ class ZoomableImageView(QGraphicsView):
         if pixmap and not pixmap.isNull():
             return pixmap
         return None
+
+    def replace_image_preserving_view(self, pixmap: QPixmap) -> None:
+        """Replace an image while retaining its normalized center and crop."""
+        if not pixmap or pixmap.isNull() or self._empty:
+            self.set_image(pixmap)
+            return
+        old_rect = self.sceneRect()
+        viewport = self.viewport()
+        old_center = self.mapToScene(viewport.rect().center())
+        norm_x = (
+            (old_center.x() - old_rect.left()) / old_rect.width()
+            if old_rect.width() > 0
+            else 0.5
+        )
+        norm_y = (
+            (old_center.y() - old_rect.top()) / old_rect.height()
+            if old_rect.height() > 0
+            else 0.5
+        )
+        was_fitted = abs(self._zoom_factor - self._min_zoom) <= max(
+            0.001, self._min_zoom * 0.01
+        )
+        old_fractional_scale = self._zoom_factor * max(1.0, old_rect.width())
+
+        self._photo_item.setPixmap(pixmap)
+        self._empty = False
+        new_rect = QRectF(pixmap.rect())
+        self._scene.setSceneRect(new_rect)
+        self.setSceneRect(new_rect)
+        if was_fitted:
+            self.fit_in_view()
+            return
+
+        self.resetTransform()
+        fit_scale = min(
+            viewport.width() / max(1.0, new_rect.width()),
+            viewport.height() / max(1.0, new_rect.height()),
+        )
+        self._min_zoom = max(0.01, fit_scale)
+        self._zoom_factor = 1.0
+        target_zoom = max(
+            self._min_zoom,
+            old_fractional_scale / max(1.0, new_rect.width()),
+        )
+        target_center = QPointF(
+            new_rect.left() + norm_x * new_rect.width(),
+            new_rect.top() + norm_y * new_rect.height(),
+        )
+        self.set_zoom_factor(target_zoom, target_center)
+        self.centerOn(target_center)
 
     def get_zoom_factor(self) -> float:
         """Get current zoom factor"""
@@ -318,6 +374,7 @@ class ZoomableImageView(QGraphicsView):
 
         # Zoom in or out based on wheel direction
         if event.angleDelta().y() > 0:
+            self.detail_requested.emit()
             self.zoom_in(mouse_pos)
         else:
             self.zoom_out(mouse_pos)
@@ -332,6 +389,7 @@ class ZoomableImageView(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             self._last_pan_point = event.position()
             self._is_panning = True
+            self._pan_distance = 0.0
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
         super().mousePressEvent(event)
 
@@ -348,6 +406,7 @@ class ZoomableImageView(QGraphicsView):
         # Handle panning
         if self._is_panning and event.buttons() == Qt.MouseButton.LeftButton:
             delta = event.position() - self._last_pan_point
+            self._pan_distance += abs(delta.x()) + abs(delta.y())
             self._last_pan_point = event.position()
 
             # Pan the view
@@ -376,6 +435,8 @@ class ZoomableImageView(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             self._is_panning = False
             self.setCursor(Qt.CursorShape.ArrowCursor)
+            if self._pan_distance < 4.0:
+                self.clicked.emit()
         super().mouseReleaseEvent(event)
 
     @override
@@ -393,6 +454,7 @@ class ZoomableImageView(QGraphicsView):
             return
 
         if key == Qt.Key.Key_Plus or key == Qt.Key.Key_Equal:
+            self.detail_requested.emit()
             self.zoom_in()
         elif key == Qt.Key.Key_Minus:
             self.zoom_out()
@@ -499,6 +561,8 @@ class IndividualViewer(QWidget):
         self._file_path = None
         self._is_selected = False
         self._media_type: str | None = None
+        self._source_pixmap: QPixmap | None = None
+        self._display_rotation_degrees = 0
         self._is_seeking = False
 
         self._setup_ui()
@@ -638,6 +702,9 @@ class IndividualViewer(QWidget):
                 lambda checked, rating=i + 1: self._on_rating_button_clicked(rating)
             )
         self.delete_button.clicked.connect(self._on_delete_button_clicked)
+        self.image_view.clicked.connect(
+            lambda: self.clicked.emit(self._file_path) if self._file_path else None
+        )
 
     def _setup_video(self):
         self.video_player = QMediaPlayer(self)
@@ -826,15 +893,41 @@ class IndividualViewer(QWidget):
         self.video_widget.setFocus()
         self.update_rating_display(rating)
 
-    def set_data(self, pixmap: QPixmap, file_path: str, rating: int, label: str | None):
+    def set_data(
+        self,
+        pixmap: QPixmap,
+        file_path: str,
+        rating: int,
+        label: str | None,
+        rotation_degrees: int = 0,
+    ):
         """Set all data for the viewer at once."""
         logger.debug(f"IndividualViewer.set_data called with file_path: {file_path}")
         self._file_path = file_path
         self._stop_video()
         self._set_media_mode("image")
-        self.image_view.set_image(pixmap)
+        self._source_pixmap = pixmap
+        self._display_rotation_degrees = rotation_degrees % 360
+        self.image_view.set_image(self._transformed_pixmap(pixmap))
         logger.debug(f"Updating rating display to {rating}")
         self.update_rating_display(rating)
+
+    def replace_source_pixmap(self, pixmap: QPixmap, *, preserve_view: bool) -> None:
+        """Replace the decoded source while retaining this slot's display transform."""
+        self._source_pixmap = pixmap
+        displayed = self._transformed_pixmap(pixmap)
+        if preserve_view:
+            self.image_view.replace_image_preserving_view(displayed)
+        else:
+            self.image_view.set_image(displayed)
+
+    def _transformed_pixmap(self, pixmap: QPixmap) -> QPixmap:
+        if self._display_rotation_degrees:
+            return pixmap.transformed(
+                QTransform().rotate(self._display_rotation_degrees),
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        return pixmap
 
     def set_loading(
         self,
@@ -858,6 +951,8 @@ class IndividualViewer(QWidget):
         """Clear the viewer and its associated data."""
         logger.debug("Clearing image_view")
         self._file_path = None
+        self._source_pixmap = None
+        self._display_rotation_degrees = 0
         self._stop_video()
         self._set_media_mode("image")
         self.image_view.clear()
@@ -1019,6 +1114,7 @@ class SynchronizedImageViewer(QWidget):
     focused_image_changed = pyqtSignal(int, str)  # index, file_path
     side_by_side_availability_changed = pyqtSignal(bool)
     cleared = pyqtSignal()
+    detail_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1030,6 +1126,7 @@ class SynchronizedImageViewer(QWidget):
         self._view_mode = "single"
         self._is_marked_for_deletion_func = None
         self._has_any_marked_for_deletion_func = None
+        self._defer_actual_size = False
         self._layout_fit_timer = QTimer(self)
         self._layout_fit_timer.setSingleShot(True)
         self._layout_fit_timer.setInterval(50)
@@ -1085,9 +1182,9 @@ class SynchronizedImageViewer(QWidget):
         controls_layout.setSpacing(10)
 
         # -- View Mode Section --
-        view_mode_container = QFrame()
-        view_mode_container.setObjectName("viewModeContainer")
-        view_mode_layout = QHBoxLayout(view_mode_container)
+        self.view_mode_container = QFrame()
+        self.view_mode_container.setObjectName("viewModeContainer")
+        view_mode_layout = QHBoxLayout(self.view_mode_container)
         view_mode_layout.setContentsMargins(3, 3, 3, 3)
         view_mode_layout.setSpacing(0)
 
@@ -1119,13 +1216,13 @@ class SynchronizedImageViewer(QWidget):
         # Leading spacer to center controls
         controls_layout.addStretch()
 
-        controls_layout.addWidget(view_mode_container)
+        controls_layout.addWidget(self.view_mode_container)
 
         # Vertical separator
-        separator1 = QFrame()
-        separator1.setObjectName("toolbarSeparator")
-        separator1.setFrameShape(QFrame.Shape.VLine)
-        controls_layout.addWidget(separator1)
+        self.view_mode_separator = QFrame()
+        self.view_mode_separator.setObjectName("toolbarSeparator")
+        self.view_mode_separator.setFrameShape(QFrame.Shape.VLine)
+        controls_layout.addWidget(self.view_mode_separator)
 
         # -- Zoom Controls Section --
         zoom_container = QFrame()
@@ -1221,6 +1318,9 @@ class SynchronizedImageViewer(QWidget):
         viewer = IndividualViewer()
         viewer.image_view.zoom_changed.connect(self._on_zoom_changed)
         viewer.image_view.pan_changed.connect(self._on_pan_changed)
+        viewer.image_view.detail_requested.connect(
+            lambda: self.detail_requested.emit("zoom")
+        )
         viewer.ratingChanged.connect(self.ratingChanged)
         viewer.deleteRequested.connect(self.deleteRequested)
         viewer.deleteOthersRequested.connect(self._on_delete_others_requested)
@@ -1401,13 +1501,17 @@ class SynchronizedImageViewer(QWidget):
                 return
 
     def _fit_visible_images_after_layout_change(self):
-        for viewer in self.image_viewers:
-            if (
-                viewer.isVisible()
-                and viewer.has_image()
-                and not viewer.is_video_loaded()
-            ):
-                viewer.image_view.fit_in_view()
+        self._updating_sync = True
+        try:
+            for viewer in self.image_viewers:
+                if (
+                    viewer.isVisible()
+                    and viewer.has_image()
+                    and not viewer.is_video_loaded()
+                ):
+                    viewer.image_view.fit_in_view()
+        finally:
+            self._updating_sync = False
 
     def get_focused_image_path_if_any(self) -> str | None:
         """
@@ -1492,6 +1596,7 @@ class SynchronizedImageViewer(QWidget):
                         image_data.get("path", ""),  # Ensure path is always a string
                         image_data.get("rating", 0),
                         image_data.get("label"),
+                        image_data.get("rotation_degrees", 0),
                     )
                 elif image_data.get("path"):
                     viewer.set_loading(
@@ -1517,7 +1622,12 @@ class SynchronizedImageViewer(QWidget):
         self._update_controls_visibility()
 
     def update_image_pixmap(
-        self, file_path: str, pixmap: QPixmap, rating: int = 0
+        self,
+        file_path: str,
+        pixmap: QPixmap,
+        rating: int = 0,
+        *,
+        preserve_view: bool = False,
     ) -> bool:
         """Upgrade the displayed image without rebuilding layout or focus state."""
         if pixmap.isNull():
@@ -1526,7 +1636,15 @@ class SynchronizedImageViewer(QWidget):
         for viewer in self.image_viewers:
             if viewer.get_file_path() != file_path or viewer.is_video_loaded():
                 continue
-            viewer.image_view.set_image(pixmap)
+            if preserve_view:
+                was_updating_sync = self._updating_sync
+                self._updating_sync = True
+                try:
+                    viewer.replace_source_pixmap(pixmap, preserve_view=True)
+                finally:
+                    self._updating_sync = was_updating_sync
+            else:
+                viewer.replace_source_pixmap(pixmap, preserve_view=False)
             viewer.update_rating_display(rating)
             updated = True
         return updated
@@ -1575,6 +1693,7 @@ class SynchronizedImageViewer(QWidget):
                             data["path"],
                             data.get("rating", 0),
                             data.get("label"),
+                            data.get("rotation_degrees", 0),
                         )
                     elif data.get("path"):
                         viewer.set_loading(
@@ -1613,24 +1732,36 @@ class SynchronizedImageViewer(QWidget):
             QTimer.singleShot(0, lambda: self.image_viewers[0].image_view.setText(text))
 
     def _zoom_in_all(self):
-        for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.image_view.zoom_in()
+        self.detail_requested.emit("zoom")
+        viewers = [viewer for viewer in self.image_viewers if viewer.isVisible()]
+        if self.sync_enabled and viewers:
+            viewers[0].image_view.zoom_in()
+            return
+        for viewer in viewers:
+            viewer.image_view.zoom_in()
 
     def _zoom_out_all(self):
-        for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.image_view.zoom_out()
+        viewers = [viewer for viewer in self.image_viewers if viewer.isVisible()]
+        if self.sync_enabled and viewers:
+            viewers[0].image_view.zoom_out()
+            return
+        for viewer in viewers:
+            viewer.image_view.zoom_out()
 
     def _fit_all(self):
-        for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.image_view.fit_in_view()
+        self._updating_sync = True
+        try:
+            for viewer in self.image_viewers:
+                if viewer.isVisible():
+                    viewer.image_view.fit_in_view()
+        finally:
+            self._updating_sync = False
 
     def _actual_size_all(self):
-        for viewer in self.image_viewers:
-            if viewer.isVisible():
-                viewer.image_view.zoom_to_actual_size()
+        self.detail_requested.emit("actual_size")
+        if self._defer_actual_size:
+            return
+        self.zoom_to_actual_size()
 
     def _ui_initialized(self) -> bool:
         return hasattr(self, "viewer_splitter")
@@ -1638,9 +1769,16 @@ class SynchronizedImageViewer(QWidget):
     def _zoom_slider_changed(self, value: int):
         if self._updating_sync:
             return
+        if value > 0:
+            self.detail_requested.emit("zoom")
 
-        # Convert display percentage back to actual zoom factor
-        for viewer in self.image_viewers:
+        # With Sync enabled one pane drives the others. Iterating every pane
+        # would apply the same toolbar step repeatedly through signal feedback.
+        visible_viewers = [
+            viewer for viewer in self.image_viewers if viewer.isVisible()
+        ]
+        target_viewers = visible_viewers[:1] if self.sync_enabled else visible_viewers
+        for viewer in target_viewers:
             if viewer.isVisible():
                 view = viewer.image_view
                 if value == 0:
@@ -1663,6 +1801,56 @@ class SynchronizedImageViewer(QWidget):
 
                 view.set_zoom_factor(zoom_factor)
 
+    def configure_toolbar(self, *, show_view_modes: bool = True) -> None:
+        """Configure reusable toolbar sections for workflow-specific viewers."""
+        self.view_mode_container.setVisible(show_view_modes)
+        self.view_mode_separator.setVisible(show_view_modes)
+
+    def defer_actual_size_until_detail(self, enabled: bool = True) -> None:
+        """Let an inspection controller apply 1:1 after its detail batch."""
+        self._defer_actual_size = enabled
+
+    def show_comparison(self) -> None:
+        """Return a comparison session from focused mode without rebuilding slots."""
+        self._set_view_mode("side_by_side")
+
+    def set_inspection_images(self, specs, pixmaps_by_path: dict[str, QPixmap]) -> None:
+        """Populate slots from shared inspection specs and already-available frames."""
+        self.set_images_data(
+            [
+                {
+                    "path": spec.path,
+                    "pixmap": pixmaps_by_path.get(spec.path),
+                    "rating": spec.rating,
+                    "label": spec.label,
+                    "media_type": spec.media_type,
+                    "rotation_degrees": spec.rotation_degrees,
+                }
+                for spec in specs
+            ]
+        )
+
+    def current_pixmap(self) -> QPixmap | None:
+        viewer = self.get_primary_viewer()
+        return viewer.get_current_pixmap() if viewer is not None else None
+
+    def has_image(self) -> bool:
+        viewer = self.get_primary_viewer()
+        return bool(viewer and viewer.has_image())
+
+    def fit_in_view(self) -> None:
+        self._fit_all()
+
+    def zoom_to_actual_size(self) -> None:
+        """Apply 1:1 without treating a completed detail load as new intent."""
+        self._updating_sync = True
+        try:
+            for viewer in self.image_viewers:
+                if viewer.isVisible():
+                    viewer.image_view.zoom_to_actual_size()
+        finally:
+            self._updating_sync = False
+
     def _on_zoom_changed(self, zoom_factor: float, center_point: QPointF):
         if self._updating_sync:
             return
@@ -1672,12 +1860,16 @@ class SynchronizedImageViewer(QWidget):
 
         # Use display percentage instead of actual zoom percentage
         display_percentage = sender_view.get_display_zoom_percentage()
+        if display_percentage > 0:
+            self._layout_fit_timer.stop()
         self.zoom_label.setText(f"{display_percentage}%")
         self._updating_sync = True
         self.zoom_slider.setValue(display_percentage)
         self._updating_sync = False
 
         if self.sync_enabled:
+            sender_fit_zoom = max(sender_view._min_zoom, 0.000001)
+            fit_relative_zoom = zoom_factor / sender_fit_zoom
             sender_scene_rect = sender_view.sceneRect()
             norm_x = (
                 (center_point.x() - sender_scene_rect.left())
@@ -1711,20 +1903,40 @@ class SynchronizedImageViewer(QWidget):
                             + normalized_pos.y() * target_scene_rect.height()
                         )
                         viewer.image_view.set_zoom_factor(
-                            zoom_factor, QPointF(target_x, target_y)
+                            viewer.image_view._min_zoom * fit_relative_zoom,
+                            QPointF(target_x, target_y),
                         )
                     else:
-                        viewer.image_view.set_zoom_factor(zoom_factor)
+                        viewer.image_view.set_zoom_factor(
+                            viewer.image_view._min_zoom * fit_relative_zoom
+                        )
             self._updating_sync = False
 
     def _on_pan_changed(self, center_point: QPointF):
         if not self.sync_enabled or self._updating_sync:
             return
         sender_view = self.sender()
+        if not isinstance(sender_view, ZoomableImageView):
+            return
+        sender_rect = sender_view.sceneRect()
+        normalized = QPointF(
+            (center_point.x() - sender_rect.left()) / sender_rect.width()
+            if sender_rect.width() > 0
+            else 0.5,
+            (center_point.y() - sender_rect.top()) / sender_rect.height()
+            if sender_rect.height() > 0
+            else 0.5,
+        )
         self._updating_sync = True
         for viewer in self.image_viewers:
             if viewer.image_view != sender_view and viewer.isVisible():
-                viewer.image_view.centerOn(center_point)
+                target_rect = viewer.image_view.sceneRect()
+                viewer.image_view.centerOn(
+                    QPointF(
+                        target_rect.left() + normalized.x() * target_rect.width(),
+                        target_rect.top() + normalized.y() * target_rect.height(),
+                    )
+                )
         self._updating_sync = False
 
     def _on_delete_others_requested(self, file_path_to_keep: str):
@@ -1740,6 +1952,4 @@ class SynchronizedImageViewer(QWidget):
             self.deleteMultipleRequested.emit(file_paths_to_delete)
 
     def fit_to_viewport(self):
-        for viewer in self.image_viewers:
-            if viewer.isVisible() and viewer.has_image():
-                viewer.image_view.fit_in_view()
+        self._fit_all()

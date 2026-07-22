@@ -5,8 +5,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from types import SimpleNamespace
 
-from PyQt6.QtGui import QAction, QKeySequence
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction, QKeySequence, QPixmap
+from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
     QApplication,
@@ -22,6 +22,7 @@ from ui.fix_rotation_step_widget import FixRotationStepWidget
 from ui.grouping_step_widget import GroupingStepWidget
 from ui.pick_best_step_widget import PickBestStepWidget
 from ui.main_window import MainWindow
+from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.workflow_review_components import (
     EASY_DELETE_SHORTCUTS,
     FIX_ROTATION_SHORTCUTS,
@@ -96,8 +97,10 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
     assert isinstance(widget._pair_left_card, WorkflowDecisionCard)
     assert not hasattr(widget, "_keep_btn")
     assert not hasattr(widget, "_mark_btn")
-    assert "border" not in widget._pair_left_img.styleSheet()
-    assert "border" not in widget._pair_right_img.styleSheet()
+    assert isinstance(widget._sync_viewer, SynchronizedImageViewer)
+    assert len(widget._sync_viewer.image_viewers) == 2
+    assert widget._sync_viewer.sync_enabled
+    assert widget._sync_viewer.view_mode_container.isHidden()
     assert all(
         label.isHidden() for row in widget._pair_left_card._detail_rows for label in row
     )
@@ -121,7 +124,7 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
         for label in row
     )
 
-    widget._pair_right_img.clicked.emit()
+    widget._on_viewer_image_clicked(1, keep_path)
     _app.processEvents()
 
     assert not marks
@@ -179,6 +182,20 @@ def test_easy_delete_enter_cancels_a_confirmed_pick_and_restores_prior_marks():
     assert widget._confirm_btn.text() == "Confirm  →"
 
 
+def test_easy_delete_shift_enter_requests_apply():
+    widget = EasyDeleteStepWidget()
+    apply_requests: list[bool] = []
+    widget.apply_requested.connect(lambda: apply_requests.append(True))
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["Shift+Return"].activated.emit()
+
+    assert apply_requests == [True]
+    apply_spec = next(spec for spec in EASY_DELETE_SHORTCUTS if spec.action == "apply")
+    assert apply_spec.sequences == ("Shift+Return", "Shift+Enter")
+    assert apply_spec.keys == "Shift+Enter"
+
+
 def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
     marks: set[str] = set()
     first = "/tmp/first.jpg"
@@ -216,13 +233,48 @@ def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
     assert first in marks
     assert widget._current_index == 1
     assert "SELECTED FOR TRASH" in widget._single_hdr.text()
-    assert "border" not in widget._single_img.styleSheet()
+    assert len(widget._sync_viewer.image_viewers) == 1
 
     widget._on_apply_all()
     _app.processEvents()
 
     assert marks == {first, second}
     assert widget._confirmed_reviews == {first, second}
+
+
+def test_easy_delete_rebuilds_queue_when_shared_results_are_pruned_in_place():
+    deleted = "/tmp/deleted.jpg"
+    paired = "/tmp/paired.jpg"
+    remaining = "/tmp/remaining.jpg"
+    results = {
+        deleted: {
+            "type": "duplicate",
+            "pair_path": paired,
+            "suggest_delete": True,
+        },
+        remaining: {
+            "type": "blur",
+            "pair_path": None,
+            "suggest_delete": True,
+        },
+    }
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(results)
+
+    results.pop(deleted)
+    widget.show_results(results)
+
+    assert widget._flagged_paths == [remaining]
+    assert widget._visible_image_paths == (remaining,)
+    assert widget._content_stack.currentIndex() == 1
+
+    results.pop(remaining)
+    widget.show_results(results)
+
+    assert widget._flagged_paths == []
+    assert widget._visible_image_paths == ()
+    assert widget._content_stack.currentIndex() == 2
 
 
 def test_easy_delete_groups_queue_under_category_headers():
@@ -1308,6 +1360,76 @@ def test_easy_delete_focuses_exact_duplicate_without_changing_decision():
     assert widget._focused_path == right
     assert widget._pair_right_card._focused
     assert widget._pending_delete_by_review == pending_before
+
+
+def test_easy_delete_upgrades_pair_and_requests_detail_only_for_zoom(tmp_path):
+    left = str(tmp_path / "left.jpg")
+    right = str(tmp_path / "right.jpg")
+    Path(left).write_bytes(b"left")
+    Path(right).write_bytes(b"right")
+    thumbnail = QPixmap(32, 24)
+    thumbnail.fill()
+    preview = QPixmap(320, 240)
+    preview.fill()
+
+    class PreviewHost(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.detail_requests = []
+            self.preview_requests = []
+            self.image_pipeline = SimpleNamespace(
+                get_immediate_review_qpixmap=lambda _path: (thumbnail, False),
+                get_cached_preview_qpixmap=lambda _path, **_kwargs: preview,
+            )
+
+        def request_interactive_previews(self, paths):
+            self.preview_requests.append(list(paths))
+
+        def request_interactive_details(self, paths):
+            self.detail_requests.append(list(paths))
+
+        def cancel_interactive_details(self):
+            pass
+
+    host = PreviewHost()
+    layout = QVBoxLayout(host)
+    widget = EasyDeleteStepWidget()
+    widget.set_image_pipeline(host.image_pipeline)
+    widget.set_is_marked_func(lambda _path: False)
+    layout.addWidget(widget)
+    widget.show_results(
+        {
+            left: {
+                "type": "duplicate",
+                "pair_path": right,
+                "suggest_delete": True,
+                "reason": "Similar",
+            }
+        }
+    )
+
+    assert host.preview_requests[-1] == [left, right]
+    assert len(widget._sync_viewer.image_viewers) == 2
+    assert widget._sync_viewer.image_viewers[0].get_current_pixmap().size() == QSize(
+        32, 24
+    )
+
+    widget.handle_preview_ready(right)
+    assert widget._sync_viewer.image_viewers[1].get_current_pixmap().size() == QSize(
+        320, 240
+    )
+    detail = QPixmap(640, 480)
+    detail.fill()
+    widget.handle_detail_ready(right, detail)
+    assert widget.focus_image(right)
+    assert widget._sync_viewer.image_viewers[1].get_current_pixmap().size() == QSize(
+        640, 480
+    )
+    widget._sync_viewer._fit_all()
+    assert host.detail_requests == []
+    widget._sync_viewer._zoom_in_all()
+    widget._sync_viewer._zoom_in_all()
+    assert host.detail_requests == [[left, right]]
 
 
 def test_easy_delete_reentry_keeps_position_when_active_image_is_not_flagged():

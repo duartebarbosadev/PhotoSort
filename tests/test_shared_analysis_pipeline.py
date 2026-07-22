@@ -76,6 +76,37 @@ def test_easy_delete_duplicate_result_explains_sharpness_recommendation(
     assert suggested["keep_suggestion_reason"] == "higher sharpness (25.0 vs 10.0)"
 
 
+def test_easy_delete_pairs_closest_available_images_first(tmp_path, monkeypatch):
+    paths = [tmp_path / name for name in ("a.jpg", "c.jpg", "b.jpg", "d.jpg")]
+    for index, path in enumerate(paths):
+        path.write_bytes(f"distinct-{index}".encode())
+
+    angles = {"a.jpg": 0.0, "b.jpg": 0.01, "c.jpg": 0.10, "d.jpg": 0.11}
+    embeddings = {
+        str(path): [np.cos(angles[path.name]), np.sin(angles[path.name])]
+        for path in paths
+    }
+    worker = EasyDeleteWorker(
+        [str(path) for path in paths],
+        cluster_map={1: [str(path) for path in paths]},
+        embeddings_cache=embeddings,
+    )
+    monkeypatch.setattr(worker, "_get_sharpness", lambda _path: 10.0)
+
+    results = worker._detect_duplicates()
+
+    selected_pairs = {
+        frozenset((path, entry["pair_path"]))
+        for path, entry in results.items()
+        if entry["suggest_delete"]
+    }
+    assert selected_pairs == {
+        frozenset((str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg"))),
+        frozenset((str(tmp_path / "c.jpg"), str(tmp_path / "d.jpg"))),
+    }
+    assert len(results) == 4
+
+
 def test_completed_empty_easy_delete_result_is_not_recomputed():
     widget = SimpleNamespace(show_results=Mock(), show_loading=Mock())
     worker_manager = SimpleNamespace(

@@ -53,6 +53,10 @@ from PyQt6.QtGui import (
 import sys
 
 from core.image_pipeline import ImagePipeline
+from ui.controllers.image_inspection_controller import (
+    ImageInspectionController,
+    InspectionImageSpec,
+)
 from core.image_file_ops import ImageFileOperations
 from core.metadata_processor import MetadataProcessor  # New metadata processor
 from core.media_utils import is_video_extension
@@ -191,6 +195,9 @@ class MainWindow(QMainWindow):
         self.preview_load_controller = PreviewLoadController(self.image_pipeline, self)
         self.preview_load_controller.preview_ready.connect(self._handle_preview_ready)
         self.preview_load_controller.preview_failed.connect(self._handle_preview_failed)
+        self.image_inspection_controller = ImageInspectionController(
+            self.image_pipeline, self.preview_load_controller, self
+        )
 
         # Hotkey controller wraps navigation key handling
         self.hotkey_controller = HotkeyController(self)
@@ -1102,7 +1109,7 @@ class MainWindow(QMainWindow):
         self.exif_progress_container.setVisible(False)
 
     def reset_preview_requests(self) -> None:
-        self.preview_load_controller.reset()
+        self.image_inspection_controller.reset()
 
     def prefetch_navigation_previews(self, image_paths: list[str]) -> None:
         self.preview_load_controller.request(
@@ -1133,6 +1140,50 @@ class MainWindow(QMainWindow):
                 force_default_brightness=force_default_brightness,
             )
 
+    def activate_image_inspection(
+        self,
+        viewer: SynchronizedImageViewer,
+        specs: list[InspectionImageSpec],
+        *,
+        force_default_brightness: bool = False,
+    ) -> None:
+        active_viewer = self._active_workflow_inspection_viewer()
+        if viewer is not active_viewer:
+            logger.debug(
+                "Ignoring inspection activation from an inactive workflow viewer"
+            )
+            return
+        self.image_inspection_controller.activate(
+            viewer,
+            specs,
+            force_default_brightness=force_default_brightness,
+        )
+
+    def _active_workflow_inspection_viewer(
+        self,
+    ) -> SynchronizedImageViewer | None:
+        """Return the sole viewer allowed to own the application inspection session."""
+        workflow_step = getattr(self.app_state, "workflow_step", "organize")
+        if workflow_step == "organize":
+            return self.grouping_step_widget.large_preview_view
+        if workflow_step == "easy_delete":
+            widget = self.easy_delete_step_widget
+            return widget._sync_viewer if widget is not None else None
+        if workflow_step == "fix_rotation":
+            widget = self.fix_rotation_step_widget
+            return widget._sync_viewer if widget is not None else None
+        if workflow_step == "pick_best":
+            widget = self.pick_best_step_widget
+            return widget._sync_viewer if widget is not None else None
+        if workflow_step == "cull":
+            return self.advanced_image_viewer
+        return None
+
+    def clear_image_inspection(
+        self, viewer: SynchronizedImageViewer | None = None
+    ) -> None:
+        self.image_inspection_controller.clear(viewer)
+
     def _get_cached_interactive_pixmap(
         self,
         image_path: str,
@@ -1140,21 +1191,11 @@ class MainWindow(QMainWindow):
         apply_thumbnail_orientation: bool = False,
     ) -> tuple[QPixmap | None, bool]:
         """Return an immediately available pixmap without decoding on the UI thread."""
-        pixmap = self.image_pipeline.get_cached_preview_qpixmap(
+        return self.image_pipeline.get_immediate_review_qpixmap(
             image_path,
             display_max_size=DISPLAY_MAX_RESOLUTION,
-            memory_only=True,
+            thumbnail_apply_orientation=apply_thumbnail_orientation,
         )
-        preview_is_cached = bool(pixmap and not pixmap.isNull())
-        if not preview_is_cached:
-            pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
-                image_path,
-                apply_orientation=apply_thumbnail_orientation,
-                memory_only=True,
-            )
-        if pixmap is not None and pixmap.isNull():
-            pixmap = None
-        return pixmap, preview_is_cached
 
     def schedule_visible_thumbnail_load(self, *_args) -> None:
         self.thumbnail_loader.schedule()
@@ -3046,38 +3087,17 @@ class MainWindow(QMainWindow):
             )
             return
 
-        primary_viewer = self.advanced_image_viewer.get_primary_viewer()
-        reuse_preview = (
-            primary_viewer is not None
-            and primary_viewer.get_file_path() == file_path
-            and primary_viewer.has_image()
-            and self._last_displayed_preview_path == file_path
+        self.activate_image_inspection(
+            self.advanced_image_viewer,
+            [
+                InspectionImageSpec(
+                    path=file_path,
+                    rating=metadata.get("rating", 0),
+                    label=metadata.get("label"),
+                )
+            ],
         )
-
-        pixmap: QPixmap | None = None
-        if reuse_preview:
-            pixmap = primary_viewer.get_current_pixmap()
-            if pixmap is None or pixmap.isNull():
-                reuse_preview = False
-                logger.debug("Primary viewer pixmap unavailable; regenerating preview.")
-            else:
-                logger.debug("Skipping preview regeneration for repeated selection.")
-                primary_viewer.update_rating_display(metadata.get("rating", 0))
-
-        if not reuse_preview:
-            pixmap, preview_is_cached = self._get_cached_interactive_pixmap(file_path)
-            image_data = {
-                "pixmap": pixmap,
-                "path": file_path,
-                "rating": metadata.get("rating", 0),
-            }
-            self.advanced_image_viewer.set_image_data(image_data)
-
-            if not preview_is_cached:
-                # A cache miss must never decode on the UI thread. Keyboard
-                # navigation may already have queued this path and its lookahead;
-                # the controller deduplicates this narrower mouse request.
-                self.request_interactive_preview(file_path)
+        pixmap = self.advanced_image_viewer.current_pixmap()
 
         self._last_displayed_preview_path = file_path
         self._update_status_bar_for_image(
@@ -3090,6 +3110,16 @@ class MainWindow(QMainWindow):
 
     def _handle_preview_ready(self, file_path: str) -> None:
         """Upgrade the current thumbnail only when the result is still relevant."""
+        if file_path in self.image_inspection_controller.active_paths:
+            if self.app_state.focused_image_path == file_path:
+                metadata = self._get_cached_metadata_for_selection(file_path) or {}
+                self._update_status_bar_for_image(
+                    file_path,
+                    metadata,
+                    self.advanced_image_viewer.current_pixmap(),
+                    self.app_state.get_file_data_by_path(file_path),
+                )
+            return
         workflow_widget = {
             "organize": self.grouping_step_widget,
             "easy_delete": self.easy_delete_step_widget,
@@ -3132,6 +3162,8 @@ class MainWindow(QMainWindow):
         )
 
     def _handle_preview_failed(self, file_path: str) -> None:
+        if file_path in self.image_inspection_controller.active_paths:
+            return
         if self.app_state.workflow_step == "organize":
             self.grouping_step_widget.handle_preview_failed(file_path)
         self.advanced_image_viewer.show_preview_message(
@@ -3187,12 +3219,16 @@ class MainWindow(QMainWindow):
             self.invalidate_last_displayed_preview()
             return
 
-        self.advanced_image_viewer.set_image_data(
-            {
-                "media_type": "video",
-                "path": file_path,
-                "rating": metadata.get("rating", 0),
-            }
+        self.activate_image_inspection(
+            self.advanced_image_viewer,
+            [
+                InspectionImageSpec(
+                    path=file_path,
+                    media_type="video",
+                    rating=metadata.get("rating", 0),
+                    label=metadata.get("label"),
+                )
+            ],
         )
         self._last_displayed_preview_path = file_path
         self._update_status_bar_for_image(
@@ -3285,8 +3321,8 @@ class MainWindow(QMainWindow):
             return
 
         images_data_for_viewer = []
+        inspection_specs = []
         metadata_for_sidebar = []
-        missing_preview_paths = []
 
         for path in selected_paths:
             if is_video_extension(path):
@@ -3303,14 +3339,19 @@ class MainWindow(QMainWindow):
                         else None,
                     }
                 )
+                inspection_specs.append(
+                    InspectionImageSpec(
+                        path=path,
+                        media_type="video",
+                        rating=basic_metadata.get("rating", 0) if basic_metadata else 0,
+                        label=basic_metadata.get("label") if basic_metadata else None,
+                    )
+                )
                 combined_meta = (basic_metadata or {}).copy()
                 combined_meta["raw_exif"] = {}
                 metadata_for_sidebar.append(combined_meta)
                 continue
 
-            pixmap, preview_is_cached = self._get_cached_interactive_pixmap(path)
-            if not preview_is_cached:
-                missing_preview_paths.append(path)
             basic_metadata = self._get_cached_metadata_for_selection(path)
             raw_exif = MetadataProcessor.get_cached_detailed_metadata(
                 path, self.app_state.exif_disk_cache
@@ -3319,11 +3360,17 @@ class MainWindow(QMainWindow):
             images_data_for_viewer.append(
                 {
                     "media_type": "image",
-                    "pixmap": pixmap,
                     "path": path,
                     "rating": basic_metadata.get("rating", 0) if basic_metadata else 0,
                     "label": basic_metadata.get("label") if basic_metadata else None,
                 }
+            )
+            inspection_specs.append(
+                InspectionImageSpec(
+                    path=path,
+                    rating=basic_metadata.get("rating", 0) if basic_metadata else 0,
+                    label=basic_metadata.get("label") if basic_metadata else None,
+                )
             )
 
             combined_meta = (basic_metadata or {}).copy()
@@ -3331,9 +3378,23 @@ class MainWindow(QMainWindow):
             metadata_for_sidebar.append(combined_meta)
 
         if images_data_for_viewer:
-            self.advanced_image_viewer.set_images_data(images_data_for_viewer)
-            if missing_preview_paths:
-                self.preview_load_controller.request(missing_preview_paths)
+            activate = getattr(self, "activate_image_inspection", None)
+            if callable(activate):
+                activate(self.advanced_image_viewer, inspection_specs)
+            else:
+                missing_preview_paths = []
+                for image_data in images_data_for_viewer:
+                    if image_data.get("media_type") == "video":
+                        continue
+                    pixmap, cached = self._get_cached_interactive_pixmap(
+                        image_data["path"]
+                    )
+                    image_data["pixmap"] = pixmap
+                    if not cached:
+                        missing_preview_paths.append(image_data["path"])
+                self.advanced_image_viewer.set_images_data(images_data_for_viewer)
+                if missing_preview_paths:
+                    self.preview_load_controller.request(missing_preview_paths)
 
             if self.sidebar_visible:
                 if len(images_data_for_viewer) >= 2:
@@ -4740,6 +4801,13 @@ class MainWindow(QMainWindow):
             self._update_image_info_label()
 
             self.grouping_step_widget.remove_deleted_paths(successfully_deleted)
+            if (
+                self.easy_delete_step_widget is not None
+                and self.app_state.easy_delete_results is not None
+            ):
+                self.easy_delete_step_widget.show_results(
+                    self.app_state.easy_delete_results
+                )
             self.mark_cull_model_dirty()
             self._refresh_workflow_deletion_state()
 

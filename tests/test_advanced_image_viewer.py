@@ -67,6 +67,30 @@ def test_preview_upgrade_does_not_rebuild_view_mode():
     viewer.deleteLater()
 
 
+def test_preview_upgrade_can_preserve_normalized_crop():
+    viewer = SynchronizedImageViewer()
+    viewer.resize(700, 500)
+    viewer.show()
+    initial = _make_image("detail.jpg", size=400)
+    viewer.set_image_data(initial)
+    QTest.qWait(80)
+    image_view = viewer.get_primary_viewer().image_view
+    image_view.set_zoom_factor(image_view.get_zoom_factor() * 1.8)
+    image_view.centerOn(280, 120)
+    old_fractional_scale = image_view.get_zoom_factor() * image_view.sceneRect().width()
+
+    upgraded = _make_image("detail.jpg", size=1200)
+    assert viewer.update_image_pixmap(
+        upgraded["path"],
+        upgraded["pixmap"],
+        preserve_view=True,
+    )
+
+    new_fractional_scale = image_view.get_zoom_factor() * image_view.sceneRect().width()
+    assert abs(new_fractional_scale - old_fractional_scale) < 1.0
+    viewer.deleteLater()
+
+
 def test_loading_placeholder_preserves_path_for_async_upgrade():
     viewer = SynchronizedImageViewer()
     viewer.set_image_data({"pixmap": None, "path": "pending.arw", "rating": 2})
@@ -127,6 +151,60 @@ def test_repeated_layout_changes_coalesce_to_one_fit():
     QTest.qWait(80)
 
     assert len(timeout_spy) == 1
+    viewer.deleteLater()
+
+
+def test_fit_stays_on_preview_but_zoom_and_actual_size_request_detail():
+    viewer = SynchronizedImageViewer()
+    viewer.set_image_data(_make_image("detail-intent.jpg", size=300))
+    requests = QSignalSpy(viewer.detail_requested)
+
+    viewer._fit_all()
+    assert len(requests) == 0
+    viewer._zoom_in_all()
+    viewer._actual_size_all()
+
+    assert [event[0] for event in requests] == ["zoom", "actual_size"]
+    viewer.deleteLater()
+
+
+def test_sync_zoom_uses_fit_relative_scale_for_asymmetric_panes():
+    viewer = SynchronizedImageViewer()
+    viewer.resize(900, 500)
+    viewer.show()
+    viewer.set_images_data(
+        [_make_image("left.jpg", size=300), _make_image("right.jpg", size=1200)]
+    )
+    QTest.qWait(80)
+    left = viewer.image_viewers[0].image_view
+    right = viewer.image_viewers[1].image_view
+
+    # Different raster sizes naturally produce different absolute Fit scales.
+    assert left._min_zoom != right._min_zoom
+    left_fit = left._min_zoom
+    right_fit = right._min_zoom
+
+    right.zoom_in()
+
+    assert abs(left.get_zoom_factor() / left_fit - 1.15) < 0.001
+    assert abs(right.get_zoom_factor() / right_fit - 1.15) < 0.001
+    viewer.deleteLater()
+
+
+def test_synced_toolbar_zoom_applies_exactly_one_step():
+    viewer = SynchronizedImageViewer()
+    viewer.resize(900, 500)
+    viewer.show()
+    viewer.set_images_data(
+        [_make_image("left.jpg", size=300), _make_image("right.jpg", size=1200)]
+    )
+    QTest.qWait(80)
+    fit_scales = [slot.image_view._min_zoom for slot in viewer.image_viewers]
+
+    viewer._zoom_in_all()
+
+    for slot, fit_scale in zip(viewer.image_viewers, fit_scales, strict=True):
+        assert abs(slot.image_view.get_zoom_factor() / fit_scale - 1.15) < 0.001
     viewer.deleteLater()
 
 

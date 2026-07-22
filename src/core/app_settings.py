@@ -83,6 +83,9 @@ EASY_DELETE_BLUR_THRESHOLD_KEY = "EasyDelete/BlurThreshold"
 EASY_DELETE_DARK_THRESHOLD_KEY = "EasyDelete/DarkThreshold"
 EASY_DELETE_WHITE_THRESHOLD_KEY = "EasyDelete/WhiteThreshold"
 EASY_DELETE_DUPLICATE_DISTANCE_KEY = "EasyDelete/DuplicateCosineDistance"
+EASY_DELETE_DUPLICATE_DISTANCE_V2_MIGRATED_KEY = (
+    "EasyDelete/DuplicateCosineDistanceV2Migrated"
+)
 
 
 # Cache directories
@@ -113,6 +116,11 @@ DEFAULT_OPENAI_MAX_TOKENS = 200
 DEFAULT_OPENAI_TIMEOUT = 600
 DEFAULT_OPENAI_MAX_WORKERS = 4
 DEFAULT_BEST_SHOT_BATCH_SIZE = 3
+
+# Image inspection quality progression. Originals stay memory-only and are
+# bounded across the complete visible comparison set.
+INSPECTION_DETAIL_DWELL_MS = 1000
+INSPECTION_DETAIL_BUDGET_BYTES = 512 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +162,8 @@ EASY_DELETE_WHITE_CLIP_FRACTION = (
 EASY_DELETE_WHITE_CLIP_VALUE = 245  # 0-255; pixels at/above this count as "white"
 EASY_DELETE_DARK_MEAN_THRESHOLD = 15.0  # 0-255 mean brightness; below = near-black
 EASY_DELETE_WHITE_MEAN_THRESHOLD = 248.0  # 0-255 mean brightness; above = overexposed
-EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01  # cosine distance; below = near-identical
+EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.005  # lower = stricter near-identical match
+_OLD_EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01
 
 # Fix Rotation step
 FIX_ROTATION_MIN_CONFIDENCE = 0.70  # model confidence; below = skip suggestion
@@ -393,17 +402,29 @@ def set_easy_delete_white_threshold(value: float):
 def get_easy_delete_duplicate_distance() -> float:
     """Cosine-distance cutoff; pairs closer than this are flagged near-duplicates."""
     settings = _get_settings()
-    return settings.value(
+    value = settings.value(
         EASY_DELETE_DUPLICATE_DISTANCE_KEY,
         EASY_DELETE_DUPLICATE_COSINE_DISTANCE,
         type=float,
     )
+    migrated = settings.value(
+        EASY_DELETE_DUPLICATE_DISTANCE_V2_MIGRATED_KEY,
+        False,
+        type=bool,
+    )
+    if not migrated:
+        if value == _OLD_EASY_DELETE_DUPLICATE_COSINE_DISTANCE:
+            value = EASY_DELETE_DUPLICATE_COSINE_DISTANCE
+            settings.setValue(EASY_DELETE_DUPLICATE_DISTANCE_KEY, value)
+        settings.setValue(EASY_DELETE_DUPLICATE_DISTANCE_V2_MIGRATED_KEY, True)
+    return value
 
 
 def set_easy_delete_duplicate_distance(value: float):
     """Set the Easy Delete near-duplicate cosine-distance threshold."""
     settings = _get_settings()
     settings.setValue(EASY_DELETE_DUPLICATE_DISTANCE_KEY, float(value))
+    settings.setValue(EASY_DELETE_DUPLICATE_DISTANCE_V2_MIGRATED_KEY, True)
 
 
 # --- First-Run Intro Video ---

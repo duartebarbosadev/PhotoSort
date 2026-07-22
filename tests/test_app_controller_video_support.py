@@ -68,6 +68,7 @@ class _DummyWorkerManager:
     def __init__(self):
         self.start_thumbnail_preload = Mock()
         self.start_rating_load = Mock()
+        self.start_preview_warming = Mock()
         self.start_rating_writer = Mock()
         self.start_best_shot_analysis = Mock()
 
@@ -111,6 +112,7 @@ def test_handle_scan_finished_preloads_thumbnails_and_metadata_for_videos_too():
     main_window.start_thumbnail_warming.assert_called_once_with(
         [image_path, video_path]
     )
+    worker_manager.start_preview_warming.assert_called_once_with([image_path])
     args, _ = worker_manager.start_rating_load.call_args
     loaded_data = args[0]
     assert len(loaded_data) == 2

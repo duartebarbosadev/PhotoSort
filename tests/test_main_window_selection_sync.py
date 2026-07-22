@@ -6,6 +6,7 @@ from src.ui.main_window import MainWindow
 
 def _cache_only_pipeline():
     return SimpleNamespace(
+        get_immediate_review_qpixmap=Mock(return_value=(None, False)),
         get_cached_preview_qpixmap=Mock(return_value=None),
         get_cached_thumbnail_qpixmap=Mock(return_value=None),
         get_preview_qpixmap=Mock(side_effect=AssertionError("synchronous preview")),
@@ -117,6 +118,27 @@ def test_multi_selection_uses_placeholders_and_one_background_request(tmp_path):
     preview_controller.request.assert_called_once_with(paths)
     pipeline.get_preview_qpixmap.assert_not_called()
     pipeline.get_thumbnail_qpixmap.assert_not_called()
+
+
+def test_inactive_workflow_cannot_replace_active_inspection_session():
+    active_viewer = Mock()
+    hidden_viewer = Mock()
+    inspection_controller = Mock()
+    context = SimpleNamespace(
+        image_inspection_controller=inspection_controller,
+        _active_workflow_inspection_viewer=lambda: active_viewer,
+    )
+
+    MainWindow.activate_image_inspection(context, hidden_viewer, [Mock()])
+    inspection_controller.activate.assert_not_called()
+
+    specs = [Mock()]
+    MainWindow.activate_image_inspection(context, active_viewer, specs)
+    inspection_controller.activate.assert_called_once_with(
+        active_viewer,
+        specs,
+        force_default_brightness=False,
+    )
 
 
 def test_rotation_comparison_never_decodes_on_ui_thread(tmp_path):

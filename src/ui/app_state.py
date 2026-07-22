@@ -197,6 +197,7 @@ class AppState:
         self.marked_for_deletion.discard(file_path)
         if self.focused_image_path == file_path:
             self.focused_image_path = None
+        self._remove_path_from_workflow_results(file_path)
 
         logger.debug(
             f"Removed data for {os.path.basename(file_path)}: "
@@ -206,6 +207,30 @@ class AppState:
             f"cluster_results={cluster_removed is not None}, "
             f"embeddings_cache={embedding_removed is not None}"
         )
+
+    def _remove_path_from_workflow_results(self, file_path: str) -> None:
+        """Invalidate analysis results that can no longer be reviewed safely."""
+
+        if self.easy_delete_results is not None:
+            invalid_reviews = [
+                review_path
+                for review_path, entry in self.easy_delete_results.items()
+                if review_path == file_path or entry.get("pair_path") == file_path
+            ]
+            for review_path in invalid_reviews:
+                self.easy_delete_results.pop(review_path, None)
+
+        if self.fix_rotation_results is not None:
+            self.fix_rotation_results.pop(file_path, None)
+
+        invalid_clusters = [
+            cluster_id
+            for cluster_id, cluster in self.pick_best_results.items()
+            if file_path in cluster.get("all_paths", [])
+        ]
+        for cluster_id in invalid_clusters:
+            self.pick_best_results.pop(cluster_id, None)
+        self.pick_best_winners_by_path.pop(file_path, None)
 
     def update_path(self, old_path: str, new_path: str):
         """Updates all cache entries and data references from an old path to a new path."""
