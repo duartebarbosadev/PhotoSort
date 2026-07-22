@@ -114,13 +114,13 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
     detail_values = [
         value.text() for _key, value in widget._pair_left_card._detail_rows
     ]
-    assert detail_keys[:2] == ["Camera", "Exposure"]
-    assert detail_values[:2] == ["Canon EOS R5", "1/250s  ISO 200"]
+    assert detail_keys[:3] == ["Path", "Camera", "Exposure"]
+    assert detail_values[:3] == [delete_path, "Canon EOS R5", "1/250s  ISO 200"]
     assert "Reason" not in detail_keys
     assert "Lower sharpness" not in detail_values
     assert all(
         not label.isHidden()
-        for row in widget._pair_left_card._detail_rows[:2]
+        for row in widget._pair_left_card._detail_rows[:3]
         for label in row
     )
 
