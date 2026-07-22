@@ -209,7 +209,7 @@ class WorkflowDecisionCard(QFrame):
 
         self._details_visible = True
         self._detail_rows: list[tuple[QLabel, QLabel]] = []
-        for row in range(6):
+        for row in range(8):
             key = QLabel()
             key.setObjectName("workflowCompareMetaKey")
             value = QLabel()
