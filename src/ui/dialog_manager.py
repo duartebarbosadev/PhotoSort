@@ -42,6 +42,7 @@ from core.app_settings import (
     get_workflow_step_visibility,
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
+    MAX_EXIF_CACHE_SIZE_MB,
     set_easy_delete_blur_threshold,
     set_easy_delete_dark_threshold,
     set_easy_delete_duplicate_distance,
@@ -1915,9 +1916,20 @@ class DialogManager:
 
         self.parent.exif_cache_size_combo = QComboBox()
         self.parent.exif_cache_size_combo.setObjectName("exifCacheSizeCombo")
-        self.parent.exif_cache_size_options_mb = [64, 128, 256, 512, 1024]
+        self.parent.exif_cache_size_options_mb = [
+            256,
+            512,
+            1024,
+            2048,
+            3072,
+            4096,
+            MAX_EXIF_CACHE_SIZE_MB,
+        ]
         self.parent.exif_cache_size_combo.addItems(
-            [f"{size} MB" for size in self.parent.exif_cache_size_options_mb]
+            [
+                f"{size // 1024} GB" if size % 1024 == 0 else f"{size} MB"
+                for size in self.parent.exif_cache_size_options_mb
+            ]
         )
         current_exif_conf_mb = get_exif_cache_size_mb()
         try:
@@ -2157,6 +2169,41 @@ class DialogManager:
         )
         warn_box.exec()
         logger.info("Closed potential cache overflow warning dialog")
+
+    def show_exif_cache_capacity_warning(
+        self,
+        dataset_entries: int,
+        resident_entries: int,
+        cache_limit_bytes: int,
+    ) -> None:
+        """Warn when metadata for the current folder cannot remain cached."""
+        evicted_entries = max(0, dataset_entries - resident_entries)
+        cache_limit_gb = cache_limit_bytes / (1024 * 1024 * 1024)
+        warning_msg = (
+            f"The EXIF metadata for this folder does not fit in the configured "
+            f"{cache_limit_gb:.2f} GB cache.\n\n"
+            f"{evicted_entries:,} of {dataset_entries:,} entries were evicted while "
+            "the folder was loading. Those files will require metadata extraction "
+            "again the next time this folder is opened.\n\n"
+            "Increase the EXIF Metadata limit in Settings > Manage Cache."
+        )
+
+        logger.warning(
+            "Showing EXIF cache capacity warning: resident=%d total=%d limit=%.2f GB",
+            resident_entries,
+            dataset_entries,
+            cache_limit_gb,
+        )
+        warn_box = QMessageBox(self.parent)
+        warn_box.setIcon(QMessageBox.Icon.Warning)
+        warn_box.setWindowTitle("EXIF Cache Too Small")
+        warn_box.setText(warning_msg)
+        warn_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        warn_box.setDefaultButton(QMessageBox.StandardButton.Ok)
+        warn_box.setWindowFlags(
+            warn_box.windowFlags() | Qt.WindowType.FramelessWindowHint
+        )
+        warn_box.exec()
 
     def show_commit_deletions_dialog(self, marked_files: list[str]) -> bool:
         """

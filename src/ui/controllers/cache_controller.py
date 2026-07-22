@@ -52,7 +52,12 @@ class CacheController:
         exif_cache = getattr(ctx.app_state, "exif_disk_cache", None)
         if exif_cache:
             configured_mb = exif_cache.get_current_size_limit_mb()
-            ctx.exif_cache_configured_limit_label.setText(f"{configured_mb} MB")
+            configured_text = (
+                f"{configured_mb / 1024:.2f} GB"
+                if configured_mb >= 1024
+                else f"{configured_mb} MB"
+            )
+            ctx.exif_cache_configured_limit_label.setText(configured_text)
             ctx.exif_cache_usage_label.setText(
                 f"{exif_cache.volume() / (1024 * 1024):.2f} MB"
             )
@@ -184,11 +189,13 @@ class CacheController:
                 set_exif_cache_size_mb(new_size_mb)
                 exif_cache.reinitialize_from_settings()
                 ctx.status_message(
-                    f"EXIF cache limit set to {new_size_mb} MB. Cache reinitialized.",
+                    f"EXIF cache limit set to {new_size_mb / 1024:.2f} GB. "
+                    "Cache reinitialized.",
                     5000,
                 )
             else:
                 ctx.status_message(
-                    f"EXIF cache limit is already {new_size_mb} MB.", 3000
+                    f"EXIF cache limit is already {new_size_mb / 1024:.2f} GB.",
+                    3000,
                 )
         self.update_labels()

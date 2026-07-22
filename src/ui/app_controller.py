@@ -157,6 +157,7 @@ class AppController(QObject):
         self._pending_grouping_preview: tuple[object, str] | None = None
         self._cancelled_workflows: set[str] = set()
         self._ignore_similarity_results = False
+        self._pending_exif_cache_capacity_warning: tuple[int, int, int] | None = None
 
     def is_workflow_analysis_running(self, workflow: str) -> bool:
         if workflow == "organize":
@@ -248,6 +249,9 @@ class AppController(QObject):
             self.handle_rating_load_finished
         )
         self.worker_manager.rating_load_error.connect(self.handle_rating_load_error)
+        self.worker_manager.rating_load_cache_capacity_warning.connect(
+            self.handle_exif_cache_capacity_warning
+        )
 
         # Rotation Detection Worker
         self.worker_manager.rotation_detection_progress.connect(
@@ -411,8 +415,10 @@ class AppController(QObject):
             self.app_state.marked_for_deletion.update(preserved_marks)
         self.main_window.reset_thumbnail_requests()
         self.main_window.reset_preview_requests()
+        self.main_window.hide_exif_progress()
         self.main_window.invalidate_last_displayed_preview()
         self._pending_grouping_preview = None
+        self._pending_exif_cache_capacity_warning = None
         self.app_state.current_folder_path = folder_path
         self.app_state.skip_grouping_step_once = skip_grouping_step
         if record_as_source:
@@ -1681,10 +1687,7 @@ class AppController(QObject):
             finish_transition(successful, failed)
 
     def handle_rating_load_progress(self, current: int, total: int, basename: str):
-        percentage = int((current / total) * 100) if total > 0 else 0
-        self.main_window.update_loading_text(
-            f"Loading ratings: {percentage}% ({current}/{total}) - {basename}"
-        )
+        self.main_window.set_exif_progress(current, total)
 
     def handle_metadata_batch_loaded(
         self, metadata_batch: list[tuple[str, dict[str, Any]]]
@@ -1715,11 +1718,39 @@ class AppController(QObject):
         )
 
         self.main_window.hide_loading_overlay()
+        self.main_window.hide_exif_progress()
+
+        warning = self._pending_exif_cache_capacity_warning
+        self._pending_exif_cache_capacity_warning = None
+        if warning is not None:
+            dataset_entries, resident_entries, cache_limit_bytes = warning
+            QTimer.singleShot(
+                0,
+                lambda: self.main_window.dialog_manager.show_exif_cache_capacity_warning(
+                    dataset_entries,
+                    resident_entries,
+                    cache_limit_bytes,
+                ),
+            )
+
+    def handle_exif_cache_capacity_warning(
+        self,
+        dataset_entries: int,
+        resident_entries: int,
+        cache_limit_bytes: int,
+    ) -> None:
+        """Defer the modal warning until background metadata loading finishes."""
+        self._pending_exif_cache_capacity_warning = (
+            dataset_entries,
+            resident_entries,
+            cache_limit_bytes,
+        )
 
     def handle_rating_load_error(self, message: str):
         logger.error(f"Rating load failed: {message}", exc_info=True)
         self.main_window.statusBar().showMessage(f"Rating Load Error: {message}", 5000)
         self.main_window.hide_loading_overlay()
+        self.main_window.hide_exif_progress()
 
     def handle_similarity_progress(self, percentage, message):
         if getattr(self, "_ignore_similarity_results", False):

@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from src.ui.app_controller import AppController
 
@@ -42,6 +42,8 @@ class _DummyMainWindow:
         self.overlay_hidden = False
         self.schedule_visible_thumbnail_load = Mock()
         self.start_thumbnail_warming = Mock()
+        self.set_exif_progress = Mock()
+        self.hide_exif_progress = Mock()
 
     def update_loading_text(self, text):
         self._loading_updates.append(text)
@@ -126,6 +128,19 @@ def test_rating_completion_does_not_trigger_global_preview_preload():
 
     worker_manager.start_preview_preload.assert_not_called()
     assert main_window.overlay_hidden
+    main_window.hide_exif_progress.assert_called_once_with()
+
+
+def test_rating_progress_updates_the_exif_footer_progress():
+    controller, main_window, _, _ = _make_controller([])
+
+    controller.handle_rating_load_progress(0, 4_482, "")
+    controller.handle_rating_load_progress(250, 4_482, "photo.arw")
+
+    assert main_window.set_exif_progress.call_args_list == [
+        call(0, 4_482),
+        call(250, 4_482),
+    ]
 
 
 def test_apply_rating_to_selection_skips_videos_and_writes_images_only():

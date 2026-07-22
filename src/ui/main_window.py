@@ -553,6 +553,19 @@ class MainWindow(QMainWindow):
         thumbnail_progress_layout.addWidget(self.thumbnail_progress_bar)
         self.thumbnail_progress_container.setVisible(False)
         self.workflow_footer_right_layout.addWidget(self.thumbnail_progress_container)
+
+        self.exif_progress_container = QWidget()
+        exif_progress_layout = QHBoxLayout(self.exif_progress_container)
+        exif_progress_layout.setContentsMargins(6, 0, 6, 0)
+        exif_progress_layout.setSpacing(6)
+        self.exif_progress_label = QLabel()
+        self.exif_progress_bar = QProgressBar()
+        self.exif_progress_bar.setTextVisible(False)
+        self.exif_progress_bar.setFixedWidth(110)
+        exif_progress_layout.addWidget(self.exif_progress_label)
+        exif_progress_layout.addWidget(self.exif_progress_bar)
+        self.exif_progress_container.setVisible(False)
+        self.workflow_footer_right_layout.addWidget(self.exif_progress_container)
         logger.debug(f"Widgets created in {time.perf_counter() - start_time:.4f}s.")
 
     def _create_layout(self):
@@ -1068,6 +1081,25 @@ class MainWindow(QMainWindow):
 
     def hide_thumbnail_progress(self) -> None:
         self.thumbnail_progress_container.setVisible(False)
+
+    def set_exif_progress(self, current: int, total: int) -> None:
+        """Show background EXIF preparation independently of thumbnails."""
+        if total <= 0:
+            self.hide_exif_progress()
+            return
+        if current <= 0:
+            self.exif_progress_label.setText("Preparing EXIF data…")
+            self.exif_progress_bar.setRange(0, 0)
+        else:
+            self.exif_progress_label.setText(
+                f"Preparing EXIF data {current:,} / {total:,}"
+            )
+            self.exif_progress_bar.setRange(0, total)
+            self.exif_progress_bar.setValue(min(current, total))
+        self.exif_progress_container.setVisible(True)
+
+    def hide_exif_progress(self) -> None:
+        self.exif_progress_container.setVisible(False)
 
     def reset_preview_requests(self) -> None:
         self.preview_load_controller.reset()

@@ -93,7 +93,8 @@ def get_huggingface_cache_dir() -> str:
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
-DEFAULT_EXIF_CACHE_SIZE_MB = 256  # Default to 256 MB for EXIF cache
+DEFAULT_EXIF_CACHE_SIZE_MB = 2048  # Default to 2 GB for EXIF cache
+MAX_EXIF_CACHE_SIZE_MB = 5120  # Largest selectable EXIF cache limit (5 GB)
 DEFAULT_ROTATION_CONFIRM_LOSSY = True  # Default to asking before lossy rotation
 DEFAULT_SHOW_WORKFLOW_SHORTCUTS = True
 DEFAULT_WORKFLOW_STEP_VISIBILITY = dict.fromkeys(WORKFLOW_STEP_VISIBILITY_KEYS, True)
