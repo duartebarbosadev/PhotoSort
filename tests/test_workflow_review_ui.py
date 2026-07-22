@@ -474,7 +474,7 @@ def test_review_workflows_share_compact_review_list_panel():
     assert not pick_best._review_list_panel.filters.isVisible()
 
 
-def test_footer_shortcuts_use_the_most_columns_that_fit():
+def test_footer_shortcuts_use_at_most_three_rows_and_still_reflow():
     strip = WorkflowShortcutStrip(ORGANIZE_SHORTCUTS)
     stylesheet = Path("src/ui/dark_theme.qss").read_text(encoding="utf-8")
     strip.setStyleSheet(stylesheet)
@@ -487,7 +487,11 @@ def test_footer_shortcuts_use_the_most_columns_that_fit():
     strip.resize(320, 100)
     _app.processEvents()
 
-    assert 1 < strip._current_columns < len(ORGANIZE_SHORTCUTS)
+    row_count = (
+        len(ORGANIZE_SHORTCUTS) + strip._current_columns - 1
+    ) // strip._current_columns
+    assert strip._current_columns < len(ORGANIZE_SHORTCUTS)
+    assert row_count <= 3
 
 
 def test_organize_top_bar_returns_to_a_single_control_row():
