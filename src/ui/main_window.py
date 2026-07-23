@@ -60,6 +60,7 @@ from ui.controllers.image_inspection_controller import (
 from core.image_file_ops import ImageFileOperations
 from core.metadata_processor import MetadataProcessor  # New metadata processor
 from core.media_utils import is_video_extension
+from core.similarity_utils import cosine_similarity
 from core.app_settings import (
     DEFAULT_BLUR_DETECTION_THRESHOLD,
     LEFT_PANEL_STRETCH,
@@ -549,11 +550,14 @@ class MainWindow(QMainWindow):
         self.statusBar().messageChanged.connect(self.workflow_status_label.setText)
         self.workflow_status_label.setText(self.statusBar().currentMessage())
         self.thumbnail_progress_container = QWidget()
+        self.thumbnail_progress_container.setObjectName("thumbnailProgressContainer")
         thumbnail_progress_layout = QHBoxLayout(self.thumbnail_progress_container)
         thumbnail_progress_layout.setContentsMargins(6, 0, 6, 0)
         thumbnail_progress_layout.setSpacing(6)
         self.thumbnail_progress_label = QLabel()
+        self.thumbnail_progress_label.setObjectName("thumbnailProgressLabel")
         self.thumbnail_progress_bar = QProgressBar()
+        self.thumbnail_progress_bar.setObjectName("thumbnailProgressBar")
         self.thumbnail_progress_bar.setTextVisible(False)
         self.thumbnail_progress_bar.setFixedWidth(110)
         thumbnail_progress_layout.addWidget(self.thumbnail_progress_label)
@@ -562,11 +566,14 @@ class MainWindow(QMainWindow):
         self.workflow_footer_right_layout.addWidget(self.thumbnail_progress_container)
 
         self.exif_progress_container = QWidget()
+        self.exif_progress_container.setObjectName("exifProgressContainer")
         exif_progress_layout = QHBoxLayout(self.exif_progress_container)
         exif_progress_layout.setContentsMargins(6, 0, 6, 0)
         exif_progress_layout.setSpacing(6)
         self.exif_progress_label = QLabel()
+        self.exif_progress_label.setObjectName("exifProgressLabel")
         self.exif_progress_bar = QProgressBar()
+        self.exif_progress_bar.setObjectName("exifProgressBar")
         self.exif_progress_bar.setTextVisible(False)
         self.exif_progress_bar.setFixedWidth(110)
         exif_progress_layout.addWidget(self.exif_progress_label)
@@ -1652,9 +1659,6 @@ class MainWindow(QMainWindow):
             from ui.fix_rotation_step_widget import FixRotationStepWidget
 
             widget = FixRotationStepWidget(self)
-            widget.skip_requested.connect(
-                lambda: self._request_next_visible_workflow_transition("fix_rotation")
-            )
             widget.proceed_requested.connect(
                 lambda: self._request_next_visible_workflow_transition("fix_rotation")
             )
@@ -1682,12 +1686,7 @@ class MainWindow(QMainWindow):
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
             )
-            widget.skip_requested.connect(
-                lambda: self._request_next_visible_workflow_transition("pick_best")
-            )
-            widget.proceed_to_cull_requested.connect(
-                lambda: self._request_next_visible_workflow_transition("pick_best")
-            )
+            widget.apply_requested.connect(self._request_workflow_resolution)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
@@ -1798,13 +1797,11 @@ class MainWindow(QMainWindow):
         ]
         if not hasattr(self, "_cull_action_shortcuts"):
             self._cull_action_shortcuts = {
-                action: action.shortcut() for action in actions
+                action: action.shortcuts() for action in actions
             }
         for action in actions:
             original = self._cull_action_shortcuts.get(action)
-            action.setShortcut(
-                original if active and original is not None else QKeySequence()
-            )
+            action.setShortcuts(original if active and original is not None else [])
 
     def _refresh_workflow_deletion_state(self) -> None:
         for widget in (
@@ -3421,22 +3418,15 @@ class MainWindow(QMainWindow):
                     self.app_state.embeddings_cache.get(path2),
                 )
                 if emb1 is not None and emb2 is not None:
-                    try:
-                        import numpy as np
-
-                        first = np.asarray(emb1, dtype=np.float32)
-                        second = np.asarray(emb2, dtype=np.float32)
-                        denominator = np.linalg.norm(first) * np.linalg.norm(second)
-                        similarity = (
-                            float(np.dot(first, second) / denominator)
-                            if denominator
-                            else 0.0
-                        )
+                    similarity = cosine_similarity(emb1, emb2)
+                    if similarity is not None:
                         self.statusBar().showMessage(
                             f"Comparing {len(images_data_for_viewer)} images. Similarity (first 2): {similarity:.4f}"
                         )
-                    except Exception as e:
-                        logger.error(f"Error calculating similarity: {e}")
+                    else:
+                        self.statusBar().showMessage(
+                            f"Comparing {len(images_data_for_viewer)} images. Similarity unavailable."
+                        )
                 else:
                     self.statusBar().showMessage(
                         f"Comparing {len(images_data_for_viewer)} images."
@@ -4807,6 +4797,10 @@ class MainWindow(QMainWindow):
             ):
                 self.easy_delete_step_widget.show_results(
                     self.app_state.easy_delete_results
+                )
+            if self.pick_best_step_widget is not None:
+                self.pick_best_step_widget.sync_results_after_file_mutation(
+                    self.app_state.pick_best_results
                 )
             self.mark_cull_model_dirty()
             self._refresh_workflow_deletion_state()

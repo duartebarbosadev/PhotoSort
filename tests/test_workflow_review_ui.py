@@ -4,15 +4,17 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from PyQt6.QtGui import QAction, QKeySequence, QPixmap
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QRect, QSize, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
     QLabel,
     QPushButton,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +26,7 @@ from ui.pick_best_step_widget import PickBestStepWidget
 from ui.main_window import MainWindow
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.workflow_review_components import (
+    CULL_SHORTCUTS,
     EASY_DELETE_SHORTCUTS,
     FIX_ROTATION_SHORTCUTS,
     ORGANIZE_SHORTCUTS,
@@ -194,6 +197,32 @@ def test_easy_delete_shift_enter_requests_apply():
     apply_spec = next(spec for spec in EASY_DELETE_SHORTCUTS if spec.action == "apply")
     assert apply_spec.sequences == ("Shift+Return", "Shift+Enter")
     assert apply_spec.keys == "Shift+Enter"
+
+
+def test_every_workflow_documents_shift_enter_as_apply():
+    for specs in (
+        ORGANIZE_SHORTCUTS,
+        EASY_DELETE_SHORTCUTS,
+        FIX_ROTATION_SHORTCUTS,
+        PICK_BEST_SHORTCUTS,
+        CULL_SHORTCUTS,
+    ):
+        apply_spec = next(spec for spec in specs if spec.action == "apply")
+        assert {"Shift+Return", "Shift+Enter"}.issubset(apply_spec.sequences)
+        assert apply_spec.keys == "Shift+Enter"
+        assert apply_spec.label == "Apply"
+
+
+def test_organize_shift_enter_requests_apply():
+    widget = GroupingStepWidget()
+    requests: list[bool] = []
+    widget.apply_requested.connect(lambda: requests.append(True))
+    widget.primary_button.setEnabled(True)
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["Shift+Return"].activated.emit()
+
+    assert requests == [True]
 
 
 def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
@@ -534,7 +563,9 @@ def test_footer_shortcuts_use_at_most_three_rows_and_still_reflow():
     strip.show()
     _app.processEvents()
 
-    assert strip._current_columns == len(ORGANIZE_SHORTCUTS)
+    wide_columns = strip._current_columns
+    wide_row_count = (len(ORGANIZE_SHORTCUTS) + wide_columns - 1) // wide_columns
+    assert wide_row_count <= 3
 
     strip.resize(320, 100)
     _app.processEvents()
@@ -542,7 +573,7 @@ def test_footer_shortcuts_use_at_most_three_rows_and_still_reflow():
     row_count = (
         len(ORGANIZE_SHORTCUTS) + strip._current_columns - 1
     ) // strip._current_columns
-    assert strip._current_columns < len(ORGANIZE_SHORTCUTS)
+    assert strip._current_columns < wide_columns
     assert row_count <= 3
 
 
@@ -723,6 +754,20 @@ def test_fix_rotation_r_rotates_counterclockwise_instead_of_toggling_selection()
     assert path not in widget._confirmed
 
 
+def test_fix_rotation_shift_enter_applies_confirmed_rotations():
+    path = "/tmp/sideways.jpg"
+    emitted: list[dict[str, int]] = []
+    widget = FixRotationStepWidget()
+    widget.apply_rotations_requested.connect(emitted.append)
+    widget.show_results({path: 90})
+    widget._on_confirm()
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["Shift+Return"].activated.emit()
+
+    assert emitted == [{path: 90}]
+
+
 def test_fix_rotation_clockwise_override_starts_from_original_when_unselected():
     path = "/tmp/upside-down.jpg"
     widget = FixRotationStepWidget()
@@ -830,14 +875,101 @@ def test_pick_best_publishes_trash_mark_as_soon_as_comparison_is_confirmed():
     assert marks == {challenger}
     assert widget._current_tournament().final_winner == winner
     assert comparison_item.text() == (
-        "challenger.jpg  ↔  winner.jpg\nComplete · winner.jpg advanced"
+        "challenger.jpg  ↔  winner.jpg\nComplete · 1 kept"
     )
     assert widget._compare_cards[0]._state_label.text() == "TRASH"
     assert widget._compare_cards[1]._state_label.text() == "KEEP"
     assert widget._done_btn.isEnabled()
 
 
-def test_pick_best_revising_final_choice_restores_prior_marks_until_reconfirmed():
+def test_pick_best_shows_cosine_similarity_and_easy_delete_cutoff(monkeypatch):
+    paths = ["/tmp/left.jpg", "/tmp/right.jpg"]
+    widget = PickBestStepWidget()
+    widget.app_state = SimpleNamespace(
+        embeddings_cache={
+            paths[0]: [1.0, 0.0],
+            paths[1]: [0.994, 0.10938025],
+        }
+    )
+    widget.set_is_marked_func(lambda _path: False)
+    monkeypatch.setattr(
+        "ui.pick_best_step_widget.get_easy_delete_duplicate_distance",
+        lambda: 0.005,
+    )
+
+    widget.show_results({1: _pick_best_payload(paths)})
+
+    detail = widget._state_banner.detail_label.text()
+    assert "Cosine similarity 0.9940 (99.40%)" in detail
+    assert "distance 0.0060" in detail
+    assert "Easy Delete cosine cutoff < 0.0050 (outside cutoff)" in detail
+    assert "unchanged framing at ≥ 0.98 structural similarity" in detail
+
+
+def test_pick_best_apply_button_and_shift_enter_submit_without_naming_cull():
+    first_paths = ["/tmp/first-left.jpg", "/tmp/first-right.jpg"]
+    second_paths = ["/tmp/second-left.jpg", "/tmp/second-right.jpg"]
+    requests: list[bool] = []
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.apply_requested.connect(lambda: requests.append(True))
+    widget.show_results(
+        {
+            1: _pick_best_payload(first_paths),
+            2: _pick_best_payload(second_paths),
+        }
+    )
+
+    assert not widget._done_btn.isEnabled()
+    widget._on_confirm()
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    assert widget._tournaments[0].finalized
+    assert not widget._tournaments[1].finalized
+    assert widget._review_list_panel.count_label.text() == "1/2 done"
+    assert widget._done_btn.isEnabled()
+    assert widget._done_btn.text() == "Apply"
+    widget._done_btn.click()
+    shortcuts["Shift+Return"].activated.emit()
+
+    assert requests == [True, True]
+
+
+def test_pick_best_file_mutation_sync_removes_invalidated_cluster_from_left_panel():
+    first_paths = ["/tmp/deleted.jpg", "/tmp/first-keeper.jpg"]
+    second_paths = ["/tmp/second-left.jpg", "/tmp/second-right.jpg"]
+    emitted: list[tuple[str, tuple[str, ...]]] = []
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.mark_for_deletion_requested.connect(
+        lambda paths: emitted.append(("mark", tuple(paths)))
+    )
+    widget.unmark_for_deletion_requested.connect(
+        lambda paths: emitted.append(("unmark", tuple(paths)))
+    )
+    results = {
+        1: _pick_best_payload(first_paths),
+        2: _pick_best_payload(second_paths),
+    }
+    widget.show_results(results)
+    widget._on_confirm()
+    emitted.clear()
+
+    results.pop(1)
+    widget.sync_results_after_file_mutation(results)
+
+    assert emitted == []
+    assert widget._cluster_keys == [2]
+    assert widget._subset_paths == second_paths
+    left_panel_text = "\n".join(
+        widget._items_list.item(index).text()
+        for index in range(widget._items_list.count())
+    )
+    assert "deleted.jpg" not in left_panel_text
+    assert "Cluster 1 · 2 photos" in left_panel_text
+
+
+def test_pick_best_revising_one_decision_preserves_the_other_until_reconfirmed():
     marks: set[str] = set()
     challenger = "/tmp/challenger.jpg"
     winner = "/tmp/winner.jpg"
@@ -860,8 +992,141 @@ def test_pick_best_revising_final_choice_restores_prior_marks_until_reconfirmed(
 
     widget._on_confirm()
 
-    assert marks == {winner}
-    assert widget._current_tournament().final_winner == challenger
+    assert not marks
+    assert widget._current_tournament().final_winner == winner
+
+
+def test_pick_best_number_shortcuts_toggle_only_the_target_photo_before_confirm():
+    paths = ["/tmp/challenger.jpg", "/tmp/winner.jpg"]
+    marks: set[str] = set()
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda selected: marks.update(selected))
+    widget.unmark_for_deletion_requested.connect(
+        lambda selected: marks.difference_update(selected)
+    )
+    widget.show_results({1: _pick_best_payload(paths, {paths[1]: 0.9})})
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+    group = widget._current_group()
+
+    assert group.keep_by_path == {paths[0]: False, paths[1]: True}
+
+    shortcuts["1"].activated.emit()
+    assert group.keep_by_path == {paths[0]: True, paths[1]: True}
+    assert not marks
+
+    shortcuts["2"].activated.emit()
+    assert group.keep_by_path == {paths[0]: True, paths[1]: False}
+    assert not marks
+
+    shortcuts["1"].activated.emit()
+    assert group.keep_by_path == {paths[0]: False, paths[1]: False}
+    assert not marks
+
+    widget._on_confirm()
+    assert marks == set(paths)
+    assert widget._current_tournament().final_winner == paths[1]
+
+
+def test_pick_best_click_toggles_only_the_clicked_photo():
+    paths = ["/tmp/left.jpg", "/tmp/right.jpg"]
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths, {paths[1]: 0.9})})
+
+    widget._on_viewer_clicked(0, paths[0])
+
+    assert widget._current_group().keep_by_path == {
+        paths[0]: True,
+        paths[1]: True,
+    }
+
+
+def test_pick_best_sole_kept_photo_advances_and_preserves_its_decision():
+    paths = ["/tmp/left.jpg", "/tmp/right.jpg", "/tmp/challenger.jpg"]
+    scores = {paths[0]: 0.7, paths[1]: 0.8, paths[2]: 0.9}
+    marks: set[str] = set()
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda selected: marks.update(selected))
+    widget.unmark_for_deletion_requested.connect(
+        lambda selected: marks.difference_update(selected)
+    )
+    widget.show_results({1: _pick_best_payload(paths, scores)})
+
+    widget._select_path(paths[0])
+    widget._select_path(paths[1])
+    widget._on_confirm()
+
+    group = widget._current_group()
+    assert group.paths == [paths[0], paths[2]]
+    assert group.keep_by_path == {paths[0]: True, paths[2]: True}
+    assert marks == {paths[1]}
+
+
+def test_pick_best_trashing_both_starts_fresh_with_next_two_photos():
+    paths = [f"/tmp/photo-{index}.jpg" for index in range(5)]
+    scores = {path: float(5 - index) for index, path in enumerate(paths)}
+    marks: set[str] = set()
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda selected: marks.update(selected))
+    widget.unmark_for_deletion_requested.connect(
+        lambda selected: marks.difference_update(selected)
+    )
+    widget.show_results({1: _pick_best_payload(paths, scores)})
+
+    widget._select_path(paths[0])
+    widget._on_confirm()
+
+    group = widget._current_group()
+    assert group.paths == paths[2:4]
+    assert not set(group.paths) & set(paths[:2])
+    assert marks == set(paths[:2])
+    assert widget._current_tournament().next_path_index == 4
+
+
+def test_pick_best_trashing_both_carries_ai_photo_when_only_one_remains():
+    paths = ["/tmp/ai-pick.jpg", "/tmp/other.jpg", "/tmp/last.jpg"]
+    scores = {paths[0]: 0.9, paths[1]: 0.7, paths[2]: 0.6}
+    marks: set[str] = set()
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda selected: marks.update(selected))
+    widget.unmark_for_deletion_requested.connect(
+        lambda selected: marks.difference_update(selected)
+    )
+    widget.show_results({1: _pick_best_payload(paths, scores)})
+
+    widget._select_path(paths[0])
+    widget._on_confirm()
+
+    group = widget._current_group()
+    assert group.paths == [paths[0], paths[2]]
+    assert group.keep_by_path[paths[0]] is False
+    assert marks == set(paths[:2])
+
+
+def test_pick_best_revising_fresh_pair_does_not_reuse_reviewed_photo():
+    paths = [f"/tmp/photo-{index}.jpg" for index in range(5)]
+    scores = {path: float(5 - index) for index, path in enumerate(paths)}
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths, scores)})
+
+    widget._select_path(paths[0])
+    widget._on_confirm()
+    assert widget._current_group().paths == paths[2:4]
+    widget._on_confirm()
+    assert paths[4] in widget._current_group().paths
+
+    widget._prev_round()
+    widget._select_path(paths[3])
+
+    tournament = widget._current_tournament()
+    assert tournament.next_path_index == 4
+    widget._on_confirm()
+    assert widget._current_group().paths == [paths[2], paths[4]]
 
 
 def test_pick_best_33_photo_cluster_uses_rolling_pairwise_comparisons():
@@ -1026,6 +1291,32 @@ def test_pick_best_up_and_down_shortcuts_navigate_comparison_history():
     assert widget._current_tournament().current_round == 2
 
 
+def test_pick_best_left_panel_scrolls_with_navigation_and_confirmation():
+    paths = [f"/tmp/photo-{index}.jpg" for index in range(7)]
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths)})
+    widget._items_list.scrollToItem = Mock()
+
+    widget._on_confirm()
+
+    current_item = _pick_best_current_comparison_item(widget)
+    assert widget._items_list.currentItem() is current_item
+    widget._items_list.scrollToItem.assert_called_with(
+        current_item,
+        widget._items_list.ScrollHint.EnsureVisible,
+    )
+
+    widget._prev_round()
+
+    current_item = _pick_best_current_comparison_item(widget)
+    assert widget._items_list.currentItem() is current_item
+    widget._items_list.scrollToItem.assert_called_with(
+        current_item,
+        widget._items_list.ScrollHint.EnsureVisible,
+    )
+
+
 def test_pick_best_up_and_down_fall_back_to_clusters_without_more_comparisons():
     widget = PickBestStepWidget()
     widget.set_is_marked_func(lambda _path: False)
@@ -1072,6 +1363,19 @@ def test_pick_best_left_panel_shows_pair_rows_and_preserves_comparison_history()
         for item in _pick_best_up_next_items(widget)
     )
     assert widget._review_list_panel.count_label.text() == "0/1 done"
+
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 280, 50)
+    cluster_index = widget._items_list.model().index(0, 0)
+    comparison_index = widget._items_list.indexFromItem(first_comparison)
+    cluster_option = widget._tournament_item_delegate._indented_option(
+        option, cluster_index
+    )
+    comparison_option = widget._tournament_item_delegate._indented_option(
+        option, comparison_index
+    )
+    assert cluster_option.rect == QRect(0, 0, 280, 50)
+    assert comparison_option.rect == QRect(20, 0, 260, 50)
 
     for _ in range(3):
         widget._on_confirm()
@@ -1183,9 +1487,7 @@ def test_pick_best_keep_all_protects_group_and_completes_without_forced_winner()
     assert widget._done_btn.isEnabled()
     assert widget._review_list_panel.count_label.text() == "1/1 done"
     assert (
-        _pick_best_current_comparison_item(widget)
-        .text()
-        .endswith("Complete · both kept")
+        _pick_best_current_comparison_item(widget).text().endswith("Complete · 2 kept")
     )
     assert all(card._state_label.text() == "KEEP" for card in widget._compare_cards[:2])
 
@@ -1220,7 +1522,7 @@ def test_pick_best_keep_all_can_mix_with_a_winner_in_the_same_round():
     }
 
 
-def test_pick_best_kept_incumbent_can_be_replaced_by_next_challenger():
+def test_pick_best_carried_keep_and_ai_challenger_can_both_remain_kept():
     paths = ["/tmp/incumbent.jpg", "/tmp/kept.jpg", "/tmp/challenger.jpg"]
     scores = {paths[0]: 0.8, paths[1]: 0.7, paths[2]: 0.95}
     marks: set[str] = set()
@@ -1247,11 +1549,11 @@ def test_pick_best_kept_incumbent_can_be_replaced_by_next_challenger():
     tournament = widget._current_tournament()
     assert tournament.finalized
     assert tournament.final_winner == paths[2]
-    assert marks == {paths[0]}
-    assert PickBestStepWidget._kept_paths(tournament) == {paths[1], paths[2]}
+    assert not marks
+    assert PickBestStepWidget._kept_paths(tournament) == set(paths)
     comparison_items = _pick_best_comparison_items(widget)
-    assert comparison_items[0].text().endswith("Complete · both kept")
-    assert comparison_items[1].text().endswith("Complete · challenger.jpg advanced")
+    assert comparison_items[0].text().endswith("Complete · 2 kept")
+    assert comparison_items[1].text().endswith("Complete · 2 kept")
 
 
 def test_pick_best_revising_kept_group_restores_marks_until_reconfirmed():
@@ -1278,8 +1580,8 @@ def test_pick_best_revising_kept_group_restores_marks_until_reconfirmed():
     widget._on_confirm()
 
     assert tournament.finalized
-    assert tournament.final_winner == paths[0]
-    assert marks == {paths[1]}
+    assert tournament.final_winner == paths[1]
+    assert marks == {paths[0]}
 
 
 def test_pick_best_left_right_and_enter_shortcuts_control_tournament():
@@ -1501,7 +1803,7 @@ def test_pick_best_focus_finds_photo_group_without_changing_selection():
     focused_card = next(
         card for card in widget._compare_cards if card.path == challengers[1]
     )
-    assert "#3A434C" in focused_card.styleSheet()
+    assert "#E53935" in focused_card.styleSheet()
     assert "#4FC3F7" not in focused_card.styleSheet()
     assert [
         group.selected_path for group in tournament.rounds[0].groups
@@ -1525,11 +1827,41 @@ def test_visible_shortcut_specs_are_the_installed_source_of_truth():
         assert len(widget._shortcuts) == expected
 
 
-def test_easy_delete_has_no_escape_workflow_shortcut():
-    assert all("Escape" not in spec.sequences for spec in EASY_DELETE_SHORTCUTS)
-    widget = EasyDeleteStepWidget()
-    installed = {shortcut.key().toString() for shortcut in widget._shortcuts}
-    assert "Esc" not in installed
+def test_review_workflows_have_no_escape_skip_shortcut():
+    widgets_and_specs = (
+        (EasyDeleteStepWidget(), EASY_DELETE_SHORTCUTS),
+        (FixRotationStepWidget(), FIX_ROTATION_SHORTCUTS),
+        (PickBestStepWidget(), PICK_BEST_SHORTCUTS),
+    )
+    for widget, specs in widgets_and_specs:
+        assert all("Escape" not in spec.sequences for spec in specs)
+        installed = {shortcut.key().toString() for shortcut in widget._shortcuts}
+        assert "Esc" not in installed
+
+
+def test_pick_best_loading_page_has_no_skip_navigation_button():
+    widget = PickBestStepWidget()
+    widget.show_results({})
+
+    button_texts = {
+        button.text() for button in widget._page_loading.findChildren(QPushButton)
+    }
+
+    assert "Skip Step" not in button_texts
+    assert not hasattr(widget, "_skip_btn_loading")
+    assert "workflow footer" in widget._loading_label.text()
+
+
+def test_pick_best_left_panel_omits_tournament_title():
+    widget = PickBestStepWidget()
+
+    titles = {
+        label.text()
+        for label in widget._review_list_panel.findChildren(QLabel)
+        if label.objectName() == "workflowReviewListTitle"
+    }
+
+    assert titles == {""}
 
 
 def test_direct_workflow_shortcuts_use_unclaimed_modified_number_keys(monkeypatch):
@@ -1643,6 +1975,13 @@ def test_guided_workflows_suspend_and_restore_cull_shortcuts():
         action = QAction(owner)
         action.setShortcut(QKeySequence(f"Ctrl+F{(index % 10) + 1}"))
         actions[name] = action
+    actions["commit_deletions_action"].setShortcuts(
+        [
+            QKeySequence("Shift+D"),
+            QKeySequence("Shift+Return"),
+            QKeySequence("Shift+Enter"),
+        ]
+    )
     context = SimpleNamespace(menu_manager=SimpleNamespace(**actions))
 
     MainWindow._set_cull_shortcuts_active(context, False)
@@ -1650,3 +1989,7 @@ def test_guided_workflows_suspend_and_restore_cull_shortcuts():
 
     MainWindow._set_cull_shortcuts_active(context, True)
     assert all(not action.shortcut().isEmpty() for action in actions.values())
+    assert {
+        sequence.toString()
+        for sequence in actions["commit_deletions_action"].shortcuts()
+    } == {"Shift+D", "Shift+Return", "Shift+Enter"}

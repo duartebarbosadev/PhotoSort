@@ -3,6 +3,7 @@ import os
 import subprocess
 from typing import Any, override
 from PyQt6.QtCore import (
+    QEasingCurve,
     Qt,
     QRectF,
     QPointF,
@@ -12,6 +13,7 @@ from PyQt6.QtCore import (
     QUrl,
     QEvent,
     QObject,
+    QVariantAnimation,
 )
 from PyQt6.QtGui import (
     QPixmap,
@@ -46,6 +48,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 
+from core.app_settings import INSPECTION_DETAIL_TRANSITION_MS
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,6 +80,8 @@ class ZoomableImageView(QGraphicsView):
         self._is_panning = False
         self._pan_distance = 0.0
         self._pending_pixmap = None  # For smooth transitions
+        self._transition_item: QGraphicsPixmapItem | None = None
+        self._transition_animation: QVariantAnimation | None = None
 
         # Setup scene and view
         self._scene = QGraphicsScene(self)
@@ -152,6 +158,7 @@ class ZoomableImageView(QGraphicsView):
     def set_image(self, pixmap: QPixmap):
         """Set the image to display with smooth transition"""
         logger.debug(f"ZoomableImageView set image called with pixmap: {pixmap}")
+        self._stop_image_transition()
         if pixmap and not pixmap.isNull():
             # Remove any lingering text items before showing the new image
             for item in self._scene.items():
@@ -189,11 +196,18 @@ class ZoomableImageView(QGraphicsView):
             return pixmap
         return None
 
-    def replace_image_preserving_view(self, pixmap: QPixmap) -> None:
+    def replace_image_preserving_view(
+        self,
+        pixmap: QPixmap,
+        *,
+        smooth_transition: bool = False,
+    ) -> None:
         """Replace an image while retaining its normalized center and crop."""
         if not pixmap or pixmap.isNull() or self._empty:
             self.set_image(pixmap)
             return
+        old_pixmap = self._photo_item.pixmap()
+        self._stop_image_transition()
         old_rect = self.sceneRect()
         viewport = self.viewport()
         old_center = self.mapToScene(viewport.rect().center())
@@ -219,25 +233,86 @@ class ZoomableImageView(QGraphicsView):
         self.setSceneRect(new_rect)
         if was_fitted:
             self.fit_in_view()
-            return
+        else:
+            self.resetTransform()
+            fit_scale = min(
+                viewport.width() / max(1.0, new_rect.width()),
+                viewport.height() / max(1.0, new_rect.height()),
+            )
+            self._min_zoom = max(0.01, fit_scale)
+            self._zoom_factor = 1.0
+            target_zoom = max(
+                self._min_zoom,
+                old_fractional_scale / max(1.0, new_rect.width()),
+            )
+            target_center = QPointF(
+                new_rect.left() + norm_x * new_rect.width(),
+                new_rect.top() + norm_y * new_rect.height(),
+            )
+            self.set_zoom_factor(target_zoom, target_center)
+            self.centerOn(target_center)
 
-        self.resetTransform()
-        fit_scale = min(
-            viewport.width() / max(1.0, new_rect.width()),
-            viewport.height() / max(1.0, new_rect.height()),
+        if smooth_transition and old_pixmap and not old_pixmap.isNull():
+            self._start_image_transition(old_pixmap, new_rect)
+
+    def _start_image_transition(
+        self,
+        old_pixmap: QPixmap,
+        new_rect: QRectF,
+    ) -> None:
+        """Fade the previous preview off the replacement without a dark flash."""
+        overlay = QGraphicsPixmapItem(old_pixmap)
+        overlay.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        overlay.setZValue(1.0)
+        old_width = max(1, old_pixmap.width())
+        old_height = max(1, old_pixmap.height())
+        overlay.setScale(1.0)
+        overlay.setTransform(
+            QTransform.fromScale(
+                new_rect.width() / old_width,
+                new_rect.height() / old_height,
+            )
         )
-        self._min_zoom = max(0.01, fit_scale)
-        self._zoom_factor = 1.0
-        target_zoom = max(
-            self._min_zoom,
-            old_fractional_scale / max(1.0, new_rect.width()),
+        self._scene.addItem(overlay)
+        self._transition_item = overlay
+
+        animation = QVariantAnimation(self)
+        animation.setDuration(INSPECTION_DETAIL_TRANSITION_MS)
+        animation.setStartValue(1.0)
+        animation.setEndValue(0.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.valueChanged.connect(overlay.setOpacity)
+        animation.finished.connect(
+            lambda item=overlay, active=animation: self._finish_image_transition(
+                item, active
+            )
         )
-        target_center = QPointF(
-            new_rect.left() + norm_x * new_rect.width(),
-            new_rect.top() + norm_y * new_rect.height(),
-        )
-        self.set_zoom_factor(target_zoom, target_center)
-        self.centerOn(target_center)
+        self._transition_animation = animation
+        animation.start()
+
+    def _finish_image_transition(
+        self,
+        item: QGraphicsPixmapItem,
+        animation: QVariantAnimation,
+    ) -> None:
+        if item.scene() is self._scene:
+            self._scene.removeItem(item)
+        if self._transition_item is item:
+            self._transition_item = None
+        if self._transition_animation is animation:
+            self._transition_animation = None
+        animation.deleteLater()
+
+    def _stop_image_transition(self) -> None:
+        animation = self._transition_animation
+        self._transition_animation = None
+        if animation is not None:
+            animation.stop()
+            animation.deleteLater()
+        item = self._transition_item
+        self._transition_item = None
+        if item is not None and item.scene() is self._scene:
+            self._scene.removeItem(item)
 
     def get_zoom_factor(self) -> float:
         """Get current zoom factor"""
@@ -469,6 +544,7 @@ class ZoomableImageView(QGraphicsView):
     def clear(self):
         """Clear the image display with smooth transition"""
         logger.debug("ZoomableImageView cleared")
+        self._stop_image_transition()
         # Remove any lingering text items
         for item in self._scene.items():
             if hasattr(item, "_is_text_item"):
@@ -912,12 +988,21 @@ class IndividualViewer(QWidget):
         logger.debug(f"Updating rating display to {rating}")
         self.update_rating_display(rating)
 
-    def replace_source_pixmap(self, pixmap: QPixmap, *, preserve_view: bool) -> None:
+    def replace_source_pixmap(
+        self,
+        pixmap: QPixmap,
+        *,
+        preserve_view: bool,
+        smooth_transition: bool = False,
+    ) -> None:
         """Replace the decoded source while retaining this slot's display transform."""
         self._source_pixmap = pixmap
         displayed = self._transformed_pixmap(pixmap)
         if preserve_view:
-            self.image_view.replace_image_preserving_view(displayed)
+            self.image_view.replace_image_preserving_view(
+                displayed,
+                smooth_transition=smooth_transition,
+            )
         else:
             self.image_view.set_image(displayed)
 
@@ -1628,6 +1713,7 @@ class SynchronizedImageViewer(QWidget):
         rating: int = 0,
         *,
         preserve_view: bool = False,
+        smooth_transition: bool = False,
     ) -> bool:
         """Upgrade the displayed image without rebuilding layout or focus state."""
         if pixmap.isNull():
@@ -1640,11 +1726,19 @@ class SynchronizedImageViewer(QWidget):
                 was_updating_sync = self._updating_sync
                 self._updating_sync = True
                 try:
-                    viewer.replace_source_pixmap(pixmap, preserve_view=True)
+                    viewer.replace_source_pixmap(
+                        pixmap,
+                        preserve_view=True,
+                        smooth_transition=smooth_transition,
+                    )
                 finally:
                     self._updating_sync = was_updating_sync
             else:
-                viewer.replace_source_pixmap(pixmap, preserve_view=False)
+                viewer.replace_source_pixmap(
+                    pixmap,
+                    preserve_view=False,
+                    smooth_transition=smooth_transition,
+                )
             viewer.update_rating_display(rating)
             updated = True
         return updated

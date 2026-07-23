@@ -119,7 +119,8 @@ DEFAULT_BEST_SHOT_BATCH_SIZE = 3
 
 # Image inspection quality progression. Originals stay memory-only and are
 # bounded across the complete visible comparison set.
-INSPECTION_DETAIL_DWELL_MS = 1000
+INSPECTION_DETAIL_DWELL_MS = 250
+INSPECTION_DETAIL_TRANSITION_MS = 180
 INSPECTION_DETAIL_BUDGET_BYTES = 512 * 1024 * 1024
 
 
@@ -153,7 +154,7 @@ EASY_DELETE_BLUR_THRESHOLD = (
 )
 EASY_DELETE_BLUR_TILE_GRID = 4  # NxN grid; blur score = max per-tile Laplacian variance
 EASY_DELETE_DARK_CLIP_FRACTION = (
-    0.85  # fraction of pixels below dark cutoff; above = near-black
+    0.98  # only almost-entirely black previews are safe automatic suggestions
 )
 EASY_DELETE_DARK_CLIP_VALUE = 10  # 0-255; pixels at/below this count as "dark"
 EASY_DELETE_WHITE_CLIP_FRACTION = (
@@ -163,6 +164,14 @@ EASY_DELETE_WHITE_CLIP_VALUE = 245  # 0-255; pixels at/above this count as "whit
 EASY_DELETE_DARK_MEAN_THRESHOLD = 15.0  # 0-255 mean brightness; below = near-black
 EASY_DELETE_WHITE_MEAN_THRESHOLD = 248.0  # 0-255 mean brightness; above = overexposed
 EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.005  # lower = stricter near-identical match
+# A second, stricter spatial check catches burst frames whose embeddings are slightly
+# farther apart because of exposure/noise, without admitting repositioned subjects.
+EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY = 0.97
+EASY_DELETE_SAME_FRAME_SIMILARITY = 0.98
+# A strong difference concentrated in a small area indicates subject movement even
+# when the unchanged background makes the complete frame look nearly identical.
+EASY_DELETE_LOCALIZED_CHANGE_RATIO = 10.0
+EASY_DELETE_LOCALIZED_CHANGE_MIN_P99 = 8.0
 _OLD_EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01
 
 # Fix Rotation step

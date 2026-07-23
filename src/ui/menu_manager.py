@@ -226,7 +226,13 @@ class MenuManager:
         main_win.addAction(self.unmark_for_delete_action)
 
         self.commit_deletions_action = QAction("Commit All Marked Deletions", main_win)
-        self.commit_deletions_action.setShortcut(QKeySequence("Shift+D"))
+        self.commit_deletions_action.setShortcuts(
+            [
+                QKeySequence("Shift+D"),
+                QKeySequence("Shift+Return"),
+                QKeySequence("Shift+Enter"),
+            ]
+        )
         main_win.addAction(self.commit_deletions_action)
 
         self.clear_marked_deletions_action = QAction(

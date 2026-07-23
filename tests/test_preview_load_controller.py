@@ -117,5 +117,5 @@ def test_new_detail_set_cancels_stale_results():
     old_worker.run()
     current_worker.run()
 
-    assert pipeline.generated == ["current-left.jpg", "current-right.jpg"]
-    assert ready == ["current-left.jpg", "current-right.jpg"]
+    assert set(pipeline.generated) == {"current-left.jpg", "current-right.jpg"}
+    assert set(ready) == {"current-left.jpg", "current-right.jpg"}

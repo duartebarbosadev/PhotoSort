@@ -37,8 +37,16 @@ QWidget#workflowNavHost {
 }
 
 QWidget#workflowFooterRight,
+QWidget#workflowFooterRight QWidget,
+QWidget#thumbnailProgressContainer,
+QWidget#thumbnailProgressContainer QLabel,
+QWidget#thumbnailProgressContainer QProgressBar,
+QWidget#exifProgressContainer,
+QWidget#exifProgressContainer QLabel,
+QWidget#exifProgressContainer QProgressBar,
 QStackedWidget#workflowShortcutStack {
     background: transparent;
+    background-color: transparent;
     border: none;
 }
 
@@ -2404,6 +2412,13 @@ QFrame#workflowShortcutStrip {
     background-color: #22262A;
     border: 1px solid #3A4147;
     border-radius: 8px;
+}
+
+QWidget#workflowShortcutItems,
+QWidget#workflowShortcutItem {
+    background: transparent;
+    background-color: transparent;
+    border: none;
 }
 
 QLabel#workflowShortcutHeading {

@@ -53,6 +53,7 @@ class ImageInspectionController(QObject):
         self._paths: tuple[str, ...] = ()
         self._quality: dict[str, InspectionQuality] = {}
         self._pixel_area: dict[str, int] = {}
+        self._pending_detail_images: dict[str, object] = {}
         self._detail_requested = False
         self._pending_actual_size = False
         self._registered_viewers: weakref.WeakSet[SynchronizedImageViewer] = (
@@ -161,6 +162,7 @@ class ImageInspectionController(QObject):
         self._paths = ()
         self._quality.clear()
         self._pixel_area.clear()
+        self._pending_detail_images.clear()
         self._detail_requested = False
         self._pending_actual_size = False
 
@@ -179,7 +181,12 @@ class ImageInspectionController(QObject):
         pixmap = self._pipeline.get_cached_preview_qpixmap(path, memory_only=True)
         if pixmap is None or pixmap.isNull():
             return
-        if self._viewer.update_image_pixmap(path, pixmap, preserve_view=True):
+        if self._viewer.update_image_pixmap(
+            path,
+            pixmap,
+            preserve_view=True,
+            smooth_transition=True,
+        ):
             self._quality[path] = InspectionQuality.PREVIEW
             self._pixel_area[path] = pixmap.width() * pixmap.height()
 
@@ -193,14 +200,9 @@ class ImageInspectionController(QObject):
         area = int(getattr(image, "width", 0)) * int(getattr(image, "height", 0))
         if area <= self._pixel_area.get(path, 0):
             return
-        try:
-            pixmap = self._pipeline.qpixmap_from_pil(image)
-        except Exception:
-            self._on_detail_failed(path)
-            return
-        if self._viewer.update_image_pixmap(path, pixmap, preserve_view=True):
-            self._quality[path] = InspectionQuality.DETAIL
-            self._pixel_area[path] = area
+        # Hold every decoded source until the worker finishes the complete visible
+        # set. Presenting them from one UI event keeps comparisons visually in sync.
+        self._pending_detail_images[path] = image
 
     def _on_detail_failed(self, path: str) -> None:
         if path in self._paths and self._viewer is not None:
@@ -214,7 +216,36 @@ class ImageInspectionController(QObject):
 
     def _on_detail_batch_finished(self) -> None:
         if self._viewer is None:
+            self._pending_detail_images.clear()
             return
+        prepared: list[tuple[str, object, int]] = []
+        for path in self._paths:
+            image = self._pending_detail_images.get(path)
+            if image is None:
+                continue
+            area = int(getattr(image, "width", 0)) * int(getattr(image, "height", 0))
+            if area <= self._pixel_area.get(path, 0):
+                continue
+            try:
+                pixmap = self._pipeline.qpixmap_from_pil(image)
+            except Exception:
+                self._on_detail_failed(path)
+                continue
+            prepared.append((path, pixmap, area))
+        self._pending_detail_images.clear()
+
+        # All pixmaps are prepared before any slot changes. Qt paints after this
+        # handler returns, so every visible successful detail starts together.
+        for path, pixmap, area in prepared:
+            if self._viewer.update_image_pixmap(
+                path,
+                pixmap,
+                preserve_view=True,
+                smooth_transition=True,
+            ):
+                self._quality[path] = InspectionQuality.DETAIL
+                self._pixel_area[path] = area
+        self._detail_requested = False
         if self._pending_actual_size:
             self._pending_actual_size = False
             self._viewer.zoom_to_actual_size()

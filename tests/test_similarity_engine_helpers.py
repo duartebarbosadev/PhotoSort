@@ -9,9 +9,16 @@ from core.similarity_utils import (
     adaptive_dbscan_eps,
     build_regional_distance_matrix,
     classify_orientation,
+    cosine_similarity,
     l2_normalize_rows,
     normalize_embedding_vector,
 )
+
+
+def test_cosine_similarity_handles_valid_and_invalid_embeddings():
+    assert cosine_similarity([1.0, 0.0], [0.8, 0.6]) == pytest.approx(0.8)
+    assert cosine_similarity([1.0, 0.0], [0.0, 0.0]) is None
+    assert cosine_similarity([1.0, 0.0], [1.0]) is None
 
 
 def test_regional_distance_requires_corresponding_scene_regions_to_match():

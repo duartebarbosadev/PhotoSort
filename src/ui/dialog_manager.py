@@ -1231,7 +1231,7 @@ class DialogManager:
         easy_delete_form.addWidget(blur_threshold_label, 0, 0)
         easy_delete_form.addWidget(blur_threshold_spin, 0, 1)
 
-        dark_threshold_label = QLabel("Near-black brightness threshold")
+        dark_threshold_label = QLabel("Near-black mean ceiling")
         dark_threshold_spin = QDoubleSpinBox()
         dark_threshold_spin.setObjectName("easyDeleteDarkThresholdSpin")
         dark_threshold_spin.setRange(0.0, 128.0)
@@ -1239,7 +1239,8 @@ class DialogManager:
         dark_threshold_spin.setSingleStep(1.0)
         dark_threshold_spin.setValue(get_easy_delete_dark_threshold())
         dark_threshold_spin.setToolTip(
-            "Images with mean brightness below this value (0-255) are flagged near-black."
+            "A preview must be below this mean and at least 98% of its pixels must "
+            "be near black. Night scenes with visible lights or shadow detail are kept."
         )
         easy_delete_form.addWidget(dark_threshold_label, 1, 0)
         easy_delete_form.addWidget(dark_threshold_spin, 1, 1)
@@ -1265,7 +1266,8 @@ class DialogManager:
         duplicate_distance_spin.setSingleStep(0.005)
         duplicate_distance_spin.setValue(get_easy_delete_duplicate_distance())
         duplicate_distance_spin.setToolTip(
-            "Cosine distance; higher catches looser duplicates, lower only near-identical."
+            "Cosine distance; Easy Delete also uses a strict same-framing check so "
+            "exposure or sensor-noise differences do not hide an otherwise unchanged photo."
         )
         easy_delete_form.addWidget(duplicate_distance_label, 3, 0)
         easy_delete_form.addWidget(duplicate_distance_spin, 3, 1)
@@ -1273,7 +1275,9 @@ class DialogManager:
 
         easy_delete_note = QLabel(
             "These settings apply to future Easy Delete analysis runs; lower blur and "
-            "duplicate thresholds are more conservative."
+            "duplicate thresholds are more conservative. Near-identical framing is "
+            "checked separately so moved subjects remain in Pick Best. Dark photos are "
+            "suggested only when the preview is effectively black, not merely a night scene."
         )
         easy_delete_note.setObjectName("cardNote")
         easy_delete_note.setWordWrap(True)

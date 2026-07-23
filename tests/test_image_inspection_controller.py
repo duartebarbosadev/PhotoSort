@@ -1,8 +1,13 @@
 from PIL import Image
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtGui import QPixmap
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
+from core.app_settings import (
+    INSPECTION_DETAIL_DWELL_MS,
+    INSPECTION_DETAIL_TRANSITION_MS,
+)
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.controllers.image_inspection_controller import (
     ImageInspectionController,
@@ -83,6 +88,8 @@ def test_dwell_requests_unique_non_video_paths_once():
 
     assert pipeline.immediate_calls == ["same.jpg"]
     assert loader.preview_requests[-1][0] == ("same.jpg",)
+    assert controller._timer.interval() == 250
+    assert INSPECTION_DETAIL_DWELL_MS == 250
     controller._timer.timeout.emit()
     controller._timer.timeout.emit()
     assert loader.detail_requests == [("same.jpg",)]
@@ -127,8 +134,16 @@ def test_detail_is_monotonic_and_must_add_pixels():
     assert controller._quality["photo.jpg"] == InspectionQuality.PREVIEW
 
     loader.detail_ready.emit("photo.jpg", Image.new("RGB", (4000, 3000)))
+    assert controller._quality["photo.jpg"] == InspectionQuality.PREVIEW
+    loader.detail_batch_finished.emit()
     assert controller._quality["photo.jpg"] == InspectionQuality.DETAIL
     detail_size = viewer.current_pixmap().size()
+    primary = viewer.get_primary_viewer()
+    assert primary is not None
+    assert primary.image_view._transition_animation is not None
+    QTest.qWait(INSPECTION_DETAIL_TRANSITION_MS + 30)
+    assert primary.image_view._transition_animation is None
+    assert primary.image_view._transition_item is None
 
     pipeline.preview = pipeline._pixmap(1920, 1200)
     loader.preview_ready.emit("photo.jpg")
@@ -145,8 +160,58 @@ def test_duplicate_source_slots_keep_independent_rotation_on_upgrade():
         ],
     )
     loader.detail_ready.emit("photo.jpg", Image.new("RGB", (4000, 3000)))
+    loader.detail_batch_finished.emit()
 
     left = viewer.image_viewers[0].get_current_pixmap()
     right = viewer.image_viewers[1].get_current_pixmap()
     assert (left.width(), left.height()) == (4000, 3000)
     assert (right.width(), right.height()) == (3000, 4000)
+
+
+def test_comparison_detail_images_are_revealed_as_one_batch():
+    controller, loader, _pipeline, viewer = _make_controller()
+    controller.activate(
+        viewer,
+        [
+            InspectionImageSpec("left.jpg"),
+            InspectionImageSpec("right.jpg"),
+        ],
+    )
+    left_viewer, right_viewer = viewer.image_viewers[:2]
+    initial_left = left_viewer.get_current_pixmap().size()
+    initial_right = right_viewer.get_current_pixmap().size()
+
+    loader.detail_ready.emit("left.jpg", Image.new("RGB", (4000, 3000)))
+    assert left_viewer.get_current_pixmap().size() == initial_left
+    assert right_viewer.get_current_pixmap().size() == initial_right
+
+    loader.detail_ready.emit("right.jpg", Image.new("RGB", (3600, 2400)))
+    assert left_viewer.get_current_pixmap().size() == initial_left
+    assert right_viewer.get_current_pixmap().size() == initial_right
+
+    loader.detail_batch_finished.emit()
+
+    assert left_viewer.get_current_pixmap().size().width() == 4000
+    assert right_viewer.get_current_pixmap().size().width() == 3600
+    assert left_viewer.image_view._transition_animation is not None
+    assert right_viewer.image_view._transition_animation is not None
+
+
+def test_navigation_discards_a_partially_decoded_comparison_batch():
+    controller, loader, _pipeline, viewer = _make_controller()
+    controller.activate(
+        viewer,
+        [
+            InspectionImageSpec("old-left.jpg"),
+            InspectionImageSpec("old-right.jpg"),
+        ],
+    )
+    loader.detail_ready.emit("old-left.jpg", Image.new("RGB", (4000, 3000)))
+    assert set(controller._pending_detail_images) == {"old-left.jpg"}
+
+    controller.activate(viewer, [InspectionImageSpec("new.jpg")])
+    loader.detail_batch_finished.emit()
+
+    assert controller._pending_detail_images == {}
+    assert viewer.displays_path("new.jpg")
+    assert not viewer.displays_path("old-left.jpg")
