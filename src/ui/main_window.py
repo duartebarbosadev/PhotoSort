@@ -208,12 +208,12 @@ class MainWindow(QMainWindow):
         self.cluster_filter_combo = QComboBox()
         self.cluster_filter_combo.addItems(["All Clusters"])
         self.cluster_filter_combo.setEnabled(False)
-        self.cluster_filter_combo.setToolTip("Filter images by similarity cluster")
+        self.cluster_filter_combo.setToolTip("Filter images by similarity group")
         self.cluster_sort_combo = QComboBox()
         self.cluster_sort_combo.addItems(["Time", "Similarity then Time"])
         self.cluster_sort_combo.setEnabled(False)
         self.cluster_sort_combo.setToolTip(
-            "Order of clusters when 'Group by Similarity' is active"
+            "Order similarity clusters by time or similarity"
         )
         logger.debug("Filter controls created.")
 
@@ -452,31 +452,31 @@ class MainWindow(QMainWindow):
         self.step_organize_button.setObjectName("workflowStepButton")
         self.step_organize_button.setCheckable(True)
         self.step_organize_button.setToolTip(
-            "Plan folder changes, review them, then apply explicitly"
+            "Group photos into folders by date, year, or event"
         )
         self.step_easy_delete_button = QPushButton("2. Easy Delete")
         self.step_easy_delete_button.setObjectName("workflowStepButton")
         self.step_easy_delete_button.setCheckable(True)
         self.step_easy_delete_button.setToolTip(
-            "Review obvious issues and stage reversible Trash marks"
+            "Detect blurry, dark, overexposed, and duplicate photos"
         )
         self.step_fix_rotation_button = QPushButton("3. Fix Rotation")
         self.step_fix_rotation_button.setObjectName("workflowStepButton")
         self.step_fix_rotation_button.setCheckable(True)
         self.step_fix_rotation_button.setToolTip(
-            "Preview rotation corrections and apply only the queued changes"
+            "Detect and fix sideways or upside-down photos"
         )
         self.step_pick_best_button = QPushButton("4. Pick Best")
         self.step_pick_best_button.setObjectName("workflowStepButton")
         self.step_pick_best_button.setCheckable(True)
         self.step_pick_best_button.setToolTip(
-            "Compare similar photos and stage Keep or Trash choices"
+            "Compare similar photos and pick the single best shot"
         )
         self.step_cull_button = QPushButton("5. Cull")
         self.step_cull_button.setObjectName("workflowStepButton")
         self.step_cull_button.setCheckable(True)
         self.step_cull_button.setToolTip(
-            "Review all staged marks and confirm any move to Trash"
+            "Inspect flagged photos before moving them to Trash"
         )
 
         # Models

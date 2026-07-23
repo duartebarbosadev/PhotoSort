@@ -1225,8 +1225,7 @@ class DialogManager:
         blur_threshold_spin.setSingleStep(10.0)
         blur_threshold_spin.setValue(get_easy_delete_blur_threshold())
         blur_threshold_spin.setToolTip(
-            "Lower = stricter (more images flagged as blurry); this is the minimum "
-            "acceptable peak local sharpness."
+            "Lower values flag more blurs. Higher values flag only severe blurs."
         )
         easy_delete_form.addWidget(blur_threshold_label, 0, 0)
         easy_delete_form.addWidget(blur_threshold_spin, 0, 1)
@@ -1239,8 +1238,7 @@ class DialogManager:
         dark_threshold_spin.setSingleStep(1.0)
         dark_threshold_spin.setValue(get_easy_delete_dark_threshold())
         dark_threshold_spin.setToolTip(
-            "A preview must be below this mean and at least 98% of its pixels must "
-            "be near black. Night scenes with visible lights or shadow detail are kept."
+            "Max brightness to flag dark shots while keeping night photos."
         )
         easy_delete_form.addWidget(dark_threshold_label, 1, 0)
         easy_delete_form.addWidget(dark_threshold_spin, 1, 1)
@@ -1253,7 +1251,7 @@ class DialogManager:
         white_threshold_spin.setSingleStep(1.0)
         white_threshold_spin.setValue(get_easy_delete_white_threshold())
         white_threshold_spin.setToolTip(
-            "Images with mean brightness above this value (0-255) are flagged overexposed."
+            "Brightness limit to flag overexposed photos."
         )
         easy_delete_form.addWidget(white_threshold_label, 2, 0)
         easy_delete_form.addWidget(white_threshold_spin, 2, 1)
@@ -1266,8 +1264,7 @@ class DialogManager:
         duplicate_distance_spin.setSingleStep(0.005)
         duplicate_distance_spin.setValue(get_easy_delete_duplicate_distance())
         duplicate_distance_spin.setToolTip(
-            "Cosine distance; Easy Delete also uses a strict same-framing check so "
-            "exposure or sensor-noise differences do not hide an otherwise unchanged photo."
+            "Similarity limit to detect identical or near-duplicate photos."
         )
         easy_delete_form.addWidget(duplicate_distance_label, 3, 0)
         easy_delete_form.addWidget(duplicate_distance_spin, 3, 1)

@@ -84,8 +84,12 @@ ORGANIZE_SHORTCUTS = (
 )
 
 EASY_DELETE_SHORTCUTS = (
-    WorkflowShortcutSpec("select_left", ("1", "Left"), "1 / ←", "Trash left"),
-    WorkflowShortcutSpec("select_right", ("2", "Right"), "2 / →", "Trash right"),
+    WorkflowShortcutSpec(
+        "select_left", ("1", "Left"), "1 / ←", "Toggle left Keep/Trash"
+    ),
+    WorkflowShortcutSpec(
+        "select_right", ("2", "Right"), "2 / →", "Toggle right Keep/Trash"
+    ),
     WorkflowShortcutSpec("previous", ("Up",), "↑", "Previous"),
     WorkflowShortcutSpec("next", ("Down",), "↓", "Next"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm / cancel"),

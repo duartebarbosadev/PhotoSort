@@ -73,7 +73,7 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
         }
     )
 
-    assert widget._state_banner.title_label.text() == "Choose, then confirm"
+    assert widget._state_banner.title_label.text() == "Set each photo, then confirm"
     assert widget._items_list.item(0).text() == "NEAR-DUPLICATES  ·  1"
     assert widget._category_checkboxes["near_duplicate"].text() == (
         "Near-duplicates (1)"
@@ -131,25 +131,27 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
     _app.processEvents()
 
     assert not marks
-    assert "SELECTED TO KEEP" in widget._pair_left_hdr.text()
+    assert "SELECTED FOR TRASH" in widget._pair_left_hdr.text()
     assert "SELECTED FOR TRASH" in widget._pair_right_hdr.text()
 
     widget._on_confirm()
     _app.processEvents()
 
-    assert keep_path in marks
-    assert delete_path not in marks
-    assert widget._state_banner.title_label.text() == "Decision confirmed"
+    assert marks == {delete_path, keep_path}
+    assert widget._state_banner.title_label.text() == "Decisions confirmed"
     assert (
         "no file has been moved or deleted" in widget._state_banner.detail_label.text()
     )
     assert widget._items_list.item(1).text().startswith("✓")
+    assert widget._items_list.item(1).text().endswith("Complete · 0 kept")
+    assert "MARKED FOR TRASH" in widget._pair_left_hdr.text()
     assert "MARKED FOR TRASH" in widget._pair_right_hdr.text()
 
 
-def test_easy_delete_enter_cancels_a_confirmed_pick_and_restores_prior_marks():
+def test_easy_delete_revision_restores_prior_marks_until_reconfirmed():
     marks = {"/tmp/already-marked.jpg"}
     review_path = "/tmp/review.jpg"
+    pair_path = "/tmp/already-marked.jpg"
     widget = EasyDeleteStepWidget()
     widget.set_is_marked_func(marks.__contains__)
     widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
@@ -160,7 +162,7 @@ def test_easy_delete_enter_cancels_a_confirmed_pick_and_restores_prior_marks():
         {
             review_path: {
                 "type": "duplicate",
-                "pair_path": "/tmp/already-marked.jpg",
+                "pair_path": pair_path,
                 "suggest_delete": True,
                 "reason": "Suggested choice",
             }
@@ -168,21 +170,117 @@ def test_easy_delete_enter_cancels_a_confirmed_pick_and_restores_prior_marks():
     )
     shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
 
-    shortcuts["1"].activated.emit()
+    shortcuts["2"].activated.emit()
     shortcuts["Return"].activated.emit()
     _app.processEvents()
 
-    assert marks == {review_path}
+    assert marks == {review_path, pair_path}
     assert widget._confirmed_reviews == {review_path}
     assert widget._confirm_btn.text() == "Cancel confirmation"
 
+    shortcuts["1"].activated.emit()
+    _app.processEvents()
+
+    assert marks == {pair_path}
+    assert not widget._confirmed_reviews
+    assert widget._state_banner.title_label.text() == "Set each photo, then confirm"
+    assert widget._confirm_btn.text() == "Confirm  →"
+    assert "SELECTED TO KEEP" in widget._pair_left_hdr.text()
+    assert "SELECTED FOR TRASH" in widget._pair_right_hdr.text()
+
     shortcuts["Return"].activated.emit()
     _app.processEvents()
 
-    assert marks == {"/tmp/already-marked.jpg"}
-    assert not widget._confirmed_reviews
-    assert widget._state_banner.title_label.text() == "Choose, then confirm"
-    assert widget._confirm_btn.text() == "Confirm  →"
+    assert marks == {pair_path}
+    assert widget._confirmed_reviews == {review_path}
+
+
+def test_easy_delete_pair_supports_all_independent_keep_trash_outcomes():
+    outcomes = {
+        (True, True): ("1",),
+        (True, False): ("1", "2"),
+        (False, True): (),
+        (False, False): ("2",),
+    }
+
+    for (keep_left, keep_right), toggles in outcomes.items():
+        left = f"/tmp/left-{keep_left}-{keep_right}.jpg"
+        right = f"/tmp/right-{keep_left}-{keep_right}.jpg"
+        marks: set[str] = set()
+        widget = EasyDeleteStepWidget()
+        widget.set_is_marked_func(marks.__contains__)
+        widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
+        widget.unmark_for_deletion_requested.connect(
+            lambda paths: marks.difference_update(paths)
+        )
+        widget.show_results(
+            {
+                left: {
+                    "type": "duplicate",
+                    "pair_path": right,
+                    "suggest_delete": True,
+                    "reason": "Detector default",
+                }
+            }
+        )
+        shortcuts = {
+            shortcut.key().toString(): shortcut for shortcut in widget._shortcuts
+        }
+
+        assert "SELECTED FOR TRASH" in widget._pair_left_hdr.text()
+        assert "SELECTED TO KEEP" in widget._pair_right_hdr.text()
+        for key in toggles:
+            shortcuts[key].activated.emit()
+        _app.processEvents()
+
+        assert not marks
+        assert ("SELECTED TO KEEP" in widget._pair_left_hdr.text()) is keep_left
+        assert ("SELECTED TO KEEP" in widget._pair_right_hdr.text()) is keep_right
+
+        shortcuts["Return"].activated.emit()
+        _app.processEvents()
+
+        expected_marks = {
+            path for path, keep in ((left, keep_left), (right, keep_right)) if not keep
+        }
+        assert marks == expected_marks
+        assert (
+            widget._items_list.item(1)
+            .text()
+            .endswith(f"Complete · {int(keep_left) + int(keep_right)} kept")
+        )
+
+
+def test_easy_delete_card_click_toggles_only_the_target_photo():
+    left = "/tmp/card-left.jpg"
+    right = "/tmp/card-right.jpg"
+    marks: set[str] = set()
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.show_results(
+        {
+            left: {
+                "type": "duplicate",
+                "pair_path": right,
+                "suggest_delete": True,
+                "reason": "Detector default",
+            }
+        }
+    )
+
+    widget._pair_left_card.activated.emit()
+    _app.processEvents()
+
+    assert "SELECTED TO KEEP" in widget._pair_left_hdr.text()
+    assert "SELECTED TO KEEP" in widget._pair_right_hdr.text()
+    assert not marks
+
+    widget._pair_right_card.activated.emit()
+    _app.processEvents()
+
+    assert "SELECTED TO KEEP" in widget._pair_left_hdr.text()
+    assert "SELECTED FOR TRASH" in widget._pair_right_hdr.text()
+    assert not marks
 
 
 def test_easy_delete_shift_enter_requests_apply():
@@ -1655,13 +1753,16 @@ def test_easy_delete_focuses_exact_duplicate_without_changing_decision():
             }
         }
     )
-    pending_before = dict(widget._pending_delete_by_review)
+    pending_before = {
+        review: dict(keep_by_path)
+        for review, keep_by_path in widget._pending_keep_by_review.items()
+    }
 
     assert widget.focus_image(right)
 
     assert widget._focused_path == right
     assert widget._pair_right_card._focused
-    assert widget._pending_delete_by_review == pending_before
+    assert widget._pending_keep_by_review == pending_before
 
 
 def test_easy_delete_upgrades_pair_and_requests_detail_only_for_zoom(tmp_path):
