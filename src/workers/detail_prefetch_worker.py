@@ -1,5 +1,6 @@
 """Cancellable source-detail decoding for interactive inspection."""
 
+import concurrent.futures
 import logging
 import math
 from threading import Event
@@ -11,6 +12,8 @@ from core.image_pipeline import ImagePipeline
 
 logger = logging.getLogger(__name__)
 
+MAX_PARALLEL_DETAIL_DECODES = 4
+
 
 class DetailPrefetchSignals(QObject):
     detail_ready = pyqtSignal(str, object, int)
@@ -19,7 +22,7 @@ class DetailPrefetchSignals(QObject):
 
 
 class DetailPrefetchWorker(QRunnable):
-    """Decode one visible image set sequentially under a combined pixel budget."""
+    """Decode up to four visible images concurrently under one pixel budget."""
 
     def __init__(
         self,
@@ -63,24 +66,75 @@ class DetailPrefetchWorker(QRunnable):
     def run(self) -> None:
         try:
             target_sizes = self._target_sizes()
+            pending_paths: list[str] = []
             for path in self.image_paths:
-                if self.cancel_event.is_set():
-                    break
                 if path not in target_sizes:
-                    self.signals.detail_failed.emit(path, self.request_id)
+                    if not self.cancel_event.is_set():
+                        self.signals.detail_failed.emit(path, self.request_id)
                     continue
-                try:
-                    image = self.image_pipeline.load_detail_image(
-                        path, target_sizes[path]
+                pending_paths.append(path)
+
+            if self.cancel_event.is_set() or not pending_paths:
+                return
+
+            worker_count = min(MAX_PARALLEL_DETAIL_DECODES, len(pending_paths))
+            path_iterator = iter(pending_paths)
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="detail-decode",
+            ) as executor:
+                futures: dict[concurrent.futures.Future, str] = {}
+
+                def submit_until_full() -> None:
+                    while (
+                        len(futures) < worker_count
+                        and not self.cancel_event.is_set()
+                    ):
+                        try:
+                            path = next(path_iterator)
+                        except StopIteration:
+                            return
+                        future = executor.submit(
+                            self._decode_detail,
+                            path,
+                            target_sizes[path],
+                        )
+                        futures[future] = path
+
+                submit_until_full()
+                while futures:
+                    done, _pending = concurrent.futures.wait(
+                        futures,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
                     )
-                except Exception:
-                    logger.error("Detail decode failed for %s", path, exc_info=True)
-                    image = None
-                if self.cancel_event.is_set():
-                    break
-                if image is None:
-                    self.signals.detail_failed.emit(path, self.request_id)
-                else:
-                    self.signals.detail_ready.emit(path, image, self.request_id)
+                    for future in done:
+                        path = futures.pop(future)
+                        image = future.result()
+                        if self.cancel_event.is_set():
+                            break
+                        if image is None:
+                            self.signals.detail_failed.emit(path, self.request_id)
+                        else:
+                            self.signals.detail_ready.emit(
+                                path, image, self.request_id
+                            )
+                    if self.cancel_event.is_set():
+                        for future in futures:
+                            future.cancel()
+                        break
+                    submit_until_full()
         finally:
             self.signals.finished.emit(self.request_id)
+
+    def _decode_detail(
+        self,
+        path: str,
+        target_size: tuple[int, int] | None,
+    ):
+        if self.cancel_event.is_set():
+            return None
+        try:
+            return self.image_pipeline.load_detail_image(path, target_size)
+        except Exception:
+            logger.error("Detail decode failed for %s", path, exc_info=True)
+            return None
