@@ -564,9 +564,7 @@ def test_footer_shortcuts_use_at_most_three_rows_and_still_reflow():
     _app.processEvents()
 
     wide_columns = strip._current_columns
-    wide_row_count = (
-        len(ORGANIZE_SHORTCUTS) + wide_columns - 1
-    ) // wide_columns
+    wide_row_count = (len(ORGANIZE_SHORTCUTS) + wide_columns - 1) // wide_columns
     assert wide_row_count <= 3
 
     strip.resize(320, 100)

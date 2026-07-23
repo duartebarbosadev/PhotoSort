@@ -97,9 +97,7 @@ def aligned_localized_change_metrics(
         centered_source = source - source_mean
         variance = float(np.dot(centered_source, centered_source))
         if variance > np.finfo(np.float32).eps:
-            gain = float(
-                np.dot(centered_source, target - target_mean) / variance
-            )
+            gain = float(np.dot(centered_source, target - target_mean) / variance)
             gain = max(0.5, min(2.0, gain))
             offset = target_mean - gain * source_mean
             aligned_second = np.clip(

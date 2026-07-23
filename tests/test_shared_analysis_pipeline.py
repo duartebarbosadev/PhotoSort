@@ -126,10 +126,7 @@ def test_localized_change_detects_small_subject_motion_in_unchanged_frame():
     assert structural_score is not None and structural_score >= 0.98
     assert change is not None
     assert change.p99_difference >= app_settings.EASY_DELETE_LOCALIZED_CHANGE_MIN_P99
-    assert (
-        change.concentration_ratio
-        >= app_settings.EASY_DELETE_LOCALIZED_CHANGE_RATIO
-    )
+    assert change.concentration_ratio >= app_settings.EASY_DELETE_LOCALIZED_CHANGE_RATIO
 
 
 def test_easy_delete_uses_same_framing_when_cosine_is_outside_cutoff(
@@ -174,9 +171,7 @@ def test_easy_delete_rejects_moved_subject_even_when_cosine_is_inside_cutoff(
     assert worker._detect_duplicates() == {}
 
 
-def test_easy_delete_rejects_concentrated_face_or_arm_movement(
-    tmp_path, monkeypatch
-):
+def test_easy_delete_rejects_concentrated_face_or_arm_movement(tmp_path, monkeypatch):
     first = tmp_path / "first.jpg"
     second = tmp_path / "second.jpg"
     first.write_bytes(b"first")
