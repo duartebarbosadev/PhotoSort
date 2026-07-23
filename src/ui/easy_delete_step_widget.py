@@ -570,7 +570,7 @@ class EasyDeleteStepWidget(QWidget):
             except Exception:
                 logger.debug("Cached EXIF lookup failed for %s", path, exc_info=True)
                 rows = [("Metadata", "No EXIF details available")]
-            rows = [("Path", path)] + rows
+            rows = [("Path", path), *rows]
             self._metadata_cache[path] = rows
         return self._metadata_cache[path]
 
