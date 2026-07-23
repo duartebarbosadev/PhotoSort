@@ -51,6 +51,9 @@ _WORKFLOW_STEP_SHORTCUT = WorkflowShortcutSpec(
     f"{_PRIMARY_MODIFIER}{_ALT_MODIFIER}1–5",
     "Step",
 )
+_APPLY_SHORTCUT = WorkflowShortcutSpec(
+    "apply", ("Shift+Return", "Shift+Enter"), "Shift+Enter", "Apply"
+)
 
 
 ORGANIZE_SHORTCUTS = (
@@ -72,9 +75,9 @@ ORGANIZE_SHORTCUTS = (
     ),
     WorkflowShortcutSpec(
         "apply",
-        ("Ctrl+Return", "Ctrl+Enter"),
-        f"{_PRIMARY_MODIFIER}↵",
-        "Apply",
+        (*_APPLY_SHORTCUT.sequences, "Ctrl+Return", "Ctrl+Enter"),
+        _APPLY_SHORTCUT.keys,
+        _APPLY_SHORTCUT.label,
     ),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
     _WORKFLOW_STEP_SHORTCUT,
@@ -86,9 +89,7 @@ EASY_DELETE_SHORTCUTS = (
     WorkflowShortcutSpec("previous", ("Up",), "↑", "Previous"),
     WorkflowShortcutSpec("next", ("Down",), "↓", "Next"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm / cancel"),
-    WorkflowShortcutSpec(
-        "apply", ("Shift+Return", "Shift+Enter"), "Shift+Enter", "Apply"
-    ),
+    _APPLY_SHORTCUT,
     WorkflowShortcutSpec("apply_all", ("A",), "A", "All"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
@@ -101,18 +102,22 @@ FIX_ROTATION_SHORTCUTS = (
     WorkflowShortcutSpec("previous", ("Left", "Up"), "←  ↑", "Previous"),
     WorkflowShortcutSpec("next", ("Right", "Down"), "→  ↓", "Next"),
     WorkflowShortcutSpec("primary", ("Return", "Enter"), "Enter", "Confirm"),
+    _APPLY_SHORTCUT,
     _TOGGLE_LEFT_PANEL_SHORTCUT,
     _WORKFLOW_STEP_SHORTCUT,
 )
 
 PICK_BEST_SHORTCUTS = (
-    WorkflowShortcutSpec("slots", ("1", "2", "3"), "1  2  3", "Choice"),
+    WorkflowShortcutSpec(
+        "slots", ("1", "2", "3"), "1  2  3", "Toggle Keep/Trash"
+    ),
     WorkflowShortcutSpec("clusters", ("Left", "Right"), "←  →", "Cluster"),
     WorkflowShortcutSpec("groups", ("Up", "Down"), "↑  ↓", "Comparison / cluster"),
     WorkflowShortcutSpec("focus", ("C",), "C", "Compare"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     WorkflowShortcutSpec("keep_all", ("K",), "K", "Keep all"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm"),
+    _APPLY_SHORTCUT,
     _TOGGLE_LEFT_PANEL_SHORTCUT,
     _WORKFLOW_STEP_SHORTCUT,
 )
@@ -124,6 +129,7 @@ CULL_SHORTCUTS = (
     ),
     WorkflowShortcutSpec("mark", ("D",), "D", "Mark"),
     WorkflowShortcutSpec("commit", ("Shift+D",), "Shift+D", "Commit"),
+    _APPLY_SHORTCUT,
     WorkflowShortcutSpec("rotate", ("R",), "R", "Rotate"),
     WorkflowShortcutSpec("details", ("I",), "I", "Details"),
     WorkflowShortcutSpec("fit", ("0",), "0", "Fit"),

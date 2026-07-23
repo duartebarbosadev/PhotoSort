@@ -39,9 +39,11 @@ def test_keyboard_layout_documents_current_workflow_shortcuts():
         "Shared controls — available in every workflow step",
         "Step 1 — Organize",
     )
+    organize = _section(source, "Step 1 — Organize", "Step 2 — Easy Delete")
     easy_delete = _section(source, "Step 2 — Easy Delete", "Step 3 — Fix Rotation")
     fix_rotation = _section(source, "Step 3 — Fix Rotation", "Step 4 — Pick Best")
     pick_best = _section(source, "Step 4 — Pick Best", "Step 5 — Cull")
+    cull = _section(source, "Step 5 — Cull")
 
     assert "Cmd/Ctrl+Shift · Hide left panel" in shared
     assert "Cmd/Ctrl+Alt/Option · Step 5 Cull" in shared
@@ -51,3 +53,7 @@ def test_keyboard_layout_documents_current_workflow_shortcuts():
     assert "Shift+Enter Apply" in easy_delete
     assert "1 · R −90° · Shift+R +90° override" in fix_rotation
     assert "Previous comparison / cluster" in pick_best
+    assert "1 · Toggle image 1 Keep / Trash" in pick_best
+    assert "2 · Toggle image 2 Keep / Trash" in pick_best
+    for section in (organize, easy_delete, fix_rotation, pick_best, cull):
+        assert "Shift+Enter · Apply" in section

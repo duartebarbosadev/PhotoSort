@@ -1679,9 +1679,7 @@ class MainWindow(QMainWindow):
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
             )
-            widget.proceed_to_cull_requested.connect(
-                lambda: self._request_next_visible_workflow_transition("pick_best")
-            )
+            widget.apply_requested.connect(self._request_workflow_resolution)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
@@ -1792,12 +1790,12 @@ class MainWindow(QMainWindow):
         ]
         if not hasattr(self, "_cull_action_shortcuts"):
             self._cull_action_shortcuts = {
-                action: action.shortcut() for action in actions
+                action: action.shortcuts() for action in actions
             }
         for action in actions:
             original = self._cull_action_shortcuts.get(action)
-            action.setShortcut(
-                original if active and original is not None else QKeySequence()
+            action.setShortcuts(
+                original if active and original is not None else []
             )
 
     def _refresh_workflow_deletion_state(self) -> None:

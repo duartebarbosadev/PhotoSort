@@ -83,6 +83,7 @@ class FixRotationStepWidget(QWidget):
                 "previous": self._on_prev,
                 "next": self._on_next,
                 "primary": self._on_confirm,
+                "apply": self._on_apply,
             },
         )
 
