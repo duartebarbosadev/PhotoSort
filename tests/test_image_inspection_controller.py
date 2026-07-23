@@ -1,8 +1,13 @@
 from PIL import Image
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtGui import QPixmap
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
+from core.app_settings import (
+    INSPECTION_DETAIL_DWELL_MS,
+    INSPECTION_DETAIL_TRANSITION_MS,
+)
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.controllers.image_inspection_controller import (
     ImageInspectionController,
@@ -83,6 +88,8 @@ def test_dwell_requests_unique_non_video_paths_once():
 
     assert pipeline.immediate_calls == ["same.jpg"]
     assert loader.preview_requests[-1][0] == ("same.jpg",)
+    assert controller._timer.interval() == 250
+    assert INSPECTION_DETAIL_DWELL_MS == 250
     controller._timer.timeout.emit()
     controller._timer.timeout.emit()
     assert loader.detail_requests == [("same.jpg",)]
@@ -129,6 +136,12 @@ def test_detail_is_monotonic_and_must_add_pixels():
     loader.detail_ready.emit("photo.jpg", Image.new("RGB", (4000, 3000)))
     assert controller._quality["photo.jpg"] == InspectionQuality.DETAIL
     detail_size = viewer.current_pixmap().size()
+    primary = viewer.get_primary_viewer()
+    assert primary is not None
+    assert primary.image_view._transition_animation is not None
+    QTest.qWait(INSPECTION_DETAIL_TRANSITION_MS + 30)
+    assert primary.image_view._transition_animation is None
+    assert primary.image_view._transition_item is None
 
     pipeline.preview = pipeline._pixmap(1920, 1200)
     loader.preview_ready.emit("photo.jpg")

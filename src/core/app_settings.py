@@ -119,7 +119,8 @@ DEFAULT_BEST_SHOT_BATCH_SIZE = 3
 
 # Image inspection quality progression. Originals stay memory-only and are
 # bounded across the complete visible comparison set.
-INSPECTION_DETAIL_DWELL_MS = 1000
+INSPECTION_DETAIL_DWELL_MS = 250
+INSPECTION_DETAIL_TRANSITION_MS = 180
 INSPECTION_DETAIL_BUDGET_BYTES = 512 * 1024 * 1024
 
 

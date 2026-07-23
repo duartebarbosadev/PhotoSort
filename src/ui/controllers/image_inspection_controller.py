@@ -179,7 +179,12 @@ class ImageInspectionController(QObject):
         pixmap = self._pipeline.get_cached_preview_qpixmap(path, memory_only=True)
         if pixmap is None or pixmap.isNull():
             return
-        if self._viewer.update_image_pixmap(path, pixmap, preserve_view=True):
+        if self._viewer.update_image_pixmap(
+            path,
+            pixmap,
+            preserve_view=True,
+            smooth_transition=True,
+        ):
             self._quality[path] = InspectionQuality.PREVIEW
             self._pixel_area[path] = pixmap.width() * pixmap.height()
 
@@ -198,7 +203,12 @@ class ImageInspectionController(QObject):
         except Exception:
             self._on_detail_failed(path)
             return
-        if self._viewer.update_image_pixmap(path, pixmap, preserve_view=True):
+        if self._viewer.update_image_pixmap(
+            path,
+            pixmap,
+            preserve_view=True,
+            smooth_transition=True,
+        ):
             self._quality[path] = InspectionQuality.DETAIL
             self._pixel_area[path] = area
 
