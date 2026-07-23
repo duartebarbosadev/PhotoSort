@@ -60,6 +60,7 @@ from ui.controllers.image_inspection_controller import (
 from core.image_file_ops import ImageFileOperations
 from core.metadata_processor import MetadataProcessor  # New metadata processor
 from core.media_utils import is_video_extension
+from core.similarity_utils import cosine_similarity
 from core.app_settings import (
     DEFAULT_BLUR_DETECTION_THRESHOLD,
     LEFT_PANEL_STRETCH,
@@ -3413,22 +3414,15 @@ class MainWindow(QMainWindow):
                     self.app_state.embeddings_cache.get(path2),
                 )
                 if emb1 is not None and emb2 is not None:
-                    try:
-                        import numpy as np
-
-                        first = np.asarray(emb1, dtype=np.float32)
-                        second = np.asarray(emb2, dtype=np.float32)
-                        denominator = np.linalg.norm(first) * np.linalg.norm(second)
-                        similarity = (
-                            float(np.dot(first, second) / denominator)
-                            if denominator
-                            else 0.0
-                        )
+                    similarity = cosine_similarity(emb1, emb2)
+                    if similarity is not None:
                         self.statusBar().showMessage(
                             f"Comparing {len(images_data_for_viewer)} images. Similarity (first 2): {similarity:.4f}"
                         )
-                    except Exception as e:
-                        logger.error(f"Error calculating similarity: {e}")
+                    else:
+                        self.statusBar().showMessage(
+                            f"Comparing {len(images_data_for_viewer)} images. Similarity unavailable."
+                        )
                 else:
                     self.statusBar().showMessage(
                         f"Comparing {len(images_data_for_viewer)} images."
@@ -4799,6 +4793,10 @@ class MainWindow(QMainWindow):
             ):
                 self.easy_delete_step_widget.show_results(
                     self.app_state.easy_delete_results
+                )
+            if self.pick_best_step_widget is not None:
+                self.pick_best_step_widget.sync_results_after_file_mutation(
+                    self.app_state.pick_best_results
                 )
             self.mark_cull_model_dirty()
             self._refresh_workflow_deletion_state()

@@ -880,6 +880,30 @@ def test_pick_best_publishes_trash_mark_as_soon_as_comparison_is_confirmed():
     assert widget._done_btn.isEnabled()
 
 
+def test_pick_best_shows_cosine_similarity_and_easy_delete_cutoff(monkeypatch):
+    paths = ["/tmp/left.jpg", "/tmp/right.jpg"]
+    widget = PickBestStepWidget()
+    widget.app_state = SimpleNamespace(
+        embeddings_cache={
+            paths[0]: [1.0, 0.0],
+            paths[1]: [0.994, 0.10938025],
+        }
+    )
+    widget.set_is_marked_func(lambda _path: False)
+    monkeypatch.setattr(
+        "ui.pick_best_step_widget.get_easy_delete_duplicate_distance",
+        lambda: 0.005,
+    )
+
+    widget.show_results({1: _pick_best_payload(paths)})
+
+    detail = widget._state_banner.detail_label.text()
+    assert "Cosine similarity 0.9940 (99.40%)" in detail
+    assert "distance 0.0060" in detail
+    assert "Easy Delete cosine cutoff < 0.0050 (outside cutoff)" in detail
+    assert "unchanged framing at ≥ 0.98 structural similarity" in detail
+
+
 def test_pick_best_apply_button_and_shift_enter_submit_without_naming_cull():
     first_paths = ["/tmp/first-left.jpg", "/tmp/first-right.jpg"]
     second_paths = ["/tmp/second-left.jpg", "/tmp/second-right.jpg"]
@@ -907,6 +931,40 @@ def test_pick_best_apply_button_and_shift_enter_submit_without_naming_cull():
     shortcuts["Shift+Return"].activated.emit()
 
     assert requests == [True, True]
+
+
+def test_pick_best_file_mutation_sync_removes_invalidated_cluster_from_left_panel():
+    first_paths = ["/tmp/deleted.jpg", "/tmp/first-keeper.jpg"]
+    second_paths = ["/tmp/second-left.jpg", "/tmp/second-right.jpg"]
+    emitted: list[tuple[str, tuple[str, ...]]] = []
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.mark_for_deletion_requested.connect(
+        lambda paths: emitted.append(("mark", tuple(paths)))
+    )
+    widget.unmark_for_deletion_requested.connect(
+        lambda paths: emitted.append(("unmark", tuple(paths)))
+    )
+    results = {
+        1: _pick_best_payload(first_paths),
+        2: _pick_best_payload(second_paths),
+    }
+    widget.show_results(results)
+    widget._on_confirm()
+    emitted.clear()
+
+    results.pop(1)
+    widget.sync_results_after_file_mutation(results)
+
+    assert emitted == []
+    assert widget._cluster_keys == [2]
+    assert widget._subset_paths == second_paths
+    left_panel_text = "\n".join(
+        widget._items_list.item(index).text()
+        for index in range(widget._items_list.count())
+    )
+    assert "deleted.jpg" not in left_panel_text
+    assert "Cluster 1 · 2 photos" in left_panel_text
 
 
 def test_pick_best_revising_one_decision_preserves_the_other_until_reconfirmed():

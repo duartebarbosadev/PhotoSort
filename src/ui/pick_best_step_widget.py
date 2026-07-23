@@ -21,6 +21,11 @@ from PyQt6.QtWidgets import (
 )
 
 from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResults
+from core.app_settings import (
+    EASY_DELETE_SAME_FRAME_SIMILARITY,
+    get_easy_delete_duplicate_distance,
+)
+from core.similarity_utils import cosine_similarity
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.controllers.image_inspection_controller import InspectionImageSpec
 from ui.workflow_review_components import (
@@ -251,16 +256,19 @@ class PickBestStepWidget(QWidget):
         self._loading_label.setText(f"Error: {message}")
         self._progress_bar.setValue(0)
 
-    def show_results(self, results: PickBestResults) -> None:
+    def show_results(
+        self, results: PickBestResults, *, restore_prior_marks: bool = True
+    ) -> None:
         if self._shown_results is not None and results == self._shown_results:
             if self._tournaments:
                 self._stack.setCurrentWidget(self._page_review)
                 self._load_cluster(self._cluster_index)
                 self.setFocus()
             return
-        for tournament in self._tournaments:
-            if tournament.prior_marks is not None:
-                self._publish_confirmed_state(dict(tournament.prior_marks))
+        if restore_prior_marks:
+            for tournament in self._tournaments:
+                if tournament.prior_marks is not None:
+                    self._publish_confirmed_state(dict(tournament.prior_marks))
         self._shown_results = results
         cluster_entries = [
             (key, payload)
@@ -283,6 +291,12 @@ class PickBestStepWidget(QWidget):
         self._load_cluster(0)
         self._stack.setCurrentWidget(self._page_review)
         self.setFocus()
+
+    def sync_results_after_file_mutation(self, results: PickBestResults) -> None:
+        """Rebuild review state after shared file operations invalidate results."""
+
+        self._shown_results = None
+        self.show_results(results, restore_prior_marks=False)
 
     def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
         self._is_marked_func = func
@@ -909,6 +923,7 @@ class PickBestStepWidget(QWidget):
     def _update_tournament_controls(self) -> None:
         tournament = self._current_tournament()
         group = self._current_group()
+        similarity_detail = self._comparison_similarity_detail(group.paths)
         self._cluster_info_label.setText(
             f"Cluster {self._cluster_index + 1} of {len(self._tournaments)}  ·  {len(self._current_all_paths)} photos"
         )
@@ -941,18 +956,48 @@ class PickBestStepWidget(QWidget):
             advancing_name = os.path.basename(group.advancing_path)
             self._state_banner.set_state(
                 "Decisions confirmed",
-                (
+                self._append_similarity_detail(
                     f"{kept_count} of {len(group.paths)} photos kept. "
-                    f"{advancing_name} continues to the next comparison."
+                    f"{advancing_name} continues to the next comparison.",
+                    similarity_detail,
                 ),
                 tone="success" if kept_count else "warning",
             )
         else:
             self._state_banner.set_state(
                 "Set each photo, then confirm",
-                "Click a photo or press its number to toggle only that Keep/Trash decision.",
+                self._append_similarity_detail(
+                    "Click a photo or press its number to toggle only that Keep/Trash decision.",
+                    similarity_detail,
+                ),
                 tone="warning",
             )
+
+    @staticmethod
+    def _append_similarity_detail(message: str, similarity_detail: str) -> str:
+        return f"{message} {similarity_detail}" if similarity_detail else message
+
+    def _comparison_similarity_detail(self, paths: list[str]) -> str:
+        if len(paths) != 2:
+            return ""
+        app_state = getattr(self.window(), "app_state", None)
+        embeddings = getattr(app_state, "embeddings_cache", {}) if app_state else {}
+        first = embeddings.get(paths[0])
+        second = embeddings.get(paths[1])
+        if first is None or second is None:
+            return ""
+        similarity = cosine_similarity(first, second)
+        if similarity is None:
+            return ""
+        distance = max(0.0, 1.0 - similarity)
+        cutoff = get_easy_delete_duplicate_distance()
+        cutoff_result = "inside" if distance < cutoff else "outside"
+        return (
+            f"Cosine similarity {similarity:.4f} ({similarity * 100:.2f}%) · "
+            f"distance {distance:.4f} · Easy Delete cosine cutoff < {cutoff:.4f} "
+            f"({cutoff_result} cutoff). Easy Delete also accepts unchanged framing "
+            f"at ≥ {EASY_DELETE_SAME_FRAME_SIMILARITY:.2f} structural similarity."
+        )
 
     def handle_preview_ready(self, path: str) -> None:
         if path not in self._subset_paths:

@@ -5,7 +5,12 @@ from unittest.mock import Mock
 import numpy as np
 from PIL import Image
 
+from core import app_settings
 from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
+from core.image_features.structural_similarity import (
+    aligned_structural_similarity,
+    prepare_same_frame_preview,
+)
 from core.similarity_engine import SimilarityEngine
 from ui.app_controller import AppController
 from workers.easy_delete_worker import EasyDeleteWorker
@@ -24,6 +29,146 @@ def test_easy_delete_reuses_shared_neutral_analysis_image():
         "photo.arw",
         target_size=(640, 480),
     )
+
+
+def test_easy_delete_dark_detection_requires_almost_complete_black_clipping(
+    monkeypatch,
+):
+    worker = EasyDeleteWorker(["photo.arw"])
+    monkeypatch.setattr(worker, "_compute_local_sharpness", lambda _gray: 200.0)
+
+    nearly_black = np.zeros((100, 100), dtype=np.uint8)
+    nearly_black[:1, :] = 50
+    monkeypatch.setattr(worker, "_load_gray_for_detection", lambda _path: nearly_black)
+
+    result = worker._detect_issue("photo.arw")
+
+    assert result is not None and result["type"] == "dark"
+    assert result["black_fraction"] == 0.99
+    assert "Effectively black image" in result["reason"]
+
+
+def test_easy_delete_preserves_dark_city_with_visible_lights(monkeypatch):
+    worker = EasyDeleteWorker(["night-city.arw"])
+    monkeypatch.setattr(worker, "_compute_local_sharpness", lambda _gray: 0.0)
+    night_city = np.full((100, 100), 5, dtype=np.uint8)
+    night_city[:10, :] = 80
+    monkeypatch.setattr(worker, "_load_gray_for_detection", lambda _path: night_city)
+
+    result = worker._detect_issue("night-city.arw")
+
+    assert night_city.mean() < app_settings.get_easy_delete_dark_threshold()
+    assert result is None
+
+
+def test_easy_delete_preserves_underexposed_preview_with_shadow_variation(
+    monkeypatch,
+):
+    worker = EasyDeleteWorker(["underexposed.arw"])
+    monkeypatch.setattr(worker, "_compute_local_sharpness", lambda _gray: 0.0)
+    shadow_gradient = np.tile(
+        np.linspace(1, 20, 100, dtype=np.uint8),
+        (100, 1),
+    )
+    monkeypatch.setattr(
+        worker, "_load_gray_for_detection", lambda _path: shadow_gradient
+    )
+
+    result = worker._detect_issue("underexposed.arw")
+
+    assert shadow_gradient.mean() < app_settings.get_easy_delete_dark_threshold()
+    assert result is None
+
+
+def test_same_frame_similarity_tolerates_noise_but_rejects_moved_subject():
+    rng = np.random.default_rng(3)
+    base = np.full((480, 640), 40, dtype=np.uint8)
+    for x in range(20, 620, 40):
+        base[:, x : x + 2] = 90 + (x % 100)
+    base[160:390, 220:360] = 190
+    noisy = np.clip(
+        base.astype(np.int16) + 5 + rng.normal(0, 5, base.shape),
+        0,
+        255,
+    ).astype(np.uint8)
+    moved = base.copy()
+    moved[150:400, 200:370] = 40
+    moved[160:390, 360:500] = 190
+
+    base_preview = prepare_same_frame_preview(base)
+    same_score = aligned_structural_similarity(
+        base_preview, prepare_same_frame_preview(noisy)
+    )
+    moved_score = aligned_structural_similarity(
+        base_preview, prepare_same_frame_preview(moved)
+    )
+
+    assert same_score is not None and same_score >= 0.98
+    assert moved_score is not None and moved_score < 0.98
+
+
+def test_easy_delete_uses_same_framing_when_cosine_is_outside_cutoff(
+    tmp_path, monkeypatch
+):
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    worker = EasyDeleteWorker(
+        [str(first), str(second)],
+        cluster_map={1: [str(first), str(second)]},
+        embeddings_cache={
+            str(first): [1.0, 0.0],
+            str(second): [0.9811, 0.19350191],
+        },
+    )
+    monkeypatch.setattr(worker, "_same_frame_similarity", lambda *_paths: 0.985)
+    monkeypatch.setattr(worker, "_get_sharpness", lambda _path: 10.0)
+
+    results = worker._detect_duplicates()
+
+    assert set(results) == {str(first), str(second)}
+    assert {entry["structural_similarity"] for entry in results.values()} == {0.985}
+    assert all(
+        entry["cosine_similarity"] < 0.995 for entry in results.values()
+    )
+
+
+def test_easy_delete_rejects_moved_subject_even_when_cosine_is_inside_cutoff(
+    tmp_path, monkeypatch
+):
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    worker = EasyDeleteWorker(
+        [str(first), str(second)],
+        cluster_map={1: [str(first), str(second)]},
+        embeddings_cache={str(first): [1.0, 0.0], str(second): [1.0, 0.0]},
+    )
+    monkeypatch.setattr(worker, "_same_frame_similarity", lambda *_paths: 0.90)
+
+    assert worker._detect_duplicates() == {}
+
+
+def test_easy_delete_structural_check_reuses_first_pass_analysis_images(monkeypatch):
+    pipeline = Mock()
+    pipeline.get_analysis_image.return_value = Image.new("RGB", (640, 480), "gray")
+    paths = ["first.arw", "second.arw"]
+    worker = EasyDeleteWorker(
+        paths,
+        cluster_map={1: paths},
+        embeddings_cache={
+            paths[0]: [1.0, 0.0],
+            paths[1]: [0.9811, 0.19350191],
+        },
+        image_pipeline=pipeline,
+    )
+    monkeypatch.setattr(worker, "_files_are_identical", lambda *_paths: False)
+
+    worker._run()
+
+    assert pipeline.get_analysis_image.call_count == 2
 
 
 def test_easy_delete_duplicate_result_has_one_authoritative_classification(

@@ -9,7 +9,12 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from core import app_settings
 from core.image_features.blur_detector import BLUR_DETECTION_PREVIEW_SIZE, BlurDetector
+from core.image_features.structural_similarity import (
+    aligned_structural_similarity,
+    prepare_same_frame_preview,
+)
 from core.image_pipeline import ImagePipeline
+from core.similarity_utils import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,7 @@ class EasyDeleteWorker(QObject):
         self.image_pipeline = image_pipeline
         self._should_stop = False
         self._sharpness_cache: dict[str, float] = {}
+        self._structural_preview_cache: dict[str, np.ndarray | None] = {}
         self._hash_cache: dict[str, str | None] = {}
 
     def stop(self) -> None:
@@ -96,6 +102,32 @@ class EasyDeleteWorker(QObject):
             return None
 
         sharpness = self._sharpness_for_gray(path, gray)
+        self._structural_preview_cache[path] = prepare_same_frame_preview(gray)
+
+        mean_brightness = float(gray.mean())
+        black_fraction = float(
+            np.count_nonzero(gray <= app_settings.EASY_DELETE_DARK_CLIP_VALUE)
+            / gray.size
+        )
+        if mean_brightness < app_settings.get_easy_delete_dark_threshold():
+            if black_fraction >= app_settings.EASY_DELETE_DARK_CLIP_FRACTION:
+                return {
+                    "type": "dark",
+                    "pair_path": None,
+                    "suggest_delete": True,
+                    "reason": (
+                        "Effectively black image "
+                        f"(mean brightness: {mean_brightness:.1f}/255; "
+                        f"{black_fraction:.1%} of pixels at or below "
+                        f"{app_settings.EASY_DELETE_DARK_CLIP_VALUE}/255)"
+                    ),
+                    "sharpness": sharpness,
+                    "mean_brightness": mean_brightness,
+                    "black_fraction": black_fraction,
+                }
+            # Low-light previews can have a misleadingly low blur score. Preserve any
+            # dark frame with visible tonal variation for exposure recovery or Cull.
+            return None
 
         if sharpness < app_settings.get_easy_delete_blur_threshold():
             return {
@@ -106,15 +138,6 @@ class EasyDeleteWorker(QObject):
                 "sharpness": sharpness,
             }
 
-        mean_brightness = float(gray.mean())
-        if mean_brightness < app_settings.get_easy_delete_dark_threshold():
-            return {
-                "type": "dark",
-                "pair_path": None,
-                "suggest_delete": True,
-                "reason": f"Near-black image (mean brightness: {mean_brightness:.1f}/255)",
-                "sharpness": sharpness,
-            }
         if mean_brightness > app_settings.get_easy_delete_white_threshold():
             return {
                 "type": "white",
@@ -184,6 +207,31 @@ class EasyDeleteWorker(QObject):
             self._sharpness_cache[path] = 0.0
             return 0.0
 
+    def _get_structural_preview(self, path: str) -> np.ndarray | None:
+        if path in self._structural_preview_cache:
+            return self._structural_preview_cache[path]
+        try:
+            gray = self._load_gray_for_detection(path)
+            preview = (
+                prepare_same_frame_preview(gray) if gray is not None else None
+            )
+        except Exception:
+            logger.debug(
+                "EasyDeleteWorker: failed to prepare structural preview for %s",
+                path,
+                exc_info=True,
+            )
+            preview = None
+        self._structural_preview_cache[path] = preview
+        return preview
+
+    def _same_frame_similarity(self, path_a: str, path_b: str) -> float | None:
+        first = self._get_structural_preview(path_a)
+        second = self._get_structural_preview(path_b)
+        if first is None or second is None:
+            return None
+        return aligned_structural_similarity(first, second)
+
     def _detect_duplicates(self) -> dict[str, dict]:
         results: dict[str, dict] = {}
         assigned_paths: set[str] = set()
@@ -201,7 +249,19 @@ class EasyDeleteWorker(QObject):
             if len(embedded) < 2:
                 continue
 
-            candidates: list[tuple[bool, float, int, int, str, str, bool]] = []
+            candidates: list[
+                tuple[
+                    bool,
+                    float,
+                    int,
+                    int,
+                    str,
+                    str,
+                    bool,
+                    float,
+                    float | None,
+                ]
+            ] = []
             for i in range(len(embedded)):
                 for j in range(i + 1, len(embedded)):
                     if self._should_stop:
@@ -209,25 +269,49 @@ class EasyDeleteWorker(QObject):
                     path_i, emb_i = embedded[i]
                     path_j, emb_j = embedded[j]
 
-                    norm_i = float(np.linalg.norm(emb_i))
-                    norm_j = float(np.linalg.norm(emb_j))
-                    if norm_i == 0 or norm_j == 0:
+                    similarity = cosine_similarity(emb_i, emb_j)
+                    if similarity is None:
                         continue
-
-                    cosine_sim = float(np.dot(emb_i, emb_j) / (norm_i * norm_j))
-                    cosine_dist = max(0.0, 1.0 - cosine_sim)
-
+                    cosine_dist = max(0.0, 1.0 - similarity)
+                    identical = False
                     if cosine_dist < duplicate_distance:
                         identical = self._files_are_identical(path_i, path_j)
+                    structural_similarity = None
+                    if (
+                        not identical
+                        and similarity
+                        >= app_settings.EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY
+                    ):
+                        structural_similarity = self._same_frame_similarity(
+                            path_i, path_j
+                        )
+                    same_frame = (
+                        structural_similarity is not None
+                        and structural_similarity
+                        >= app_settings.EASY_DELETE_SAME_FRAME_SIMILARITY
+                    )
+                    cosine_fallback = (
+                        structural_similarity is None
+                        and cosine_dist < duplicate_distance
+                    )
+                    if identical or same_frame or cosine_fallback:
+                        visual_distance = min(
+                            cosine_dist,
+                            1.0 - structural_similarity
+                            if structural_similarity is not None
+                            else cosine_dist,
+                        )
                         candidates.append(
                             (
                                 not identical,
-                                cosine_dist,
+                                visual_distance,
                                 i,
                                 j,
                                 path_i,
                                 path_j,
                                 identical,
+                                similarity,
+                                structural_similarity,
                             )
                         )
 
@@ -242,6 +326,8 @@ class EasyDeleteWorker(QObject):
                 path_i,
                 path_j,
                 identical,
+                cosine_match,
+                structural_match,
             ) in candidates:
                 if self._should_stop:
                     break
@@ -268,6 +354,8 @@ class EasyDeleteWorker(QObject):
                     "pair_path": keep_path,
                     "suggest_delete": True,
                     "duplicate_kind": duplicate_kind,
+                    "cosine_similarity": cosine_match,
+                    "structural_similarity": structural_match,
                     "reason": self._duplicate_reason(
                         delete_path, keep_path, identical=identical
                     ),
@@ -280,6 +368,8 @@ class EasyDeleteWorker(QObject):
                     "pair_path": delete_path,
                     "suggest_delete": False,
                     "duplicate_kind": duplicate_kind,
+                    "cosine_similarity": cosine_match,
+                    "structural_similarity": structural_match,
                     "reason": "Suggested to keep this photo",
                     "delete_suggestion_reason": delete_suggestion_reason,
                     "keep_suggestion_reason": keep_suggestion_reason,

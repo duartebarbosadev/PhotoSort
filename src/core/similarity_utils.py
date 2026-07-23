@@ -1,6 +1,7 @@
 import logging
 import os
 from typing import Literal
+from collections.abc import Sequence
 
 import numpy as np
 from PIL import Image
@@ -9,6 +10,25 @@ from PIL.ImageOps import exif_transpose
 logger = logging.getLogger(__name__)
 
 Orientation = Literal["portrait", "landscape", "square"]
+
+
+def cosine_similarity(
+    first_values: Sequence[float] | np.ndarray,
+    second_values: Sequence[float] | np.ndarray,
+) -> float | None:
+    """Return cosine similarity for two valid embedding vectors."""
+
+    first = np.asarray(first_values, dtype=np.float32).reshape(-1)
+    second = np.asarray(second_values, dtype=np.float32).reshape(-1)
+    if first.size == 0 or first.shape != second.shape:
+        return None
+    denominator = float(np.linalg.norm(first) * np.linalg.norm(second))
+    if not np.isfinite(denominator) or denominator == 0.0:
+        return None
+    similarity = float(np.dot(first, second) / denominator)
+    if not np.isfinite(similarity):
+        return None
+    return max(-1.0, min(1.0, similarity))
 
 
 def _get_raw_dimensions(image_path: str) -> tuple[int, int] | None:
