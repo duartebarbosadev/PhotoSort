@@ -10,6 +10,8 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from core import app_settings
 from core.image_features.blur_detector import BLUR_DETECTION_PREVIEW_SIZE, BlurDetector
 from core.image_features.structural_similarity import (
+    LocalizedChangeMetrics,
+    aligned_localized_change_metrics,
     aligned_structural_similarity,
     prepare_same_frame_preview,
 )
@@ -230,6 +232,15 @@ class EasyDeleteWorker(QObject):
             return None
         return aligned_structural_similarity(first, second)
 
+    def _localized_change_metrics(
+        self, path_a: str, path_b: str
+    ) -> LocalizedChangeMetrics | None:
+        first = self._get_structural_preview(path_a)
+        second = self._get_structural_preview(path_b)
+        if first is None or second is None:
+            return None
+        return aligned_localized_change_metrics(first, second)
+
     def _detect_duplicates(self) -> dict[str, dict]:
         results: dict[str, dict] = {}
         assigned_paths: set[str] = set()
@@ -258,6 +269,7 @@ class EasyDeleteWorker(QObject):
                     bool,
                     float,
                     float | None,
+                    LocalizedChangeMetrics | None,
                 ]
             ] = []
             for i in range(len(embedded)):
@@ -275,6 +287,7 @@ class EasyDeleteWorker(QObject):
                     if cosine_dist < duplicate_distance:
                         identical = self._files_are_identical(path_i, path_j)
                     structural_similarity = None
+                    localized_change = None
                     if (
                         not identical
                         and similarity
@@ -283,10 +296,26 @@ class EasyDeleteWorker(QObject):
                         structural_similarity = self._same_frame_similarity(
                             path_i, path_j
                         )
+                        if (
+                            structural_similarity is not None
+                            and structural_similarity
+                            >= app_settings.EASY_DELETE_SAME_FRAME_SIMILARITY
+                        ):
+                            localized_change = self._localized_change_metrics(
+                                path_i, path_j
+                            )
+                    has_localized_change = (
+                        localized_change is not None
+                        and localized_change.p99_difference
+                        >= app_settings.EASY_DELETE_LOCALIZED_CHANGE_MIN_P99
+                        and localized_change.concentration_ratio
+                        >= app_settings.EASY_DELETE_LOCALIZED_CHANGE_RATIO
+                    )
                     same_frame = (
                         structural_similarity is not None
                         and structural_similarity
                         >= app_settings.EASY_DELETE_SAME_FRAME_SIMILARITY
+                        and not has_localized_change
                     )
                     cosine_fallback = (
                         structural_similarity is None
@@ -310,6 +339,7 @@ class EasyDeleteWorker(QObject):
                                 identical,
                                 similarity,
                                 structural_similarity,
+                                localized_change,
                             )
                         )
 
@@ -326,6 +356,7 @@ class EasyDeleteWorker(QObject):
                 identical,
                 cosine_match,
                 structural_match,
+                localized_change,
             ) in candidates:
                 if self._should_stop:
                     break
@@ -354,6 +385,16 @@ class EasyDeleteWorker(QObject):
                     "duplicate_kind": duplicate_kind,
                     "cosine_similarity": cosine_match,
                     "structural_similarity": structural_match,
+                    "localized_change_ratio": (
+                        localized_change.concentration_ratio
+                        if localized_change is not None
+                        else None
+                    ),
+                    "localized_change_p99": (
+                        localized_change.p99_difference
+                        if localized_change is not None
+                        else None
+                    ),
                     "reason": self._duplicate_reason(
                         delete_path, keep_path, identical=identical
                     ),
@@ -368,6 +409,16 @@ class EasyDeleteWorker(QObject):
                     "duplicate_kind": duplicate_kind,
                     "cosine_similarity": cosine_match,
                     "structural_similarity": structural_match,
+                    "localized_change_ratio": (
+                        localized_change.concentration_ratio
+                        if localized_change is not None
+                        else None
+                    ),
+                    "localized_change_p99": (
+                        localized_change.p99_difference
+                        if localized_change is not None
+                        else None
+                    ),
                     "reason": "Suggested to keep this photo",
                     "delete_suggestion_reason": delete_suggestion_reason,
                     "keep_suggestion_reason": keep_suggestion_reason,

@@ -168,6 +168,10 @@ EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.005  # lower = stricter near-identical
 # farther apart because of exposure/noise, without admitting repositioned subjects.
 EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY = 0.97
 EASY_DELETE_SAME_FRAME_SIMILARITY = 0.98
+# A strong difference concentrated in a small area indicates subject movement even
+# when the unchanged background makes the complete frame look nearly identical.
+EASY_DELETE_LOCALIZED_CHANGE_RATIO = 10.0
+EASY_DELETE_LOCALIZED_CHANGE_MIN_P99 = 8.0
 _OLD_EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01
 
 # Fix Rotation step

@@ -2,12 +2,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import cv2
 import numpy as np
 from PIL import Image
 
 from core import app_settings
 from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
 from core.image_features.structural_similarity import (
+    LocalizedChangeMetrics,
+    aligned_localized_change_metrics,
     aligned_structural_similarity,
     prepare_same_frame_preview,
 )
@@ -107,6 +110,28 @@ def test_same_frame_similarity_tolerates_noise_but_rejects_moved_subject():
     assert moved_score is not None and moved_score < 0.98
 
 
+def test_localized_change_detects_small_subject_motion_in_unchanged_frame():
+    rng = np.random.default_rng(1)
+    first = cv2.GaussianBlur(
+        rng.normal(100, 20, (96, 128)).astype(np.float32),
+        (0, 0),
+        2,
+    )
+    second = first.copy()
+    second[50:70, 50:58] += 20
+
+    structural_score = aligned_structural_similarity(first, second)
+    change = aligned_localized_change_metrics(first, second)
+
+    assert structural_score is not None and structural_score >= 0.98
+    assert change is not None
+    assert change.p99_difference >= app_settings.EASY_DELETE_LOCALIZED_CHANGE_MIN_P99
+    assert (
+        change.concentration_ratio
+        >= app_settings.EASY_DELETE_LOCALIZED_CHANGE_RATIO
+    )
+
+
 def test_easy_delete_uses_same_framing_when_cosine_is_outside_cutoff(
     tmp_path, monkeypatch
 ):
@@ -145,6 +170,34 @@ def test_easy_delete_rejects_moved_subject_even_when_cosine_is_inside_cutoff(
         embeddings_cache={str(first): [1.0, 0.0], str(second): [1.0, 0.0]},
     )
     monkeypatch.setattr(worker, "_same_frame_similarity", lambda *_paths: 0.90)
+
+    assert worker._detect_duplicates() == {}
+
+
+def test_easy_delete_rejects_concentrated_face_or_arm_movement(
+    tmp_path, monkeypatch
+):
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    worker = EasyDeleteWorker(
+        [str(first), str(second)],
+        cluster_map={1: [str(first), str(second)]},
+        embeddings_cache={
+            str(first): [1.0, 0.0],
+            str(second): [0.9932, 0.1164],
+        },
+    )
+    monkeypatch.setattr(worker, "_same_frame_similarity", lambda *_paths: 0.9963)
+    monkeypatch.setattr(
+        worker,
+        "_localized_change_metrics",
+        lambda *_paths: LocalizedChangeMetrics(
+            p99_difference=9.5,
+            concentration_ratio=13.6,
+        ),
+    )
 
     assert worker._detect_duplicates() == {}
 

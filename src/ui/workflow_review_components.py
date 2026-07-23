@@ -318,6 +318,7 @@ class WorkflowShortcutStrip(QFrame):
         layout.addWidget(heading)
 
         items = QWidget(self)
+        items.setObjectName("workflowShortcutItems")
         items_layout = QGridLayout(items)
         items_layout.setContentsMargins(0, 0, 0, 0)
         items_layout.setHorizontalSpacing(8)
