@@ -1166,9 +1166,7 @@ class PickBestStepWidget(QWidget):
 
         tournament.rounds = tournament.rounds[: tournament.current_round + 1]
         remaining_count = len(all_paths) - tournament.next_path_index
-        kept_count = sum(
-            group.keep_by_path.get(path, False) for path in group.paths
-        )
+        kept_count = sum(group.keep_by_path.get(path, False) for path in group.paths)
         carried_decisions: dict[str, bool] | None
         if kept_count == 0 and remaining_count >= 2:
             next_paths = all_paths[

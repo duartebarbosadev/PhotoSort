@@ -36,9 +36,7 @@ def aligned_structural_similarity(
     first_float = np.asarray(first, dtype=np.float32)
     second_float = np.asarray(second, dtype=np.float32)
     try:
-        (shift_x, shift_y), _response = cv2.phaseCorrelate(
-            first_float, second_float
-        )
+        (shift_x, shift_y), _response = cv2.phaseCorrelate(first_float, second_float)
     except cv2.error:
         return None
     if not np.isfinite((shift_x, shift_y)).all():
@@ -79,26 +77,20 @@ def aligned_structural_similarity(
 def _ssim_map(first: np.ndarray, second: np.ndarray) -> np.ndarray:
     c1 = (0.01 * 255.0) ** 2
     c2 = (0.03 * 255.0) ** 2
-    mean_first = cv2.GaussianBlur(
-        first, _SSIM_WINDOW_SIZE, _SSIM_SIGMA
-    )
-    mean_second = cv2.GaussianBlur(
-        second, _SSIM_WINDOW_SIZE, _SSIM_SIGMA
-    )
+    mean_first = cv2.GaussianBlur(first, _SSIM_WINDOW_SIZE, _SSIM_SIGMA)
+    mean_second = cv2.GaussianBlur(second, _SSIM_WINDOW_SIZE, _SSIM_SIGMA)
     mean_first_sq = mean_first * mean_first
     mean_second_sq = mean_second * mean_second
     mean_both = mean_first * mean_second
     variance_first = (
-        cv2.GaussianBlur(first * first, _SSIM_WINDOW_SIZE, _SSIM_SIGMA)
-        - mean_first_sq
+        cv2.GaussianBlur(first * first, _SSIM_WINDOW_SIZE, _SSIM_SIGMA) - mean_first_sq
     )
     variance_second = (
         cv2.GaussianBlur(second * second, _SSIM_WINDOW_SIZE, _SSIM_SIGMA)
         - mean_second_sq
     )
     covariance = (
-        cv2.GaussianBlur(first * second, _SSIM_WINDOW_SIZE, _SSIM_SIGMA)
-        - mean_both
+        cv2.GaussianBlur(first * second, _SSIM_WINDOW_SIZE, _SSIM_SIGMA) - mean_both
     )
     numerator = (2.0 * mean_both + c1) * (2.0 * covariance + c2)
     denominator = (mean_first_sq + mean_second_sq + c1) * (

@@ -212,9 +212,7 @@ class EasyDeleteWorker(QObject):
             return self._structural_preview_cache[path]
         try:
             gray = self._load_gray_for_detection(path)
-            preview = (
-                prepare_same_frame_preview(gray) if gray is not None else None
-            )
+            preview = prepare_same_frame_preview(gray) if gray is not None else None
         except Exception:
             logger.debug(
                 "EasyDeleteWorker: failed to prepare structural preview for %s",

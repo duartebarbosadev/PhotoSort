@@ -1485,9 +1485,7 @@ def test_pick_best_keep_all_protects_group_and_completes_without_forced_winner()
     assert widget._done_btn.isEnabled()
     assert widget._review_list_panel.count_label.text() == "1/1 done"
     assert (
-        _pick_best_current_comparison_item(widget)
-        .text()
-        .endswith("Complete · 2 kept")
+        _pick_best_current_comparison_item(widget).text().endswith("Complete · 2 kept")
     )
     assert all(card._state_label.text() == "KEEP" for card in widget._compare_cards[:2])
 

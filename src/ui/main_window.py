@@ -1795,9 +1795,7 @@ class MainWindow(QMainWindow):
             }
         for action in actions:
             original = self._cull_action_shortcuts.get(action)
-            action.setShortcuts(
-                original if active and original is not None else []
-            )
+            action.setShortcuts(original if active and original is not None else [])
 
     def _refresh_workflow_deletion_state(self) -> None:
         for widget in (

@@ -129,9 +129,7 @@ def test_easy_delete_uses_same_framing_when_cosine_is_outside_cutoff(
 
     assert set(results) == {str(first), str(second)}
     assert {entry["structural_similarity"] for entry in results.values()} == {0.985}
-    assert all(
-        entry["cosine_similarity"] < 0.995 for entry in results.values()
-    )
+    assert all(entry["cosine_similarity"] < 0.995 for entry in results.values())
 
 
 def test_easy_delete_rejects_moved_subject_even_when_cosine_is_inside_cutoff(
