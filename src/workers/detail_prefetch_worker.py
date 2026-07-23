@@ -87,8 +87,7 @@ class DetailPrefetchWorker(QRunnable):
 
                 def submit_until_full() -> None:
                     while (
-                        len(futures) < worker_count
-                        and not self.cancel_event.is_set()
+                        len(futures) < worker_count and not self.cancel_event.is_set()
                     ):
                         try:
                             path = next(path_iterator)
@@ -115,9 +114,7 @@ class DetailPrefetchWorker(QRunnable):
                         if image is None:
                             self.signals.detail_failed.emit(path, self.request_id)
                         else:
-                            self.signals.detail_ready.emit(
-                                path, image, self.request_id
-                            )
+                            self.signals.detail_ready.emit(path, image, self.request_id)
                     if self.cancel_event.is_set():
                         for future in futures:
                             future.cancel()

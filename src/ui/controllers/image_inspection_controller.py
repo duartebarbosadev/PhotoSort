@@ -223,9 +223,7 @@ class ImageInspectionController(QObject):
             image = self._pending_detail_images.get(path)
             if image is None:
                 continue
-            area = int(getattr(image, "width", 0)) * int(
-                getattr(image, "height", 0)
-            )
+            area = int(getattr(image, "width", 0)) * int(getattr(image, "height", 0))
             if area <= self._pixel_area.get(path, 0):
                 continue
             try:

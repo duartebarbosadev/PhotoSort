@@ -23,9 +23,10 @@ def test_detail_worker_keeps_full_resolution_when_pair_fits_budget():
 
     worker.run()
 
-    assert {
-        call.args for call in pipeline.load_detail_image.call_args_list
-    } == {("left.jpg", None), ("right.jpg", None)}
+    assert {call.args for call in pipeline.load_detail_image.call_args_list} == {
+        ("left.jpg", None),
+        ("right.jpg", None),
+    }
 
 
 def test_detail_worker_scales_pair_proportionally_to_combined_budget():
