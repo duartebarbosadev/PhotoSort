@@ -228,7 +228,10 @@ class ThumbnailPreloadWorker(QObject):
                         )
                         paused_emitted = False
 
-                    if available and not background_paused:
+                    foreground_inflight = any(
+                        was_foreground for _path, was_foreground in futures.values()
+                    )
+                    if available and not background_paused and not foreground_inflight:
                         for path in self._take_background(available):
                             future = executor.submit(
                                 self._ensure,

@@ -61,6 +61,8 @@ class TestThumbnailPreloadWorker:
         pipeline = Mock()
         initial_batch_started = threading.Event()
         release_background = threading.Event()
+        jump_started = threading.Event()
+        release_jump = threading.Event()
         state_lock = threading.Lock()
         calls = []
         initial_background_count = 0
@@ -80,6 +82,9 @@ class TestThumbnailPreloadWorker:
                         initial_batch_started.set()
             if path.startswith("background-") and path != "background-5":
                 release_background.wait(timeout=2)
+            elif path == "jump-target":
+                jump_started.set()
+                release_jump.wait(timeout=2)
             return True
 
         pipeline.ensure_thumbnail_cached.side_effect = ensure
@@ -101,6 +106,12 @@ class TestThumbnailPreloadWorker:
 
         worker.prioritize(["jump-target"])
         release_background.set()
+        assert jump_started.wait(timeout=2)
+
+        with state_lock:
+            assert ("background-5", True) not in calls
+
+        release_jump.set()
         thread.join(timeout=2)
 
         assert not thread.is_alive()
