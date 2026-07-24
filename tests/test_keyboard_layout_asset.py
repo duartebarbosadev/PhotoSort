@@ -51,14 +51,18 @@ def test_keyboard_layout_documents_current_workflow_shortcuts():
     assert "Skip" not in fix_rotation
     assert "Skip" not in pick_best
     assert "Shift+Enter Apply" in easy_delete
+    assert "R · Reset current · Shift+R · Reset all" in easy_delete
     assert "1 · Toggle left image Keep / Trash" in easy_delete
     assert "2 · Toggle right image Keep / Trash" in easy_delete
     assert "Confirm visible suggestions" in easy_delete
     assert "Trash left image" not in easy_delete
     assert "Trash right image" not in easy_delete
-    assert "1 · R −90° · Shift+R +90° override" in fix_rotation
+    assert "Q · −90° override" in fix_rotation
+    assert "E · +90° override" in fix_rotation
+    assert "R · Reset current · Shift+R · Reset all" in fix_rotation
     assert "Previous comparison / cluster" in pick_best
     assert "1 · Toggle image 1 Keep / Trash" in pick_best
     assert "2 · Toggle image 2 Keep / Trash" in pick_best
+    assert "R · Reset current · Shift+R · Reset all" in pick_best
     for section in (organize, easy_delete, fix_rotation, pick_best, cull):
         assert "Shift+Enter · Apply" in section

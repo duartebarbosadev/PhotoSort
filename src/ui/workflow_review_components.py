@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QDialog,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -53,6 +54,10 @@ _WORKFLOW_STEP_SHORTCUT = WorkflowShortcutSpec(
 )
 _APPLY_SHORTCUT = WorkflowShortcutSpec(
     "apply", ("Shift+Return", "Shift+Enter"), "Shift+Enter", "Apply"
+)
+_RESET_DEFAULT_SHORTCUT = WorkflowShortcutSpec("reset", ("R",), "R", "Reset default")
+_RESET_ALL_DEFAULTS_SHORTCUT = WorkflowShortcutSpec(
+    "reset_all", ("Shift+R",), "Shift+R", "Reset all"
 )
 
 
@@ -93,6 +98,8 @@ EASY_DELETE_SHORTCUTS = (
     WorkflowShortcutSpec("previous", ("Up",), "↑", "Previous"),
     WorkflowShortcutSpec("next", ("Down",), "↓", "Next"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm / cancel"),
+    _RESET_DEFAULT_SHORTCUT,
+    _RESET_ALL_DEFAULTS_SHORTCUT,
     _APPLY_SHORTCUT,
     WorkflowShortcutSpec("apply_all", ("A",), "A", "All"),
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
@@ -101,11 +108,13 @@ EASY_DELETE_SHORTCUTS = (
 )
 
 FIX_ROTATION_SHORTCUTS = (
-    WorkflowShortcutSpec("rotate_counterclockwise", ("R",), "R", "−90° override"),
-    WorkflowShortcutSpec("rotate_clockwise", ("Shift+R",), "Shift+R", "+90° override"),
+    WorkflowShortcutSpec("rotate_counterclockwise", ("Q",), "Q", "−90° override"),
+    WorkflowShortcutSpec("rotate_clockwise", ("E",), "E", "+90° override"),
     WorkflowShortcutSpec("previous", ("Left", "Up"), "←  ↑", "Previous"),
     WorkflowShortcutSpec("next", ("Right", "Down"), "→  ↓", "Next"),
     WorkflowShortcutSpec("primary", ("Return", "Enter"), "Enter", "Confirm"),
+    _RESET_DEFAULT_SHORTCUT,
+    _RESET_ALL_DEFAULTS_SHORTCUT,
     _APPLY_SHORTCUT,
     _TOGGLE_LEFT_PANEL_SHORTCUT,
     _WORKFLOW_STEP_SHORTCUT,
@@ -119,6 +128,8 @@ PICK_BEST_SHORTCUTS = (
     WorkflowShortcutSpec("info", ("I",), "I", "Details"),
     WorkflowShortcutSpec("keep_all", ("K",), "K", "Keep all"),
     WorkflowShortcutSpec("confirm", ("Return", "Enter"), "Enter", "Confirm"),
+    _RESET_DEFAULT_SHORTCUT,
+    _RESET_ALL_DEFAULTS_SHORTCUT,
     _APPLY_SHORTCUT,
     _TOGGLE_LEFT_PANEL_SHORTCUT,
     _WORKFLOW_STEP_SHORTCUT,
@@ -147,6 +158,142 @@ WORKFLOW_SHORTCUTS = {
     "pick_best": PICK_BEST_SHORTCUTS,
     "cull": CULL_SHORTCUTS,
 }
+
+
+class ConfirmOrResetDialog(QDialog):
+    """Focused workflow dialog with direct actions instead of a generic warning."""
+
+    def __init__(
+        self,
+        parent: QWidget,
+        *,
+        confirm: Callable[[], None],
+        reset: Callable[[], None],
+        reset_all: Callable[[], None],
+    ) -> None:
+        super().__init__(parent)
+        self._confirm = confirm
+        self._reset = reset
+        self._reset_all = reset_all
+        self.setObjectName("confirmOrResetDialog")
+        self.setWindowTitle("Finish this photo first")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setMinimumWidth(520)
+        self.setMaximumWidth(620)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 26, 28, 24)
+        layout.setSpacing(14)
+
+        eyebrow = QLabel("UNCONFIRMED CHANGE")
+        eyebrow.setObjectName("confirmOrResetEyebrow")
+        layout.addWidget(eyebrow)
+
+        self.title_label = QLabel("Finish this photo first")
+        self.title_label.setObjectName("confirmOrResetTitle")
+        layout.addWidget(self.title_label)
+
+        self.message_label = QLabel(
+            "You changed this review, so PhotoSort kept you on the current photo."
+        )
+        self.message_label.setObjectName("confirmOrResetMessage")
+        self.message_label.setWordWrap(True)
+        layout.addWidget(self.message_label)
+
+        explanation = QFrame()
+        explanation.setObjectName("confirmOrResetExplanation")
+        explanation_layout = QVBoxLayout(explanation)
+        explanation_layout.setContentsMargins(16, 14, 16, 14)
+        explanation_layout.setSpacing(8)
+
+        self.confirm_explanation_label = QLabel(
+            "<b>Confirm decision · Enter</b> records this review choice. "
+            "It does not apply changes to your files."
+        )
+        self.confirm_explanation_label.setObjectName("confirmOrResetOption")
+        self.confirm_explanation_label.setWordWrap(True)
+        explanation_layout.addWidget(self.confirm_explanation_label)
+
+        self.reset_explanation_label = QLabel(
+            "<b>Reset · R</b> unconfirms this review and restores PhotoSort's "
+            "suggestion. <b>Reset all · Shift+R</b> restores every review."
+        )
+        self.reset_explanation_label.setObjectName("confirmOrResetOption")
+        self.reset_explanation_label.setWordWrap(True)
+        explanation_layout.addWidget(self.reset_explanation_label)
+        layout.addWidget(explanation)
+
+        self.hint_label = QLabel("Use Apply later when you are ready to change files.")
+        self.hint_label.setObjectName("confirmOrResetHint")
+        self.hint_label.setWordWrap(True)
+        layout.addWidget(self.hint_label)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(10)
+        buttons.addStretch(1)
+
+        self.reset_button = QPushButton("Reset to suggestion  (R)")
+        self.reset_button.setObjectName("confirmOrResetResetButton")
+        self.reset_button.setToolTip("Discard this edit and restore the suggestion (R)")
+        self.reset_button.clicked.connect(self._reset_and_close)
+        buttons.addWidget(self.reset_button)
+
+        self.confirm_button = QPushButton("Confirm decision  (Enter)")
+        self.confirm_button.setObjectName("confirmOrResetConfirmButton")
+        self.confirm_button.setToolTip("Save this review decision (Enter)")
+        self.confirm_button.setDefault(True)
+        self.confirm_button.clicked.connect(self._confirm_and_close)
+        buttons.addWidget(self.confirm_button)
+        layout.addLayout(buttons)
+
+    def _confirm_and_close(self) -> None:
+        self.accept()
+        self._confirm()
+
+    def _reset_and_close(self) -> None:
+        self.accept()
+        self._reset()
+
+    def _reset_all_and_close(self) -> None:
+        self.accept()
+        self._reset_all()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_R:
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                self._reset_all_and_close()
+            else:
+                self._reset_and_close()
+            return
+        super().keyPressEvent(event)
+
+
+def show_confirm_or_reset_notice(
+    owner: QWidget,
+    *,
+    confirm: Callable[[], None],
+    reset: Callable[[], None],
+    reset_all: Callable[[], None],
+) -> None:
+    """Explain why navigation was blocked and offer the two valid actions."""
+
+    existing = getattr(owner, "_confirm_or_reset_dialog", None)
+    if existing is not None and existing.isVisible():
+        existing.raise_()
+        existing.activateWindow()
+        return
+
+    dialog = ConfirmOrResetDialog(
+        owner.window(),
+        confirm=confirm,
+        reset=reset,
+        reset_all=reset_all,
+    )
+    owner._confirm_or_reset_dialog = dialog
+    dialog.finished.connect(
+        lambda _result: setattr(owner, "_confirm_or_reset_dialog", None)
+    )
+    dialog.open()
 
 
 def _refresh_style(widget: QWidget) -> None:

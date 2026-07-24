@@ -67,6 +67,26 @@ def test_preview_upgrade_does_not_rebuild_view_mode():
     viewer.deleteLater()
 
 
+def test_one_physical_image_click_emits_one_synchronized_click():
+    viewer = SynchronizedImageViewer()
+    viewer.resize(600, 400)
+    viewer.show()
+    viewer.set_image_data(_make_image("single-click.jpg", size=200))
+    QTest.qWait(40)
+    clicks = QSignalSpy(viewer.imageClicked)
+    viewport = viewer.image_viewers[0].image_view.viewport()
+
+    QTest.mousePress(viewport, Qt.MouseButton.LeftButton)
+    assert len(clicks) == 0
+
+    QTest.mouseRelease(viewport, Qt.MouseButton.LeftButton)
+    _app.processEvents()
+
+    assert len(clicks) == 1
+    assert clicks[0] == [0, "single-click.jpg"]
+    viewer.deleteLater()
+
+
 def test_preview_upgrade_can_preserve_normalized_crop():
     viewer = SynchronizedImageViewer()
     viewer.resize(700, 500)

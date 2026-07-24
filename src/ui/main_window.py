@@ -922,6 +922,22 @@ class MainWindow(QMainWindow):
             trash_paths=self.app_state.get_marked_files(),
         )
 
+    def _has_blocking_review_edit(self, workflow_step: str) -> bool:
+        adapter_getter = getattr(self, "get_active_image_adapter", None)
+        if not callable(adapter_getter):
+            return False
+        widget = adapter_getter(workflow_step)
+        has_changes = getattr(widget, "has_unconfirmed_changes", None)
+        if not callable(has_changes) or not has_changes():
+            return False
+        show_required = getattr(widget, "show_confirm_or_reset_required", None)
+        if callable(show_required):
+            show_required()
+        refresh_navigation = getattr(self, "update_workflow_navigation", None)
+        if callable(refresh_navigation):
+            refresh_navigation()
+        return True
+
     def _request_workflow_transition(self, destination: str | None) -> None:
         source = self.app_state.workflow_step
         switching = destination is not None
@@ -937,6 +953,9 @@ class MainWindow(QMainWindow):
                 4000,
             )
             self.update_workflow_navigation()
+            return
+
+        if MainWindow._has_blocking_review_edit(self, source):
             return
 
         pending = self._collect_workflow_pending_state(source)
@@ -1645,6 +1664,7 @@ class MainWindow(QMainWindow):
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
             )
+            widget.deletion_state_requested.connect(self._set_paths_deletion_state)
             widget.active_image_changed.connect(
                 lambda path: self.active_image_controller.publish(
                     path, source="easy_delete"
@@ -1691,6 +1711,7 @@ class MainWindow(QMainWindow):
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
             )
+            widget.deletion_state_requested.connect(self._set_paths_deletion_state)
             widget.active_image_changed.connect(
                 lambda path: self.active_image_controller.publish(
                     path, source="pick_best"
@@ -1908,6 +1929,24 @@ class MainWindow(QMainWindow):
             self.proxy_model,
         )
         self.proxy_model.invalidate()
+        self._refresh_workflow_deletion_state()
+
+    def _set_paths_deletion_state(self, mark_state: dict[str, bool]) -> None:
+        """Apply a bulk review decision with one model pass and one UI refresh."""
+
+        active_view = self._get_active_file_view()
+        active_model = active_view.model() if active_view is not None else None
+        proxy_model = (
+            active_model
+            if isinstance(active_model, QSortFilterProxyModel)
+            else self.proxy_model
+        )
+        self.deletion_controller.set_paths_marked(
+            mark_state,
+            self.file_system_model,
+            proxy_model,
+        )
+        proxy_model.invalidate()
         self._refresh_workflow_deletion_state()
 
     def update_grouping_preview(self, text: str) -> None:

@@ -35,6 +35,23 @@ def test_scan_batches_maintain_media_summary_and_path_index():
     assert state.get_file_data_by_path("a.jpg")["is_blurred"] is True
 
 
+def test_bulk_deletion_marks_update_atomically():
+    state = _state()
+    state.marked_for_deletion = {"keep-marked.jpg", "remove-mark.jpg"}
+
+    changed = state.set_deletion_marks(
+        {
+            "keep-marked.jpg": True,
+            "remove-mark.jpg": False,
+            "new-mark.jpg": True,
+            "stay-clear.jpg": False,
+        }
+    )
+
+    assert changed == 2
+    assert state.marked_for_deletion == {"keep-marked.jpg", "new-mark.jpg"}
+
+
 def test_assignment_removal_and_rename_keep_index_consistent():
     state = _state()
     state.image_files_data = [

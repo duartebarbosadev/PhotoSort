@@ -24,6 +24,7 @@ from ui.workflow_review_components import (
     WorkflowReviewListPanel,
     WorkflowStateBanner,
     install_workflow_shortcuts,
+    show_confirm_or_reset_notice,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,8 @@ class FixRotationStepWidget(QWidget):
                 "previous": self._on_prev,
                 "next": self._on_next,
                 "primary": self._on_confirm,
+                "reset": self.reset_current_to_default,
+                "reset_all": self.reset_all_to_default,
                 "apply": self._on_apply,
             },
         )
@@ -110,6 +113,49 @@ class FixRotationStepWidget(QWidget):
         if self._ordered_paths and self._current_index >= 0:
             self._show_current()
         self._refresh_controls()
+
+    def has_unconfirmed_changes(self) -> bool:
+        if self._current_index < 0 or not self._ordered_paths:
+            return False
+        path = self._ordered_paths[self._current_index]
+        if path in self._confirmed:
+            return False
+        return not self._marked.get(path, False) or path in self._angle_overrides
+
+    def show_confirm_or_reset_required(self) -> None:
+        show_confirm_or_reset_notice(
+            self,
+            confirm=self._on_confirm,
+            reset=self.reset_current_to_default,
+            reset_all=self.reset_all_to_default,
+        )
+
+    def reset_current_to_default(self) -> None:
+        if self._current_index < 0 or not self._ordered_paths:
+            return
+        path = self._ordered_paths[self._current_index]
+        self._confirmed.discard(path)
+        self._angle_overrides.pop(path, None)
+        self._marked[path] = True
+        self._show_current()
+        self._refresh_controls()
+
+    def reset_all_to_default(self) -> None:
+        """Unconfirm every image and restore all suggested rotations."""
+
+        self._confirmed.clear()
+        self._angle_overrides.clear()
+        for path in self._ordered_paths:
+            self._marked[path] = True
+        if self._current_index >= 0:
+            self._show_current()
+        self._refresh_controls()
+
+    def _allow_review_departure(self) -> bool:
+        if not self.has_unconfirmed_changes():
+            return True
+        self.show_confirm_or_reset_required()
+        return False
 
     def apply_pending_rotations(self) -> None:
         """Apply the current queue through the widget's normal state machine."""
@@ -319,6 +365,8 @@ class FixRotationStepWidget(QWidget):
         if not self._ordered_paths:
             return
         index = max(0, min(index, len(self._ordered_paths) - 1))
+        if index != self._current_index and not self._allow_review_departure():
+            return
         self._current_index = index
 
         self._items_list.blockSignals(True)
@@ -336,6 +384,8 @@ class FixRotationStepWidget(QWidget):
         try:
             index = self._ordered_paths.index(path)
         except ValueError:
+            return False
+        if index != self._current_index and not self._allow_review_departure():
             return False
         self._syncing_active_image = True
         try:
@@ -395,7 +445,13 @@ class FixRotationStepWidget(QWidget):
         else:
             self._preview_hdr.setText("ROTATED PREVIEW · not selected")
 
-        if not confirmed:
+        if self.has_unconfirmed_changes():
+            self._state_banner.set_state(
+                "Choose, then confirm",
+                "Your rotation change is only a preview until you press Confirm.",
+                tone="warning",
+            )
+        elif not confirmed:
             self._state_banner.set_state(
                 "Choose, then confirm",
                 "This is only a preview selection. Nothing is queued until you press Confirm.",
@@ -457,6 +513,9 @@ class FixRotationStepWidget(QWidget):
         self._confirm_btn.setText(
             "Cancel confirmation" if path in self._confirmed else "Confirm  →"
         )
+        self._reset_btn.setEnabled(
+            self.has_unconfirmed_changes() or path in self._confirmed
+        )
 
         self._refresh_apply_button()
         self._refresh_list_colors()
@@ -480,6 +539,11 @@ class FixRotationStepWidget(QWidget):
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         row = self._items_list.row(item)
+        if row != self._current_index and not self._allow_review_departure():
+            self._items_list.blockSignals(True)
+            self._items_list.setCurrentRow(self._current_index)
+            self._items_list.blockSignals(False)
+            return
         if row != self._current_index:
             self._navigate_to(row)
 
@@ -533,6 +597,8 @@ class FixRotationStepWidget(QWidget):
         self._rotate_current_preview(90)
 
     def _on_confirm_all(self) -> None:
+        if not self._allow_review_departure():
+            return
         for path in self._ordered_paths:
             if self._selected_angle(path) == 0:
                 self._angle_overrides.pop(path, None)
@@ -568,6 +634,8 @@ class FixRotationStepWidget(QWidget):
             self._navigate_to(next_index)
 
     def _on_apply(self) -> None:
+        if not self._allow_review_departure():
+            return
         rotations = self.pending_rotations()
         if rotations:
             self._submitted_paths = set(rotations)
@@ -811,7 +879,14 @@ class FixRotationStepWidget(QWidget):
         self._confirm_btn.setMinimumWidth(110)
         self._confirm_btn.clicked.connect(self._on_confirm)
 
-        self._rotate_counterclockwise_btn = QPushButton("Rotate −90°  [R]")
+        self._reset_btn = QPushButton("Reset default")
+        self._reset_btn.setObjectName("workflowGhostButton")
+        self._reset_btn.setToolTip(
+            "Reset this rotation (R), or reset every rotation (Shift+R)"
+        )
+        self._reset_btn.clicked.connect(self.reset_current_to_default)
+
+        self._rotate_counterclockwise_btn = QPushButton("Rotate −90°  [Q]")
         self._rotate_counterclockwise_btn.setObjectName("workflowGhostButton")
         self._rotate_counterclockwise_btn.setToolTip(
             "Override the suggestion and rotate the preview 90° counterclockwise"
@@ -820,7 +895,7 @@ class FixRotationStepWidget(QWidget):
             self._on_rotate_counterclockwise
         )
 
-        self._rotate_clockwise_btn = QPushButton("Rotate +90°  [Shift+R]")
+        self._rotate_clockwise_btn = QPushButton("Rotate +90°  [E]")
         self._rotate_clockwise_btn.setObjectName("workflowGhostButton")
         self._rotate_clockwise_btn.setToolTip(
             "Override the suggestion and rotate the preview 90° clockwise"
@@ -836,6 +911,7 @@ class FixRotationStepWidget(QWidget):
         action.addWidget(self._counter_label)
         action.addWidget(self._next_btn)
         action.addWidget(self._confirm_btn)
+        action.addWidget(self._reset_btn)
         action.addWidget(self._rotate_counterclockwise_btn)
         action.addWidget(self._rotate_clockwise_btn)
         action.addStretch(1)

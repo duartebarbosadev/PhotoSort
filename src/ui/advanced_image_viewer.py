@@ -1070,13 +1070,6 @@ class IndividualViewer(QWidget):
         """Handle mouse press events to show context menu on right-click."""
         if event.button() == Qt.MouseButton.RightButton and self._file_path is not None:
             self._show_context_menu(event.pos())
-        elif (
-            event.button() == Qt.MouseButton.LeftButton
-            and self._file_path is not None
-            and self._media_type != "video"
-        ):
-            self.clicked.emit(self._file_path)
-            super().mousePressEvent(event)
         else:
             super().mousePressEvent(event)
 

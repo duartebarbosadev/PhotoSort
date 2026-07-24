@@ -352,6 +352,30 @@ class AppState:
         logger.info(f"Unmarking file for deletion: {os.path.basename(file_path)}")
         self.marked_for_deletion.discard(file_path)
 
+    def set_deletion_marks(self, mark_state: dict[str, bool]) -> int:
+        """Apply many deletion marks atomically without per-path logging."""
+
+        to_mark = {
+            path
+            for path, marked in mark_state.items()
+            if marked and path not in self.marked_for_deletion
+        }
+        to_unmark = {
+            path
+            for path, marked in mark_state.items()
+            if not marked and path in self.marked_for_deletion
+        }
+        self.marked_for_deletion.update(to_mark)
+        self.marked_for_deletion.difference_update(to_unmark)
+        changed = len(to_mark) + len(to_unmark)
+        if changed:
+            logger.info(
+                "Updated deletion marks in bulk: %d marked, %d unmarked",
+                len(to_mark),
+                len(to_unmark),
+            )
+        return changed
+
     def is_marked_for_deletion(self, file_path: str) -> bool:
         """Checks if a file is marked for deletion."""
 

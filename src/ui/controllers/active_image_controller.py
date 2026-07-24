@@ -37,6 +37,15 @@ class ActiveImageController:
 
         if self._syncing:
             return False
+        active_workflow = getattr(self._context.app_state, "workflow_step", None)
+        if source != active_workflow:
+            adapter = self._context.get_active_image_adapter(active_workflow)
+            has_changes = getattr(adapter, "has_unconfirmed_changes", None)
+            if callable(has_changes) and has_changes():
+                show_required = getattr(adapter, "show_confirm_or_reset_required", None)
+                if callable(show_required):
+                    show_required()
+                return False
         normalized = str(path) if path else None
         changed = normalized != self.active_path
         self._context.app_state.focused_image_path = normalized

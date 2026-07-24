@@ -3,7 +3,7 @@ import os
 from collections.abc import Callable, Iterable
 from PyQt6.QtGui import QStandardItem, QColor
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QModelIndex, Qt
 
 from ui.helpers.deletion_utils import build_presentation
 
@@ -179,6 +179,69 @@ class DeletionMarkController:
             )
             self._update_item_presentation(item, p, is_blurred)
         return count
+
+    def set_paths_marked(
+        self,
+        mark_state: dict[str, bool],
+        file_system_model,
+        proxy_model,
+    ) -> int:
+        """Apply a complete mark map with one model traversal.
+
+        Bulk review actions can touch hundreds of photos. Looking up every path
+        by independently walking the proxy model makes that work quadratic and
+        blocks the UI. Update application state first, then refresh matching
+        model items during one breadth-first pass.
+        """
+
+        normalized = {
+            path: bool(marked)
+            for path, marked in mark_state.items()
+            if isinstance(path, str) and path
+        }
+        bulk_setter = getattr(self.app_state, "set_deletion_marks", None)
+        if callable(bulk_setter):
+            changed = bulk_setter(normalized)
+        else:
+            changed = 0
+            for path, marked in normalized.items():
+                if marked == self._is_marked_func(path):
+                    continue
+                if marked:
+                    self.app_state.mark_for_deletion(path)
+                else:
+                    self.app_state.unmark_for_deletion(path)
+                changed += 1
+
+        if not normalized:
+            return changed
+
+        queue = [
+            proxy_model.index(row, 0, QModelIndex())
+            for row in range(proxy_model.rowCount(QModelIndex()))
+        ]
+        head = 0
+        while head < len(queue):
+            proxy_index = queue[head]
+            head += 1
+            if not proxy_index.isValid():
+                continue
+            source_index = proxy_model.mapToSource(proxy_index)
+            item = file_system_model.itemFromIndex(source_index)
+            if item is not None:
+                data = item.data(Qt.ItemDataRole.UserRole)
+                path = data.get("path") if isinstance(data, dict) else None
+                if path in normalized:
+                    self._update_item_presentation(
+                        item,
+                        path,
+                        data.get("is_blurred"),
+                    )
+            queue.extend(
+                proxy_model.index(row, 0, proxy_index)
+                for row in range(proxy_model.rowCount(proxy_index))
+            )
+        return changed
 
     def mark_others_in_collection(
         self,

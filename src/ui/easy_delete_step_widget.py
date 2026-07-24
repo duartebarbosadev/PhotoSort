@@ -24,6 +24,7 @@ from ui.workflow_review_components import (
     WorkflowReviewListPanel,
     WorkflowStateBanner,
     install_workflow_shortcuts,
+    show_confirm_or_reset_notice,
 )
 from ui.workflow_metadata import build_workflow_metadata_rows
 from ui.advanced_image_viewer import SynchronizedImageViewer
@@ -63,6 +64,7 @@ class EasyDeleteStepWidget(QWidget):
     skip_requested = pyqtSignal()
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
+    deletion_state_requested = pyqtSignal(dict)
     active_image_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -82,6 +84,7 @@ class EasyDeleteStepWidget(QWidget):
         self._has_any_marked_func: Callable[[], bool] | None = None
         self._pending_keep_by_review: dict[str, dict[str, bool]] = {}
         self._confirmed_reviews: set[str] = set()
+        self._confirmation_order: list[str] = []
         self._marks_before_confirmation: dict[str, set[str]] = {}
         self._publishing_confirmation = False
         self._info_visible = False
@@ -101,6 +104,8 @@ class EasyDeleteStepWidget(QWidget):
                 "previous": self._on_prev,
                 "next": self._on_next,
                 "confirm": self._on_confirm,
+                "reset": self.reset_current_to_default,
+                "reset_all": self.reset_all_to_default,
                 "apply": self._on_apply,
                 "apply_all": self._on_apply_all,
                 "info": self._toggle_info,
@@ -133,9 +138,78 @@ class EasyDeleteStepWidget(QWidget):
         """Forget local review confirmations after shared Trash marks are cleared."""
         self._pending_keep_by_review.clear()
         self._confirmed_reviews.clear()
+        self._confirmation_order.clear()
         self._marks_before_confirmation.clear()
         if hasattr(self, "_items_list"):
             self._refresh_controls()
+
+    def has_unconfirmed_changes(self) -> bool:
+        if self._current_index < 0 or not self._flagged_paths:
+            return False
+        review_path = self._flagged_paths[self._current_index]
+        if review_path in self._confirmed_reviews:
+            return False
+        entry = self._results.get(review_path, {})
+        return self._pending_keep_state(review_path, entry) != self._default_keep_state(
+            review_path, entry
+        )
+
+    def show_confirm_or_reset_required(self) -> None:
+        show_confirm_or_reset_notice(
+            self,
+            confirm=self._on_confirm,
+            reset=self.reset_current_to_default,
+            reset_all=self.reset_all_to_default,
+        )
+
+    def reset_current_to_default(self) -> None:
+        if self._current_index < 0 or not self._flagged_paths:
+            return
+        review_path = self._flagged_paths[self._current_index]
+        entry = self._results.get(review_path, {})
+        candidates = self._review_candidates(review_path, entry)
+        if review_path in self._confirmed_reviews:
+            self._cancel_confirmation(review_path, candidates, refresh=False)
+        self._pending_keep_by_review[review_path] = self._default_keep_state(
+            review_path, entry
+        )
+        self._refresh_controls()
+
+    def reset_all_to_default(self) -> None:
+        """Unconfirm every review and restore all detector suggestions."""
+
+        restored_mark_state: dict[str, bool] = {}
+        ordered_confirmations = list(reversed(self._confirmation_order))
+        ordered_confirmations.extend(
+            review_path
+            for review_path in self._confirmed_reviews
+            if review_path not in self._confirmation_order
+        )
+        for review_path in ordered_confirmations:
+            entry = self._results.get(review_path, {})
+            prior_marks = self._marks_before_confirmation.get(review_path, set())
+            restored_mark_state.update(
+                {
+                    candidate: candidate in prior_marks
+                    for candidate in self._review_candidates(review_path, entry)
+                }
+            )
+        self._confirmed_reviews.clear()
+        self._confirmation_order.clear()
+        self._marks_before_confirmation.clear()
+        for review_path, entry in self._results.items():
+            self._pending_keep_by_review[review_path] = self._default_keep_state(
+                review_path, entry
+            )
+        if restored_mark_state:
+            self._publish_mark_state(restored_mark_state)
+        self._refresh_controls()
+
+    def _allow_review_departure(self) -> bool:
+        if not self.has_unconfirmed_changes():
+            return True
+        self.show_confirm_or_reset_required()
+        return False
 
     def _discard_stale_confirmations(self) -> None:
         if self._publishing_confirmation or not self._is_marked_func:
@@ -151,6 +225,8 @@ class EasyDeleteStepWidget(QWidget):
             )
             if not matches_shared_state:
                 self._confirmed_reviews.discard(review_path)
+                if review_path in self._confirmation_order:
+                    self._confirmation_order.remove(review_path)
                 self._marks_before_confirmation.pop(review_path, None)
 
     # ------------------------------------------------------------------
@@ -185,6 +261,7 @@ class EasyDeleteStepWidget(QWidget):
             return
         self._pending_keep_by_review.clear()
         self._confirmed_reviews.clear()
+        self._confirmation_order.clear()
         self._marks_before_confirmation.clear()
         self._metadata_cache.clear()
         # Keep a value snapshot. AppState owns and mutates the live result mapping
@@ -388,6 +465,8 @@ class EasyDeleteStepWidget(QWidget):
         if not self._flagged_paths:
             return
         index = max(0, min(index, len(self._flagged_paths) - 1))
+        if index != self._current_index and not self._allow_review_departure():
+            return
         self._current_index = index
         review_path = self._flagged_paths[index]
         pair_path = self._results.get(review_path, {}).get("pair_path")
@@ -410,6 +489,8 @@ class EasyDeleteStepWidget(QWidget):
             pair_path = self._results.get(review_path, {}).get("pair_path")
             if path not in {review_path, pair_path}:
                 continue
+            if index != self._current_index and not self._allow_review_departure():
+                return False
             self._focused_path = path
             self._syncing_active_image = True
             try:
@@ -476,7 +557,13 @@ class EasyDeleteStepWidget(QWidget):
         confirmed = path in self._confirmed_reviews
         candidates = self._review_candidates(path, entry)
         kept_count = sum(keep_by_path.get(candidate, True) for candidate in candidates)
-        if confirmed:
+        if self.has_unconfirmed_changes():
+            self._state_banner.set_state(
+                "Set each photo, then confirm",
+                "Your Keep/Trash changes are local until you press Confirm.",
+                tone="warning",
+            )
+        elif confirmed:
             self._state_banner.set_state(
                 "Decisions confirmed",
                 (
@@ -547,17 +634,11 @@ class EasyDeleteStepWidget(QWidget):
         slot: int,
     ) -> None:
         if selected_for_delete:
-            state = (
-                "MARKED FOR TRASH · staged"
-                if confirmed
-                else "SELECTED FOR TRASH · not confirmed"
-            )
+            state = "TRASH"
             color = "#FF7B86"
             border = "#E53935"
         else:
-            state = (
-                "KEEP · unmarked" if confirmed else "SELECTED TO KEEP · not confirmed"
-            )
+            state = "KEEP"
             color = "#66BB6A"
             border = "#2E7D32"
         state_label.setText(state)
@@ -687,15 +768,19 @@ class EasyDeleteStepWidget(QWidget):
             self._prev_btn.setEnabled(False)
             self._next_btn.setEnabled(False)
             self._confirm_btn.setEnabled(False)
+            self._reset_btn.setEnabled(False)
             self._apply_all_btn.setEnabled(False)
             return
         self._confirm_btn.setEnabled(True)
+        path = self._flagged_paths[self._current_index]
+        self._reset_btn.setEnabled(
+            self.has_unconfirmed_changes() or path in self._confirmed_reviews
+        )
         self._apply_all_btn.setEnabled(True)
         self._counter_label.setText(f"{self._current_index + 1} of {total}")
         self._prev_btn.setEnabled(self._current_index > 0)
         self._next_btn.setEnabled(self._current_index < total - 1)
 
-        path = self._flagged_paths[self._current_index]
         self._confirm_btn.setText(
             "Cancel confirmation" if path in self._confirmed_reviews else "Confirm  →"
         )
@@ -712,6 +797,13 @@ class EasyDeleteStepWidget(QWidget):
         if not path:
             return
         index = self._flagged_paths.index(path)
+        if index != self._current_index and not self._allow_review_departure():
+            self._items_list.blockSignals(True)
+            self._items_list.setCurrentRow(
+                self._list_row_by_path[self._flagged_paths[self._current_index]]
+            )
+            self._items_list.blockSignals(False)
+            return
         if index != self._current_index:
             self._navigate_to(index)
 
@@ -778,6 +870,13 @@ class EasyDeleteStepWidget(QWidget):
         self._refresh_controls()
 
     def _publish_mark_state(self, mark_state: dict[str, bool]) -> None:
+        if self.receivers(self.deletion_state_requested):
+            self._publishing_confirmation = True
+            try:
+                self.deletion_state_requested.emit(mark_state)
+            finally:
+                self._publishing_confirmation = False
+            return
         to_mark = [
             path
             for path, marked in mark_state.items()
@@ -820,6 +919,7 @@ class EasyDeleteStepWidget(QWidget):
             }
         )
         self._confirmed_reviews.add(review_path)
+        self._confirmation_order.append(review_path)
         next_index = next(
             (
                 i
@@ -840,6 +940,8 @@ class EasyDeleteStepWidget(QWidget):
 
         prior_marks = self._marks_before_confirmation.pop(review_path, set())
         self._confirmed_reviews.discard(review_path)
+        if review_path in self._confirmation_order:
+            self._confirmation_order.remove(review_path)
         self._publish_mark_state(
             {candidate: candidate in prior_marks for candidate in candidates}
         )
@@ -847,6 +949,8 @@ class EasyDeleteStepWidget(QWidget):
             self._refresh_controls()
 
     def _on_apply_all(self) -> None:
+        if not self._allow_review_departure():
+            return
         desired_mark_state: dict[str, bool] = {}
         for review_path in self._flagged_paths:
             entry = self._results.get(review_path, {})
@@ -866,11 +970,22 @@ class EasyDeleteStepWidget(QWidget):
                 }
             )
             self._confirmed_reviews.add(review_path)
+            if review_path not in self._confirmation_order:
+                self._confirmation_order.append(review_path)
         self._publish_mark_state(desired_mark_state)
         self._refresh_controls()
 
     def _on_category_toggled(self, category: str, checked: bool) -> None:
         if self._updating_category_toggles:
+            return
+        if not self._allow_review_departure():
+            self._updating_category_toggles = True
+            try:
+                self._category_checkboxes[category].setChecked(
+                    self._enabled_categories.get(category, False)
+                )
+            finally:
+                self._updating_category_toggles = False
             return
         self._enabled_categories[category] = checked
         self._apply_category_filter()
@@ -914,6 +1029,8 @@ class EasyDeleteStepWidget(QWidget):
         self._sync_viewer.clear()
 
     def _on_apply(self) -> None:
+        if not self._allow_review_departure():
+            return
         self.apply_requested.emit()
 
     def _on_skip(self) -> None:
@@ -1080,6 +1197,13 @@ class EasyDeleteStepWidget(QWidget):
         self._confirm_btn.setMinimumWidth(110)
         self._confirm_btn.clicked.connect(self._on_confirm)
 
+        self._reset_btn = QPushButton("Reset default")
+        self._reset_btn.setObjectName("workflowGhostButton")
+        self._reset_btn.setToolTip(
+            "Reset this review (R), or reset every review (Shift+R)"
+        )
+        self._reset_btn.clicked.connect(self.reset_current_to_default)
+
         self._apply_btn = QPushButton("Apply")
         self._apply_btn.setObjectName("workflowPrimaryButton")
         self._apply_btn.setToolTip(
@@ -1091,6 +1215,7 @@ class EasyDeleteStepWidget(QWidget):
         action.addWidget(self._counter_label)
         action.addWidget(self._next_btn)
         action.addWidget(self._confirm_btn)
+        action.addWidget(self._reset_btn)
         action.addStretch()
         action.addWidget(self._apply_btn)
         right_layout.addLayout(action)

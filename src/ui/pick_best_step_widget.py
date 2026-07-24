@@ -34,6 +34,7 @@ from ui.workflow_review_components import (
     WorkflowReviewListPanel,
     WorkflowStateBanner,
     install_workflow_shortcuts,
+    show_confirm_or_reset_notice,
 )
 from ui.workflow_metadata import build_workflow_metadata_rows
 
@@ -168,6 +169,7 @@ class TournamentGroup:
     paths: list[str]
     ai_pick: str
     keep_by_path: dict[str, bool]
+    default_keep_by_path: dict[str, bool]
     advancing_path: str
     confirmed: bool = False
 
@@ -214,6 +216,7 @@ class PickBestStepWidget(QWidget):
     apply_requested = pyqtSignal()
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
+    deletion_state_requested = pyqtSignal(dict)
     active_image_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -241,6 +244,48 @@ class PickBestStepWidget(QWidget):
         self._create_widgets()
         self._connect_signals()
         self._create_shortcuts()
+
+    def has_unconfirmed_changes(self) -> bool:
+        if not self._tournaments:
+            return False
+        group = self._current_group()
+        if group.confirmed:
+            return False
+        return group.keep_by_path != group.default_keep_by_path
+
+    def show_confirm_or_reset_required(self) -> None:
+        show_confirm_or_reset_notice(
+            self,
+            confirm=self._on_confirm,
+            reset=self.reset_current_to_default,
+            reset_all=self.reset_all_to_default,
+        )
+
+    def reset_current_to_default(self) -> None:
+        if not self._tournaments:
+            return
+        tournament = self._current_tournament()
+        group = self._current_group()
+        if group.confirmed or tournament.finalized:
+            self._invalidate_later_rounds(tournament)
+            group.confirmed = False
+        group.keep_by_path = dict(group.default_keep_by_path)
+        group.advancing_path = self._resolve_advancing_path(
+            group.paths, group.keep_by_path, group.ai_pick
+        )
+        self._refresh_photo_list()
+        self._show_current_group()
+
+    def reset_all_to_default(self) -> None:
+        """Unconfirm all comparisons and rebuild their immutable defaults."""
+
+        self.discard_pending_decisions()
+
+    def _allow_review_departure(self) -> bool:
+        if not self.has_unconfirmed_changes():
+            return True
+        self.show_confirm_or_reset_required()
+        return False
 
     def show_loading(self, message: str = "Analysing…", percent: int = 0) -> None:
         self._stack.setCurrentWidget(self._page_loading)
@@ -311,9 +356,12 @@ class PickBestStepWidget(QWidget):
 
     def discard_pending_decisions(self) -> None:
         """Reset every local tournament while retaining worker analysis results."""
+        restored_mark_state: dict[str, bool] = {}
         for tournament in self._tournaments:
             if tournament.prior_marks is not None:
-                self._publish_confirmed_state(dict(tournament.prior_marks))
+                restored_mark_state.update(tournament.prior_marks)
+        if restored_mark_state:
+            self._publish_confirmed_state(restored_mark_state)
         self._tournaments = [
             self._build_tournament(key, payload)
             for key, payload in zip(self._cluster_keys, self._clusters, strict=True)
@@ -464,6 +512,13 @@ class PickBestStepWidget(QWidget):
         self._confirm_btn.setObjectName("workflowPrimaryButton")
         action_layout.addWidget(self._confirm_btn)
 
+        self._reset_btn = QPushButton("Reset default")
+        self._reset_btn.setObjectName("workflowGhostButton")
+        self._reset_btn.setToolTip(
+            "Reset this comparison (R), or reset every comparison (Shift+R)"
+        )
+        action_layout.addWidget(self._reset_btn)
+
         self._keep_all_btn = QPushButton("Keep all")
         self._keep_all_btn.setObjectName("workflowGhostButton")
         self._keep_all_btn.setToolTip(
@@ -485,6 +540,7 @@ class PickBestStepWidget(QWidget):
     def _connect_signals(self) -> None:
         self._done_btn.clicked.connect(self._on_apply)
         self._confirm_btn.clicked.connect(self._on_confirm)
+        self._reset_btn.clicked.connect(self.reset_current_to_default)
         self._keep_all_btn.clicked.connect(self._on_keep_all)
         self._items_list.itemClicked.connect(self._on_photo_item_clicked)
         self._prev_cluster_btn.clicked.connect(self._prev_cluster)
@@ -515,6 +571,8 @@ class PickBestStepWidget(QWidget):
                 "info": self._toggle_info,
                 "keep_all": self._on_keep_all,
                 "confirm": self._on_confirm,
+                "reset": self.reset_current_to_default,
+                "reset_all": self.reset_all_to_default,
                 "apply": self._on_apply,
             },
         )
@@ -544,6 +602,7 @@ class PickBestStepWidget(QWidget):
                     paths=list(paths),
                     ai_pick=ai_pick,
                     keep_by_path=keep_by_path,
+                    default_keep_by_path=dict(keep_by_path),
                     advancing_path=self._resolve_advancing_path(
                         paths, keep_by_path, ai_pick
                     ),
@@ -765,6 +824,9 @@ class PickBestStepWidget(QWidget):
         )
 
     def _on_photo_item_clicked(self, item: QListWidgetItem) -> None:
+        if not self._allow_review_departure():
+            self._refresh_photo_list()
+            return
         cluster_index = item.data(LIST_CLUSTER_ROLE)
         round_index = item.data(LIST_SECTION_ROLE)
         if isinstance(cluster_index, int):
@@ -786,6 +848,8 @@ class PickBestStepWidget(QWidget):
     def _load_cluster(self, index: int) -> None:
         if not self._tournaments:
             return
+        if index != self._cluster_index and not self._allow_review_departure():
+            return
         self._cluster_index = max(0, min(index, len(self._tournaments) - 1))
         tournament = self._current_tournament()
         all_paths = list(tournament.payload.get("all_paths", []))
@@ -805,6 +869,16 @@ class PickBestStepWidget(QWidget):
 
     def focus_image(self, path: str) -> bool:
         """Open and focus the comparison containing path without changing decisions."""
+
+        if self.has_unconfirmed_changes():
+            if path not in self._subset_paths:
+                self.show_confirm_or_reset_required()
+                return False
+            self._focused_slot_index = self._subset_paths.index(path)
+            self._update_focus_state()
+            if self._focus_mode:
+                self._sync_viewer.set_focused_viewer(self._focused_slot_index)
+            return True
 
         cluster_index = next(
             (
@@ -941,6 +1015,7 @@ class PickBestStepWidget(QWidget):
         )
         self._confirm_btn.setEnabled(not group.confirmed)
         self._confirm_btn.setText("Confirmed" if group.confirmed else "Confirm  →")
+        self._reset_btn.setEnabled(self.has_unconfirmed_changes() or group.confirmed)
         self._keep_all_btn.setEnabled(not (group.confirmed and group.keep_all))
         self._keep_all_btn.setText(
             "All kept"
@@ -952,7 +1027,13 @@ class PickBestStepWidget(QWidget):
         )
         self._done_btn.setEnabled(has_completed_cluster)
         kept_count = sum(group.keep_by_path.get(path, False) for path in group.paths)
-        if group.confirmed:
+        if self.has_unconfirmed_changes():
+            self._state_banner.set_state(
+                "Set each photo, then confirm",
+                "Your Keep/Trash changes are local until you press Confirm.",
+                tone="warning",
+            )
+        elif group.confirmed:
             advancing_name = os.path.basename(group.advancing_path)
             self._state_banner.set_state(
                 "Decisions confirmed",
@@ -1061,6 +1142,13 @@ class PickBestStepWidget(QWidget):
                 card.set_focused(index == self._focused_slot_index)
 
     def _publish_confirmed_state(self, mark_state: dict[str, bool]) -> None:
+        if self.receivers(self.deletion_state_requested):
+            self._publishing_confirmation = True
+            try:
+                self.deletion_state_requested.emit(mark_state)
+            finally:
+                self._publishing_confirmation = False
+            return
         to_mark = [path for path, marked in mark_state.items() if marked]
         to_unmark = [path for path, marked in mark_state.items() if not marked]
         self._publishing_confirmation = True
@@ -1230,12 +1318,16 @@ class PickBestStepWidget(QWidget):
         self._advance_after_confirmation()
 
     def _next_cluster(self) -> None:
+        if not self._allow_review_departure():
+            return
         if self._cluster_index < len(self._tournaments) - 1:
             self._exit_focus_mode()
             self._load_cluster(self._cluster_index + 1)
             self._publish_focused_path()
 
     def _prev_cluster(self) -> None:
+        if not self._allow_review_departure():
+            return
         if self._cluster_index > 0:
             self._exit_focus_mode()
             self._load_cluster(self._cluster_index - 1)
@@ -1244,6 +1336,8 @@ class PickBestStepWidget(QWidget):
     def _next_group(self) -> None:
         """Move down within comparison history, then into the next cluster."""
 
+        if not self._allow_review_departure():
+            return
         if not self._tournaments:
             return
         tournament = self._current_tournament()
@@ -1255,6 +1349,8 @@ class PickBestStepWidget(QWidget):
     def _prev_group(self) -> None:
         """Move up within comparison history, then into the previous cluster."""
 
+        if not self._allow_review_departure():
+            return
         if not self._tournaments:
             return
         if self._current_tournament().current_round > 0:
@@ -1263,6 +1359,8 @@ class PickBestStepWidget(QWidget):
             self._prev_cluster()
 
     def _next_round(self) -> None:
+        if not self._allow_review_departure():
+            return
         tournament = self._current_tournament()
         if tournament.current_round + 1 < len(tournament.rounds):
             tournament.current_round += 1
@@ -1272,6 +1370,8 @@ class PickBestStepWidget(QWidget):
             self._show_current_group()
 
     def _prev_round(self) -> None:
+        if not self._allow_review_departure():
+            return
         tournament = self._current_tournament()
         if tournament.current_round > 0:
             tournament.current_round -= 1
@@ -1287,6 +1387,8 @@ class PickBestStepWidget(QWidget):
         self._select_path(path)
 
     def _on_apply(self) -> None:
+        if not self._allow_review_departure():
+            return
         if not self._tournaments or not any(
             tournament.finalized for tournament in self._tournaments
         ):
