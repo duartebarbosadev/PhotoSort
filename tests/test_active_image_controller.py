@@ -70,3 +70,22 @@ def test_active_path_can_be_cleared_and_updated_centrally():
     adapter.focus_image.assert_called_once_with("/photos/new.jpg")
     assert controller.clear_if_active("/photos/new.jpg")
     assert context.app_state.focused_image_path is None
+
+
+def test_external_publish_cannot_replace_active_path_during_dirty_review():
+    context = _Context()
+    context.app_state.workflow_step = "easy_delete"
+    context.app_state.focused_image_path = "/photos/current.jpg"
+    dirty_review = SimpleNamespace(
+        has_unconfirmed_changes=lambda: True,
+        show_confirm_or_reset_required=Mock(),
+        focus_image=Mock(return_value=True),
+    )
+    context.adapters = {"easy_delete": dirty_review}
+    controller = ActiveImageController(context)
+
+    assert not controller.publish("/photos/other.jpg", source="cull")
+
+    assert context.app_state.focused_image_path == "/photos/current.jpg"
+    dirty_review.show_confirm_or_reset_required.assert_called_once_with()
+    dirty_review.focus_image.assert_not_called()

@@ -51,6 +51,35 @@ def test_clean_transition_cancels_current_analysis_and_switches_directly():
     window._show_workflow_destination.assert_called_once_with("fix_rotation")
 
 
+def test_dirty_review_blocks_workflow_switch_before_pending_resolution():
+    review = SimpleNamespace(
+        has_unconfirmed_changes=lambda: True,
+        show_confirm_or_reset_required=Mock(),
+    )
+    collect_pending = Mock()
+    show_destination = Mock()
+    window = SimpleNamespace(
+        app_state=SimpleNamespace(workflow_step="easy_delete"),
+        worker_manager=_worker_manager(),
+        app_controller=SimpleNamespace(
+            is_workflow_analysis_running=lambda _workflow: False
+        ),
+        get_active_image_adapter=lambda workflow: (
+            review if workflow == "easy_delete" else None
+        ),
+        update_workflow_navigation=Mock(),
+        _collect_workflow_pending_state=collect_pending,
+        _show_workflow_destination=show_destination,
+    )
+
+    MainWindow._request_workflow_transition(window, "fix_rotation")
+
+    review.show_confirm_or_reset_required.assert_called_once_with()
+    window.update_workflow_navigation.assert_called_once_with()
+    collect_pending.assert_not_called()
+    show_destination.assert_not_called()
+
+
 def test_stay_here_preserves_pending_work_and_running_analysis():
     controller = SimpleNamespace(
         is_workflow_analysis_running=lambda _workflow: True,

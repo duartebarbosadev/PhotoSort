@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
     QLabel,
+    QMainWindow,
     QPushButton,
     QStyleOptionViewItem,
     QVBoxLayout,
@@ -32,6 +33,7 @@ from ui.workflow_review_components import (
     ORGANIZE_SHORTCUTS,
     PICK_BEST_SHORTCUTS,
     WORKFLOW_SHORTCUTS,
+    ConfirmOrResetDialog,
     WorkflowDecisionCard,
     WorkflowShortcutStrip,
 )
@@ -81,8 +83,7 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
     assert "exact_duplicate" not in widget._category_checkboxes
     assert widget._items_list.item(1).text() == "delete.jpg  ↔  keep.jpg"
     assert not (widget._items_list.item(0).flags() & Qt.ItemFlag.ItemIsSelectable)
-    assert "SELECTED FOR TRASH" in widget._pair_left_hdr.text()
-    assert "not confirmed" in widget._pair_left_hdr.text()
+    assert widget._pair_left_hdr.text() == "TRASH"
     assert (
         widget._pair_left_card._name_label.text()
         == "delete.jpg · Suggested for trash · lower sharpness (10.0 vs 25.0)"
@@ -131,8 +132,8 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
     _app.processEvents()
 
     assert not marks
-    assert "SELECTED FOR TRASH" in widget._pair_left_hdr.text()
-    assert "SELECTED FOR TRASH" in widget._pair_right_hdr.text()
+    assert widget._pair_left_hdr.text() == "TRASH"
+    assert widget._pair_right_hdr.text() == "TRASH"
 
     widget._on_confirm()
     _app.processEvents()
@@ -144,8 +145,8 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
     )
     assert widget._items_list.item(1).text().startswith("✓")
     assert widget._items_list.item(1).text().endswith("Complete · 0 kept")
-    assert "MARKED FOR TRASH" in widget._pair_left_hdr.text()
-    assert "MARKED FOR TRASH" in widget._pair_right_hdr.text()
+    assert widget._pair_left_hdr.text() == "TRASH"
+    assert widget._pair_right_hdr.text() == "TRASH"
 
 
 def test_easy_delete_revision_restores_prior_marks_until_reconfirmed():
@@ -185,14 +186,115 @@ def test_easy_delete_revision_restores_prior_marks_until_reconfirmed():
     assert not widget._confirmed_reviews
     assert widget._state_banner.title_label.text() == "Set each photo, then confirm"
     assert widget._confirm_btn.text() == "Confirm  →"
-    assert "SELECTED TO KEEP" in widget._pair_left_hdr.text()
-    assert "SELECTED FOR TRASH" in widget._pair_right_hdr.text()
+    assert widget._pair_left_hdr.text() == "KEEP"
+    assert widget._pair_right_hdr.text() == "TRASH"
 
     shortcuts["Return"].activated.emit()
     _app.processEvents()
 
     assert marks == {pair_path}
     assert widget._confirmed_reviews == {review_path}
+
+
+def test_easy_delete_r_unconfirms_and_restores_default_and_prior_marks():
+    review_path = "/tmp/reset-confirmed-review.jpg"
+    pair_path = "/tmp/reset-confirmed-pair.jpg"
+    marks = {pair_path}
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
+    widget.unmark_for_deletion_requested.connect(
+        lambda paths: marks.difference_update(paths)
+    )
+    widget.show_results(
+        {
+            review_path: {
+                "type": "duplicate",
+                "pair_path": pair_path,
+                "suggest_delete": True,
+            }
+        }
+    )
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["Return"].activated.emit()
+    assert marks == {review_path}
+    assert widget._confirmed_reviews == {review_path}
+
+    shortcuts["R"].activated.emit()
+
+    assert marks == {pair_path}
+    assert not widget._confirmed_reviews
+    assert widget._pair_left_hdr.text() == "TRASH"
+    assert widget._pair_right_hdr.text() == "KEEP"
+
+
+def test_easy_delete_shift_r_resets_all_confirmed_reviews():
+    first = "/tmp/reset-all-first.jpg"
+    second = "/tmp/reset-all-second.jpg"
+    marks: set[str] = set()
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
+    widget.unmark_for_deletion_requested.connect(
+        lambda paths: marks.difference_update(paths)
+    )
+    widget.show_results(
+        {
+            first: {"type": "blur", "pair_path": None, "suggest_delete": True},
+            second: {"type": "dark", "pair_path": None, "suggest_delete": True},
+        }
+    )
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["Return"].activated.emit()
+    shortcuts["Return"].activated.emit()
+    assert marks == {first, second}
+    assert widget._confirmed_reviews == {first, second}
+
+    shortcuts["Shift+R"].activated.emit()
+
+    assert not marks
+    assert not widget._confirmed_reviews
+    assert all(
+        state == widget._default_keep_state(path, widget._results[path])
+        for path, state in widget._pending_keep_by_review.items()
+    )
+
+
+def test_easy_delete_bulk_actions_publish_one_atomic_mark_update():
+    results = {
+        f"/tmp/bulk-{index}.jpg": {
+            "type": "blur",
+            "pair_path": None,
+            "suggest_delete": True,
+        }
+        for index in range(40)
+    }
+    batch_updates: list[dict[str, bool]] = []
+    legacy_mark_updates: list[list[str]] = []
+    legacy_unmark_updates: list[list[str]] = []
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.deletion_state_requested.connect(batch_updates.append)
+    widget.mark_for_deletion_requested.connect(legacy_mark_updates.append)
+    widget.unmark_for_deletion_requested.connect(legacy_unmark_updates.append)
+    widget.show_results(results)
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["A"].activated.emit()
+
+    assert len(batch_updates) == 1
+    assert batch_updates[0] == dict.fromkeys(results, True)
+    assert not legacy_mark_updates
+    assert not legacy_unmark_updates
+
+    batch_updates.clear()
+    shortcuts["Shift+R"].activated.emit()
+
+    assert len(batch_updates) == 1
+    assert batch_updates[0] == dict.fromkeys(results, False)
+    assert not widget._confirmed_reviews
 
 
 def test_easy_delete_pair_supports_all_independent_keep_trash_outcomes():
@@ -227,15 +329,15 @@ def test_easy_delete_pair_supports_all_independent_keep_trash_outcomes():
             shortcut.key().toString(): shortcut for shortcut in widget._shortcuts
         }
 
-        assert "SELECTED FOR TRASH" in widget._pair_left_hdr.text()
-        assert "SELECTED TO KEEP" in widget._pair_right_hdr.text()
+        assert widget._pair_left_hdr.text() == "TRASH"
+        assert widget._pair_right_hdr.text() == "KEEP"
         for key in toggles:
             shortcuts[key].activated.emit()
         _app.processEvents()
 
         assert not marks
-        assert ("SELECTED TO KEEP" in widget._pair_left_hdr.text()) is keep_left
-        assert ("SELECTED TO KEEP" in widget._pair_right_hdr.text()) is keep_right
+        assert (widget._pair_left_hdr.text() == "KEEP") is keep_left
+        assert (widget._pair_right_hdr.text() == "KEEP") is keep_right
 
         shortcuts["Return"].activated.emit()
         _app.processEvents()
@@ -271,16 +373,44 @@ def test_easy_delete_card_click_toggles_only_the_target_photo():
     widget._pair_left_card.activated.emit()
     _app.processEvents()
 
-    assert "SELECTED TO KEEP" in widget._pair_left_hdr.text()
-    assert "SELECTED TO KEEP" in widget._pair_right_hdr.text()
+    assert widget._pair_left_hdr.text() == "KEEP"
+    assert widget._pair_right_hdr.text() == "KEEP"
     assert not marks
 
     widget._pair_right_card.activated.emit()
     _app.processEvents()
 
-    assert "SELECTED TO KEEP" in widget._pair_left_hdr.text()
-    assert "SELECTED FOR TRASH" in widget._pair_right_hdr.text()
+    assert widget._pair_left_hdr.text() == "KEEP"
+    assert widget._pair_right_hdr.text() == "TRASH"
     assert not marks
+
+
+def test_easy_delete_physical_image_click_toggles_once_and_stays_toggled():
+    left = "/tmp/physical-click-left.jpg"
+    right = "/tmp/physical-click-right.jpg"
+    widget = EasyDeleteStepWidget()
+    widget.resize(900, 650)
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            left: {
+                "type": "duplicate",
+                "pair_path": right,
+                "suggest_delete": True,
+                "reason": "Detector default",
+            }
+        }
+    )
+    widget.show()
+    QTest.qWait(40)
+    viewport = widget._sync_viewer.image_viewers[0].image_view.viewport()
+
+    QTest.mouseClick(viewport, Qt.MouseButton.LeftButton)
+    _app.processEvents()
+
+    assert widget._pair_left_hdr.text() == "KEEP"
+    assert widget._pair_right_hdr.text() == "KEEP"
+    assert widget.has_unconfirmed_changes()
 
 
 def test_easy_delete_shift_enter_requests_apply():
@@ -359,7 +489,7 @@ def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
 
     assert first in marks
     assert widget._current_index == 1
-    assert "SELECTED FOR TRASH" in widget._single_hdr.text()
+    assert widget._single_hdr.text() == "TRASH"
     assert len(widget._sync_viewer.image_viewers) == 1
 
     widget._on_apply_all()
@@ -564,10 +694,74 @@ def test_easy_delete_arrow_shortcuts_separate_choice_from_navigation():
     shortcuts["Right"].activated.emit()
 
     assert widget._current_index == 0
-    assert "SELECTED FOR TRASH" in widget._pair_right_hdr.text()
+    assert widget._pair_right_hdr.text() == "TRASH"
 
     shortcuts["Down"].activated.emit()
 
+    assert widget._current_index == 0
+    assert widget._confirm_or_reset_dialog.isVisible()
+
+    shortcuts["R"].activated.emit()
+    shortcuts["Down"].activated.emit()
+
+    assert widget._current_index == 1
+
+
+def test_easy_delete_dirty_review_blocks_departure_until_r_resets_default():
+    first = "/tmp/dirty-first.jpg"
+    partner = "/tmp/dirty-partner.jpg"
+    second = "/tmp/dirty-second.jpg"
+    marks: set[str] = set()
+    apply_requests: list[bool] = []
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.apply_requested.connect(lambda: apply_requests.append(True))
+    widget.show_results(
+        {
+            first: {
+                "type": "duplicate",
+                "pair_path": partner,
+                "suggest_delete": True,
+                "duplicate_kind": "exact",
+            },
+            second: {
+                "type": "blur",
+                "pair_path": None,
+                "suggest_delete": True,
+            },
+        }
+    )
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    assert not widget.has_unconfirmed_changes()
+    shortcuts["1"].activated.emit()
+    assert widget.has_unconfirmed_changes()
+    assert widget._reset_btn.isEnabled()
+
+    widget._on_next()
+    blocked_item = widget._items_list.item(3)
+    widget._items_list.setCurrentItem(blocked_item)
+    widget._items_list.itemClicked.emit(blocked_item)
+    assert not widget.focus_image(second)
+    widget._category_checkboxes["exact_duplicate"].setChecked(False)
+    shortcuts["Shift+Return"].activated.emit()
+
+    assert widget._current_index == 0
+    assert widget._items_list.currentItem().data(Qt.ItemDataRole.UserRole) == first
+    assert widget._category_checkboxes["exact_duplicate"].isChecked()
+    assert widget._visible_image_paths == (first, partner)
+    assert widget._confirm_or_reset_dialog.isVisible()
+    assert not marks
+    assert not apply_requests
+
+    shortcuts["R"].activated.emit()
+
+    assert not widget.has_unconfirmed_changes()
+    assert widget._pair_left_hdr.text() == "TRASH"
+    assert widget._pair_right_hdr.text() == "KEEP"
+    assert not widget._reset_btn.isEnabled()
+
+    widget._on_next()
     assert widget._current_index == 1
 
 
@@ -790,7 +984,7 @@ def test_fix_rotation_distinguishes_preview_queue_and_applied_state():
     assert not widget._ordered_paths
 
 
-def test_fix_rotation_manual_shortcut_cycles_clockwise_and_queues_override():
+def test_fix_rotation_e_shortcut_cycles_clockwise_and_queues_override():
     path = "/tmp/sideways.jpg"
     widget = FixRotationStepWidget()
     widget.show_results({path: 90})
@@ -798,7 +992,7 @@ def test_fix_rotation_manual_shortcut_cycles_clockwise_and_queues_override():
     assert "A" not in shortcuts
     assert "Space" not in shortcuts
 
-    shortcuts["Shift+R"].activated.emit()
+    shortcuts["E"].activated.emit()
     _app.processEvents()
 
     assert widget._selected_angle(path) == 180
@@ -810,8 +1004,8 @@ def test_fix_rotation_manual_shortcut_cycles_clockwise_and_queues_override():
     widget._on_confirm()
     assert widget.pending_rotations() == {path: 180}
 
-    shortcuts["Shift+R"].activated.emit()
-    shortcuts["Shift+R"].activated.emit()
+    shortcuts["E"].activated.emit()
+    shortcuts["E"].activated.emit()
     _app.processEvents()
 
     assert widget._selected_angle(path) == 0
@@ -819,7 +1013,7 @@ def test_fix_rotation_manual_shortcut_cycles_clockwise_and_queues_override():
     assert path not in widget._confirmed
     assert widget.pending_rotations() == {}
 
-    shortcuts["Shift+R"].activated.emit()
+    shortcuts["E"].activated.emit()
     _app.processEvents()
 
     assert widget._selected_angle(path) == 90
@@ -827,13 +1021,13 @@ def test_fix_rotation_manual_shortcut_cycles_clockwise_and_queues_override():
     assert widget._marked[path]
 
 
-def test_fix_rotation_r_rotates_counterclockwise_instead_of_toggling_selection():
+def test_fix_rotation_q_rotates_counterclockwise_instead_of_toggling_selection():
     path = "/tmp/upside-down.jpg"
     widget = FixRotationStepWidget()
     widget.show_results({path: 180})
     shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
 
-    shortcuts["R"].activated.emit()
+    shortcuts["Q"].activated.emit()
     _app.processEvents()
 
     assert widget._selected_angle(path) == 90
@@ -844,12 +1038,36 @@ def test_fix_rotation_r_rotates_counterclockwise_instead_of_toggling_selection()
     widget._on_confirm()
     assert widget.pending_rotations() == {path: 90}
 
-    shortcuts["R"].activated.emit()
+    shortcuts["Q"].activated.emit()
     _app.processEvents()
 
     assert widget._selected_angle(path) == 0
     assert not widget._marked[path]
     assert path not in widget._confirmed
+
+
+def test_fix_rotation_r_unconfirms_and_shift_r_resets_all():
+    first = "/tmp/reset-rotation-first.jpg"
+    second = "/tmp/reset-rotation-second.jpg"
+    widget = FixRotationStepWidget()
+    widget.show_results({first: 90, second: -90})
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    widget._on_confirm_all()
+    assert widget._confirmed == {first, second}
+    assert widget.pending_rotations() == {first: 90, second: -90}
+
+    shortcuts["R"].activated.emit()
+    assert first not in widget._confirmed
+    assert widget._selected_angle(first) == 90
+    assert widget.pending_rotations() == {second: -90}
+
+    shortcuts["Shift+R"].activated.emit()
+
+    assert not widget._confirmed
+    assert widget.pending_rotations() == {}
+    assert widget._selected_angle(first) == 90
+    assert widget._selected_angle(second) == -90
 
 
 def test_fix_rotation_shift_enter_applies_confirmed_rotations():
@@ -877,6 +1095,57 @@ def test_fix_rotation_clockwise_override_starts_from_original_when_unselected():
     widget._on_confirm()
 
     assert widget.pending_rotations() == {path: 90}
+
+
+def test_fix_rotation_dirty_review_blocks_departure_and_reset_restores_suggestion():
+    first = "/tmp/rotation-dirty-first.jpg"
+    second = "/tmp/rotation-dirty-second.jpg"
+    apply_requests: list[dict] = []
+    widget = FixRotationStepWidget()
+    widget.apply_rotations_requested.connect(apply_requests.append)
+    widget.show_results({first: 90, second: -90})
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+
+    shortcuts["Q"].activated.emit()
+    assert widget.has_unconfirmed_changes()
+    assert widget._selected_angle(first) == 0
+
+    widget._on_next()
+    blocked_item = widget._items_list.item(1)
+    widget._items_list.setCurrentItem(blocked_item)
+    widget._items_list.itemClicked.emit(blocked_item)
+    assert not widget.focus_image(second)
+    shortcuts["Shift+Return"].activated.emit()
+
+    assert widget._current_index == 0
+    assert widget._items_list.currentItem().data(Qt.ItemDataRole.UserRole) == first
+    assert widget._confirm_or_reset_dialog.isVisible()
+    assert not widget.pending_rotations()
+    assert not apply_requests
+
+    shortcuts["R"].activated.emit()
+
+    assert not widget.has_unconfirmed_changes()
+    assert widget._selected_angle(first) == 90
+    assert widget._marked[first]
+    assert first not in widget._angle_overrides
+
+    widget._on_next()
+    assert widget._current_index == 1
+
+
+def test_fix_rotation_returning_to_suggestion_clears_dirty_state():
+    path = "/tmp/rotation-back-to-default.jpg"
+    widget = FixRotationStepWidget()
+    widget.show_results({path: 90})
+
+    widget._on_rotate_counterclockwise()
+    assert widget.has_unconfirmed_changes()
+
+    widget._on_rotate_clockwise()
+    assert not widget.has_unconfirmed_changes()
+    assert widget._selected_angle(path) == 90
+    assert path not in widget._angle_overrides
 
 
 def _pick_best_payload(paths: list[str], scores: dict[str, float] | None = None):
@@ -1124,6 +1393,207 @@ def test_pick_best_number_shortcuts_toggle_only_the_target_photo_before_confirm(
     widget._on_confirm()
     assert marks == set(paths)
     assert widget._current_tournament().final_winner == paths[1]
+
+
+def test_pick_best_dirty_review_blocks_departure_until_escape_restores_baseline():
+    first_paths = ["/tmp/pick-dirty-a.jpg", "/tmp/pick-dirty-b.jpg"]
+    second_paths = ["/tmp/pick-other-a.jpg", "/tmp/pick-other-b.jpg"]
+    marks: set[str] = set()
+    apply_requests: list[bool] = []
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.apply_requested.connect(lambda: apply_requests.append(True))
+    widget.show_results(
+        {
+            1: _pick_best_payload(first_paths, {first_paths[1]: 0.9}),
+            2: _pick_best_payload(second_paths, {second_paths[1]: 0.9}),
+        }
+    )
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+    baseline = dict(widget._current_group().default_keep_by_path)
+
+    shortcuts["1"].activated.emit()
+    assert widget.has_unconfirmed_changes()
+    assert widget._reset_btn.isEnabled()
+
+    widget._next_cluster()
+    second_cluster_item = _pick_best_cluster_items(widget)[1]
+    widget._items_list.setCurrentItem(second_cluster_item)
+    widget._items_list.itemClicked.emit(second_cluster_item)
+    assert not widget.focus_image(second_paths[0])
+    shortcuts["Shift+Return"].activated.emit()
+
+    assert widget._cluster_index == 0
+    assert widget._items_list.currentItem() is not second_cluster_item
+    assert widget._subset_paths == first_paths
+    assert widget._confirm_or_reset_dialog.isVisible()
+    assert not marks
+    assert not apply_requests
+
+    shortcuts["R"].activated.emit()
+
+    assert not widget.has_unconfirmed_changes()
+    assert widget._current_group().keep_by_path == baseline
+    assert not widget._reset_btn.isEnabled()
+
+    widget._next_cluster()
+    assert widget._cluster_index == 1
+
+
+def test_blocked_review_navigation_shows_explanation_dialog():
+    host = QMainWindow()
+    widget = EasyDeleteStepWidget()
+    host.setCentralWidget(widget)
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            "/tmp/notice-first.jpg": {
+                "type": "blur",
+                "pair_path": None,
+                "suggest_delete": True,
+            },
+            "/tmp/notice-second.jpg": {
+                "type": "dark",
+                "pair_path": None,
+                "suggest_delete": True,
+            },
+        }
+    )
+
+    widget._toggle_single_choice()
+    widget._on_next()
+
+    dialog = widget._confirm_or_reset_dialog
+    assert dialog.isVisible()
+    assert dialog.title_label.text() == "Finish this photo first"
+    assert dialog.message_label.text() == (
+        "You changed this review, so PhotoSort kept you on the current photo."
+    )
+    assert dialog.confirm_button.text() == "Confirm decision  (Enter)"
+    assert dialog.reset_button.text() == "Reset to suggestion  (R)"
+    assert "does not apply changes" in dialog.confirm_explanation_label.text()
+    assert "Enter" in dialog.confirm_explanation_label.text()
+    assert "R" in dialog.reset_explanation_label.text()
+    assert "Apply later" in dialog.hint_label.text()
+
+    QTest.keyClick(dialog, Qt.Key.Key_R)
+
+    assert not widget.has_unconfirmed_changes()
+    assert widget._confirm_or_reset_dialog is None
+
+
+def test_confirm_or_reset_dialog_shift_r_resets_all():
+    actions: list[str] = []
+    host = QMainWindow()
+    dialog = ConfirmOrResetDialog(
+        host,
+        confirm=lambda: actions.append("confirm"),
+        reset=lambda: actions.append("reset"),
+        reset_all=lambda: actions.append("reset_all"),
+    )
+    dialog.show()
+
+    QTest.keyClick(dialog, Qt.Key.Key_R, Qt.KeyboardModifier.ShiftModifier)
+
+    assert actions == ["reset_all"]
+    assert not dialog.isVisible()
+
+
+def test_pick_best_reset_restores_carried_comparison_default():
+    paths = [
+        "/tmp/carried-a.jpg",
+        "/tmp/carried-b.jpg",
+        "/tmp/carried-c.jpg",
+    ]
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths, {paths[1]: 0.9})})
+
+    widget._select_path(paths[0])
+    widget._on_confirm()
+    group = widget._current_group()
+    baseline = dict(group.default_keep_by_path)
+
+    widget._select_path(group.paths[0])
+    assert widget.has_unconfirmed_changes()
+
+    widget.reset_current_to_default()
+
+    assert not widget.has_unconfirmed_changes()
+    assert group.keep_by_path == baseline
+
+
+def test_pick_best_r_unconfirms_and_shift_r_resets_all_clusters():
+    first_paths = ["/tmp/reset-pick-a.jpg", "/tmp/reset-pick-b.jpg"]
+    second_paths = ["/tmp/reset-pick-c.jpg", "/tmp/reset-pick-d.jpg"]
+    marks: set[str] = set()
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.mark_for_deletion_requested.connect(lambda paths: marks.update(paths))
+    widget.unmark_for_deletion_requested.connect(
+        lambda paths: marks.difference_update(paths)
+    )
+    widget.show_results(
+        {
+            1: _pick_best_payload(first_paths, {first_paths[1]: 0.9}),
+            2: _pick_best_payload(second_paths, {second_paths[1]: 0.9}),
+        }
+    )
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in widget._shortcuts}
+    first_default = dict(widget._current_group().default_keep_by_path)
+
+    shortcuts["Return"].activated.emit()
+    assert widget._cluster_index == 1
+    shortcuts["Return"].activated.emit()
+    assert marks == {first_paths[0], second_paths[0]}
+
+    shortcuts["R"].activated.emit()
+    assert marks == {first_paths[0]}
+    assert not widget._current_group().confirmed
+    assert (
+        widget._current_group().keep_by_path
+        == widget._current_group().default_keep_by_path
+    )
+
+    shortcuts["Shift+R"].activated.emit()
+
+    assert not marks
+    assert widget._cluster_index == 1
+    assert all(
+        not group.confirmed
+        for tournament in widget._tournaments
+        for round_ in tournament.rounds
+        for group in round_.groups
+    )
+    widget._load_cluster(0)
+    assert widget._current_group().keep_by_path == first_default
+
+
+def test_pick_best_reset_all_publishes_one_atomic_mark_update():
+    batch_updates: list[dict[str, bool]] = []
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.deletion_state_requested.connect(batch_updates.append)
+    clusters = {
+        index: _pick_best_payload(
+            [f"/tmp/batch-{index}-a.jpg", f"/tmp/batch-{index}-b.jpg"],
+            {f"/tmp/batch-{index}-b.jpg": 0.9},
+        )
+        for index in range(1, 6)
+    }
+    widget.show_results(clusters)
+
+    for _index in clusters:
+        widget._on_confirm()
+    batch_updates.clear()
+
+    widget.reset_all_to_default()
+
+    assert len(batch_updates) == 1
+    assert set(batch_updates[0]) == {
+        path for payload in clusters.values() for path in payload["all_paths"]
+    }
+    assert not any(batch_updates[0].values())
 
 
 def test_pick_best_click_toggles_only_the_clicked_photo():
@@ -1928,16 +2398,22 @@ def test_visible_shortcut_specs_are_the_installed_source_of_truth():
         assert len(widget._shortcuts) == expected
 
 
-def test_review_workflows_have_no_escape_skip_shortcut():
+def test_review_workflows_use_r_and_shift_r_to_reset_defaults():
     widgets_and_specs = (
         (EasyDeleteStepWidget(), EASY_DELETE_SHORTCUTS),
         (FixRotationStepWidget(), FIX_ROTATION_SHORTCUTS),
         (PickBestStepWidget(), PICK_BEST_SHORTCUTS),
     )
     for widget, specs in widgets_and_specs:
-        assert all("Escape" not in spec.sequences for spec in specs)
+        reset_spec = next(spec for spec in specs if spec.action == "reset")
+        assert reset_spec.sequences == ("R",)
+        assert reset_spec.label == "Reset default"
+        reset_all_spec = next(spec for spec in specs if spec.action == "reset_all")
+        assert reset_all_spec.sequences == ("Shift+R",)
+        assert reset_all_spec.label == "Reset all"
         installed = {shortcut.key().toString() for shortcut in widget._shortcuts}
-        assert "Esc" not in installed
+        assert "R" in installed
+        assert "Shift+R" in installed
 
 
 def test_pick_best_loading_page_has_no_skip_navigation_button():

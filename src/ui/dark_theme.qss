@@ -606,6 +606,90 @@ QFrame#dialogCard {
     padding: 4px;
 }
 
+/* Confirm-or-reset review guard */
+QDialog#confirmOrResetDialog {
+    background: #272A2D;
+    border: 1px solid #4A5158;
+    border-radius: 14px;
+}
+
+QLabel#confirmOrResetEyebrow {
+    background: transparent;
+    color: #73A7E8;
+    font-size: 8.5pt;
+    font-weight: bold;
+    letter-spacing: 1.5px;
+}
+
+QLabel#confirmOrResetTitle {
+    background: transparent;
+    color: #F2F5F7;
+    font-size: 18pt;
+    font-weight: bold;
+}
+
+QLabel#confirmOrResetMessage {
+    background: transparent;
+    color: #C5CFD8;
+    font-size: 11pt;
+    padding-bottom: 2px;
+}
+
+QFrame#confirmOrResetExplanation {
+    background: #202326;
+    border: 1px solid #3E454B;
+    border-radius: 9px;
+}
+
+QLabel#confirmOrResetOption {
+    background: transparent;
+    color: #B8C3CC;
+    font-size: 10pt;
+}
+
+QLabel#confirmOrResetHint {
+    background: transparent;
+    color: #8D9AA5;
+    font-size: 9pt;
+}
+
+QPushButton#confirmOrResetResetButton {
+    background: #353A3E;
+    color: #D1D8DE;
+    border: 1px solid #515A61;
+    border-radius: 8px;
+    padding: 10px 18px;
+    min-width: 145px;
+    font-weight: 600;
+}
+
+QPushButton#confirmOrResetResetButton:hover {
+    background: #41474C;
+    border-color: #69747C;
+    color: #FFFFFF;
+}
+
+QPushButton#confirmOrResetConfirmButton {
+    background: #3569B8;
+    color: #FFFFFF;
+    border: 1px solid #4A7BC5;
+    border-radius: 8px;
+    padding: 10px 20px;
+    min-width: 145px;
+    font-weight: bold;
+}
+
+QPushButton#confirmOrResetConfirmButton:hover {
+    background: #4177C7;
+    border-color: #6090D3;
+}
+
+QPushButton#confirmOrResetConfirmButton:pressed,
+QPushButton#confirmOrResetResetButton:pressed {
+    padding-top: 11px;
+    padding-bottom: 9px;
+}
+
 /* Card Section Title */
 QLabel#cardSectionTitle {
     color: #A9B7C6;

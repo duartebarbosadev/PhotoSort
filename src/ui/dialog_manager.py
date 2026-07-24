@@ -1250,9 +1250,7 @@ class DialogManager:
         white_threshold_spin.setDecimals(1)
         white_threshold_spin.setSingleStep(1.0)
         white_threshold_spin.setValue(get_easy_delete_white_threshold())
-        white_threshold_spin.setToolTip(
-            "Brightness limit to flag overexposed photos."
-        )
+        white_threshold_spin.setToolTip("Brightness limit to flag overexposed photos.")
         easy_delete_form.addWidget(white_threshold_label, 2, 0)
         easy_delete_form.addWidget(white_threshold_spin, 2, 1)
 
