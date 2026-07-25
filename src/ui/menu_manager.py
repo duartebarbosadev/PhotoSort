@@ -870,9 +870,7 @@ class MenuManager:
         try:
             normalized_path = os.path.normpath(file_path)
             if os.name == "nt":
-                QProcess.startDetached(
-                    "explorer", ["/select,", normalized_path]
-                )
+                QProcess.startDetached("explorer", ["/select,", normalized_path])
             elif os.name == "posix":
                 if os.uname().sysname == "Darwin":
                     QProcess.startDetached("open", ["-R", normalized_path])

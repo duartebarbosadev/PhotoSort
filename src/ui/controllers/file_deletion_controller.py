@@ -80,9 +80,7 @@ class FileDeletionController:
         start_batch = getattr(self.ctx, "_start_deletion_batch", None)
         if not callable(start_batch):
             logger.error("Background deletion service is unavailable.")
-            self.ctx.statusBar().showMessage(
-                "Deletion service is unavailable.", 3000
-            )
+            self.ctx.statusBar().showMessage("Deletion service is unavailable.", 3000)
             return
 
         started = start_batch(
@@ -102,9 +100,7 @@ class FileDeletionController:
             ),
         )
         if not started:
-            self.ctx.statusBar().showMessage(
-                "A deletion is already in progress.", 3000
-            )
+            self.ctx.statusBar().showMessage("A deletion is already in progress.", 3000)
 
     def _finish_background_delete(
         self,
@@ -130,8 +126,7 @@ class FileDeletionController:
             self.ctx._update_image_info_label()
         if failures:
             self.ctx.statusBar().showMessage(
-                f"{len(successful_targets)} moved to Trash; "
-                f"{len(failures)} failed.",
+                f"{len(successful_targets)} moved to Trash; {len(failures)} failed.",
                 5000,
             )
             show_error = getattr(self.ctx.dialog_manager, "show_error_dialog", None)

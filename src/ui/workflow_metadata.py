@@ -69,9 +69,7 @@ def build_workflow_metadata_rows(
     if isinstance(exif_disk_cache, Mapping):
         metadata = exif_disk_cache.get(os.path.normpath(path))
     else:
-        metadata = MetadataProcessor.get_cached_detailed_metadata(
-            path, exif_disk_cache
-        )
+        metadata = MetadataProcessor.get_cached_detailed_metadata(path, exif_disk_cache)
     rows: list[tuple[str, str]] = []
 
     if isinstance(metadata, dict):

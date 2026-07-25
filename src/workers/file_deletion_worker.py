@@ -45,9 +45,7 @@ class FileDeletionWorker(QObject):
         self.exif_cache = exif_cache
         self.analysis_cache = analysis_cache
         self.folder_path = folder_path
-        self.trash_operation = (
-            trash_operation or ImageFileOperations.move_to_trash
-        )
+        self.trash_operation = trash_operation or ImageFileOperations.move_to_trash
         self._should_stop = False
 
     def stop(self) -> None:

@@ -167,9 +167,7 @@ def test_batch_path_update_scans_shared_results_once_without_disk_io():
         "new-a.jpg",
         "new-b.jpg",
     ]
-    assert state.easy_delete_results == {
-        "new-a.jpg": {"pair_path": "new-b.jpg"}
-    }
+    assert state.easy_delete_results == {"new-a.jpg": {"pair_path": "new-b.jpg"}}
     cluster = state.pick_best_results[1]
     assert cluster["all_paths"] == ["new-a.jpg", "new-b.jpg"]
     assert cluster["ranked"] == [{"path": "new-a.jpg"}]

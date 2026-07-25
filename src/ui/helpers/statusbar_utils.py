@@ -47,11 +47,7 @@ def build_status_bar_info(
     cluster_id = None
     if cluster_lookup and file_path in cluster_lookup:
         cluster_id = cluster_lookup[file_path]
-    file_size = (
-        file_data_from_model.get("file_size")
-        if file_data_from_model
-        else None
-    )
+    file_size = file_data_from_model.get("file_size") if file_data_from_model else None
     try:
         size_kb = int(file_size) // 1024 if file_size is not None else None
     except TypeError, ValueError:

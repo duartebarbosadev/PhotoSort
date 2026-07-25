@@ -195,9 +195,7 @@ class DeletionTestContext:
                         )
         return QModelIndex()
 
-    def _start_deletion_batch(
-        self, targets, _represented_by_target, *, completion
-    ):
+    def _start_deletion_batch(self, targets, _represented_by_target, *, completion):
         """Simulate the central background-deletion completion boundary."""
 
         target_set = set(targets)

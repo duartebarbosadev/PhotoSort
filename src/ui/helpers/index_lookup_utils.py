@@ -12,9 +12,7 @@ def find_proxy_indices_for_paths(
 ) -> dict[str, QModelIndex]:
     """Resolve many paths during one proxy-model traversal."""
 
-    remaining = {
-        path for path in target_paths if isinstance(path, str) and path
-    }
+    remaining = {path for path in target_paths if isinstance(path, str) and path}
     if not remaining or not isinstance(proxy_model, QSortFilterProxyModel):
         return {}
 

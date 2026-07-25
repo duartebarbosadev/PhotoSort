@@ -775,9 +775,7 @@ class WorkerManager(QObject):
         self.file_deletion_worker.completed.connect(self.file_deletion_complete)
         self.file_deletion_worker.finished.connect(self.file_deletion_thread.quit)
         self.file_deletion_thread.started.connect(self.file_deletion_worker.run)
-        self.file_deletion_thread.finished.connect(
-            self._cleanup_file_deletion_refs
-        )
+        self.file_deletion_thread.finished.connect(self._cleanup_file_deletion_refs)
         self.file_deletion_thread.start()
         logger.info("File deletion thread started for %d target(s).", len(targets))
         return True

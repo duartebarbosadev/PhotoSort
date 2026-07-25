@@ -23,6 +23,7 @@ from PyQt6.QtGui import QFont
 
 from core.media_utils import is_video_extension
 from core.utils.time_utils import format_duration
+
 logger = logging.getLogger(__name__)
 
 
@@ -820,9 +821,7 @@ class MetadataSidebar(QWidget):
 
                 try:
                     creation_times = []
-                    for i, _path in enumerate(
-                        self.current_image_paths_for_comparison
-                    ):
+                    for i, _path in enumerate(self.current_image_paths_for_comparison):
                         creation_date = None
 
                         # Try to get creation date from EXIF data first

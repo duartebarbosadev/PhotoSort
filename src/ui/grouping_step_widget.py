@@ -532,9 +532,8 @@ class FolderPreviewListModel(QAbstractListModel):
                 self._owner._cached_thumbnail_icon_for_path(source_path)
                 or self._owner._file_icon
             )
-        if (
-            role == Qt.ItemDataRole.ForegroundRole
-            and self._owner._is_marked_func(source_path)
+        if role == Qt.ItemDataRole.ForegroundRole and self._owner._is_marked_func(
+            source_path
         ):
             return QBrush(QColor("#FFB366"))
         return None
@@ -826,9 +825,7 @@ class GroupingStepWidget(QWidget):
         self.after_collapse_all_button.setEnabled(False)
 
         self._tree_expansion_timers: dict[QTreeWidget, QTimer] = {}
-        self._tree_expansion_stacks: dict[
-            QTreeWidget, list[QTreeWidgetItem]
-        ] = {}
+        self._tree_expansion_stacks: dict[QTreeWidget, list[QTreeWidgetItem]] = {}
         self._tree_expansion_targets: dict[QTreeWidget, bool] = {}
         for tree in (self.before_tree, self.preview_tree):
             timer = QTimer(self)
@@ -3286,9 +3283,7 @@ class GroupingStepWidget(QWidget):
             return len(self._before_file_items_by_path)
         return len(self._after_file_items_by_path)
 
-    def _set_all_tree_folders_expanded(
-        self, tree: QTreeWidget, expanded: bool
-    ) -> None:
+    def _set_all_tree_folders_expanded(self, tree: QTreeWidget, expanded: bool) -> None:
         """Expand or collapse one complete tree without freezing large folders."""
 
         self._cancel_tree_expansion_operation(tree)
@@ -3329,9 +3324,7 @@ class GroupingStepWidget(QWidget):
         try:
             while stack and processed < UI_POPULATION_CHUNK_SIZE:
                 item = stack.pop()
-                children = [
-                    item.child(index) for index in range(item.childCount())
-                ]
+                children = [item.child(index) for index in range(item.childCount())]
                 stack.extend(reversed(children))
                 if children:
                     item.setExpanded(expanded)
@@ -3988,10 +3981,7 @@ class GroupingStepWidget(QWidget):
             for path in getattr(plan, "filesystem_directories", set())
         }
         for deleted_path in getattr(plan, "deleted_paths", []) or []:
-            if (
-                os.path.normcase(os.path.normpath(deleted_path))
-                in known_directories
-            ):
+            if os.path.normcase(os.path.normpath(deleted_path)) in known_directories:
                 lines.append(
                     f"Delete folder {self._relative_display_path(deleted_path)}"
                 )
@@ -4016,9 +4006,7 @@ class GroupingStepWidget(QWidget):
         )
         paths = set(prepared_paths)
         paths.update(self._all_source_paths())
-        return {
-            os.path.normcase(os.path.normpath(path)) for path in paths if path
-        }
+        return {os.path.normcase(os.path.normpath(path)) for path in paths if path}
 
     def _preview_destination_path(
         self,
@@ -4057,16 +4045,12 @@ class GroupingStepWidget(QWidget):
         )
         inventory_is_complete = bool(
             self._current_plan is not None
-            and getattr(
-                self._current_plan, "filesystem_inventory_complete", False
-            )
+            and getattr(self._current_plan, "filesystem_inventory_complete", False)
         )
         if not prepared_paths and not inventory_is_complete:
             prepared_paths = set(self._all_source_paths())
         known_paths = {
-            os.path.normcase(os.path.normpath(path))
-            for path in prepared_paths
-            if path
+            os.path.normcase(os.path.normpath(path)) for path in prepared_paths if path
         }
         moving_set = {
             os.path.normcase(os.path.normpath(path))
@@ -4081,10 +4065,7 @@ class GroupingStepWidget(QWidget):
             return []
         candidate_dirs: dict[str, str] = {}
         for path in moving_paths:
-            if (
-                not path
-                or os.path.normcase(os.path.normpath(path)) not in moving_set
-            ):
+            if not path or os.path.normcase(os.path.normpath(path)) not in moving_set:
                 continue
             current_dir = os.path.dirname(os.path.normpath(path))
             while current_dir:
@@ -4118,9 +4099,7 @@ class GroupingStepWidget(QWidget):
             normalized_path = os.path.normcase(os.path.normpath(path))
             if normalized_path in moving_set:
                 continue
-            parent_key = os.path.normcase(
-                os.path.normpath(os.path.dirname(path))
-            )
+            parent_key = os.path.normcase(os.path.normpath(os.path.dirname(path)))
             remaining_files_by_dir[parent_key] = (
                 remaining_files_by_dir.get(parent_key, 0) + 1
             )
@@ -4137,9 +4116,7 @@ class GroupingStepWidget(QWidget):
         child_dirs_by_parent: dict[str, set[str]] = {}
         for directory in prepared_directories:
             directory_key = os.path.normcase(os.path.normpath(directory))
-            parent_key = os.path.normcase(
-                os.path.normpath(os.path.dirname(directory))
-            )
+            parent_key = os.path.normcase(os.path.normpath(os.path.dirname(directory)))
             child_dirs_by_parent.setdefault(parent_key, set()).add(directory_key)
 
         removable_dirs: set[str] = set()

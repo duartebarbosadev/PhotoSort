@@ -298,11 +298,7 @@ class AppState:
     ) -> int:
         """Rename references with one pass over each shared result collection."""
 
-        pairs = (
-            path_updates.items()
-            if isinstance(path_updates, dict)
-            else path_updates
-        )
+        pairs = path_updates.items() if isinstance(path_updates, dict) else path_updates
         updates = {
             old_path: new_path
             for old_path, new_path in pairs

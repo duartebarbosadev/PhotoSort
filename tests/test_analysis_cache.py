@@ -119,7 +119,5 @@ def test_analysis_cache_removes_deleted_paths_with_one_read_and_write():
     assert saved["cluster_results"] == {kept: 1}
     assert saved["manual_cluster_overrides"] == {}
     assert saved["best_shot_rankings"] == {"1": [{"image_path": kept}]}
-    assert saved["best_shot_scores_by_path"] == {
-        kept: {"image_path": kept}
-    }
+    assert saved["best_shot_scores_by_path"] == {kept: {"image_path": kept}}
     assert saved["best_shot_winners"] == {"1": {"image_path": kept}}

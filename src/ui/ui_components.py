@@ -637,17 +637,13 @@ class SimilarityWorker(QObject):
             self.error.emit(str(e))
             self.finished.emit()
 
-    def _handle_clustering_complete(
-        self, cluster_results: dict[str, int]
-    ) -> None:
+    def _handle_clustering_complete(self, cluster_results: dict[str, int]) -> None:
         """Apply and persist analysis-cache state before returning to the UI."""
 
         results = dict(cluster_results or {})
         if self.analysis_cache is not None and self.folder_path:
             try:
-                overrides = self.analysis_cache.get_manual_overrides(
-                    self.folder_path
-                )
+                overrides = self.analysis_cache.get_manual_overrides(self.folder_path)
                 for path, cluster_id in overrides.items():
                     if path in results:
                         results[path] = cluster_id

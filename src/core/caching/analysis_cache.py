@@ -176,9 +176,7 @@ class AnalysisCache:
         def remap_mapping_keys(value: object) -> object:
             if not isinstance(value, dict):
                 return value
-            return {
-                path_updates.get(path, path): item for path, item in value.items()
-            }
+            return {path_updates.get(path, path): item for path, item in value.items()}
 
         for field in (
             "cluster_results",
@@ -256,8 +254,7 @@ class AnalysisCache:
                     result
                     for result in values
                     if not (
-                        isinstance(result, dict)
-                        and result.get("image_path") in removed
+                        isinstance(result, dict) and result.get("image_path") in removed
                     )
                 ]
                 if retained:
@@ -270,10 +267,7 @@ class AnalysisCache:
                         winners.pop(cluster_id, None)
         elif isinstance(winners, dict):
             for cluster_id, winner in list(winners.items()):
-                if (
-                    isinstance(winner, dict)
-                    and winner.get("image_path") in removed
-                ):
+                if isinstance(winner, dict) and winner.get("image_path") in removed:
                     winners.pop(cluster_id, None)
 
         entry["version"] = CACHE_VERSION

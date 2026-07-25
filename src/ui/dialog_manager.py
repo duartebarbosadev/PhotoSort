@@ -283,9 +283,7 @@ class DialogManager:
                     (("apply", "Apply rotations"), ("discard", "Discard queue")),
                 )
         if deletion_entries:
-            is_truncated = bool(
-                deletion_entries and deletion_entries[-1][0] == ""
-            )
+            is_truncated = bool(deletion_entries and deletion_entries[-1][0] == "")
             trash_heading = QLabel(
                 "Deletion targets"
                 if is_truncated

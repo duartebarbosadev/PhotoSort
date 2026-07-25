@@ -426,9 +426,7 @@ class BestShotWorker(QObject):
                             results,
                         )
                     except Exception:
-                        logger.exception(
-                            "Failed to persist best-shot result batch."
-                        )
+                        logger.exception("Failed to persist best-shot result batch.")
                 total_results = sum(len(results) for results in results.values())
                 logger.info(
                     f"Best shot analysis completed: {total_results} results from {len(results)} clusters"

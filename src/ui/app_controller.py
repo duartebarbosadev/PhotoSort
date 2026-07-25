@@ -377,9 +377,7 @@ class AppController(QObject):
                 4000,
             )
             return
-        if getattr(
-            self.worker_manager, "is_file_deletion_running", lambda: False
-        )():
+        if getattr(self.worker_manager, "is_file_deletion_running", lambda: False)():
             self.main_window.statusBar().showMessage(
                 "Files are still moving to Trash. Wait before loading another folder.",
                 4000,
@@ -507,9 +505,7 @@ class AppController(QObject):
 
     def _finish_pending_folder_load(self) -> None:
         """Resume a deferred folder load after the deletion thread has exited."""
-        if getattr(
-            self.worker_manager, "is_file_deletion_running", lambda: False
-        )():
+        if getattr(self.worker_manager, "is_file_deletion_running", lambda: False)():
             QTimer.singleShot(25, self._finish_pending_folder_load)
             return
 
@@ -1199,9 +1195,7 @@ class AppController(QObject):
         unrated: list[str] = []
         already_rated_count = 0
         for path in image_paths:
-            existing_rating = self.app_state.rating_cache.get(
-                os.path.normpath(path), 0
-            )
+            existing_rating = self.app_state.rating_cache.get(os.path.normpath(path), 0)
             if existing_rating is not None and existing_rating != 0:
                 already_rated_count += 1
                 continue

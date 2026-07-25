@@ -128,14 +128,18 @@ def test_organize_tree_headers_expand_and_collapse_each_tree(tmp_path):
     assert widget.after_expand_all_button.isEnabled()
     assert widget.after_collapse_all_button.isEnabled()
     assert all(item.isExpanded() for item in _expandable_tree_items(widget.before_tree))
-    assert all(item.isExpanded() for item in _expandable_tree_items(widget.preview_tree))
+    assert all(
+        item.isExpanded() for item in _expandable_tree_items(widget.preview_tree)
+    )
 
     widget.before_collapse_all_button.click()
 
     assert not any(
         item.isExpanded() for item in _expandable_tree_items(widget.before_tree)
     )
-    assert all(item.isExpanded() for item in _expandable_tree_items(widget.preview_tree))
+    assert all(
+        item.isExpanded() for item in _expandable_tree_items(widget.preview_tree)
+    )
 
     widget.after_collapse_all_button.click()
     assert not any(
@@ -146,7 +150,9 @@ def test_organize_tree_headers_expand_and_collapse_each_tree(tmp_path):
     widget.after_expand_all_button.click()
 
     assert all(item.isExpanded() for item in _expandable_tree_items(widget.before_tree))
-    assert all(item.isExpanded() for item in _expandable_tree_items(widget.preview_tree))
+    assert all(
+        item.isExpanded() for item in _expandable_tree_items(widget.preview_tree)
+    )
 
 
 def test_organize_tree_branch_style_distinguishes_folder_states_from_leaves():
@@ -175,13 +181,9 @@ def test_organize_tree_branch_style_distinguishes_folder_states_from_leaves():
 
     enabled = QStyle.StateFlag.State_Enabled
     leaf_pixels = rendered_pixels(enabled)
-    collapsed_pixels = rendered_pixels(
-        enabled | QStyle.StateFlag.State_Children
-    )
+    collapsed_pixels = rendered_pixels(enabled | QStyle.StateFlag.State_Children)
     expanded_pixels = rendered_pixels(
-        enabled
-        | QStyle.StateFlag.State_Children
-        | QStyle.StateFlag.State_Open
+        enabled | QStyle.StateFlag.State_Children | QStyle.StateFlag.State_Open
     )
 
     assert leaf_pixels == set()
@@ -238,7 +240,9 @@ def test_large_organize_tree_expansion_is_batched_and_cancelled_on_refresh(
     while timer.isActive():
         widget._process_tree_expansion_batch(widget.preview_tree)
 
-    assert all(item.isExpanded() for item in _expandable_tree_items(widget.preview_tree))
+    assert all(
+        item.isExpanded() for item in _expandable_tree_items(widget.preview_tree)
+    )
 
 
 def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
@@ -1238,9 +1242,7 @@ def test_grouping_folder_preview_discards_thumbnail_updates_from_prior_folder():
     model.refresh_thumbnail_paths({old_path})
 
     assert changed_ranges == []
-    assert (
-        model.data(model.index(0, 0), Qt.ItemDataRole.UserRole) == current_path
-    )
+    assert model.data(model.index(0, 0), Qt.ItemDataRole.UserRole) == current_path
 
 
 def test_grouping_folder_preview_requests_thumbnail_loading(tmp_path):

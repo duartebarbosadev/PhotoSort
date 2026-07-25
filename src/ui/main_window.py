@@ -960,9 +960,7 @@ class MainWindow(QMainWindow):
         if (
             self.worker_manager.is_grouping_workflow_running()
             or self.worker_manager.is_rotation_application_running()
-            or getattr(
-                self.worker_manager, "is_file_deletion_running", lambda: False
-            )()
+            or getattr(self.worker_manager, "is_file_deletion_running", lambda: False)()
         ):
             self.statusBar().showMessage(
                 "Files are still being changed. Wait for the operation to finish before switching.",
@@ -1926,12 +1924,7 @@ class MainWindow(QMainWindow):
                 return
 
         represented_by_target = {
-            target: (
-                represented
-                if is_directory
-                else [target]
-            )
-            for target in targets
+            target: (represented if is_directory else [target]) for target in targets
         }
         self._start_deletion_batch(
             targets,
@@ -2463,10 +2456,7 @@ class MainWindow(QMainWindow):
             if (
                 user_data.startswith("cluster_header_")
                 or user_data.startswith("date_header_")
-                or (
-                    self.show_folders_mode
-                    and not self.group_by_similarity_mode
-                )
+                or (self.show_folders_mode and not self.group_by_similarity_mode)
             ):
                 is_group = True
 
@@ -2532,9 +2522,7 @@ class MainWindow(QMainWindow):
                 4000,
             )
             return
-        if getattr(
-            self.worker_manager, "is_file_deletion_running", lambda: False
-        )():
+        if getattr(self.worker_manager, "is_file_deletion_running", lambda: False)():
             event.ignore()
             self.statusBar().showMessage(
                 "Files are still moving to Trash. Wait for deletion to finish before closing.",
@@ -3127,9 +3115,9 @@ class MainWindow(QMainWindow):
             rating=self.app_state.rating_cache.get(normalized_path, 0),
             date=self.app_state.date_cache.get(normalized_path),
         )
-        raw_metadata = getattr(
-            self.app_state, "detailed_metadata_cache", {}
-        ).get(normalized_path)
+        raw_metadata = getattr(self.app_state, "detailed_metadata_cache", {}).get(
+            normalized_path
+        )
         if isinstance(raw_metadata, dict):
             label = raw_metadata.get("Xmp.xmp.Label")
             if label is not None:
@@ -3410,9 +3398,9 @@ class MainWindow(QMainWindow):
                 continue
 
             basic_metadata = self._get_cached_metadata_for_selection(path)
-            raw_exif = getattr(
-                self.app_state, "detailed_metadata_cache", {}
-            ).get(os.path.normpath(path))
+            raw_exif = getattr(self.app_state, "detailed_metadata_cache", {}).get(
+                os.path.normpath(path)
+            )
 
             images_data_for_viewer.append(
                 {
@@ -4668,9 +4656,7 @@ class MainWindow(QMainWindow):
         if not active_view:
             return False
         if self.worker_manager.is_file_deletion_running():
-            self.statusBar().showMessage(
-                "A deletion is already in progress.", 3000
-            )
+            self.statusBar().showMessage("A deletion is already in progress.", 3000)
             return False
 
         visible_paths_before = self._get_all_visible_image_paths()
@@ -4781,9 +4767,7 @@ class MainWindow(QMainWindow):
     def _handle_file_deletion_progress(
         self, current: int, total: int, filename: str
     ) -> None:
-        self.statusBar().showMessage(
-            f"Moving to Trash {current}/{total}: {filename}"
-        )
+        self.statusBar().showMessage(f"Moving to Trash {current}/{total}: {filename}")
 
     def _handle_file_deletion_complete(self, result) -> None:
         context = self._pending_deletion_context
@@ -4812,9 +4796,7 @@ class MainWindow(QMainWindow):
             clear_disk_caches=False,
         )
         if resolved_marks:
-            self.app_state.set_deletion_marks(
-                dict.fromkeys(resolved_marks, False)
-            )
+            self.app_state.set_deletion_marks(dict.fromkeys(resolved_marks, False))
         for path in deleted_paths:
             self.image_pipeline.invalidate_path(path)
         if deleted_paths:
@@ -4964,9 +4946,7 @@ class MainWindow(QMainWindow):
 
     def _finish_close_after_deletion(self) -> None:
         """Close only after the deletion worker thread has fully shut down."""
-        if getattr(
-            self.worker_manager, "is_file_deletion_running", lambda: False
-        )():
+        if getattr(self.worker_manager, "is_file_deletion_running", lambda: False)():
             QTimer.singleShot(25, self._finish_close_after_deletion)
             return
         self.close()

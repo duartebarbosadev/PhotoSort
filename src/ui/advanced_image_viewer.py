@@ -1158,9 +1158,7 @@ class IndividualViewer(QWidget):
         normalized_path = os.path.normpath(self._file_path)
         try:
             if os.name == "nt":
-                QProcess.startDetached(
-                    "explorer", ["/select,", normalized_path]
-                )
+                QProcess.startDetached("explorer", ["/select,", normalized_path])
             elif os.name == "posix":
                 if os.uname().sysname == "Darwin":
                     QProcess.startDetached("open", ["-R", normalized_path])

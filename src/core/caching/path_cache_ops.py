@@ -27,9 +27,7 @@ def migrate_cached_paths(
 ) -> None:
     """Move disk-cache values to renamed path keys outside the UI thread."""
 
-    pairs = (
-        path_updates.items() if isinstance(path_updates, dict) else path_updates
-    )
+    pairs = path_updates.items() if isinstance(path_updates, dict) else path_updates
     for old_path, new_path in pairs:
         if not old_path or not new_path or old_path == new_path:
             continue
