@@ -311,6 +311,11 @@ class AppState:
         if not updates:
             return 0
 
+        def remap_optional_path(path: object) -> object:
+            if isinstance(path, str):
+                return updates.get(path, path)
+            return path
+
         for record in self._image_files_data:
             old_path = record.get("path")
             if old_path in updates:
@@ -371,9 +376,7 @@ class AppState:
             self.easy_delete_results = {
                 updates.get(path, path): {
                     **entry,
-                    "pair_path": updates.get(
-                        entry.get("pair_path"), entry.get("pair_path")
-                    ),
+                    "pair_path": remap_optional_path(entry.get("pair_path")),
                 }
                 for path, entry in self.easy_delete_results.items()
             }
@@ -386,11 +389,13 @@ class AppState:
             winner_path = cluster.get("winner_path")
             if winner_path in updates:
                 cluster["winner_path"] = updates[winner_path]
-            for field in ("all_paths", "unsupported_paths"):
-                cluster[field] = [
-                    updates.get(path, path) for path in cluster.get(field, [])
-                ]
-            for entries in (cluster.get("ranked", []), cluster.get("failed", [])):
+            cluster["all_paths"] = [
+                updates.get(path, path) for path in cluster["all_paths"]
+            ]
+            cluster["unsupported_paths"] = [
+                updates.get(path, path) for path in cluster["unsupported_paths"]
+            ]
+            for entries in (cluster["ranked"], cluster["failed"]):
                 for score_entry in entries:
                     path = score_entry.get("path")
                     if path in updates:
