@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from workers.ai_rating_worker import AiRatingWorker
     from workers.best_shot_worker import BestShotWorker
     from workers.easy_delete_worker import EasyDeleteWorker
+    from workers.file_deletion_worker import FileDeletionWorker
     from workers.grouping_worker import GroupingPreviewWorker, GroupingWorkflowWorker
     from workers.pick_best_worker import PickBestWorker
     from workers.rating_loader_worker import RatingLoaderWorker
@@ -136,6 +137,10 @@ class WorkerManager(QObject):
     grouping_workflow_complete = pyqtSignal(object)
     grouping_workflow_error = pyqtSignal(str)
 
+    # Filesystem deletion signals
+    file_deletion_progress = pyqtSignal(int, int, str)
+    file_deletion_complete = pyqtSignal(object)
+
     # Pick Best signals
     pick_best_progress = pyqtSignal(int, str)
     pick_best_complete = pyqtSignal(dict)
@@ -193,6 +198,8 @@ class WorkerManager(QObject):
         self.grouping_preview_worker: GroupingPreviewWorker | None = None
         self.grouping_workflow_thread: QThread | None = None
         self.grouping_workflow_worker: GroupingWorkflowWorker | None = None
+        self.file_deletion_thread: QThread | None = None
+        self.file_deletion_worker: FileDeletionWorker | None = None
 
         self.pick_best_thread: QThread | None = None
         self.pick_best_worker: PickBestWorker | None = None
@@ -375,7 +382,12 @@ class WorkerManager(QObject):
 
     # --- Similarity Engine Management ---
     def start_similarity_analysis(
-        self, file_paths: list[str], allow_model_download: bool = False
+        self,
+        file_paths: list[str],
+        allow_model_download: bool = False,
+        *,
+        folder_path: str | None = None,
+        analysis_cache=None,
     ):
         from ui.ui_components import SimilarityWorker
 
@@ -386,6 +398,8 @@ class WorkerManager(QObject):
             file_paths,
             allow_model_download=allow_model_download,
             image_pipeline=self.image_pipeline,
+            folder_path=folder_path,
+            analysis_cache=analysis_cache,
         )
         self.similarity_worker.moveToThread(self.similarity_thread)
 
@@ -678,6 +692,9 @@ class WorkerManager(QObject):
         prepared_plan=None,
         location_depth: int = 3,
         move_companions: bool = False,
+        rating_cache=None,
+        exif_cache=None,
+        analysis_cache=None,
     ):
         from workers.grouping_worker import GroupingWorkflowWorker
 
@@ -693,6 +710,9 @@ class WorkerManager(QObject):
             location_depth=location_depth,
             move_companions=move_companions,
             image_pipeline=self.image_pipeline,
+            rating_cache=rating_cache,
+            exif_cache=exif_cache,
+            analysis_cache=analysis_cache,
         )
         self.grouping_workflow_worker.moveToThread(self.grouping_workflow_thread)
 
@@ -718,6 +738,62 @@ class WorkerManager(QObject):
             allow_terminate=False,
         )
 
+    def _cleanup_file_deletion_refs(self) -> None:
+        self._cleanup_worker_refs(
+            "file_deletion_thread",
+            "file_deletion_worker",
+            "File deletion",
+        )
+
+    def start_file_deletion(
+        self,
+        targets: list[str],
+        *,
+        cache_paths_by_target: dict[str, list[str]] | None = None,
+        rating_cache=None,
+        exif_cache=None,
+        analysis_cache=None,
+        folder_path: str | None = None,
+    ) -> bool:
+        """Start one serialized Trash batch without blocking the UI thread."""
+
+        from workers.file_deletion_worker import FileDeletionWorker
+
+        if self.is_file_deletion_running() or not targets:
+            return False
+        self.file_deletion_thread = QThread()
+        self.file_deletion_worker = FileDeletionWorker(
+            targets,
+            cache_paths_by_target=cache_paths_by_target,
+            rating_cache=rating_cache,
+            exif_cache=exif_cache,
+            analysis_cache=analysis_cache,
+            folder_path=folder_path,
+        )
+        self.file_deletion_worker.moveToThread(self.file_deletion_thread)
+        self.file_deletion_worker.progress.connect(self.file_deletion_progress)
+        self.file_deletion_worker.completed.connect(self.file_deletion_complete)
+        self.file_deletion_worker.finished.connect(self.file_deletion_thread.quit)
+        self.file_deletion_thread.started.connect(self.file_deletion_worker.run)
+        self.file_deletion_thread.finished.connect(self._cleanup_file_deletion_refs)
+        self.file_deletion_thread.start()
+        logger.info("File deletion thread started for %d target(s).", len(targets))
+        return True
+
+    def stop_file_deletion(self) -> None:
+        # Never terminate a thread while the platform Trash API owns a file.
+        self._stop_worker(
+            "file_deletion_thread",
+            "file_deletion_worker",
+            allow_terminate=False,
+        )
+
+    def is_file_deletion_running(self) -> bool:
+        return (
+            self.file_deletion_thread is not None
+            and self.file_deletion_thread.isRunning()
+        )
+
     def stop_all_workers(self):
         logger.info("Stopping all workers...")
         self.stop_file_scan()
@@ -735,6 +811,7 @@ class WorkerManager(QObject):
         self.stop_ai_rating()
         self.stop_grouping_preview()
         self.stop_grouping_workflow()
+        self.stop_file_deletion()
         self.stop_pick_best_analysis()
         self.stop_easy_delete_analysis()
         self.stop_fix_rotation_detection()
@@ -853,6 +930,7 @@ class WorkerManager(QObject):
             or self.is_preview_warming_running()
             or self.is_grouping_preview_running()
             or self.is_grouping_workflow_running()
+            or self.is_file_deletion_running()
             or self.is_best_shot_worker_running()
             or self.is_ai_rating_running()
             or self.is_pick_best_running()

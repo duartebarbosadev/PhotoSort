@@ -1,4 +1,5 @@
 import os
+from types import SimpleNamespace
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QStandardItemModel, QStandardItem
 from PyQt6.QtWidgets import QApplication, QTreeView
@@ -102,3 +103,19 @@ def test_find_proxy_index_not_found(tmp_path):
     idx = mw._find_proxy_index_for_path(str(tmp_path / "missing.jpg"))
     assert not idx.isValid()
     assert not idx.isValid()
+
+
+def test_model_item_validation_never_stats_the_filesystem(monkeypatch):
+    model = QStandardItemModel()
+    proxy = QSortFilterProxyModel()
+    proxy.setSourceModel(model)
+    model.appendRow(make_item("/slow-volume/photo.jpg"))
+    index = proxy.index(0, 0)
+    monkeypatch.setattr(
+        "src.ui.main_window.os.path.isfile",
+        lambda _path: (_ for _ in ()).throw(AssertionError("unexpected stat")),
+    )
+
+    context = SimpleNamespace(proxy_model=proxy, file_system_model=model)
+
+    assert MainWindow._is_valid_image_item(context, index) is True

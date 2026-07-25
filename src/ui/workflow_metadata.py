@@ -1,4 +1,6 @@
 from fractions import Fraction
+import os
+from collections.abc import Mapping
 
 from core.metadata_processor import (
     DATE_TAGS_PREFERENCE,
@@ -63,8 +65,11 @@ def _format_capture_date(metadata: dict) -> str | None:
 def build_workflow_metadata_rows(
     path: str, exif_disk_cache, *, limit: int = 6
 ) -> list[tuple[str, str]]:
-    """Format cached EXIF data for workflow decision cards without file I/O."""
-    metadata = MetadataProcessor.get_cached_detailed_metadata(path, exif_disk_cache)
+    """Format memory-cached EXIF data for workflow decision cards."""
+    if isinstance(exif_disk_cache, Mapping):
+        metadata = exif_disk_cache.get(os.path.normpath(path))
+    else:
+        metadata = MetadataProcessor.get_cached_detailed_metadata(path, exif_disk_cache)
     rows: list[tuple[str, str]] = []
 
     if isinstance(metadata, dict):

@@ -1,9 +1,8 @@
 import logging
 import os
-import subprocess
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QPoint, Qt, QSignalBlocker
+from PyQt6.QtCore import QPoint, QProcess, Qt, QSignalBlocker
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PyQt6.QtWidgets import QMenu, QStyle
 
@@ -871,13 +870,13 @@ class MenuManager:
         try:
             normalized_path = os.path.normpath(file_path)
             if os.name == "nt":
-                subprocess.run(["explorer", "/select,", normalized_path], check=False)
+                QProcess.startDetached("explorer", ["/select,", normalized_path])
             elif os.name == "posix":
                 if os.uname().sysname == "Darwin":
-                    subprocess.run(["open", "-R", normalized_path], check=False)
+                    QProcess.startDetached("open", ["-R", normalized_path])
                 else:
-                    subprocess.run(
-                        ["xdg-open", os.path.dirname(normalized_path)], check=False
+                    QProcess.startDetached(
+                        "xdg-open", [os.path.dirname(normalized_path)]
                     )
         except Exception as e:
             logger.error(

@@ -57,7 +57,6 @@ from ui.controllers.image_inspection_controller import (
     ImageInspectionController,
     InspectionImageSpec,
 )
-from core.image_file_ops import ImageFileOperations
 from core.metadata_processor import MetadataProcessor  # New metadata processor
 from core.media_utils import is_video_extension
 from core.similarity_utils import cosine_similarity
@@ -88,7 +87,11 @@ from ui.workflow_transition import (
 )
 from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
-from ui.helpers.index_lookup_utils import find_proxy_index_for_path
+from ui.helpers.index_lookup_utils import (
+    find_proxy_index_for_path,
+    find_proxy_indices_for_paths,
+)
+from ui.helpers.ui_yield import cooperative_ui_yield
 from ui.helpers.navigation_utils import (
     find_next_multi_image_cluster_head,
     find_next_rating_match,
@@ -143,7 +146,9 @@ class MainWindow(QMainWindow):
         self._filter_apply_count = 0
         self._last_filter_search_text: str | None = None
         self._close_after_grouping_save = False
+        self._close_after_deletion = False
         self._pending_workflow_transition: WorkflowTransitionRequest | None = None
+        self._pending_deletion_context: dict[str, Any] | None = None
 
         self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
@@ -655,6 +660,12 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         start_time = time.perf_counter()
         logger.debug("Connecting signals...")
+        self.worker_manager.file_deletion_progress.connect(
+            self._handle_file_deletion_progress
+        )
+        self.worker_manager.file_deletion_complete.connect(
+            self._handle_file_deletion_complete
+        )
         # Connect to the new signals from the advanced viewer
         self.advanced_image_viewer.ratingChanged.connect(self._apply_rating)
         self.advanced_image_viewer.deleteRequested.connect(self._delete_image)
@@ -913,6 +924,7 @@ class MainWindow(QMainWindow):
         rotations: dict[str, int] = {}
         if source == "fix_rotation" and self.fix_rotation_step_widget is not None:
             rotations = self.fix_rotation_step_widget.pending_rotations()
+        directory_paths = self.grouping_step_widget.known_directory_paths()
         return WorkflowPendingState(
             organize_actions=organize_actions,
             organize_delete_paths=organize_delete_paths,
@@ -920,6 +932,7 @@ class MainWindow(QMainWindow):
             rotation_count=len(rotations),
             rotation_changes=rotations,
             trash_paths=self.app_state.get_marked_files(),
+            directory_paths=directory_paths,
         )
 
     def _has_blocking_review_edit(self, workflow_step: str) -> bool:
@@ -947,6 +960,7 @@ class MainWindow(QMainWindow):
         if (
             self.worker_manager.is_grouping_workflow_running()
             or self.worker_manager.is_rotation_application_running()
+            or getattr(self.worker_manager, "is_file_deletion_running", lambda: False)()
         ):
             self.statusBar().showMessage(
                 "Files are still being changed. Wait for the operation to finish before switching.",
@@ -1032,7 +1046,13 @@ class MainWindow(QMainWindow):
             return False
         if request.trash_resolution == "commit":
             marked = self.app_state.get_marked_files()
-            if marked and not self._perform_deletion_of_marked_files(marked):
+            deletion_result = (
+                self._perform_deletion_of_marked_files(marked) if marked else True
+            )
+            if deletion_result is None:
+                self._pending_workflow_transition = request
+                return False
+            if not deletion_result:
                 self._pending_workflow_transition = None
                 self.statusBar().showMessage(
                     "Some marked files could not be moved to Trash. Resolve them before switching.",
@@ -1249,6 +1269,8 @@ class MainWindow(QMainWindow):
             preserved_focused_path = self.app_state.focused_image_path
 
         self.update_loading_text("Rebuilding view...")
+        self._model_population_processed = 0
+        self._model_population_total = len(self.app_state.image_files_data)
         # Drop Python wrappers before Qt deletes their underlying model items.
         # Queued thumbnail callbacks may run re-entrantly during UI updates.
         self._file_items_by_path.clear()
@@ -1397,15 +1419,17 @@ class MainWindow(QMainWindow):
             active_view.updateGeometries()
             active_view.viewport().update()
 
-            focused_proxy_idx = (
-                self._find_proxy_index_for_path(preserved_focused_path)
-                if preserved_focused_path
-                else QModelIndex()
+            restore_paths = list(preserved_selection_paths)
+            if preserved_focused_path:
+                restore_paths.append(preserved_focused_path)
+            restore_indices = self._find_proxy_indices_for_paths(restore_paths)
+            focused_proxy_idx = restore_indices.get(
+                preserved_focused_path, QModelIndex()
             )
 
             selection_to_restore = QItemSelection()
             for path in preserved_selection_paths:
-                proxy_idx = self._find_proxy_index_for_path(path)
+                proxy_idx = restore_indices.get(path, QModelIndex())
                 if proxy_idx.isValid():
                     selection_to_restore.select(proxy_idx, proxy_idx)
 
@@ -1454,6 +1478,8 @@ class MainWindow(QMainWindow):
                         active_view.expand(idx_to_expand)
 
         self._cull_model_dirty = False
+        self._model_population_processed = 0
+        self._model_population_total = 0
         thumbnail_loader = getattr(self, "thumbnail_loader", None)
         if thumbnail_loader is not None:
             # The model owns new item objects now. Re-request only its viewport
@@ -1655,7 +1681,7 @@ class MainWindow(QMainWindow):
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
             )
-            widget.set_exif_disk_cache(self.app_state.exif_disk_cache)
+            widget.set_exif_disk_cache(self.app_state.detailed_metadata_cache)
             widget.skip_requested.connect(
                 lambda: self._request_next_visible_workflow_transition("easy_delete")
             )
@@ -1834,32 +1860,37 @@ class MainWindow(QMainWindow):
                 widget.refresh_deletion_state()
 
     def _toggle_organize_deletion_marks(self, paths: list[str]) -> None:
-        existing_paths = [
-            path
-            for path in dict.fromkeys(paths)
-            if os.path.isfile(path) or os.path.isdir(path)
-        ]
-        contains_directory = any(os.path.isdir(path) for path in existing_paths)
-        toggled = 0
+        existing_paths = list(dict.fromkeys(path for path in paths if path))
+        directory_paths = self.grouping_step_widget.known_directory_paths()
+        normalized_directories = {
+            os.path.normcase(os.path.normpath(path)) for path in directory_paths
+        }
+        contains_directory = any(
+            os.path.normcase(os.path.normpath(path)) in normalized_directories
+            for path in existing_paths
+        )
+        mark_state: dict[str, bool] = {}
         if contains_directory:
             should_unmark = all(
                 self.app_state.is_marked_for_deletion(path) for path in existing_paths
             )
-            for path in existing_paths:
-                if should_unmark:
-                    self.deletion_controller.unmark(path)
-                else:
-                    self.deletion_controller.mark(path)
-                toggled += 1
+            mark_state = dict.fromkeys(existing_paths, not should_unmark)
         else:
-            for path in existing_paths:
-                self.deletion_controller.toggle_mark(path)
-                toggled += 1
+            mark_state = {
+                path: not self.app_state.is_marked_for_deletion(path)
+                for path in existing_paths
+            }
+        toggled = len(mark_state)
         if not toggled:
             self.statusBar().showMessage(
                 "No files or folders are available to mark.", 3000
             )
             return
+        self.deletion_controller.set_paths_marked(
+            mark_state,
+            self.file_system_model,
+            self.proxy_model,
+        )
         self.proxy_model.invalidate()
         self._refresh_visible_items_icons()
         self._refresh_workflow_deletion_state()
@@ -1869,7 +1900,15 @@ class MainWindow(QMainWindow):
         self, target_path: str, represented_paths: list[str]
     ) -> None:
         represented = list(dict.fromkeys(represented_paths))
-        is_directory = bool(target_path and os.path.isdir(target_path))
+        directory_paths = self.grouping_step_widget.known_directory_paths()
+        normalized_directories = {
+            os.path.normcase(os.path.normpath(path)) for path in directory_paths
+        }
+        is_directory = bool(
+            target_path
+            and os.path.normcase(os.path.normpath(target_path))
+            in normalized_directories
+        )
         if is_directory:
             if not self.dialog_manager.show_confirm_trash_target_dialog(
                 target_path, represented
@@ -1878,38 +1917,27 @@ class MainWindow(QMainWindow):
             targets = [target_path]
         else:
             targets = [target_path] if target_path else represented
-            targets = [path for path in targets if os.path.isfile(path)]
+            targets = list(dict.fromkeys(path for path in targets if path))
             if not targets or not self.dialog_manager.show_confirm_delete_dialog(
                 targets
             ):
                 return
 
-        successful_paths: list[str] = []
-        failures: list[str] = []
-        for path in targets:
-            success, message = ImageFileOperations.move_to_trash(path)
-            if success:
-                successful_paths.extend(represented if is_directory else [path])
-            else:
-                failures.append(message or os.path.basename(path))
-
-        successful_paths = list(dict.fromkeys(successful_paths))
-        if successful_paths:
-            for path in successful_paths:
-                self.app_state.remove_data_for_path(path)
-                self.image_pipeline.invalidate_path(path)
-            self.thumbnail_loader.invalidate_paths(successful_paths)
-            self.grouping_step_widget.remove_deleted_paths(successful_paths)
-            self.proxy_model.invalidate()
-            self.mark_cull_model_dirty()
-            self._refresh_workflow_deletion_state()
-            self.statusBar().showMessage(
-                f"Moved {len(successful_paths)} file(s) to Trash.", 5000
-            )
-        if failures:
-            self.dialog_manager.show_error_dialog(
-                "Trash Error", "\n".join(failures[:5])
-            )
+        represented_by_target = {
+            target: (represented if is_directory else [target]) for target in targets
+        }
+        self._start_deletion_batch(
+            targets,
+            represented_by_target,
+            completion=lambda successful, deleted, failures, _resolved: (
+                self._finish_ad_hoc_deletion(
+                    successful,
+                    deleted,
+                    failures,
+                    operation_label="Trash",
+                )
+            ),
+        )
 
     def _mark_paths_for_deletion(self, paths: list) -> None:
         self.deletion_controller.mark_paths(
@@ -2092,18 +2120,26 @@ class MainWindow(QMainWindow):
             item = QStandardItem(os.path.basename(path))
             item.setData({"path": path, "rotation": rotation}, Qt.ItemDataRole.UserRole)
             root_item.appendRow(item)
+            self._note_model_item_populated()
+
+    def _note_model_item_populated(self) -> None:
+        self._model_population_processed = (
+            getattr(self, "_model_population_processed", 0) + 1
+        )
+        total = getattr(self, "_model_population_total", 0)
+        cooperative_ui_yield(
+            self._model_population_processed,
+            total,
+            progress_callback=lambda processed, count: self.update_loading_text(
+                f"Populating view: {processed}/{count}..."
+            ),
+        )
 
     def _populate_model_standard(
         self, parent_item: QStandardItem, image_data_list: list[dict[str, Any]]
     ):
         if not image_data_list:
             return
-
-        from core.app_settings import LARGE_FOLDER_THRESHOLD, UI_POPULATION_CHUNK_SIZE
-
-        total_items = len(image_data_list)
-        use_chunked_processing = total_items > LARGE_FOLDER_THRESHOLD
-        processed_count = 0
 
         if self.show_folders_mode and not self.group_by_similarity_mode:
             files_by_folder: dict[str, list[dict[str, Any]]] = {}
@@ -2130,17 +2166,7 @@ class MainWindow(QMainWindow):
                 ):
                     image_item = self._create_standard_item(file_data)
                     folder_item.appendRow(image_item)
-
-                    if use_chunked_processing:
-                        processed_count += 1
-                        if processed_count % UI_POPULATION_CHUNK_SIZE == 0:
-                            progress_msg = (
-                                f"Populating view: {processed_count}/{total_items}..."
-                            )
-                            self.update_loading_text(progress_msg)
-                            logger.info(
-                                progress_msg
-                            )  # Log progress so user can see what's happening
+                    self._note_model_item_populated()
         else:  # Not showing folders, or grouping by similarity (which creates its own top-level groups)
 
             def image_sort_key_func(fd):
@@ -2167,22 +2193,10 @@ class MainWindow(QMainWindow):
             for file_data in sorted(image_data_list, key=image_sort_key_func):
                 image_item = self._create_standard_item(file_data)
                 parent_item.appendRow(image_item)
-
-                if use_chunked_processing:
-                    processed_count += 1
-                    if processed_count % UI_POPULATION_CHUNK_SIZE == 0:
-                        progress_msg = (
-                            f"Populating view: {processed_count}/{total_items}..."
-                        )
-                        self.update_loading_text(progress_msg)
-                        logger.info(
-                            progress_msg
-                        )  # Log progress so user can see what's happening
+                self._note_model_item_populated()
 
     def _apply_rating(self, file_path: str, rating: int):
         """Handle a viewer rating request through the shared background worker."""
-        if not os.path.exists(file_path):
-            return
         # Use the background worker for all rating operations
         self.app_controller.apply_rating_to_selection(rating, [file_path])
 
@@ -2206,73 +2220,65 @@ class MainWindow(QMainWindow):
     def _delete_image(self, file_path: str):
         """Delete a single image file."""
         logger.debug(f"Deleting image: {file_path}")
-        if not os.path.exists(file_path):
-            logger.warning(f"File does not exist: {file_path}")
-            return
 
         # Show confirmation dialog
         if not self.dialog_manager.show_confirm_delete_dialog([file_path]):
             logger.debug("User cancelled deletion")
             return
 
-        # Move to trash
-        logger.info(f"Moving file to trash: {file_path}")
-        success, message = ImageFileOperations.move_to_trash(file_path)
-        if success:
-            # Remove from app state
-            self.app_state.remove_data_for_path(file_path)
-            self.statusBar().showMessage(f"Deleted {os.path.basename(file_path)}", 5000)
-            logger.info(f"Successfully deleted: {file_path}")
-            # Refresh the view
-            self._handle_file_selection_changed()
-            # Reapply filters to hide deleted items
-            self._apply_filter()
-        else:
-            self.statusBar().showMessage(
-                f"Failed to delete {os.path.basename(file_path)}: {message}", 5000
-            )
-            logger.error(f"Failed to delete {file_path}: {message}")
+        self._start_deletion_batch(
+            [file_path],
+            {file_path: [file_path]},
+            completion=lambda successful, deleted, failures, _resolved: (
+                self._finish_ad_hoc_deletion(successful, deleted, failures)
+            ),
+        )
 
     def _delete_multiple_images(self, file_paths: list[str]):
         """Delete multiple image files at once."""
         logger.debug(f"Deleting multiple images: {file_paths}")
 
-        # Filter out non-existent files
-        existing_file_paths = [path for path in file_paths if os.path.exists(path)]
-        if not existing_file_paths:
+        target_paths = list(dict.fromkeys(path for path in file_paths if path))
+        if not target_paths:
             logger.warning("No valid files to delete")
             return
 
         # Show confirmation dialog for all files at once
-        if not self.dialog_manager.show_confirm_delete_dialog(existing_file_paths):
+        if not self.dialog_manager.show_confirm_delete_dialog(target_paths):
             logger.debug("User cancelled deletion")
             return
 
-        # Delete each file
-        deleted_count = 0
-        for file_path in existing_file_paths:
-            logger.info(f"Moving file to trash: {file_path}")
-            success, message = ImageFileOperations.move_to_trash(file_path)
-            if success:
-                # Remove from app state
-                self.app_state.remove_data_for_path(file_path)
-                logger.info(f"Successfully deleted: {file_path}")
-                deleted_count += 1
-            else:
-                self.statusBar().showMessage(
-                    f"Failed to delete {os.path.basename(file_path)}: {message}", 5000
-                )
-                logger.error(f"Failed to delete {file_path}: {message}")
+        self._start_deletion_batch(
+            target_paths,
+            {path: [path] for path in target_paths},
+            completion=lambda successful, deleted, failures, _resolved: (
+                self._finish_ad_hoc_deletion(successful, deleted, failures)
+            ),
+        )
 
-        # Show status message
-        if deleted_count > 0:
-            self.statusBar().showMessage(f"Deleted {deleted_count} image(s)", 5000)
-            # Refresh the view
+    def _finish_ad_hoc_deletion(
+        self,
+        successful_targets: list[str],
+        deleted_paths: list[str],
+        failures: dict[str, str],
+        *,
+        operation_label: str = "Delete",
+    ) -> None:
+        if deleted_paths:
+            self.statusBar().showMessage(
+                f"Moved {len(successful_targets)} item(s) to Trash.", 5000
+            )
             self._handle_file_selection_changed()
-            # Reapply filters to hide deleted items
-            self._apply_filter()
-        elif len(existing_file_paths) > 0:
-            self.statusBar().showMessage("Failed to delete any images", 5000)
+            self._update_image_info_label()
+        if failures:
+            details = "\n".join(
+                f"{os.path.basename(path) or path}: {message}"
+                for path, message in list(failures.items())[:5]
+            )
+            self.dialog_manager.show_error_dialog(
+                f"{operation_label} Error",
+                details,
+            )
 
     def _log_qmodelindex(self, index: QModelIndex, prefix: str = "") -> str:
         if not index.isValid():
@@ -2301,13 +2307,10 @@ class MainWindow(QMainWindow):
             return False
 
         item_user_data = item.data(Qt.ItemDataRole.UserRole)
-        is_image = (
-            isinstance(item_user_data, dict)
-            and "path" in item_user_data
-            and os.path.isfile(item_user_data["path"])
-        )
-
-        return is_image
+        # The scanner-backed model is the source of truth here. Calling
+        # ``isfile`` while traversing the model turns selection and navigation
+        # into one filesystem round trip per row on slow/network volumes.
+        return isinstance(item_user_data, dict) and bool(item_user_data.get("path"))
 
     def _get_active_file_view(self):
         return self.left_panel.get_active_view() if self.left_panel else None
@@ -2453,11 +2456,7 @@ class MainWindow(QMainWindow):
             if (
                 user_data.startswith("cluster_header_")
                 or user_data.startswith("date_header_")
-                or (
-                    self.show_folders_mode
-                    and not self.group_by_similarity_mode
-                    and os.path.isdir(user_data)
-                )
+                or (self.show_folders_mode and not self.group_by_similarity_mode)
             ):
                 is_group = True
 
@@ -2523,10 +2522,16 @@ class MainWindow(QMainWindow):
                 4000,
             )
             return
+        if getattr(self.worker_manager, "is_file_deletion_running", lambda: False)():
+            event.ignore()
+            self.statusBar().showMessage(
+                "Files are still moving to Trash. Wait for deletion to finish before closing.",
+                4000,
+            )
+            return
 
-        # The detailed action preview walks the complete source tree. Most closes
-        # have no Organize edits, so compare the in-memory plan signature first
-        # and only perform filesystem work when a dialog is actually required.
+        # Compare the in-memory signature before building the worker-inventoried
+        # action preview. No source-tree walk occurs on the UI thread.
         has_grouping_edits = self.grouping_step_widget.has_unsaved_grouping_edits()
         grouping_action_lines = (
             self.grouping_step_widget.pending_grouping_action_lines()
@@ -2561,9 +2566,12 @@ class MainWindow(QMainWindow):
 
             if choice == "commit":
                 logger.info("User chose to commit deletions on close")
-                # Commit the deletions and then close
-                self._commit_marked_deletions_without_confirmation()
-                # Continue with closing
+                self._close_after_deletion = True
+                started = self._commit_marked_deletions_without_confirmation()
+                if started is False:
+                    self._close_after_deletion = False
+                event.ignore()
+                return
             elif choice == "ignore":
                 logger.info("User chose to ignore deletions on close")
                 # Ignore the marked files and close
@@ -3061,9 +3069,26 @@ class MainWindow(QMainWindow):
             proxy_model=proxy_model,
             source_model=self.file_system_model,
             is_valid_image_item=self._is_valid_image_item,
-            is_expanded=(lambda idx: active_view.isExpanded(idx))
-            if isinstance(active_view, QTreeView)
-            else None,
+            is_expanded=None,
+        )
+
+    def _find_proxy_indices_for_paths(
+        self, target_paths: list[str] | set[str]
+    ) -> dict[str, QModelIndex]:
+        """Resolve a path collection without repeatedly walking the model."""
+
+        active_view = self._get_active_file_view()
+        if not active_view:
+            return {}
+        proxy_model = active_view.model()
+        if not isinstance(proxy_model, QSortFilterProxyModel):
+            return {}
+        return find_proxy_indices_for_paths(
+            target_paths=target_paths,
+            proxy_model=proxy_model,
+            source_model=self.file_system_model,
+            is_valid_image_item=self._is_valid_image_item,
+            is_expanded=None,
         )
 
     def _get_selected_file_paths_from_view(self) -> list[str]:
@@ -3076,22 +3101,28 @@ class MainWindow(QMainWindow):
     def _get_cached_metadata_for_selection(
         self, file_path: str
     ) -> dict[str, Any] | None:
-        """Gets metadata from AppState caches. Assumes caches are populated by RatingLoaderWorker."""
-        if not os.path.isfile(file_path):
-            logger.warning(
-                f"[_get_cached_metadata_for_selection] File not found: {file_path}"
-            )
-            return None
+        """Return scanner/worker-populated metadata without filesystem access."""
 
-        # Data should have been populated by RatingLoaderWorker into AppState caches
-        # os.path.normpath is important for cache key consistency.
-        # RatingLoaderWorker stores with normalized paths.
         normalized_path = os.path.normpath(file_path)
-
-        current_rating = self.app_state.rating_cache.get(normalized_path, 0)
-        current_date = self.app_state.date_cache.get(normalized_path)
-
-        return {"rating": current_rating, "date": current_date}
+        get_file_data = getattr(self.app_state, "get_file_data_by_path", None)
+        file_data = (
+            get_file_data(file_path) or get_file_data(normalized_path)
+            if callable(get_file_data)
+            else None
+        )
+        metadata = dict(file_data or {})
+        metadata.update(
+            rating=self.app_state.rating_cache.get(normalized_path, 0),
+            date=self.app_state.date_cache.get(normalized_path),
+        )
+        raw_metadata = getattr(self.app_state, "detailed_metadata_cache", {}).get(
+            normalized_path
+        )
+        if isinstance(raw_metadata, dict):
+            label = raw_metadata.get("Xmp.xmp.Label")
+            if label is not None:
+                metadata["label"] = label
+        return metadata
 
     def _display_single_image_preview(
         self, file_path: str, file_data_from_model: dict[str, Any] | None
@@ -3099,14 +3130,6 @@ class MainWindow(QMainWindow):
         """Handles displaying preview and info for a single selected image."""
         self._pending_rotation_comparison_path = None
         logger.debug(f"Displaying single image preview: {os.path.basename(file_path)}")
-        if not os.path.exists(file_path):
-            logger.warning(f"File not found: {file_path}")
-            self.advanced_image_viewer.clear()
-            self.statusBar().showMessage(
-                f"Error: File not found - {os.path.basename(file_path)}", 5000
-            )
-            self.invalidate_last_displayed_preview()
-            return
 
         metadata = self._get_cached_metadata_for_selection(file_path)
         if not metadata:
@@ -3247,13 +3270,6 @@ class MainWindow(QMainWindow):
         file_data_from_model: dict[str, Any] | None,
     ):
         logger.debug(f"Displaying single video preview: {os.path.basename(file_path)}")
-        if not os.path.exists(file_path):
-            self.advanced_image_viewer.clear()
-            self.statusBar().showMessage(
-                f"Error: File not found - {os.path.basename(file_path)}", 5000
-            )
-            self.invalidate_last_displayed_preview()
-            return
 
         self.activate_image_inspection(
             self.advanced_image_viewer,
@@ -3282,13 +3298,6 @@ class MainWindow(QMainWindow):
     ):
         """Handles displaying preview after rotation, preserving view mode."""
         logger.debug(f"Displaying rotated image preview: {os.path.basename(file_path)}")
-        if not os.path.exists(file_path):
-            self.advanced_image_viewer.clear()
-            self.statusBar().showMessage(
-                f"Error: File not found - {os.path.basename(file_path)}", 5000
-            )
-            self.invalidate_last_displayed_preview()
-            return
 
         if preserve_side_by_side:
             # In side-by-side mode, we need to refresh the entire view to show the updated image
@@ -3389,8 +3398,8 @@ class MainWindow(QMainWindow):
                 continue
 
             basic_metadata = self._get_cached_metadata_for_selection(path)
-            raw_exif = MetadataProcessor.get_cached_detailed_metadata(
-                path, self.app_state.exif_disk_cache
+            raw_exif = getattr(self.app_state, "detailed_metadata_cache", {}).get(
+                os.path.normpath(path)
             )
 
             images_data_for_viewer.append(
@@ -3812,6 +3821,7 @@ class MainWindow(QMainWindow):
                 for file_data in files_in_group_data:
                     image_item = self._create_standard_item(file_data)
                     parent_for_images.appendRow(image_item)
+                    self._note_model_item_populated()
 
     def _create_standard_item(self, file_data: dict[str, Any]):
         file_path = file_data["path"]
@@ -4008,11 +4018,8 @@ class MainWindow(QMainWindow):
             item_data = item.data(Qt.ItemDataRole.UserRole)
             if isinstance(item_data, dict) and "path" in item_data:
                 image_path = item_data["path"]
-                if os.path.exists(image_path):
-                    determined_cluster_id = self.app_state.cluster_results.get(
-                        image_path
-                    )
-                    break
+                determined_cluster_id = self.app_state.cluster_results.get(image_path)
+                break
             elif isinstance(item_data, str) and item_data.startswith("cluster_header_"):
                 with contextlib.suppress(ValueError, IndexError):
                     determined_cluster_id = int(item_data.split("_")[-1])
@@ -4469,12 +4476,6 @@ class MainWindow(QMainWindow):
             f"_update_sidebar_with_current_selection: Processing {os.path.basename(file_path)} (extension: {file_ext})"
         )
 
-        if not os.path.exists(file_path):
-            logger.error(
-                f"_update_sidebar_with_current_selection: File does not exist: {file_path}"
-            )
-            return
-
         # Get cached metadata
         metadata = self._get_cached_metadata_for_selection(file_path)
         if not metadata:
@@ -4490,11 +4491,8 @@ class MainWindow(QMainWindow):
         # Detailed metadata is populated by the folder's batch metadata worker.
         # A selection change must remain cache-only so a slow RAW/video parser can
         # never block navigation on the UI thread.
-        raw_exif = (
-            MetadataProcessor.get_cached_detailed_metadata(
-                file_path, self.app_state.exif_disk_cache
-            )
-            or {}
+        raw_exif = self.app_state.detailed_metadata_cache.get(
+            os.path.normpath(file_path), {}
         )
 
         # Update sidebar
@@ -4653,15 +4651,18 @@ class MainWindow(QMainWindow):
         self._perform_deletion_of_marked_files(marked_files)
 
     def _perform_deletion_of_marked_files(self, marked_files: list[str]):
-        """Performs the actual deletion of marked files, updating the view in-place."""
+        """Start one background Trash batch for all effective marked targets."""
         active_view = self._get_active_file_view()
         if not active_view:
             return False
+        if self.worker_manager.is_file_deletion_running():
+            self.statusBar().showMessage("A deletion is already in progress.", 3000)
+            return False
 
-        # --- Pre-computation for next selection ---
         visible_paths_before = self._get_all_visible_image_paths()
-        logger.debug(f"Visible paths before deletion: {visible_paths_before}")
-        logger.debug(f"Marked files for deletion: {marked_files}")
+        current_selected_path_before = (
+            self.app_state.focused_image_path or self._get_current_selected_image_path()
+        )
 
         def is_within(path: str, directory: str) -> bool:
             try:
@@ -4673,7 +4674,15 @@ class MainWindow(QMainWindow):
             except ValueError, OSError:
                 return False
 
-        directory_targets = [path for path in marked_files if os.path.isdir(path)]
+        known_directories = {
+            os.path.normcase(os.path.normpath(path))
+            for path in self.grouping_step_widget.known_directory_paths()
+        }
+        directory_targets = [
+            path
+            for path in marked_files
+            if os.path.normcase(os.path.normpath(path)) in known_directories
+        ]
         effective_targets = [
             path
             for path in marked_files
@@ -4682,154 +4691,119 @@ class MainWindow(QMainWindow):
                 for directory in directory_targets
             )
         ]
-
-        # --- Delete files and update model ---
-        deleted_count = 0
-        successfully_deleted: list[str] = []
-        resolved_marks: set[str] = set()
-        for file_path in effective_targets:
-            is_directory_target = os.path.isdir(file_path)
-            represented_paths = [file_path]
-            if is_directory_target:
-                represented_paths = [
-                    item.get("path")
-                    for item in self.app_state.image_files_data
-                    if item.get("path") and is_within(item["path"], file_path)
+        represented_by_target: dict[str, list[str]] = {}
+        marks_by_target: dict[str, list[str]] = {}
+        media_paths = [
+            item.get("path")
+            for item in self.app_state.image_files_data
+            if item.get("path")
+        ]
+        for target in effective_targets:
+            if os.path.normcase(os.path.normpath(target)) in known_directories:
+                represented_by_target[target] = [
+                    path for path in media_paths if is_within(path, target)
                 ]
-            try:
-                success, message = self.app_controller.move_to_trash(file_path)
-                if not success:
-                    raise RuntimeError(message)
-                for represented_path in represented_paths:
-                    self.app_state.remove_data_for_path(represented_path)
-                deleted_count += 1
-                successfully_deleted.extend(represented_paths)
-                resolved_marks.update(
+                marks_by_target[target] = [
                     marked
                     for marked in marked_files
-                    if marked == file_path
-                    or (is_directory_target and is_within(marked, file_path))
-                )
-                logger.info(f"Moved file to trash: {os.path.basename(file_path)}")
-            except Exception as e:
-                logger.error(f"Error moving marked file '{file_path}' to trash: {e}")
-
-        successfully_deleted = list(dict.fromkeys(successfully_deleted))
-        for file_path in resolved_marks:
-            self.app_state.unmark_for_deletion(file_path)
-        for file_path in successfully_deleted:
-            self.image_pipeline.invalidate_path(file_path)
-        if successfully_deleted:
-            self.thumbnail_loader.invalidate_paths(successfully_deleted)
-
-        # Rebuild row removals from successful paths only; failed files stay visible.
-        source_indices_by_parent = {}
-        for path in successfully_deleted:
-            proxy_idx = self._find_proxy_index_for_path(path)
-            if proxy_idx.isValid():
-                source_idx = self.proxy_model.mapToSource(proxy_idx)
-                parent_idx = source_idx.parent()
-                source_indices_by_parent.setdefault(parent_idx, []).append(
-                    source_idx.row()
-                )
-
-        if deleted_count > 0:
-            for parent_idx, rows in source_indices_by_parent.items():
-                parent_item = (
-                    self.file_system_model.itemFromIndex(parent_idx)
-                    if parent_idx.isValid()
-                    else self.file_system_model.invisibleRootItem()
-                )
-                if parent_item:
-                    for row in sorted(rows, reverse=True):
-                        parent_item.takeRow(row)
-
-            self.proxy_model.invalidate()
-            self.statusBar().showMessage(f"Committed {deleted_count} deletions.", 5000)
-
-            # --- Select next item using robust advancement to next valid image ---
-            visible_paths_after_delete = self._get_all_visible_image_paths()
-            logger.debug(
-                f"{len(visible_paths_after_delete)} visible paths remaining after deletion."
-            )
-            logger.debug("Visible paths after deletion list suppressed for brevity")
-
-            # Determine the anchor path for selection after deletion
-            # This determines which image position to use as reference for finding the next selection
-            current_selected_path_before = (
-                self.app_state.focused_image_path
-                or self._get_current_selected_image_path()
-            )
-
-            # If the current selection is one of the deleted files, use it as anchor
-            # This will ensure we select the next image after the deleted one
-            if current_selected_path_before in successfully_deleted:
-                anchor_path = current_selected_path_before
-            # If there are deleted files and current selection is not one of them,
-            # use the first deleted file as anchor for better UX
-            # This handles cases where user marks files for deletion without having them selected
-            elif successfully_deleted:
-                anchor_path = successfully_deleted[
-                    0
-                ]  # Use first deleted file as reference point
-            # Fallback to current selection
+                    if marked == target or is_within(marked, target)
+                ]
             else:
-                anchor_path = current_selected_path_before
+                represented_by_target[target] = [target]
+                marks_by_target[target] = [target]
 
-            logger.debug(
-                f"Current selected (focused) path before deletion: {current_selected_path_before}"
-            )
-            logger.debug(f"Anchor path for selection after deletion: {anchor_path}")
-
-            if not visible_paths_after_delete:
-                logger.debug("No visible image items left after deletion.")
-                self.advanced_image_viewer.clear()
-                self.advanced_image_viewer.setText("No images left to display.")
-                self.statusBar().showMessage("No images left or visible.")
-            else:
-                # Always find the best next selection. The function is smart enough
-                # to keep the current selection if it's still valid.
-                logger.debug("Finding next selection after deletion.")
-                next_path = select_next_surviving_path(
+        started = self._start_deletion_batch(
+            effective_targets,
+            represented_by_target,
+            marks_by_target=marks_by_target,
+            completion=lambda successful_targets, deleted_paths, failures, resolved: (
+                self._finish_marked_deletion_batch(
                     visible_paths_before,
-                    successfully_deleted,
-                    anchor_path,
-                    visible_paths_after_delete,
+                    current_selected_path_before,
+                    marked_files,
+                    successful_targets,
+                    deleted_paths,
+                    failures,
+                    resolved,
                 )
+            ),
+        )
+        return None if started else False
 
-                if next_path:
-                    next_proxy_idx = self._find_proxy_index_for_path(next_path)
-                    if next_proxy_idx.isValid():
-                        logger.debug("Selecting next path after deletion")
-                        active_view.setCurrentIndex(next_proxy_idx)
-                        active_view.selectionModel().select(
-                            next_proxy_idx,
-                            QItemSelectionModel.SelectionFlag.ClearAndSelect,
-                        )
-                        active_view.scrollTo(
-                            next_proxy_idx,
-                            QAbstractItemView.ScrollHint.EnsureVisible,
-                        )
-                        # The selection change will trigger the preview update.
-                        # We might need to manually trigger if the selection doesn't change
-                        # but this is safer.
-                        QTimer.singleShot(0, self._handle_file_selection_changed)
-                    else:
-                        logger.warning(
-                            f"Could not find a valid proxy index for the next path: {next_path}"
-                        )
-                        self.advanced_image_viewer.clear()
-                        self.advanced_image_viewer.setText(
-                            "Could not select next image."
-                        )
-                else:
-                    logger.debug("No next valid path found; clearing UI.")
-                    self.advanced_image_viewer.clear()
-                    self.advanced_image_viewer.setText("No valid image to select.")
+    def _start_deletion_batch(
+        self,
+        targets: list[str],
+        represented_by_target: dict[str, list[str]],
+        *,
+        marks_by_target: dict[str, list[str]] | None = None,
+        completion: Callable[[list[str], list[str], dict[str, str], set[str]], None],
+    ) -> bool:
+        if self._pending_deletion_context is not None:
+            return False
+        normalized_targets = list(dict.fromkeys(path for path in targets if path))
+        if not normalized_targets:
+            return False
+        self._pending_deletion_context = {
+            "represented_by_target": represented_by_target,
+            "marks_by_target": marks_by_target or {},
+            "completion": completion,
+        }
+        started = self.worker_manager.start_file_deletion(
+            normalized_targets,
+            cache_paths_by_target=represented_by_target,
+            rating_cache=self.app_state.rating_disk_cache,
+            exif_cache=self.app_state.exif_disk_cache,
+            analysis_cache=self.app_state.analysis_cache,
+            folder_path=self.app_state.current_folder_path,
+        )
+        if not started:
+            self._pending_deletion_context = None
+            return False
+        self.statusBar().showMessage(
+            f"Moving {len(normalized_targets)} item(s) to Trash…"
+        )
+        return True
 
-            self._update_image_info_label()
+    def _handle_file_deletion_progress(
+        self, current: int, total: int, filename: str
+    ) -> None:
+        self.statusBar().showMessage(f"Moving to Trash {current}/{total}: {filename}")
 
-            self.grouping_step_widget.remove_deleted_paths(successfully_deleted)
+    def _handle_file_deletion_complete(self, result) -> None:
+        context = self._pending_deletion_context
+        self._pending_deletion_context = None
+        if context is None:
+            return
+        successful_targets = list(getattr(result, "successful_targets", []))
+        failures = dict(getattr(result, "failures", {}))
+        represented_by_target = context["represented_by_target"]
+        marks_by_target = context["marks_by_target"]
+        deleted_paths = list(
+            dict.fromkeys(
+                path
+                for target in successful_targets
+                for path in represented_by_target.get(target, [target])
+            )
+        )
+        resolved_marks = {
+            path
+            for target in successful_targets
+            for path in marks_by_target.get(target, [])
+        }
+
+        self.app_state.remove_data_for_paths(
+            deleted_paths,
+            clear_disk_caches=False,
+        )
+        if resolved_marks:
+            self.app_state.set_deletion_marks(dict.fromkeys(resolved_marks, False))
+        for path in deleted_paths:
+            self.image_pipeline.invalidate_path(path)
+        if deleted_paths:
+            self.thumbnail_loader.invalidate_paths(deleted_paths)
+            self._remove_model_paths_batch(deleted_paths)
+            self.proxy_model.invalidate()
+            self.grouping_step_widget.remove_deleted_paths(deleted_paths)
             if (
                 self.easy_delete_step_widget is not None
                 and self.app_state.easy_delete_results is not None
@@ -4844,25 +4818,155 @@ class MainWindow(QMainWindow):
             self.mark_cull_model_dirty()
             self._refresh_workflow_deletion_state()
 
-        logger.info(f"Completed committing {deleted_count} deletions")
-        return len(resolved_marks) == len(marked_files)
+        completion = context["completion"]
+        completion(
+            successful_targets,
+            deleted_paths,
+            failures,
+            resolved_marks,
+        )
+
+    def _remove_model_paths_batch(self, deleted_paths: list[str]) -> None:
+        """Remove matching source rows with one model traversal."""
+
+        targets = set(deleted_paths)
+        if not targets:
+            return
+        root = self.file_system_model.invisibleRootItem()
+        queue = [root]
+        rows_by_parent: dict[int, tuple[QStandardItem, list[int]]] = {}
+        parent_candidates: list[QStandardItem] = []
+        while queue:
+            parent = queue.pop()
+            for row in range(parent.rowCount()):
+                child = parent.child(row)
+                if child is None:
+                    continue
+                data = child.data(Qt.ItemDataRole.UserRole)
+                path = data.get("path") if isinstance(data, dict) else None
+                if path in targets:
+                    entry = rows_by_parent.setdefault(id(parent), (parent, []))
+                    entry[1].append(row)
+                    if parent not in parent_candidates:
+                        parent_candidates.append(parent)
+                elif child.hasChildren():
+                    queue.append(child)
+        for parent, rows in rows_by_parent.values():
+            for row in sorted(rows, reverse=True):
+                parent.takeRow(row)
+        for path in targets:
+            normalized = os.path.normpath(path)
+            self._file_items_by_path.pop(normalized, None)
+            self._thumbnail_icons_by_path.pop(normalized, None)
+        self.file_deletion_controller._prune_empty_parent_groups(parent_candidates)
+
+    def _finish_marked_deletion_batch(
+        self,
+        visible_paths_before: list[str],
+        current_selected_path_before: str | None,
+        marked_files: list[str],
+        successful_targets: list[str],
+        deleted_paths: list[str],
+        failures: dict[str, str],
+        resolved_marks: set[str],
+    ) -> None:
+        active_view = self._get_active_file_view()
+        if deleted_paths and active_view:
+            visible_after = self._get_all_visible_image_paths()
+            anchor_path = (
+                current_selected_path_before
+                if current_selected_path_before in deleted_paths
+                else deleted_paths[0]
+            )
+            next_path = select_next_surviving_path(
+                visible_paths_before,
+                deleted_paths,
+                anchor_path,
+                visible_after,
+            )
+            if next_path:
+                next_index = self._find_proxy_index_for_path(next_path)
+                if next_index.isValid():
+                    active_view.setCurrentIndex(next_index)
+                    active_view.selectionModel().select(
+                        next_index,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    )
+                    active_view.scrollTo(
+                        next_index,
+                        QAbstractItemView.ScrollHint.EnsureVisible,
+                    )
+                    QTimer.singleShot(0, self._handle_file_selection_changed)
+            elif not visible_after:
+                self.advanced_image_viewer.clear()
+                self.advanced_image_viewer.setText("No images left to display.")
+            self._update_image_info_label()
+
+        if failures:
+            self.statusBar().showMessage(
+                f"Moved {len(successful_targets)} item(s) to Trash; "
+                f"{len(failures)} failed.",
+                5000,
+            )
+        else:
+            self.statusBar().showMessage(
+                f"Committed {len(successful_targets)} deletion(s).", 5000
+            )
+
+        all_resolved = len(resolved_marks) == len(set(marked_files))
+        resume_folder_load = getattr(
+            self.app_controller, "resume_folder_load_after_deletion", None
+        )
+        if callable(resume_folder_load):
+            resume_folder_load(all_resolved)
+        if self._close_after_deletion:
+            self._close_after_deletion = False
+            if all_resolved:
+                self._finish_close_after_deletion()
+            else:
+                self.statusBar().showMessage(
+                    "Some items could not be moved to Trash. Close was cancelled.",
+                    5000,
+                )
+        request = self._pending_workflow_transition
+        if request is not None and request.trash_resolution == "commit":
+            self._pending_workflow_transition = None
+            if not all_resolved:
+                self.statusBar().showMessage(
+                    "Some marked files could not be moved to Trash. "
+                    "Resolve them before switching.",
+                    5000,
+                )
+                return
+            self._reset_deletion_workflow_decisions()
+            if request.destination is not None:
+                self._show_workflow_destination(request.destination)
+            else:
+                self.update_workflow_navigation()
+
+    def _finish_close_after_deletion(self) -> None:
+        """Close only after the deletion worker thread has fully shut down."""
+        if getattr(self.worker_manager, "is_file_deletion_running", lambda: False)():
+            QTimer.singleShot(25, self._finish_close_after_deletion)
+            return
+        self.close()
 
     def _commit_marked_deletions_without_confirmation(self):
         """Finds all marked files and moves them to trash without confirmation, updating the view in-place."""
         active_view = self._get_active_file_view()
         if not self.app_state.current_folder_path or not active_view:
             self.statusBar().showMessage("No folder loaded.", 3000)
-            return
+            return False
 
         marked_files = self.app_state.get_marked_files()
         if not marked_files:
             self.statusBar().showMessage("No images are marked for deletion.", 3000)
-            return
+            return False
 
         logger.info(
             f"Committing {len(marked_files)} marked deletions without confirmation"
         )
-        self._perform_deletion_of_marked_files(marked_files)
+        return self._perform_deletion_of_marked_files(marked_files)
 
     def _mark_selection_for_deletion(self):
         """Toggles the deletion mark for selected files, updating the model in-place."""
@@ -4909,22 +5013,19 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        # Mark the file for deletion in the app state
-        is_marked = self._is_marked_for_deletion(file_path)
-        if is_marked:
-            self.app_state.unmark_for_deletion(file_path)
-        else:
-            self.app_state.mark_for_deletion(file_path)
-
-        # Update the UI
-        self.deletion_controller.toggle_paths(
+        changed = self.deletion_controller.mark_paths(
             [file_path],
             self._find_proxy_index_for_path,
             self.file_system_model,
             self.proxy_model,
         )
 
-        self.statusBar().showMessage("Marked 1 image for deletion.", 5000)
+        self.statusBar().showMessage(
+            "Marked 1 image for deletion."
+            if changed
+            else "Image is already marked for deletion.",
+            5000,
+        )
         self.proxy_model.invalidate()
 
     def _mark_others_for_deletion(self, file_path_to_keep: str):
@@ -4969,10 +5070,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Image is not marked for deletion.", 3000)
             return
 
-        # Unmark the file for deletion in the app state
-        self.app_state.unmark_for_deletion(file_path)
-
-        self.deletion_controller.toggle_paths(
+        self.deletion_controller.unmark_paths(
             [file_path],
             self._find_proxy_index_for_path,
             self.file_system_model,
@@ -5029,6 +5127,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No images are marked for deletion.", 3000)
             return
 
+        preserved_selection = self._get_selected_file_paths_from_view()
         self.deletion_controller.clear_all_and_update(
             self._find_proxy_index_for_path,
             self.file_system_model,
@@ -5040,54 +5139,10 @@ class MainWindow(QMainWindow):
         )
         self.proxy_model.invalidate()
         self._refresh_workflow_deletion_state()
-
-        visible_paths = self._get_all_visible_image_paths()
-        if not visible_paths:
-            self.advanced_image_viewer.clear()
-            return
-
-        first_path = marked_files[0]
-        first_proxy_idx = self._find_proxy_index_for_path(first_path)
-        if first_proxy_idx.isValid():
-            active_view = self._get_active_file_view()
-            if active_view:
-                active_view.setCurrentIndex(first_proxy_idx)
-                active_view.selectionModel().select(
-                    first_proxy_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                )
-                active_view.scrollTo(
-                    first_proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible
-                )
-
-        final_selection_paths = list(marked_files)
-        self._handle_file_selection_changed(
-            override_selected_paths=final_selection_paths
-        )
-
-        if first_path:
-            self.advanced_image_viewer.set_focused_viewer_by_path(first_path)
-
-        selection = QItemSelection()
-        first_idx = QModelIndex()
-        for path in final_selection_paths:
-            proxy_idx = self._find_proxy_index_for_path(path)
-            if proxy_idx.isValid():
-                selection.select(proxy_idx, proxy_idx)
-                if not first_idx.isValid():
-                    first_idx = proxy_idx
-
-        if not selection.isEmpty():
-            active_view = self._get_active_file_view()
-            if active_view:
-                active_view.selectionModel().blockSignals(True)
-                active_view.selectionModel().select(
-                    selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                )
-                active_view.selectionModel().blockSignals(False)
-                if first_idx.isValid():
-                    active_view.scrollTo(
-                        first_idx, QAbstractItemView.ScrollHint.EnsureVisible
-                    )
+        if preserved_selection:
+            self._handle_file_selection_changed(
+                override_selected_paths=preserved_selection
+            )
 
     def _get_current_selected_image_path(self) -> str | None:
         """Get the file path of the currently selected image."""
@@ -5110,11 +5165,7 @@ class MainWindow(QMainWindow):
         if not isinstance(item_data, dict) or "path" not in item_data:
             return None
 
-        file_path = item_data["path"]
-        if not os.path.exists(file_path):
-            return None
-
-        return file_path
+        return item_data["path"]
 
     def _handle_focused_image_changed(self, index: int, file_path: str):
         """Slot to handle when the focused image changes in the viewer."""

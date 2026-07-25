@@ -70,6 +70,8 @@ class GroupingPlan:
     # worker has already included non-media files that need to move with it.
     filesystem_inventory_complete: bool = False
     source_root: str = ""
+    filesystem_paths: set[str] = field(default_factory=set)
+    filesystem_directories: set[str] = field(default_factory=set)
 
     def to_preview(self) -> GroupingPreview:
         return GroupingPreview(
@@ -181,16 +183,37 @@ def augment_grouping_plan_with_filesystem_paths(
                 continue
         return False
 
-    discovered_paths: list[str] = []
-    for walk_root in walk_roots:
-        for current_root, _dirnames, filenames in os.walk(walk_root):
-            for filename in filenames:
-                # XMP files follow the separate companion-file preference.
-                if os.path.splitext(filename)[1].lower() == ".xmp":
-                    continue
-                path = os.path.join(current_root, filename)
-                if not is_pending_deletion(path):
-                    discovered_paths.append(path)
+    inventory_paths: set[str] = set()
+    inventory_directories: set[str] = {root}
+    for current_root, dirnames, filenames in os.walk(root):
+        inventory_directories.update(
+            os.path.join(current_root, dirname) for dirname in dirnames
+        )
+        inventory_paths.update(
+            os.path.join(current_root, filename) for filename in filenames
+        )
+    plan.filesystem_paths = inventory_paths
+    plan.filesystem_directories = inventory_directories
+
+    normalized_walk_roots = [
+        os.path.normcase(os.path.normpath(value)) for value in walk_roots
+    ]
+
+    def is_in_walk_roots(path: str) -> bool:
+        normalized_path = os.path.normcase(os.path.normpath(path))
+        return any(
+            normalized_path == walk_root
+            or normalized_path.startswith(walk_root + os.sep)
+            for walk_root in normalized_walk_roots
+        )
+
+    discovered_paths = [
+        path
+        for path in inventory_paths
+        if is_in_walk_roots(path)
+        and os.path.splitext(path)[1].lower() != ".xmp"
+        and not is_pending_deletion(path)
+    ]
 
     normalized_planned = {
         os.path.normcase(os.path.normpath(path)) for path in planned_paths

@@ -223,11 +223,6 @@ QListView[viewMode="IconMode"]::item {
     text-align: center;
 }
 
-QTreeView::branch {
-    background: transparent;
-}
-
-
 /* --- Center Pane (Image and its Controls) --- */
 QWidget#center_pane_container {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
@@ -2976,6 +2971,31 @@ QLabel#groupingTreeDesc {
     background: transparent;
 }
 
+QPushButton#groupingTreeControlButton {
+    background-color: transparent;
+    color: #8FA4B2;
+    border: 1px solid #3D474D;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 8pt;
+    font-weight: 600;
+}
+
+QPushButton#groupingTreeControlButton:hover {
+    background-color: #30373B;
+    border-color: #58666E;
+    color: #D9E3EA;
+}
+
+QPushButton#groupingTreeControlButton:pressed {
+    background-color: #252B2E;
+}
+
+QPushButton#groupingTreeControlButton:disabled {
+    color: #4A565D;
+    border-color: #30373B;
+}
+
 /* The before panel header gets an amber left accent */
 QFrame#groupingBeforePanel QLabel#groupingTreeHeader {
     color: #D4A76A;
@@ -3016,10 +3036,6 @@ QTreeWidget#groupingTree::item:selected {
 QTreeWidget#groupingTree::item:hover:!selected {
     background-color: #2C3438;
     color: #D8E4EC;
-}
-
-QTreeWidget#groupingTree::branch {
-    background: transparent;
 }
 
 /* Bottom status bar */

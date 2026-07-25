@@ -1,5 +1,4 @@
 import logging
-import os
 from contextlib import suppress
 from datetime import datetime as datetime_obj
 from typing import Any
@@ -60,29 +59,32 @@ class ClusterUtils:
     def _resolve_image_datetime(
         path: str,
         date_cache: dict[str, datetime_obj | None],
+        file_data: dict[str, Any] | None = None,
     ) -> datetime_obj | None:
         """Resolve best-effort image datetime for sorting.
 
         Priority:
           1. Existing metadata date cache entry (typically EXIF/XMP creation date).
-          2. Filesystem birth time when available.
-          3. Filesystem modification time fallback.
+          2. Scanner-provided modification timestamp.
+
+        This helper runs during model sorting on the UI thread, so it must not
+        issue one filesystem stat call per image.
         """
         cached = date_cache.get(path)
         if cached is not None:
             return cached
 
-        try:
-            stat_result = os.stat(path)
-        except OSError:
-            return None
-
         timestamp: float | None = None
-        birth_time = getattr(stat_result, "st_birthtime", 0)
-        if birth_time and birth_time > 0:
-            timestamp = birth_time
-        if timestamp is None or timestamp < 1000000:
-            timestamp = stat_result.st_mtime
+        if isinstance(file_data, dict):
+            mtime_ns = file_data.get("mtime_ns")
+            mtime = file_data.get("mtime")
+            try:
+                if mtime_ns:
+                    timestamp = float(mtime_ns) / 1_000_000_000
+                elif mtime:
+                    timestamp = float(mtime)
+            except TypeError, ValueError:
+                timestamp = None
         if not timestamp:
             return None
 
@@ -103,7 +105,9 @@ class ClusterUtils:
                 path = file_data.get("path") if isinstance(file_data, dict) else None
                 if not path:
                     continue
-                img_date = ClusterUtils._resolve_image_datetime(path, date_cache)
+                img_date = ClusterUtils._resolve_image_datetime(
+                    path, date_cache, file_data
+                )
                 if img_date and img_date < earliest_date:
                     earliest_date = img_date
                     found_date = True

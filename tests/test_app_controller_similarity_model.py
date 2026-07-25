@@ -86,6 +86,8 @@ class _WorkerManager:
 
 class _AppState:
     image_files_data = [{"path": "/tmp/a.jpg", "media_type": "image"}]
+    current_folder_path = "/tmp"
+    analysis_cache = object()
 
 
 def test_similarity_declined_model_download_cancels_cleanly(monkeypatch):
@@ -129,7 +131,11 @@ def test_similarity_approved_model_download_starts_worker_with_download(monkeypa
 
     assert worker_manager.started is True
     assert worker_manager.paths == ["/tmp/a.jpg"]
-    assert worker_manager.kwargs == {"allow_model_download": True}
+    assert worker_manager.kwargs == {
+        "allow_model_download": True,
+        "folder_path": "/tmp",
+        "analysis_cache": _AppState.analysis_cache,
+    }
     assert main_window.shown == ["Starting similarity analysis..."]
 
 

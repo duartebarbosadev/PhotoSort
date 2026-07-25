@@ -1,6 +1,5 @@
 import logging
 import os
-import subprocess
 from typing import Any, override
 from PyQt6.QtCore import (
     QEasingCurve,
@@ -10,6 +9,7 @@ from PyQt6.QtCore import (
     pyqtSignal,
     QTimer,
     QPoint,
+    QProcess,
     QUrl,
     QEvent,
     QObject,
@@ -1158,13 +1158,13 @@ class IndividualViewer(QWidget):
         normalized_path = os.path.normpath(self._file_path)
         try:
             if os.name == "nt":
-                subprocess.run(["explorer", "/select,", normalized_path], check=False)
+                QProcess.startDetached("explorer", ["/select,", normalized_path])
             elif os.name == "posix":
                 if os.uname().sysname == "Darwin":
-                    subprocess.run(["open", "-R", normalized_path], check=False)
+                    QProcess.startDetached("open", ["-R", normalized_path])
                 else:
-                    subprocess.run(
-                        ["xdg-open", os.path.dirname(normalized_path)], check=False
+                    QProcess.startDetached(
+                        "xdg-open", [os.path.dirname(normalized_path)]
                     )
         except Exception:
             logger.error(

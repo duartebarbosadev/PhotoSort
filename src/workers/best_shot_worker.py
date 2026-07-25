@@ -297,15 +297,6 @@ class BestShotWorker(QObject):
                 entry.get("batch_rank", 0),
             )
         )
-        if self._analysis_cache and self._folder_path:
-            try:
-                self._analysis_cache.update_best_shot_results(
-                    self._folder_path, cluster_id, final_results
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to persist best-shot results for cluster %s", cluster_id
-                )
         return final_results
 
     def _analyze_cluster(
@@ -327,16 +318,6 @@ class BestShotWorker(QObject):
                     "analysis": "",
                 }
             ]
-            if self._analysis_cache and self._folder_path:
-                try:
-                    self._analysis_cache.update_best_shot_results(
-                        self._folder_path, cluster_id, single_results
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to persist single-image best-shot result for cluster %s",
-                        cluster_id,
-                    )
             return single_results
         rankings = self._rank_cluster_with_batching(cluster_id, normalized_paths)
         return rankings
@@ -438,6 +419,14 @@ class BestShotWorker(QObject):
                 self._shutdown_executor(cancel=self._should_stop)
 
             if not self._should_stop:
+                if self._analysis_cache and self._folder_path:
+                    try:
+                        self._analysis_cache.update_best_shot_results_batch(
+                            self._folder_path,
+                            results,
+                        )
+                    except Exception:
+                        logger.exception("Failed to persist best-shot result batch.")
                 total_results = sum(len(results) for results in results.values())
                 logger.info(
                     f"Best shot analysis completed: {total_results} results from {len(results)} clusters"

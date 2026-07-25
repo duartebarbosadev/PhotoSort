@@ -11,6 +11,7 @@ from core.grouping import (
     execute_grouping_plan,
 )
 from core.image_pipeline import ImagePipeline
+from core.caching.path_cache_ops import migrate_cached_paths
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,9 @@ class GroupingWorkflowWorker(QObject):
         location_depth: int = 3,
         move_companions: bool = False,
         image_pipeline: ImagePipeline | None = None,
+        rating_cache=None,
+        exif_cache=None,
+        analysis_cache=None,
         parent=None,
     ):
         super().__init__(parent)
@@ -98,6 +102,9 @@ class GroupingWorkflowWorker(QObject):
         self.location_depth = location_depth
         self.move_companions = move_companions
         self.image_pipeline = image_pipeline
+        self.rating_cache = rating_cache
+        self.exif_cache = exif_cache
+        self.analysis_cache = analysis_cache
         self._should_stop = False
 
     def stop(self):
@@ -135,6 +142,22 @@ class GroupingWorkflowWorker(QObject):
                 progress_callback=self.progress_update.emit,
                 move_companions=self.move_companions,
             )
+            path_updates = {
+                entry.original_path: entry.new_path
+                for entry in summary.entries
+                if entry.new_path
+            }
+            migrate_cached_paths(
+                path_updates,
+                rating_cache=self.rating_cache,
+                exif_cache=self.exif_cache,
+            )
+            if self.analysis_cache is not None:
+                self.analysis_cache.migrate_folder_paths(
+                    self.source_root,
+                    self.output_root,
+                    path_updates,
+                )
             if self._should_stop:
                 return
             self.progress_update.emit(100, "Grouping complete.")

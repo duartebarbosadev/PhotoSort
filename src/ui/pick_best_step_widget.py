@@ -1110,7 +1110,9 @@ class PickBestStepWidget(QWidget):
 
     def _build_metadata_rows(self, path: str) -> list[tuple[str, str]]:
         app_state = getattr(self.window(), "app_state", None)
-        cache = getattr(app_state, "exif_disk_cache", None) if app_state else None
+        cache = (
+            getattr(app_state, "detailed_metadata_cache", None) if app_state else None
+        )
         try:
             rows = build_workflow_metadata_rows(path, cache)
         except Exception:

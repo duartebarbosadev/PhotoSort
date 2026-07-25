@@ -571,6 +571,8 @@ class SimilarityWorker(QObject):
         file_paths: list[str],
         allow_model_download: bool = False,
         image_pipeline: ImagePipeline | None = None,
+        folder_path: str | None = None,
+        analysis_cache=None,
         parent=None,
     ):
         super().__init__(parent)
@@ -579,6 +581,8 @@ class SimilarityWorker(QObject):
         self._is_running = True
         self.similarity_engine = None
         self.image_pipeline = image_pipeline
+        self.folder_path = folder_path
+        self.analysis_cache = analysis_cache
 
     def _has_raw_images(self) -> bool:
         """Check if any of the file paths are RAW image files."""
@@ -615,11 +619,12 @@ class SimilarityWorker(QObject):
             self.similarity_engine.regional_embeddings_generated.connect(
                 self.regional_embeddings_generated
             )
-            self.similarity_engine.clustering_complete.connect(self.clustering_complete)
+            self.similarity_engine.clustering_complete.connect(
+                self._handle_clustering_complete
+            )
             self.similarity_engine.error.connect(self.error)
 
-            # 3. Connect the final signal to this worker's finished signal
-            self.similarity_engine.clustering_complete.connect(self.finished)
+            # 3. Connect the final error signal to this worker's finished signal
             self.similarity_engine.error.connect(self.finished)
 
             # 4. Start the process
@@ -631,6 +636,25 @@ class SimilarityWorker(QObject):
             )
             self.error.emit(str(e))
             self.finished.emit()
+
+    def _handle_clustering_complete(self, cluster_results: dict[str, int]) -> None:
+        """Apply and persist analysis-cache state before returning to the UI."""
+
+        results = dict(cluster_results or {})
+        if self.analysis_cache is not None and self.folder_path:
+            try:
+                overrides = self.analysis_cache.get_manual_overrides(self.folder_path)
+                for path, cluster_id in overrides.items():
+                    if path in results:
+                        results[path] = cluster_id
+                self.analysis_cache.save_cluster_results(
+                    self.folder_path,
+                    results,
+                )
+            except Exception:
+                logger.exception("Failed to persist similarity results.")
+        self.clustering_complete.emit(results)
+        self.finished.emit()
 
 
 # --- CUDA Detection Worker ---

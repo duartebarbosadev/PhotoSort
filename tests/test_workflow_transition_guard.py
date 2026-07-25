@@ -18,6 +18,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+app = QApplication.instance() or QApplication([])
+
 
 class _ThumbnailSignals(QObject):
     thumbnail_session_batch_ready = pyqtSignal(str, object)
@@ -472,7 +474,7 @@ def test_rotation_dialog_shows_gallery_and_direct_switch_actions():
     review_cache.assert_called_once_with("/tmp/a.jpg")
 
 
-def test_deletion_preview_expands_folders_and_shows_non_media_files(tmp_path):
+def test_deletion_preview_keeps_folders_as_bounded_recursive_targets(tmp_path):
     folder = tmp_path / "Trip"
     nested = folder / "Metadata"
     nested.mkdir(parents=True)
@@ -488,6 +490,7 @@ def test_deletion_preview_expands_folders_and_shows_non_media_files(tmp_path):
         WorkflowPendingState(
             trash_paths=[str(folder)],
             organize_removed_folders=[str(empty_after_move)],
+            directory_paths={str(folder), str(empty_after_move)},
         )
     )
 
@@ -495,16 +498,27 @@ def test_deletion_preview_expands_folders_and_shows_non_media_files(tmp_path):
         path: (name, detail, is_directory)
         for path, name, detail, is_directory in entries
     }
-    assert set(by_path) == {
-        str(folder),
-        str(nested),
-        str(photo),
-        str(sidecar),
-        str(empty_after_move),
-    }
+    assert set(by_path) == {str(folder), str(empty_after_move)}
     assert by_path[str(folder)][2] is True
-    assert by_path[str(sidecar)][1] == "Inside Trip"
+    assert "all contents" in by_path[str(folder)][1]
     assert by_path[str(empty_after_move)][1] == "Empty folder removed after organizing"
+
+
+def test_deletion_preview_caps_widget_count_without_filesystem_walk(tmp_path):
+    targets = []
+    for index in range(DialogManager.MAX_TRANSITION_DELETION_PREVIEW_ITEMS + 25):
+        target = tmp_path / f"{index}.jpg"
+        target.write_bytes(b"x")
+        targets.append(str(target))
+
+    manager = DialogManager(QWidget())
+    entries = manager._build_deletion_preview_entries(
+        WorkflowPendingState(trash_paths=targets)
+    )
+
+    assert len(entries) == DialogManager.MAX_TRANSITION_DELETION_PREVIEW_ITEMS + 1
+    assert entries[-1][0] == ""
+    assert "25 more" in entries[-1][1]
 
 
 def test_organize_folder_mark_is_staged_and_unstaged_as_one_target(tmp_path):
@@ -514,16 +528,24 @@ def test_organize_folder_mark_is_staged_and_unstaged_as_one_target(tmp_path):
     photo.write_bytes(b"photo")
     marks: set[str] = set()
     app_state = SimpleNamespace(is_marked_for_deletion=marks.__contains__)
+
+    def set_paths_marked(mark_state, *_args):
+        for path, marked in mark_state.items():
+            if marked:
+                marks.add(path)
+            else:
+                marks.discard(path)
+
     deletion_controller = SimpleNamespace(
-        mark=marks.add,
-        unmark=marks.discard,
-        toggle_mark=lambda path: (
-            marks.discard(path) if path in marks else marks.add(path)
-        ),
+        set_paths_marked=set_paths_marked,
     )
     window = SimpleNamespace(
         app_state=app_state,
+        grouping_step_widget=SimpleNamespace(
+            known_directory_paths=lambda: {str(folder)}
+        ),
         deletion_controller=deletion_controller,
+        file_system_model=object(),
         proxy_model=SimpleNamespace(invalidate=Mock()),
         _refresh_visible_items_icons=Mock(),
         _refresh_workflow_deletion_state=Mock(),
@@ -536,3 +558,67 @@ def test_organize_folder_mark_is_staged_and_unstaged_as_one_target(tmp_path):
 
     MainWindow._toggle_organize_deletion_marks(window, targets)
     assert marks == set()
+
+
+def test_context_menu_mark_handler_sets_mark_without_toggling_back():
+    deletion_controller = SimpleNamespace(mark_paths=Mock(return_value=1))
+    status = SimpleNamespace(showMessage=Mock())
+    window = SimpleNamespace(
+        deletion_controller=deletion_controller,
+        _find_proxy_index_for_path=Mock(),
+        file_system_model=object(),
+        proxy_model=SimpleNamespace(invalidate=Mock()),
+        statusBar=lambda: status,
+    )
+
+    MainWindow._mark_image_for_deletion(window, "/tmp/photo.jpg")
+
+    deletion_controller.mark_paths.assert_called_once_with(
+        ["/tmp/photo.jpg"],
+        window._find_proxy_index_for_path,
+        window.file_system_model,
+        window.proxy_model,
+    )
+
+
+def test_context_menu_unmark_handler_sets_unmarked_without_toggling_back():
+    deletion_controller = SimpleNamespace(unmark_paths=Mock(return_value=1))
+    status = SimpleNamespace(showMessage=Mock())
+    window = SimpleNamespace(
+        deletion_controller=deletion_controller,
+        _is_marked_for_deletion=lambda _path: True,
+        _find_proxy_index_for_path=Mock(),
+        file_system_model=object(),
+        proxy_model=SimpleNamespace(invalidate=Mock()),
+        statusBar=lambda: status,
+    )
+
+    MainWindow._unmark_image_for_deletion(window, "/tmp/photo.jpg")
+
+    deletion_controller.unmark_paths.assert_called_once_with(
+        ["/tmp/photo.jpg"],
+        window._find_proxy_index_for_path,
+        window.file_system_model,
+        window.proxy_model,
+    )
+
+
+def test_deferred_close_waits_for_deletion_thread_shutdown(monkeypatch):
+    callbacks = []
+    worker_manager = SimpleNamespace(is_file_deletion_running=lambda: True)
+    window = SimpleNamespace(worker_manager=worker_manager, close=Mock())
+    window._finish_close_after_deletion = lambda: (
+        MainWindow._finish_close_after_deletion(window)
+    )
+    monkeypatch.setattr(
+        "ui.main_window.QTimer.singleShot",
+        lambda _delay, callback: callbacks.append(callback),
+    )
+
+    MainWindow._finish_close_after_deletion(window)
+
+    window.close.assert_not_called()
+    assert len(callbacks) == 1
+    worker_manager.is_file_deletion_running = lambda: False
+    callbacks.pop()()
+    window.close.assert_called_once_with()

@@ -90,6 +90,8 @@ def _build_kv_row(key_text, value_widget, parent_layout):
 class DialogManager:
     """A manager class for handling the creation of dialogs."""
 
+    MAX_TRANSITION_DELETION_PREVIEW_ITEMS = 200
+
     def __init__(self, parent):
         """
         Initialize the DialogManager.
@@ -281,12 +283,17 @@ class DialogManager:
                     (("apply", "Apply rotations"), ("discard", "Discard queue")),
                 )
         if deletion_entries:
-            trash_heading = QLabel(f"{len(deletion_entries)} item(s) will be removed")
+            is_truncated = bool(deletion_entries and deletion_entries[-1][0] == "")
+            trash_heading = QLabel(
+                "Deletion targets"
+                if is_truncated
+                else f"{len(deletion_entries)} item(s) will be removed"
+            )
             trash_heading.setObjectName("workflowTransitionTrashTitle")
             body.addWidget(trash_heading)
             trash_description = QLabel(
-                "This includes marked files, folders, their contents, and empty folders "
-                "removed by Organize. Review the complete list before continuing."
+                "Folders include all descendants. The preview is intentionally "
+                "bounded so large directory trees do not stall the interface."
             )
             trash_description.setObjectName("workflowTransitionDescription")
             trash_description.setWordWrap(True)
@@ -551,9 +558,17 @@ class DialogManager:
     def _build_deletion_preview_entries(
         self, pending: WorkflowPendingState
     ) -> list[tuple[str, str, str, bool]]:
-        """Expand deletion targets into every affected file and folder."""
+        """Build a bounded target preview without walking marked directories."""
         entries: list[tuple[str, str, str, bool]] = []
         seen: set[str] = set()
+        directory_paths = {
+            os.path.normcase(os.path.normpath(path))
+            for path in pending.directory_paths
+            if path
+        }
+
+        def is_known_directory(path: str) -> bool:
+            return os.path.normcase(os.path.normpath(path)) in directory_paths
 
         def add(path: str, display_name: str, detail: str, is_directory: bool) -> None:
             normalized = os.path.normcase(os.path.normpath(path))
@@ -563,25 +578,14 @@ class DialogManager:
             entries.append((path, display_name, detail, is_directory))
 
         def add_target(path: str, detail: str, expand_directory: bool) -> None:
-            is_directory = os.path.isdir(path)
+            is_directory = is_known_directory(path)
             name = os.path.basename(os.path.normpath(path)) or path
+            if is_directory and expand_directory:
+                detail = f"{detail} (folder and all contents)"
             add(path, name, detail, is_directory)
-            if not is_directory or not expand_directory:
-                return
-            for current_root, dirnames, filenames in os.walk(path, followlinks=False):
-                dirnames.sort(key=str.casefold)
-                filenames.sort(key=str.casefold)
-                for dirname in dirnames:
-                    child = os.path.join(current_root, dirname)
-                    relative = os.path.relpath(child, path)
-                    add(child, relative, f"Folder inside {name}", True)
-                for filename in filenames:
-                    child = os.path.join(current_root, filename)
-                    relative = os.path.relpath(child, path)
-                    add(child, relative, f"Inside {name}", False)
 
         def canonical_targets(paths: list[str]) -> list[str]:
-            directories = [path for path in paths if os.path.isdir(path)]
+            directories = [path for path in paths if is_known_directory(path)]
             retained = []
             for path in paths:
                 covered = False
@@ -600,7 +604,7 @@ class DialogManager:
                     retained.append(path)
             return sorted(
                 dict.fromkeys(retained),
-                key=lambda path: (not os.path.isdir(path), path.casefold()),
+                key=lambda path: (not is_known_directory(path), path.casefold()),
             )
 
         for path in canonical_targets(pending.trash_paths):
@@ -613,7 +617,19 @@ class DialogManager:
                 "Empty folder removed after organizing",
                 expand_directory=False,
             )
-        return entries
+        maximum = self.MAX_TRANSITION_DELETION_PREVIEW_ITEMS
+        if len(entries) <= maximum:
+            return entries
+        omitted = len(entries) - maximum
+        return [
+            *entries[:maximum],
+            (
+                "",
+                f"… and {omitted} more target(s)",
+                "All targets remain included in the operation",
+                False,
+            ),
+        ]
 
     def _has_raw_images(self, file_paths: list[str]) -> bool:
         """Check if any of the provided file paths are RAW image files."""
@@ -2054,11 +2070,18 @@ class DialogManager:
         list_widget.setWordWrap(True)
         list_widget.setSpacing(10)
 
-        for file_path in files:
+        preview_files = files[: self.MAX_TRANSITION_DELETION_PREVIEW_ITEMS]
+        for file_path in preview_files:
             item = QListWidgetItem(
                 self._cached_thumbnail_icon(file_path),
                 os.path.basename(file_path),
             )
+            item.setSizeHint(QSize(148, 168))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            list_widget.addItem(item)
+        omitted = len(files) - len(preview_files)
+        if omitted > 0:
+            item = QListWidgetItem(f"… and {omitted} more item(s)")
             item.setSizeHint(QSize(148, 168))
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             list_widget.addItem(item)
@@ -2292,11 +2315,18 @@ class DialogManager:
         list_widget.setWordWrap(True)
         list_widget.setSpacing(10)
 
-        for file_path in marked_files:
+        preview_files = marked_files[: self.MAX_TRANSITION_DELETION_PREVIEW_ITEMS]
+        for file_path in preview_files:
             item = QListWidgetItem(
                 self._cached_thumbnail_icon(file_path),
                 os.path.basename(file_path),
             )
+            item.setSizeHint(QSize(148, 168))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            list_widget.addItem(item)
+        omitted = len(marked_files) - len(preview_files)
+        if omitted > 0:
+            item = QListWidgetItem(f"… and {omitted} more marked item(s)")
             item.setSizeHint(QSize(148, 168))
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             list_widget.addItem(item)

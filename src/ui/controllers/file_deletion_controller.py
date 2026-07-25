@@ -77,79 +77,70 @@ class FileDeletionController:
         if not self.ctx.dialog_manager.show_confirm_delete_dialog(target_paths):
             return
 
-        source_indices = self._collect_source_indices(target_paths)
-        deleted_count, parent_items = self._delete_indices(source_indices)
+        start_batch = getattr(self.ctx, "_start_deletion_batch", None)
+        if not callable(start_batch):
+            logger.error("Background deletion service is unavailable.")
+            self.ctx.statusBar().showMessage("Deletion service is unavailable.", 3000)
+            return
 
-        if deleted_count > 0:
-            self._prune_empty_parent_groups(parent_items)
+        started = start_batch(
+            target_paths,
+            {path: [path] for path in target_paths},
+            completion=(
+                lambda successful_targets, deleted_paths, failures, _resolved: (
+                    self._finish_background_delete(
+                        view,
+                        visible_paths_before_delete,
+                        target_paths,
+                        successful_targets,
+                        deleted_paths,
+                        failures,
+                    )
+                )
+            ),
+        )
+        if not started:
+            self.ctx.statusBar().showMessage("A deletion is already in progress.", 3000)
+
+    def _finish_background_delete(
+        self,
+        view: QAbstractItemView,
+        visible_paths_before_delete: list[str],
+        target_paths: list[str],
+        successful_targets: list[str],
+        deleted_paths: list[str],
+        failures: dict[str, str],
+    ) -> None:
+        if deleted_paths:
             self.ctx.statusBar().showMessage(
-                f"{deleted_count} image(s) moved to trash.", 5000
+                f"{len(successful_targets)} image(s) moved to trash.", 5000
             )
             view.selectionModel().clearSelection()
             visible_after = self.ctx._get_all_visible_image_paths()
             self._restore_selection_after_delete(
-                visible_paths_before_delete, visible_after, target_paths, view
+                visible_paths_before_delete,
+                visible_after,
+                deleted_paths,
+                view,
             )
             self.ctx._update_image_info_label()
-        elif deleted_count == 0 and len(self.original_selection_paths) > 0:
+        if failures:
+            self.ctx.statusBar().showMessage(
+                f"{len(successful_targets)} moved to Trash; {len(failures)} failed.",
+                5000,
+            )
+            show_error = getattr(self.ctx.dialog_manager, "show_error_dialog", None)
+            if callable(show_error):
+                show_error(
+                    "Delete Error",
+                    f"Could not move {len(failures)} item(s) to Trash.",
+                )
+        elif not target_paths:
             self.ctx.statusBar().showMessage(
                 "No valid image files were deleted from selection.", 3000
             )
 
     # --- Internal helpers ---
-    def _collect_source_indices(self, paths: list[str]):
-        indices = []
-        for p in paths:
-            proxy = self.ctx._find_proxy_index_for_path(p)
-            if proxy.isValid():  # type: ignore[attr-defined]
-                src = self.ctx.proxy_model.mapToSource(proxy)
-                if src.isValid() and src not in indices:  # type: ignore[attr-defined]
-                    indices.append(src)
-        indices.sort(
-            key=lambda idx: (idx.parent().internalId(), idx.row()), reverse=True
-        )  # type: ignore[attr-defined]
-        return indices
-
-    def _delete_indices(self, source_indices):
-        deleted_count = 0
-        parent_items = []
-        for src_idx in source_indices:
-            item = self.ctx.file_system_model.itemFromIndex(src_idx)
-            if not item:
-                continue
-            data = item.data(0x0100)  # Qt.UserRole
-            if not isinstance(data, dict) or "path" not in data:
-                continue
-            path = data["path"]
-            if not os.path.isfile(path):
-                continue
-            try:
-                result = self.ctx.app_controller.move_to_trash(path)
-                if isinstance(result, tuple):
-                    success, message = result
-                else:
-                    success, message = bool(result), ""
-                if not success:
-                    raise RuntimeError(message)
-                self.ctx.app_state.remove_data_for_path(path)
-                parent_idx = src_idx.parent()
-                parent_item = (
-                    self.ctx.file_system_model.itemFromIndex(parent_idx)
-                    if parent_idx.isValid()
-                    else self.ctx.file_system_model.invisibleRootItem()
-                )
-                if parent_item:
-                    parent_item.takeRow(src_idx.row())
-                    if parent_item not in parent_items:
-                        parent_items.append(parent_item)
-                deleted_count += 1
-            except Exception as e:  # pragma: no cover (rare path)
-                logger.error("Error moving file to trash: %s", e, exc_info=True)
-                self.ctx.dialog_manager.show_error_dialog(
-                    "Delete Error", f"Could not move {os.path.basename(path)} to trash."
-                )
-        return deleted_count, parent_items
-
     def _prune_empty_parent_groups(self, parents):
         for parent_item_candidate in list(parents):
             if parent_item_candidate == self.ctx.file_system_model.invisibleRootItem():
@@ -165,7 +156,6 @@ class FileDeletionController:
                     or (
                         self.ctx.show_folders_mode
                         and not self.ctx.group_by_similarity_mode
-                        and os.path.isdir(user_data)
                     )
                 ):
                     is_eligible = True
