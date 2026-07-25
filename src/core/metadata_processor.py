@@ -588,7 +588,9 @@ class MetadataProcessor:
                     )
             final_results_for_caller[cache_key] = {
                 "rating": parsed_rating,
+                "label": parsed_label,
                 "date": parsed_date,
+                "raw_metadata": raw_metadata,
             }
             if idx == 1 or idx % DETAIL_LOG_INTERVAL == 0 or idx == total_result_count:
                 logger.debug(

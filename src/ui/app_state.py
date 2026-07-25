@@ -36,6 +36,7 @@ class AppState:
             str, int
         ] = {}  # This is an in-memory dictionary for quick UI access
         self.date_cache: dict[str, datetime_obj | None] = {}
+        self.detailed_metadata_cache: dict[str, dict[str, Any]] = {}
         self.cluster_results: dict[str, int] = {}  # {image_path: cluster_id}
         self.embeddings_cache: dict[
             str, list[float]
@@ -141,6 +142,7 @@ class AppState:
         self.image_files_data = []
         self.rating_cache.clear()  # Clears in-memory dict
         self.date_cache.clear()
+        self.detailed_metadata_cache.clear()
         self.cluster_results.clear()
         self.embeddings_cache.clear()
         self.regional_embeddings_cache.clear()
@@ -160,53 +162,104 @@ class AppState:
         # self.current_folder_path = None # Optionally reset current folder path
 
     def remove_data_for_path(self, file_path: str):
-        """Removes all cached data associated with a specific file path."""
-        logger.info(f"Removing all cached data for file: {os.path.basename(file_path)}")
+        """Remove one path while preserving the batch implementation as owner."""
 
-        original_count = len(self.image_files_data)
-        self.image_files_data = [
-            fd for fd in self.image_files_data if fd.get("path") != file_path
+        self.remove_data_for_paths([file_path])
+
+    def remove_data_for_paths(
+        self,
+        file_paths: Iterable[str],
+        *,
+        clear_disk_caches: bool = True,
+    ) -> int:
+        """Remove file-scoped state in one pass over every shared structure.
+
+        ``clear_disk_caches`` is disabled when a filesystem worker already
+        invalidated the disk caches. Keeping that I/O off the UI thread is
+        important for large deletion batches.
+        """
+
+        removed_paths = {path for path in file_paths if isinstance(path, str) and path}
+        if not removed_paths:
+            return 0
+
+        original_count = len(self._image_files_data)
+        self._image_files_data = [
+            record
+            for record in self._image_files_data
+            if record.get("path") not in removed_paths
         ]
-        removed_from_image_files = original_count - len(self.image_files_data)
+        self._rebuild_media_index()
 
-        rating_removed = self.rating_cache.pop(file_path, None)  # In-memory dict
-        if self.rating_disk_cache:
-            self.rating_disk_cache.delete(file_path)  # Disk cache
-        if self.exif_disk_cache:
-            self.exif_disk_cache.delete(file_path)  # Exif Disk cache
-        date_removed = self.date_cache.pop(file_path, None)
-        cluster_removed = self.cluster_results.pop(file_path, None)
-        embedding_removed = self.embeddings_cache.pop(file_path, None)
-        self.regional_embeddings_cache.pop(file_path, None)
-        removed_best = self.best_shot_scores_by_path.pop(file_path, None)
-        if cluster_removed is None and removed_best:
-            cluster_removed = removed_best.get("cluster_id")
-        if cluster_removed is not None:
-            rankings = self.best_shot_rankings.get(cluster_removed)
-            if rankings:
-                self.best_shot_rankings[cluster_removed] = [
-                    r for r in rankings if r.get("image_path") != file_path
-                ]
-                if not self.best_shot_rankings[cluster_removed]:
-                    self.best_shot_rankings.pop(cluster_removed, None)
-            winner = self.best_shot_winners.get(cluster_removed)
-            if winner and winner.get("image_path") == file_path:
-                self.best_shot_winners.pop(cluster_removed, None)
+        for cache in (
+            self.rating_cache,
+            self.date_cache,
+            self.detailed_metadata_cache,
+            self.cluster_results,
+            self.embeddings_cache,
+            self.regional_embeddings_cache,
+            self.best_shot_scores_by_path,
+            self.ai_rating_results,
+        ):
+            for path in removed_paths:
+                cache.pop(path, None)
 
-        self.ai_rating_results.pop(file_path, None)
-        self.marked_for_deletion.discard(file_path)
-        if self.focused_image_path == file_path:
+        if clear_disk_caches:
+            for path in removed_paths:
+                if self.rating_disk_cache:
+                    self.rating_disk_cache.delete(path)
+                if self.exif_disk_cache:
+                    self.exif_disk_cache.delete(path)
+
+        for cluster_id, rankings in list(self.best_shot_rankings.items()):
+            retained = [
+                entry
+                for entry in rankings
+                if entry.get("image_path") not in removed_paths
+            ]
+            if retained:
+                self.best_shot_rankings[cluster_id] = retained
+            else:
+                self.best_shot_rankings.pop(cluster_id, None)
+        for cluster_id, winner in list(self.best_shot_winners.items()):
+            if winner.get("image_path") in removed_paths:
+                self.best_shot_winners.pop(cluster_id, None)
+
+        self.marked_for_deletion.difference_update(removed_paths)
+        if self.focused_image_path in removed_paths:
             self.focused_image_path = None
-        self._remove_path_from_workflow_results(file_path)
 
-        logger.debug(
-            f"Removed data for {os.path.basename(file_path)}: "
-            f"image_files_data={removed_from_image_files}, "
-            f"rating_cache={rating_removed is not None}, "
-            f"date_cache={date_removed is not None}, "
-            f"cluster_results={cluster_removed is not None}, "
-            f"embeddings_cache={embedding_removed is not None}"
+        if self.easy_delete_results is not None:
+            self.easy_delete_results = {
+                path: entry
+                for path, entry in self.easy_delete_results.items()
+                if path not in removed_paths
+                and entry.get("pair_path") not in removed_paths
+            }
+        if self.fix_rotation_results is not None:
+            self.fix_rotation_results = {
+                path: angle
+                for path, angle in self.fix_rotation_results.items()
+                if path not in removed_paths
+            }
+
+        invalid_pick_best_paths: set[str] = set()
+        for cluster_id, cluster in list(self.pick_best_results.items()):
+            cluster_paths = set(cluster.get("all_paths", []))
+            if cluster_paths.intersection(removed_paths):
+                invalid_pick_best_paths.update(cluster_paths)
+                self.pick_best_results.pop(cluster_id, None)
+        invalid_pick_best_paths.update(removed_paths)
+        for path in invalid_pick_best_paths:
+            self.pick_best_winners_by_path.pop(path, None)
+
+        removed_count = original_count - len(self._image_files_data)
+        logger.info(
+            "Removed shared data for %d path(s) in one batch (%d media records).",
+            len(removed_paths),
+            removed_count,
         )
+        return removed_count
 
     def _remove_path_from_workflow_results(self, file_path: str) -> None:
         """Invalidate analysis results that can no longer be reviewed safely."""
@@ -233,98 +286,131 @@ class AppState:
         self.pick_best_winners_by_path.pop(file_path, None)
 
     def update_path(self, old_path: str, new_path: str):
-        """Updates all cache entries and data references from an old path to a new path."""
-        # Update image_files_data
-        file_data = self.get_file_data_by_path(old_path)
-        if file_data:
-            file_data["path"] = new_path
-            self._file_data_by_path.pop(old_path, None)
-            self._file_data_by_path[new_path] = file_data
+        """Update one path while preserving the batch implementation as owner."""
 
-        # Update in-memory caches
-        if old_path in self.rating_cache:
-            self.rating_cache[new_path] = self.rating_cache.pop(old_path)
-        if old_path in self.date_cache:
-            self.date_cache[new_path] = self.date_cache.pop(old_path)
-        if old_path in self.cluster_results:
-            self.cluster_results[new_path] = self.cluster_results.pop(old_path)
-        if old_path in self.embeddings_cache:
-            self.embeddings_cache[new_path] = self.embeddings_cache.pop(old_path)
-        if old_path in self.regional_embeddings_cache:
-            self.regional_embeddings_cache[new_path] = (
-                self.regional_embeddings_cache.pop(old_path)
-            )
-        if old_path in self.best_shot_scores_by_path:
-            self.best_shot_scores_by_path[new_path] = self.best_shot_scores_by_path.pop(
-                old_path
-            )
-        for ranking in self.best_shot_rankings.values():
-            for result in ranking:
-                if result.get("image_path") == old_path:
-                    result["image_path"] = new_path
-        for winner in self.best_shot_winners.values():
-            if winner.get("image_path") == old_path:
-                winner["image_path"] = new_path
-        if old_path in self.ai_rating_results:
-            self.ai_rating_results[new_path] = self.ai_rating_results.pop(old_path)
+        self.update_paths({old_path: new_path})
 
-        # Update disk caches
-        if self.rating_disk_cache:
-            rating_val = self.rating_disk_cache.get(old_path)
-            if rating_val is not None:
-                self.rating_disk_cache.set(new_path, rating_val)
-                self.rating_disk_cache.delete(old_path)
+    def update_paths(
+        self,
+        path_updates: dict[str, str] | Iterable[tuple[str, str]],
+        *,
+        migrate_disk_caches: bool = True,
+    ) -> int:
+        """Rename references with one pass over each shared result collection."""
 
-        if self.exif_disk_cache:
-            exif_data = self.exif_disk_cache.get(old_path)
-            if exif_data is not None:
-                self.exif_disk_cache.set(new_path, exif_data)
-                self.exif_disk_cache.delete(old_path)
+        pairs = (
+            path_updates.items()
+            if isinstance(path_updates, dict)
+            else path_updates
+        )
+        updates = {
+            old_path: new_path
+            for old_path, new_path in pairs
+            if isinstance(old_path, str)
+            and isinstance(new_path, str)
+            and old_path
+            and new_path
+            and old_path != new_path
+        }
+        if not updates:
+            return 0
 
-        if self.focused_image_path == old_path:
-            self.focused_image_path = new_path
-        if self.easy_delete_results is not None:
-            easy_entry = self.easy_delete_results.pop(old_path, None)
-            if easy_entry is not None:
-                self.easy_delete_results[new_path] = easy_entry
-            for easy_delete_entry in self.easy_delete_results.values():
-                if easy_delete_entry.get("pair_path") == old_path:
-                    easy_delete_entry["pair_path"] = new_path
-        if (
-            self.fix_rotation_results is not None
-            and old_path in self.fix_rotation_results
+        for record in self._image_files_data:
+            old_path = record.get("path")
+            if old_path in updates:
+                record["path"] = updates[old_path]
+        self._file_data_by_path = {
+            record["path"]: record
+            for record in self._image_files_data
+            if record.get("path")
+        }
+
+        def remap_keys(cache: dict) -> None:
+            moved = [
+                (updates[path], cache.pop(path))
+                for path in tuple(updates)
+                if path in cache
+            ]
+            cache.update(moved)
+
+        for cache in (
+            self.rating_cache,
+            self.date_cache,
+            self.detailed_metadata_cache,
+            self.cluster_results,
+            self.embeddings_cache,
+            self.regional_embeddings_cache,
+            self.best_shot_scores_by_path,
+            self.ai_rating_results,
+            self.pick_best_winners_by_path,
         ):
-            self.fix_rotation_results[new_path] = self.fix_rotation_results.pop(
-                old_path
-            )
+            remap_keys(cache)
+
+        for rankings in self.best_shot_rankings.values():
+            for result in rankings:
+                path = result.get("image_path")
+                if path in updates:
+                    result["image_path"] = updates[path]
+        for winner in self.best_shot_winners.values():
+            path = winner.get("image_path")
+            if path in updates:
+                winner["image_path"] = updates[path]
+
+        if migrate_disk_caches:
+            for old_path, new_path in updates.items():
+                if self.rating_disk_cache:
+                    rating_val = self.rating_disk_cache.get(old_path)
+                    if rating_val is not None:
+                        self.rating_disk_cache.set(new_path, rating_val)
+                        self.rating_disk_cache.delete(old_path)
+                if self.exif_disk_cache:
+                    exif_data = self.exif_disk_cache.get(old_path)
+                    if exif_data is not None:
+                        self.exif_disk_cache.set(new_path, exif_data)
+                        self.exif_disk_cache.delete(old_path)
+
+        if self.focused_image_path in updates:
+            self.focused_image_path = updates[self.focused_image_path]
+        if self.easy_delete_results is not None:
+            self.easy_delete_results = {
+                updates.get(path, path): {
+                    **entry,
+                    "pair_path": updates.get(
+                        entry.get("pair_path"), entry.get("pair_path")
+                    ),
+                }
+                for path, entry in self.easy_delete_results.items()
+            }
+        if self.fix_rotation_results is not None:
+            self.fix_rotation_results = {
+                updates.get(path, path): angle
+                for path, angle in self.fix_rotation_results.items()
+            }
         for cluster in self.pick_best_results.values():
-            if cluster.get("winner_path") == old_path:
-                cluster["winner_path"] = new_path
-            cluster["all_paths"] = [
-                new_path if path == old_path else path
-                for path in cluster.get("all_paths", [])
-            ]
-            cluster["unsupported_paths"] = [
-                new_path if path == old_path else path
-                for path in cluster.get("unsupported_paths", [])
-            ]
-            for entries in (
-                cluster.get("ranked", []),
-                cluster.get("failed", []),
-            ):
+            winner_path = cluster.get("winner_path")
+            if winner_path in updates:
+                cluster["winner_path"] = updates[winner_path]
+            for field in ("all_paths", "unsupported_paths"):
+                cluster[field] = [
+                    updates.get(path, path) for path in cluster.get(field, [])
+                ]
+            for entries in (cluster.get("ranked", []), cluster.get("failed", [])):
                 for score_entry in entries:
-                    if score_entry.get("path") == old_path:
-                        score_entry["path"] = new_path
+                    path = score_entry.get("path")
+                    if path in updates:
+                        score_entry["path"] = updates[path]
             mark_state = cluster.get("_mark_state")
-            if isinstance(mark_state, dict) and old_path in mark_state:
-                mark_state[new_path] = mark_state.pop(old_path)
-        if old_path in self.pick_best_winners_by_path:
-            self.pick_best_winners_by_path[new_path] = (
-                self.pick_best_winners_by_path.pop(old_path)
-            )
-        if old_path in self.marked_for_deletion:
-            self.marked_for_deletion.discard(old_path)
-            self.marked_for_deletion.add(new_path)
+            if isinstance(mark_state, dict):
+                cluster["_mark_state"] = {
+                    updates.get(path, path): marked
+                    for path, marked in mark_state.items()
+                }
+
+        self.marked_for_deletion = {
+            updates.get(path, path) for path in self.marked_for_deletion
+        }
+        logger.info("Updated shared references for %d renamed path(s).", len(updates))
+        return len(updates)
 
     # Add more methods as needed, e.g., to get specific data,
     # update blur status, etc.

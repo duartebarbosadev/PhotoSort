@@ -11,6 +11,7 @@ class WorkflowPendingState:
     rotation_count: int = 0
     rotation_changes: dict[str, int] = field(default_factory=dict)
     trash_paths: list[str] = field(default_factory=list)
+    directory_paths: set[str] = field(default_factory=set)
 
     @property
     def has_resolvable_work(self) -> bool:

@@ -4,12 +4,15 @@ from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtGui import QIcon, QPixmap
-from PyQt6.QtWidgets import QApplication, QMenu
+from PyQt6.QtCore import QRect, Qt
+from PyQt6.QtGui import QIcon, QPainter, QPixmap
+from PyQt6.QtWidgets import QApplication, QListView, QMenu, QStyle, QStyleOption
 
+import src.ui.grouping_step_widget as grouping_step_widget_module
 from src.core.grouping import GroupingGroup, GroupingPlan
 from src.ui.grouping_step_widget import (
     DroppableGroupingTree,
+    GroupingTreeBranchStyle,
     GroupingStepWidget,
     ITEM_GROUP,
     ROLE_KIND,
@@ -17,6 +20,19 @@ from src.ui.grouping_step_widget import (
 
 
 _app = QApplication.instance() or QApplication([])
+
+
+def _expandable_tree_items(tree):
+    stack = [
+        tree.topLevelItem(index)
+        for index in range(tree.topLevelItemCount() - 1, -1, -1)
+    ]
+    while stack:
+        item = stack.pop()
+        children = [item.child(index) for index in range(item.childCount())]
+        stack.extend(reversed(children))
+        if children:
+            yield item
 
 
 class _CacheOnlyPipeline:
@@ -78,6 +94,151 @@ def test_grouping_step_widget_tracks_mode_and_busy_state():
     assert widget.folder_button.isEnabled()
     assert widget.back_button.isEnabled()
     assert all(btn.isEnabled() for btn in widget._mode_buttons.values())
+
+
+def test_organize_tree_headers_expand_and_collapse_each_tree(tmp_path):
+    source_root = tmp_path / "demo"
+    nested = source_root / "Parent" / "Child"
+    nested.mkdir(parents=True)
+    first = str(nested / "a.jpg")
+    nested.joinpath("a.jpg").write_bytes(b"preview")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Parent/Child",
+                    source_paths=[first],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    assert widget.before_expand_all_button.isEnabled()
+    assert widget.before_collapse_all_button.isEnabled()
+    assert widget.after_expand_all_button.isEnabled()
+    assert widget.after_collapse_all_button.isEnabled()
+    assert all(item.isExpanded() for item in _expandable_tree_items(widget.before_tree))
+    assert all(item.isExpanded() for item in _expandable_tree_items(widget.preview_tree))
+
+    widget.before_collapse_all_button.click()
+
+    assert not any(
+        item.isExpanded() for item in _expandable_tree_items(widget.before_tree)
+    )
+    assert all(item.isExpanded() for item in _expandable_tree_items(widget.preview_tree))
+
+    widget.after_collapse_all_button.click()
+    assert not any(
+        item.isExpanded() for item in _expandable_tree_items(widget.preview_tree)
+    )
+
+    widget.before_expand_all_button.click()
+    widget.after_expand_all_button.click()
+
+    assert all(item.isExpanded() for item in _expandable_tree_items(widget.before_tree))
+    assert all(item.isExpanded() for item in _expandable_tree_items(widget.preview_tree))
+
+
+def test_organize_tree_branch_style_distinguishes_folder_states_from_leaves():
+    style = GroupingTreeBranchStyle()
+
+    def rendered_pixels(state: QStyle.StateFlag) -> set[tuple[int, int]]:
+        pixmap = QPixmap(20, 20)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        option = QStyleOption()
+        option.rect = QRect(0, 0, 20, 20)
+        option.state = state
+        painter = QPainter(pixmap)
+        style.drawPrimitive(
+            QStyle.PrimitiveElement.PE_IndicatorBranch,
+            option,
+            painter,
+        )
+        painter.end()
+        image = pixmap.toImage()
+        return {
+            (x, y)
+            for y in range(image.height())
+            for x in range(image.width())
+            if image.pixelColor(x, y).alpha() > 0
+        }
+
+    enabled = QStyle.StateFlag.State_Enabled
+    leaf_pixels = rendered_pixels(enabled)
+    collapsed_pixels = rendered_pixels(
+        enabled | QStyle.StateFlag.State_Children
+    )
+    expanded_pixels = rendered_pixels(
+        enabled
+        | QStyle.StateFlag.State_Children
+        | QStyle.StateFlag.State_Open
+    )
+
+    assert leaf_pixels == set()
+    assert collapsed_pixels
+    assert expanded_pixels
+    assert collapsed_pixels != expanded_pixels
+
+
+def test_large_organize_tree_expansion_is_batched_and_cancelled_on_refresh(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(grouping_step_widget_module, "LARGE_FOLDER_THRESHOLD", 1)
+    monkeypatch.setattr(grouping_step_widget_module, "UI_POPULATION_CHUNK_SIZE", 1)
+    source_root = tmp_path / "demo"
+    nested = source_root / "Parent" / "Child"
+    nested.mkdir(parents=True)
+    first = str(nested / "a.jpg")
+    second = str(nested / "b.jpg")
+    nested.joinpath("a.jpg").write_bytes(b"preview")
+    nested.joinpath("b.jpg").write_bytes(b"preview")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=2,
+            supported_items=2,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Parent/Child",
+                    source_paths=[first, second],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    widget.after_expand_all_button.click()
+
+    timer = widget._tree_expansion_timers[widget.preview_tree]
+    assert timer.isActive()
+    assert widget.preview_tree in widget._tree_expansion_stacks
+
+    widget._refresh_preview_trees()
+
+    assert not timer.isActive()
+    assert widget.preview_tree not in widget._tree_expansion_stacks
+
+    widget.after_expand_all_button.click()
+    while timer.isActive():
+        widget._process_tree_expansion_batch(widget.preview_tree)
+
+    assert all(item.isExpanded() for item in _expandable_tree_items(widget.preview_tree))
 
 
 def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
@@ -429,7 +590,10 @@ def test_grouping_step_widget_folder_preview_uses_cached_thumbnails_only(tmp_pat
     pipeline.get_cached_thumbnail_qpixmap.reset_mock()
     widget._update_folder_preview(widget._after_group_items_by_id["1"])
 
-    assert widget.folder_preview_grid.count() == 2
+    model = widget._folder_preview_model
+    assert model.rowCount() == 2
+    for row in range(model.rowCount()):
+        model.data(model.index(row, 0), Qt.ItemDataRole.DecorationRole)
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     assert pipeline.get_preview_qpixmap.call_count == 0
     assert pipeline.get_cached_thumbnail_qpixmap.call_count == 2
@@ -1010,9 +1174,73 @@ def test_grouping_step_widget_shows_folder_preview_grid(tmp_path):
     widget._handle_before_item_changed(before_dir, None)
 
     assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
-    assert widget.folder_preview_grid.count() == 2
+    assert widget._folder_preview_model.rowCount() == 2
     assert widget.folder_preview_title.text() == "Beach"
     assert widget.visible_thumbnail_paths()[:2] == [first, second]
+
+
+def test_grouping_folder_preview_exposes_every_item_with_batched_layout(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    paths = [str(source_root / "Beach" / f"{index:04}.jpg") for index in range(275)]
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=len(paths),
+            supported_items=len(paths),
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=paths,
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+            filesystem_inventory_complete=True,
+            source_root=str(source_root),
+            filesystem_paths=set(paths),
+            filesystem_directories={str(source_root / "Beach")},
+        ),
+        str(source_root),
+    )
+
+    widget._update_folder_preview(widget._after_group_items_by_id["1"])
+
+    model = widget._folder_preview_model
+    assert model.rowCount() == len(paths)
+    assert (
+        model.data(model.index(len(paths) - 1, 0), Qt.ItemDataRole.UserRole)
+        == paths[-1]
+    )
+    assert widget.folder_preview_meta.text().startswith(f"{len(paths)} item(s)\n")
+    assert "showing first" not in widget.folder_preview_meta.text()
+    assert widget.folder_preview_grid.layoutMode() == QListView.LayoutMode.Batched
+    assert widget.folder_preview_grid.batchSize() > 0
+
+
+def test_grouping_folder_preview_discards_thumbnail_updates_from_prior_folder():
+    widget = GroupingStepWidget()
+    model = widget._folder_preview_model
+    old_path = "/photos/old/a.jpg"
+    current_path = "/photos/current/b.jpg"
+    changed_ranges: list[tuple[int, int]] = []
+    model.dataChanged.connect(
+        lambda start, end, _roles: changed_ranges.append((start.row(), end.row()))
+    )
+
+    model.set_paths([old_path])
+    model.set_paths([current_path])
+    changed_ranges.clear()
+    model.refresh_thumbnail_paths({old_path})
+
+    assert changed_ranges == []
+    assert (
+        model.data(model.index(0, 0), Qt.ItemDataRole.UserRole) == current_path
+    )
 
 
 def test_grouping_folder_preview_requests_thumbnail_loading(tmp_path):
@@ -1111,9 +1339,10 @@ def test_grouping_step_widget_folder_preview_includes_unmanaged_files(tmp_path):
     before_dir = widget._before_dir_items_by_relative_path["Beach"]
     widget._handle_before_item_changed(before_dir, None)
 
+    model = widget._folder_preview_model
     names = {
-        widget.folder_preview_grid.item(index).text()
-        for index in range(widget.folder_preview_grid.count())
+        model.data(model.index(index, 0), Qt.ItemDataRole.DisplayRole)
+        for index in range(model.rowCount())
     }
 
     assert names == {"a.jpg", "a.json"}
@@ -1405,7 +1634,7 @@ def test_grouping_step_widget_keeps_folder_preview_visible_after_rename(tmp_path
 
     assert widget.preview_tree.currentItem() is widget._after_group_items_by_id["1"]
     assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
-    assert widget.folder_preview_grid.count() == 1
+    assert widget._folder_preview_model.rowCount() == 1
 
 
 def test_grouping_step_widget_restores_selected_file_when_current_item_is_lost(
@@ -1794,3 +2023,93 @@ def test_grouping_step_widget_keyboard_navigation_skips_deleted(tmp_path):
     handled_override = widget.eventFilter(widget.preview_tree, event_down_override)
     assert handled_override is True
     assert widget.preview_tree.currentItem() is second_item
+
+
+def test_organize_left_arrow_moves_to_parent_then_collapses_folder(tmp_path):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QKeyEvent
+
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Parent" / "Child" / "a.jpg")
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Parent/Child",
+                    source_paths=[first],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    left = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_Left,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    for tree, file_item in (
+        (widget.before_tree, widget._before_file_items_by_path[first]),
+        (widget.preview_tree, widget._after_file_items_by_path[first]),
+    ):
+        folder_item = file_item.parent()
+        assert folder_item is not None
+        assert folder_item.isExpanded()
+        tree.setCurrentItem(file_item)
+
+        assert widget.eventFilter(tree, left) is True
+        assert tree.currentItem() is folder_item
+        assert folder_item.isExpanded()
+
+        assert widget.eventFilter(tree, left) is True
+        assert tree.currentItem() is folder_item
+        assert not folder_item.isExpanded()
+
+
+def test_organize_left_arrow_keeps_collapsed_root_selected(tmp_path):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QKeyEvent
+
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "a.jpg")
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Root files",
+                    source_paths=[first],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    root_item = widget.preview_tree.topLevelItem(0)
+    root_item.setExpanded(False)
+    widget.preview_tree.setCurrentItem(root_item)
+    left = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_Left,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    assert widget.eventFilter(widget.preview_tree, left) is True
+    assert widget.preview_tree.currentItem() is root_item
+    assert not root_item.isExpanded()

@@ -15,7 +15,6 @@ from core.app_settings import (
 from core.similarity_embedding_model import is_similarity_model_installed
 from core.media_utils import is_image_extension
 from core.image_file_ops import ImageFileOperations
-from core.pyexiv2_wrapper import PyExiv2Operations
 from core.grouping import build_grouping_output_root
 from core.similarity_utils import (
     adaptive_dbscan_eps,
@@ -158,6 +157,7 @@ class AppController(QObject):
         self._cancelled_workflows: set[str] = set()
         self._ignore_similarity_results = False
         self._pending_exif_cache_capacity_warning: tuple[int, int, int] | None = None
+        self._pending_folder_load: tuple[str, dict[str, bool]] | None = None
 
     def is_workflow_analysis_running(self, workflow: str) -> bool:
         if workflow == "organize":
@@ -377,6 +377,14 @@ class AppController(QObject):
                 4000,
             )
             return
+        if getattr(
+            self.worker_manager, "is_file_deletion_running", lambda: False
+        )():
+            self.main_window.statusBar().showMessage(
+                "Files are still moving to Trash. Wait before loading another folder.",
+                4000,
+            )
+            return
 
         marked_files = self.app_state.get_marked_files()
         preserved_marks = set(marked_files) if preserve_deletion_marks else set()
@@ -391,7 +399,20 @@ class AppController(QObject):
                     "User chose to commit deletions before switching folders (%d files).",
                     len(marked_files),
                 )
-                self.main_window._commit_marked_deletions_without_confirmation()
+                self._pending_folder_load = (
+                    folder_path,
+                    {
+                        "skip_grouping_step": skip_grouping_step,
+                        "record_as_source": record_as_source,
+                        "preserve_deletion_marks": preserve_deletion_marks,
+                    },
+                )
+                started = (
+                    self.main_window._commit_marked_deletions_without_confirmation()
+                )
+                if started is False:
+                    self._pending_folder_load = None
+                return
             elif choice == "ignore":
                 logger.info(
                     "User chose to ignore %d marked deletions before switching folders.",
@@ -471,6 +492,34 @@ class AppController(QObject):
             blur_threshold=self.main_window.blur_detection_threshold,
         )
 
+    def resume_folder_load_after_deletion(self, successful: bool) -> None:
+        pending = self._pending_folder_load
+        if pending is None:
+            return
+        if not successful:
+            self._pending_folder_load = None
+            self.main_window.statusBar().showMessage(
+                "Folder change cancelled because some items could not be moved to Trash.",
+                5000,
+            )
+            return
+        self._finish_pending_folder_load()
+
+    def _finish_pending_folder_load(self) -> None:
+        """Resume a deferred folder load after the deletion thread has exited."""
+        if getattr(
+            self.worker_manager, "is_file_deletion_running", lambda: False
+        )():
+            QTimer.singleShot(25, self._finish_pending_folder_load)
+            return
+
+        pending = self._pending_folder_load
+        self._pending_folder_load = None
+        if pending is None:
+            return
+        folder_path, options = pending
+        self.load_folder(folder_path, **options)
+
     def start_similarity_analysis(self):
         self._ignore_similarity_results = False
         logger.info("Starting similarity analysis.")
@@ -543,6 +592,8 @@ class AppController(QObject):
         self.worker_manager.start_similarity_analysis(
             paths_for_similarity,
             allow_model_download=allow_model_download,
+            folder_path=getattr(self.app_state, "current_folder_path", None),
+            analysis_cache=getattr(self.app_state, "analysis_cache", None),
         )
 
     def refresh_grouping_preview(self):
@@ -622,6 +673,9 @@ class AppController(QObject):
             prepared_plan=prepared_plan,
             location_depth=self.main_window.grouping_step_widget.get_location_depth(),
             move_companions=get_companion_files_preference() == "always",
+            rating_cache=self.app_state.rating_disk_cache,
+            exif_cache=self.app_state.exif_disk_cache,
+            analysis_cache=self.app_state.analysis_cache,
         )
 
     def start_blur_detection_analysis(self):
@@ -933,13 +987,6 @@ class AppController(QObject):
 
         cluster_map = self._build_cluster_path_map()
         existing_clusters = set(self.app_state.best_shot_rankings.keys())
-        if not existing_clusters and self.app_state.current_folder_path:
-            cached_clusters = (
-                self.app_state.analysis_cache.get_completed_best_shot_clusters(
-                    self.app_state.current_folder_path
-                )
-            )
-            existing_clusters.update(cached_clusters)
         if existing_clusters:
             cluster_map = {
                 cid: paths
@@ -1037,6 +1084,12 @@ class AppController(QObject):
                 "AI rating is already running.", 3000
             )
             return
+        if self.worker_manager.is_rating_loader_running():
+            self.main_window.statusBar().showMessage(
+                "Metadata is still loading. AI rating will be available when it finishes.",
+                4000,
+            )
+            return
 
         if not self.app_state.image_files_data:
             self.main_window.statusBar().showMessage("No images loaded to rate.", 3000)
@@ -1089,21 +1142,6 @@ class AppController(QObject):
                     return
         self.main_window.statusBar().showMessage("No folder context to reload.", 3000)
 
-    def move_to_trash(self, file_path: str):
-        """Moves a file to the system's trash."""
-        logger.info(f"Moving file to trash: {os.path.basename(file_path)}")
-        success, message = ImageFileOperations.move_to_trash(file_path)
-        if not success:
-            logger.error(
-                f"Failed to move file to trash: {os.path.basename(file_path)} - {message}"
-            )
-            self.main_window.statusBar().showMessage(message, 5000)
-        else:
-            logger.info(
-                f"Successfully moved file to trash: {os.path.basename(file_path)}"
-            )
-        return success, message
-
     def rename_image(self, old_path: str, new_path: str):
         """Renames an image file."""
         success, message = ImageFileOperations.rename_image(old_path, new_path)
@@ -1153,81 +1191,17 @@ class AppController(QObject):
     def _filter_image_paths(self, paths: list[str]) -> list[str]:
         return [path for path in paths if path and is_image_extension(path)]
 
-    def _get_existing_rating_for_path(self, image_path: str) -> int | None:
-        normalized_path = os.path.normpath(image_path)
-        cached_rating = self._get_cached_rating(normalized_path)
-        if cached_rating is not None:
-            return cached_rating
-
-        metadata_rating = self._read_metadata_rating(normalized_path)
-        if metadata_rating is None:
-            self._cache_missing_rating(normalized_path)
-            return None
-
-        rating_int = self._normalize_rating_value(metadata_rating, normalized_path)
-        if rating_int is None:
-            return None
-
-        self._cache_rating(normalized_path, rating_int)
-        return rating_int
-
-    def _get_cached_rating(self, normalized_path: str) -> int | None:
-        cached_rating = self.app_state.rating_cache.get(normalized_path)
-        if cached_rating is not None:
-            return int(cached_rating)
-        disk_cache = getattr(self.app_state, "rating_disk_cache", None)
-        if disk_cache:
-            disk_rating = disk_cache.get(normalized_path)
-            if disk_rating is not None:
-                rating_int = int(disk_rating)
-                self.app_state.rating_cache[normalized_path] = rating_int
-                return rating_int
-        return None
-
-    def _read_metadata_rating(self, normalized_path: str) -> float | None:
-        try:
-            return PyExiv2Operations.get_rating(normalized_path)
-        except Exception:
-            logger.debug(
-                "Failed to read rating metadata for %s",
-                normalized_path,
-                exc_info=True,
-            )
-            return None
-
-    def _normalize_rating_value(
-        self, metadata_rating: object, normalized_path: str
-    ) -> int | None:
-        try:
-            rating_int = int(round(float(metadata_rating)))
-        except TypeError, ValueError:
-            logger.debug(
-                "Unexpected rating value for %s: %s",
-                normalized_path,
-                metadata_rating,
-            )
-            return None
-        return max(0, min(5, rating_int))
-
-    def _cache_rating(self, normalized_path: str, rating: int) -> None:
-        self.app_state.rating_cache[normalized_path] = rating
-        disk_cache = getattr(self.app_state, "rating_disk_cache", None)
-        if disk_cache:
-            disk_cache.set(normalized_path, rating)
-
-    def _cache_missing_rating(self, normalized_path: str) -> None:
-        self.app_state.rating_cache.setdefault(normalized_path, 0)
-        disk_cache = getattr(self.app_state, "rating_disk_cache", None)
-        if disk_cache:
-            disk_cache.set(normalized_path, 0)
-
     def _partition_unrated_images(
         self, image_paths: list[str]
     ) -> tuple[list[str], int]:
+        """Partition from the worker-populated memory cache only."""
+
         unrated: list[str] = []
         already_rated_count = 0
         for path in image_paths:
-            existing_rating = self._get_existing_rating_for_path(path)
+            existing_rating = self.app_state.rating_cache.get(
+                os.path.normpath(path), 0
+            )
             if existing_rating is not None and existing_rating != 0:
                 already_rated_count += 1
                 continue
@@ -1256,7 +1230,10 @@ class AppController(QObject):
         self.main_window.menu_manager.detect_blur_action.setEnabled(has_images)
         self.main_window.menu_manager.auto_rotate_action.setEnabled(has_images)
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(has_images)
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(has_images)
+        # Rating decisions depend on the background metadata pass. Enabling AI
+        # rating before it finishes would force per-file disk/EXIF reads from
+        # the UI thread to discover already-rated images.
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
 
         self._restore_analysis_state()
         if self._supports_grouping_workflow_ui():
@@ -1384,16 +1361,21 @@ class AppController(QObject):
         )
 
     def handle_grouping_workflow_complete(self, summary):
-        for entry in getattr(summary, "entries", []):
-            if getattr(entry, "new_path", None):
-                try:
-                    self.app_state.update_path(entry.original_path, entry.new_path)
-                except Exception:
-                    logger.debug(
-                        "Failed to update in-memory path cache for %s",
-                        entry.original_path,
-                        exc_info=True,
-                    )
+        path_updates = {
+            entry.original_path: entry.new_path
+            for entry in getattr(summary, "entries", [])
+            if getattr(entry, "new_path", None)
+        }
+        try:
+            self.app_state.update_paths(
+                path_updates,
+                migrate_disk_caches=False,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to update in-memory path caches after grouping.",
+                exc_info=True,
+            )
         self.app_state.grouping_run_summary = {
             "mode": summary.mode,
             "output_root": summary.output_root,
@@ -1726,6 +1708,10 @@ class AppController(QObject):
 
         self.main_window.hide_loading_overlay()
         self.main_window.hide_exif_progress()
+        menu_manager = getattr(self.main_window, "menu_manager", None)
+        ai_rating_action = getattr(menu_manager, "ai_rate_images_action", None)
+        if ai_rating_action is not None:
+            ai_rating_action.setEnabled(bool(self._get_image_file_data()))
 
         warning = self._pending_exif_cache_capacity_warning
         self._pending_exif_cache_capacity_warning = None
@@ -1807,18 +1793,6 @@ class AppController(QObject):
         self.app_state.clear_best_shot_results()
         self.app_state.clear_pick_best_results()
 
-        # Apply saved manual overrides on top of auto-clustering results
-        if self.app_state.current_folder_path:
-            manual_overrides = self.app_state.analysis_cache.get_manual_overrides(
-                self.app_state.current_folder_path
-            )
-            for path, cluster_id in manual_overrides.items():
-                if path in self.app_state.cluster_results:
-                    self.app_state.cluster_results[path] = cluster_id
-
-            self.app_state.analysis_cache.save_cluster_results(
-                self.app_state.current_folder_path, self.app_state.cluster_results
-            )
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self._get_image_file_data())
         )
@@ -1910,13 +1884,6 @@ class AppController(QObject):
         new_results = rankings_by_cluster or {}
         if new_results:
             self.app_state.merge_best_shot_results(new_results)
-            if self.app_state.current_folder_path:
-                for cluster_id, rankings in new_results.items():
-                    self.app_state.analysis_cache.update_best_shot_results(
-                        self.app_state.current_folder_path,
-                        cluster_id,
-                        rankings,
-                    )
         self.main_window.hide_loading_overlay()
         analyzed = len(new_results)
         self.main_window.statusBar().showMessage(
@@ -1992,13 +1959,6 @@ class AppController(QObject):
 
             ratings_applied += 1
             self.app_state.rating_cache[image_path] = rating_int
-            if self.app_state.rating_disk_cache:
-                try:
-                    self.app_state.rating_disk_cache.set(image_path, rating_int)
-                except Exception:  # pragma: no cover - cache writes should not crash UI
-                    logger.exception(
-                        "Failed to persist AI rating cache for %s", image_path
-                    )
 
             for viewer in self.main_window.advanced_image_viewer.image_viewers:
                 if viewer.isVisible() and viewer._file_path == image_path:

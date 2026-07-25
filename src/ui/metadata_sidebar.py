@@ -5,6 +5,7 @@ Displays comprehensive image metadata in a modern, elegant sidebar
 
 import os
 import logging
+import contextlib
 from datetime import datetime
 from typing import Any
 from PyQt6.QtWidgets import (
@@ -22,8 +23,6 @@ from PyQt6.QtGui import QFont
 
 from core.media_utils import is_video_extension
 from core.utils.time_utils import format_duration
-import contextlib
-
 logger = logging.getLogger(__name__)
 
 
@@ -354,7 +353,10 @@ class MetadataSidebar(QWidget):
         """Update the sidebar with new metadata, resetting to single-image view."""
         self.comparison_mode = False
         self.current_image_path = image_path
-        self.raw_metadata = raw_exif or {}
+        # Scanner and metadata-worker results are already in memory. Keep one
+        # merged payload so rendering never needs filesystem fallbacks.
+        self.raw_metadata = dict(metadata or {})
+        self.raw_metadata.update(raw_exif or {})
         if is_video_extension(image_path):
             self.title_label.setText("Video Details")
         else:
@@ -450,11 +452,6 @@ class MetadataSidebar(QWidget):
             if value is not None:
                 with contextlib.suppress(ValueError, TypeError):
                     size_in_bytes = int(value)
-            if size_in_bytes is None and path and os.path.exists(path):
-                try:
-                    size_in_bytes = os.stat(path).st_size
-                except FileNotFoundError:
-                    return "N/A"
             if size_in_bytes is not None:
                 return (
                     f"{size_in_bytes / (1024 * 1024):.2f} MB"
@@ -576,6 +573,33 @@ class MetadataSidebar(QWidget):
             return str(value)
         except ValueError, TypeError:
             return str(value)
+
+    @staticmethod
+    def _cached_creation_datetime(metadata: dict[str, Any]) -> datetime | None:
+        """Resolve creation time from worker-populated metadata only."""
+
+        cached_date = metadata.get("date")
+        if isinstance(cached_date, datetime):
+            return cached_date
+        if cached_date is not None and hasattr(cached_date, "timetuple"):
+            try:
+                return datetime.combine(cached_date, datetime.min.time())
+            except TypeError:
+                pass
+
+        mtime_ns = metadata.get("mtime_ns")
+        if mtime_ns is not None:
+            try:
+                return datetime.fromtimestamp(float(mtime_ns) / 1_000_000_000)
+            except ValueError, TypeError, OSError:
+                pass
+        mtime = metadata.get("mtime")
+        if mtime is not None:
+            try:
+                return datetime.fromtimestamp(float(mtime))
+            except ValueError, TypeError, OSError:
+                pass
+        return None
 
     def add_comparison_cards(self):
         """
@@ -796,7 +820,9 @@ class MetadataSidebar(QWidget):
 
                 try:
                     creation_times = []
-                    for i, p in enumerate(self.current_image_paths_for_comparison):
+                    for i, _path in enumerate(
+                        self.current_image_paths_for_comparison
+                    ):
                         creation_date = None
 
                         # Try to get creation date from EXIF data first
@@ -827,16 +853,15 @@ class MetadataSidebar(QWidget):
 
                         # Fallback to filesystem creation/birth time
                         if creation_date is None:
-                            stat = os.stat(p)
-                            # Use birth time if available, otherwise modified time
-                            if hasattr(stat, "st_birthtime") and stat.st_birthtime > 0:
-                                creation_date = datetime.fromtimestamp(
-                                    stat.st_birthtime
-                                )
-                            else:
-                                creation_date = datetime.fromtimestamp(stat.st_mtime)
+                            creation_date = self._cached_creation_datetime(
+                                self.raw_metadata_for_comparison[i]
+                            )
 
-                        creation_times.append(creation_date.strftime("%Y-%m-%d %H:%M"))
+                        creation_times.append(
+                            creation_date.strftime("%Y-%m-%d %H:%M")
+                            if creation_date is not None
+                            else "N/A"
+                        )
 
                     card.add_comparison_row("Created", creation_times)
                     rows_added += 1
@@ -940,23 +965,17 @@ class MetadataSidebar(QWidget):
         """Add file information card"""
         card = MetadataCard("File Information", "FI")
 
-        if os.path.exists(self.current_image_path):
+        if self.current_image_path:
             # File name
             card.add_info_row("Name", os.path.basename(self.current_image_path))
 
-            # File size - prefer from metadata if available
-            file_size = self.raw_metadata.get("FileSize")
-            if file_size and file_size != "Unknown":
-                card.add_info_row("Size", str(file_size))
-            else:
-                # Fallback to filesystem size
-                stat = os.stat(self.current_image_path)
-                size_mb = stat.st_size / (1024 * 1024)
-                if size_mb < 1:
-                    size_str = f"{stat.st_size / 1024:.1f} KB"
-                else:
-                    size_str = f"{size_mb:.2f} MB"
-                card.add_info_row("Size", size_str)
+            file_size = self.raw_metadata.get(
+                "FileSize", self.raw_metadata.get("file_size")
+            )
+            card.add_info_row(
+                "Size",
+                self._format_display_value(file_size, "size_fallback"),
+            )
 
             # Creation date (from EXIF data or filesystem)
             creation_date = None
@@ -981,14 +1000,9 @@ class MetadataSidebar(QWidget):
                     except ValueError, TypeError, AttributeError:
                         continue
 
-            # Fallback to filesystem creation/birth time
+            # Scanner/metadata-worker fallback
             if creation_date is None:
-                stat = os.stat(self.current_image_path)
-                # Use birth time if available, otherwise modified time
-                if hasattr(stat, "st_birthtime") and stat.st_birthtime > 0:
-                    creation_date = datetime.fromtimestamp(stat.st_birthtime)
-                else:
-                    creation_date = datetime.fromtimestamp(stat.st_mtime)
+                creation_date = self._cached_creation_datetime(self.raw_metadata)
 
             if creation_date:
                 card.add_info_row("Created", creation_date.strftime("%B %d, %Y %H:%M"))

@@ -28,7 +28,7 @@ def test_statusbar_with_cluster_and_blur_yes(tmp_path):
         width=100,
         height=200,
         cluster_lookup={str(f): 7},
-        file_data_from_model={"is_blurred": True},
+        file_data_from_model={"is_blurred": True, "file_size": 2048},
     )
     msg = info.to_message()
     assert "C: 7" in msg

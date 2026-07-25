@@ -1,5 +1,4 @@
 from typing import Protocol, Any
-import os
 from PyQt6.QtCore import QModelIndex
 from PyQt6.QtGui import QStandardItem
 from PyQt6.QtCore import Qt
@@ -35,6 +34,7 @@ class SelectionController:
             return []
         selected_indexes = sel_model.selectedIndexes()
         out: list[str] = []
+        seen: set[str] = set()
         for proxy_index in selected_indexes:
             if proxy_index.column() != 0:
                 continue
@@ -47,7 +47,8 @@ class SelectionController:
             item_user_data = item.data(Qt.ItemDataRole.UserRole)
             if isinstance(item_user_data, dict) and "path" in item_user_data:
                 file_path = item_user_data["path"]
-                if os.path.isfile(file_path) and file_path not in out:
+                if file_path and file_path not in seen:
+                    seen.add(file_path)
                     out.append(file_path)
         return out
 

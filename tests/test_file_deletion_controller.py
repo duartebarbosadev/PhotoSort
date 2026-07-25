@@ -195,6 +195,33 @@ class DeletionTestContext:
                         )
         return QModelIndex()
 
+    def _start_deletion_batch(
+        self, targets, _represented_by_target, *, completion
+    ):
+        """Simulate the central background-deletion completion boundary."""
+
+        target_set = set(targets)
+        self.app_controller.moved_to_trash.extend(targets)
+        root = self.file_system_model.invisibleRootItem()
+
+        def remove_targets(parent):
+            for row in range(parent.rowCount() - 1, -1, -1):
+                child = parent.child(row)
+                if child is None:
+                    continue
+                data = child.data(Qt.ItemDataRole.UserRole)
+                if isinstance(data, dict) and data.get("path") in target_set:
+                    self.app_state.remove_data_for_path(data["path"])
+                    parent.takeRow(row)
+                    continue
+                remove_targets(child)
+                if isinstance(data, str) and child.rowCount() == 0:
+                    parent.takeRow(row)
+
+        remove_targets(root)
+        completion(list(targets), list(targets), {}, set())
+        return True
+
     def _handle_file_selection_changed(
         self, override_selected_paths=None
     ):  # pragma: no cover - trivial

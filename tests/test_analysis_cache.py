@@ -1,4 +1,5 @@
 import os
+from unittest.mock import MagicMock, Mock
 
 from src.core.caching.analysis_cache import AnalysisCache
 
@@ -36,3 +37,89 @@ def test_analysis_cache_persists_clusters_and_best_shots(tmp_path):
     assert completed == {1}
 
     cache.close()
+
+
+def test_best_shot_batch_uses_one_cache_read_and_write():
+    cache = AnalysisCache.__new__(AnalysisCache)
+    cache._cache = MagicMock()
+    cache.load = Mock(return_value={})
+
+    cache.update_best_shot_results_batch(
+        "/photos",
+        {
+            1: [{"image_path": "a.jpg", "composite_score": 0.9}],
+            2: [{"image_path": "b.jpg", "composite_score": 0.8}],
+        },
+    )
+
+    cache.load.assert_called_once_with("/photos")
+    cache._cache.set.assert_called_once()
+    saved = cache._cache.set.call_args.args[1]
+    assert set(saved["best_shot_rankings"]) == {"1", "2"}
+
+
+def test_analysis_cache_migrates_folder_and_all_path_references():
+    old = "/photos/source/a.jpg"
+    new = "/photos/output/a.jpg"
+    cache = AnalysisCache.__new__(AnalysisCache)
+    cache._cache = MagicMock()
+    cache._cache.__contains__ = Mock(return_value=True)
+    cache.load = Mock(
+        return_value={
+            "cluster_results": {old: 1},
+            "manual_cluster_overrides": {old: 2},
+            "best_shot_rankings": {"1": [{"image_path": old}]},
+            "best_shot_scores_by_path": {old: {"image_path": old}},
+            "best_shot_winners": {"1": {"image_path": old}},
+        }
+    )
+
+    cache.migrate_folder_paths(
+        "/photos/source",
+        "/photos/output",
+        {old: new},
+    )
+
+    cache.load.assert_called_once_with("/photos/source")
+    cache._cache.set.assert_called_once()
+    saved = cache._cache.set.call_args.args[1]
+    assert saved["cluster_results"] == {new: 1}
+    assert saved["manual_cluster_overrides"] == {new: 2}
+    assert saved["best_shot_rankings"]["1"][0]["image_path"] == new
+    assert saved["best_shot_scores_by_path"][new]["image_path"] == new
+    assert saved["best_shot_winners"]["1"]["image_path"] == new
+    cache._cache.__delitem__.assert_called_once()
+
+
+def test_analysis_cache_removes_deleted_paths_with_one_read_and_write():
+    removed = "/photos/deleted.jpg"
+    kept = "/photos/kept.jpg"
+    cache = AnalysisCache.__new__(AnalysisCache)
+    cache._cache = MagicMock()
+    cache.load = Mock(
+        return_value={
+            "cluster_results": {removed: 1, kept: 1},
+            "manual_cluster_overrides": {removed: 1},
+            "best_shot_rankings": {
+                "1": [{"image_path": removed}, {"image_path": kept}]
+            },
+            "best_shot_scores_by_path": {
+                removed: {"image_path": removed},
+                kept: {"image_path": kept},
+            },
+            "best_shot_winners": {"1": {"image_path": removed}},
+        }
+    )
+
+    cache.remove_paths("/photos", {removed})
+
+    cache.load.assert_called_once_with("/photos")
+    cache._cache.set.assert_called_once()
+    saved = cache._cache.set.call_args.args[1]
+    assert saved["cluster_results"] == {kept: 1}
+    assert saved["manual_cluster_overrides"] == {}
+    assert saved["best_shot_rankings"] == {"1": [{"image_path": kept}]}
+    assert saved["best_shot_scores_by_path"] == {
+        kept: {"image_path": kept}
+    }
+    assert saved["best_shot_winners"] == {"1": {"image_path": kept}}

@@ -25,6 +25,7 @@ from ui.worker_manager import WorkerManager
         "ai_rating_thread",
         "grouping_preview_thread",
         "grouping_workflow_thread",
+        "file_deletion_thread",
         "pick_best_thread",
         "easy_delete_thread",
         "fix_rotation_detect_thread",
