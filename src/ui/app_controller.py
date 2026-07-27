@@ -8,11 +8,21 @@ import numpy as np
 from PyQt6.QtCore import QObject, QTimer
 from core.best_photo_finder.payloads import PickBestResults
 from core.app_settings import (
+    DBSCAN_MIN_SAMPLES,
     add_recent_folder,
+    get_similarity_clustering_eps,
     get_similarity_embedding_model_name,
     get_companion_files_preference,
 )
-from core.similarity_embedding_model import is_similarity_model_installed
+from core.similarity_embedding_model import (
+    SimilarityEmbeddingModel,
+    is_similarity_model_installed,
+)
+from core.similarity_cache import (
+    SimilarityClusteringResult,
+    build_similarity_signature,
+    normalize_fingerprints,
+)
 from core.media_utils import is_image_extension
 from core.image_file_ops import ImageFileOperations
 from core.grouping import build_grouping_output_root
@@ -649,6 +659,35 @@ class AppController(QObject):
             allow_model_download=allow_model_download,
             folder_path=getattr(self.app_state, "current_folder_path", None),
             analysis_cache=getattr(self.app_state, "analysis_cache", None),
+            fingerprints=self._similarity_fingerprints(paths_for_similarity),
+        )
+
+    def _similarity_fingerprints(
+        self, paths: list[str] | None = None
+    ) -> dict[str, tuple[int, int]]:
+        requested = set(paths or self._get_image_paths())
+        supplied: dict[str, tuple[int, int]] = {}
+        for item in self._get_image_file_data():
+            path = item.get("path")
+            size = item.get("file_size")
+            mtime_ns = item.get("mtime_ns")
+            if (
+                path in requested
+                and isinstance(size, int)
+                and isinstance(mtime_ns, int)
+            ):
+                supplied[path] = (size, mtime_ns)
+        return normalize_fingerprints(list(requested), supplied)
+
+    def _current_similarity_signature(self, paths: list[str]) -> str:
+        model = SimilarityEmbeddingModel(get_similarity_embedding_model_name())
+        return build_similarity_signature(
+            paths,
+            self._similarity_fingerprints(paths),
+            model_cache_key=model.cache_key,
+            regional_cache_key=model.region_cache_key,
+            clustering_eps=get_similarity_clustering_eps(),
+            min_samples=DBSCAN_MIN_SAMPLES,
         )
 
     def refresh_grouping_preview(self):
@@ -971,6 +1010,14 @@ class AppController(QObject):
         available_paths = {
             item.get("path") for item in self._get_image_file_data() if item.get("path")
         }
+        image_paths = self._get_image_paths()
+        valid_clusters = self.app_state.analysis_cache.load_valid_cluster_results(
+            folder_path,
+            signature=self._current_similarity_signature(image_paths),
+            expected_paths=set(image_paths),
+        )
+        if valid_clusters is None:
+            return
 
         def _parse_cluster_key(key) -> int | None:
             if isinstance(key, int):
@@ -987,7 +1034,7 @@ class AppController(QObject):
 
         restored_anything = False
 
-        saved_clusters = saved.get("cluster_results") or {}
+        saved_clusters = valid_clusters
         if isinstance(saved_clusters, dict):
             filtered_clusters = {
                 path: _parse_cluster_key(cluster_id)
@@ -1659,6 +1706,9 @@ class AppController(QObject):
             cluster_map=cluster_map,
             embeddings_cache=embeddings,
             exif_disk_cache=exif_cache,
+            analysis_cache=getattr(self.app_state, "analysis_cache", None),
+            folder_path=getattr(self.app_state, "current_folder_path", None),
+            fingerprints=self._similarity_fingerprints(image_paths),
         )
 
     def handle_easy_delete_progress(self, percent: int, message: str) -> None:
@@ -1878,12 +1928,22 @@ class AppController(QObject):
             return
         self.app_state.regional_embeddings_cache = embeddings_dict
 
-    def handle_clustering_complete(self, cluster_results_dict: dict[str, int]):
+    def handle_clustering_complete(
+        self,
+        result: SimilarityClusteringResult | dict[str, int],
+    ):
         if getattr(self, "_ignore_similarity_results", False):
             return
+        if isinstance(result, SimilarityClusteringResult):
+            cluster_results_dict = result.clusters
+            reused = result.reused
+        else:
+            cluster_results_dict = result
+            reused = False
         self.app_state.cluster_results = cluster_results_dict
-        self.app_state.clear_best_shot_results()
-        self.app_state.clear_pick_best_results()
+        if not reused:
+            self.app_state.clear_best_shot_results()
+            self.app_state.clear_pick_best_results()
 
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self._get_image_file_data())
@@ -2435,6 +2495,7 @@ class AppController(QObject):
         try:
             if self._pending_rotated_paths:
                 rotated_paths = list(self._pending_rotated_paths)
+                self.app_state.invalidate_similarity_for_paths(rotated_paths)
                 self.main_window._batch_update_rotated_thumbnails(rotated_paths)
 
                 selected_paths = self.main_window._get_selected_file_paths_from_view()

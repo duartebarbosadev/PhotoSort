@@ -16,14 +16,17 @@ class SimilarityAnalysisCancelled(Exception):
     """Raised when a cancellable similarity computation is asked to stop."""
 
 
+REGIONAL_DISTANCE_BLOCK_TARGET_BYTES = 64 * 1024 * 1024
+
+
 def cosine_similarity(
     first_values: Sequence[float] | np.ndarray,
     second_values: Sequence[float] | np.ndarray,
 ) -> float | None:
     """Return cosine similarity for two valid embedding vectors."""
 
-    first = np.asarray(first_values, dtype=np.float32).reshape(-1)
-    second = np.asarray(second_values, dtype=np.float32).reshape(-1)
+    first: np.ndarray = np.asarray(first_values, dtype=np.float32).reshape(-1)
+    second: np.ndarray = np.asarray(second_values, dtype=np.float32).reshape(-1)
     if first.size == 0 or first.shape != second.shape:
         return None
     denominator = float(np.linalg.norm(first) * np.linalg.norm(second))
@@ -170,11 +173,83 @@ def regional_embedding_distance(
     return max(0.0, min(2.0, 1.0 - similarity))
 
 
+def _normalized_region_sets(
+    embeddings: dict[str, list[float]],
+    regional_embeddings: dict[str, list[list[float]]],
+    subset_paths: list[str],
+    should_cancel: Callable[[], bool] | None = None,
+) -> list[np.ndarray]:
+    """Prepare every regional matrix once for all subsequent comparisons."""
+
+    region_sets: list[np.ndarray] = []
+    for path in subset_paths:
+        if should_cancel is not None and should_cancel():
+            raise SimilarityAnalysisCancelled
+        region_vectors = regional_embeddings.get(path)
+        if region_vectors:
+            region_matrix: np.ndarray = np.asarray(
+                region_vectors, dtype=np.float32
+            )
+        else:
+            region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
+        if region_matrix.ndim != 2 or region_matrix.shape[0] == 0:
+            region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
+        region_sets.append(l2_normalize_rows(region_matrix))
+    return region_sets
+
+
+def _uniform_regional_features(
+    region_sets: list[np.ndarray],
+) -> np.ndarray | None:
+    """Return flattened exact regional features when all records are compatible.
+
+    Each regional row is already unit-normalized. Dividing the concatenated rows
+    by sqrt(region_count) makes a dot product equal to the existing mean of the
+    corresponding regional cosine similarities.
+    """
+
+    if not region_sets:
+        return np.empty((0, 0), dtype=np.float32)
+    expected_shape = region_sets[0].shape
+    if len(expected_shape) != 2 or any(
+        region_set.shape != expected_shape for region_set in region_sets
+    ):
+        return None
+    region_count = expected_shape[0]
+    if region_count <= 0:
+        return None
+    stacked = np.stack(region_sets).astype(np.float32, copy=False)
+    return np.ascontiguousarray(
+        stacked.reshape(len(region_sets), -1) / np.sqrt(float(region_count))
+    )
+
+
+def _regional_distance_from_normalized(
+    first_regions: np.ndarray, second_regions: np.ndarray
+) -> float:
+    """Apply the established regional-distance rule to normalized matrices."""
+
+    if first_regions.shape == second_regions.shape and len(first_regions) > 1:
+        similarity = float(
+            np.mean(np.sum(first_regions * second_regions, axis=1))
+        )
+    else:
+        similarity = float(np.max(first_regions @ second_regions.T))
+    return max(0.0, min(2.0, 1.0 - similarity))
+
+
+def _distance_block_rows(count: int, target_bytes: int) -> int:
+    if count <= 0:
+        return 1
+    return max(1, min(count, target_bytes // max(1, count * np.dtype(np.float32).itemsize)))
+
+
 def build_regional_distance_matrix(
     embeddings: dict[str, list[float]],
     regional_embeddings: dict[str, list[list[float]]],
     subset_paths: list[str],
     should_cancel: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int], None] | None = None,
 ) -> np.ndarray:
     """Build a symmetric distance matrix from shared regional embedding data.
 
@@ -182,36 +257,131 @@ def build_regional_distance_matrix(
     worker thread can provide a cancellation predicate. It is checked once per
     row to keep cancellation responsive without adding work to every pair.
     """
-    region_sets: list[np.ndarray] = []
-    for path in subset_paths:
-        if should_cancel is not None and should_cancel():
-            raise SimilarityAnalysisCancelled
-        region_vectors = regional_embeddings.get(path)
-        if region_vectors:
-            region_matrix = np.asarray(region_vectors, dtype=np.float32)
-        else:
-            region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
-        if region_matrix.ndim != 2 or region_matrix.shape[0] == 0:
-            region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
-        region_sets.append(region_matrix)
-
+    region_sets = _normalized_region_sets(
+        embeddings, regional_embeddings, subset_paths, should_cancel
+    )
     count = len(subset_paths)
-    distances = np.zeros((count, count), dtype=np.float32)
+    distances: np.ndarray = np.zeros((count, count), dtype=np.float32)
+    uniform_features = _uniform_regional_features(region_sets)
+    if uniform_features is not None:
+        block_rows = _distance_block_rows(
+            count, REGIONAL_DISTANCE_BLOCK_TARGET_BYTES
+        )
+        for start in range(0, count, block_rows):
+            if should_cancel is not None and should_cancel():
+                raise SimilarityAnalysisCancelled
+            end = min(count, start + block_rows)
+            similarities = uniform_features[start:end] @ uniform_features.T
+            distances[start:end] = np.clip(
+                1.0 - similarities, 0.0, 2.0
+            ).astype(np.float32, copy=False)
+            if progress_callback is not None and count:
+                progress_callback(int(end / count * 100))
+        np.fill_diagonal(distances, 0.0)
+        return distances
+
     for first_index in range(count):
         if should_cancel is not None and should_cancel():
             raise SimilarityAnalysisCancelled
         for second_index in range(first_index + 1, count):
-            distance = regional_embedding_distance(
+            distance = _regional_distance_from_normalized(
                 region_sets[first_index], region_sets[second_index]
             )
             distances[first_index, second_index] = distance
             distances[second_index, first_index] = distance
+        if progress_callback is not None and count:
+            progress_callback(int((first_index + 1) / count * 100))
     return distances
+
+
+def build_regional_neighborhood_graph(
+    embeddings: dict[str, list[float]],
+    regional_embeddings: dict[str, list[list[float]]],
+    subset_paths: list[str],
+    eps: float,
+    should_cancel: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int], None] | None = None,
+):
+    """Build an exact sparse epsilon-neighbour graph for regional DBSCAN.
+
+    The graph contains every distance at or below ``eps``, including explicit
+    zero-distance edges between distinct identical images. Work is performed in
+    bounded row blocks so large libraries do not require a dense NxN allocation.
+    """
+
+    from scipy.sparse import coo_matrix
+
+    region_sets = _normalized_region_sets(
+        embeddings, regional_embeddings, subset_paths, should_cancel
+    )
+    uniform_features = _uniform_regional_features(region_sets)
+    count = len(subset_paths)
+    if uniform_features is None:
+        row_values = list(range(count))
+        column_values = list(range(count))
+        distance_values = [0.0] * count
+        for first_index in range(count):
+            if should_cancel is not None and should_cancel():
+                raise SimilarityAnalysisCancelled
+            for second_index in range(first_index + 1, count):
+                distance = _regional_distance_from_normalized(
+                    region_sets[first_index], region_sets[second_index]
+                )
+                if distance <= eps:
+                    row_values.extend((first_index, second_index))
+                    column_values.extend((second_index, first_index))
+                    distance_values.extend((distance, distance))
+            if progress_callback is not None and count:
+                progress_callback(int((first_index + 1) / count * 100))
+        return coo_matrix(
+            (
+                np.asarray(distance_values, dtype=np.float32),
+                (
+                    np.asarray(row_values, dtype=np.int64),
+                    np.asarray(column_values, dtype=np.int64),
+                ),
+            ),
+            shape=(count, count),
+            dtype=np.float32,
+        ).tocsr()
+
+    row_parts: list[np.ndarray] = []
+    column_parts: list[np.ndarray] = []
+    value_parts: list[np.ndarray] = []
+    block_rows = _distance_block_rows(count, REGIONAL_DISTANCE_BLOCK_TARGET_BYTES)
+    for start in range(0, count, block_rows):
+        if should_cancel is not None and should_cancel():
+            raise SimilarityAnalysisCancelled
+        end = min(count, start + block_rows)
+        distances = np.clip(
+            1.0 - (uniform_features[start:end] @ uniform_features.T),
+            0.0,
+            2.0,
+        ).astype(np.float32, copy=False)
+        local_rows, columns = np.nonzero(distances <= eps)
+        row_parts.append(local_rows.astype(np.int64, copy=False) + start)
+        column_parts.append(columns.astype(np.int64, copy=False))
+        value_parts.append(distances[local_rows, columns])
+        if progress_callback is not None and count:
+            progress_callback(int(end / count * 100))
+
+    if not row_parts:
+        return coo_matrix((count, count), dtype=np.float32).tocsr()
+    graph = coo_matrix(
+        (
+            np.concatenate(value_parts),
+            (np.concatenate(row_parts), np.concatenate(column_parts)),
+        ),
+        shape=(count, count),
+        dtype=np.float32,
+    ).tocsr()
+    graph.sort_indices()
+    return graph
 
 
 def normalize_embedding_vector(values: list[float]) -> tuple[list[float], bool]:
     """Normalize a single embedding vector, returning (normalized_list, changed_flag)."""
-    arr = np.asarray(values, dtype=np.float32)
+    arr: np.ndarray = np.asarray(values, dtype=np.float32)
     norm = float(np.linalg.norm(arr))
     if not np.isfinite(norm) or norm == 0.0:
         return arr.tolist(), False

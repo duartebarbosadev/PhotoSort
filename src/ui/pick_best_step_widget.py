@@ -21,10 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResults
-from core.app_settings import (
-    EASY_DELETE_SAME_FRAME_SIMILARITY,
-    get_easy_delete_duplicate_distance,
-)
+from core.app_settings import get_easy_delete_duplicate_distance
 from core.similarity_utils import cosine_similarity
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.controllers.image_inspection_controller import InspectionImageSpec
@@ -1076,8 +1073,9 @@ class PickBestStepWidget(QWidget):
         return (
             f"Cosine similarity {similarity:.4f} ({similarity * 100:.2f}%) · "
             f"distance {distance:.4f} · Easy Delete cosine cutoff < {cutoff:.4f} "
-            f"({cutoff_result} cutoff). Easy Delete also accepts unchanged framing "
-            f"at ≥ {EASY_DELETE_SAME_FRAME_SIMILARITY:.2f} structural similarity."
+            f"({cutoff_result} cutoff). Cosine similarity only selects candidates; "
+            "Easy Delete also requires unchanged framing, coherent foreground, and "
+            "face geometry before proposing a safe near-duplicate."
         )
 
     def handle_preview_ready(self, path: str) -> None:

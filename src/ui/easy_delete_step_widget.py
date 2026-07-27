@@ -537,8 +537,8 @@ class EasyDeleteStepWidget(QWidget):
         self._suggestion_label.hide()
         _, color = _ISSUE_LABELS.get("duplicate", ("DUP", "#A78BFA"))
         duplicate_kind = entry.get("duplicate_kind", "near")
-        classification = (
-            "Exact duplicate" if duplicate_kind == "exact" else "Near-duplicate"
+        classification = entry.get("classification_label") or (
+            "Exact copy" if duplicate_kind == "exact" else "Near-duplicate"
         )
         self._issue_label.setText(
             f"<b style='color:{color}'>{classification}</b>  ·  {reason}"

@@ -50,12 +50,14 @@ def test_rotation_batch_finish_never_eagerly_regenerates_all_previews():
     )
     controller = SimpleNamespace(
         main_window=main_window,
+        app_state=SimpleNamespace(invalidate_similarity_for_paths=Mock()),
         _pending_rotated_paths=[path],
     )
 
     AppController.handle_rotation_application_finished(controller, 1, 0)
 
     pipeline.preload_previews.assert_not_called()
+    controller.app_state.invalidate_similarity_for_paths.assert_called_once_with([path])
     main_window._batch_update_rotated_thumbnails.assert_called_once_with([path])
     main_window._handle_file_selection_changed.assert_called_once()
     assert controller._pending_rotated_paths == []

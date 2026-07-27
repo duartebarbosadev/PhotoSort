@@ -166,6 +166,57 @@ class AppState:
 
         self.remove_data_for_paths([file_path])
 
+    def invalidate_similarity_for_paths(
+        self,
+        file_paths: Iterable[str],
+        *,
+        invalidate_disk_cache: bool = True,
+    ) -> None:
+        """Invalidate shared similarity state after source-file mutations."""
+
+        changed_paths = {
+            path for path in file_paths if isinstance(path, str) and path
+        }
+        for path in changed_paths:
+            self.embeddings_cache.pop(path, None)
+            self.regional_embeddings_cache.pop(path, None)
+            record = self.get_file_data_by_path(path)
+            if record is not None:
+                try:
+                    stat_result = os.stat(path)
+                except OSError:
+                    pass
+                else:
+                    record["file_size"] = stat_result.st_size
+                    record["mtime_ns"] = stat_result.st_mtime_ns
+
+        self.cluster_results.clear()
+        ad_hoc_cluster_id = -1
+        self.best_shot_rankings = {
+            cluster_id: rankings
+            for cluster_id, rankings in self.best_shot_rankings.items()
+            if cluster_id == ad_hoc_cluster_id
+        }
+        self.best_shot_winners = {
+            cluster_id: winner
+            for cluster_id, winner in self.best_shot_winners.items()
+            if cluster_id == ad_hoc_cluster_id
+        }
+        self.best_shot_scores_by_path = {
+            path: score
+            for path, score in self.best_shot_scores_by_path.items()
+            if score.get("cluster_id") == ad_hoc_cluster_id
+        }
+        self.clear_pick_best_results()
+        self.easy_delete_results = None
+
+        if (
+            invalidate_disk_cache
+            and self.current_folder_path
+            and self.analysis_cache
+        ):
+            self.analysis_cache.invalidate_similarity(self.current_folder_path)
+
     def remove_data_for_paths(
         self,
         file_paths: Iterable[str],
@@ -252,6 +303,11 @@ class AppState:
         invalid_pick_best_paths.update(removed_paths)
         for path in invalid_pick_best_paths:
             self.pick_best_winners_by_path.pop(path, None)
+
+        self.invalidate_similarity_for_paths(
+            removed_paths,
+            invalidate_disk_cache=False,
+        )
 
         removed_count = original_count - len(self._image_files_data)
         logger.info(
@@ -410,6 +466,10 @@ class AppState:
         self.marked_for_deletion = {
             updates.get(path, path) for path in self.marked_for_deletion
         }
+        self.invalidate_similarity_for_paths(
+            updates.values(),
+            invalidate_disk_cache=migrate_disk_caches,
+        )
         logger.info("Updated shared references for %d renamed path(s).", len(updates))
         return len(updates)
 

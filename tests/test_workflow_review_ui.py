@@ -503,7 +503,7 @@ def test_easy_delete_confirm_advances_and_confirm_all_uses_suggestions():
         }
     )
 
-    assert "Exact duplicate" in widget._issue_label.text()
+    assert "Exact copy" in widget._issue_label.text()
     assert widget._suggestion_label.isHidden()
     widget._on_confirm()
     _app.processEvents()
@@ -605,6 +605,25 @@ def test_easy_delete_groups_queue_under_category_headers():
 
     widget._navigate_to(3)
     assert widget._items_list.currentItem().text() == "dark.jpg"
+
+
+def test_easy_delete_shows_subject_safe_near_duplicate_classification():
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            "/tmp/similar-a.jpg": {
+                "type": "duplicate",
+                "pair_path": "/tmp/similar-b.jpg",
+                "suggest_delete": True,
+                "duplicate_kind": "near",
+                "classification_label": "Safe near-duplicate",
+                "reason": "Suggested choice: higher sharpness",
+            }
+        }
+    )
+
+    assert "Safe near-duplicate" in widget._issue_label.text()
 
 
 def test_easy_delete_duplicate_filters_can_be_selected_independently():
@@ -1291,7 +1310,8 @@ def test_pick_best_shows_cosine_similarity_and_easy_delete_cutoff(monkeypatch):
     assert "Cosine similarity 0.9940 (99.40%)" in detail
     assert "distance 0.0060" in detail
     assert "Easy Delete cosine cutoff < 0.0050 (outside cutoff)" in detail
-    assert "unchanged framing at ≥ 0.98 structural similarity" in detail
+    assert "Cosine similarity only selects candidates" in detail
+    assert "coherent foreground" in detail
 
 
 def test_pick_best_apply_button_and_shift_enter_submit_without_naming_cull():

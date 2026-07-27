@@ -10,7 +10,7 @@ from core.runtime_paths import resolve_user_cache_dir
 
 logger = logging.getLogger(__name__)
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 def _normalize_folder_path(path: str) -> str:
@@ -51,12 +51,14 @@ class AnalysisCache:
         folder_path: str,
         cluster_results: dict[str, int],
         *,
+        signature: str,
         reset_best_shots: bool = True,
     ) -> None:
         key = _normalize_folder_path(folder_path)
         entry = self.load(folder_path)
         entry["version"] = CACHE_VERSION
         entry["cluster_results"] = dict(cluster_results)
+        entry["similarity_signature"] = signature
         if reset_best_shots:
             entry.pop("best_shot_rankings", None)
             entry.pop("best_shot_scores_by_path", None)
@@ -66,6 +68,150 @@ class AnalysisCache:
             self._cache.set(key, entry)
         except Exception:
             logger.exception("Failed to persist cluster results for %s", folder_path)
+
+    def load_valid_cluster_results(
+        self,
+        folder_path: str,
+        *,
+        signature: str,
+        expected_paths: set[str],
+    ) -> dict[str, int] | None:
+        """Return a complete cluster map only when its inputs still match."""
+
+        entry = self.load(folder_path)
+        if (
+            entry.get("version") != CACHE_VERSION
+            or entry.get("similarity_signature") != signature
+        ):
+            return None
+        clusters = entry.get("cluster_results")
+        if not isinstance(clusters, dict) or set(clusters) != expected_paths:
+            return None
+        try:
+            return {str(path): int(cluster_id) for path, cluster_id in clusters.items()}
+        except (TypeError, ValueError):
+            return None
+
+    def invalidate_similarity(self, folder_path: str) -> None:
+        """Invalidate computed similarity state while preserving manual overrides."""
+
+        key = _normalize_folder_path(folder_path)
+        entry = self.load(folder_path)
+        if not entry:
+            return
+        for field in (
+            "cluster_results",
+            "similarity_signature",
+            "best_shot_rankings",
+            "best_shot_scores_by_path",
+            "best_shot_winners",
+            "subject_descriptors",
+        ):
+            entry.pop(field, None)
+        entry["version"] = CACHE_VERSION
+        entry["updated_at"] = time.time()
+        try:
+            self._cache.set(key, entry)
+        except Exception:
+            logger.exception(
+                "Failed to invalidate similarity state for %s", folder_path
+            )
+
+    def load_subject_descriptor(
+        self,
+        folder_path: str,
+        file_path: str,
+        *,
+        fingerprint: tuple[int, int],
+        signature: str,
+    ) -> dict[str, object] | None:
+        """Return a descriptor only when its file and analysis inputs still match."""
+
+        entry = self.load(folder_path)
+        descriptors = entry.get("subject_descriptors")
+        if not isinstance(descriptors, dict):
+            return None
+        record = descriptors.get(file_path)
+        if not isinstance(record, dict):
+            return None
+        try:
+            cached_fingerprint = tuple(record.get("fingerprint", ()))
+        except TypeError:
+            return None
+        descriptor = record.get("descriptor")
+        if (
+            record.get("signature") != signature
+            or cached_fingerprint != tuple(fingerprint)
+            or not isinstance(descriptor, dict)
+        ):
+            return None
+        return copy.deepcopy(descriptor)
+
+    def save_subject_descriptor(
+        self,
+        folder_path: str,
+        file_path: str,
+        *,
+        fingerprint: tuple[int, int],
+        signature: str,
+        descriptor: dict[str, object],
+    ) -> None:
+        """Persist one immutable subject descriptor and its validity inputs."""
+
+        self.save_subject_descriptors_batch(
+            folder_path,
+            {
+                file_path: {
+                    "fingerprint": tuple(fingerprint),
+                    "signature": signature,
+                    "descriptor": descriptor,
+                }
+            },
+        )
+
+    def save_subject_descriptors_batch(
+        self,
+        folder_path: str,
+        records: dict[str, dict[str, object]],
+    ) -> None:
+        """Persist many subject descriptors with one cache read and write."""
+
+        if not records:
+            return
+        key = _normalize_folder_path(folder_path)
+        entry = self.load(folder_path)
+        descriptors = entry.setdefault("subject_descriptors", {})
+        if not isinstance(descriptors, dict):
+            descriptors = {}
+            entry["subject_descriptors"] = descriptors
+        for file_path, record in records.items():
+            if not isinstance(record, dict):
+                continue
+            descriptor = record.get("descriptor")
+            fingerprint = record.get("fingerprint")
+            signature = record.get("signature")
+            if (
+                not isinstance(descriptor, dict)
+                or not isinstance(fingerprint, (tuple, list))
+                or len(fingerprint) != 2
+                or not isinstance(signature, str)
+            ):
+                continue
+            descriptors[file_path] = {
+                "fingerprint": tuple(fingerprint),
+                "signature": signature,
+                "descriptor": copy.deepcopy(descriptor),
+            }
+        entry["version"] = CACHE_VERSION
+        entry["updated_at"] = time.time()
+        try:
+            self._cache.set(key, entry)
+        except Exception:
+            logger.exception(
+                "Failed to persist %d subject descriptors for %s",
+                len(records),
+                folder_path,
+            )
 
     def update_best_shot_results(
         self,
@@ -182,6 +328,7 @@ class AnalysisCache:
             "cluster_results",
             "manual_cluster_overrides",
             "best_shot_scores_by_path",
+            "subject_descriptors",
         ):
             if field in entry:
                 entry[field] = remap_mapping_keys(entry[field])
@@ -210,6 +357,7 @@ class AnalysisCache:
                         result["image_path"] = path_updates[path]
 
         entry["version"] = CACHE_VERSION
+        entry.pop("similarity_signature", None)
         entry["updated_at"] = time.time()
         source_key = _normalize_folder_path(source_folder)
         destination_key = _normalize_folder_path(destination_folder)
@@ -238,6 +386,7 @@ class AnalysisCache:
             "cluster_results",
             "manual_cluster_overrides",
             "best_shot_scores_by_path",
+            "subject_descriptors",
         ):
             mapping = entry.get(field)
             if isinstance(mapping, dict):
@@ -271,6 +420,7 @@ class AnalysisCache:
                     winners.pop(cluster_id, None)
 
         entry["version"] = CACHE_VERSION
+        entry.pop("similarity_signature", None)
         entry["updated_at"] = time.time()
         try:
             self._cache.set(_normalize_folder_path(folder_path), entry)

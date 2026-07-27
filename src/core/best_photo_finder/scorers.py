@@ -14,6 +14,7 @@ from core.best_photo_finder.errors import (
 from core.best_photo_finder.models import TechnicalMetrics
 from core.app_settings import get_huggingface_cache_dir
 from core.huggingface_progress import build_hf_tqdm_class
+from core.image_features.face_analysis import FaceAnalysisService
 from core.runtime_paths import resolve_face_landmarker_model_path
 import contextlib
 
@@ -159,14 +160,19 @@ class OpenCvMediapipeTechnicalScorer:
     _face_landmarker: FaceLandmarkerBackend | None = field(
         default=None, init=False, repr=False
     )
+    _face_analysis_service: FaceAnalysisService | None = field(
+        default=None, init=False, repr=False
+    )
 
     def _get_face_landmarker(self) -> FaceLandmarkerBackend:
         if self._face_landmarker is not None:
             return self._face_landmarker
         try:
-            self._face_landmarker = self.face_landmarker_factory(
-                resolve_face_landmarker_model_path()
+            self._face_analysis_service = FaceAnalysisService(
+                backend_factory=self.face_landmarker_factory,
+                model_path_resolver=resolve_face_landmarker_model_path,
             )
+            self._face_landmarker = self._face_analysis_service.get_backend()
         except (
             FileNotFoundError,
             MissingDependencyError,
@@ -181,8 +187,12 @@ class OpenCvMediapipeTechnicalScorer:
 
     def close(self) -> None:
         landmarker = self._face_landmarker
+        service = self._face_analysis_service
         self._face_landmarker = None
-        if landmarker is not None:
+        self._face_analysis_service = None
+        if service is not None:
+            service.close()
+        elif landmarker is not None:
             with contextlib.suppress(RuntimeError):
                 landmarker.close()
 

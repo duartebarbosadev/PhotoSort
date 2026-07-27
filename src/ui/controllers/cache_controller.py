@@ -100,6 +100,9 @@ class CacheController:
 
         try:
             analysis_cache.clear_all()
+            from core.similarity_engine import SimilarityEngine
+
+            SimilarityEngine.clear_embedding_cache()
             ctx.status_message("Analysis cache cleared.", 5000)
         except Exception:
             logger.exception("Failed to clear analysis cache.")
@@ -112,7 +115,14 @@ class CacheController:
         ctx = self.context
         ctx.group_by_similarity_mode = False
         ctx.app_state.cluster_results.clear()
+        getattr(ctx.app_state, "embeddings_cache", {}).clear()
+        getattr(ctx.app_state, "regional_embeddings_cache", {}).clear()
         ctx.app_state.clear_best_shot_results()
+        clear_pick_best = getattr(ctx.app_state, "clear_pick_best_results", None)
+        if callable(clear_pick_best):
+            clear_pick_best()
+        if hasattr(ctx.app_state, "easy_delete_results"):
+            ctx.app_state.easy_delete_results = None
         ctx.cluster_filter_combo.clear()
         ctx.cluster_filter_combo.addItem("All Clusters")
         ctx.cluster_filter_combo.setEnabled(False)

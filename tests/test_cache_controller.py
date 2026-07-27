@@ -10,7 +10,12 @@ def _action():
     return SimpleNamespace(setChecked=Mock(), setEnabled=Mock())
 
 
-def test_clear_analysis_cache_resets_dependent_ui_state():
+def test_clear_analysis_cache_resets_dependent_ui_state(monkeypatch):
+    clear_similarity_cache = Mock()
+    monkeypatch.setattr(
+        "core.similarity_engine.SimilarityEngine.clear_embedding_cache",
+        clear_similarity_cache,
+    )
     menu = SimpleNamespace(
         group_by_similarity_action=_action(),
         analyze_best_shots_action=_action(),
@@ -44,6 +49,7 @@ def test_clear_analysis_cache_resets_dependent_ui_state():
     controller.clear_analysis_cache()
 
     app_state.analysis_cache.clear_all.assert_called_once_with()
+    clear_similarity_cache.assert_called_once_with()
     assert app_state.cluster_results == {}
     assert context.group_by_similarity_mode is False
     app_state.clear_best_shot_results.assert_called_once_with()

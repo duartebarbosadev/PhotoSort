@@ -574,6 +574,7 @@ class SimilarityWorker(QObject):
         image_pipeline: ImagePipeline | None = None,
         folder_path: str | None = None,
         analysis_cache=None,
+        fingerprints: dict[str, tuple[int, int]] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -584,6 +585,8 @@ class SimilarityWorker(QObject):
         self.image_pipeline = image_pipeline
         self.folder_path = folder_path
         self.analysis_cache = analysis_cache
+        self.fingerprints = fingerprints or {}
+        self._similarity_signature = ""
 
     def _has_raw_images(self) -> bool:
         """Check if any of the file paths are RAW image files."""
@@ -607,6 +610,15 @@ class SimilarityWorker(QObject):
             return
         try:
             from core.similarity_engine import SimilarityEngine
+            from core.app_settings import (
+                DBSCAN_MIN_SAMPLES,
+                get_similarity_clustering_eps,
+            )
+            from core.similarity_cache import (
+                SimilarityClusteringResult,
+                build_similarity_signature,
+                normalize_fingerprints,
+            )
 
             # 1. Instantiate the engine inside the worker thread
             self.similarity_engine = SimilarityEngine(
@@ -617,6 +629,25 @@ class SimilarityWorker(QObject):
                 self.similarity_engine.stop()
                 self.finished.emit()
                 return
+
+            normalized_fingerprints = normalize_fingerprints(
+                self.file_paths, self.fingerprints
+            )
+            self._similarity_signature = build_similarity_signature(
+                self.file_paths,
+                normalized_fingerprints,
+                model_cache_key=self.similarity_engine.model.cache_key,
+                regional_cache_key=self.similarity_engine.model.region_cache_key,
+                clustering_eps=get_similarity_clustering_eps(),
+                min_samples=DBSCAN_MIN_SAMPLES,
+            )
+            cached_clusters = None
+            if self.analysis_cache is not None and self.folder_path:
+                cached_clusters = self.analysis_cache.load_valid_cluster_results(
+                    self.folder_path,
+                    signature=self._similarity_signature,
+                    expected_paths=set(self.file_paths),
+                )
 
             # 2. Connect its signals to this worker's signals
             self.similarity_engine.progress_update.connect(self.progress_update)
@@ -635,7 +666,24 @@ class SimilarityWorker(QObject):
             self.similarity_engine.error.connect(self.finished)
 
             # 4. Start the process
-            self.similarity_engine.generate_embeddings_for_files(self.file_paths)
+            self.similarity_engine.generate_embeddings_for_files(
+                self.file_paths,
+                fingerprints=normalized_fingerprints,
+                perform_clustering=cached_clusters is None,
+            )
+            if cached_clusters is not None and self._is_running:
+                logger.info(
+                    "Reusing %d cached similarity cluster assignments.",
+                    len(cached_clusters),
+                )
+                self.clustering_complete.emit(
+                    SimilarityClusteringResult(
+                        clusters=cached_clusters,
+                        signature=self._similarity_signature,
+                        reused=True,
+                    )
+                )
+                self.finished.emit()
 
         except Exception as e:
             logger.error(
@@ -651,6 +699,8 @@ class SimilarityWorker(QObject):
             self.finished.emit()
             return
 
+        from core.similarity_cache import SimilarityClusteringResult
+
         results = dict(cluster_results or {})
         if self.analysis_cache is not None and self.folder_path:
             try:
@@ -661,10 +711,17 @@ class SimilarityWorker(QObject):
                 self.analysis_cache.save_cluster_results(
                     self.folder_path,
                     results,
+                    signature=self._similarity_signature,
                 )
             except Exception:
                 logger.exception("Failed to persist similarity results.")
-        self.clustering_complete.emit(results)
+        self.clustering_complete.emit(
+            SimilarityClusteringResult(
+                clusters=results,
+                signature=self._similarity_signature,
+                reused=False,
+            )
+        )
         self.finished.emit()
 
 
