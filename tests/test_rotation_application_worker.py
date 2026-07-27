@@ -28,6 +28,15 @@ class TestRotationApplicationWorker:
         assert worker._is_running is False
 
     @patch("workers.rotation_application_worker.MetadataProcessor")
+    def test_stop_before_start_is_not_lost(self, mock_metadata_processor):
+        worker = RotationApplicationWorker()
+        worker.stop()
+
+        worker.apply_rotations({"/tmp/photo.jpg": 90})
+
+        mock_metadata_processor.try_metadata_rotation_first.assert_not_called()
+
+    @patch("workers.rotation_application_worker.MetadataProcessor")
     def test_apply_single_rotation_clockwise_success(self, mock_metadata_processor):
         """Test applying a single clockwise rotation"""
         # Mock metadata-first rotation success

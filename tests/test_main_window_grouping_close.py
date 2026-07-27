@@ -56,7 +56,9 @@ def test_close_without_grouping_edits_skips_expensive_action_preview():
     preview_controller = SimpleNamespace(shutdown=Mock())
     worker_manager = SimpleNamespace(
         is_grouping_workflow_running=lambda: False,
-        stop_all_workers=Mock(),
+        is_file_deletion_running=lambda: False,
+        is_any_worker_running=lambda: False,
+        request_stop_all_workers=Mock(),
     )
     window = SimpleNamespace(
         worker_manager=worker_manager,
@@ -74,5 +76,44 @@ def test_close_without_grouping_edits_skips_expensive_action_preview():
 
     pending_actions.assert_not_called()
     preview_controller.shutdown.assert_called_once()
-    worker_manager.stop_all_workers.assert_called_once()
+    worker_manager.request_stop_all_workers.assert_called_once()
     assert event.accepted
+
+
+def test_close_requests_worker_stop_without_waiting(monkeypatch):
+    callbacks = []
+    status_bar = _DummyStatusBar()
+    preview_controller = SimpleNamespace(shutdown=Mock())
+    worker_manager = SimpleNamespace(
+        is_grouping_workflow_running=lambda: False,
+        is_file_deletion_running=lambda: False,
+        is_any_worker_running=lambda: True,
+        request_stop_all_workers=Mock(),
+    )
+    window = SimpleNamespace(
+        worker_manager=worker_manager,
+        grouping_step_widget=SimpleNamespace(
+            pending_grouping_action_lines=lambda: [],
+            has_unsaved_grouping_edits=lambda: False,
+        ),
+        app_state=SimpleNamespace(get_marked_files=lambda: []),
+        preview_load_controller=preview_controller,
+        statusBar=lambda: status_bar,
+        _close_after_grouping_save=False,
+        _shutdown_in_progress=False,
+        _finish_close_after_workers=Mock(),
+    )
+    event = _DummyEvent()
+    monkeypatch.setattr(
+        "src.ui.main_window.QTimer.singleShot",
+        lambda _delay, callback: callbacks.append(callback),
+    )
+
+    MainWindow.closeEvent(window, event)
+
+    worker_manager.request_stop_all_workers.assert_called_once_with()
+    assert event.ignored
+    assert not event.accepted
+    assert window._shutdown_in_progress is True
+    assert callbacks == [window._finish_close_after_workers]
+    assert status_bar.messages[-1][0] == "Stopping background work…"

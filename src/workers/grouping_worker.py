@@ -4,6 +4,7 @@ from typing import Any
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.grouping import (
+    GroupingAnalysisCancelled,
     GroupingMode,
     augment_grouping_plan_with_filesystem_paths,
     build_grouping_output_root,
@@ -38,22 +39,37 @@ class GroupingPreviewWorker(QObject):
         self.location_depth = location_depth
         self.image_pipeline = image_pipeline
         self._should_stop = False
+        self._similarity_engine = None
 
     def stop(self):
         self._should_stop = True
+        if self._similarity_engine is not None:
+            self._similarity_engine.stop()
 
     def run(self):
         try:
             if self._should_stop:
                 return
             self.progress_update.emit(10, "Preparing grouping preview...")
+            mode = GroupingMode(self.mode)
+            if mode in {GroupingMode.SIMILARITY, GroupingMode.MIXED}:
+                from core.similarity_engine import SimilarityEngine
+
+                self._similarity_engine = SimilarityEngine(
+                    image_pipeline=self.image_pipeline
+                )
+                if self._should_stop:
+                    self._similarity_engine.stop()
+                    return
             plan = build_grouping_plan(
                 self.items,
-                GroupingMode(self.mode),
+                mode,
                 progress_callback=self.progress_update.emit,
                 source_root=self.source_root,
                 location_depth=self.location_depth,
                 image_pipeline=self.image_pipeline,
+                should_continue=lambda: not self._should_stop,
+                similarity_engine=self._similarity_engine,
             )
             plan = augment_grouping_plan_with_filesystem_paths(
                 plan,
@@ -63,6 +79,8 @@ class GroupingPreviewWorker(QObject):
                 return
             self.progress_update.emit(100, "Grouping preview ready.")
             self.preview_ready.emit(plan)
+        except GroupingAnalysisCancelled:
+            logger.info("Grouping preview cancelled.")
         except Exception as exc:
             logger.error("Grouping preview failed: %s", exc, exc_info=True)
             self.error.emit(str(exc))

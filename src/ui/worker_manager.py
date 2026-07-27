@@ -21,6 +21,28 @@ sip = _sip
 
 logger = logging.getLogger(__name__)
 
+_WORKER_SLOTS = (
+    ("scanner_thread", "file_scanner"),
+    ("similarity_thread", "similarity_worker"),
+    ("blur_detection_thread", "blur_detection_worker"),
+    ("rating_loader_thread", "rating_loader_worker"),
+    ("rotation_detection_thread", "rotation_detection_worker"),
+    ("rating_writer_thread", "rating_writer_worker"),
+    ("rotation_application_thread", "rotation_application_worker"),
+    ("thumbnail_preload_thread", "thumbnail_preload_worker"),
+    ("preview_warm_thread", "preview_warm_worker"),
+    ("cuda_detection_thread", "cuda_detection_worker"),
+    ("update_check_thread", "update_check_worker"),
+    ("best_shot_thread", "best_shot_worker"),
+    ("ai_rating_thread", "ai_rating_worker"),
+    ("grouping_preview_thread", "grouping_preview_worker"),
+    ("grouping_workflow_thread", "grouping_workflow_worker"),
+    ("file_deletion_thread", "file_deletion_worker"),
+    ("pick_best_thread", "pick_best_worker"),
+    ("easy_delete_thread", "easy_delete_worker"),
+    ("fix_rotation_detect_thread", "fix_rotation_detect_worker"),
+)
+
 if TYPE_CHECKING:
     from ui.ui_components import (
         BlurDetectionWorker,
@@ -317,19 +339,34 @@ class WorkerManager(QObject):
         if remaining_thread is None:
             setattr(self, worker_attribute, None)
 
-    def _finish_worker_slot(
+    def _request_worker_stop(
         self,
         thread_attribute: str,
         worker_attribute: str,
-        label: str,
+        *,
+        before_stop: Callable[[Any], None] | None = None,
     ) -> None:
-        """Quit a completed worker's event loop, then release its references."""
+        """Request cancellation without waiting on the caller's thread."""
+
+        worker = getattr(self, worker_attribute)
+        if worker is not None and before_stop is not None:
+            try:
+                before_stop(worker)
+            except Exception:
+                logger.debug("Worker pre-stop hook failed.", exc_info=True)
+        stop_method = getattr(worker, "stop", None) if worker is not None else None
+        if stop_method is not None:
+            try:
+                stop_method()
+            except Exception:
+                logger.error(
+                    "Error requesting stop for %s.", worker_attribute, exc_info=True
+                )
 
         thread = getattr(self, thread_attribute)
         if thread is not None and thread.isRunning():
+            thread.requestInterruption()
             thread.quit()
-            thread.wait()
-        self._cleanup_worker_refs(thread_attribute, worker_attribute, label)
 
     def _cleanup_scanner_refs(self):
         self._cleanup_worker_refs("scanner_thread", "file_scanner", "File scanner")
@@ -449,6 +486,10 @@ class WorkerManager(QObject):
     def stop_similarity_analysis(self):
         self._advance_worker_generation("similarity")
         self._stop_worker("similarity_thread", "similarity_worker")
+
+    def request_stop_similarity_analysis(self) -> None:
+        self._advance_worker_generation("similarity")
+        self._request_worker_stop("similarity_thread", "similarity_worker")
 
     def _cleanup_blur_detection_refs(self):
         self._cleanup_worker_refs(
@@ -632,7 +673,8 @@ class WorkerManager(QObject):
     ):
         from workers.grouping_worker import GroupingPreviewWorker
 
-        self.stop_grouping_preview()
+        if self.grouping_preview_thread is not None:
+            return False
         generation = self._advance_worker_generation("grouping_preview")
         self.grouping_preview_thread = QThread()
         self.grouping_preview_worker = GroupingPreviewWorker(
@@ -670,10 +712,15 @@ class WorkerManager(QObject):
         )
         self.grouping_preview_thread.start()
         logger.info("Grouping preview thread started.")
+        return True
 
     def stop_grouping_preview(self):
         self._advance_worker_generation("grouping_preview")
         self._stop_worker("grouping_preview_thread", "grouping_preview_worker")
+
+    def request_stop_grouping_preview(self) -> None:
+        self._advance_worker_generation("grouping_preview")
+        self._request_worker_stop("grouping_preview_thread", "grouping_preview_worker")
 
     def _cleanup_grouping_workflow_refs(self):
         self._cleanup_worker_refs(
@@ -789,10 +836,7 @@ class WorkerManager(QObject):
         )
 
     def is_file_deletion_running(self) -> bool:
-        return (
-            self.file_deletion_thread is not None
-            and self.file_deletion_thread.isRunning()
-        )
+        return self.file_deletion_thread is not None
 
     def stop_all_workers(self):
         logger.info("Stopping all workers...")
@@ -817,56 +861,67 @@ class WorkerManager(QObject):
         self.stop_fix_rotation_detection()
         logger.info("All workers stop requested.")
 
+    def request_stop_all_workers(self) -> None:
+        """Request application-wide cancellation without blocking the UI thread."""
+
+        logger.info("Requesting all workers stop without blocking...")
+        for generation_name in (
+            "similarity",
+            "pick_best",
+            "easy_delete",
+            "fix_rotation",
+            "grouping_preview",
+        ):
+            self._advance_worker_generation(generation_name)
+
+        for thread_attribute, worker_attribute in _WORKER_SLOTS:
+            before_stop = (
+                (lambda worker: worker.disable_emits())
+                if worker_attribute == "rating_loader_worker"
+                else None
+            )
+            self._request_worker_stop(
+                thread_attribute,
+                worker_attribute,
+                before_stop=before_stop,
+            )
+        logger.info("All worker cancellation requests dispatched.")
+
     def is_file_scanner_running(self) -> bool:
-        return self.scanner_thread is not None and self.scanner_thread.isRunning()
+        return self.scanner_thread is not None
 
     def is_similarity_worker_running(self) -> bool:
-        return self.similarity_thread is not None and self.similarity_thread.isRunning()
+        return self.similarity_thread is not None
 
     def is_blur_detection_running(self) -> bool:
-        return (
-            self.blur_detection_thread is not None
-            and self.blur_detection_thread.isRunning()
-        )
+        return self.blur_detection_thread is not None
 
     def is_rating_loader_running(self) -> bool:
-        return (
-            self.rating_loader_thread is not None
-            and self.rating_loader_thread.isRunning()
-        )
+        return self.rating_loader_thread is not None
 
     def is_rotation_detection_running(self) -> bool:
-        return (
-            self.rotation_detection_thread is not None
-            and self.rotation_detection_thread.isRunning()
-        )
+        return self.rotation_detection_thread is not None
 
     def is_cuda_detection_running(self) -> bool:
-        return (
-            self.cuda_detection_thread is not None
-            and self.cuda_detection_thread.isRunning()
-        )
+        return self.cuda_detection_thread is not None
 
     def is_best_shot_worker_running(self) -> bool:
-        return self.best_shot_thread is not None and self.best_shot_thread.isRunning()
+        return self.best_shot_thread is not None
 
     def is_ai_rating_running(self) -> bool:
-        return self.ai_rating_thread is not None and self.ai_rating_thread.isRunning()
+        return self.ai_rating_thread is not None
 
     def is_grouping_preview_running(self) -> bool:
-        return (
-            self.grouping_preview_thread is not None
-            and self.grouping_preview_thread.isRunning()
-        )
+        return self.grouping_preview_thread is not None
+
+    def is_grouping_preview_active(self) -> bool:
+        return self.grouping_preview_thread is not None
 
     def is_grouping_workflow_running(self) -> bool:
-        return (
-            self.grouping_workflow_thread is not None
-            and self.grouping_workflow_thread.isRunning()
-        )
+        return self.grouping_workflow_thread is not None
 
     def is_pick_best_running(self) -> bool:
-        return self.pick_best_thread is not None and self.pick_best_thread.isRunning()
+        return self.pick_best_thread is not None
 
     def start_update_check(self, current_version: str):
         """Start checking for updates in a background thread."""
@@ -887,8 +942,9 @@ class WorkerManager(QObject):
             self.update_check_finished.emit
         )
         self.update_check_worker.update_check_finished.connect(
-            self._cleanup_update_check_worker
+            self.update_check_thread.quit
         )
+        self.update_check_thread.finished.connect(self._cleanup_update_check_worker)
 
         # Connect start signal
         self.update_check_thread.started.connect(
@@ -900,15 +956,12 @@ class WorkerManager(QObject):
 
     def _cleanup_update_check_worker(self):
         """Clean up the update check worker and thread."""
-        self._finish_worker_slot(
+        self._cleanup_worker_refs(
             "update_check_thread", "update_check_worker", "Update check"
         )
 
     def is_update_check_running(self) -> bool:
-        return (
-            self.update_check_thread is not None
-            and self.update_check_thread.isRunning()
-        )
+        return self.update_check_thread is not None
 
     def stop_update_check(self) -> None:
         """Stop an in-flight update check during application shutdown."""
@@ -936,6 +989,14 @@ class WorkerManager(QObject):
             or self.is_pick_best_running()
             or self.is_easy_delete_running()
             or self.is_fix_rotation_running()
+        )
+
+    def is_any_worker_active(self) -> bool:
+        """Whether any worker slot still owns a thread awaiting final cleanup."""
+
+        return any(
+            getattr(self, thread_attribute) is not None
+            for thread_attribute, _worker_attribute in _WORKER_SLOTS
         )
 
     def is_resource_intensive_analysis_running(self) -> bool:
@@ -981,7 +1042,8 @@ class WorkerManager(QObject):
         self.rating_writer_worker.rating_written.connect(self.rating_written.emit)
         self.rating_writer_worker.finished.connect(self.rating_write_finished.emit)
         self.rating_writer_worker.error.connect(self.rating_write_error.emit)
-        self.rating_writer_worker.finished.connect(self._cleanup_rating_writer_worker)
+        self.rating_writer_worker.finished.connect(self.rating_writer_thread.quit)
+        self.rating_writer_thread.finished.connect(self._cleanup_rating_writer_worker)
 
         # Connect start signal
         self.rating_writer_thread.started.connect(
@@ -993,15 +1055,12 @@ class WorkerManager(QObject):
 
     def _cleanup_rating_writer_worker(self):
         """Clean up the rating writer worker and thread."""
-        self._finish_worker_slot(
+        self._cleanup_worker_refs(
             "rating_writer_thread", "rating_writer_worker", "Rating writer"
         )
 
     def is_rating_writer_running(self) -> bool:
-        return (
-            self.rating_writer_thread is not None
-            and self.rating_writer_thread.isRunning()
-        )
+        return self.rating_writer_thread is not None
 
     def stop_rating_writer(self):
         """Stop the rating writer thread."""
@@ -1044,6 +1103,9 @@ class WorkerManager(QObject):
             self.rotation_application_error.emit
         )
         self.rotation_application_worker.finished.connect(
+            self.rotation_application_thread.quit
+        )
+        self.rotation_application_thread.finished.connect(
             self._cleanup_rotation_application_worker
         )
 
@@ -1057,17 +1119,14 @@ class WorkerManager(QObject):
 
     def _cleanup_rotation_application_worker(self):
         """Clean up the rotation application worker and thread."""
-        self._finish_worker_slot(
+        self._cleanup_worker_refs(
             "rotation_application_thread",
             "rotation_application_worker",
             "Rotation application",
         )
 
     def is_rotation_application_running(self) -> bool:
-        return (
-            self.rotation_application_thread is not None
-            and self.rotation_application_thread.isRunning()
-        )
+        return self.rotation_application_thread is not None
 
     def stop_rotation_application(self):
         """Stop the rotation application thread."""
@@ -1083,7 +1142,7 @@ class WorkerManager(QObject):
         """Start one prioritized thumbnail session for the active folder."""
         from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
 
-        if self.is_thumbnail_preload_running():
+        if self.thumbnail_preload_thread is not None:
             return False
 
         self.thumbnail_preload_thread = QThread()
@@ -1109,6 +1168,9 @@ class WorkerManager(QObject):
             self.thumbnail_session_error.emit
         )
         self.thumbnail_preload_worker.session_finished.connect(
+            self.thumbnail_preload_thread.quit
+        )
+        self.thumbnail_preload_thread.finished.connect(
             self._cleanup_thumbnail_preload_worker
         )
         self.thumbnail_preload_thread.started.connect(
@@ -1132,21 +1194,25 @@ class WorkerManager(QObject):
 
     def _cleanup_thumbnail_preload_worker(self, *_args):
         """Clean up the thumbnail preload worker and thread."""
-        self._finish_worker_slot(
+        self._cleanup_worker_refs(
             "thumbnail_preload_thread",
             "thumbnail_preload_worker",
             "Thumbnail preload",
         )
 
     def is_thumbnail_preload_running(self) -> bool:
-        return (
-            self.thumbnail_preload_thread is not None
-            and self.thumbnail_preload_thread.isRunning()
-        )
+        return self.thumbnail_preload_thread is not None
 
     def stop_thumbnail_preload(self):
         """Stop the thumbnail preload thread."""
         self._stop_worker("thumbnail_preload_thread", "thumbnail_preload_worker")
+
+    def request_stop_thumbnail_preload(self) -> None:
+        """Cancel thumbnail warming without blocking the UI thread."""
+
+        self._request_worker_stop(
+            "thumbnail_preload_thread", "thumbnail_preload_worker"
+        )
 
     # --- Folder Preview Warming ---
     def start_preview_warming(self, image_paths: list[str]) -> bool:
@@ -1164,23 +1230,21 @@ class WorkerManager(QObject):
         self.preview_warm_worker.progress.connect(self.preview_warm_progress.emit)
         self.preview_warm_worker.finished.connect(self.preview_warm_finished.emit)
         self.preview_warm_worker.error.connect(self.preview_warm_error.emit)
-        self.preview_warm_worker.finished.connect(self._cleanup_preview_warm_worker)
+        self.preview_warm_worker.finished.connect(self.preview_warm_thread.quit)
+        self.preview_warm_thread.finished.connect(self._cleanup_preview_warm_worker)
         self.preview_warm_thread.started.connect(self.preview_warm_worker.run)
         self.preview_warm_thread.start()
         return True
 
     def _cleanup_preview_warm_worker(self, *_args) -> None:
-        self._finish_worker_slot(
+        self._cleanup_worker_refs(
             "preview_warm_thread",
             "preview_warm_worker",
             "Preview warming",
         )
 
     def is_preview_warming_running(self) -> bool:
-        return (
-            self.preview_warm_thread is not None
-            and self.preview_warm_thread.isRunning()
-        )
+        return self.preview_warm_thread is not None
 
     def stop_preview_warming(self) -> None:
         self._stop_worker("preview_warm_thread", "preview_warm_worker")
@@ -1236,6 +1300,10 @@ class WorkerManager(QObject):
     def stop_pick_best_analysis(self) -> None:
         self._advance_worker_generation("pick_best")
         self._stop_worker("pick_best_thread", "pick_best_worker")
+
+    def request_stop_pick_best_analysis(self) -> None:
+        self._advance_worker_generation("pick_best")
+        self._request_worker_stop("pick_best_thread", "pick_best_worker")
 
     def _cleanup_pick_best_worker(self) -> None:
         self._cleanup_worker_refs(
@@ -1298,10 +1366,12 @@ class WorkerManager(QObject):
         self._advance_worker_generation("easy_delete")
         self._stop_worker("easy_delete_thread", "easy_delete_worker")
 
+    def request_stop_easy_delete_analysis(self) -> None:
+        self._advance_worker_generation("easy_delete")
+        self._request_worker_stop("easy_delete_thread", "easy_delete_worker")
+
     def is_easy_delete_running(self) -> bool:
-        return (
-            self.easy_delete_thread is not None and self.easy_delete_thread.isRunning()
-        )
+        return self.easy_delete_thread is not None
 
     def _cleanup_easy_delete_worker(self) -> None:
         self._cleanup_worker_refs(
@@ -1383,11 +1453,14 @@ class WorkerManager(QObject):
         self._advance_worker_generation("fix_rotation")
         self._stop_worker("fix_rotation_detect_thread", "fix_rotation_detect_worker")
 
-    def is_fix_rotation_running(self) -> bool:
-        return (
-            self.fix_rotation_detect_thread is not None
-            and self.fix_rotation_detect_thread.isRunning()
+    def request_stop_fix_rotation_detection(self) -> None:
+        self._advance_worker_generation("fix_rotation")
+        self._request_worker_stop(
+            "fix_rotation_detect_thread", "fix_rotation_detect_worker"
         )
+
+    def is_fix_rotation_running(self) -> bool:
+        return self.fix_rotation_detect_thread is not None
 
     def _cleanup_fix_rotation_detect_worker(self) -> None:
         self._cleanup_worker_refs(
@@ -1434,6 +1507,9 @@ class WorkerManager(QObject):
 
     def stop_best_shot_analysis(self):
         self._stop_worker("best_shot_thread", "best_shot_worker")
+
+    def request_stop_best_shot_analysis(self) -> None:
+        self._request_worker_stop("best_shot_thread", "best_shot_worker")
 
     def start_ai_rating(
         self,

@@ -459,7 +459,8 @@ class BlurDetectionWorker(QObject):
         return self._is_running
 
     def run_detection(self):
-        self._is_running = True
+        if not self._is_running:
+            return
         try:
             from core.image_features.blur_detector import BlurDetector
 
@@ -601,7 +602,9 @@ class SimilarityWorker(QObject):
 
     def run(self):
         """The main method that will be executed in the new thread."""
-        self._is_running = True
+        if not self._is_running:
+            self.finished.emit()
+            return
         try:
             from core.similarity_engine import SimilarityEngine
 
@@ -610,6 +613,10 @@ class SimilarityWorker(QObject):
                 allow_model_download=self.allow_model_download,
                 image_pipeline=self.image_pipeline,
             )
+            if not self._is_running:
+                self.similarity_engine.stop()
+                self.finished.emit()
+                return
 
             # 2. Connect its signals to this worker's signals
             self.similarity_engine.progress_update.connect(self.progress_update)
@@ -639,6 +646,10 @@ class SimilarityWorker(QObject):
 
     def _handle_clustering_complete(self, cluster_results: dict[str, int]) -> None:
         """Apply and persist analysis-cache state before returning to the UI."""
+
+        if not self._is_running:
+            self.finished.emit()
+            return
 
         results = dict(cluster_results or {})
         if self.analysis_cache is not None and self.folder_path:

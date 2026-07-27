@@ -147,6 +147,7 @@ class MainWindow(QMainWindow):
         self._last_filter_search_text: str | None = None
         self._close_after_grouping_save = False
         self._close_after_deletion = False
+        self._shutdown_in_progress = False
         self._pending_workflow_transition: WorkflowTransitionRequest | None = None
         self._pending_deletion_context: dict[str, Any] | None = None
 
@@ -2515,6 +2516,21 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         close_start = time.perf_counter()
         logger.info("Application close requested.")
+        if getattr(self, "_shutdown_in_progress", False):
+            is_any_worker_active = getattr(
+                self.worker_manager,
+                "is_any_worker_active",
+                self.worker_manager.is_any_worker_running,
+            )
+            if is_any_worker_active():
+                event.ignore()
+                return
+            self._shutdown_in_progress = False
+            MetadataIO.shutdown_worker_thread(immediate=True, timeout=0.0)
+            logger.info("Background workers stopped; application close can complete.")
+            event.accept()
+            return
+
         if self.worker_manager.is_grouping_workflow_running():
             event.ignore()
             self.statusBar().showMessage(
@@ -2588,13 +2604,38 @@ class MainWindow(QMainWindow):
 
         self._close_after_grouping_save = False
         logger.info(
-            "Stopping all workers on application close (preflight %.3fs).",
+            "Requesting all workers stop on application close (preflight %.3fs).",
             time.perf_counter() - close_start,
         )
         self.preview_load_controller.shutdown()
-        self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
-        MetadataIO.shutdown_worker_thread(immediate=True)
+        self.worker_manager.request_stop_all_workers()
+        is_any_worker_active = getattr(
+            self.worker_manager,
+            "is_any_worker_active",
+            self.worker_manager.is_any_worker_running,
+        )
+        if is_any_worker_active():
+            self._shutdown_in_progress = True
+            self.statusBar().showMessage("Stopping background work…", 0)
+            QTimer.singleShot(25, self._finish_close_after_workers)
+            event.ignore()
+            return
+
+        MetadataIO.shutdown_worker_thread(immediate=True, timeout=0.0)
         event.accept()
+
+    def _finish_close_after_workers(self) -> None:
+        """Retry closing through Qt's event loop once worker threads have exited."""
+
+        is_any_worker_active = getattr(
+            self.worker_manager,
+            "is_any_worker_active",
+            self.worker_manager.is_any_worker_running,
+        )
+        if is_any_worker_active():
+            QTimer.singleShot(25, self._finish_close_after_workers)
+            return
+        self.close()
 
     def _get_current_group_sibling_images(
         self, current_image_proxy_idx: QModelIndex

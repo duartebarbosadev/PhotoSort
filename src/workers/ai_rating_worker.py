@@ -51,6 +51,7 @@ class AiRatingWorker(QObject):
             min_workers=2, max_workers=6
         )
         self._should_stop = False
+        self._stop_event = threading.Event()
         self._max_retries = max(1, int(max_retries))
         self._retry_delay = max(0.0, float(retry_delay_seconds))
         self._executor_lock = threading.Lock()
@@ -59,6 +60,7 @@ class AiRatingWorker(QObject):
 
     def stop(self) -> None:
         self._should_stop = True
+        self._stop_event.set()
         self._shutdown_executor(cancel=True)
         if self._strategy is not None:
             try:
@@ -118,8 +120,8 @@ class AiRatingWorker(QObject):
                     warning_msg = f"Retry {attempts}/{self._max_retries} for {os.path.basename(image_path)}: {exc}"
                     logger.warning(warning_msg)
                     self.warning.emit(warning_msg)
-                    if delay > 0:
-                        time.sleep(delay)
+                    if delay > 0 and self._stop_event.wait(delay):
+                        return None
         if last_error is not None:
             raise RuntimeError(
                 f"Failed to rate {image_path} after {self._max_retries} attempt(s): {last_error}"

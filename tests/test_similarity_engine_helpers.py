@@ -6,7 +6,9 @@ pytest.importorskip("sklearn")
 
 from core.similarity_engine import SimilarityEngine
 from core.similarity_utils import (
+    SimilarityAnalysisCancelled,
     adaptive_dbscan_eps,
+    build_orientation_map,
     build_regional_distance_matrix,
     classify_orientation,
     cosine_similarity,
@@ -52,6 +54,46 @@ def test_regional_distance_keeps_identical_ordered_regions_together():
     )
 
     assert distances[0, 1] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_regional_distance_matrix_honors_cancellation():
+    paths = [f"/tmp/{index}.jpg" for index in range(10)]
+    embeddings = {path: [1.0, 0.0] for path in paths}
+    regional_embeddings = {path: [[1.0, 0.0]] for path in paths}
+    cancellation_checks = 0
+
+    def should_cancel():
+        nonlocal cancellation_checks
+        cancellation_checks += 1
+        return cancellation_checks >= 4
+
+    with pytest.raises(SimilarityAnalysisCancelled):
+        build_regional_distance_matrix(
+            embeddings,
+            regional_embeddings,
+            paths,
+            should_cancel=should_cancel,
+        )
+
+    assert cancellation_checks == 4
+
+
+def test_orientation_map_honors_cancellation(monkeypatch):
+    classified_paths = []
+
+    def classify(path):
+        classified_paths.append(path)
+        return "landscape"
+
+    monkeypatch.setattr("core.similarity_utils.classify_orientation", classify)
+
+    with pytest.raises(SimilarityAnalysisCancelled):
+        build_orientation_map(
+            ["/tmp/a.jpg", "/tmp/b.jpg"],
+            should_cancel=lambda: bool(classified_paths),
+        )
+
+    assert classified_paths == ["/tmp/a.jpg"]
 
 
 def test_l2_normalize_rows_produces_unit_norm_rows():

@@ -273,8 +273,8 @@ def test_successful_in_place_resolution_does_not_open_another_workflow():
 
 def test_cancelled_workflow_discards_late_analysis_results():
     worker = SimpleNamespace(
-        stop_easy_delete_analysis=Mock(),
-        stop_similarity_analysis=Mock(),
+        request_stop_easy_delete_analysis=Mock(),
+        request_stop_similarity_analysis=Mock(),
     )
     state = SimpleNamespace(
         easy_delete_results=None,
@@ -293,8 +293,8 @@ def test_cancelled_workflow_discards_late_analysis_results():
     assert state.easy_delete_results is None
     assert state.embeddings_cache == {}
     main_window.easy_delete_step_widget.show_results.assert_not_called()
-    worker.stop_easy_delete_analysis.assert_called_once()
-    worker.stop_similarity_analysis.assert_called_once()
+    worker.request_stop_easy_delete_analysis.assert_called_once()
+    worker.request_stop_similarity_analysis.assert_called_once()
 
 
 def test_worker_generation_drops_callback_from_replaced_run():

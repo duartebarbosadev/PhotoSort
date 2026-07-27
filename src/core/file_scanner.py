@@ -118,7 +118,9 @@ class FileScanner(QObject):
         perform_blur_detection: bool - If True, performs blur detection in parallel.
         blur_threshold: float - Threshold for blur detection if performed.
         """
-        self._is_running = True
+        if not self._is_running:
+            logger.info("File scan skipped because cancellation was already requested.")
+            return
         all_file_data: list[dict[str, Any]] = []
         discovery_batch: list[dict[str, Any]] = []
         image_paths_for_blur: list[str] = []

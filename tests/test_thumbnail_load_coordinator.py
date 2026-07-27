@@ -43,6 +43,25 @@ def test_folder_session_prioritizes_visible_and_warms_every_path_once():
     context.set_thumbnail_progress.assert_called_once_with(0, 3, 0, False)
 
 
+def test_replacing_folder_session_cancels_without_waiting_and_retries():
+    context = _context(item_count=2)
+    context.worker_manager.is_thumbnail_preload_running.return_value = True
+    loader = ViewportThumbnailLoader(context)
+    loader._visible_paths = Mock(return_value=["image-1.jpg"])
+
+    loader.start_folder(["image-0.jpg", "image-1.jpg"])
+
+    context.worker_manager.request_stop_thumbnail_preload.assert_called_once_with()
+    context.worker_manager.stop_thumbnail_preload.assert_not_called()
+    context.worker_manager.start_thumbnail_session.assert_not_called()
+    assert loader._folder_start_timer.isActive()
+
+    context.worker_manager.is_thumbnail_preload_running.return_value = False
+    loader._start_folder_session()
+
+    context.worker_manager.start_thumbnail_session.assert_called_once()
+
+
 def test_scroll_request_is_reprioritized_while_session_is_active():
     context = _context(item_count=2)
     loader = ViewportThumbnailLoader(context)
