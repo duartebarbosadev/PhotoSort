@@ -403,11 +403,11 @@ class EasyDeleteStepWidget(QWidget):
                     keep_by_path.get(candidate, True)
                     for candidate in self._review_candidates(path, entry)
                 )
-                summary = f"\nComplete · {kept_count} kept"
+                summary = f"\n{kept_count} kept"
             return f"{prefix}{os.path.basename(path)}  ↔  {pair_name}{summary}"
         if confirmed:
             kept = self._pending_keep_state(path, entry).get(path, True)
-            return f"{prefix}{os.path.basename(path)}\nComplete · {'Keep' if kept else 'Trash'}"
+            return f"{prefix}{os.path.basename(path)}\n{'Keep' if kept else 'Trash'}"
         return os.path.basename(path)
 
     def _add_category_header(self, category: str, count: int) -> None:

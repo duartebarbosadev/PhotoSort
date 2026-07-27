@@ -74,7 +74,7 @@ from core.grouping import (
     augment_grouping_plan_with_filesystem_paths,
     find_directory_rename_candidates,
 )
-from core.media_utils import is_video_extension
+from core.media_utils import is_image_extension, is_video_extension
 from core.app_settings import (
     get_location_grouping_depth,
     set_location_grouping_depth,
@@ -840,7 +840,7 @@ class GroupingStepWidget(QWidget):
         self.preview_panel_header = QLabel("Preview")
         self.preview_panel_header.setObjectName("groupingTreeHeader")
         self.preview_pane_stack = QStackedWidget()
-        self.preview_hint_label = QLabel("Select a photo or folder to preview")
+        self.preview_hint_label = QLabel("Select a photo, video, or folder to preview")
         self.preview_hint_label.setObjectName("groupingPreviewHint")
         self.preview_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.large_preview_view = SynchronizedImageViewer()
@@ -2372,6 +2372,10 @@ class GroupingStepWidget(QWidget):
                 icon = get_icon(source_path)
         item.setIcon(0, icon or self._file_icon)
 
+    @staticmethod
+    def _is_previewable_media_path(source_path: str) -> bool:
+        return is_image_extension(source_path) or is_video_extension(source_path)
+
     def visible_thumbnail_paths(
         self,
         limit: int = THUMBNAIL_PRELOAD_BATCH_SIZE
@@ -2397,7 +2401,7 @@ class GroupingStepWidget(QWidget):
             max_inspected = max(limit * 4, limit)
             while item is not None and len(paths) < limit and inspected < max_inspected:
                 source_path = self._item_source_path(item)
-                if source_path:
+                if source_path and self._is_previewable_media_path(source_path):
                     paths.append(source_path)
                 item = tree.itemBelow(item)
                 inspected += 1
@@ -2430,7 +2434,13 @@ class GroupingStepWidget(QWidget):
                 ratio = scroll_bar.value() / maximum if maximum > 0 else 0.0
                 first_row = int(ratio * max(0, row_count - 1))
             start_row = max(0, first_row - THUMBNAIL_PRELOAD_VISIBLE_MARGIN)
-            return self._folder_preview_model.paths_slice(start_row, limit)
+            return [
+                path
+                for path in self._folder_preview_model.paths_slice(
+                    start_row, row_count - start_row
+                )
+                if self._is_previewable_media_path(path)
+            ][:limit]
 
         combined = (
             paths_for_folder_preview()
@@ -2480,7 +2490,10 @@ class GroupingStepWidget(QWidget):
         if source_path:
             self._update_selected_preview(source_path)
             self._sync_selection_to_other_tree(current, from_after=True)
-            if not self._syncing_active_image:
+            if (
+                self._is_previewable_media_path(source_path)
+                and not self._syncing_active_image
+            ):
                 self.active_image_changed.emit(source_path)
         elif current is not None:
             self._update_folder_preview(current)
@@ -2495,7 +2508,10 @@ class GroupingStepWidget(QWidget):
         if source_path:
             self._update_selected_preview(source_path)
             self._sync_selection_to_other_tree(current, from_after=False)
-            if not self._syncing_active_image:
+            if (
+                self._is_previewable_media_path(source_path)
+                and not self._syncing_active_image
+            ):
                 self.active_image_changed.emit(source_path)
         elif current is not None:
             self._update_folder_preview(current)
@@ -2518,6 +2534,7 @@ class GroupingStepWidget(QWidget):
             clear_inspection(self.large_preview_view)
         self.large_preview_view.clear()
         self.large_preview_name.clear()
+        self.preview_hint_label.setText("Select a photo, video, or folder to preview")
         self.folder_preview_title.clear()
         self.folder_preview_meta.clear()
         self._folder_preview_model.set_paths([])
@@ -2530,8 +2547,33 @@ class GroupingStepWidget(QWidget):
         self.thumb_label.clear()
         self.thumb_label.setVisible(False)
 
+    def _show_unavailable_file_preview(self, source_path: str) -> None:
+        self._current_preview_source_path = source_path
+        clear_inspection = getattr(self._parent_window, "clear_image_inspection", None)
+        if callable(clear_inspection):
+            clear_inspection(self.large_preview_view)
+        self.large_preview_view.clear()
+        self.large_preview_name.clear()
+        self.preview_hint_label.setText("Preview unavailable for this file type")
+        self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_HINT)
+        self.preview_trash_button.setEnabled(os.path.isfile(source_path))
+        display_name = self._preview_deletion_display_name(source_path)
+        self.preview_selection_label.setText(display_name)
+        self.preview_selection_label.setVisible(True)
+        self.preview_selection_meta.setText(source_path)
+        self.preview_selection_meta.setVisible(True)
+        self._apply_preview_deletion_style(source_path)
+
     def _update_selected_preview(self, source_path: str) -> None:
         start_time = time.perf_counter()
+        if not self._is_previewable_media_path(source_path):
+            self._show_unavailable_file_preview(source_path)
+            logger.debug(
+                "Organize skipped unsupported preview in %.3fs (path=%s)",
+                time.perf_counter() - start_time,
+                source_path,
+            )
+            return
         current_preview_path = self._current_preview_source_path
         self._current_preview_source_path = source_path
         existing_pixmap = self.large_preview_view.current_pixmap()
@@ -2602,7 +2644,10 @@ class GroupingStepWidget(QWidget):
 
     def handle_preview_ready(self, source_path: str) -> None:
         """Compatibility hook; shared inspection owns preview upgrades."""
-        if source_path != self._current_preview_source_path:
+        if (
+            source_path != self._current_preview_source_path
+            or not self._is_previewable_media_path(source_path)
+        ):
             return
         if callable(getattr(self._parent_window, "activate_image_inspection", None)):
             return
@@ -2620,7 +2665,10 @@ class GroupingStepWidget(QWidget):
             )
 
     def handle_preview_failed(self, source_path: str) -> None:
-        if source_path != self._current_preview_source_path:
+        if (
+            source_path != self._current_preview_source_path
+            or not self._is_previewable_media_path(source_path)
+        ):
             return
         if not self.large_preview_view.has_image():
             self.large_preview_view.setText("Preview unavailable")
