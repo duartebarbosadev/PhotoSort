@@ -353,6 +353,9 @@ class AppController(QObject):
         self.worker_manager.easy_delete_complete.connect(
             self.handle_easy_delete_complete
         )
+        self.worker_manager.easy_delete_assessments_ready.connect(
+            self.handle_easy_delete_assessments_ready
+        )
         self.worker_manager.easy_delete_error.connect(self.handle_easy_delete_error)
 
         # Fix Rotation Worker
@@ -1515,6 +1518,14 @@ class AppController(QObject):
                 "Failed to update in-memory path caches after grouping.",
                 exc_info=True,
             )
+        else:
+            sync_workflows = getattr(
+                self.main_window,
+                "_sync_workflow_results_after_file_mutation",
+                None,
+            )
+            if callable(sync_workflows):
+                sync_workflows()
         self.app_state.grouping_run_summary = {
             "mode": summary.mode,
             "output_root": summary.output_root,
@@ -1697,6 +1708,7 @@ class AppController(QObject):
         cluster_map = self._build_cluster_path_map()
         embeddings = getattr(self.app_state, "embeddings_cache", {}) or {}
         exif_cache = self.app_state.exif_disk_cache
+        getattr(self.app_state, "easy_delete_pair_assessments", {}).clear()
 
         self.main_window.easy_delete_step_widget.show_loading(
             "Step 2/2: Detecting blurry, dark, overexposed, and duplicate images…", 0
@@ -1723,6 +1735,11 @@ class AppController(QObject):
         self.app_state.easy_delete_results = results
         self.main_window.easy_delete_step_widget.show_results(results)
         AppController._sync_active_image(self, "easy_delete")
+
+    def handle_easy_delete_assessments_ready(self, assessments: dict) -> None:
+        if _workflow_is_cancelled(self, "easy_delete"):
+            return
+        self.app_state.easy_delete_pair_assessments = dict(assessments)
 
     def handle_easy_delete_error(self, message: str) -> None:
         if _workflow_is_cancelled(self, "easy_delete"):
@@ -2496,6 +2513,15 @@ class AppController(QObject):
             if self._pending_rotated_paths:
                 rotated_paths = list(self._pending_rotated_paths)
                 self.app_state.invalidate_similarity_for_paths(rotated_paths)
+                sync_workflows = getattr(
+                    self.main_window,
+                    "_sync_workflow_results_after_file_mutation",
+                    None,
+                )
+                if callable(sync_workflows):
+                    # Fix Rotation owns the active apply-result lifecycle and
+                    # removes successful rows in show_apply_complete().
+                    sync_workflows(exclude={"fix_rotation"})
                 self.main_window._batch_update_rotated_thumbnails(rotated_paths)
 
                 selected_paths = self.main_window._get_selected_file_paths_from_view()

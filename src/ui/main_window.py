@@ -1860,6 +1860,31 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.refresh_deletion_state()
 
+    def _sync_workflow_results_after_file_mutation(
+        self, *, exclude: set[str] | None = None
+    ) -> None:
+        """Synchronize every instantiated workflow queue with shared AppState."""
+
+        excluded = exclude or set()
+        if (
+            "easy_delete" not in excluded
+            and self.easy_delete_step_widget is not None
+        ):
+            self.easy_delete_step_widget.sync_results_after_file_mutation(
+                self.app_state.easy_delete_results
+            )
+        if (
+            "fix_rotation" not in excluded
+            and self.fix_rotation_step_widget is not None
+        ):
+            self.fix_rotation_step_widget.sync_results_after_file_mutation(
+                self.app_state.fix_rotation_results
+            )
+        if "pick_best" not in excluded and self.pick_best_step_widget is not None:
+            self.pick_best_step_widget.sync_results_after_file_mutation(
+                self.app_state.pick_best_results
+            )
+
     def _toggle_organize_deletion_marks(self, paths: list[str]) -> None:
         existing_paths = list(dict.fromkeys(path for path in paths if path))
         directory_paths = self.grouping_step_widget.known_directory_paths()
@@ -4838,24 +4863,19 @@ class MainWindow(QMainWindow):
         )
         if resolved_marks:
             self.app_state.set_deletion_marks(dict.fromkeys(resolved_marks, False))
-        for path in deleted_paths:
-            self.image_pipeline.invalidate_path(path)
+
         if deleted_paths:
+            # Synchronize workflow-owned review queues before mutating the
+            # general file model. Removing source rows can emit selection
+            # changes, and no deleted review path may remain available to
+            # request a stale preview.
+            self._sync_workflow_results_after_file_mutation()
+            for path in deleted_paths:
+                self.image_pipeline.invalidate_path(path)
             self.thumbnail_loader.invalidate_paths(deleted_paths)
             self._remove_model_paths_batch(deleted_paths)
             self.proxy_model.invalidate()
             self.grouping_step_widget.remove_deleted_paths(deleted_paths)
-            if (
-                self.easy_delete_step_widget is not None
-                and self.app_state.easy_delete_results is not None
-            ):
-                self.easy_delete_step_widget.show_results(
-                    self.app_state.easy_delete_results
-                )
-            if self.pick_best_step_widget is not None:
-                self.pick_best_step_widget.sync_results_after_file_mutation(
-                    self.app_state.pick_best_results
-                )
             self.mark_cull_model_dirty()
             self._refresh_workflow_deletion_state()
 

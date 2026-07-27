@@ -52,13 +52,53 @@ def aligned_structural_similarity(
     if not within_shift_limit:
         return 0.0
 
-    score_map = _ssim_map(first_float, aligned_second)
-    global_score = float(score_map.mean())
+    return structural_similarity_for_aligned(first_float, aligned_second)
+
+
+def structural_similarity_for_aligned(
+    first: np.ndarray,
+    second: np.ndarray,
+    valid_mask: np.ndarray | None = None,
+) -> float | None:
+    """Return global/local SSIM for images that already share one coordinate frame."""
+
+    if first.size == 0 or second.size == 0 or first.shape != second.shape:
+        return None
+    first_float = np.asarray(first, dtype=np.float32)
+    second_float = np.asarray(second, dtype=np.float32)
+    if not np.isfinite(first_float).all() or not np.isfinite(second_float).all():
+        return None
+
+    score_map = _ssim_map(first_float, second_float)
+    if valid_mask is None:
+        mask = np.ones(score_map.shape, dtype=bool)
+    else:
+        mask = np.asarray(valid_mask, dtype=bool)
+        if mask.shape != score_map.shape:
+            return None
+        # SSIM uses an 11x11 support window. Exclude pixels whose support touches
+        # an alignment border so synthetic border values never affect the score.
+        mask = cv2.erode(
+            mask.astype(np.uint8),
+            np.ones(_SSIM_WINDOW_SIZE, dtype=np.uint8),
+        ).astype(bool)
+    if not np.any(mask):
+        return None
+
+    global_score = float(score_map[mask].mean())
     tile_scores = [
-        float(tile.mean())
-        for tile_row in np.array_split(score_map, 4, axis=0)
-        for tile in np.array_split(tile_row, 4, axis=1)
-        if tile.size
+        float(score_tile[mask_tile].mean())
+        for score_rows, mask_rows in zip(
+            np.array_split(score_map, 4, axis=0),
+            np.array_split(mask, 4, axis=0),
+            strict=True,
+        )
+        for score_tile, mask_tile in zip(
+            np.array_split(score_rows, 4, axis=1),
+            np.array_split(mask_rows, 4, axis=1),
+            strict=True,
+        )
+        if np.any(mask_tile)
     ]
     if not tile_scores or not np.isfinite(global_score):
         return None

@@ -123,6 +123,7 @@ class CacheController:
             clear_pick_best()
         if hasattr(ctx.app_state, "easy_delete_results"):
             ctx.app_state.easy_delete_results = None
+        getattr(ctx.app_state, "easy_delete_pair_assessments", {}).clear()
         ctx.cluster_filter_combo.clear()
         ctx.cluster_filter_combo.addItem("All Clusters")
         ctx.cluster_filter_combo.setEnabled(False)

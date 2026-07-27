@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResults
-from core.app_settings import get_easy_delete_duplicate_distance
+from core.app_settings import EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY
 from core.similarity_utils import cosine_similarity
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.controllers.image_inspection_controller import InspectionImageSpec
@@ -324,6 +324,7 @@ class PickBestStepWidget(QWidget):
         ]
         self._metadata_cache.clear()
         if not self._tournaments:
+            self._clear_review_display()
             self.show_loading(
                 "No comparable clusters found.\nUse the workflow footer to continue."
             )
@@ -339,6 +340,24 @@ class PickBestStepWidget(QWidget):
 
         self._shown_results = None
         self.show_results(results, restore_prior_marks=False)
+
+    def _clear_review_display(self) -> None:
+        """Clear all tournament paths after the shared results are invalidated."""
+
+        self._items_list.clear()
+        self._review_list_panel.count_label.setText("0/0 done")
+        self._subset_paths = []
+        self._current_all_paths = []
+        self._cluster_ordered_paths = []
+        self._current_images_data = []
+        self._current_winner_path = ""
+        self._focused_slot_index = 0
+        for card in self._compare_cards:
+            card.hide()
+        clear_inspection = getattr(self.window(), "clear_image_inspection", None)
+        if callable(clear_inspection):
+            clear_inspection(self._sync_viewer)
+        self._sync_viewer.clear()
 
     def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
         self._is_marked_func = func
@@ -1068,14 +1087,40 @@ class PickBestStepWidget(QWidget):
         if similarity is None:
             return ""
         distance = max(0.0, 1.0 - similarity)
-        cutoff = get_easy_delete_duplicate_distance()
-        cutoff_result = "inside" if distance < cutoff else "outside"
+        assessment = getattr(
+            app_state, "easy_delete_pair_assessments", {}
+        ).get(tuple(sorted(paths)))
+        if assessment:
+            reason_code = assessment.get("assessment_reason_code")
+            detail = assessment.get("assessment_detail")
+            decision = assessment.get("assessment_decision")
+            if decision == "subject_changed":
+                policy_detail = (
+                    f"Easy Delete excluded this pair: {detail or reason_code}."
+                )
+            elif decision == "uncertain":
+                policy_detail = (
+                    "Easy Delete kept this pair for review because "
+                    f"{detail or reason_code}."
+                )
+            else:
+                policy_detail = (
+                    f"Easy Delete assessment: {detail or reason_code}."
+                )
+        elif similarity < EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY:
+            policy_detail = (
+                "Easy Delete did not compare it further because it is below the "
+                f"{EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY:.2f} candidate gate."
+            )
+        else:
+            policy_detail = (
+                "Easy Delete accepts only pairs proven indistinguishable at normal "
+                "view after alignment, visible-change, and face checks."
+            )
         return (
             f"Cosine similarity {similarity:.4f} ({similarity * 100:.2f}%) · "
-            f"distance {distance:.4f} · Easy Delete cosine cutoff < {cutoff:.4f} "
-            f"({cutoff_result} cutoff). Cosine similarity only selects candidates; "
-            "Easy Delete also requires unchanged framing, coherent foreground, and "
-            "face geometry before proposing a safe near-duplicate."
+            f"distance {distance:.4f}. Cosine similarity only selects candidates. "
+            f"{policy_detail}"
         )
 
     def handle_preview_ready(self, path: str) -> None:

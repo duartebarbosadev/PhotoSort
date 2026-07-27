@@ -5,18 +5,20 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+import math
+import time
 
 import cv2
 import numpy as np
 
 from core.image_features.face_analysis import FaceDescriptor, SubjectDescriptor
 from core.image_features.structural_similarity import (
-    aligned_structural_similarity,
     prepare_same_frame_preview,
+    structural_similarity_for_aligned,
 )
 
 
-NEAR_DUPLICATE_ALGORITHM_VERSION = "subject-safe-v1"
+NEAR_DUPLICATE_ALGORITHM_VERSION = "normal-view-subject-safe-v2"
 
 CHANGE_ABSOLUTE_FLOOR = 10.0 / 255.0
 CHANGE_MAD_MULTIPLIER = 6.0
@@ -24,12 +26,28 @@ CHANGE_COMPONENT_MIN_FRACTION = 0.0005
 CHANGE_COMPONENT_MIN_PIXELS = 48
 CHANGE_COMPONENT_MIN_P90 = 16.0 / 255.0
 CHANGE_COMBINED_MIN_FRACTION = 0.0015
+NORMAL_VIEW_LONG_EDGE = 384
+NORMAL_VIEW_BLUR_SIGMA = 0.6
+NORMAL_VIEW_COMPONENT_MIN_FRACTION = 0.0008
+NORMAL_VIEW_COMPONENT_MIN_PIXELS = 24
+NORMAL_VIEW_COMBINED_MIN_FRACTION = 0.0025
+NORMAL_VIEW_COMPONENT_MIN_THICKNESS = 6
+NORMAL_VIEW_COMPONENT_MAX_ELONGATION = 4.0
+ALIGNMENT_MAX_LONG_EDGE = 512
+ALIGNMENT_PYRAMID_SCALES = (0.5, 1.0)
 MAX_ALIGNMENT_FRACTION = 0.04
+MAX_ALIGNMENT_ROTATION_DEGREES = 1.5
+MAX_ALIGNMENT_SCALE_CHANGE = 0.02
+MAX_ALIGNMENT_SHEAR = 0.01
+MIN_ALIGNMENT_OVERLAP = 0.85
+MIN_ALIGNMENT_CORRELATION = 0.90
+HIGH_CONFIDENCE_ALIGNMENT = 0.995
 FACE_MIN_IOU = 0.60
 FACE_LANDMARK_MEDIAN_LIMIT = 0.018
 FACE_LANDMARK_P90_LIMIT = 0.040
 FACE_CROP_MIN_SSIM = 0.985
 SAME_FRAME_MIN_SSIM = 0.98
+SAFE_NEAR_DUPLICATE_MIN_SSIM = 0.995
 
 
 class NearDuplicateDecision(Enum):
@@ -49,6 +67,29 @@ class CoherentChangeMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class AlignmentMetrics:
+    mode: str
+    correlation: float
+    translation_x: float
+    translation_y: float
+    rotation_degrees: float
+    scale_x: float
+    scale_y: float
+    shear: float
+    overlap_fraction: float
+    transform: tuple[tuple[float, float, float], tuple[float, float, float]]
+
+
+@dataclass(frozen=True, slots=True)
+class _AlignedPair:
+    first_gray: np.ndarray
+    aligned_second: np.ndarray
+    valid_mask: np.ndarray
+    transform: np.ndarray
+    metrics: AlignmentMetrics
+
+
+@dataclass(frozen=True, slots=True)
 class NearDuplicateAssessment:
     decision: NearDuplicateDecision
     algorithm_version: str = NEAR_DUPLICATE_ALGORITHM_VERSION
@@ -60,8 +101,9 @@ class NearDuplicateAssessment:
     face_max_median_displacement: float | None = None
     face_max_p90_displacement: float | None = None
     face_min_crop_similarity: float | None = None
+    reason_code: str = ""
     detail: str = ""
-    metrics: dict[str, float | int | bool | None] = field(default_factory=dict)
+    metrics: dict[str, object] = field(default_factory=dict)
 
     @property
     def accepted(self) -> bool:
@@ -82,6 +124,7 @@ class NearDuplicateAssessment:
             "face_max_median_displacement": self.face_max_median_displacement,
             "face_max_p90_displacement": self.face_max_p90_displacement,
             "face_min_crop_similarity": self.face_min_crop_similarity,
+            "assessment_reason_code": self.reason_code,
         }
         if self.change is not None:
             values.update(
@@ -117,99 +160,239 @@ class SubjectSafeNearDuplicateComparator:
         *,
         descriptor_a: SubjectDescriptor | None = None,
         descriptor_b: SubjectDescriptor | None = None,
+        descriptor_loader_a: Callable[[], SubjectDescriptor | None] | None = None,
+        descriptor_loader_b: Callable[[], SubjectDescriptor | None] | None = None,
         identical: bool = False,
     ) -> NearDuplicateAssessment:
         del path_a, path_b, fingerprint_a, fingerprint_b
         if identical:
             return NearDuplicateAssessment(
                 NearDuplicateDecision.EXACT_DUPLICATE,
+                reason_code="exact_duplicate",
                 detail="byte-for-byte identical",
             )
         if self._should_stop():
-            return NearDuplicateAssessment(
-                NearDuplicateDecision.UNCERTAIN, detail="cancelled"
-            )
-        prepared = _prepare_aligned_pair(image_a, image_b)
+            return self._uncertain("cancelled", "cancelled")
+
+        alignment_started = time.perf_counter()
+        prepared = _prepare_aligned_pair(image_a, image_b, self._should_stop)
         if prepared is None:
-            return NearDuplicateAssessment(
-                NearDuplicateDecision.UNCERTAIN,
-                detail="images could not be aligned safely",
+            return self._uncertain(
+                "alignment_uncertain", "images could not be aligned safely"
             )
-        first_gray, aligned_second, shift_x, shift_y = prepared
-        structural = aligned_structural_similarity(
-            prepare_same_frame_preview(first_gray * 255.0),
-            prepare_same_frame_preview(aligned_second * 255.0),
+        alignment_seconds = time.perf_counter() - alignment_started
+        if self._should_stop():
+            return self._uncertain("cancelled", "cancelled", prepared=prepared)
+
+        perceptual_started = time.perf_counter()
+        corrected = _exposure_correct(
+            prepared.first_gray,
+            prepared.aligned_second,
+            prepared.valid_mask,
+        )
+        if corrected is None:
+            return self._uncertain(
+                "alignment_uncertain",
+                "exposure compensation was unstable",
+                prepared=prepared,
+            )
+        normal_first, normal_second, normal_mask = _normal_view_pair(
+            prepared.first_gray,
+            corrected,
+            prepared.valid_mask,
+        )
+        perceptual_first = prepare_same_frame_preview(normal_first * 255.0) / 255.0
+        perceptual_second = prepare_same_frame_preview(normal_second * 255.0) / 255.0
+        perceptual_mask = cv2.resize(
+            normal_mask.astype(np.uint8),
+            (perceptual_first.shape[1], perceptual_first.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
+        structural = structural_similarity_for_aligned(
+            perceptual_first * 255.0,
+            perceptual_second * 255.0,
+            perceptual_mask,
         )
         if structural is None:
-            return NearDuplicateAssessment(
-                NearDuplicateDecision.UNCERTAIN,
-                detail="structural similarity was unavailable",
+            return self._uncertain(
+                "alignment_uncertain",
+                "structural similarity was unavailable",
+                prepared=prepared,
             )
+        full_change = coherent_change_metrics(
+            prepared.first_gray,
+            prepared.aligned_second,
+            valid_mask=prepared.valid_mask,
+            should_stop=self._should_stop,
+        )
+        visible_change = coherent_change_metrics(
+            normal_first,
+            normal_second,
+            valid_mask=normal_mask,
+            component_min_fraction=NORMAL_VIEW_COMPONENT_MIN_FRACTION,
+            component_min_pixels=NORMAL_VIEW_COMPONENT_MIN_PIXELS,
+            combined_min_fraction=NORMAL_VIEW_COMBINED_MIN_FRACTION,
+            component_min_thickness=NORMAL_VIEW_COMPONENT_MIN_THICKNESS,
+            component_max_elongation=NORMAL_VIEW_COMPONENT_MAX_ELONGATION,
+            exposure_correct=False,
+            should_stop=self._should_stop,
+        )
+        perceptual_seconds = time.perf_counter() - perceptual_started
+        shared_metrics = _assessment_metrics(
+            prepared,
+            full_change=full_change,
+            visible_change=visible_change,
+            alignment_seconds=alignment_seconds,
+            perceptual_seconds=perceptual_seconds,
+        )
+        shared_metrics["normal_view_structural_similarity"] = structural
         if structural < SAME_FRAME_MIN_SSIM:
             return NearDuplicateAssessment(
                 NearDuplicateDecision.SUBJECT_CHANGED,
                 structural_similarity=structural,
+                change=visible_change,
+                reason_code="visible_subject_change",
                 detail="framing or subject structure changed",
+                metrics=shared_metrics,
             )
         if self._should_stop():
-            return NearDuplicateAssessment(
-                NearDuplicateDecision.UNCERTAIN,
-                structural_similarity=structural,
-                detail="cancelled",
+            return self._uncertain(
+                "cancelled",
+                "cancelled",
+                prepared=prepared,
+                structural=structural,
+                change=visible_change,
+                metrics=shared_metrics,
             )
-        change = coherent_change_metrics(first_gray, aligned_second)
-        if change is None:
-            return NearDuplicateAssessment(
-                NearDuplicateDecision.UNCERTAIN,
-                structural_similarity=structural,
-                detail="localized change measurement was unstable",
+
+        if visible_change is None:
+            if self._should_stop():
+                return self._uncertain(
+                    "cancelled",
+                    "cancelled",
+                    prepared=prepared,
+                    structural=structural,
+                    metrics=shared_metrics,
+                )
+            return self._uncertain(
+                "alignment_uncertain",
+                "normal-view change measurement was unstable",
+                prepared=prepared,
+                structural=structural,
+                metrics=shared_metrics,
             )
-        if change.meaningful_change:
-            return NearDuplicateAssessment(
-                NearDuplicateDecision.SUBJECT_CHANGED,
-                structural_similarity=structural,
-                change=change,
-                detail="coherent foreground or subject change detected",
-            )
+
+        face_started = time.perf_counter()
+        if descriptor_a is None and descriptor_loader_a is not None:
+            descriptor_a = descriptor_loader_a()
         if self._should_stop():
-            return NearDuplicateAssessment(
-                NearDuplicateDecision.UNCERTAIN,
-                structural_similarity=structural,
-                change=change,
-                detail="cancelled",
+            return self._uncertain(
+                "cancelled",
+                "cancelled",
+                prepared=prepared,
+                structural=structural,
+                change=visible_change,
+                metrics=shared_metrics,
             )
+        if descriptor_b is None and descriptor_loader_b is not None:
+            descriptor_b = descriptor_loader_b()
+        face_seconds = time.perf_counter() - face_started
+        shared_metrics["face_seconds"] = face_seconds
         if descriptor_a is None or descriptor_b is None:
-            return NearDuplicateAssessment(
-                NearDuplicateDecision.UNCERTAIN,
-                structural_similarity=structural,
-                change=change,
-                detail="face analysis was unavailable",
+            return self._uncertain(
+                "face_analysis_unavailable",
+                "face analysis was unavailable",
+                prepared=prepared,
+                structural=structural,
+                change=visible_change,
+                metrics=shared_metrics,
             )
+
         face_result = _compare_faces(
             descriptor_a,
             descriptor_b,
-            first_gray,
-            aligned_second,
-            shift_x,
-            shift_y,
+            prepared.first_gray,
+            prepared.aligned_second,
+            prepared.valid_mask,
+            prepared.transform,
         )
+        face_decision = face_result["decision"]
+        if face_decision is NearDuplicateDecision.SUBJECT_CHANGED:
+            decision = NearDuplicateDecision.SUBJECT_CHANGED
+            reason_code = "face_changed"
+            detail = str(face_result["detail"])
+        elif face_decision is NearDuplicateDecision.UNCERTAIN:
+            decision = NearDuplicateDecision.UNCERTAIN
+            reason_code = "face_analysis_unavailable"
+            detail = str(face_result["detail"])
+        elif visible_change.meaningful_change:
+            decision = NearDuplicateDecision.SUBJECT_CHANGED
+            reason_code = "visible_subject_change"
+            detail = "coherent change remains visible at normal viewing size"
+        elif (
+            prepared.metrics.correlation >= HIGH_CONFIDENCE_ALIGNMENT
+            and structural >= SAFE_NEAR_DUPLICATE_MIN_SSIM
+        ):
+            decision = NearDuplicateDecision.SAFE_NEAR_DUPLICATE
+            reason_code = "normal_view_equivalent"
+            detail = "indistinguishable at normal viewing size"
+        else:
+            decision = NearDuplicateDecision.UNCERTAIN
+            reason_code = "borderline_similarity"
+            detail = "similar, but below the high-confidence Easy Delete proof"
+
         return NearDuplicateAssessment(
-            face_result["decision"],
+            decision,
             structural_similarity=structural,
-            change=change,
+            change=visible_change,
             face_count_a=len(descriptor_a.faces),
             face_count_b=len(descriptor_b.faces),
             face_min_iou=face_result["min_iou"],
             face_max_median_displacement=face_result["max_median"],
             face_max_p90_displacement=face_result["max_p90"],
             face_min_crop_similarity=face_result["min_crop_ssim"],
-            detail=face_result["detail"],
+            reason_code=reason_code,
+            detail=detail,
+            metrics=shared_metrics,
+        )
+
+    @staticmethod
+    def _uncertain(
+        reason_code: str,
+        detail: str,
+        *,
+        prepared: _AlignedPair | None = None,
+        structural: float | None = None,
+        change: CoherentChangeMetrics | None = None,
+        metrics: dict[str, object] | None = None,
+    ) -> NearDuplicateAssessment:
+        combined = dict(metrics or {})
+        if prepared is not None:
+            combined.update(_alignment_result_metrics(prepared.metrics))
+        return NearDuplicateAssessment(
+            NearDuplicateDecision.UNCERTAIN,
+            structural_similarity=structural,
+            change=change,
+            reason_code=reason_code,
+            detail=detail,
+            metrics=combined,
         )
 
 
 def coherent_change_metrics(
-    first: np.ndarray, aligned_second: np.ndarray
+    first: np.ndarray,
+    aligned_second: np.ndarray,
+    *,
+    valid_mask: np.ndarray | None = None,
+    component_min_fraction: float = CHANGE_COMPONENT_MIN_FRACTION,
+    component_min_pixels: int = CHANGE_COMPONENT_MIN_PIXELS,
+    combined_min_fraction: float = CHANGE_COMBINED_MIN_FRACTION,
+    component_min_thickness: int = 1,
+    component_max_elongation: float = float("inf"),
+    exposure_correct: bool = True,
+    should_stop: Callable[[], bool] | None = None,
 ) -> CoherentChangeMetrics | None:
+    should_stop = should_stop or (lambda: False)
     if first.shape != aligned_second.shape or first.size == 0:
         return None
     first = np.asarray(first, dtype=np.float32)
@@ -217,17 +400,30 @@ def coherent_change_metrics(
     if not np.isfinite(first).all() or not np.isfinite(second).all():
         return None
 
-    corrected = _exposure_correct(first, second)
-    if corrected is None:
-        return None
+    if valid_mask is None:
+        valid = np.ones(first.shape, dtype=bool)
+    else:
+        valid = np.asarray(valid_mask, dtype=bool)
+        if valid.shape != first.shape or not np.any(valid):
+            return None
+
+    if exposure_correct:
+        corrected = _exposure_correct(first, second, valid)
+        if corrected is None:
+            return None
+    else:
+        corrected = second
     difference = np.abs(first - corrected)
-    median = float(np.median(difference))
-    normalized_mad = float(1.4826 * np.median(np.abs(difference - median)))
+    valid_difference = difference[valid]
+    median = float(np.median(valid_difference))
+    normalized_mad = float(
+        1.4826 * np.median(np.abs(valid_difference - median))
+    )
     threshold = max(
         CHANGE_ABSOLUTE_FLOOR,
         median + CHANGE_MAD_MULTIPLIER * normalized_mad,
     )
-    mask = np.asarray(difference >= threshold, dtype=np.uint8) * 255
+    mask = np.asarray((difference >= threshold) & valid, dtype=np.uint8) * 255
     mask = cv2.morphologyEx(
         mask, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8)
     )
@@ -236,18 +432,31 @@ def coherent_change_metrics(
     )
 
     count, labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, 8)
-    image_area = int(difference.size)
+    image_area = int(np.count_nonzero(valid))
     minimum_area = max(
-        CHANGE_COMPONENT_MIN_PIXELS,
-        int(np.ceil(image_area * CHANGE_COMPONENT_MIN_FRACTION)),
+        component_min_pixels,
+        int(np.ceil(image_area * component_min_fraction)),
     )
     coherent_area = 0
     largest_area = 0
     largest_p90 = 0.0
     significant_component = False
     for label in range(1, count):
+        if should_stop():
+            return None
         area = int(stats[label, cv2.CC_STAT_AREA])
         if area <= 0:
+            continue
+        component_width = int(stats[label, cv2.CC_STAT_WIDTH])
+        component_height = int(stats[label, cv2.CC_STAT_HEIGHT])
+        minimum_dimension = min(component_width, component_height)
+        elongation = max(component_width, component_height) / max(
+            minimum_dimension, 1
+        )
+        if (
+            minimum_dimension < component_min_thickness
+            or elongation > component_max_elongation
+        ):
             continue
         values = difference[labels == label]
         p90 = float(np.quantile(values, 0.90)) if values.size else 0.0
@@ -261,7 +470,7 @@ def coherent_change_metrics(
     coherent_fraction = coherent_area / max(image_area, 1)
     meaningful = (
         significant_component
-        or coherent_fraction >= CHANGE_COMBINED_MIN_FRACTION
+        or coherent_fraction >= combined_min_fraction
     )
     return CoherentChangeMetrics(
         threshold=threshold,
@@ -273,35 +482,292 @@ def coherent_change_metrics(
 
 
 def _prepare_aligned_pair(
-    image_a: np.ndarray | None, image_b: np.ndarray | None
-) -> tuple[np.ndarray, np.ndarray, float, float] | None:
+    image_a: np.ndarray | None,
+    image_b: np.ndarray | None,
+    should_stop: Callable[[], bool] | None = None,
+) -> _AlignedPair | None:
+    should_stop = should_stop or (lambda: False)
     if image_a is None or image_b is None:
         return None
     first = _to_gray_unit(image_a)
     second = _to_gray_unit(image_b)
     if first is None or second is None or first.shape != second.shape:
         return None
+    if should_stop():
+        return None
+
+    height, width = first.shape
+    alignment_scale = min(
+        1.0,
+        ALIGNMENT_MAX_LONG_EDGE / max(height, width),
+    )
+    alignment_size = (
+        max(32, int(round(width * alignment_scale))),
+        max(32, int(round(height * alignment_scale))),
+    )
+    if alignment_size != (width, height):
+        alignment_first = cv2.resize(
+            first, alignment_size, interpolation=cv2.INTER_AREA
+        )
+        alignment_second = cv2.resize(
+            second, alignment_size, interpolation=cv2.INTER_AREA
+        )
+    else:
+        alignment_first = first
+        alignment_second = second
+
     try:
-        (shift_x, shift_y), response = cv2.phaseCorrelate(first, second)
+        (shift_x, shift_y), response = cv2.phaseCorrelate(
+            alignment_first,
+            alignment_second,
+        )
     except cv2.error:
         return None
     if not np.isfinite((shift_x, shift_y, response)).all() or response <= 0.0:
         return None
-    height, width = first.shape
-    if (
-        abs(shift_x) > width * MAX_ALIGNMENT_FRACTION
-        or abs(shift_y) > height * MAX_ALIGNMENT_FRACTION
-    ):
+
+    base_transform = np.asarray(
+        [[1.0, 0.0, shift_x], [0.0, 1.0, shift_y]],
+        dtype=np.float32,
+    )
+    correlation = float(response)
+    for pyramid_scale in ALIGNMENT_PYRAMID_SCALES:
+        if should_stop():
+            return None
+        level_size = (
+            max(32, int(round(alignment_size[0] * pyramid_scale))),
+            max(32, int(round(alignment_size[1] * pyramid_scale))),
+        )
+        if level_size == alignment_size:
+            level_first = alignment_first
+            level_second = alignment_second
+        else:
+            level_first = cv2.resize(
+                alignment_first, level_size, interpolation=cv2.INTER_AREA
+            )
+            level_second = cv2.resize(
+                alignment_second, level_size, interpolation=cv2.INTER_AREA
+            )
+        level_transform = base_transform.copy()
+        level_transform[:, 2] *= pyramid_scale
+        try:
+            correlation, level_transform = cv2.findTransformECC(
+                level_first,
+                level_second,
+                level_transform,
+                cv2.MOTION_AFFINE,
+                (
+                    cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+                    100,
+                    1e-6,
+                ),
+                None,
+                5,
+            )
+        except cv2.error:
+            return None
+        if not np.isfinite(correlation) or not np.isfinite(level_transform).all():
+            return None
+        base_transform = np.asarray(level_transform, dtype=np.float32)
+        base_transform[:, 2] /= pyramid_scale
+
+    transform = base_transform.copy()
+    transform[:, 2] /= alignment_scale
+    alignment_metrics = _validate_alignment(
+        transform,
+        correlation=float(correlation),
+        width=width,
+        height=height,
+    )
+    if alignment_metrics is None:
         return None
-    transform = np.float32([[1.0, 0.0, shift_x], [0.0, 1.0, shift_y]])
+
     aligned = cv2.warpAffine(
         second,
         transform,
         (width, height),
         flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-        borderMode=cv2.BORDER_REFLECT,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0.0,
     )
-    return first, aligned, float(shift_x), float(shift_y)
+    validity = cv2.warpAffine(
+        np.ones(first.shape, dtype=np.uint8),
+        transform,
+        (width, height),
+        flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    ).astype(bool)
+    overlap_fraction = float(np.count_nonzero(validity) / validity.size)
+    if overlap_fraction < MIN_ALIGNMENT_OVERLAP:
+        return None
+    alignment_metrics = AlignmentMetrics(
+        mode=alignment_metrics.mode,
+        correlation=alignment_metrics.correlation,
+        translation_x=alignment_metrics.translation_x,
+        translation_y=alignment_metrics.translation_y,
+        rotation_degrees=alignment_metrics.rotation_degrees,
+        scale_x=alignment_metrics.scale_x,
+        scale_y=alignment_metrics.scale_y,
+        shear=alignment_metrics.shear,
+        overlap_fraction=overlap_fraction,
+        transform=alignment_metrics.transform,
+    )
+    return _AlignedPair(
+        first_gray=first,
+        aligned_second=aligned,
+        valid_mask=validity,
+        transform=transform,
+        metrics=alignment_metrics,
+    )
+
+
+def _validate_alignment(
+    transform: np.ndarray,
+    *,
+    correlation: float,
+    width: int,
+    height: int,
+) -> AlignmentMetrics | None:
+    if transform.shape != (2, 3) or not np.isfinite(transform).all():
+        return None
+    if not np.isfinite(correlation) or correlation < MIN_ALIGNMENT_CORRELATION:
+        return None
+    linear = np.asarray(transform[:, :2], dtype=np.float64)
+    translation_x = float(transform[0, 2])
+    translation_y = float(transform[1, 2])
+    if (
+        abs(translation_x) > width * MAX_ALIGNMENT_FRACTION
+        or abs(translation_y) > height * MAX_ALIGNMENT_FRACTION
+    ):
+        return None
+
+    column_x = linear[:, 0]
+    column_y = linear[:, 1]
+    scale_x = float(np.linalg.norm(column_x))
+    scale_y = float(np.linalg.norm(column_y))
+    if min(scale_x, scale_y) <= np.finfo(np.float64).eps:
+        return None
+    rotation_degrees = math.degrees(math.atan2(linear[1, 0], linear[0, 0]))
+    shear = float(abs(np.dot(column_x, column_y) / (scale_x * scale_y)))
+    if (
+        abs(rotation_degrees) > MAX_ALIGNMENT_ROTATION_DEGREES
+        or abs(scale_x - 1.0) > MAX_ALIGNMENT_SCALE_CHANGE
+        or abs(scale_y - 1.0) > MAX_ALIGNMENT_SCALE_CHANGE
+        or shear > MAX_ALIGNMENT_SHEAR
+    ):
+        return None
+
+    return AlignmentMetrics(
+        mode="pyramidal_affine_ecc",
+        correlation=float(correlation),
+        translation_x=translation_x,
+        translation_y=translation_y,
+        rotation_degrees=float(rotation_degrees),
+        scale_x=scale_x,
+        scale_y=scale_y,
+        shear=shear,
+        overlap_fraction=0.0,
+        transform=(
+            tuple(float(value) for value in transform[0]),
+            tuple(float(value) for value in transform[1]),
+        ),
+    )
+
+
+def _normal_view_pair(
+    first: np.ndarray,
+    second: np.ndarray,
+    valid_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    height, width = first.shape
+    scale = min(1.0, NORMAL_VIEW_LONG_EDGE / max(height, width))
+    target_size = (
+        max(1, int(round(width * scale))),
+        max(1, int(round(height * scale))),
+    )
+    if target_size == (width, height):
+        normal_first = first.copy()
+        normal_second = second.copy()
+        normal_mask = valid_mask.copy()
+    else:
+        normal_first = cv2.resize(
+            first, target_size, interpolation=cv2.INTER_AREA
+        )
+        normal_second = cv2.resize(
+            second, target_size, interpolation=cv2.INTER_AREA
+        )
+        normal_mask = cv2.resize(
+            valid_mask.astype(np.uint8),
+            target_size,
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
+    normal_first = cv2.GaussianBlur(
+        normal_first,
+        (0, 0),
+        sigmaX=NORMAL_VIEW_BLUR_SIGMA,
+        sigmaY=NORMAL_VIEW_BLUR_SIGMA,
+    )
+    normal_second = cv2.GaussianBlur(
+        normal_second,
+        (0, 0),
+        sigmaX=NORMAL_VIEW_BLUR_SIGMA,
+        sigmaY=NORMAL_VIEW_BLUR_SIGMA,
+    )
+    return normal_first, normal_second, normal_mask
+
+
+def _alignment_result_metrics(metrics: AlignmentMetrics) -> dict[str, object]:
+    return {
+        "alignment_mode": metrics.mode,
+        "alignment_correlation": metrics.correlation,
+        "alignment_translation_x": metrics.translation_x,
+        "alignment_translation_y": metrics.translation_y,
+        "alignment_rotation_degrees": metrics.rotation_degrees,
+        "alignment_scale_x": metrics.scale_x,
+        "alignment_scale_y": metrics.scale_y,
+        "alignment_shear": metrics.shear,
+        "alignment_overlap_fraction": metrics.overlap_fraction,
+        "alignment_transform": [
+            list(metrics.transform[0]),
+            list(metrics.transform[1]),
+        ],
+        "normal_view_long_edge": NORMAL_VIEW_LONG_EDGE,
+        "normal_view_blur_sigma": NORMAL_VIEW_BLUR_SIGMA,
+    }
+
+
+def _assessment_metrics(
+    prepared: _AlignedPair,
+    *,
+    full_change: CoherentChangeMetrics | None,
+    visible_change: CoherentChangeMetrics | None,
+    alignment_seconds: float,
+    perceptual_seconds: float,
+) -> dict[str, object]:
+    metrics = _alignment_result_metrics(prepared.metrics)
+    metrics.update(
+        {
+            "alignment_seconds": alignment_seconds,
+            "perceptual_seconds": perceptual_seconds,
+            "full_resolution_change_fraction": (
+                full_change.coherent_fraction
+                if full_change is not None
+                else None
+            ),
+            "full_resolution_largest_component_fraction": (
+                full_change.largest_component_fraction
+                if full_change is not None
+                else None
+            ),
+            "normal_view_change_fraction": (
+                visible_change.coherent_fraction
+                if visible_change is not None
+                else None
+            ),
+        }
+    )
+    return metrics
 
 
 def _to_gray_unit(image: np.ndarray) -> np.ndarray | None:
@@ -321,10 +787,21 @@ def _to_gray_unit(image: np.ndarray) -> np.ndarray | None:
 
 
 def _exposure_correct(
-    target: np.ndarray, source: np.ndarray
+    target: np.ndarray,
+    source: np.ndarray,
+    valid_mask: np.ndarray | None = None,
 ) -> np.ndarray | None:
-    low, high = np.percentile(source, (2.0, 98.0))
+    valid_values = (
+        source[np.asarray(valid_mask, dtype=bool)]
+        if valid_mask is not None
+        else source.ravel()
+    )
+    if valid_values.size < 64:
+        return None
+    low, high = np.percentile(valid_values, (2.0, 98.0))
     mask = (source > low) & (source < high)
+    if valid_mask is not None:
+        mask &= np.asarray(valid_mask, dtype=bool)
     values = source[mask]
     targets = target[mask]
     if values.size < 64:
@@ -350,8 +827,8 @@ def _compare_faces(
     second: SubjectDescriptor,
     first_gray: np.ndarray,
     aligned_second: np.ndarray,
-    shift_x: float,
-    shift_y: float,
+    valid_mask: np.ndarray,
+    transform: np.ndarray,
 ) -> dict[str, object]:
     if len(first.faces) != len(second.faces):
         return _face_result(
@@ -365,8 +842,17 @@ def _compare_faces(
         )
 
     height, width = first_gray.shape
+    try:
+        second_to_first = cv2.invertAffineTransform(
+            np.asarray(transform, dtype=np.float64)
+        )
+    except cv2.error:
+        return _face_result(
+            NearDuplicateDecision.UNCERTAIN,
+            detail="face alignment transform was unavailable",
+        )
     adjusted_second = [
-        _shift_face(face, -shift_x / width, -shift_y / height)
+        _transform_face(face, second_to_first, width, height)
         for face in second.faces
     ]
     remaining = set(range(len(adjusted_second)))
@@ -408,7 +894,10 @@ def _compare_faces(
         max_median = max(max_median, median)
         max_p90 = max(max_p90, p90)
         crop_similarity = _face_crop_similarity(
-            first_gray, aligned_second, face_a.bbox
+            first_gray,
+            aligned_second,
+            face_a.bbox,
+            valid_mask,
         )
         if crop_similarity is None:
             return _face_result(
@@ -462,11 +951,26 @@ def _face_result(
     }
 
 
-def _shift_face(face: FaceDescriptor, dx: float, dy: float) -> FaceDescriptor:
-    x0, y0, x1, y1 = face.bbox
+def _transform_face(
+    face: FaceDescriptor,
+    transform: np.ndarray,
+    width: int,
+    height: int,
+) -> FaceDescriptor:
+    points = np.asarray(face.landmarks, dtype=np.float64)
+    pixel_points = np.column_stack((points[:, 0] * width, points[:, 1] * height))
+    transformed = cv2.transform(
+        pixel_points.reshape(1, -1, 2),
+        np.asarray(transform, dtype=np.float64),
+    ).reshape(-1, 2)
+    normalized = np.column_stack(
+        (transformed[:, 0] / width, transformed[:, 1] / height)
+    )
+    xs = normalized[:, 0]
+    ys = normalized[:, 1]
     return FaceDescriptor(
-        bbox=(x0 + dx, y0 + dy, x1 + dx, y1 + dy),
-        landmarks=tuple((x + dx, y + dy) for x, y in face.landmarks),
+        bbox=(float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())),
+        landmarks=tuple((float(x), float(y)) for x, y in normalized),
     )
 
 
@@ -523,6 +1027,7 @@ def _face_crop_similarity(
     first: np.ndarray,
     second: np.ndarray,
     bbox: tuple[float, float, float, float],
+    valid_mask: np.ndarray | None = None,
 ) -> float | None:
     height, width = first.shape
     x0, y0, x1, y1 = bbox
@@ -536,7 +1041,18 @@ def _face_crop_similarity(
         return None
     first_crop = first[top:bottom, left:right] * 255.0
     second_crop = second[top:bottom, left:right] * 255.0
-    return aligned_structural_similarity(
+    crop_mask = (
+        valid_mask[top:bottom, left:right]
+        if valid_mask is not None
+        else np.ones(first_crop.shape, dtype=bool)
+    )
+    preview_mask = cv2.resize(
+        crop_mask.astype(np.uint8),
+        (128, 96),
+        interpolation=cv2.INTER_NEAREST,
+    ).astype(bool)
+    return structural_similarity_for_aligned(
         prepare_same_frame_preview(first_crop),
         prepare_same_frame_preview(second_crop),
+        preview_mask,
     )

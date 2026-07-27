@@ -171,6 +171,7 @@ class WorkerManager(QObject):
     # Easy Delete signals
     easy_delete_progress = pyqtSignal(int, str)
     easy_delete_complete = pyqtSignal(dict)
+    easy_delete_assessments_ready = pyqtSignal(dict)
     easy_delete_error = pyqtSignal(str)
 
     # Fix Rotation Detection signals
@@ -1351,6 +1352,14 @@ class WorkerManager(QObject):
                 self.easy_delete_progress,
                 percent,
                 message,
+            )
+        )
+        self.easy_delete_worker.assessments_ready.connect(
+            lambda assessments: self._emit_if_current(
+                "easy_delete",
+                generation,
+                self.easy_delete_assessments_ready,
+                assessments,
             )
         )
         self.easy_delete_worker.completed.connect(

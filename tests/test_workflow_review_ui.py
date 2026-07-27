@@ -555,6 +555,79 @@ def test_easy_delete_rebuilds_queue_when_shared_results_are_pruned_in_place():
     assert widget._content_stack.currentIndex() == 2
 
 
+def test_easy_delete_file_mutation_clears_invalidated_queue_and_visible_paths():
+    deleted = "/tmp/deleted.jpg"
+    paired = "/tmp/paired.jpg"
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            deleted: {
+                "type": "duplicate",
+                "pair_path": paired,
+                "suggest_delete": True,
+            }
+        }
+    )
+
+    widget.sync_results_after_file_mutation(None)
+
+    assert widget._results == {}
+    assert widget._flagged_paths == []
+    assert widget._visible_image_paths == ()
+    assert widget._items_list.count() == 0
+    assert widget._content_stack.currentIndex() == 2
+    assert not widget.focus_image(deleted)
+    assert not widget.focus_image(paired)
+
+
+def test_easy_delete_deleting_one_review_keeps_the_remaining_queue():
+    deleted = "/tmp/deleted.jpg"
+    deleted_pair = "/tmp/deleted-pair.jpg"
+    remaining = "/tmp/remaining.jpg"
+    results = {
+        deleted: {
+            "type": "duplicate",
+            "pair_path": deleted_pair,
+            "suggest_delete": True,
+        },
+        remaining: {
+            "type": "blur",
+            "pair_path": None,
+            "suggest_delete": True,
+        },
+    }
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(results)
+
+    results.pop(deleted)
+    widget.sync_results_after_file_mutation(results)
+
+    assert widget._flagged_paths == [remaining]
+    assert widget._visible_image_paths == (remaining,)
+    assert widget._items_list.count() == 2  # Category heading and review row.
+    assert widget.focus_image(remaining)
+    assert not widget.focus_image(deleted)
+    assert not widget.focus_image(deleted_pair)
+    assert widget._content_stack.currentIndex() == 1
+
+
+def test_fix_rotation_file_mutation_clears_queue_list_and_viewer():
+    path = "/tmp/deleted-rotation.jpg"
+    widget = FixRotationStepWidget()
+    widget.show_results({path: 90})
+
+    widget.sync_results_after_file_mutation({})
+
+    assert widget._suggestions == {}
+    assert widget._ordered_paths == []
+    assert widget._items_list.count() == 0
+    assert not widget._sync_viewer.has_image()
+    assert widget._content_stack.currentIndex() == 2
+    assert not widget.focus_image(path)
+
+
 def test_easy_delete_groups_queue_under_category_headers():
     widget = EasyDeleteStepWidget()
     widget.set_is_marked_func(lambda _path: False)
@@ -617,13 +690,18 @@ def test_easy_delete_shows_subject_safe_near_duplicate_classification():
                 "pair_path": "/tmp/similar-b.jpg",
                 "suggest_delete": True,
                 "duplicate_kind": "near",
-                "classification_label": "Safe near-duplicate",
+                "classification_label": (
+                    "Safe near-duplicate · indistinguishable at normal view"
+                ),
                 "reason": "Suggested choice: higher sharpness",
             }
         }
     )
 
-    assert "Safe near-duplicate" in widget._issue_label.text()
+    assert (
+        "Safe near-duplicate · indistinguishable at normal view"
+        in widget._issue_label.text()
+    )
 
 
 def test_easy_delete_duplicate_filters_can_be_selected_independently():
@@ -1289,29 +1367,33 @@ def test_pick_best_publishes_trash_mark_as_soon_as_comparison_is_confirmed():
     assert widget._done_btn.isEnabled()
 
 
-def test_pick_best_shows_cosine_similarity_and_easy_delete_cutoff(monkeypatch):
+def test_pick_best_explains_normal_view_easy_delete_policy():
     paths = ["/tmp/left.jpg", "/tmp/right.jpg"]
     widget = PickBestStepWidget()
     widget.app_state = SimpleNamespace(
         embeddings_cache={
             paths[0]: [1.0, 0.0],
             paths[1]: [0.994, 0.10938025],
-        }
+        },
+        easy_delete_pair_assessments={
+            tuple(sorted(paths)): {
+                "assessment_decision": "uncertain",
+                "assessment_reason_code": "borderline_similarity",
+                "assessment_detail": (
+                    "similar, but below the high-confidence Easy Delete proof"
+                ),
+            }
+        },
     )
     widget.set_is_marked_func(lambda _path: False)
-    monkeypatch.setattr(
-        "ui.pick_best_step_widget.get_easy_delete_duplicate_distance",
-        lambda: 0.005,
-    )
 
     widget.show_results({1: _pick_best_payload(paths)})
 
     detail = widget._state_banner.detail_label.text()
     assert "Cosine similarity 0.9940 (99.40%)" in detail
     assert "distance 0.0060" in detail
-    assert "Easy Delete cosine cutoff < 0.0050 (outside cutoff)" in detail
     assert "Cosine similarity only selects candidates" in detail
-    assert "coherent foreground" in detail
+    assert "below the high-confidence Easy Delete proof" in detail
 
 
 def test_pick_best_apply_button_and_shift_enter_submit_without_naming_cull():
@@ -1375,6 +1457,23 @@ def test_pick_best_file_mutation_sync_removes_invalidated_cluster_from_left_pane
     )
     assert "deleted.jpg" not in left_panel_text
     assert "Cluster 1 · 2 photos" in left_panel_text
+
+
+def test_pick_best_file_mutation_clears_empty_list_viewer_and_focus_paths():
+    paths = ["/tmp/deleted-pick.jpg", "/tmp/pick-keeper.jpg"]
+    widget = PickBestStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results({1: _pick_best_payload(paths)})
+
+    widget.sync_results_after_file_mutation({})
+
+    assert widget._tournaments == []
+    assert widget._items_list.count() == 0
+    assert widget._subset_paths == []
+    assert widget._current_images_data == []
+    assert not widget._sync_viewer.has_image()
+    assert not widget.focus_image(paths[0])
+    assert not widget.focus_image(paths[1])
 
 
 def test_pick_best_revising_one_decision_preserves_the_other_until_reconfirmed():

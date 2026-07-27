@@ -42,6 +42,7 @@ class EasyDeleteWorker(QObject):
 
     progress_update = pyqtSignal(int, str)
     completed = pyqtSignal(dict)  # {path: {type, pair_path, suggest_delete, reason}}
+    assessments_ready = pyqtSignal(dict)  # {(path_a, path_b): assessment metrics}
     error = pyqtSignal(str)
     finished = pyqtSignal()
 
@@ -78,6 +79,7 @@ class EasyDeleteWorker(QObject):
             lambda: self._should_stop
         )
         self._face_descriptor_signature: str | None = None
+        self.pair_assessments: dict[tuple[str, str], dict[str, object]] = {}
 
     def stop(self) -> None:
         self._should_stop = True
@@ -120,6 +122,7 @@ class EasyDeleteWorker(QObject):
 
         if not self._should_stop:
             self.progress_update.emit(100, "Detection complete.")
+            self.assessments_ready.emit(dict(self.pair_assessments))
             self.completed.emit(results)
 
     def _detect_issue(self, path: str) -> dict | None:
@@ -452,12 +455,18 @@ class EasyDeleteWorker(QObject):
                             self._fingerprint(path_j),
                             first_rgb,
                             second_rgb,
-                            descriptor_a=self._subject_descriptor(path_i, first_rgb),
-                            descriptor_b=self._subject_descriptor(path_j, second_rgb),
+                            descriptor_loader_a=lambda path=path_i, rgb=first_rgb: (
+                                self._subject_descriptor(path, rgb)
+                            ),
+                            descriptor_loader_b=lambda path=path_j, rgb=second_rgb: (
+                                self._subject_descriptor(path, rgb)
+                            ),
                         )
                     else:
                         continue
 
+                    pair_key = tuple(sorted((path_i, path_j)))
+                    self.pair_assessments[pair_key] = assessment.result_metrics()
                     if assessment.accepted:
                         structural_similarity = assessment.structural_similarity
                         visual_distance = min(
@@ -511,7 +520,9 @@ class EasyDeleteWorker(QObject):
 
                 duplicate_kind = "exact" if identical else "near"
                 classification_label = (
-                    "Exact copy" if identical else "Safe near-duplicate"
+                    "Exact copy"
+                    if identical
+                    else "Safe near-duplicate · indistinguishable at normal view"
                 )
                 delete_suggestion_reason, keep_suggestion_reason = (
                     self._duplicate_suggestion_reasons(
@@ -549,26 +560,41 @@ class EasyDeleteWorker(QObject):
                 }
                 logger.info(
                     "Easy Delete accepted pair: %s ↔ %s classification=%s "
-                    "cosine=%.6f structural=%s change_fraction=%s",
+                    "reason=%s cosine=%.6f structural=%s alignment=%s "
+                    "normal_view_change=%s",
                     os.path.basename(path_i),
                     os.path.basename(path_j),
                     assessment.decision.value,
+                    assessment.reason_code,
                     cosine_match,
                     assessment.structural_similarity,
-                    (
-                        assessment.change.coherent_fraction
-                        if assessment.change is not None
-                        else None
-                    ),
+                    assessment.metrics.get("alignment_correlation"),
+                    assessment.metrics.get("normal_view_change_fraction"),
                 )
 
+        alignment_seconds = sum(
+            float(metrics.get("alignment_seconds") or 0.0)
+            for metrics in self.pair_assessments.values()
+        )
+        perceptual_seconds = sum(
+            float(metrics.get("perceptual_seconds") or 0.0)
+            for metrics in self.pair_assessments.values()
+        )
+        face_seconds = sum(
+            float(metrics.get("face_seconds") or 0.0)
+            for metrics in self.pair_assessments.values()
+        )
         logger.info(
             "Easy Delete near-duplicate assessment finished in %.3fs: "
-            "accepted_pairs=%d subject_changed=%d uncertain=%d",
+            "accepted_pairs=%d subject_changed=%d uncertain=%d "
+            "alignment=%.3fs perceptual=%.3fs face=%.3fs",
             time.perf_counter() - started_at,
             len(results) // 2,
             rejected_counts[NearDuplicateDecision.SUBJECT_CHANGED],
             rejected_counts[NearDuplicateDecision.UNCERTAIN],
+            alignment_seconds,
+            perceptual_seconds,
+            face_seconds,
         )
         return results
 

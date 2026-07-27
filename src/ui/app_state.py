@@ -57,6 +57,9 @@ class AppState:
         self.easy_delete_results: dict[str, dict[str, Any]] | None = (
             None  # None = not analysed; {} = analysed with no issues
         )
+        self.easy_delete_pair_assessments: dict[
+            tuple[str, str], dict[str, Any]
+        ] = {}
         self.fix_rotation_results: dict[str, int] | None = (
             None  # None = not analysed; {} = analysed with no suggestions
         )
@@ -158,6 +161,7 @@ class AppState:
         self.clear_pick_best_results()
         self.ai_rating_results.clear()
         self.easy_delete_results = None
+        self.easy_delete_pair_assessments.clear()
         self.fix_rotation_results = None
         # self.current_folder_path = None # Optionally reset current folder path
 
@@ -171,8 +175,15 @@ class AppState:
         file_paths: Iterable[str],
         *,
         invalidate_disk_cache: bool = True,
+        preserve_review_results: bool = False,
     ) -> None:
-        """Invalidate shared similarity state after source-file mutations."""
+        """Invalidate shared similarity state after source-file mutations.
+
+        Deletion callers may preserve already-pruned Easy Delete and Pick Best
+        reviews because removing a file does not change the analysis of
+        surviving photos. Content-changing mutations such as rotation continue
+        to invalidate those review results completely.
+        """
 
         changed_paths = {
             path for path in file_paths if isinstance(path, str) and path
@@ -207,8 +218,10 @@ class AppState:
             for path, score in self.best_shot_scores_by_path.items()
             if score.get("cluster_id") == ad_hoc_cluster_id
         }
-        self.clear_pick_best_results()
-        self.easy_delete_results = None
+        if not preserve_review_results:
+            self.clear_pick_best_results()
+            self.easy_delete_results = None
+            self.easy_delete_pair_assessments.clear()
 
         if (
             invalidate_disk_cache
@@ -287,6 +300,11 @@ class AppState:
                 if path not in removed_paths
                 and entry.get("pair_path") not in removed_paths
             }
+        self.easy_delete_pair_assessments = {
+            pair: assessment
+            for pair, assessment in self.easy_delete_pair_assessments.items()
+            if not set(pair).intersection(removed_paths)
+        }
         if self.fix_rotation_results is not None:
             self.fix_rotation_results = {
                 path: angle
@@ -307,6 +325,7 @@ class AppState:
         self.invalidate_similarity_for_paths(
             removed_paths,
             invalidate_disk_cache=False,
+            preserve_review_results=True,
         )
 
         removed_count = original_count - len(self._image_files_data)
@@ -328,6 +347,11 @@ class AppState:
             ]
             for review_path in invalid_reviews:
                 self.easy_delete_results.pop(review_path, None)
+        self.easy_delete_pair_assessments = {
+            pair: assessment
+            for pair, assessment in self.easy_delete_pair_assessments.items()
+            if file_path not in pair
+        }
 
         if self.fix_rotation_results is not None:
             self.fix_rotation_results.pop(file_path, None)
@@ -436,6 +460,12 @@ class AppState:
                 }
                 for path, entry in self.easy_delete_results.items()
             }
+        self.easy_delete_pair_assessments = {
+            tuple(sorted((updates.get(pair[0], pair[0]), updates.get(pair[1], pair[1])))): (
+                assessment
+            )
+            for pair, assessment in self.easy_delete_pair_assessments.items()
+        }
         if self.fix_rotation_results is not None:
             self.fix_rotation_results = {
                 updates.get(path, path): angle

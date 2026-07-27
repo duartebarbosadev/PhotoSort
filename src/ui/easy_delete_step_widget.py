@@ -297,8 +297,21 @@ class EasyDeleteStepWidget(QWidget):
                 self._syncing_active_image = False
             self.setFocus(Qt.FocusReason.OtherFocusReason)
         else:
+            self._populate_list()
             self._clear_viewer_images()
             self._content_stack.setCurrentIndex(2)
+
+    def sync_results_after_file_mutation(
+        self, results: dict[str, dict] | None
+    ) -> None:
+        """Drop stale review UI after shared file state has been invalidated."""
+
+        # File mutations may invalidate the complete Easy Delete analysis by
+        # setting AppState.easy_delete_results to None. Treat that as an empty
+        # live queue so deleted paths cannot remain selectable or request
+        # previews while a future analysis is pending.
+        self._shown_results = None
+        self.show_results(results if results is not None else {})
 
     # ------------------------------------------------------------------
     # Private helpers
