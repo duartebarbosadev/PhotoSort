@@ -156,6 +156,44 @@ def test_current_structure_grouping_plan_preserves_relative_folders(tmp_path):
     assert labels == ["day_one", "day_two"]
 
 
+def test_current_structure_grouping_plan_preserves_photos_and_videos(tmp_path):
+    source_root = tmp_path / "source"
+    mixed_dir = source_root / "mixed"
+    video_only_dir = source_root / "video_only"
+    mixed_dir.mkdir(parents=True)
+    video_only_dir.mkdir()
+    image_path = mixed_dir / "a.jpg"
+    paired_video = mixed_dir / "a.mov"
+    root_video = source_root / "root.mp4"
+    video_only_path = video_only_dir / "clip.mkv"
+    _create_solid_image(str(image_path), (220, 40, 40))
+    for video_path in (paired_video, root_video, video_only_path):
+        video_path.write_bytes(b"video")
+
+    plan = build_grouping_plan(
+        [
+            {"path": str(image_path), "media_type": "image"},
+            {"path": str(paired_video), "media_type": "video"},
+            {"path": str(root_video), "media_type": "video"},
+            {"path": str(video_only_path), "media_type": "video"},
+        ],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+
+    paths_by_label = {
+        group.group_label: set(group.source_paths) for group in plan.groups
+    }
+    assert paths_by_label == {
+        "": {str(root_video)},
+        "mixed": {str(image_path), str(paired_video)},
+        "video_only": {str(video_only_path)},
+    }
+    assert plan.total_items == 4
+    assert plan.supported_items == 4
+    assert plan.skipped_paths == []
+
+
 def test_current_structure_grouping_plan_keeps_root_level_files_at_root(tmp_path):
     source_root = tmp_path / "source"
     source_root.mkdir(parents=True)
@@ -199,6 +237,40 @@ def test_face_grouping_plan_assigns_face_like_images_and_unassigns_flat_image(tm
     assert len(plan.groups) == 1
     assert len(plan.groups[0].source_paths) == 2
     assert str(blank) in plan.unassigned_paths
+
+
+def test_similarity_grouping_remains_image_only_and_skips_videos(tmp_path, monkeypatch):
+    image_path = tmp_path / "a.jpg"
+    video_path = tmp_path / "a.mp4"
+    _create_solid_image(str(image_path), (220, 40, 40))
+    video_path.write_bytes(b"video")
+    analyzed_paths = []
+
+    def run_similarity(
+        paths,
+        progress_callback=None,
+        shared_engine=None,
+        image_pipeline=None,
+    ):
+        analyzed_paths.extend(paths)
+        return {str(image_path): 1}
+
+    monkeypatch.setattr(
+        "src.core.grouping._run_ml_similarity_pipeline",
+        run_similarity,
+    )
+
+    plan = build_grouping_plan(
+        [
+            {"path": str(image_path), "media_type": "image"},
+            {"path": str(video_path), "media_type": "video"},
+        ],
+        GroupingMode.SIMILARITY,
+    )
+
+    assert analyzed_paths == [str(image_path)]
+    assert plan.supported_items == 1
+    assert plan.skipped_paths == [str(video_path)]
 
 
 def test_face_grouping_plan_uses_detected_face_region_for_offset_faces(
@@ -377,10 +449,15 @@ def test_execute_grouping_plan_keeps_current_mode_files_in_place_when_already_gr
     day_one = source_root / "day_one"
     day_one.mkdir(parents=True)
     image_path = day_one / "a.jpg"
+    video_path = day_one / "a.mov"
     _create_solid_image(str(image_path), (220, 40, 40))
+    video_path.write_bytes(b"video")
 
     plan = build_grouping_plan(
-        [{"path": str(image_path)}],
+        [
+            {"path": str(image_path), "media_type": "image"},
+            {"path": str(video_path), "media_type": "video"},
+        ],
         GroupingMode.CURRENT,
         source_root=str(source_root),
     )
@@ -392,8 +469,13 @@ def test_execute_grouping_plan_keeps_current_mode_files_in_place_when_already_gr
 
     assert summary.moved_count == 0
     assert image_path.exists()
-    assert summary.entries[0].status == "unchanged"
-    assert summary.entries[0].new_path == str(image_path)
+    assert video_path.exists()
+    assert summary.skipped_count == 0
+    assert {entry.status for entry in summary.entries} == {"unchanged"}
+    assert {entry.new_path for entry in summary.entries} == {
+        str(image_path),
+        str(video_path),
+    }
 
 
 def test_execute_grouping_plan_removes_empty_source_directories(tmp_path):
@@ -541,12 +623,17 @@ def test_execute_grouping_plan_renames_entire_folder_and_keeps_unmanaged_files(
     old_dir = source_root / "old_folder"
     old_dir.mkdir(parents=True)
     image_path = old_dir / "a.jpg"
+    video_path = old_dir / "a.mov"
     zip_path = old_dir / "archive.zip"
     _create_solid_image(str(image_path), (220, 40, 40))
+    video_path.write_bytes(b"video")
     zip_path.write_bytes(b"zip-data")
 
     plan = build_grouping_plan(
-        [{"path": str(image_path)}],
+        [
+            {"path": str(image_path), "media_type": "image"},
+            {"path": str(video_path), "media_type": "video"},
+        ],
         GroupingMode.CURRENT,
         source_root=str(source_root),
     )
@@ -558,9 +645,11 @@ def test_execute_grouping_plan_renames_entire_folder_and_keeps_unmanaged_files(
         output_root=str(source_root),
     )
 
-    assert summary.moved_count == 1
+    assert summary.moved_count == 2
+    assert summary.skipped_count == 0
     assert not old_dir.exists()
     assert (source_root / "renamed_folder" / "a.jpg").exists()
+    assert (source_root / "renamed_folder" / "a.mov").exists()
     assert (source_root / "renamed_folder" / "archive.zip").exists()
 
 

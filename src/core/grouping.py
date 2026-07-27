@@ -901,20 +901,18 @@ def build_grouping_plan(
         item for item in items if isinstance(item, dict) and item.get("path")
     ]
     total_items = len(valid_items)
-    image_paths = [
-        item["path"] for item in valid_items if not is_video_extension(item["path"])
-    ]
-    skipped_paths = [
-        item["path"] for item in valid_items if is_video_extension(item["path"])
-    ]
+    media_paths = [item["path"] for item in valid_items]
 
     if mode_value == GroupingMode.CURRENT:
         return _build_current_structure_plan(
             total_items,
-            image_paths,
-            skipped_paths,
+            media_paths,
             source_root=source_root,
         )
+
+    image_paths = [path for path in media_paths if not is_video_extension(path)]
+    skipped_paths = [path for path in media_paths if is_video_extension(path)]
+
     if mode_value == GroupingMode.LOCATION:
         return _build_location_plan(
             total_items, image_paths, skipped_paths, location_depth
@@ -945,8 +943,7 @@ def build_grouping_plan(
 
 def _build_current_structure_plan(
     total_items: int,
-    image_paths: Sequence[str],
-    skipped_paths: Sequence[str],
+    media_paths: Sequence[str],
     *,
     source_root: str | None = None,
 ) -> GroupingPlan:
@@ -954,9 +951,9 @@ def _build_current_structure_plan(
     resolved_source_root = (
         os.path.normpath(source_root)
         if source_root
-        else (os.path.commonpath(list(image_paths)) if image_paths else "")
+        else (os.path.commonpath(list(media_paths)) if media_paths else "")
     )
-    for path in image_paths:
+    for path in media_paths:
         parent_dir = os.path.dirname(path)
         if resolved_source_root:
             try:
@@ -981,10 +978,10 @@ def _build_current_structure_plan(
     return GroupingPlan(
         mode=GroupingMode.CURRENT.value,
         total_items=total_items,
-        supported_items=len(image_paths),
+        supported_items=len(media_paths),
         groups=groups,
         unassigned_paths=[],
-        skipped_paths=list(skipped_paths),
+        skipped_paths=[],
     )
 
 

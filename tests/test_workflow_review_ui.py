@@ -144,7 +144,8 @@ def test_easy_delete_requires_confirmation_before_staging_trash(monkeypatch):
         "no file has been moved or deleted" in widget._state_banner.detail_label.text()
     )
     assert widget._items_list.item(1).text().startswith("✓")
-    assert widget._items_list.item(1).text().endswith("Complete · 0 kept")
+    assert widget._items_list.item(1).text().endswith("\n0 kept")
+    assert "Complete" not in widget._items_list.item(1).text()
     assert widget._pair_left_hdr.text() == "TRASH"
     assert widget._pair_right_hdr.text() == "TRASH"
 
@@ -194,6 +195,26 @@ def test_easy_delete_revision_restores_prior_marks_until_reconfirmed():
 
     assert marks == {pair_path}
     assert widget._confirmed_reviews == {review_path}
+
+
+def test_easy_delete_confirmed_single_row_omits_redundant_complete_label():
+    path = "/tmp/blurry.jpg"
+    widget = EasyDeleteStepWidget()
+    widget.set_is_marked_func(lambda _path: False)
+    widget.show_results(
+        {
+            path: {
+                "type": "blur",
+                "pair_path": None,
+                "suggest_delete": True,
+                "reason": "Blurry image",
+            }
+        }
+    )
+
+    widget._on_confirm()
+
+    assert widget._items_list.item(1).text() == "✓  blurry.jpg\nTrash"
 
 
 def test_easy_delete_r_unconfirms_and_restores_default_and_prior_marks():
@@ -349,7 +370,7 @@ def test_easy_delete_pair_supports_all_independent_keep_trash_outcomes():
         assert (
             widget._items_list.item(1)
             .text()
-            .endswith(f"Complete · {int(keep_left) + int(keep_right)} kept")
+            .endswith(f"\n{int(keep_left) + int(keep_right)} kept")
         )
 
 

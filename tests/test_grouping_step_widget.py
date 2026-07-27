@@ -1,15 +1,21 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QRect, Qt
-from PyQt6.QtGui import QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QIcon, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import QApplication, QListView, QMenu, QStyle, QStyleOption
 
 import src.ui.grouping_step_widget as grouping_step_widget_module
-from src.core.grouping import GroupingGroup, GroupingPlan
+from src.core.grouping import (
+    GroupingGroup,
+    GroupingMode,
+    GroupingPlan,
+    build_grouping_plan,
+)
 from src.ui.grouping_step_widget import (
     DroppableGroupingTree,
     GroupingTreeBranchStyle,
@@ -94,6 +100,49 @@ def test_grouping_step_widget_tracks_mode_and_busy_state():
     assert widget.folder_button.isEnabled()
     assert widget.back_button.isEnabled()
     assert all(btn.isEnabled() for btn in widget._mode_buttons.values())
+
+
+def test_grouping_preview_hint_has_readable_theme_contrast():
+    widget = GroupingStepWidget()
+    widget.setStyleSheet(Path("src/ui/dark_theme.qss").read_text(encoding="utf-8"))
+    widget.show()
+    _app.processEvents()
+
+    hint_color = widget.preview_hint_label.palette().color(
+        QPalette.ColorRole.WindowText
+    )
+    assert hint_color.name() == "#a9b7c6"
+    assert widget.preview_hint_label.font().pointSizeF() >= 10
+    assert widget.preview_hint_label.font().weight() >= 600
+
+
+def test_current_video_only_folder_is_not_rendered_as_skipped(tmp_path):
+    source_root = tmp_path / "demo"
+    video_dir = source_root / "Clips"
+    video_dir.mkdir(parents=True)
+    video_path = video_dir / "clip.mp4"
+    video_path.write_bytes(b"video")
+    plan = build_grouping_plan(
+        [{"path": str(video_path), "media_type": "video"}],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget._update_selected_preview = Mock()
+    widget.set_preview_plan(plan, str(source_root))
+
+    assert widget._editable_skipped == []
+    assert str(video_path) in widget._after_file_items_by_path
+    assert (
+        widget.preview_tree.findItems(
+            "Skipped",
+            Qt.MatchFlag.MatchExactly | Qt.MatchFlag.MatchRecursive,
+            0,
+        )
+        == []
+    )
 
 
 def test_organize_tree_headers_expand_and_collapse_each_tree(tmp_path):
@@ -532,6 +581,66 @@ def test_grouping_step_widget_selected_preview_queues_upgrade_from_cached_thumbn
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     request_preview.assert_called_once_with(first)
     assert widget.large_preview_view.has_image()
+
+
+def test_grouping_step_widget_does_not_preview_or_publish_unmanaged_files(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    image_path = str(beach_dir / "a.jpg")
+    xml_path = str(beach_dir / "metadata.xml")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+    beach_dir.joinpath("metadata.xml").write_text("<metadata />", encoding="utf-8")
+
+    clear_inspection = Mock()
+    activate_inspection = Mock()
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(
+        clear_image_inspection=clear_inspection,
+        activate_image_inspection=activate_inspection,
+    )
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[image_path],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    clear_inspection.reset_mock()
+    published_paths = []
+    widget.active_image_changed.connect(published_paths.append)
+
+    widget._update_selected_preview(image_path)
+    activate_inspection.assert_called_once()
+    activate_inspection.reset_mock()
+
+    xml_item = widget._after_file_items_by_path[xml_path]
+    widget._handle_after_item_changed(xml_item, None)
+
+    clear_inspection.assert_called_once_with(widget.large_preview_view)
+    activate_inspection.assert_not_called()
+    assert published_paths == []
+    assert widget._current_preview_source_path == xml_path
+    assert widget.preview_pane_stack.currentWidget() is widget.preview_hint_label
+    assert widget.preview_hint_label.text() == "Preview unavailable for this file type"
+    assert widget.preview_selection_label.text() == "metadata.xml"
+    assert widget.preview_selection_meta.text() == xml_path
+
+    widget._update_folder_preview(widget._after_group_items_by_id["1"])
+    visible_thumbnail_paths = widget.visible_thumbnail_paths()
+    assert image_path in visible_thumbnail_paths
+    assert xml_path not in visible_thumbnail_paths
 
 
 def test_grouping_step_widget_applies_only_current_background_preview(tmp_path):
