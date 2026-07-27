@@ -301,9 +301,7 @@ class EasyDeleteStepWidget(QWidget):
             self._clear_viewer_images()
             self._content_stack.setCurrentIndex(2)
 
-    def sync_results_after_file_mutation(
-        self, results: dict[str, dict] | None
-    ) -> None:
+    def sync_results_after_file_mutation(self, results: dict[str, dict] | None) -> None:
         """Drop stale review UI after shared file state has been invalidated."""
 
         # File mutations may invalidate the complete Easy Delete analysis by

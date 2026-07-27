@@ -1866,17 +1866,11 @@ class MainWindow(QMainWindow):
         """Synchronize every instantiated workflow queue with shared AppState."""
 
         excluded = exclude or set()
-        if (
-            "easy_delete" not in excluded
-            and self.easy_delete_step_widget is not None
-        ):
+        if "easy_delete" not in excluded and self.easy_delete_step_widget is not None:
             self.easy_delete_step_widget.sync_results_after_file_mutation(
                 self.app_state.easy_delete_results
             )
-        if (
-            "fix_rotation" not in excluded
-            and self.fix_rotation_step_widget is not None
-        ):
+        if "fix_rotation" not in excluded and self.fix_rotation_step_widget is not None:
             self.fix_rotation_step_widget.sync_results_after_file_mutation(
                 self.app_state.fix_rotation_results
             )

@@ -134,9 +134,7 @@ class NearDuplicateAssessment:
                         self.change.largest_component_fraction
                     ),
                     "change_coherent_fraction": self.change.coherent_fraction,
-                    "change_largest_component_p90": (
-                        self.change.largest_component_p90
-                    ),
+                    "change_largest_component_p90": (self.change.largest_component_p90),
                 }
             )
         values.update(self.metrics)
@@ -416,20 +414,14 @@ def coherent_change_metrics(
     difference = np.abs(first - corrected)
     valid_difference = difference[valid]
     median = float(np.median(valid_difference))
-    normalized_mad = float(
-        1.4826 * np.median(np.abs(valid_difference - median))
-    )
+    normalized_mad = float(1.4826 * np.median(np.abs(valid_difference - median)))
     threshold = max(
         CHANGE_ABSOLUTE_FLOOR,
         median + CHANGE_MAD_MULTIPLIER * normalized_mad,
     )
     mask = np.asarray((difference >= threshold) & valid, dtype=np.uint8) * 255
-    mask = cv2.morphologyEx(
-        mask, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8)
-    )
-    mask = cv2.morphologyEx(
-        mask, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8)
-    )
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8))
 
     count, labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, 8)
     image_area = int(np.count_nonzero(valid))
@@ -450,9 +442,7 @@ def coherent_change_metrics(
         component_width = int(stats[label, cv2.CC_STAT_WIDTH])
         component_height = int(stats[label, cv2.CC_STAT_HEIGHT])
         minimum_dimension = min(component_width, component_height)
-        elongation = max(component_width, component_height) / max(
-            minimum_dimension, 1
-        )
+        elongation = max(component_width, component_height) / max(minimum_dimension, 1)
         if (
             minimum_dimension < component_min_thickness
             or elongation > component_max_elongation
@@ -468,10 +458,7 @@ def coherent_change_metrics(
             if p90 >= CHANGE_COMPONENT_MIN_P90:
                 significant_component = True
     coherent_fraction = coherent_area / max(image_area, 1)
-    meaningful = (
-        significant_component
-        or coherent_fraction >= combined_min_fraction
-    )
+    meaningful = significant_component or coherent_fraction >= combined_min_fraction
     return CoherentChangeMetrics(
         threshold=threshold,
         largest_component_fraction=largest_area / max(image_area, 1),
@@ -691,12 +678,8 @@ def _normal_view_pair(
         normal_second = second.copy()
         normal_mask = valid_mask.copy()
     else:
-        normal_first = cv2.resize(
-            first, target_size, interpolation=cv2.INTER_AREA
-        )
-        normal_second = cv2.resize(
-            second, target_size, interpolation=cv2.INTER_AREA
-        )
+        normal_first = cv2.resize(first, target_size, interpolation=cv2.INTER_AREA)
+        normal_second = cv2.resize(second, target_size, interpolation=cv2.INTER_AREA)
         normal_mask = cv2.resize(
             valid_mask.astype(np.uint8),
             target_size,
@@ -751,9 +734,7 @@ def _assessment_metrics(
             "alignment_seconds": alignment_seconds,
             "perceptual_seconds": perceptual_seconds,
             "full_resolution_change_fraction": (
-                full_change.coherent_fraction
-                if full_change is not None
-                else None
+                full_change.coherent_fraction if full_change is not None else None
             ),
             "full_resolution_largest_component_fraction": (
                 full_change.largest_component_fraction
@@ -761,9 +742,7 @@ def _assessment_metrics(
                 else None
             ),
             "normal_view_change_fraction": (
-                visible_change.coherent_fraction
-                if visible_change is not None
-                else None
+                visible_change.coherent_fraction if visible_change is not None else None
             ),
         }
     )
@@ -852,8 +831,7 @@ def _compare_faces(
             detail="face alignment transform was unavailable",
         )
     adjusted_second = [
-        _transform_face(face, second_to_first, width, height)
-        for face in second.faces
+        _transform_face(face, second_to_first, width, height) for face in second.faces
     ]
     remaining = set(range(len(adjusted_second)))
     matches: list[tuple[FaceDescriptor, FaceDescriptor, float]] = []
@@ -984,9 +962,7 @@ def _bbox_iou(
     y1 = min(first[3], second[3])
     intersection = max(0.0, x1 - x0) * max(0.0, y1 - y0)
     first_area = max(0.0, first[2] - first[0]) * max(0.0, first[3] - first[1])
-    second_area = max(0.0, second[2] - second[0]) * max(
-        0.0, second[3] - second[1]
-    )
+    second_area = max(0.0, second[2] - second[0]) * max(0.0, second[3] - second[1])
     return intersection / max(first_area + second_area - intersection, 1e-12)
 
 
@@ -997,9 +973,7 @@ def _landmark_displacement(
         return None
     first_points = np.asarray(first.landmarks, dtype=np.float64)
     second_points = np.asarray(second.landmarks, dtype=np.float64)
-    first_scale = np.hypot(
-        first.bbox[2] - first.bbox[0], first.bbox[3] - first.bbox[1]
-    )
+    first_scale = np.hypot(first.bbox[2] - first.bbox[0], first.bbox[3] - first.bbox[1])
     second_scale = np.hypot(
         second.bbox[2] - second.bbox[0], second.bbox[3] - second.bbox[1]
     )

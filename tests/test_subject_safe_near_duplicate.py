@@ -47,9 +47,7 @@ def _face(offset: float = 0.0) -> FaceDescriptor:
 def _high_contrast_scene(pose: int = 0) -> np.ndarray:
     height, width = 768, 1024
     rng = np.random.default_rng(91)
-    image = np.clip(rng.normal(105, 5, (height, width, 3)), 0, 255).astype(
-        np.uint8
-    )
+    image = np.clip(rng.normal(105, 5, (height, width, 3)), 0, 255).astype(np.uint8)
     for x in range(40, width, 70):
         cv2.line(image, (x, 0), (x + 180, height), (35, 45, 55), 3)
     for y in range(60, height, 85):
@@ -146,24 +144,25 @@ def test_alignment_safety_boundaries_are_strict():
 
     rotation = np.deg2rad(MAX_ALIGNMENT_ROTATION_DEGREES + 0.01)
     too_rotated = np.float32(
-        [[np.cos(rotation), -np.sin(rotation), 0], [np.sin(rotation), np.cos(rotation), 0]]
+        [
+            [np.cos(rotation), -np.sin(rotation), 0],
+            [np.sin(rotation), np.cos(rotation), 0],
+        ]
     )
-    too_scaled = np.float32(
-        [[1 + MAX_ALIGNMENT_SCALE_CHANGE + 0.001, 0, 0], [0, 1, 0]]
-    )
-    too_sheared = np.float32(
-        [[1, MAX_ALIGNMENT_SHEAR + 0.001, 0], [0, 1, 0]]
-    )
+    too_scaled = np.float32([[1 + MAX_ALIGNMENT_SCALE_CHANGE + 0.001, 0, 0], [0, 1, 0]])
+    too_sheared = np.float32([[1, MAX_ALIGNMENT_SHEAR + 0.001, 0], [0, 1, 0]])
 
-    assert _validate_alignment(
-        too_rotated, correlation=1.0, width=1000, height=800
-    ) is None
-    assert _validate_alignment(
-        too_scaled, correlation=1.0, width=1000, height=800
-    ) is None
-    assert _validate_alignment(
-        too_sheared, correlation=1.0, width=1000, height=800
-    ) is None
+    assert (
+        _validate_alignment(too_rotated, correlation=1.0, width=1000, height=800)
+        is None
+    )
+    assert (
+        _validate_alignment(too_scaled, correlation=1.0, width=1000, height=800) is None
+    )
+    assert (
+        _validate_alignment(too_sheared, correlation=1.0, width=1000, height=800)
+        is None
+    )
 
 
 def test_small_changed_subject_is_not_diluted_by_large_static_background():
@@ -491,9 +490,7 @@ def test_cancellation_is_honored_during_component_analysis():
 def test_component_area_boundary_is_conservative():
     height = width = 512
     rng = np.random.default_rng(3)
-    first = np.clip(rng.normal(0.45, 0.08, (height, width)), 0, 1).astype(
-        np.float32
-    )
+    first = np.clip(rng.normal(0.45, 0.08, (height, width)), 0, 1).astype(np.float32)
     below = first.copy()
     above = first.copy()
     minimum_area = int(np.ceil(first.size * CHANGE_COMPONENT_MIN_FRACTION))

@@ -89,7 +89,7 @@ class AnalysisCache:
             return None
         try:
             return {str(path): int(cluster_id) for path, cluster_id in clusters.items()}
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
     def invalidate_similarity(self, folder_path: str) -> None:

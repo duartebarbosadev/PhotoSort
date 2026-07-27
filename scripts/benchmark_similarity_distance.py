@@ -21,13 +21,11 @@ def main() -> int:
     args = parser.parse_args()
 
     rng = np.random.default_rng(7)
-    arrays = rng.normal(
-        size=(args.images, args.regions, args.dimensions)
-    ).astype(np.float32)
+    arrays = rng.normal(size=(args.images, args.regions, args.dimensions)).astype(
+        np.float32
+    )
     paths = [str(index) for index in range(args.images)]
-    embeddings = {
-        path: arrays[index, 0].tolist() for index, path in enumerate(paths)
-    }
+    embeddings = {path: arrays[index, 0].tolist() for index, path in enumerate(paths)}
     regional = {path: arrays[index].tolist() for index, path in enumerate(paths)}
 
     reference = np.zeros((args.images, args.images), dtype=np.float32)

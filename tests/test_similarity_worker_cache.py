@@ -44,9 +44,7 @@ class _FakeEngine:
     def generate_embeddings_for_files(self, paths, **kwargs):
         self.calls.append((paths, kwargs))
         self.embeddings_generated.emit({path: [1.0, 0.0] for path in paths})
-        self.regional_embeddings_generated.emit(
-            {path: [[1.0, 0.0]] for path in paths}
-        )
+        self.regional_embeddings_generated.emit({path: [[1.0, 0.0]] for path in paths})
         if kwargs["perform_clustering"]:
             self.clustering_complete.emit({path: 1 for path in paths})
 

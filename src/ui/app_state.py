@@ -57,9 +57,7 @@ class AppState:
         self.easy_delete_results: dict[str, dict[str, Any]] | None = (
             None  # None = not analysed; {} = analysed with no issues
         )
-        self.easy_delete_pair_assessments: dict[
-            tuple[str, str], dict[str, Any]
-        ] = {}
+        self.easy_delete_pair_assessments: dict[tuple[str, str], dict[str, Any]] = {}
         self.fix_rotation_results: dict[str, int] | None = (
             None  # None = not analysed; {} = analysed with no suggestions
         )
@@ -185,9 +183,7 @@ class AppState:
         to invalidate those review results completely.
         """
 
-        changed_paths = {
-            path for path in file_paths if isinstance(path, str) and path
-        }
+        changed_paths = {path for path in file_paths if isinstance(path, str) and path}
         for path in changed_paths:
             self.embeddings_cache.pop(path, None)
             self.regional_embeddings_cache.pop(path, None)
@@ -223,11 +219,7 @@ class AppState:
             self.easy_delete_results = None
             self.easy_delete_pair_assessments.clear()
 
-        if (
-            invalidate_disk_cache
-            and self.current_folder_path
-            and self.analysis_cache
-        ):
+        if invalidate_disk_cache and self.current_folder_path and self.analysis_cache:
             self.analysis_cache.invalidate_similarity(self.current_folder_path)
 
     def remove_data_for_paths(
@@ -461,9 +453,9 @@ class AppState:
                 for path, entry in self.easy_delete_results.items()
             }
         self.easy_delete_pair_assessments = {
-            tuple(sorted((updates.get(pair[0], pair[0]), updates.get(pair[1], pair[1])))): (
-                assessment
-            )
+            tuple(
+                sorted((updates.get(pair[0], pair[0]), updates.get(pair[1], pair[1])))
+            ): (assessment)
             for pair, assessment in self.easy_delete_pair_assessments.items()
         }
         if self.fix_rotation_results is not None:

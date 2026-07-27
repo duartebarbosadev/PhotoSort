@@ -88,8 +88,7 @@ def build_similarity_signature(
         "clustering_eps": float(clustering_eps),
         "min_samples": int(min_samples),
         "files": [
-            [path, *fingerprints.get(path, (-1, -1))]
-            for path in sorted(file_paths)
+            [path, *fingerprints.get(path, (-1, -1))] for path in sorted(file_paths)
         ],
     }
     encoded = json.dumps(

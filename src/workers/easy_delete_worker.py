@@ -374,7 +374,7 @@ class EasyDeleteWorker(QObject):
             embedded_count * (embedded_count - 1) // 2
             for paths in self.cluster_map.values()
             if (embedded_count := sum(path in self.embeddings_cache for path in paths))
-                >= 2
+            >= 2
         )
         processed_pairs = 0
         progress_interval = max(1, total_pairs // 100)
@@ -414,9 +414,7 @@ class EasyDeleteWorker(QObject):
                         or processed_pairs == total_pairs
                         or processed_pairs % progress_interval == 0
                     ):
-                        percent = 60 + int(
-                            39 * processed_pairs / max(total_pairs, 1)
-                        )
+                        percent = 60 + int(39 * processed_pairs / max(total_pairs, 1))
                         self.progress_update.emit(
                             percent,
                             "Checking subject-safe near-duplicates… "

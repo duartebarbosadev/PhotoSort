@@ -85,9 +85,7 @@ def test_vectorized_regional_distances_match_pairwise_reference():
     rng = np.random.default_rng(12)
     paths = [f"{index}.jpg" for index in range(12)]
     arrays = rng.normal(size=(len(paths), 6, 32)).astype(np.float32)
-    embeddings = {
-        path: arrays[index, 0].tolist() for index, path in enumerate(paths)
-    }
+    embeddings = {path: arrays[index, 0].tolist() for index, path in enumerate(paths)}
     regional = {path: arrays[index].tolist() for index, path in enumerate(paths)}
 
     optimized = build_regional_distance_matrix(embeddings, regional, paths)
@@ -150,22 +148,18 @@ def test_sparse_and_dense_regional_dbscan_are_equivalent():
     arrays = rng.normal(size=(len(paths), 6, 16)).astype(np.float32)
     arrays[1] = arrays[0]
     arrays[3] = arrays[2]
-    embeddings = {
-        path: arrays[index, 0].tolist() for index, path in enumerate(paths)
-    }
+    embeddings = {path: arrays[index, 0].tolist() for index, path in enumerate(paths)}
     regional = {path: arrays[index].tolist() for index, path in enumerate(paths)}
     eps = 0.1
 
     dense = build_regional_distance_matrix(embeddings, regional, paths)
-    sparse = build_regional_neighborhood_graph(
-        embeddings, regional, paths, eps
+    sparse = build_regional_neighborhood_graph(embeddings, regional, paths, eps)
+    dense_labels = DBSCAN(eps=eps, min_samples=2, metric="precomputed").fit_predict(
+        dense
     )
-    dense_labels = DBSCAN(
-        eps=eps, min_samples=2, metric="precomputed"
-    ).fit_predict(dense)
-    sparse_labels = DBSCAN(
-        eps=eps, min_samples=2, metric="precomputed"
-    ).fit_predict(sparse)
+    sparse_labels = DBSCAN(eps=eps, min_samples=2, metric="precomputed").fit_predict(
+        sparse
+    )
 
     assert np.array_equal(sparse_labels, dense_labels)
 

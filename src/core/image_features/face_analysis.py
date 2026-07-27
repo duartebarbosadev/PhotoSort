@@ -70,7 +70,7 @@ class FaceDescriptor:
                 for point in landmarks
                 if isinstance(point, (list, tuple)) and len(point) >= 2
             )
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         if len(parsed_landmarks) != len(landmarks):
             return None
@@ -94,7 +94,10 @@ class SubjectDescriptor:
 
     @classmethod
     def from_dict(cls, value: object) -> SubjectDescriptor | None:
-        if not isinstance(value, dict) or value.get("version") != FACE_DESCRIPTOR_VERSION:
+        if (
+            not isinstance(value, dict)
+            or value.get("version") != FACE_DESCRIPTOR_VERSION
+        ):
             return None
         values = value.get("faces")
         if not isinstance(values, list):

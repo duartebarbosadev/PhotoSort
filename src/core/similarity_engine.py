@@ -257,8 +257,7 @@ class SimilarityEngine(QObject):
             path: artifact
             for path, artifact in all_artifacts.items()
             if path in current_fingerprints
-            and tuple(artifact.get("fingerprint", ()))
-            == current_fingerprints[path]
+            and tuple(artifact.get("fingerprint", ())) == current_fingerprints[path]
         }
         files_to_process = [
             path

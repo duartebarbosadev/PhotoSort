@@ -1087,9 +1087,9 @@ class PickBestStepWidget(QWidget):
         if similarity is None:
             return ""
         distance = max(0.0, 1.0 - similarity)
-        assessment = getattr(
-            app_state, "easy_delete_pair_assessments", {}
-        ).get(tuple(sorted(paths)))
+        assessment = getattr(app_state, "easy_delete_pair_assessments", {}).get(
+            tuple(sorted(paths))
+        )
         if assessment:
             reason_code = assessment.get("assessment_reason_code")
             detail = assessment.get("assessment_detail")
@@ -1104,9 +1104,7 @@ class PickBestStepWidget(QWidget):
                     f"{detail or reason_code}."
                 )
             else:
-                policy_detail = (
-                    f"Easy Delete assessment: {detail or reason_code}."
-                )
+                policy_detail = f"Easy Delete assessment: {detail or reason_code}."
         elif similarity < EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY:
             policy_detail = (
                 "Easy Delete did not compare it further because it is below the "

@@ -187,9 +187,7 @@ def _normalized_region_sets(
             raise SimilarityAnalysisCancelled
         region_vectors = regional_embeddings.get(path)
         if region_vectors:
-            region_matrix: np.ndarray = np.asarray(
-                region_vectors, dtype=np.float32
-            )
+            region_matrix: np.ndarray = np.asarray(region_vectors, dtype=np.float32)
         else:
             region_matrix = np.asarray([embeddings[path]], dtype=np.float32)
         if region_matrix.ndim != 2 or region_matrix.shape[0] == 0:
@@ -230,9 +228,7 @@ def _regional_distance_from_normalized(
     """Apply the established regional-distance rule to normalized matrices."""
 
     if first_regions.shape == second_regions.shape and len(first_regions) > 1:
-        similarity = float(
-            np.mean(np.sum(first_regions * second_regions, axis=1))
-        )
+        similarity = float(np.mean(np.sum(first_regions * second_regions, axis=1)))
     else:
         similarity = float(np.max(first_regions @ second_regions.T))
     return max(0.0, min(2.0, 1.0 - similarity))
@@ -241,7 +237,9 @@ def _regional_distance_from_normalized(
 def _distance_block_rows(count: int, target_bytes: int) -> int:
     if count <= 0:
         return 1
-    return max(1, min(count, target_bytes // max(1, count * np.dtype(np.float32).itemsize)))
+    return max(
+        1, min(count, target_bytes // max(1, count * np.dtype(np.float32).itemsize))
+    )
 
 
 def build_regional_distance_matrix(
@@ -264,17 +262,15 @@ def build_regional_distance_matrix(
     distances: np.ndarray = np.zeros((count, count), dtype=np.float32)
     uniform_features = _uniform_regional_features(region_sets)
     if uniform_features is not None:
-        block_rows = _distance_block_rows(
-            count, REGIONAL_DISTANCE_BLOCK_TARGET_BYTES
-        )
+        block_rows = _distance_block_rows(count, REGIONAL_DISTANCE_BLOCK_TARGET_BYTES)
         for start in range(0, count, block_rows):
             if should_cancel is not None and should_cancel():
                 raise SimilarityAnalysisCancelled
             end = min(count, start + block_rows)
             similarities = uniform_features[start:end] @ uniform_features.T
-            distances[start:end] = np.clip(
-                1.0 - similarities, 0.0, 2.0
-            ).astype(np.float32, copy=False)
+            distances[start:end] = np.clip(1.0 - similarities, 0.0, 2.0).astype(
+                np.float32, copy=False
+            )
             if progress_callback is not None and count:
                 progress_callback(int(end / count * 100))
         np.fill_diagonal(distances, 0.0)
