@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 import numpy as np
 from PIL import Image
@@ -33,6 +33,17 @@ class GroupingMode(StrEnum):
     FACE = "face"
     LOCATION = "location"
     MIXED = "mixed"
+
+
+class GroupingAnalysisCancelled(Exception):
+    """Raised when grouping preview analysis is cancelled."""
+
+
+def _raise_if_grouping_cancelled(
+    should_continue: Callable[[], bool] | None,
+) -> None:
+    if should_continue is not None and not should_continue():
+        raise GroupingAnalysisCancelled
 
 
 @dataclass(slots=True)
@@ -867,7 +878,9 @@ def _run_ml_similarity_pipeline(
     progress_callback=None,
     shared_engine: SimilarityEngine | None = None,
     image_pipeline: ImagePipeline | None = None,
+    should_continue: Callable[[], bool] | None = None,
 ) -> dict[str, int]:
+    _raise_if_grouping_cancelled(should_continue)
     if not image_paths:
         return {}
     if shared_engine is None:
@@ -880,6 +893,7 @@ def _run_ml_similarity_pipeline(
         list(image_paths),
         progress_callback=progress_callback,
     )
+    _raise_if_grouping_cancelled(should_continue)
     assignments: dict[str, int] = {}
     for path, raw_cluster in cluster_results.items():
         cluster_id = _parse_cluster_id(raw_cluster)
@@ -895,7 +909,10 @@ def build_grouping_plan(
     source_root: str | None = None,
     location_depth: int = 3,
     image_pipeline: ImagePipeline | None = None,
+    should_continue: Callable[[], bool] | None = None,
+    similarity_engine: SimilarityEngine | None = None,
 ) -> GroupingPlan:
+    _raise_if_grouping_cancelled(should_continue)
     mode_value = GroupingMode(mode)
     valid_items = [
         item for item in items if isinstance(item, dict) and item.get("path")
@@ -915,7 +932,11 @@ def build_grouping_plan(
 
     if mode_value == GroupingMode.LOCATION:
         return _build_location_plan(
-            total_items, image_paths, skipped_paths, location_depth
+            total_items,
+            image_paths,
+            skipped_paths,
+            location_depth,
+            should_continue=should_continue,
         )
     if mode_value == GroupingMode.FACE:
         return _build_face_plan(
@@ -923,6 +944,7 @@ def build_grouping_plan(
             image_paths,
             skipped_paths,
             image_pipeline=image_pipeline,
+            should_continue=should_continue,
         )
     if mode_value == GroupingMode.MIXED:
         return _build_mixed_plan(
@@ -931,6 +953,8 @@ def build_grouping_plan(
             skipped_paths,
             progress_callback=progress_callback,
             image_pipeline=image_pipeline,
+            should_continue=should_continue,
+            similarity_engine=similarity_engine,
         )
     return _build_similarity_plan(
         total_items,
@@ -938,6 +962,8 @@ def build_grouping_plan(
         skipped_paths,
         progress_callback=progress_callback,
         image_pipeline=image_pipeline,
+        should_continue=should_continue,
+        similarity_engine=similarity_engine,
     )
 
 
@@ -991,12 +1017,17 @@ def _build_similarity_plan(
     skipped_paths: Sequence[str],
     progress_callback=None,
     image_pipeline: ImagePipeline | None = None,
+    should_continue: Callable[[], bool] | None = None,
+    similarity_engine: SimilarityEngine | None = None,
 ) -> GroupingPlan:
-    assignments = _run_ml_similarity_pipeline(
-        image_paths,
-        progress_callback=progress_callback,
-        image_pipeline=image_pipeline,
-    )
+    pipeline_kwargs = {
+        "progress_callback": progress_callback,
+        "shared_engine": similarity_engine,
+        "image_pipeline": image_pipeline,
+    }
+    if should_continue is not None:
+        pipeline_kwargs["should_continue"] = should_continue
+    assignments = _run_ml_similarity_pipeline(image_paths, **pipeline_kwargs)
     grouped_paths = set(assignments.keys())
     unassigned = sorted([path for path in image_paths if path not in grouped_paths])
     groups = _build_groups_from_assignments(
@@ -1017,10 +1048,12 @@ def _build_face_plan(
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
     image_pipeline: ImagePipeline | None = None,
+    should_continue: Callable[[], bool] | None = None,
 ) -> GroupingPlan:
     vectors: dict[str, np.ndarray] = {}
     unassigned: list[str] = []
     for path in image_paths:
+        _raise_if_grouping_cancelled(should_continue)
         vector, has_face_like_signal = _compute_face_vector(
             path,
             image_pipeline=image_pipeline,
@@ -1050,10 +1083,12 @@ def _build_location_plan(
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
     location_depth: int = 3,
+    should_continue: Callable[[], bool] | None = None,
 ) -> GroupingPlan:
     buckets: dict[str, list[str]] = {}
     unassigned: list[str] = []
     for path in image_paths:
+        _raise_if_grouping_cancelled(should_continue)
         metadata = _load_comprehensive_metadata(path)
         label = _location_label_from_metadata(metadata, depth=location_depth)
         if not label:
@@ -1105,10 +1140,13 @@ def _build_mixed_plan(
     skipped_paths: Sequence[str],
     progress_callback=None,
     image_pipeline: ImagePipeline | None = None,
+    should_continue: Callable[[], bool] | None = None,
+    similarity_engine: SimilarityEngine | None = None,
 ) -> GroupingPlan:
     date_buckets: dict[str, list[str]] = {}
     undated: list[str] = []
     for path in image_paths:
+        _raise_if_grouping_cancelled(should_continue)
         label = _extract_date_label(path)
         if not label:
             undated.append(path)
@@ -1118,6 +1156,7 @@ def _build_mixed_plan(
     groups: list[GroupingGroup] = []
     group_counter = 1
     for date_label in sorted(date_buckets.keys()):
+        _raise_if_grouping_cancelled(should_continue)
         bucket_paths = date_buckets[date_label]
 
         def _bucket_progress(
@@ -1126,10 +1165,16 @@ def _build_mixed_plan(
             if progress_callback:
                 progress_callback(percent, f"{bucket_label}: {message}")
 
+        pipeline_kwargs = {
+            "progress_callback": (_bucket_progress if progress_callback else None),
+            "shared_engine": similarity_engine,
+            "image_pipeline": image_pipeline,
+        }
+        if should_continue is not None:
+            pipeline_kwargs["should_continue"] = should_continue
         assignments = _run_ml_similarity_pipeline(
             bucket_paths,
-            progress_callback=_bucket_progress if progress_callback else None,
-            image_pipeline=image_pipeline,
+            **pipeline_kwargs,
         )
         grouped_by_cluster: dict[int, list[str]] = {}
         for path, cluster_id in assignments.items():

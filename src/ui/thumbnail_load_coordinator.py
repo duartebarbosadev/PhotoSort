@@ -31,6 +31,10 @@ class ViewportThumbnailLoader(QObject):
         self._request_timer.setSingleShot(True)
         self._request_timer.setInterval(50)
         self._request_timer.timeout.connect(self._load_requested_paths)
+        self._folder_start_timer = QTimer(self)
+        self._folder_start_timer.setSingleShot(True)
+        self._folder_start_timer.setInterval(50)
+        self._folder_start_timer.timeout.connect(self._start_folder_session)
         self._load_timer = QTimer(self)
         self._load_timer.setSingleShot(True)
         self._load_timer.setInterval(THUMBNAIL_SCROLL_IDLE_MS)
@@ -54,24 +58,37 @@ class ViewportThumbnailLoader(QObject):
         if not self._all_paths or not self._enabled():
             return
         self._session_id = uuid4().hex
+        self.context.set_thumbnail_progress(0, len(self._all_paths), 0, False)
+        self._start_folder_session()
+
+    def _start_folder_session(self) -> None:
+        """Start the current folder session once the previous worker has exited."""
+
+        if not self._session_id or not self._all_paths or not self._enabled():
+            return
+        manager = self.context.worker_manager
+        if manager.is_thumbnail_preload_running():
+            self._folder_start_timer.start()
+            return
         visible = [
             path
             for path in dict.fromkeys(self._visible_paths())
             if path in self._all_path_set
         ]
-        self.context.set_thumbnail_progress(0, len(self._all_paths), 0, False)
-        self.context.worker_manager.start_thumbnail_session(
+        if not manager.start_thumbnail_session(
             self._session_id,
             self._all_paths,
             visible,
-        )
+        ):
+            self._folder_start_timer.start()
 
     def reset(self, *, stop_worker: bool = False) -> None:
+        self._folder_start_timer.stop()
         self._load_timer.stop()
         self._layout_retry_timer.stop()
         self._request_timer.stop()
         if stop_worker and self.context.worker_manager.is_thumbnail_preload_running():
-            self.context.worker_manager.stop_thumbnail_preload()
+            self.context.worker_manager.request_stop_thumbnail_preload()
         self._session_id = ""
         self._all_paths = []
         self._all_path_set.clear()

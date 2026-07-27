@@ -1,9 +1,11 @@
 import os
 
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw
 
 from src.core.grouping import (
+    GroupingAnalysisCancelled,
     GroupingMode,
     GroupingGroup,
     GroupingPlan,
@@ -12,6 +14,30 @@ from src.core.grouping import (
     build_grouping_plan,
     execute_grouping_plan,
 )
+
+
+def test_grouping_metadata_modes_honor_cancellation(monkeypatch):
+    loaded = []
+    cancellation_checks = 0
+
+    def should_continue():
+        nonlocal cancellation_checks
+        cancellation_checks += 1
+        return cancellation_checks < 3
+
+    monkeypatch.setattr(
+        "src.core.grouping._load_comprehensive_metadata",
+        lambda path: loaded.append(path) or {},
+    )
+
+    with pytest.raises(GroupingAnalysisCancelled):
+        build_grouping_plan(
+            [{"path": "/tmp/a.jpg"}, {"path": "/tmp/b.jpg"}],
+            GroupingMode.LOCATION,
+            should_continue=should_continue,
+        )
+
+    assert loaded == ["/tmp/a.jpg"]
 
 
 def _create_solid_image(path: str, color: tuple[int, int, int]) -> None:

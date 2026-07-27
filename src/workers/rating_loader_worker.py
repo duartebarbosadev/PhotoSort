@@ -69,7 +69,11 @@ class RatingLoaderWorker(QObject):
             signal.emit(*args)
 
     def run_load(self):
-        self._is_running = True
+        if not self._is_running:
+            logger.info(
+                "Metadata load skipped because cancellation was already requested."
+            )
+            return
         image_paths_to_process = [
             fd["path"]
             for fd in self._image_data_list

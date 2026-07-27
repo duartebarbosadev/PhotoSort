@@ -16,6 +16,7 @@ from core.similarity_embedding_model import (
     SimilarityModelNotInstalledError,
 )
 from core.similarity_utils import (
+    SimilarityAnalysisCancelled,
     build_regional_distance_matrix,
     adaptive_dbscan_eps,
     build_orientation_map,
@@ -36,6 +37,16 @@ logger = logging.getLogger(__name__)
 
 _module_init_start_time = time.time()
 logger.debug("Initializing SimilarityEngine module...")
+
+
+def _analysis_stop_requested(engine: object) -> bool:
+    """Read the cooperative stop flag without requiring an initialized QObject."""
+
+    try:
+        state = object.__getattribute__(engine, "__dict__")
+    except AttributeError:
+        return False
+    return not state.get("_is_running", True)
 
 
 class SimilarityEngine(QObject):
@@ -67,7 +78,7 @@ class SimilarityEngine(QObject):
             allow_download=allow_model_download,
             progress_callback=self._handle_model_progress,
         )
-        self._is_running = False
+        self._is_running = True
         self._cache_filename = f"embeddings_{self.model.cache_key}.pkl.zst"
         self._region_cache_filename = (
             f"embeddings_{self.model.region_cache_key}.pkl.zst"
@@ -268,7 +279,10 @@ class SimilarityEngine(QObject):
             self.error.emit(f"Could not save regional embeddings cache: {e}")
 
     def generate_embeddings_for_files(self, file_paths: list[str]):
-        self._is_running = True
+        if not self._is_running:
+            logger.info("Similarity analysis skipped (stop already requested).")
+            self.clustering_complete.emit({})
+            return
         logger.info(f"Starting embedding generation for {len(file_paths)} files.")
 
         if not self._load_model():
@@ -408,7 +422,15 @@ class SimilarityEngine(QObject):
         if self._is_running:  # Only cluster if not stopped
             # Build orientation map for orientation-aware clustering
             logger.info("Building orientation map for %d files...", len(file_paths))
-            orientation_map = build_orientation_map(file_paths)
+            try:
+                orientation_map = build_orientation_map(
+                    file_paths,
+                    should_cancel=lambda: _analysis_stop_requested(self),
+                )
+            except SimilarityAnalysisCancelled:
+                logger.info("Orientation mapping cancelled.")
+                self.clustering_complete.emit({})
+                return
             self.cluster_embeddings(
                 final_embeddings_for_requested_files,
                 orientation_map,
@@ -426,7 +448,10 @@ class SimilarityEngine(QObject):
     ) -> np.ndarray:
         """Build a distance matrix from corresponding large image regions."""
         return build_regional_distance_matrix(
-            embeddings, regional_embeddings, subset_paths
+            embeddings,
+            regional_embeddings,
+            subset_paths,
+            should_cancel=lambda: _analysis_stop_requested(self),
         )
 
     def _run_dbscan_on_subset(
@@ -449,6 +474,8 @@ class SimilarityEngine(QObject):
         """
         if not subset_paths:
             return {}, start_cluster_id
+        if _analysis_stop_requested(self):
+            raise SimilarityAnalysisCancelled
 
         subset_embeddings = [embeddings[path] for path in subset_paths]
         embedding_matrix = np.array(subset_embeddings, dtype=np.float32)
@@ -462,6 +489,8 @@ class SimilarityEngine(QObject):
             distance_matrix = self._build_regional_distance_matrix(
                 embeddings, regional_embeddings, subset_paths
             )
+            if _analysis_stop_requested(self):
+                raise SimilarityAnalysisCancelled
             adaptive_eps = base_eps
             dbscan = DBSCAN(
                 eps=adaptive_eps,
@@ -477,6 +506,8 @@ class SimilarityEngine(QObject):
                 eps=adaptive_eps, min_samples=DBSCAN_MIN_SAMPLES, metric="cosine"
             )
             dbscan_labels = dbscan.fit_predict(embedding_matrix)
+        if _analysis_stop_requested(self):
+            raise SimilarityAnalysisCancelled
 
         # Map DBSCAN labels to our cluster IDs
         label_map: dict[int, int] = {}
@@ -553,6 +584,8 @@ class SimilarityEngine(QObject):
                         "Portrait clustering: %d clusters/groups formed.",
                         len(set(portrait_clusters.values())),
                     )
+                    if not self._is_running:
+                        raise SimilarityAnalysisCancelled
                 else:
                     next_id = 1
 
@@ -575,6 +608,10 @@ class SimilarityEngine(QObject):
                     [path_to_cluster[path] for path in filepaths], dtype=int
                 )
 
+            except SimilarityAnalysisCancelled:
+                logger.info("Similarity clustering cancelled.")
+                self.clustering_complete.emit({})
+                return
             except Exception as e_dbscan:
                 error_msg = (
                     f"Error during orientation-aware DBSCAN clustering: {e_dbscan}"
@@ -592,13 +629,18 @@ class SimilarityEngine(QObject):
 
             labels = None
             base_eps = get_similarity_clustering_eps()
-            regional_distance_matrix = (
-                self._build_regional_distance_matrix(
-                    embeddings, regional_embeddings, filepaths
+            try:
+                regional_distance_matrix = (
+                    self._build_regional_distance_matrix(
+                        embeddings, regional_embeddings, filepaths
+                    )
+                    if regional_embeddings
+                    else None
                 )
-                if regional_embeddings
-                else None
-            )
+            except SimilarityAnalysisCancelled:
+                logger.info("Similarity clustering cancelled.")
+                self.clustering_complete.emit({})
+                return
             adaptive_eps = (
                 base_eps
                 if regional_distance_matrix is not None

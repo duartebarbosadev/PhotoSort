@@ -32,6 +32,53 @@ def test_load_folder_blocks_while_grouping_workflow_is_running():
     assert "loading another folder" in message
 
 
+def test_load_folder_cancels_analysis_without_blocking(monkeypatch):
+    callbacks = []
+    worker_manager = SimpleNamespace(
+        is_grouping_workflow_running=lambda: False,
+        is_file_deletion_running=lambda: False,
+        is_rotation_application_running=lambda: False,
+        is_rating_writer_running=lambda: False,
+        is_any_worker_running=lambda: True,
+        request_stop_all_workers=Mock(),
+    )
+    app_state = SimpleNamespace(
+        get_marked_files=lambda: [],
+        clear_all_file_specific_data=Mock(),
+    )
+    main_window = SimpleNamespace(
+        show_loading_overlay=Mock(),
+        update_loading_text=Mock(),
+        menu_manager=SimpleNamespace(update_recent_folders_menu=Mock()),
+    )
+    controller = SimpleNamespace(
+        worker_manager=worker_manager,
+        app_state=app_state,
+        main_window=main_window,
+        _pending_folder_load_after_workers=None,
+        _finish_folder_load_after_workers=Mock(),
+    )
+    monkeypatch.setattr("src.ui.app_controller.add_recent_folder", lambda _path: None)
+    monkeypatch.setattr(
+        "src.ui.app_controller.QTimer.singleShot",
+        lambda _delay, callback: callbacks.append(callback),
+    )
+
+    AppController.load_folder(controller, "/tmp/demo")
+
+    worker_manager.request_stop_all_workers.assert_called_once_with()
+    app_state.clear_all_file_specific_data.assert_not_called()
+    assert controller._pending_folder_load_after_workers == (
+        "/tmp/demo",
+        {
+            "skip_grouping_step": False,
+            "record_as_source": True,
+            "preserve_deletion_marks": False,
+        },
+    )
+    assert callbacks == [controller._finish_folder_load_after_workers]
+
+
 def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch):
     status_bar = _DummyStatusBar()
     load_calls = []

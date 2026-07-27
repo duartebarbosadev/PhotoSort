@@ -1,7 +1,7 @@
 import logging
 import os
 from typing import Literal
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import numpy as np
 from PIL import Image
@@ -10,6 +10,10 @@ from PIL.ImageOps import exif_transpose
 logger = logging.getLogger(__name__)
 
 Orientation = Literal["portrait", "landscape", "square"]
+
+
+class SimilarityAnalysisCancelled(Exception):
+    """Raised when a cancellable similarity computation is asked to stop."""
 
 
 def cosine_similarity(
@@ -112,7 +116,10 @@ def classify_orientation(image_path: str) -> Orientation:
         return "landscape"
 
 
-def build_orientation_map(file_paths: list[str]) -> dict[str, Orientation]:
+def build_orientation_map(
+    file_paths: list[str],
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, Orientation]:
     """
     Build a mapping of file paths to their orientations.
 
@@ -124,6 +131,8 @@ def build_orientation_map(file_paths: list[str]) -> dict[str, Orientation]:
     """
     orientation_map: dict[str, Orientation] = {}
     for path in file_paths:
+        if should_cancel is not None and should_cancel():
+            raise SimilarityAnalysisCancelled
         orientation_map[path] = classify_orientation(path)
     return orientation_map
 
@@ -165,10 +174,18 @@ def build_regional_distance_matrix(
     embeddings: dict[str, list[float]],
     regional_embeddings: dict[str, list[list[float]]],
     subset_paths: list[str],
+    should_cancel: Callable[[], bool] | None = None,
 ) -> np.ndarray:
-    """Build a symmetric distance matrix from shared regional embedding data."""
+    """Build a symmetric distance matrix from shared regional embedding data.
+
+    The matrix is quadratic in the number of images, so callers running in a
+    worker thread can provide a cancellation predicate. It is checked once per
+    row to keep cancellation responsive without adding work to every pair.
+    """
     region_sets: list[np.ndarray] = []
     for path in subset_paths:
+        if should_cancel is not None and should_cancel():
+            raise SimilarityAnalysisCancelled
         region_vectors = regional_embeddings.get(path)
         if region_vectors:
             region_matrix = np.asarray(region_vectors, dtype=np.float32)
@@ -181,6 +198,8 @@ def build_regional_distance_matrix(
     count = len(subset_paths)
     distances = np.zeros((count, count), dtype=np.float32)
     for first_index in range(count):
+        if should_cancel is not None and should_cancel():
+            raise SimilarityAnalysisCancelled
         for second_index in range(first_index + 1, count):
             distance = regional_embedding_distance(
                 region_sets[first_index], region_sets[second_index]

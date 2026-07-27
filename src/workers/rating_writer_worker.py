@@ -44,7 +44,11 @@ class RatingWriterWorker(QObject):
         Args:
             rating_operations: List of tuples (file_path, rating)
         """
-        self._is_running = True
+        if not self._is_running:
+            logger.info(
+                "Rating write skipped because cancellation was already requested"
+            )
+            return
         total_operations = len(rating_operations)
         successful_count = 0
         failed_count = 0

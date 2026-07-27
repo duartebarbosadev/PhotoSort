@@ -154,10 +154,16 @@ class AppController(QObject):
         self._pick_best_pending_after_similarity: bool = False
         self._easy_delete_pending_after_similarity: bool = False
         self._pending_grouping_preview: tuple[object, str] | None = None
+        self._pending_grouping_preview_start: (
+            tuple[list[dict[str, Any]], str, str | None, int] | None
+        ) = None
         self._cancelled_workflows: set[str] = set()
         self._ignore_similarity_results = False
         self._pending_exif_cache_capacity_warning: tuple[int, int, int] | None = None
         self._pending_folder_load: tuple[str, dict[str, bool]] | None = None
+        self._pending_folder_load_after_workers: tuple[str, dict[str, bool]] | None = (
+            None
+        )
 
     def is_workflow_analysis_running(self, workflow: str) -> bool:
         if workflow == "organize":
@@ -180,24 +186,25 @@ class AppController(QObject):
         """Cancel only work owned by the departing workflow."""
         self._cancelled_workflows.add(workflow)
         if workflow == "organize":
-            self.worker_manager.stop_grouping_preview()
+            self.worker_manager.request_stop_grouping_preview()
             self._pending_grouping_preview = None
+            self._pending_grouping_preview_start = None
         elif workflow == "easy_delete":
             depended_on_similarity = self._easy_delete_pending_after_similarity
             self._easy_delete_pending_after_similarity = False
-            self.worker_manager.stop_easy_delete_analysis()
+            self.worker_manager.request_stop_easy_delete_analysis()
             if depended_on_similarity:
                 self._ignore_similarity_results = True
-                self.worker_manager.stop_similarity_analysis()
+                self.worker_manager.request_stop_similarity_analysis()
         elif workflow == "pick_best":
             depended_on_similarity = self._pick_best_pending_after_similarity
             self._pick_best_pending_after_similarity = False
-            self.worker_manager.stop_pick_best_analysis()
+            self.worker_manager.request_stop_pick_best_analysis()
             if depended_on_similarity:
                 self._ignore_similarity_results = True
-                self.worker_manager.stop_similarity_analysis()
+                self.worker_manager.request_stop_similarity_analysis()
         elif workflow == "fix_rotation":
-            self.worker_manager.stop_fix_rotation_detection()
+            self.worker_manager.request_stop_fix_rotation_detection()
 
     def _sync_active_image(self, workflow_step: str) -> None:
         controller = getattr(self.main_window, "active_image_controller", None)
@@ -383,6 +390,18 @@ class AppController(QObject):
                 4000,
             )
             return
+        if self.worker_manager.is_rotation_application_running():
+            self.main_window.statusBar().showMessage(
+                "Rotations are still being written. Wait before loading another folder.",
+                4000,
+            )
+            return
+        if self.worker_manager.is_rating_writer_running():
+            self.main_window.statusBar().showMessage(
+                "Ratings are still being written. Wait before loading another folder.",
+                4000,
+            )
+            return
 
         marked_files = self.app_state.get_marked_files()
         preserved_marks = set(marked_files) if preserve_deletion_marks else set()
@@ -427,7 +446,26 @@ class AppController(QObject):
         add_recent_folder(folder_path)
         self.main_window.menu_manager.update_recent_folders_menu()
 
-        self.worker_manager.stop_all_workers()
+        self.worker_manager.request_stop_all_workers()
+        is_any_worker_active = getattr(
+            self.worker_manager,
+            "is_any_worker_active",
+            self.worker_manager.is_any_worker_running,
+        )
+        if is_any_worker_active():
+            self._pending_folder_load_after_workers = (
+                folder_path,
+                {
+                    "skip_grouping_step": skip_grouping_step,
+                    "record_as_source": record_as_source,
+                    "preserve_deletion_marks": preserve_deletion_marks,
+                },
+            )
+            self.main_window.update_loading_text(
+                "Stopping background work before scanning the new folder…"
+            )
+            QTimer.singleShot(25, self._finish_folder_load_after_workers)
+            return
 
         self.app_state.clear_all_file_specific_data()
         if preserved_marks:
@@ -489,6 +527,27 @@ class AppController(QObject):
             perform_blur_detection=False,
             blur_threshold=self.main_window.blur_detection_threshold,
         )
+
+    def _finish_folder_load_after_workers(self) -> None:
+        """Resume a folder change after cancellable workers have exited."""
+
+        if getattr(self.main_window, "_shutdown_in_progress", False):
+            self._pending_folder_load_after_workers = None
+            return
+        is_any_worker_active = getattr(
+            self.worker_manager,
+            "is_any_worker_active",
+            self.worker_manager.is_any_worker_running,
+        )
+        if is_any_worker_active():
+            QTimer.singleShot(25, self._finish_folder_load_after_workers)
+            return
+        pending = self._pending_folder_load_after_workers
+        self._pending_folder_load_after_workers = None
+        if pending is None:
+            return
+        folder_path, options = pending
+        self.load_folder(folder_path, **options)
 
     def resume_folder_load_after_deletion(self, successful: bool) -> None:
         pending = self._pending_folder_load
@@ -612,11 +671,50 @@ class AppController(QObject):
             True,
             None,
         )
-        self.worker_manager.start_grouping_preview(
+        request = (
             list(self.app_state.image_files_data),
             mode,
             source_root,
-            location_depth=self.main_window.grouping_step_widget.get_location_depth(),
+            self.main_window.grouping_step_widget.get_location_depth(),
+        )
+        is_grouping_preview_active = getattr(
+            self.worker_manager,
+            "is_grouping_preview_active",
+            self.worker_manager.is_grouping_preview_running,
+        )
+        if is_grouping_preview_active():
+            self._pending_grouping_preview_start = request
+            self.worker_manager.request_stop_grouping_preview()
+            QTimer.singleShot(25, self._start_pending_grouping_preview)
+            return
+        self._pending_grouping_preview_start = None
+        self.worker_manager.start_grouping_preview(
+            request[0],
+            request[1],
+            request[2],
+            location_depth=request[3],
+        )
+
+    def _start_pending_grouping_preview(self) -> None:
+        """Start the latest preview request after the replaced worker exits."""
+
+        is_grouping_preview_active = getattr(
+            self.worker_manager,
+            "is_grouping_preview_active",
+            self.worker_manager.is_grouping_preview_running,
+        )
+        if is_grouping_preview_active():
+            QTimer.singleShot(25, self._start_pending_grouping_preview)
+            return
+        request = self._pending_grouping_preview_start
+        self._pending_grouping_preview_start = None
+        if request is None or _workflow_is_cancelled(self, "organize"):
+            return
+        self.worker_manager.start_grouping_preview(
+            request[0],
+            request[1],
+            request[2],
+            location_depth=request[3],
         )
 
     def activate_grouping_preview(self) -> None:
@@ -1055,7 +1153,7 @@ class AppController(QObject):
             )
             return
 
-        self.worker_manager.stop_best_shot_analysis()
+        self.worker_manager.request_stop_best_shot_analysis()
         self.main_window.hide_loading_overlay()
         self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
         remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
