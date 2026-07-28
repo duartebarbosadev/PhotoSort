@@ -368,9 +368,7 @@ class PickBestStepWidget(QWidget):
         self._has_any_marked_func = func
         self._sync_viewer.set_has_any_marked_for_deletion_func(lambda: False)
 
-    def set_similarity_embeddings_provider(
-        self, provider: Callable[[], dict]
-    ) -> None:
+    def set_similarity_embeddings_provider(self, provider: Callable[[], dict]) -> None:
         self._similarity_embeddings_provider = provider
 
     def refresh_deletion_state(self) -> None:

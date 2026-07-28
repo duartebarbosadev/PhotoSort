@@ -491,9 +491,7 @@ class DialogManager:
             cached_icon = self._cached_media_icon(file_path)
             item = QListWidgetItem(
                 cached_icon
-                or self.parent.style().standardIcon(
-                    QStyle.StandardPixmap.SP_FileIcon
-                ),
+                or self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon),
                 os.path.basename(file_path),
             )
             item.setSizeHint(QSize(148, 168))

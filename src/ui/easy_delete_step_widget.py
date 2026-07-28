@@ -234,9 +234,7 @@ class EasyDeleteStepWidget(QWidget):
     # ------------------------------------------------------------------
 
     def show_loading(self, message: str = "", percent: int = -1) -> None:
-        self._progress_view.update_progress(
-            message or "Analyzing images…", percent
-        )
+        self._progress_view.update_progress(message or "Analyzing images…", percent)
         self._content_stack.setCurrentIndex(0)
 
     def show_error(self, message: str) -> None:

@@ -166,9 +166,7 @@ class FixRotationStepWidget(QWidget):
     # ------------------------------------------------------------------
 
     def show_loading(self, message: str = "", percent: int = -1) -> None:
-        self._progress_view.update_progress(
-            message or "Analyzing rotation…", percent
-        )
+        self._progress_view.update_progress(message or "Analyzing rotation…", percent)
         self._missing_model_widget.setVisible(False)
         self._progress_view.set_detail_visible(False)
         self._progress_bar.setVisible(True)
