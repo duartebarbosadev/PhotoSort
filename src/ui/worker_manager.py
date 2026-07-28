@@ -81,7 +81,7 @@ class WorkerManager(QObject):
     similarity_progress = pyqtSignal(int, str)  # percentage, message
     similarity_embeddings_generated = pyqtSignal(dict)  # {image_path: embedding_vector}
     similarity_regional_embeddings_generated = pyqtSignal(dict)
-    similarity_clustering_complete = pyqtSignal(dict)  # {image_path: cluster_id}
+    similarity_clustering_complete = pyqtSignal(object)
     similarity_error = pyqtSignal(str)
 
     # Blur Detection Signals
@@ -171,6 +171,7 @@ class WorkerManager(QObject):
     # Easy Delete signals
     easy_delete_progress = pyqtSignal(int, str)
     easy_delete_complete = pyqtSignal(dict)
+    easy_delete_assessments_ready = pyqtSignal(dict)
     easy_delete_error = pyqtSignal(str)
 
     # Fix Rotation Detection signals
@@ -425,6 +426,7 @@ class WorkerManager(QObject):
         *,
         folder_path: str | None = None,
         analysis_cache=None,
+        fingerprints: dict[str, tuple[int, int]] | None = None,
     ):
         from ui.ui_components import SimilarityWorker
 
@@ -437,6 +439,7 @@ class WorkerManager(QObject):
             image_pipeline=self.image_pipeline,
             folder_path=folder_path,
             analysis_cache=analysis_cache,
+            fingerprints=fingerprints,
         )
         self.similarity_worker.moveToThread(self.similarity_thread)
 
@@ -1316,6 +1319,10 @@ class WorkerManager(QObject):
         cluster_map: dict[int, list[str]] | None = None,
         embeddings_cache: dict | None = None,
         exif_disk_cache=None,
+        *,
+        analysis_cache=None,
+        folder_path: str | None = None,
+        fingerprints: dict[str, tuple[int, int]] | None = None,
     ) -> None:
         from workers.easy_delete_worker import EasyDeleteWorker
 
@@ -1332,6 +1339,9 @@ class WorkerManager(QObject):
             embeddings_cache=embeddings_cache,
             exif_disk_cache=exif_disk_cache,
             image_pipeline=self.image_pipeline,
+            analysis_cache=analysis_cache,
+            folder_path=folder_path,
+            fingerprints=fingerprints,
         )
         self.easy_delete_worker.moveToThread(self.easy_delete_thread)
 
@@ -1342,6 +1352,14 @@ class WorkerManager(QObject):
                 self.easy_delete_progress,
                 percent,
                 message,
+            )
+        )
+        self.easy_delete_worker.assessments_ready.connect(
+            lambda assessments: self._emit_if_current(
+                "easy_delete",
+                generation,
+                self.easy_delete_assessments_ready,
+                assessments,
             )
         )
         self.easy_delete_worker.completed.connect(

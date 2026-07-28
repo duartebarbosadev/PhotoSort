@@ -1,6 +1,8 @@
 import logging
 import os
 import hashlib
+import time
+from collections import OrderedDict
 
 import cv2
 import numpy as np
@@ -9,13 +11,17 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from core import app_settings
 from core.image_features.blur_detector import BLUR_DETECTION_PREVIEW_SIZE, BlurDetector
-from core.image_features.structural_similarity import (
-    LocalizedChangeMetrics,
-    aligned_localized_change_metrics,
-    aligned_structural_similarity,
-    prepare_same_frame_preview,
+from core.image_features.face_analysis import (
+    FaceAnalysisService,
+    SubjectDescriptor,
+    face_descriptor_signature,
 )
-from core.image_pipeline import ImagePipeline
+from core.image_features.near_duplicate import (
+    NearDuplicateAssessment,
+    NearDuplicateDecision,
+    SubjectSafeNearDuplicateComparator,
+)
+from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION, ImagePipeline
 from core.similarity_utils import cosine_similarity
 
 logger = logging.getLogger(__name__)
@@ -28,6 +34,7 @@ _EXIF_FIELD_SCORE_WEIGHT = (
 )
 _MAX_EXIF_FIELDS_FOR_SCORE = 999
 _MAX_FILE_SIZE_SCORE = _EXIF_FIELD_SCORE_WEIGHT - 1
+_ANALYSIS_RGB_HOT_CACHE_SIZE = 32
 
 
 class EasyDeleteWorker(QObject):
@@ -35,6 +42,7 @@ class EasyDeleteWorker(QObject):
 
     progress_update = pyqtSignal(int, str)
     completed = pyqtSignal(dict)  # {path: {type, pair_path, suggest_delete, reason}}
+    assessments_ready = pyqtSignal(dict)  # {(path_a, path_b): assessment metrics}
     error = pyqtSignal(str)
     finished = pyqtSignal()
 
@@ -45,6 +53,10 @@ class EasyDeleteWorker(QObject):
         embeddings_cache: dict | None = None,
         exif_disk_cache=None,
         image_pipeline: ImagePipeline | None = None,
+        analysis_cache=None,
+        folder_path: str | None = None,
+        fingerprints: dict[str, tuple[int, int]] | None = None,
+        face_analysis_service: FaceAnalysisService | None = None,
         parent: QObject | None = None,
     ):
         super().__init__(parent)
@@ -53,10 +65,21 @@ class EasyDeleteWorker(QObject):
         self.embeddings_cache = embeddings_cache or {}
         self.exif_disk_cache = exif_disk_cache
         self.image_pipeline = image_pipeline
+        self.analysis_cache = analysis_cache
+        self.folder_path = folder_path
+        self.fingerprints = dict(fingerprints or {})
+        self._face_analysis_service = face_analysis_service
         self._should_stop = False
         self._sharpness_cache: dict[str, float] = {}
-        self._structural_preview_cache: dict[str, np.ndarray | None] = {}
+        self._analysis_rgb_cache: OrderedDict[str, np.ndarray | None] = OrderedDict()
+        self._subject_descriptor_cache: dict[str, SubjectDescriptor | None] = {}
+        self._pending_subject_descriptors: dict[str, dict[str, object]] = {}
         self._hash_cache: dict[str, str | None] = {}
+        self._near_duplicate_comparator = SubjectSafeNearDuplicateComparator(
+            lambda: self._should_stop
+        )
+        self._face_descriptor_signature: str | None = None
+        self.pair_assessments: dict[tuple[str, str], dict[str, object]] = {}
 
     def stop(self) -> None:
         self._should_stop = True
@@ -68,6 +91,9 @@ class EasyDeleteWorker(QObject):
             logger.error("EasyDeleteWorker: unexpected error", exc_info=True)
             self.error.emit(str(exc))
         finally:
+            self._flush_subject_descriptors()
+            if self._face_analysis_service is not None:
+                self._face_analysis_service.close()
             self.finished.emit()
 
     def _run(self) -> None:
@@ -96,6 +122,7 @@ class EasyDeleteWorker(QObject):
 
         if not self._should_stop:
             self.progress_update.emit(100, "Detection complete.")
+            self.assessments_ready.emit(dict(self.pair_assessments))
             self.completed.emit(results)
 
     def _detect_issue(self, path: str) -> dict | None:
@@ -104,7 +131,6 @@ class EasyDeleteWorker(QObject):
             return None
 
         sharpness = self._sharpness_for_gray(path, gray)
-        self._structural_preview_cache[path] = prepare_same_frame_preview(gray)
 
         mean_brightness = float(gray.mean())
         black_fraction = float(
@@ -168,22 +194,148 @@ class EasyDeleteWorker(QObject):
         return max_variance
 
     def _load_gray_for_detection(self, path: str) -> np.ndarray | None:
-        if self.image_pipeline is not None:
-            pil_img = self.image_pipeline.get_analysis_image(
-                path,
-                target_size=BLUR_DETECTION_PREVIEW_SIZE,
+        rgb = self._get_analysis_rgb(path)
+        if rgb is None:
+            return None
+        height, width = rgb.shape[:2]
+        target_width, target_height = BLUR_DETECTION_PREVIEW_SIZE
+        scale = min(target_width / width, target_height / height, 1.0)
+        if scale < 1.0:
+            rgb = cv2.resize(
+                rgb,
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                interpolation=cv2.INTER_AREA,
             )
-        else:
-            pil_img = BlurDetector._load_image_for_detection(
-                path,
-                target_size=BLUR_DETECTION_PREVIEW_SIZE,
-                apply_auto_edits_for_raw=False,
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        return gray
+
+    def _get_analysis_rgb(self, path: str) -> np.ndarray | None:
+        if path in self._analysis_rgb_cache:
+            self._analysis_rgb_cache.move_to_end(path)
+            return self._analysis_rgb_cache[path]
+        try:
+            if self.image_pipeline is not None:
+                image = self.image_pipeline.get_analysis_image(
+                    path,
+                    target_size=ANALYSIS_CACHE_RESOLUTION,
+                )
+            else:
+                image = BlurDetector._load_image_for_detection(
+                    path,
+                    target_size=ANALYSIS_CACHE_RESOLUTION,
+                    apply_auto_edits_for_raw=False,
+                )
+            rgb = (
+                np.ascontiguousarray(np.asarray(image.convert("RGB")))
+                if image is not None
+                else None
             )
-        if pil_img is None:
+        except Exception:
+            logger.debug(
+                "EasyDeleteWorker: failed to load analysis image for %s",
+                path,
+                exc_info=True,
+            )
+            rgb = None
+        self._analysis_rgb_cache[path] = rgb
+        self._analysis_rgb_cache.move_to_end(path)
+        while len(self._analysis_rgb_cache) > _ANALYSIS_RGB_HOT_CACHE_SIZE:
+            self._analysis_rgb_cache.popitem(last=False)
+        return rgb
+
+    def _fingerprint(self, path: str) -> tuple[int, int] | None:
+        supplied = self.fingerprints.get(path)
+        if supplied is not None:
+            return tuple(supplied)
+        try:
+            stat_result = os.stat(path)
+        except OSError:
+            return None
+        fingerprint = (int(stat_result.st_size), int(stat_result.st_mtime_ns))
+        self.fingerprints[path] = fingerprint
+        return fingerprint
+
+    def _subject_descriptor(
+        self, path: str, rgb: np.ndarray | None
+    ) -> SubjectDescriptor | None:
+        if path in self._subject_descriptor_cache:
+            return self._subject_descriptor_cache[path]
+        if rgb is None or self._should_stop:
+            self._subject_descriptor_cache[path] = None
             return None
 
-        bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-        return cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        fingerprint = self._fingerprint(path)
+        if self._face_descriptor_signature is None:
+            try:
+                self._face_descriptor_signature = face_descriptor_signature()
+            except OSError:
+                logger.warning(
+                    "EasyDeleteWorker: face model signature unavailable",
+                    exc_info=True,
+                )
+                self._subject_descriptor_cache[path] = None
+                return None
+        descriptor_signature = self._face_descriptor_signature
+        if (
+            fingerprint is not None
+            and self.analysis_cache is not None
+            and self.folder_path
+        ):
+            cached = self.analysis_cache.load_subject_descriptor(
+                self.folder_path,
+                path,
+                fingerprint=fingerprint,
+                signature=descriptor_signature,
+            )
+            descriptor = SubjectDescriptor.from_dict(cached)
+            if descriptor is not None:
+                self._subject_descriptor_cache[path] = descriptor
+                return descriptor
+
+        try:
+            if self._face_analysis_service is None:
+                self._face_analysis_service = FaceAnalysisService()
+            descriptor = self._face_analysis_service.describe(rgb)
+        except Exception:
+            logger.warning(
+                "EasyDeleteWorker: face analysis unavailable for %s",
+                path,
+                exc_info=True,
+            )
+            descriptor = None
+        self._subject_descriptor_cache[path] = descriptor
+        if (
+            descriptor is not None
+            and fingerprint is not None
+            and self.analysis_cache is not None
+            and self.folder_path
+        ):
+            self._pending_subject_descriptors[path] = {
+                "fingerprint": fingerprint,
+                "signature": descriptor_signature,
+                "descriptor": descriptor.to_dict(),
+            }
+        return descriptor
+
+    def _flush_subject_descriptors(self) -> None:
+        if (
+            not self._pending_subject_descriptors
+            or self.analysis_cache is None
+            or not self.folder_path
+        ):
+            return
+        pending = self._pending_subject_descriptors
+        self._pending_subject_descriptors = {}
+        try:
+            self.analysis_cache.save_subject_descriptors_batch(
+                self.folder_path,
+                pending,
+            )
+        except Exception:
+            logger.warning(
+                "EasyDeleteWorker: failed to persist subject descriptors",
+                exc_info=True,
+            )
 
     def _sharpness_for_gray(self, path: str, gray: np.ndarray) -> float:
         sharpness = self._compute_local_sharpness(gray)
@@ -209,42 +361,23 @@ class EasyDeleteWorker(QObject):
             self._sharpness_cache[path] = 0.0
             return 0.0
 
-    def _get_structural_preview(self, path: str) -> np.ndarray | None:
-        if path in self._structural_preview_cache:
-            return self._structural_preview_cache[path]
-        try:
-            gray = self._load_gray_for_detection(path)
-            preview = prepare_same_frame_preview(gray) if gray is not None else None
-        except Exception:
-            logger.debug(
-                "EasyDeleteWorker: failed to prepare structural preview for %s",
-                path,
-                exc_info=True,
-            )
-            preview = None
-        self._structural_preview_cache[path] = preview
-        return preview
-
-    def _same_frame_similarity(self, path_a: str, path_b: str) -> float | None:
-        first = self._get_structural_preview(path_a)
-        second = self._get_structural_preview(path_b)
-        if first is None or second is None:
-            return None
-        return aligned_structural_similarity(first, second)
-
-    def _localized_change_metrics(
-        self, path_a: str, path_b: str
-    ) -> LocalizedChangeMetrics | None:
-        first = self._get_structural_preview(path_a)
-        second = self._get_structural_preview(path_b)
-        if first is None or second is None:
-            return None
-        return aligned_localized_change_metrics(first, second)
-
     def _detect_duplicates(self) -> dict[str, dict]:
         results: dict[str, dict] = {}
         assigned_paths: set[str] = set()
         duplicate_distance = app_settings.get_easy_delete_duplicate_distance()
+        rejected_counts = {
+            NearDuplicateDecision.SUBJECT_CHANGED: 0,
+            NearDuplicateDecision.UNCERTAIN: 0,
+        }
+        started_at = time.perf_counter()
+        total_pairs = sum(
+            embedded_count * (embedded_count - 1) // 2
+            for paths in self.cluster_map.values()
+            if (embedded_count := sum(path in self.embeddings_cache for path in paths))
+            >= 2
+        )
+        processed_pairs = 0
+        progress_interval = max(1, total_pairs // 100)
 
         for paths in self.cluster_map.values():
             if len(paths) < 2 or self._should_stop:
@@ -268,14 +401,25 @@ class EasyDeleteWorker(QObject):
                     str,
                     bool,
                     float,
-                    float | None,
-                    LocalizedChangeMetrics | None,
+                    NearDuplicateAssessment,
                 ]
             ] = []
             for i in range(len(embedded)):
                 for j in range(i + 1, len(embedded)):
                     if self._should_stop:
                         break
+                    processed_pairs += 1
+                    if (
+                        processed_pairs == 1
+                        or processed_pairs == total_pairs
+                        or processed_pairs % progress_interval == 0
+                    ):
+                        percent = 60 + int(39 * processed_pairs / max(total_pairs, 1))
+                        self.progress_update.emit(
+                            percent,
+                            "Checking subject-safe near-duplicates… "
+                            f"({processed_pairs}/{total_pairs})",
+                        )
                     path_i, emb_i = embedded[i]
                     path_j, emb_j = embedded[j]
 
@@ -286,42 +430,43 @@ class EasyDeleteWorker(QObject):
                     identical = False
                     if cosine_dist < duplicate_distance:
                         identical = self._files_are_identical(path_i, path_j)
-                    structural_similarity = None
-                    localized_change = None
-                    if (
-                        not identical
-                        and similarity
+                    if identical:
+                        assessment = self._near_duplicate_comparator.assess(
+                            path_i,
+                            path_j,
+                            self._fingerprint(path_i),
+                            self._fingerprint(path_j),
+                            None,
+                            None,
+                            identical=True,
+                        )
+                    elif (
+                        similarity
                         >= app_settings.EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY
                     ):
-                        structural_similarity = self._same_frame_similarity(
-                            path_i, path_j
+                        first_rgb = self._get_analysis_rgb(path_i)
+                        second_rgb = self._get_analysis_rgb(path_j)
+                        assessment = self._near_duplicate_comparator.assess(
+                            path_i,
+                            path_j,
+                            self._fingerprint(path_i),
+                            self._fingerprint(path_j),
+                            first_rgb,
+                            second_rgb,
+                            descriptor_loader_a=lambda path=path_i, rgb=first_rgb: (
+                                self._subject_descriptor(path, rgb)
+                            ),
+                            descriptor_loader_b=lambda path=path_j, rgb=second_rgb: (
+                                self._subject_descriptor(path, rgb)
+                            ),
                         )
-                        if (
-                            structural_similarity is not None
-                            and structural_similarity
-                            >= app_settings.EASY_DELETE_SAME_FRAME_SIMILARITY
-                        ):
-                            localized_change = self._localized_change_metrics(
-                                path_i, path_j
-                            )
-                    has_localized_change = (
-                        localized_change is not None
-                        and localized_change.p99_difference
-                        >= app_settings.EASY_DELETE_LOCALIZED_CHANGE_MIN_P99
-                        and localized_change.concentration_ratio
-                        >= app_settings.EASY_DELETE_LOCALIZED_CHANGE_RATIO
-                    )
-                    same_frame = (
-                        structural_similarity is not None
-                        and structural_similarity
-                        >= app_settings.EASY_DELETE_SAME_FRAME_SIMILARITY
-                        and not has_localized_change
-                    )
-                    cosine_fallback = (
-                        structural_similarity is None
-                        and cosine_dist < duplicate_distance
-                    )
-                    if identical or same_frame or cosine_fallback:
+                    else:
+                        continue
+
+                    pair_key = tuple(sorted((path_i, path_j)))
+                    self.pair_assessments[pair_key] = assessment.result_metrics()
+                    if assessment.accepted:
+                        structural_similarity = assessment.structural_similarity
                         visual_distance = min(
                             cosine_dist,
                             1.0 - structural_similarity
@@ -338,10 +483,11 @@ class EasyDeleteWorker(QObject):
                                 path_j,
                                 identical,
                                 similarity,
-                                structural_similarity,
-                                localized_change,
+                                assessment,
                             )
                         )
+                    elif assessment.decision in rejected_counts:
+                        rejected_counts[assessment.decision] += 1
 
             # Exact duplicates come first, then the visually closest pairs.
             # Stable source indexes make equal-distance choices deterministic.
@@ -355,8 +501,7 @@ class EasyDeleteWorker(QObject):
                 path_j,
                 identical,
                 cosine_match,
-                structural_match,
-                localized_change,
+                assessment,
             ) in candidates:
                 if self._should_stop:
                     break
@@ -372,6 +517,11 @@ class EasyDeleteWorker(QObject):
                     delete_path, keep_path = path_i, path_j
 
                 duplicate_kind = "exact" if identical else "near"
+                classification_label = (
+                    "Exact copy"
+                    if identical
+                    else "Safe near-duplicate · indistinguishable at normal view"
+                )
                 delete_suggestion_reason, keep_suggestion_reason = (
                     self._duplicate_suggestion_reasons(
                         delete_path, keep_path, identical=identical
@@ -383,18 +533,9 @@ class EasyDeleteWorker(QObject):
                     "pair_path": keep_path,
                     "suggest_delete": True,
                     "duplicate_kind": duplicate_kind,
+                    "classification_label": classification_label,
                     "cosine_similarity": cosine_match,
-                    "structural_similarity": structural_match,
-                    "localized_change_ratio": (
-                        localized_change.concentration_ratio
-                        if localized_change is not None
-                        else None
-                    ),
-                    "localized_change_p99": (
-                        localized_change.p99_difference
-                        if localized_change is not None
-                        else None
-                    ),
+                    **assessment.result_metrics(),
                     "reason": self._duplicate_reason(
                         delete_path, keep_path, identical=identical
                     ),
@@ -407,24 +548,52 @@ class EasyDeleteWorker(QObject):
                     "pair_path": delete_path,
                     "suggest_delete": False,
                     "duplicate_kind": duplicate_kind,
+                    "classification_label": classification_label,
                     "cosine_similarity": cosine_match,
-                    "structural_similarity": structural_match,
-                    "localized_change_ratio": (
-                        localized_change.concentration_ratio
-                        if localized_change is not None
-                        else None
-                    ),
-                    "localized_change_p99": (
-                        localized_change.p99_difference
-                        if localized_change is not None
-                        else None
-                    ),
+                    **assessment.result_metrics(),
                     "reason": "Suggested to keep this photo",
                     "delete_suggestion_reason": delete_suggestion_reason,
                     "keep_suggestion_reason": keep_suggestion_reason,
                     "sharpness": self._get_sharpness(keep_path),
                 }
+                logger.info(
+                    "Easy Delete accepted pair: %s ↔ %s classification=%s "
+                    "reason=%s cosine=%.6f structural=%s alignment=%s "
+                    "normal_view_change=%s",
+                    os.path.basename(path_i),
+                    os.path.basename(path_j),
+                    assessment.decision.value,
+                    assessment.reason_code,
+                    cosine_match,
+                    assessment.structural_similarity,
+                    assessment.metrics.get("alignment_correlation"),
+                    assessment.metrics.get("normal_view_change_fraction"),
+                )
 
+        alignment_seconds = sum(
+            float(metrics.get("alignment_seconds") or 0.0)
+            for metrics in self.pair_assessments.values()
+        )
+        perceptual_seconds = sum(
+            float(metrics.get("perceptual_seconds") or 0.0)
+            for metrics in self.pair_assessments.values()
+        )
+        face_seconds = sum(
+            float(metrics.get("face_seconds") or 0.0)
+            for metrics in self.pair_assessments.values()
+        )
+        logger.info(
+            "Easy Delete near-duplicate assessment finished in %.3fs: "
+            "accepted_pairs=%d subject_changed=%d uncertain=%d "
+            "alignment=%.3fs perceptual=%.3fs face=%.3fs",
+            time.perf_counter() - started_at,
+            len(results) // 2,
+            rejected_counts[NearDuplicateDecision.SUBJECT_CHANGED],
+            rejected_counts[NearDuplicateDecision.UNCERTAIN],
+            alignment_seconds,
+            perceptual_seconds,
+            face_seconds,
+        )
         return results
 
     def _keep_score(self, path: str) -> int:

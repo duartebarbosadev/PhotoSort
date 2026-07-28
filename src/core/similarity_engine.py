@@ -9,7 +9,13 @@ from core.utils.time_utils import format_eta
 
 from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION, ImagePipeline
 from core.image_file_ops import ImageFileOperations
-from core.embedding_cache import load_embedding_cache, save_embedding_cache
+from core.similarity_cache import (
+    FileFingerprint,
+    SimilarityArtifact,
+    load_similarity_artifact_cache,
+    normalize_fingerprints,
+    save_similarity_artifact_cache,
+)
 from core.similarity_embedding_model import (
     SimilarityEmbeddingModel,
     SimilarityModelDownloadError,
@@ -18,9 +24,8 @@ from core.similarity_embedding_model import (
 from core.similarity_utils import (
     SimilarityAnalysisCancelled,
     build_regional_distance_matrix,
+    build_regional_neighborhood_graph,
     adaptive_dbscan_eps,
-    build_orientation_map,
-    normalize_embedding_dict,
     l2_normalize_rows,
     Orientation,
 )
@@ -37,6 +42,8 @@ logger = logging.getLogger(__name__)
 
 _module_init_start_time = time.time()
 logger.debug("Initializing SimilarityEngine module...")
+
+REGIONAL_DENSE_MATRIX_MAX_BYTES = 256 * 1024 * 1024
 
 
 def _analysis_stop_requested(engine: object) -> bool:
@@ -79,13 +86,11 @@ class SimilarityEngine(QObject):
             progress_callback=self._handle_model_progress,
         )
         self._is_running = True
-        self._cache_filename = f"embeddings_{self.model.cache_key}.pkl.zst"
-        self._region_cache_filename = (
-            f"embeddings_{self.model.region_cache_key}.pkl.zst"
+        self._cache_filename = (
+            f"artifacts_{self.model.cache_key}_{self.model.region_cache_key}.pkl.zst"
         )
         embedding_cache_dir = Path(resolve_user_cache_dir("embeddings"))
         self._cache_path = embedding_cache_dir / self._cache_filename
-        self._region_cache_path = embedding_cache_dir / self._region_cache_filename
 
         self.image_pipeline = image_pipeline or ImagePipeline()
         logger.info(
@@ -98,6 +103,10 @@ class SimilarityEngine(QObject):
 
     def _handle_model_progress(self, percent: int, message: str) -> None:
         self.progress_update.emit(percent, message)
+
+    def _emit_distance_progress(self, percent: int, label: str) -> None:
+        with contextlib.suppress(RuntimeError):
+            self.progress_update.emit(percent, f"{label} ({percent}%)")
 
     def run_analysis_sync(
         self,
@@ -174,143 +183,103 @@ class SimilarityEngine(QObject):
             self.error.emit(error_msg)
         return False
 
-    def _load_cached_embeddings(self) -> dict[str, list[float]]:
+    def _load_cached_artifacts(self) -> dict[str, SimilarityArtifact]:
         if self._cache_path.exists():
             try:
                 cache_load_start_time = time.perf_counter()
-                logger.info(f"Loading embeddings cache: {self._cache_path}")
-                cache_data = load_embedding_cache(self._cache_path, kind="global")
-                if not isinstance(cache_data, dict):
-                    raise ValueError("global embedding cache data is not a dictionary")
-                if cache_data and normalize_embedding_dict(cache_data):
-                    logger.info(
-                        "Detected non-normalized embeddings. Updating the cache."
-                    )
-                    self._save_embeddings_to_cache(cache_data)
+                logger.info("Loading similarity artifact cache: %s", self._cache_path)
+                cache_data = load_similarity_artifact_cache(self._cache_path)
                 logger.info(
-                    "Loaded %d embeddings from cache in %.4fs",
+                    "Loaded %d similarity artifacts from cache in %.4fs",
                     len(cache_data),
                     time.perf_counter() - cache_load_start_time,
                 )
                 return cache_data
             except Exception as e:
                 logger.warning(
-                    f"Failed to load embedding cache '{self._cache_path}': {e}. A new cache will be created."
+                    "Failed to load similarity artifact cache '%s': %s. "
+                    "A new cache will be created.",
+                    self._cache_path,
+                    e,
                 )
                 self._cache_path.unlink(missing_ok=True)
         return {}
 
-    def _save_embeddings_to_cache(self, embeddings: dict[str, list[float]]):
+    def _save_artifacts_to_cache(self, artifacts: dict[str, SimilarityArtifact]):
         try:
             cache_save_start_time = time.perf_counter()
             logger.info(
-                f"Saving {len(embeddings)} embeddings to cache: {self._cache_path}"
+                "Saving %d similarity artifacts to cache: %s",
+                len(artifacts),
+                self._cache_path,
             )
-            save_embedding_cache(self._cache_path, embeddings, kind="global")
+            save_similarity_artifact_cache(self._cache_path, artifacts)
             logger.info(
-                f"Embeddings saved in {time.perf_counter() - cache_save_start_time:.4f}s"
-            )
-        except Exception as e:
-            logger.error(
-                f"Failed to save embedding cache '{self._cache_path}': {e}",
-                exc_info=True,
-            )
-            self.error.emit(f"Could not save embeddings cache: {e}")
-
-    def _load_cached_regional_embeddings(self) -> dict[str, list[list[float]]]:
-        if self._region_cache_path.exists():
-            try:
-                cache_load_start_time = time.perf_counter()
-                cache_data = load_embedding_cache(
-                    self._region_cache_path, kind="regional"
-                )
-                if isinstance(cache_data, dict):
-                    normalized_cache: dict[str, list[list[float]]] = {}
-                    for path, region_vectors in cache_data.items():
-                        try:
-                            region_matrix = l2_normalize_rows(
-                                np.asarray(region_vectors, dtype=np.float32)
-                            )
-                        except TypeError, ValueError:
-                            continue
-                        if region_matrix.ndim == 2 and region_matrix.shape[0] > 0:
-                            normalized_cache[path] = region_matrix.tolist()
-                    logger.info(
-                        "Loaded %d regional embedding sets from cache in %.4fs",
-                        len(normalized_cache),
-                        time.perf_counter() - cache_load_start_time,
-                    )
-                    return normalized_cache
-            except Exception as e:
-                logger.warning(
-                    "Failed to load regional embedding cache '%s': %s. A new cache will be created.",
-                    self._region_cache_path,
-                    e,
-                )
-                self._region_cache_path.unlink(missing_ok=True)
-        return {}
-
-    def _save_regional_embeddings_to_cache(
-        self, regional_embeddings: dict[str, list[list[float]]]
-    ):
-        try:
-            cache_save_start_time = time.perf_counter()
-            logger.info(
-                "Saving %d regional embedding sets to cache: %s",
-                len(regional_embeddings),
-                self._region_cache_path,
-            )
-            save_embedding_cache(
-                self._region_cache_path,
-                regional_embeddings,
-                kind="regional",
-            )
-            logger.info(
-                "Regional embeddings saved in %.4fs",
+                "Similarity artifacts saved in %.4fs",
                 time.perf_counter() - cache_save_start_time,
             )
         except Exception as e:
             logger.error(
-                "Failed to save regional embedding cache '%s': %s",
-                self._region_cache_path,
+                "Failed to save similarity artifact cache '%s': %s",
+                self._cache_path,
                 e,
                 exc_info=True,
             )
-            self.error.emit(f"Could not save regional embeddings cache: {e}")
+            self.error.emit(f"Could not save similarity artifact cache: {e}")
 
-    def generate_embeddings_for_files(self, file_paths: list[str]):
+    @staticmethod
+    def _classify_loaded_image(image: object) -> Orientation:
+        width, height = getattr(image, "size", (0, 0))
+        if not width or not height:
+            return "landscape"
+        aspect_ratio = width / height
+        if 0.9 <= aspect_ratio <= 1.1:
+            return "square"
+        return "portrait" if aspect_ratio < 1.0 else "landscape"
+
+    def generate_embeddings_for_files(
+        self,
+        file_paths: list[str],
+        *,
+        fingerprints: dict[str, FileFingerprint] | None = None,
+        perform_clustering: bool = True,
+    ):
         if not self._is_running:
             logger.info("Similarity analysis skipped (stop already requested).")
-            self.clustering_complete.emit({})
+            if perform_clustering:
+                self.clustering_complete.emit({})
             return
         logger.info(f"Starting embedding generation for {len(file_paths)} files.")
 
-        if not self._load_model():
-            return
-
-        cached_embeddings = self._load_cached_embeddings()
-        cached_regional_embeddings = self._load_cached_regional_embeddings()
-        all_embeddings = cached_embeddings.copy()
-        all_regional_embeddings = cached_regional_embeddings.copy()
+        current_fingerprints = normalize_fingerprints(file_paths, fingerprints)
+        all_artifacts = self._load_cached_artifacts()
+        valid_artifacts = {
+            path: artifact
+            for path, artifact in all_artifacts.items()
+            if path in current_fingerprints
+            and tuple(artifact.get("fingerprint", ())) == current_fingerprints[path]
+        }
         files_to_process = [
             path
             for path in file_paths
-            if (path not in all_embeddings or path not in all_regional_embeddings)
-            and self._is_running
+            if path not in valid_artifacts and self._is_running
         ]
 
         total_to_process = len(files_to_process)
         logger.info(
-            f"Found {len(all_embeddings)} cached. Processing {total_to_process} new files."
+            "Found %d valid cached artifacts. Processing %d new or changed files.",
+            len(valid_artifacts),
+            total_to_process,
         )
+        if total_to_process and not self._load_model():
+            return
         eta_placeholder = "--:--:--"
         self.progress_update.emit(
             0, f"Processing {total_to_process} new images... • ETA {eta_placeholder}"
         )
 
         processed_count = 0
-        new_embeddings = {}
-        new_regional_embeddings = {}
+        new_artifacts: dict[str, SimilarityArtifact] = {}
         batch_size = DEFAULT_SIMILARITY_BATCH_SIZE
         start_time = time.perf_counter()
 
@@ -367,10 +336,14 @@ class SimilarityEngine(QObject):
                 batch_embeds = l2_normalize_rows(batch_embeds)
 
                 for path_idx, path in enumerate(valid_paths_in_batch):
-                    new_embeddings[path] = batch_embeds[path_idx].tolist()
-                    new_regional_embeddings[path] = batch_region_embeds[
-                        path_idx
-                    ].tolist()
+                    new_artifacts[path] = {
+                        "fingerprint": current_fingerprints.get(path, (-1, -1)),
+                        "embedding": batch_embeds[path_idx].tolist(),
+                        "regional_embeddings": batch_region_embeds[path_idx].tolist(),
+                        "orientation": self._classify_loaded_image(
+                            batch_images[path_idx]
+                        ),
+                    }
 
                 processed_count += len(valid_paths_in_batch)
                 progress = (
@@ -396,20 +369,20 @@ class SimilarityEngine(QObject):
                 )  # Still count them for progress
 
         logger.info("Finished processing new files.")
-        all_embeddings.update(new_embeddings)
-        all_regional_embeddings.update(new_regional_embeddings)
-        if new_embeddings:
-            self._save_embeddings_to_cache(all_embeddings)
-        if new_regional_embeddings:
-            self._save_regional_embeddings_to_cache(all_regional_embeddings)
+        all_artifacts.update(new_artifacts)
+        valid_artifacts.update(new_artifacts)
+        if new_artifacts:
+            self._save_artifacts_to_cache(all_artifacts)
 
         final_embeddings_for_requested_files = {
-            path: all_embeddings[path] for path in file_paths if path in all_embeddings
+            path: valid_artifacts[path]["embedding"]
+            for path in file_paths
+            if path in valid_artifacts
         }
         final_regional_embeddings_for_requested_files = {
-            path: all_regional_embeddings[path]
+            path: valid_artifacts[path]["regional_embeddings"]
             for path in file_paths
-            if path in all_regional_embeddings
+            if path in valid_artifacts
         }
         self.embeddings_generated.emit(final_embeddings_for_requested_files)
         self.regional_embeddings_generated.emit(
@@ -419,18 +392,22 @@ class SimilarityEngine(QObject):
             f"Finished. Emitted {len(final_embeddings_for_requested_files)} embeddings."
         )
 
+        if not perform_clustering:
+            logger.info("Skipping clustering because cached clusters will be reused.")
+            return
+
         if self._is_running:  # Only cluster if not stopped
-            # Build orientation map for orientation-aware clustering
-            logger.info("Building orientation map for %d files...", len(file_paths))
-            try:
-                orientation_map = build_orientation_map(
-                    file_paths,
-                    should_cancel=lambda: _analysis_stop_requested(self),
-                )
-            except SimilarityAnalysisCancelled:
-                logger.info("Orientation mapping cancelled.")
-                self.clustering_complete.emit({})
-                return
+            orientation_start = time.perf_counter()
+            orientation_map: dict[str, Orientation] = {
+                path: valid_artifacts[path]["orientation"]
+                for path in file_paths
+                if path in valid_artifacts
+            }
+            logger.info(
+                "Prepared cached orientation map for %d files in %.4fs.",
+                len(orientation_map),
+                time.perf_counter() - orientation_start,
+            )
             self.cluster_embeddings(
                 final_embeddings_for_requested_files,
                 orientation_map,
@@ -452,6 +429,9 @@ class SimilarityEngine(QObject):
             regional_embeddings,
             subset_paths,
             should_cancel=lambda: _analysis_stop_requested(self),
+            progress_callback=lambda percent: self._emit_distance_progress(
+                percent, "Computing regional distances"
+            ),
         )
 
     def _run_dbscan_on_subset(
@@ -486,8 +466,30 @@ class SimilarityEngine(QObject):
 
         base_eps = get_similarity_clustering_eps()
         if regional_embeddings:
-            distance_matrix = self._build_regional_distance_matrix(
-                embeddings, regional_embeddings, subset_paths
+            feature_start = time.perf_counter()
+            dense_bytes = len(subset_paths) ** 2 * np.dtype(np.float32).itemsize
+            if dense_bytes <= REGIONAL_DENSE_MATRIX_MAX_BYTES:
+                distance_data = self._build_regional_distance_matrix(
+                    embeddings, regional_embeddings, subset_paths
+                )
+                distance_kind = "dense"
+            else:
+                distance_data = build_regional_neighborhood_graph(
+                    embeddings,
+                    regional_embeddings,
+                    subset_paths,
+                    base_eps,
+                    should_cancel=lambda: _analysis_stop_requested(self),
+                    progress_callback=lambda percent: self._emit_distance_progress(
+                        percent, "Computing regional neighbours"
+                    ),
+                )
+                distance_kind = "sparse"
+            logger.info(
+                "Built %s regional distance data for %d images in %.4fs.",
+                distance_kind,
+                len(subset_paths),
+                time.perf_counter() - feature_start,
             )
             if _analysis_stop_requested(self):
                 raise SimilarityAnalysisCancelled
@@ -497,7 +499,13 @@ class SimilarityEngine(QObject):
                 min_samples=DBSCAN_MIN_SAMPLES,
                 metric="precomputed",
             )
-            dbscan_labels = dbscan.fit_predict(distance_matrix)
+            dbscan_start = time.perf_counter()
+            dbscan_labels = dbscan.fit_predict(distance_data)
+            logger.info(
+                "DBSCAN fit for %d images completed in %.4fs.",
+                len(subset_paths),
+                time.perf_counter() - dbscan_start,
+            )
         else:
             adaptive_eps = adaptive_dbscan_eps(
                 embedding_matrix, base_eps, DBSCAN_MIN_SAMPLES

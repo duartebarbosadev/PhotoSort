@@ -15,9 +15,17 @@ def test_analysis_cache_persists_clusters_and_best_shots(tmp_path):
         "/tmp/photosort/session/img3.jpg": 2,
     }
 
-    cache.save_cluster_results(folder, clusters)
+    cache.save_cluster_results(folder, clusters, signature="signature")
     restored = cache.load(folder)
     assert restored["cluster_results"] == clusters
+    assert (
+        cache.load_valid_cluster_results(
+            folder,
+            signature="signature",
+            expected_paths=set(clusters),
+        )
+        == clusters
+    )
 
     rankings_cluster_1 = [
         {"image_path": "/tmp/photosort/session/img1.jpg", "composite_score": 0.9},
@@ -37,6 +45,48 @@ def test_analysis_cache_persists_clusters_and_best_shots(tmp_path):
     assert completed == {1}
 
     cache.close()
+
+
+def test_analysis_cache_rejects_unsigned_partial_or_changed_clusters(tmp_path):
+    cache = AnalysisCache(str(tmp_path / "analysis_cache"))
+    folder = "/tmp/photos"
+    clusters = {"a.jpg": 1, "b.jpg": 1}
+    cache.save_cluster_results(folder, clusters, signature="current")
+
+    assert (
+        cache.load_valid_cluster_results(
+            folder,
+            signature="changed",
+            expected_paths=set(clusters),
+        )
+        is None
+    )
+    assert (
+        cache.load_valid_cluster_results(
+            folder,
+            signature="current",
+            expected_paths={"a.jpg", "b.jpg", "c.jpg"},
+        )
+        is None
+    )
+
+
+def test_similarity_invalidation_preserves_manual_overrides(tmp_path):
+    cache = AnalysisCache(str(tmp_path / "analysis_cache"))
+    folder = "/tmp/photos"
+    cache.save_cluster_results(
+        folder,
+        {"a.jpg": 1},
+        signature="current",
+    )
+    cache.save_manual_cluster_override(folder, "a.jpg", 8)
+
+    cache.invalidate_similarity(folder)
+
+    entry = cache.load(folder)
+    assert entry["manual_cluster_overrides"] == {"a.jpg": 8}
+    assert "cluster_results" not in entry
+    assert "similarity_signature" not in entry
 
 
 def test_best_shot_batch_uses_one_cache_read_and_write():

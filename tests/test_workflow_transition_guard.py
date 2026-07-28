@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from src.ui.app_controller import AppController
 from src.ui.main_window import MainWindow
@@ -269,6 +269,119 @@ def test_successful_in_place_resolution_does_not_open_another_workflow():
     window._reset_deletion_workflow_decisions.assert_called_once()
     window._show_workflow_destination.assert_not_called()
     window.update_workflow_navigation.assert_called_once()
+
+
+def test_deletion_completion_clears_easy_delete_before_file_model_mutation():
+    calls = Mock()
+    sync_workflows = Mock()
+    calls.attach_mock(sync_workflows, "sync_workflows")
+    remove_model_paths = Mock()
+    calls.attach_mock(remove_model_paths, "remove_model_paths")
+    completion = Mock()
+    state = SimpleNamespace(
+        easy_delete_results=None,
+        pick_best_results={},
+        remove_data_for_paths=Mock(),
+        set_deletion_marks=Mock(),
+    )
+    window = SimpleNamespace(
+        _pending_deletion_context={
+            "represented_by_target": {"/tmp/deleted.jpg": ["/tmp/deleted.jpg"]},
+            "marks_by_target": {"/tmp/deleted.jpg": ["/tmp/deleted.jpg"]},
+            "completion": completion,
+        },
+        app_state=state,
+        _sync_workflow_results_after_file_mutation=sync_workflows,
+        image_pipeline=SimpleNamespace(invalidate_path=Mock()),
+        thumbnail_loader=SimpleNamespace(invalidate_paths=Mock()),
+        _remove_model_paths_batch=remove_model_paths,
+        proxy_model=SimpleNamespace(invalidate=Mock()),
+        grouping_step_widget=SimpleNamespace(remove_deleted_paths=Mock()),
+        mark_cull_model_dirty=Mock(),
+        _refresh_workflow_deletion_state=Mock(),
+    )
+    result = SimpleNamespace(
+        successful_targets=["/tmp/deleted.jpg"],
+        failures={},
+    )
+
+    MainWindow._handle_file_deletion_complete(window, result)
+
+    sync_workflows.assert_called_once_with()
+    assert calls.mock_calls[:2] == [
+        call.sync_workflows(),
+        call.remove_model_paths(["/tmp/deleted.jpg"]),
+    ]
+    completion.assert_called_once_with(
+        ["/tmp/deleted.jpg"],
+        ["/tmp/deleted.jpg"],
+        {},
+        {"/tmp/deleted.jpg"},
+    )
+
+
+def test_file_mutation_sync_updates_every_instantiated_review_workflow():
+    easy_delete = SimpleNamespace(sync_results_after_file_mutation=Mock())
+    fix_rotation = SimpleNamespace(sync_results_after_file_mutation=Mock())
+    pick_best = SimpleNamespace(sync_results_after_file_mutation=Mock())
+    state = SimpleNamespace(
+        easy_delete_results=None,
+        fix_rotation_results={"/tmp/remaining.jpg": 90},
+        pick_best_results={},
+    )
+    window = SimpleNamespace(
+        app_state=state,
+        easy_delete_step_widget=easy_delete,
+        fix_rotation_step_widget=fix_rotation,
+        pick_best_step_widget=pick_best,
+    )
+
+    MainWindow._sync_workflow_results_after_file_mutation(window)
+
+    easy_delete.sync_results_after_file_mutation.assert_called_once_with(None)
+    fix_rotation.sync_results_after_file_mutation.assert_called_once_with(
+        state.fix_rotation_results
+    )
+    pick_best.sync_results_after_file_mutation.assert_called_once_with({})
+
+
+def test_failed_deletion_does_not_reset_workflow_review_state():
+    sync_workflows = Mock()
+    completion = Mock()
+    state = SimpleNamespace(
+        remove_data_for_paths=Mock(),
+        set_deletion_marks=Mock(),
+    )
+    window = SimpleNamespace(
+        _pending_deletion_context={
+            "represented_by_target": {"/tmp/kept.jpg": ["/tmp/kept.jpg"]},
+            "marks_by_target": {"/tmp/kept.jpg": ["/tmp/kept.jpg"]},
+            "completion": completion,
+        },
+        app_state=state,
+        _sync_workflow_results_after_file_mutation=sync_workflows,
+        image_pipeline=SimpleNamespace(invalidate_path=Mock()),
+        thumbnail_loader=SimpleNamespace(invalidate_paths=Mock()),
+        _remove_model_paths_batch=Mock(),
+        proxy_model=SimpleNamespace(invalidate=Mock()),
+        grouping_step_widget=SimpleNamespace(remove_deleted_paths=Mock()),
+        mark_cull_model_dirty=Mock(),
+        _refresh_workflow_deletion_state=Mock(),
+    )
+    result = SimpleNamespace(
+        successful_targets=[],
+        failures={"/tmp/kept.jpg": "Permission denied"},
+    )
+
+    MainWindow._handle_file_deletion_complete(window, result)
+
+    sync_workflows.assert_not_called()
+    completion.assert_called_once_with(
+        [],
+        [],
+        {"/tmp/kept.jpg": "Permission denied"},
+        set(),
+    )
 
 
 def test_cancelled_workflow_discards_late_analysis_results():

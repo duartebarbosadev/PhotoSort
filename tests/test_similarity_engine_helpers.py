@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("sklearn")
+from sklearn.cluster import DBSCAN
 
 from core.similarity_engine import SimilarityEngine
 from core.similarity_utils import (
@@ -10,10 +11,12 @@ from core.similarity_utils import (
     adaptive_dbscan_eps,
     build_orientation_map,
     build_regional_distance_matrix,
+    build_regional_neighborhood_graph,
     classify_orientation,
     cosine_similarity,
     l2_normalize_rows,
     normalize_embedding_vector,
+    regional_embedding_distance,
 )
 
 
@@ -76,6 +79,89 @@ def test_regional_distance_matrix_honors_cancellation():
         )
 
     assert cancellation_checks == 4
+
+
+def test_vectorized_regional_distances_match_pairwise_reference():
+    rng = np.random.default_rng(12)
+    paths = [f"{index}.jpg" for index in range(12)]
+    arrays = rng.normal(size=(len(paths), 6, 32)).astype(np.float32)
+    embeddings = {path: arrays[index, 0].tolist() for index, path in enumerate(paths)}
+    regional = {path: arrays[index].tolist() for index, path in enumerate(paths)}
+
+    optimized = build_regional_distance_matrix(embeddings, regional, paths)
+    reference = np.zeros_like(optimized)
+    for first in range(len(paths)):
+        for second in range(first + 1, len(paths)):
+            value = regional_embedding_distance(arrays[first], arrays[second])
+            reference[first, second] = value
+            reference[second, first] = value
+
+    assert np.allclose(optimized, reference, atol=5e-7)
+
+
+def test_mixed_and_missing_regional_records_keep_reference_semantics():
+    embeddings = {
+        "six.jpg": [1.0, 0.0],
+        "two.jpg": [0.8, 0.2],
+        "missing.jpg": [0.0, 1.0],
+    }
+    regional = {
+        "six.jpg": [[1.0, 0.0]] * 6,
+        "two.jpg": [[0.8, 0.2], [0.0, 1.0]],
+    }
+    paths = list(embeddings)
+
+    distances = build_regional_distance_matrix(embeddings, regional, paths)
+
+    expected = regional_embedding_distance(
+        np.asarray(regional["six.jpg"]),
+        np.asarray(regional["two.jpg"]),
+    )
+    assert distances[0, 1] == pytest.approx(expected)
+    assert np.allclose(np.diag(distances), 0.0)
+
+
+def test_regional_normalization_occurs_once_per_image(monkeypatch):
+    import core.similarity_utils as similarity_utils
+
+    original = similarity_utils.l2_normalize_rows
+    calls = 0
+
+    def counting_normalize(matrix):
+        nonlocal calls
+        calls += 1
+        return original(matrix)
+
+    monkeypatch.setattr(similarity_utils, "l2_normalize_rows", counting_normalize)
+    paths = [f"{index}.jpg" for index in range(20)]
+    embeddings = {path: [1.0, float(index)] for index, path in enumerate(paths)}
+    regional = {path: [embeddings[path]] * 6 for path in paths}
+
+    build_regional_distance_matrix(embeddings, regional, paths)
+
+    assert calls == len(paths)
+
+
+def test_sparse_and_dense_regional_dbscan_are_equivalent():
+    rng = np.random.default_rng(3)
+    paths = [f"{index}.jpg" for index in range(30)]
+    arrays = rng.normal(size=(len(paths), 6, 16)).astype(np.float32)
+    arrays[1] = arrays[0]
+    arrays[3] = arrays[2]
+    embeddings = {path: arrays[index, 0].tolist() for index, path in enumerate(paths)}
+    regional = {path: arrays[index].tolist() for index, path in enumerate(paths)}
+    eps = 0.1
+
+    dense = build_regional_distance_matrix(embeddings, regional, paths)
+    sparse = build_regional_neighborhood_graph(embeddings, regional, paths, eps)
+    dense_labels = DBSCAN(eps=eps, min_samples=2, metric="precomputed").fit_predict(
+        dense
+    )
+    sparse_labels = DBSCAN(eps=eps, min_samples=2, metric="precomputed").fit_predict(
+        sparse
+    )
+
+    assert np.array_equal(sparse_labels, dense_labels)
 
 
 def test_orientation_map_honors_cancellation(monkeypatch):

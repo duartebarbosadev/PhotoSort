@@ -9,15 +9,26 @@ from PIL import Image
 from core import app_settings
 from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
 from core.image_features.structural_similarity import (
-    LocalizedChangeMetrics,
     aligned_localized_change_metrics,
     aligned_structural_similarity,
     prepare_same_frame_preview,
+)
+from core.image_features.face_analysis import SubjectDescriptor
+from core.image_features.near_duplicate import (
+    NearDuplicateAssessment,
+    NearDuplicateDecision,
 )
 from core.similarity_engine import SimilarityEngine
 from ui.app_controller import AppController
 from workers.easy_delete_worker import EasyDeleteWorker
 from workers.pick_best_worker import PickBestWorker
+
+
+def _safe_near_duplicate(structural_similarity: float = 0.99):
+    return NearDuplicateAssessment(
+        NearDuplicateDecision.SAFE_NEAR_DUPLICATE,
+        structural_similarity=structural_similarity,
+    )
 
 
 def test_easy_delete_reuses_shared_neutral_analysis_image():
@@ -30,8 +41,21 @@ def test_easy_delete_reuses_shared_neutral_analysis_image():
     assert gray is not None and gray.shape == (480, 640)
     pipeline.get_analysis_image.assert_called_once_with(
         "photo.arw",
-        target_size=(640, 480),
+        target_size=ANALYSIS_CACHE_RESOLUTION,
     )
+
+
+def test_easy_delete_bounds_its_worker_owned_analysis_image_cache():
+    pipeline = Mock()
+    pipeline.get_analysis_image.return_value = Image.new("RGB", (640, 480), "gray")
+    worker = EasyDeleteWorker([], image_pipeline=pipeline)
+
+    for index in range(40):
+        worker._get_analysis_rgb(f"photo-{index}.arw")
+
+    assert len(worker._analysis_rgb_cache) == 32
+    assert "photo-0.arw" not in worker._analysis_rgb_cache
+    assert "photo-39.arw" in worker._analysis_rgb_cache
 
 
 def test_easy_delete_dark_detection_requires_almost_complete_black_clipping(
@@ -144,7 +168,11 @@ def test_easy_delete_uses_same_framing_when_cosine_is_outside_cutoff(
             str(second): [0.9811, 0.19350191],
         },
     )
-    monkeypatch.setattr(worker, "_same_frame_similarity", lambda *_paths: 0.985)
+    monkeypatch.setattr(
+        worker._near_duplicate_comparator,
+        "assess",
+        lambda *_args, **_kwargs: _safe_near_duplicate(0.985),
+    )
     monkeypatch.setattr(worker, "_get_sharpness", lambda _path: 10.0)
 
     results = worker._detect_duplicates()
@@ -166,7 +194,14 @@ def test_easy_delete_rejects_moved_subject_even_when_cosine_is_inside_cutoff(
         cluster_map={1: [str(first), str(second)]},
         embeddings_cache={str(first): [1.0, 0.0], str(second): [1.0, 0.0]},
     )
-    monkeypatch.setattr(worker, "_same_frame_similarity", lambda *_paths: 0.90)
+    monkeypatch.setattr(
+        worker._near_duplicate_comparator,
+        "assess",
+        lambda *_args, **_kwargs: NearDuplicateAssessment(
+            NearDuplicateDecision.SUBJECT_CHANGED,
+            structural_similarity=0.90,
+        ),
+    )
 
     assert worker._detect_duplicates() == {}
 
@@ -184,13 +219,12 @@ def test_easy_delete_rejects_concentrated_face_or_arm_movement(tmp_path, monkeyp
             str(second): [0.9932, 0.1164],
         },
     )
-    monkeypatch.setattr(worker, "_same_frame_similarity", lambda *_paths: 0.9963)
     monkeypatch.setattr(
-        worker,
-        "_localized_change_metrics",
-        lambda *_paths: LocalizedChangeMetrics(
-            p99_difference=9.5,
-            concentration_ratio=13.6,
+        worker._near_duplicate_comparator,
+        "assess",
+        lambda *_args, **_kwargs: NearDuplicateAssessment(
+            NearDuplicateDecision.SUBJECT_CHANGED,
+            structural_similarity=0.9963,
         ),
     )
 
@@ -199,8 +233,13 @@ def test_easy_delete_rejects_concentrated_face_or_arm_movement(tmp_path, monkeyp
 
 def test_easy_delete_structural_check_reuses_first_pass_analysis_images(monkeypatch):
     pipeline = Mock()
-    pipeline.get_analysis_image.return_value = Image.new("RGB", (640, 480), "gray")
+    rng = np.random.default_rng(5)
+    pipeline.get_analysis_image.return_value = Image.fromarray(
+        np.clip(rng.normal(110, 20, (480, 640, 3)), 0, 255).astype(np.uint8)
+    )
     paths = ["first.arw", "second.arw"]
+    face_service = Mock()
+    face_service.describe.return_value = SubjectDescriptor(())
     worker = EasyDeleteWorker(
         paths,
         cluster_map={1: paths},
@@ -209,6 +248,7 @@ def test_easy_delete_structural_check_reuses_first_pass_analysis_images(monkeypa
             paths[1]: [0.9811, 0.19350191],
         },
         image_pipeline=pipeline,
+        face_analysis_service=face_service,
     )
     monkeypatch.setattr(worker, "_files_are_identical", lambda *_paths: False)
 
@@ -258,6 +298,11 @@ def test_easy_delete_duplicate_result_explains_sharpness_recommendation(
     )
     sharpness = {str(softer): 10.0, str(sharper): 25.0}
     monkeypatch.setattr(worker, "_get_sharpness", sharpness.__getitem__)
+    monkeypatch.setattr(
+        worker._near_duplicate_comparator,
+        "assess",
+        lambda *_args, **_kwargs: _safe_near_duplicate(),
+    )
 
     results = worker._detect_duplicates()
 
@@ -283,6 +328,11 @@ def test_easy_delete_pairs_closest_available_images_first(tmp_path, monkeypatch)
         embeddings_cache=embeddings,
     )
     monkeypatch.setattr(worker, "_get_sharpness", lambda _path: 10.0)
+    monkeypatch.setattr(
+        worker._near_duplicate_comparator,
+        "assess",
+        lambda *_args, **_kwargs: _safe_near_duplicate(),
+    )
 
     results = worker._detect_duplicates()
 
@@ -400,10 +450,8 @@ def test_similarity_uses_shared_analysis_images_instead_of_full_processing():
     pipeline.get_analysis_image.return_value = Image.new("RGB", (1024, 700), "teal")
     engine = SimilarityEngine(image_pipeline=pipeline)
     engine._load_model = Mock(return_value=True)
-    engine._load_cached_embeddings = Mock(return_value={})
-    engine._load_cached_regional_embeddings = Mock(return_value={})
-    engine._save_embeddings_to_cache = Mock()
-    engine._save_regional_embeddings_to_cache = Mock()
+    engine._load_cached_artifacts = Mock(return_value={})
+    engine._save_artifacts_to_cache = Mock()
     engine.model.encode_with_regions = Mock(
         return_value=(
             np.asarray([[1.0, 0.0]], dtype=np.float32),

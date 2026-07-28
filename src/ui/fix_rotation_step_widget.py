@@ -242,11 +242,20 @@ class FixRotationStepWidget(QWidget):
                 self._syncing_active_image = False
             self.setFocus(Qt.FocusReason.OtherFocusReason)
         else:
+            self._clear_review_display()
             self._configure_empty_state(
                 "All photos are correctly oriented",
                 "No rotation corrections are needed.",
             )
             self._content_stack.setCurrentIndex(2)
+
+    def sync_results_after_file_mutation(
+        self, suggestions: dict[str, int] | None
+    ) -> None:
+        """Rebuild the queue after shared file operations change its paths."""
+
+        self._shown_suggestions = None
+        self.show_results(suggestions if suggestions is not None else {})
 
     def show_applying(self, current: int, total: int, filename: str) -> None:
         self._applying = True
@@ -292,6 +301,7 @@ class FixRotationStepWidget(QWidget):
         self._successful_paths.clear()
 
         if not self._ordered_paths:
+            self._clear_review_display()
             self._configure_empty_state(
                 "Rotations applied",
                 f"{successful} photo{'s' if successful != 1 else ''} updated successfully.",
@@ -318,6 +328,16 @@ class FixRotationStepWidget(QWidget):
     def _configure_empty_state(self, title: str, subtitle: str) -> None:
         self._empty_title.setText(title)
         self._empty_subtitle.setText(subtitle)
+
+    def _clear_review_display(self) -> None:
+        """Clear every path-bearing control when no rotation review remains."""
+
+        self._populate_list()
+        self._current_index = -1
+        clear_inspection = getattr(self.window(), "clear_image_inspection", None)
+        if callable(clear_inspection):
+            clear_inspection(self._sync_viewer)
+        self._sync_viewer.clear()
 
     # ------------------------------------------------------------------
     # Private helpers

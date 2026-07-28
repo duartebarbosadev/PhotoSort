@@ -96,12 +96,15 @@ def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch
     )
     controller.app_state = SimpleNamespace(
         update_path=lambda old_path, new_path: None,
+        update_paths=Mock(),
         grouping_run_summary=None,
         grouping_output_root=None,
     )
+    sync_workflows = Mock()
     controller.main_window = SimpleNamespace(
         set_grouping_busy=lambda busy: None,
         hide_loading_overlay=lambda: None,
+        _sync_workflow_results_after_file_mutation=sync_workflows,
         grouping_step_widget=SimpleNamespace(
             set_loading_state=lambda message, busy: None,
         ),
@@ -140,6 +143,11 @@ def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch
 
     AppController.handle_grouping_workflow_complete(controller, summary)
 
+    controller.app_state.update_paths.assert_called_once_with(
+        {},
+        migrate_disk_caches=False,
+    )
+    sync_workflows.assert_called_once_with()
     assert load_calls == [("/tmp/demo", True, False, True)]
     assert close_calls == [True]
 

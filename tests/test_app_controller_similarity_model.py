@@ -1,5 +1,7 @@
 from types import SimpleNamespace
+from unittest.mock import Mock
 
+from core.similarity_cache import SimilarityClusteringResult
 from ui.app_controller import AppController
 
 
@@ -135,6 +137,7 @@ def test_similarity_approved_model_download_starts_worker_with_download(monkeypa
         "allow_model_download": True,
         "folder_path": "/tmp",
         "analysis_cache": _AppState.analysis_cache,
+        "fingerprints": {},
     }
     assert main_window.shown == ["Starting similarity analysis..."]
 
@@ -218,3 +221,56 @@ def test_pick_best_refreshes_cached_clusters_without_regional_inputs(monkeypatch
 
     assert worker_manager.started is True
     assert controller._pick_best_pending_after_similarity is True
+
+
+def test_reused_clusters_do_not_clear_downstream_results():
+    action = SimpleNamespace(
+        setEnabled=Mock(),
+        setChecked=Mock(),
+        isChecked=Mock(return_value=False),
+    )
+    menu = SimpleNamespace(
+        analyze_similarity_action=action,
+        analyze_best_shots_action=action,
+        group_by_similarity_action=action,
+        update_cluster_filter_menu=Mock(),
+        set_cluster_sort_menu_visible=Mock(),
+        set_cluster_sort_menu_enabled=Mock(),
+    )
+    main_window = SimpleNamespace(
+        menu_manager=menu,
+        cluster_filter_combo=SimpleNamespace(
+            clear=Mock(),
+            addItems=Mock(),
+            setEnabled=Mock(),
+        ),
+        cluster_sort_combo=SimpleNamespace(setEnabled=Mock()),
+        update_loading_text=Mock(),
+        refresh_navigation_shortcut_actions=Mock(),
+        group_by_similarity_mode=False,
+        hide_loading_overlay=Mock(),
+    )
+    state = SimpleNamespace(
+        cluster_results={},
+        clear_best_shot_results=Mock(),
+        clear_pick_best_results=Mock(),
+    )
+    controller = SimpleNamespace(
+        app_state=state,
+        main_window=main_window,
+        _pick_best_pending_after_similarity=False,
+        _easy_delete_pending_after_similarity=False,
+        _get_image_file_data=Mock(return_value=[{"path": "photo.jpg"}]),
+    )
+
+    AppController.handle_clustering_complete(
+        controller,
+        SimilarityClusteringResult(
+            clusters={"photo.jpg": 1},
+            signature="signature",
+            reused=True,
+        ),
+    )
+
+    state.clear_best_shot_results.assert_not_called()
+    state.clear_pick_best_results.assert_not_called()
