@@ -62,7 +62,7 @@ jobs:
           ruff check .
           ruff check --select G004 \
             src/core/best_photo_finder \
-            src/core/embedding_cache.py \
+            src/core/similarity_cache.py \
             src/core/image_file_ops.py \
             src/core/media_utils.py \
             src/core/metadata_io.py \
@@ -79,7 +79,7 @@ jobs:
         run: |
           mypy \
             src/core/best_photo_finder \
-            src/core/embedding_cache.py \
+            src/core/similarity_cache.py \
             src/core/image_file_ops.py \
             src/core/media_utils.py \
             src/core/metadata_io.py \

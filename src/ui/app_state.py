@@ -388,6 +388,11 @@ class AppState:
                 return updates.get(path, path)
             return path
 
+        def remap_pair(pair: tuple[str, str]) -> tuple[str, str]:
+            first = updates.get(pair[0], pair[0])
+            second = updates.get(pair[1], pair[1])
+            return (first, second) if first <= second else (second, first)
+
         for record in self._image_files_data:
             old_path = record.get("path")
             if old_path in updates:
@@ -453,9 +458,7 @@ class AppState:
                 for path, entry in self.easy_delete_results.items()
             }
         self.easy_delete_pair_assessments = {
-            tuple(
-                sorted((updates.get(pair[0], pair[0]), updates.get(pair[1], pair[1])))
-            ): (assessment)
+            remap_pair(pair): assessment
             for pair, assessment in self.easy_delete_pair_assessments.items()
         }
         if self.fix_rotation_results is not None:
