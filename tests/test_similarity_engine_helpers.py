@@ -16,6 +16,7 @@ from core.similarity_utils import (
     cosine_similarity,
     l2_normalize_rows,
     normalize_embedding_vector,
+    order_paths_by_anchor_similarity,
     regional_embedding_distance,
 )
 
@@ -24,6 +25,19 @@ def test_cosine_similarity_handles_valid_and_invalid_embeddings():
     assert cosine_similarity([1.0, 0.0], [0.8, 0.6]) == pytest.approx(0.8)
     assert cosine_similarity([1.0, 0.0], [0.0, 0.0]) is None
     assert cosine_similarity([1.0, 0.0], [1.0]) is None
+
+
+def test_anchor_similarity_order_is_deterministic_and_keeps_missing_data_last():
+    paths = ["anchor", "medium", "missing", "closest"]
+    embeddings = {
+        "anchor": [1.0, 0.0],
+        "medium": [0.8, 0.6],
+        "closest": [0.99, 0.1],
+    }
+
+    assert order_paths_by_anchor_similarity(
+        paths, embeddings, anchor_path="anchor"
+    ) == ["anchor", "closest", "medium", "missing"]
 
 
 def test_regional_distance_requires_corresponding_scene_regions_to_match():

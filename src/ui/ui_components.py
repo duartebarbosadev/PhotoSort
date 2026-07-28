@@ -1,7 +1,6 @@
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
-    QLabel,
     QTreeView,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -17,12 +16,14 @@ from PyQt6.QtGui import (
     QStandardItem,
 )
 import os
+import re
 from typing import override
 
 from core.image_pipeline import ImagePipeline
 from core.caching.exif_cache import ExifCache
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.media_utils import is_image_extension
+from ui.workflow_review_components import WorkflowProgressView
 import logging
 
 logger = logging.getLogger(__name__)
@@ -371,31 +372,20 @@ class LoadingOverlay(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        self.bg_widget = QWidget(self)
-        # Fallback inline style ensures visibility before external stylesheet loads.
-        # External stylesheet (dark_theme.qss) will override this when applied.
-        self.bg_widget.setStyleSheet("background-color: rgba(32, 32, 32, 0.85);")
-        main_layout.addWidget(self.bg_widget)
-
-        content_layout = QVBoxLayout(self.bg_widget)
-        content_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        content_layout.setContentsMargins(20, 20, 20, 20)
-
-        self.text_label = QLabel("Loading...", self)
-        self.text_label.setObjectName("loading_text_label")  # For styling
-        self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Fallback inline style for text visibility before external stylesheet loads
-        self.text_label.setStyleSheet(
-            "color: #E5E5E5; font-size: 15pt; font-weight: bold; "
-            "background-color: transparent; padding: 25px;"
+        self.progress_view = WorkflowProgressView(
+            "Working on your library",
+            default_message="Loading…",
+            parent=self,
         )
-
-        content_layout.addWidget(self.text_label)
+        self.bg_widget = self.progress_view
+        self.text_label = self.progress_view.message_label
+        main_layout.addWidget(self.progress_view)
         self.hide()
 
     def setText(self, text):
-        self.text_label.setText(text)
-        self.text_label.adjustSize()
+        match = re.search(r"\((\d+)%\)", text)
+        percent = int(match.group(1)) if match else -1
+        self.progress_view.update_progress(text, percent)
 
     @override
     def showEvent(self, event):
@@ -405,6 +395,7 @@ class LoadingOverlay(QWidget):
 
     @override
     def hideEvent(self, event):
+        self.progress_view.mark_finished()
         super().hideEvent(event)
 
     def update_position(self):

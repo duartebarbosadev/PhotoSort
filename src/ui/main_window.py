@@ -1235,7 +1235,7 @@ class MainWindow(QMainWindow):
         self,
         image_path: str,
         *,
-        apply_thumbnail_orientation: bool = False,
+        apply_thumbnail_orientation: bool = True,
     ) -> tuple[QPixmap | None, bool]:
         """Return an immediately available pixmap without decoding on the UI thread."""
         return self.image_pipeline.get_immediate_review_qpixmap(
@@ -1732,6 +1732,9 @@ class MainWindow(QMainWindow):
             widget.set_is_marked_func(self.app_state.is_marked_for_deletion)
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
+            )
+            widget.set_similarity_embeddings_provider(
+                lambda: self.app_state.embeddings_cache
             )
             widget.apply_requested.connect(self._request_workflow_resolution)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)

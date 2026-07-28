@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidgetItem,
-    QProgressBar,
     QPushButton,
     QSplitter,
     QStackedWidget,
@@ -22,12 +21,13 @@ from PyQt6.QtWidgets import (
 
 from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResults
 from core.app_settings import EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY
-from core.similarity_utils import cosine_similarity
+from core.similarity_utils import cosine_similarity, order_paths_by_anchor_similarity
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.controllers.image_inspection_controller import InspectionImageSpec
 from ui.workflow_review_components import (
     PICK_BEST_SHORTCUTS,
     WorkflowDecisionCard,
+    WorkflowProgressView,
     WorkflowReviewListPanel,
     WorkflowStateBanner,
     install_workflow_shortcuts,
@@ -165,6 +165,7 @@ class CompareCard(WorkflowDecisionCard):
 class TournamentGroup:
     paths: list[str]
     ai_pick: str
+    challenger_path: str
     keep_by_path: dict[str, bool]
     default_keep_by_path: dict[str, bool]
     advancing_path: str
@@ -194,6 +195,7 @@ class TournamentRound:
 class ClusterTournament:
     cluster_key: object
     payload: PickBestClusterResult
+    ordered_paths: list[str] = field(default_factory=list)
     rounds: list[TournamentRound] = field(default_factory=list)
     current_round: int = 0
     current_group: int = 0
@@ -238,6 +240,7 @@ class PickBestStepWidget(QWidget):
         self._info_visible = True
         self._is_marked_func: Callable[[str], bool] | None = None
         self._has_any_marked_func: Callable[[], bool] | None = None
+        self._similarity_embeddings_provider: Callable[[], dict] = lambda: {}
         self._create_widgets()
         self._connect_signals()
         self._create_shortcuts()
@@ -268,7 +271,10 @@ class PickBestStepWidget(QWidget):
             group.confirmed = False
         group.keep_by_path = dict(group.default_keep_by_path)
         group.advancing_path = self._resolve_advancing_path(
-            group.paths, group.keep_by_path, group.ai_pick
+            group.paths,
+            group.keep_by_path,
+            group.ai_pick,
+            group.challenger_path,
         )
         self._refresh_photo_list()
         self._show_current_group()
@@ -286,21 +292,16 @@ class PickBestStepWidget(QWidget):
 
     def show_loading(self, message: str = "Analysing…", percent: int = 0) -> None:
         self._stack.setCurrentWidget(self._page_loading)
-        self._loading_label.setText(message)
-        if percent is None or percent < 0:
-            self._progress_bar.setRange(0, 0)
-        else:
-            self._progress_bar.setRange(0, 100)
-            self._progress_bar.setValue(percent)
+        self._progress_view.update_progress(message, percent)
 
     def show_error(self, message: str) -> None:
         self._stack.setCurrentWidget(self._page_loading)
-        self._loading_label.setText(f"Error: {message}")
-        self._progress_bar.setValue(0)
+        self._progress_view.show_error(message)
 
     def show_results(
         self, results: PickBestResults, *, restore_prior_marks: bool = True
     ) -> None:
+        self._progress_view.mark_finished()
         if self._shown_results is not None and results == self._shown_results:
             if self._tournaments:
                 self._stack.setCurrentWidget(self._page_review)
@@ -367,6 +368,9 @@ class PickBestStepWidget(QWidget):
         self._has_any_marked_func = func
         self._sync_viewer.set_has_any_marked_for_deletion_func(lambda: False)
 
+    def set_similarity_embeddings_provider(self, provider: Callable[[], dict]) -> None:
+        self._similarity_embeddings_provider = provider
+
     def refresh_deletion_state(self) -> None:
         """Tournament choices remain local until a final winner is confirmed."""
 
@@ -394,32 +398,13 @@ class PickBestStepWidget(QWidget):
         self._stack = QStackedWidget()
         main_layout.addWidget(self._stack)
 
-        self._page_loading = QWidget()
-        loading_layout = QVBoxLayout(self._page_loading)
-        loading_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        title = QLabel("Pick Best Photos")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; margin-bottom: 8px;")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        loading_layout.addWidget(title)
-
-        self._loading_label = QLabel("Starting analysis…")
-        self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._loading_label.setWordWrap(True)
-        self._loading_label.setStyleSheet(
-            "font-size: 13px; color: #aaaaaa; margin-bottom: 12px;"
+        self._progress_view = WorkflowProgressView(
+            "Pick Best Photos",
+            default_message="Starting analysis…",
         )
-        loading_layout.addWidget(self._loading_label)
-
-        self._progress_bar = QProgressBar()
-        self._progress_bar.setRange(0, 100)
-        self._progress_bar.setValue(0)
-        self._progress_bar.setFixedWidth(320)
-        self._progress_bar.setTextVisible(True)
-        loading_layout.addWidget(
-            self._progress_bar, alignment=Qt.AlignmentFlag.AlignCenter
-        )
-
+        self._page_loading = self._progress_view
+        self._loading_label = self._progress_view.message_label
+        self._progress_bar = self._progress_view.progress_bar
         self._stack.addWidget(self._page_loading)
 
         self._page_review = QWidget()
@@ -600,6 +585,7 @@ class PickBestStepWidget(QWidget):
         *,
         carried_decisions: dict[str, bool] | None = None,
     ) -> TournamentRound:
+        challenger_path = paths[-1]
         score_by_path, _failures = self._cluster_score_maps(payload)
         ai_pick = max(
             paths,
@@ -609,6 +595,7 @@ class PickBestStepWidget(QWidget):
                 -paths.index(path),
             ),
         )
+        paths = [path for path in paths if path != ai_pick] + [ai_pick]
         keep_by_path = dict(carried_decisions or {})
         for path in paths:
             keep_by_path.setdefault(path, path == ai_pick)
@@ -617,10 +604,11 @@ class PickBestStepWidget(QWidget):
                 TournamentGroup(
                     paths=list(paths),
                     ai_pick=ai_pick,
+                    challenger_path=challenger_path,
                     keep_by_path=keep_by_path,
                     default_keep_by_path=dict(keep_by_path),
                     advancing_path=self._resolve_advancing_path(
-                        paths, keep_by_path, ai_pick
+                        paths, keep_by_path, ai_pick, challenger_path
                     ),
                 )
             ]
@@ -628,18 +616,32 @@ class PickBestStepWidget(QWidget):
 
     @staticmethod
     def _resolve_advancing_path(
-        paths: list[str], keep_by_path: dict[str, bool], ai_pick: str
+        paths: list[str],
+        keep_by_path: dict[str, bool],
+        ai_pick: str,
+        challenger_path: str,
     ) -> str:
         kept_paths = [path for path in paths if keep_by_path.get(path, False)]
-        return kept_paths[0] if len(kept_paths) == 1 else ai_pick
+        if len(kept_paths) == 1:
+            return kept_paths[0]
+        if len(kept_paths) > 1 and challenger_path in kept_paths:
+            return challenger_path
+        return ai_pick
 
     def _build_tournament(
         self, cluster_key: object, payload: PickBestClusterResult
     ) -> ClusterTournament:
         paths = list(dict.fromkeys(payload.get("all_paths", [])))
+        if paths:
+            paths = order_paths_by_anchor_similarity(
+                paths,
+                self._similarity_embeddings_provider(),
+                anchor_path=paths[0],
+            )
         tournament = ClusterTournament(
             cluster_key=cluster_key,
             payload=payload,
+            ordered_paths=paths,
             next_path_index=min(2, len(paths)),
         )
         if len(paths) >= 2:
@@ -702,7 +704,7 @@ class PickBestStepWidget(QWidget):
 
     def _cluster_summary(self, index: int) -> tuple[str, QColor, QColor]:
         tournament = self._tournaments[index]
-        paths = list(tournament.payload.get("all_paths", []))
+        paths = tournament.ordered_paths
         kept_paths = self._kept_paths(tournament)
         retained_count = len(kept_paths)
         has_progress = any(
@@ -791,7 +793,7 @@ class PickBestStepWidget(QWidget):
                         )
                         self._items_list.addItem(item)
 
-                    all_paths = list(tournament.payload.get("all_paths", []))
+                    all_paths = tournament.ordered_paths
                     for path in all_paths[tournament.next_path_index :]:
                         item = waiting_items.get(
                             (cluster_index, path), QListWidgetItem()
@@ -868,7 +870,7 @@ class PickBestStepWidget(QWidget):
             return
         self._cluster_index = max(0, min(index, len(self._tournaments) - 1))
         tournament = self._current_tournament()
-        all_paths = list(tournament.payload.get("all_paths", []))
+        all_paths = tournament.ordered_paths
         self._current_all_paths = all_paths
         self._cluster_ordered_paths = all_paths
         if tournament.final_advancing_path and not tournament.rounds:
@@ -900,7 +902,7 @@ class PickBestStepWidget(QWidget):
             (
                 index
                 for index, tournament in enumerate(self._tournaments)
-                if path in tournament.payload.get("all_paths", [])
+                if path in tournament.ordered_paths
             ),
             None,
         )
@@ -1221,7 +1223,7 @@ class PickBestStepWidget(QWidget):
                     replayed_state[path] = not group.keep_by_path.get(path, False)
             self._publish_confirmed_state(replayed_state)
         tournament.rounds = tournament.rounds[: tournament.current_round + 1]
-        all_paths = list(tournament.payload.get("all_paths", []))
+        all_paths = tournament.ordered_paths
         path_indices = {path: index for index, path in enumerate(all_paths)}
         reviewed_indices = [
             path_indices[path]
@@ -1241,7 +1243,7 @@ class PickBestStepWidget(QWidget):
             return
         tournament.prior_marks = {
             path: bool(self._is_marked_func(path)) if self._is_marked_func else False
-            for path in tournament.payload.get("all_paths", [])
+            for path in tournament.ordered_paths
         }
 
     def _publish_group_decision(self, group: TournamentGroup) -> None:
@@ -1258,7 +1260,10 @@ class PickBestStepWidget(QWidget):
             group.confirmed = False
         group.keep_by_path[path] = not group.keep_by_path.get(path, False)
         group.advancing_path = self._resolve_advancing_path(
-            group.paths, group.keep_by_path, group.ai_pick
+            group.paths,
+            group.keep_by_path,
+            group.ai_pick,
+            group.challenger_path,
         )
         self._focused_slot_index = group.paths.index(path)
         self._show_current_group()
@@ -1278,7 +1283,7 @@ class PickBestStepWidget(QWidget):
         tournament = self._current_tournament()
         group = self._current_group()
         advancing_path = group.advancing_path
-        all_paths = list(tournament.payload.get("all_paths", []))
+        all_paths = tournament.ordered_paths
         if tournament.next_path_index >= len(all_paths):
             self._finalize_current_tournament(advancing_path)
             next_cluster = next(
@@ -1334,7 +1339,10 @@ class PickBestStepWidget(QWidget):
         tournament = self._current_tournament()
         self._ensure_prior_marks(tournament)
         group.advancing_path = self._resolve_advancing_path(
-            group.paths, group.keep_by_path, group.ai_pick
+            group.paths,
+            group.keep_by_path,
+            group.ai_pick,
+            group.challenger_path,
         )
         group.confirmed = True
         self._publish_group_decision(group)
@@ -1353,7 +1361,10 @@ class PickBestStepWidget(QWidget):
         self._ensure_prior_marks(tournament)
         group.keep_by_path.update(dict.fromkeys(group.paths, True))
         group.advancing_path = self._resolve_advancing_path(
-            group.paths, group.keep_by_path, group.ai_pick
+            group.paths,
+            group.keep_by_path,
+            group.ai_pick,
+            group.challenger_path,
         )
         group.confirmed = True
         self._publish_group_decision(group)

@@ -8,9 +8,10 @@ external apply_auto_edits parameters.
 
 import inspect
 from unittest.mock import Mock, patch
-from core.app_settings import PRELOAD_MAX_RESOLUTION
+from core.app_settings import PRELOAD_MAX_RESOLUTION, THUMBNAIL_MAX_SIZE
 from src.core.image_pipeline import CACHE_SCHEMA_VERSION, ImagePipeline
 from src.core.image_processing.raw_image_processor import is_raw_extension
+from src.core.image_processing.standard_image_processor import StandardImageProcessor
 from PIL import Image
 from PyQt6.QtWidgets import QApplication
 
@@ -226,6 +227,57 @@ def test_get_cached_thumbnail_qpixmap_does_not_generate_on_cache_miss(tmp_path):
         pixmap = pipeline.get_cached_thumbnail_qpixmap(str(image_path))
 
     assert pixmap is None
+
+
+def test_thumbnail_warming_caches_jpeg_with_exif_orientation_applied(tmp_path):
+    image_path = tmp_path / "portrait.jpg"
+    source = Image.new("RGB", (80, 40), color="red")
+    exif = Image.Exif()
+    exif[274] = 6
+    source.save(image_path, exif=exif)
+
+    thumbnail_cache_dir = str(tmp_path / "thumb")
+    preview_cache_dir = str(tmp_path / "preview")
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=thumbnail_cache_dir,
+        preview_cache_dir=preview_cache_dir,
+    )
+
+    with patch(
+        "src.core.image_pipeline.StandardImageProcessor.process_for_thumbnail",
+        wraps=StandardImageProcessor.process_for_thumbnail,
+    ) as process_thumbnail:
+        assert pipeline.ensure_thumbnail_cached(
+            str(image_path),
+            promote_to_memory=False,
+        )
+
+    process_thumbnail.assert_called_once_with(
+        str(image_path),
+        THUMBNAIL_MAX_SIZE,
+        True,
+    )
+    pipeline.thumbnail_cache.close()
+    pipeline.preview_cache.close()
+
+    reloaded = ImagePipeline(
+        thumbnail_cache_dir=thumbnail_cache_dir,
+        preview_cache_dir=preview_cache_dir,
+    )
+    with patch(
+        "src.core.image_pipeline.StandardImageProcessor.process_for_thumbnail",
+        side_effect=AssertionError("disk-cached thumbnail must not be decoded again"),
+    ):
+        assert reloaded.ensure_thumbnail_cached(str(image_path))
+        pixmap = reloaded.get_cached_thumbnail_qpixmap(
+            str(image_path),
+            memory_only=True,
+        )
+
+    assert pixmap is not None
+    assert (pixmap.width(), pixmap.height()) == (40, 80)
+    reloaded.thumbnail_cache.close()
+    reloaded.preview_cache.close()
 
 
 def test_get_cached_preview_qpixmap_does_not_generate_on_cache_miss(tmp_path):

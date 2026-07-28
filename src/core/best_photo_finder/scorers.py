@@ -308,6 +308,33 @@ class HuggingFaceAestheticScorer:
         image.thumbnail((size, size), Image.Resampling.LANCZOS)
         return image
 
+    def _resolve_model_snapshot(self, snapshot_download) -> str:
+        """Resolve cached weights first and report downloads only on a cache miss."""
+
+        download_kwargs = {
+            "cache_dir": get_huggingface_cache_dir(),
+        }
+        try:
+            model_path = snapshot_download(
+                self.model_name,
+                local_files_only=True,
+                **download_kwargs,
+            )
+        except Exception:
+            model_path = snapshot_download(
+                self.model_name,
+                local_files_only=False,
+                tqdm_class=build_hf_tqdm_class(
+                    self.progress_callback,
+                    label=f"Downloading {self.model_name}",
+                ),
+                **download_kwargs,
+            )
+
+        if self.progress_callback:
+            self.progress_callback(-1, f"Loading {self.model_name}")
+        return model_path
+
     def _build_model(self, config: SelectorConfig):
         self._resolved_device = resolve_device(config.device)
         try:
@@ -326,16 +353,7 @@ class HuggingFaceAestheticScorer:
                 torch, self._resolved_device.torch_dtype_name
             )
 
-        model_path = snapshot_download(
-            self.model_name,
-            cache_dir=get_huggingface_cache_dir(),
-            tqdm_class=build_hf_tqdm_class(
-                self.progress_callback,
-                label=f"Downloading {self.model_name}",
-            ),
-        )
-        if self.progress_callback:
-            self.progress_callback(-1, f"Loading {self.model_name}")
+        model_path = self._resolve_model_snapshot(snapshot_download)
         model = AutoModelForImageClassification.from_pretrained(
             model_path, local_files_only=True, **model_kwargs
         )

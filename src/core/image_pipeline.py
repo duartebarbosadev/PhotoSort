@@ -133,7 +133,7 @@ class ImagePipeline:
     def thumbnail_cache_key(
         self,
         image_path: str,
-        apply_orientation: bool = False,
+        apply_orientation: bool = True,
         *,
         file_size: int | None = None,
         mtime_ns: int | None = None,
@@ -315,7 +315,7 @@ class ImagePipeline:
     def _get_pil_thumbnail(
         self,
         image_path: str,
-        apply_orientation: bool = False,
+        apply_orientation: bool = True,
         *,
         promote_to_memory: bool = True,
     ) -> Image.Image | None:
@@ -399,7 +399,7 @@ class ImagePipeline:
         """
         if not promote_to_memory:
             normalized_path = os.path.normpath(image_path)
-            cache_key = self.thumbnail_cache_key(normalized_path, False)
+            cache_key = self.thumbnail_cache_key(normalized_path, True)
             if self._memory_get(cache_key) is not None:
                 return True
             # Membership avoids decoding a disk hit into the shared memory LRU.
@@ -416,7 +416,7 @@ class ImagePipeline:
     def get_cached_thumbnail_qpixmap(
         self,
         image_path: str,
-        apply_orientation: bool = False,
+        apply_orientation: bool = True,
         *,
         file_size: int | None = None,
         mtime_ns: int | None = None,
@@ -443,25 +443,6 @@ class ImagePipeline:
             if memory_only
             else self._cache_get(self.thumbnail_cache, cache_key)
         )
-        if cached_img is None and apply_orientation:
-            # Folder warming intentionally creates one canonical, un-oriented
-            # thumbnail.  Review surfaces still need display orientation, so
-            # derive that tiny variant from the shared cached image instead of
-            # decoding the source file again.
-            source_key = self.thumbnail_cache_key(
-                normalized_path,
-                False,
-                file_size=file_size,
-                mtime_ns=mtime_ns,
-            )
-            source_img = (
-                self._memory_get(source_key)
-                if memory_only
-                else self._cache_get(self.thumbnail_cache, source_key)
-            )
-            if source_img is not None:
-                cached_img = self.image_orientation_handler.exif_transpose(source_img)
-                self._memory_set(cache_key, cached_img)
         if cached_img is None:
             return None
 
@@ -567,7 +548,7 @@ class ImagePipeline:
     def get_thumbnail_qpixmap(
         self,
         image_path: str,
-        apply_orientation: bool = False,
+        apply_orientation: bool = True,
     ) -> QPixmap | None:
         """
         Gets a QPixmap thumbnail for the given image path.

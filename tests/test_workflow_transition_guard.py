@@ -8,7 +8,7 @@ from src.ui.workflow_transition import WorkflowTransitionRequest
 from src.ui.workflow_transition import WorkflowPendingState
 from src.ui.dialog_manager import DialogManager
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPixmap
+from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -501,6 +501,111 @@ def test_transition_dialog_loads_missing_thumbnails_and_updates_live_items(tmp_p
     assert result == {"trash": "clear"}
 
 
+def test_delete_confirmation_loads_missing_thumbnails_and_updates_live_items(
+    tmp_path,
+):
+    photo = tmp_path / "photo.arw"
+    photo.write_bytes(b"raw image")
+    loaded = False
+    thumbnail = QPixmap(40, 30)
+    thumbnail.fill(QColor("red"))
+
+    def cached_review(_path):
+        return thumbnail if loaded else QPixmap()
+
+    parent = QWidget()
+    parent.image_pipeline = SimpleNamespace(
+        get_cached_review_qpixmap=Mock(side_effect=cached_review),
+        get_cached_thumbnail_qpixmap=Mock(return_value=QPixmap()),
+    )
+    parent.worker_manager = _ThumbnailSignals()
+    parent.thumbnail_loader = SimpleNamespace(request_paths=Mock())
+    manager = DialogManager(parent)
+    observed = {}
+
+    def interact():
+        nonlocal loaded
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QDialog)
+        gallery = dialog.findChild(QListWidget, "deleteDialogListWidget")
+        item = gallery.item(0)
+        loaded = True
+        parent.worker_manager.thumbnail_session_batch_ready.emit(
+            "dialog-session", [str(photo)]
+        )
+        QApplication.processEvents()
+        rendered = item.icon().pixmap(24, 24).toImage()
+        observed["color"] = rendered.pixelColor(
+            rendered.width() // 2, rendered.height() // 2
+        )
+        dialog.reject()
+
+    QTimer.singleShot(0, interact)
+    result = manager.show_commit_deletions_dialog([str(photo)])
+
+    parent.thumbnail_loader.request_paths.assert_called_once_with([str(photo)])
+    assert observed["color"] == QColor("red")
+    assert result is False
+
+
+def test_delete_confirmation_reuses_shared_icon_without_requesting_thumbnail(
+    tmp_path,
+):
+    photo = tmp_path / "photo.arw"
+    photo.write_bytes(b"raw image")
+    thumbnail = QPixmap(40, 30)
+    thumbnail.fill(QColor("blue"))
+    cached_icon = QIcon(thumbnail)
+
+    parent = QWidget()
+    parent.get_cached_thumbnail_icon = Mock(return_value=cached_icon)
+    parent.image_pipeline = SimpleNamespace(
+        get_cached_review_qpixmap=Mock(
+            side_effect=AssertionError("shared UI icon should be reused first")
+        )
+    )
+    parent.worker_manager = _ThumbnailSignals()
+    parent.thumbnail_loader = SimpleNamespace(request_paths=Mock())
+    manager = DialogManager(parent)
+    observed = {}
+
+    def interact():
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QDialog)
+        gallery = dialog.findChild(QListWidget, "deleteDialogListWidget")
+        rendered = gallery.item(0).icon().pixmap(24, 24).toImage()
+        observed["color"] = rendered.pixelColor(
+            rendered.width() // 2, rendered.height() // 2
+        )
+        dialog.reject()
+
+    QTimer.singleShot(0, interact)
+    manager.show_commit_deletions_dialog([str(photo)])
+
+    parent.get_cached_thumbnail_icon.assert_called_once_with(str(photo))
+    parent.thumbnail_loader.request_paths.assert_not_called()
+    assert observed["color"] == QColor("blue")
+
+
+def test_close_confirmation_uses_shared_dialog_thumbnail_loader(tmp_path):
+    photo = tmp_path / "photo.jpg"
+    photo.write_bytes(b"image")
+    parent = QWidget()
+    parent.image_pipeline = SimpleNamespace(
+        get_cached_review_qpixmap=Mock(return_value=QPixmap()),
+        get_cached_thumbnail_qpixmap=Mock(return_value=QPixmap()),
+    )
+    parent.worker_manager = _ThumbnailSignals()
+    parent.thumbnail_loader = SimpleNamespace(request_paths=Mock())
+    manager = DialogManager(parent)
+
+    QTimer.singleShot(0, lambda: QApplication.activeModalWidget().reject())
+    result = manager.show_close_confirmation_dialog([str(photo)])
+
+    parent.thumbnail_loader.request_paths.assert_called_once_with([str(photo)])
+    assert result == "cancel"
+
+
 def test_in_place_resolution_dialog_does_not_offer_switch_actions():
     parent = QWidget()
     parent.image_pipeline = SimpleNamespace(
@@ -617,21 +722,46 @@ def test_deletion_preview_keeps_folders_as_bounded_recursive_targets(tmp_path):
     assert by_path[str(empty_after_move)][1] == "Empty folder removed after organizing"
 
 
-def test_deletion_preview_caps_widget_count_without_filesystem_walk(tmp_path):
-    targets = []
-    for index in range(DialogManager.MAX_TRANSITION_DELETION_PREVIEW_ITEMS + 25):
-        target = tmp_path / f"{index}.jpg"
-        target.write_bytes(b"x")
-        targets.append(str(target))
-
+def test_deletion_preview_includes_every_target_without_filesystem_walk(tmp_path):
+    targets = [str(tmp_path / f"{index}.jpg") for index in range(505)]
     manager = DialogManager(QWidget())
     entries = manager._build_deletion_preview_entries(
         WorkflowPendingState(trash_paths=targets)
     )
 
-    assert len(entries) == DialogManager.MAX_TRANSITION_DELETION_PREVIEW_ITEMS + 1
-    assert entries[-1][0] == ""
-    assert "25 more" in entries[-1][1]
+    assert len(entries) == len(targets)
+    assert {entry[0] for entry in entries} == set(targets)
+    assert all(entry[0] for entry in entries)
+
+
+def test_delete_confirmation_gallery_shows_every_marked_image():
+    paths = [f"/tmp/photo-{index}.jpg" for index in range(505)]
+    parent = QWidget()
+    parent.image_pipeline = SimpleNamespace(
+        get_cached_review_qpixmap=Mock(return_value=QPixmap()),
+        get_cached_thumbnail_qpixmap=Mock(return_value=QPixmap()),
+    )
+    parent.worker_manager = _ThumbnailSignals()
+    parent.thumbnail_loader = SimpleNamespace(request_paths=Mock())
+    manager = DialogManager(parent)
+    observed = {}
+
+    def interact():
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QDialog)
+        gallery = dialog.findChild(QListWidget, "deleteDialogListWidget")
+        observed["count"] = gallery.count()
+        observed["labels"] = [
+            gallery.item(index).text() for index in range(gallery.count())
+        ]
+        dialog.reject()
+
+    QTimer.singleShot(0, interact)
+    manager.show_commit_deletions_dialog(paths)
+
+    assert observed["count"] == len(paths)
+    assert not any("more item" in label for label in observed["labels"])
+    parent.thumbnail_loader.request_paths.assert_called_once_with(paths)
 
 
 def test_organize_folder_mark_is_staged_and_unstaged_as_one_target(tmp_path):
