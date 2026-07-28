@@ -1235,7 +1235,7 @@ class MainWindow(QMainWindow):
         self,
         image_path: str,
         *,
-        apply_thumbnail_orientation: bool = False,
+        apply_thumbnail_orientation: bool = True,
     ) -> tuple[QPixmap | None, bool]:
         """Return an immediately available pixmap without decoding on the UI thread."""
         return self.image_pipeline.get_immediate_review_qpixmap(

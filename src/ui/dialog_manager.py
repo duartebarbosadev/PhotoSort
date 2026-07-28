@@ -90,8 +90,6 @@ def _build_kv_row(key_text, value_widget, parent_layout):
 class DialogManager:
     """A manager class for handling the creation of dialogs."""
 
-    MAX_TRANSITION_DELETION_PREVIEW_ITEMS = 200
-
     def __init__(self, parent):
         """
         Initialize the DialogManager.
@@ -283,17 +281,11 @@ class DialogManager:
                     (("apply", "Apply rotations"), ("discard", "Discard queue")),
                 )
         if deletion_entries:
-            is_truncated = bool(deletion_entries and deletion_entries[-1][0] == "")
-            trash_heading = QLabel(
-                "Deletion targets"
-                if is_truncated
-                else f"{len(deletion_entries)} item(s) will be removed"
-            )
+            trash_heading = QLabel(f"{len(deletion_entries)} item(s) will be removed")
             trash_heading.setObjectName("workflowTransitionTrashTitle")
             body.addWidget(trash_heading)
             trash_description = QLabel(
-                "Folders include all descendants. The preview is intentionally "
-                "bounded so large directory trees do not stall the interface."
+                "Every target is shown below. Folders include all descendants."
             )
             trash_description.setObjectName("workflowTransitionDescription")
             trash_description.setWordWrap(True)
@@ -332,7 +324,7 @@ class DialogManager:
                 if is_media and cached_icon is None:
                     missing_thumbnail_items[file_path] = item
             body.addWidget(list_widget, 1)
-            self._load_transition_thumbnails(dialog, missing_thumbnail_items)
+            self._load_dialog_thumbnails(dialog, missing_thumbnail_items)
 
         body.addStretch()
         outer.addWidget(scroll, 1)
@@ -431,6 +423,12 @@ class DialogManager:
 
     def _cached_media_icon(self, file_path: str) -> QIcon | None:
         """Return the best memory-cached media image using workflow cache priority."""
+        icon_getter = getattr(self.parent, "get_cached_thumbnail_icon", None)
+        if callable(icon_getter):
+            icon = icon_getter(file_path)
+            if icon is not None and not icon.isNull():
+                return icon
+
         review_getter = getattr(
             self.parent.image_pipeline, "get_cached_review_qpixmap", None
         )
@@ -443,12 +441,12 @@ class DialogManager:
             return None
         return QIcon(pixmap)
 
-    def _load_transition_thumbnails(
+    def _load_dialog_thumbnails(
         self,
         dialog: QDialog,
         items_by_path: dict[str, QListWidgetItem],
     ) -> None:
-        """Load missing gallery thumbnails asynchronously and update live items."""
+        """Load missing dialog thumbnails through the shared background pipeline."""
         if not items_by_path:
             return
         loader = getattr(self.parent, "thumbnail_loader", None)
@@ -480,6 +478,33 @@ class DialogManager:
         batch_ready.connect(update_items)
         dialog.finished.connect(disconnect_loader)
         request_paths(list(pending))
+
+    def _populate_media_thumbnail_gallery(
+        self,
+        dialog: QDialog,
+        list_widget: QListWidget,
+        file_paths: list[str],
+    ) -> None:
+        """Populate a complete media gallery and asynchronously fill cache misses."""
+        missing_thumbnail_items: dict[str, QListWidgetItem] = {}
+        for file_path in file_paths:
+            cached_icon = self._cached_media_icon(file_path)
+            item = QListWidgetItem(
+                cached_icon
+                or self.parent.style().standardIcon(
+                    QStyle.StandardPixmap.SP_FileIcon
+                ),
+                os.path.basename(file_path),
+            )
+            item.setSizeHint(QSize(148, 168))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            list_widget.addItem(item)
+            if cached_icon is None and (
+                is_image_extension(file_path) or is_video_extension(file_path)
+            ):
+                missing_thumbnail_items[file_path] = item
+
+        self._load_dialog_thumbnails(dialog, missing_thumbnail_items)
 
     def _rotation_comparison_widget(self, file_path: str, angle: int) -> QWidget:
         """Build a cache-only before/after rotation comparison card."""
@@ -558,7 +583,7 @@ class DialogManager:
     def _build_deletion_preview_entries(
         self, pending: WorkflowPendingState
     ) -> list[tuple[str, str, str, bool]]:
-        """Build a bounded target preview without walking marked directories."""
+        """Build the complete target list without walking marked directories."""
         entries: list[tuple[str, str, str, bool]] = []
         seen: set[str] = set()
         directory_paths = {
@@ -617,19 +642,7 @@ class DialogManager:
                 "Empty folder removed after organizing",
                 expand_directory=False,
             )
-        maximum = self.MAX_TRANSITION_DELETION_PREVIEW_ITEMS
-        if len(entries) <= maximum:
-            return entries
-        omitted = len(entries) - maximum
-        return [
-            *entries[:maximum],
-            (
-                "",
-                f"… and {omitted} more target(s)",
-                "All targets remain included in the operation",
-                False,
-            ),
-        ]
+        return entries
 
     def _has_raw_images(self, file_paths: list[str]) -> bool:
         """Check if any of the provided file paths are RAW image files."""
@@ -2070,21 +2083,11 @@ class DialogManager:
         list_widget.setWordWrap(True)
         list_widget.setSpacing(10)
 
-        preview_files = files[: self.MAX_TRANSITION_DELETION_PREVIEW_ITEMS]
-        for file_path in preview_files:
-            item = QListWidgetItem(
-                self._cached_thumbnail_icon(file_path),
-                os.path.basename(file_path),
-            )
-            item.setSizeHint(QSize(148, 168))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            list_widget.addItem(item)
-        omitted = len(files) - len(preview_files)
-        if omitted > 0:
-            item = QListWidgetItem(f"… and {omitted} more item(s)")
-            item.setSizeHint(QSize(148, 168))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            list_widget.addItem(item)
+        self._populate_media_thumbnail_gallery(
+            dialog,
+            list_widget,
+            files,
+        )
 
         body.addWidget(list_widget)
         outer.addLayout(body)
@@ -2315,21 +2318,11 @@ class DialogManager:
         list_widget.setWordWrap(True)
         list_widget.setSpacing(10)
 
-        preview_files = marked_files[: self.MAX_TRANSITION_DELETION_PREVIEW_ITEMS]
-        for file_path in preview_files:
-            item = QListWidgetItem(
-                self._cached_thumbnail_icon(file_path),
-                os.path.basename(file_path),
-            )
-            item.setSizeHint(QSize(148, 168))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            list_widget.addItem(item)
-        omitted = len(marked_files) - len(preview_files)
-        if omitted > 0:
-            item = QListWidgetItem(f"… and {omitted} more marked item(s)")
-            item.setSizeHint(QSize(148, 168))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            list_widget.addItem(item)
+        self._populate_media_thumbnail_gallery(
+            dialog,
+            list_widget,
+            marked_files,
+        )
 
         body.addWidget(list_widget)
         outer.addLayout(body)

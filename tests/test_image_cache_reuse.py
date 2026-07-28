@@ -39,7 +39,7 @@ def test_review_pixmap_reuses_highest_quality_cache_without_redundant_lookups():
     pipeline.get_cached_thumbnail_qpixmap.assert_not_called()
 
 
-def test_review_pixmap_orients_shared_thumbnail_without_redecoding(tmp_path):
+def test_review_pixmap_reuses_oriented_shared_thumbnail_without_redecoding(tmp_path):
     source = tmp_path / "rotated.jpg"
     image = Image.new("RGB", (80, 40), "teal")
     exif = image.getexif()
@@ -54,12 +54,12 @@ def test_review_pixmap_orients_shared_thumbnail_without_redecoding(tmp_path):
         "core.image_pipeline.StandardImageProcessor.process_for_thumbnail",
         wraps=StandardImageProcessor.process_for_thumbnail,
     ) as processor:
-        unrotated = pipeline._get_pil_thumbnail(str(source))
+        oriented = pipeline._get_pil_thumbnail(str(source))
         pixmap = pipeline.get_cached_review_qpixmap(str(source))
         second_pixmap = pipeline.get_cached_review_qpixmap(str(source))
 
-    assert unrotated is not None
-    assert unrotated.width > unrotated.height
+    assert oriented is not None
+    assert oriented.height > oriented.width
     assert pixmap is not None
     assert pixmap.height() > pixmap.width()
     assert second_pixmap is not None
