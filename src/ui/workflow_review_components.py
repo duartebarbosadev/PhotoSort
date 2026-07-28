@@ -7,11 +7,13 @@ of truth.
 """
 
 import math
+import re
 import sys
+import time
 from dataclasses import dataclass
 from collections.abc import Callable, Iterable, Mapping, Sequence
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFrame,
@@ -21,10 +23,212 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QDialog,
     QPushButton,
+    QProgressBar,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
+
+from core.utils.time_utils import format_duration
+
+
+_PROGRESS_COUNT_RE = re.compile(r"\((\d+)\s*/\s*(\d+)\)")
+_PROGRESS_NAMED_COUNT_RE = re.compile(
+    r"\b(?:cluster|image|photo|item)s?\s+(\d+)\s*/\s*(\d+)",
+    re.IGNORECASE,
+)
+
+
+class WorkflowProgressView(QFrame):
+    """Shared, phase-aware loading presentation for workflow pages."""
+
+    def __init__(
+        self,
+        workflow_name: str,
+        *,
+        default_message: str,
+        parent: QWidget | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("workflowProgressPage")
+        self._clock = clock
+        self._started_at: float | None = None
+        self._phase_started_at: float | None = None
+        self._phase_started_percent = 0
+        self._last_percent: int | None = None
+        self._active = False
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.addStretch(1)
+
+        self.card = QFrame()
+        self.card.setObjectName("workflowProgressCard")
+        self.card.setMinimumWidth(480)
+        self.card.setMaximumWidth(620)
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(10)
+
+        self.title_label = QLabel(workflow_name)
+        self.title_label.setObjectName("workflowProgressTitle")
+        self.title_label.setWordWrap(True)
+        card_layout.addWidget(self.title_label)
+
+        self.message_label = QLabel(default_message)
+        self.message_label.setObjectName("workflowProgressMessage")
+        self.message_label.setWordWrap(True)
+        card_layout.addWidget(self.message_label)
+
+        progress_row = QHBoxLayout()
+        progress_row.setSpacing(10)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("workflowProgressBar")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        self.percent_label = QLabel("0%")
+        self.percent_label.setObjectName("workflowProgressPercent")
+        progress_row.addWidget(self.progress_bar, 1)
+        progress_row.addWidget(self.percent_label)
+        card_layout.addLayout(progress_row)
+
+        metrics = QFrame()
+        metrics.setObjectName("workflowProgressMetrics")
+        metrics_layout = QHBoxLayout(metrics)
+        metrics_layout.setContentsMargins(0, 0, 0, 0)
+        metrics_layout.setSpacing(6)
+
+        self.remaining_caption = QLabel("Remaining")
+        self.remaining_caption.setObjectName("workflowProgressMetricCaption")
+        self.remaining_label = QLabel("Estimating…")
+        self.remaining_label.setObjectName("workflowProgressMetricValue")
+
+        self.elapsed_caption = QLabel("•  Elapsed")
+        self.elapsed_caption.setObjectName("workflowProgressMetricCaption")
+        self.elapsed_label = QLabel("0s")
+        self.elapsed_label.setObjectName("workflowProgressMetricValue")
+
+        self.count_caption = QLabel("•  Processed")
+        self.count_caption.setObjectName("workflowProgressMetricCaption")
+        self.count_label = QLabel("Preparing…")
+        self.count_label.setObjectName("workflowProgressMetricValue")
+
+        metrics_layout.addWidget(self.remaining_caption)
+        metrics_layout.addWidget(self.remaining_label)
+        metrics_layout.addWidget(self.elapsed_caption)
+        metrics_layout.addWidget(self.elapsed_label)
+        metrics_layout.addWidget(self.count_caption)
+        metrics_layout.addWidget(self.count_label)
+        metrics_layout.addStretch(1)
+        card_layout.addWidget(metrics)
+
+        self.detail_container = QWidget()
+        self.detail_layout = QVBoxLayout(self.detail_container)
+        self.detail_layout.setContentsMargins(0, 0, 0, 0)
+        self.detail_layout.setSpacing(12)
+        self.detail_container.setVisible(False)
+        card_layout.addWidget(self.detail_container)
+
+        outer.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignCenter)
+        outer.addStretch(1)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._refresh_time_labels)
+
+    def add_detail_widget(self, widget: QWidget) -> None:
+        self.detail_layout.addWidget(widget)
+
+    def set_detail_visible(self, visible: bool) -> None:
+        self.detail_container.setVisible(visible)
+
+    def update_progress(self, message: str, percent: int | None) -> None:
+        now = self._clock()
+        determinate = percent is not None and percent >= 0
+        normalized = max(0, min(100, int(percent))) if determinate else None
+        should_restart = not self._active
+        if (
+            not should_restart
+            and normalized is not None
+            and self._last_percent is not None
+            and normalized < self._last_percent
+        ):
+            self._phase_started_at = now
+            self._phase_started_percent = normalized
+
+        if should_restart:
+            self._started_at = now
+            self._phase_started_at = now
+            self._phase_started_percent = normalized or 0
+            self._active = True
+            self._timer.start()
+
+        self.setProperty("state", "loading")
+        _refresh_style(self)
+        self.message_label.setText(message)
+        match = _PROGRESS_COUNT_RE.search(message) or _PROGRESS_NAMED_COUNT_RE.search(
+            message
+        )
+        self.count_label.setText(
+            f"{match.group(1)} of {match.group(2)}" if match else "In progress"
+        )
+
+        if normalized is None:
+            self.progress_bar.setRange(0, 0)
+            self.percent_label.setText("•••")
+            self.remaining_label.setText("Estimating…")
+        else:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(normalized)
+            self.percent_label.setText(f"{normalized}%")
+            self._last_percent = normalized
+        self._refresh_time_labels()
+
+    def show_error(self, message: str) -> None:
+        self._active = False
+        self._timer.stop()
+        self.setProperty("state", "error")
+        _refresh_style(self)
+        self.message_label.setText(message)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.percent_label.setText("!")
+        self.remaining_caption.setText("Status")
+        self.remaining_label.setText("Needs attention")
+        self.count_label.setText("Not completed")
+        self._refresh_time_labels()
+
+    def mark_finished(self) -> None:
+        self._active = False
+        self._timer.stop()
+        self._last_percent = None
+
+    def _refresh_time_labels(self) -> None:
+        if self._started_at is None:
+            return
+        now = self._clock()
+        elapsed = max(0.0, now - self._started_at)
+        self.elapsed_label.setText(format_duration(elapsed))
+        self.remaining_caption.setText("Remaining")
+
+        percent = self._last_percent
+        phase_started_at = self._phase_started_at
+        if (
+            not self._active
+            or percent is None
+            or percent <= self._phase_started_percent
+            or phase_started_at is None
+        ):
+            return
+        phase_elapsed = max(0.0, now - phase_started_at)
+        progress_delta = percent - self._phase_started_percent
+        if phase_elapsed < 1.0 or progress_delta < 2:
+            self.remaining_label.setText("Estimating…")
+            return
+        remaining_seconds = phase_elapsed * (100 - percent) / progress_delta
+        self.remaining_label.setText(f"About {format_duration(remaining_seconds)}")
 
 
 @dataclass(frozen=True, slots=True)

@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidgetItem,
-    QProgressBar,
     QPushButton,
     QSplitter,
     QStackedWidget,
@@ -28,6 +27,7 @@ from ui.controllers.image_inspection_controller import InspectionImageSpec
 from ui.workflow_review_components import (
     PICK_BEST_SHORTCUTS,
     WorkflowDecisionCard,
+    WorkflowProgressView,
     WorkflowReviewListPanel,
     WorkflowStateBanner,
     install_workflow_shortcuts,
@@ -286,21 +286,16 @@ class PickBestStepWidget(QWidget):
 
     def show_loading(self, message: str = "Analysing…", percent: int = 0) -> None:
         self._stack.setCurrentWidget(self._page_loading)
-        self._loading_label.setText(message)
-        if percent is None or percent < 0:
-            self._progress_bar.setRange(0, 0)
-        else:
-            self._progress_bar.setRange(0, 100)
-            self._progress_bar.setValue(percent)
+        self._progress_view.update_progress(message, percent)
 
     def show_error(self, message: str) -> None:
         self._stack.setCurrentWidget(self._page_loading)
-        self._loading_label.setText(f"Error: {message}")
-        self._progress_bar.setValue(0)
+        self._progress_view.show_error(message)
 
     def show_results(
         self, results: PickBestResults, *, restore_prior_marks: bool = True
     ) -> None:
+        self._progress_view.mark_finished()
         if self._shown_results is not None and results == self._shown_results:
             if self._tournaments:
                 self._stack.setCurrentWidget(self._page_review)
@@ -394,32 +389,13 @@ class PickBestStepWidget(QWidget):
         self._stack = QStackedWidget()
         main_layout.addWidget(self._stack)
 
-        self._page_loading = QWidget()
-        loading_layout = QVBoxLayout(self._page_loading)
-        loading_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        title = QLabel("Pick Best Photos")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; margin-bottom: 8px;")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        loading_layout.addWidget(title)
-
-        self._loading_label = QLabel("Starting analysis…")
-        self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._loading_label.setWordWrap(True)
-        self._loading_label.setStyleSheet(
-            "font-size: 13px; color: #aaaaaa; margin-bottom: 12px;"
+        self._progress_view = WorkflowProgressView(
+            "Pick Best Photos",
+            default_message="Starting analysis…",
         )
-        loading_layout.addWidget(self._loading_label)
-
-        self._progress_bar = QProgressBar()
-        self._progress_bar.setRange(0, 100)
-        self._progress_bar.setValue(0)
-        self._progress_bar.setFixedWidth(320)
-        self._progress_bar.setTextVisible(True)
-        loading_layout.addWidget(
-            self._progress_bar, alignment=Qt.AlignmentFlag.AlignCenter
-        )
-
+        self._page_loading = self._progress_view
+        self._loading_label = self._progress_view.message_label
+        self._progress_bar = self._progress_view.progress_bar
         self._stack.addWidget(self._page_loading)
 
         self._page_review = QWidget()

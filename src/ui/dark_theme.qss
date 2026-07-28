@@ -512,34 +512,6 @@ QHeaderView::section {
     border: 1px solid #515151;
 }
 
-/* --- Loading Overlay --- */
-LoadingOverlay { /* Target the class name */
-    /* The overlay itself is transparent, its child bg_widget provides the visible background */
-}
-
-LoadingOverlay > QWidget {
-    background-color: rgba(43, 43, 43, 0.90);
-    border-radius: 10px;
-}
-
-LoadingOverlay QLabel#loading_text_label {
-    color: #BBBBBB;
-    font-size: 15pt;
-    font-weight: bold;
-    background-color: transparent;
-    padding: 25px;
-    border: none;
-    border-radius: 0px;
-}
-
-/* Optional: Style for an animation label if you add one */
-/*
-LoadingOverlay QLabel#loading_animation_label {
-    background-color: transparent;
-    padding-bottom: 10px;
-}
-*/
-
 /* --- Cache Management Dialog --- */
 QDialog#cacheManagementDialog {
     background: #2B2B2B;
@@ -550,6 +522,82 @@ QDialog#cacheManagementDialog {
 /* ============================== */
 /* Shared Dialog Components       */
 /* ============================== */
+
+/* Shared workflow progress page */
+QFrame#workflowProgressPage {
+    background-color: #202326;
+    border: none;
+}
+
+QFrame#workflowProgressCard {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+}
+
+QLabel#workflowProgressTitle {
+    color: #D6DCE1;
+    font-size: 15pt;
+    font-weight: 650;
+    background: transparent;
+}
+
+QLabel#workflowProgressMessage {
+    color: #AAB4BC;
+    font-size: 9pt;
+    background: transparent;
+    padding-bottom: 2px;
+}
+
+QProgressBar#workflowProgressBar {
+    min-height: 7px;
+    max-height: 7px;
+    background-color: #1E2326;
+    border: 1px solid #3A4147;
+    border-radius: 4px;
+    padding: 0;
+}
+
+QProgressBar#workflowProgressBar::chunk {
+    border-radius: 3px;
+    background-color: #214283;
+}
+
+QLabel#workflowProgressPercent {
+    min-width: 38px;
+    color: #B9C2C9;
+    font-size: 9pt;
+    font-weight: 650;
+    background: transparent;
+}
+
+QFrame#workflowProgressMetrics {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+}
+
+QLabel#workflowProgressMetricCaption {
+    color: #7F8B94;
+    font-size: 8pt;
+    font-weight: 500;
+    background: transparent;
+}
+
+QLabel#workflowProgressMetricValue {
+    color: #B9C2C9;
+    font-size: 8pt;
+    font-weight: 600;
+    background: transparent;
+}
+
+QFrame#workflowProgressPage[state="error"] QLabel#workflowProgressPercent {
+    color: #FF7B86;
+}
+
+QFrame#workflowProgressPage[state="error"] QProgressBar#workflowProgressBar::chunk {
+    background: #C8505D;
+}
 
 /* Dialog Header Bar */
 QFrame#dialogHeader,

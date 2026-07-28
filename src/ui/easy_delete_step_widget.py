@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidgetItem,
-    QProgressBar,
     QPushButton,
     QSplitter,
     QStackedWidget,
@@ -21,6 +20,7 @@ from PyQt6.QtWidgets import (
 from ui.workflow_review_components import (
     EASY_DELETE_SHORTCUTS,
     WorkflowDecisionCard,
+    WorkflowProgressView,
     WorkflowReviewListPanel,
     WorkflowStateBanner,
     install_workflow_shortcuts,
@@ -234,21 +234,17 @@ class EasyDeleteStepWidget(QWidget):
     # ------------------------------------------------------------------
 
     def show_loading(self, message: str = "", percent: int = -1) -> None:
-        self._loading_label.setText(message or "Analyzing images…")
-        if percent < 0:
-            self._progress_bar.setRange(0, 0)
-        else:
-            self._progress_bar.setRange(0, 100)
-            self._progress_bar.setValue(percent)
+        self._progress_view.update_progress(
+            message or "Analyzing images…", percent
+        )
         self._content_stack.setCurrentIndex(0)
 
     def show_error(self, message: str) -> None:
-        self._loading_label.setText(f"Error: {message}")
-        self._progress_bar.setRange(0, 100)
-        self._progress_bar.setValue(0)
+        self._progress_view.show_error(message)
         self._content_stack.setCurrentIndex(0)
 
     def show_results(self, results: dict[str, dict]) -> None:
+        self._progress_view.mark_finished()
         if self._shown_results is not None and results == self._shown_results:
             self.refresh_deletion_state()
             if self._flagged_paths:
@@ -1065,31 +1061,14 @@ class EasyDeleteStepWidget(QWidget):
         self._content_stack.setCurrentIndex(0)
 
     def _build_loading_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.setSpacing(16)
-
-        title = QLabel("Easy Delete")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-size: 20px; font-weight: bold; margin-bottom: 4px;")
-
-        self._loading_label = QLabel("Analyzing images…")
-        self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._loading_label.setWordWrap(True)
-        self._loading_label.setStyleSheet(
-            "font-size: 13px; color: #aaaaaa; margin-bottom: 12px;"
+        self._progress_view = WorkflowProgressView(
+            "Easy Delete",
+            default_message="Analyzing images…",
         )
-
-        self._progress_bar = QProgressBar()
-        self._progress_bar.setRange(0, 100)
-        self._progress_bar.setFixedWidth(320)
-        self._progress_bar.setTextVisible(True)
-
-        layout.addWidget(title)
-        layout.addWidget(self._loading_label)
-        layout.addWidget(self._progress_bar, alignment=Qt.AlignmentFlag.AlignCenter)
-        return page
+        # Compatibility aliases for integrations that inspect the active status.
+        self._loading_label = self._progress_view.message_label
+        self._progress_bar = self._progress_view.progress_bar
+        return self._progress_view
 
     def _build_results_page(self) -> QWidget:
         page = QWidget()
