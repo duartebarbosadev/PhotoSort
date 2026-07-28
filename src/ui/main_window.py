@@ -1733,6 +1733,9 @@ class MainWindow(QMainWindow):
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
             )
+            widget.set_similarity_embeddings_provider(
+                lambda: self.app_state.embeddings_cache
+            )
             widget.apply_requested.connect(self._request_workflow_resolution)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(

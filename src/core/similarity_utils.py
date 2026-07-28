@@ -38,6 +38,49 @@ def cosine_similarity(
     return max(-1.0, min(1.0, similarity))
 
 
+def order_paths_by_anchor_similarity(
+    paths: Sequence[str],
+    embeddings: dict[str, Sequence[float] | np.ndarray],
+    *,
+    anchor_path: str,
+) -> list[str]:
+    """Put the anchor first, followed by its most visually similar paths.
+
+    Missing or invalid embeddings retain their original relative order at the end.
+    This makes review sequences deterministic without recomputing image features.
+    """
+
+    unique_paths = list(dict.fromkeys(paths))
+    if anchor_path not in unique_paths:
+        return unique_paths
+
+    original_index = {path: index for index, path in enumerate(unique_paths)}
+    anchor_embedding = embeddings.get(anchor_path)
+    if anchor_embedding is None:
+        return [anchor_path, *(path for path in unique_paths if path != anchor_path)]
+
+    scored_paths: list[tuple[bool, float, int, str]] = []
+    for path in unique_paths:
+        if path == anchor_path:
+            continue
+        candidate_embedding = embeddings.get(path)
+        similarity = (
+            cosine_similarity(anchor_embedding, candidate_embedding)
+            if candidate_embedding is not None
+            else None
+        )
+        scored_paths.append(
+            (
+                similarity is not None,
+                similarity if similarity is not None else float("-inf"),
+                original_index[path],
+                path,
+            )
+        )
+    scored_paths.sort(key=lambda item: (-int(item[0]), -item[1], item[2]))
+    return [anchor_path, *(item[3] for item in scored_paths)]
+
+
 def _get_raw_dimensions(image_path: str) -> tuple[int, int] | None:
     """Return orientation-corrected RAW dimensions when rawpy supports the file."""
     try:
