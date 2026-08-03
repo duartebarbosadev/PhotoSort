@@ -40,12 +40,7 @@ class MenuManager:
         self.back_to_grouping_action: QAction
         self.toggle_thumbnails_action: QAction
         self.analyze_similarity_action: QAction
-        self.analyze_best_shots_action: QAction
-        self.analyze_best_shots_selected_action: QAction
-        self.stop_best_shots_action: QAction
         self.ai_rate_images_action: QAction
-        self.detect_blur_action: QAction
-        self.auto_rotate_action: QAction
         self.toggle_metadata_sidebar_action: QAction
         self.skip_singleton_nav_action: QAction
         self.rating_navigation_menu: QMenu
@@ -56,7 +51,6 @@ class MenuManager:
         self.view_list_action: QAction
         self.view_icons_action: QAction
         self.view_grid_action: QAction
-        self.view_rotation_action: QAction
 
         # Filter Menu state
         self.rating_filter_actions: dict[str, QAction] = {}
@@ -206,13 +200,6 @@ class MenuManager:
         self.view_grid_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         main_win.addAction(self.view_grid_action)
 
-        self.view_rotation_action = QAction("Rotation View", main_win)
-        self.view_rotation_action.setShortcut(QKeySequence("Alt+4"))
-        self.view_rotation_action.setShortcutContext(
-            Qt.ShortcutContext.ApplicationShortcut
-        )
-        main_win.addAction(self.view_rotation_action)
-
         # Deletion marking actions
         self.mark_for_delete_action = QAction("Mark for Deletion", main_win)
         self.mark_for_delete_action.setShortcut(QKeySequence("D"))
@@ -227,7 +214,6 @@ class MenuManager:
         self.commit_deletions_action = QAction("Commit All Marked Deletions", main_win)
         self.commit_deletions_action.setShortcuts(
             [
-                QKeySequence("Shift+D"),
                 QKeySequence("Shift+Return"),
                 QKeySequence("Shift+Enter"),
             ]
@@ -304,7 +290,6 @@ class MenuManager:
         view_menu.addAction(self.view_list_action)
         view_menu.addAction(self.view_icons_action)
         view_menu.addAction(self.view_grid_action)
-        view_menu.addAction(self.view_rotation_action)
 
         view_menu.addSeparator()
 
@@ -316,28 +301,6 @@ class MenuManager:
         self.analyze_similarity_action.setShortcut(QKeySequence("Ctrl+S"))
         view_menu.addAction(self.analyze_similarity_action)
 
-        self.analyze_best_shots_action = QAction("Analyze Best Shots", main_win)
-        self.analyze_best_shots_action.setToolTip(
-            "Run the multi-model quality ranking inside each similarity cluster"
-        )
-        self.analyze_best_shots_action.setEnabled(False)
-        self.analyze_best_shots_action.setShortcut(QKeySequence("Ctrl+B"))
-        view_menu.addAction(self.analyze_best_shots_action)
-
-        self.analyze_best_shots_selected_action = QAction(
-            "Analyze Best Shots (Selected)", main_win
-        )
-        self.analyze_best_shots_selected_action.setToolTip(
-            "Run quality ranking on currently selected images only"
-        )
-        self.analyze_best_shots_selected_action.setEnabled(False)
-        self.analyze_best_shots_selected_action.setShortcut(QKeySequence("Alt+B"))
-        view_menu.addAction(self.analyze_best_shots_selected_action)
-
-        self.stop_best_shots_action = QAction("Stop Best Shot Analysis", main_win)
-        self.stop_best_shots_action.setEnabled(False)
-        view_menu.addAction(self.stop_best_shots_action)
-
         self.ai_rate_images_action = QAction("AI Rate Images", main_win)
         self.ai_rate_images_action.setToolTip(
             "Ask the configured AI engine to rate every visible image individually"
@@ -345,22 +308,6 @@ class MenuManager:
         self.ai_rate_images_action.setEnabled(False)
         self.ai_rate_images_action.setShortcut(QKeySequence("Ctrl+A"))
         view_menu.addAction(self.ai_rate_images_action)
-
-        self.detect_blur_action = QAction("Detect Blurriness", main_win)
-        self.detect_blur_action.setToolTip(
-            "Analyze images for blurriness (can be slow for many images)"
-        )
-        self.detect_blur_action.setEnabled(False)
-        self.detect_blur_action.setShortcut(QKeySequence("B"))
-        view_menu.addAction(self.detect_blur_action)
-
-        self.auto_rotate_action = QAction("Auto Rotate Images", main_win)
-        self.auto_rotate_action.setToolTip(
-            "Automatically detect and suggest rotations for poorly oriented images"
-        )
-        self.auto_rotate_action.setEnabled(False)
-        self.auto_rotate_action.setShortcut(QKeySequence("Ctrl+R"))
-        view_menu.addAction(self.auto_rotate_action)
 
         view_menu.addSeparator()
 
@@ -641,23 +588,8 @@ class MenuManager:
         self.analyze_similarity_action.triggered.connect(
             main_win.app_controller.start_similarity_analysis
         )
-        self.analyze_best_shots_action.triggered.connect(
-            main_win.app_controller.start_best_shot_analysis
-        )
-        self.analyze_best_shots_selected_action.triggered.connect(
-            main_win.app_controller.start_best_shot_analysis_for_selected
-        )
-        self.stop_best_shots_action.triggered.connect(
-            main_win.app_controller.stop_best_shot_analysis
-        )
         self.ai_rate_images_action.triggered.connect(
             main_win.app_controller.start_ai_rating_all
-        )
-        self.detect_blur_action.triggered.connect(
-            main_win.app_controller.start_blur_detection_analysis
-        )
-        self.auto_rotate_action.triggered.connect(
-            main_win.app_controller.start_auto_rotation_analysis
         )
         self.toggle_metadata_sidebar_action.toggled.connect(
             main_win._toggle_metadata_sidebar
@@ -677,24 +609,6 @@ class MenuManager:
             main_win.left_panel.set_view_mode_icons
         )
         self.view_grid_action.triggered.connect(main_win.left_panel.set_view_mode_grid)
-
-        # Guard Rotation View (Alt+4): only allow when there are rotation suggestions
-        def _guarded_show_rotation_view():
-            try:
-                suggestions = getattr(main_win, "rotation_suggestions", None)
-                if not suggestions or len(suggestions) == 0:
-                    # No-op if there are no rotation suggestions
-                    main_win.statusBar().showMessage(
-                        "No rotation suggestions to display.", 3000
-                    )
-                    return
-                # Proceed to show rotation view
-                main_win.left_panel.set_view_mode_rotation()
-            except Exception:
-                # Hard guard: never raise on shortcut
-                logger.error("Failed to switch to Rotation View.", exc_info=True)
-
-        self.view_rotation_action.triggered.connect(_guarded_show_rotation_view)
 
         # Image Menu
         self.rotate_clockwise_action.triggered.connect(

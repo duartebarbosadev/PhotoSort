@@ -1,9 +1,9 @@
-"""AI helper utilities for LLM-based best-shot ranking and scoring."""
+"""AI helper utilities for LLM-based image rating."""
 
-from .best_shot_pipeline import BaseBestShotStrategy, LLMBestShotStrategy, LLMConfig
+from .ai_rating_pipeline import BaseAiRatingStrategy, LLMAiRatingStrategy, LLMConfig
 
 __all__ = [
-    "BaseBestShotStrategy",
-    "LLMBestShotStrategy",
+    "BaseAiRatingStrategy",
+    "LLMAiRatingStrategy",
     "LLMConfig",
 ]

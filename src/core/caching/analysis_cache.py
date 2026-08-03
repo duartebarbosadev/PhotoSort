@@ -1,5 +1,4 @@
 import copy
-import json
 import logging
 import os
 import time
@@ -19,8 +18,7 @@ def _normalize_folder_path(path: str) -> str:
 
 class AnalysisCache:
     """
-    Persists similarity clustering and best-shot analysis results per folder so that
-    long-running AI computations can be resumed across application sessions.
+    Persists similarity clustering and reusable workflow analysis per folder.
     """
 
     def __init__(self, cache_dir: str | None = None):
@@ -43,7 +41,14 @@ class AnalysisCache:
             logger.exception("Failed to load analysis cache for %s", folder_path)
             return {}
         if isinstance(data, dict):
-            return copy.deepcopy(data)
+            result = copy.deepcopy(data)
+            for obsolete_key in (
+                "best_shot_rankings",
+                "best_shot_scores_by_path",
+                "best_shot_winners",
+            ):
+                result.pop(obsolete_key, None)
+            return result
         return {}
 
     def save_cluster_results(
@@ -52,17 +57,12 @@ class AnalysisCache:
         cluster_results: dict[str, int],
         *,
         signature: str,
-        reset_best_shots: bool = True,
     ) -> None:
         key = _normalize_folder_path(folder_path)
         entry = self.load(folder_path)
         entry["version"] = CACHE_VERSION
         entry["cluster_results"] = dict(cluster_results)
         entry["similarity_signature"] = signature
-        if reset_best_shots:
-            entry.pop("best_shot_rankings", None)
-            entry.pop("best_shot_scores_by_path", None)
-            entry.pop("best_shot_winners", None)
         entry["updated_at"] = time.time()
         try:
             self._cache.set(key, entry)
@@ -102,9 +102,6 @@ class AnalysisCache:
         for field in (
             "cluster_results",
             "similarity_signature",
-            "best_shot_rankings",
-            "best_shot_scores_by_path",
-            "best_shot_winners",
             "subject_descriptors",
         ):
             entry.pop(field, None)
@@ -213,84 +210,6 @@ class AnalysisCache:
                 folder_path,
             )
 
-    def update_best_shot_results(
-        self,
-        folder_path: str,
-        cluster_id: int,
-        rankings: list[dict[str, object]],
-    ) -> None:
-        """Persist one cluster through the batch-owned implementation."""
-
-        self.update_best_shot_results_batch(
-            folder_path,
-            {cluster_id: rankings},
-        )
-
-    def update_best_shot_results_batch(
-        self,
-        folder_path: str,
-        rankings_by_cluster: dict[int, list[dict[str, object]]],
-    ) -> None:
-        """Merge many cluster rankings with one cache read and one write."""
-
-        if not rankings_by_cluster:
-            return
-        key = _normalize_folder_path(folder_path)
-        entry = self.load(folder_path)
-
-        rankings_map = entry.setdefault("best_shot_rankings", {})
-        winners_map = entry.setdefault("best_shot_winners", {})
-        scores_map = entry.setdefault("best_shot_scores_by_path", {})
-
-        for cluster_id, rankings in rankings_by_cluster.items():
-            serialized_rankings = json.loads(json.dumps(rankings))
-            rankings_map[str(cluster_id)] = serialized_rankings
-            winner = serialized_rankings[0] if serialized_rankings else None
-            if winner:
-                winners_map[str(cluster_id)] = winner
-            else:
-                winners_map.pop(str(cluster_id), None)
-
-            for result in serialized_rankings:
-                path = result.get("image_path")
-                if path:
-                    scores_map[path] = result
-
-        entry["version"] = CACHE_VERSION
-        entry["updated_at"] = time.time()
-        try:
-            self._cache.set(key, entry)
-        except Exception:
-            logger.exception(
-                "Failed to persist best-shot result batch for %s", folder_path
-            )
-
-    def get_completed_best_shot_clusters(self, folder_path: str) -> set[int]:
-        entry = self.load(folder_path)
-        rankings_map = entry.get("best_shot_rankings")
-        if not isinstance(rankings_map, dict):
-            return set()
-        completed: set[int] = set()
-        for key in rankings_map:
-            try:
-                completed.add(int(key))
-            except TypeError, ValueError:
-                continue
-        return completed
-
-    def clear_best_shot_data(self, folder_path: str) -> None:
-        key = _normalize_folder_path(folder_path)
-        entry = self.load(folder_path)
-        entry.pop("best_shot_rankings", None)
-        entry.pop("best_shot_scores_by_path", None)
-        entry.pop("best_shot_winners", None)
-        entry["version"] = CACHE_VERSION
-        entry["updated_at"] = time.time()
-        try:
-            self._cache.set(key, entry)
-        except Exception:
-            logger.exception("Failed to clear best-shot data for %s", folder_path)
-
     def clear_folder(self, folder_path: str) -> None:
         key = _normalize_folder_path(folder_path)
         try:
@@ -327,34 +246,10 @@ class AnalysisCache:
         for field in (
             "cluster_results",
             "manual_cluster_overrides",
-            "best_shot_scores_by_path",
             "subject_descriptors",
         ):
             if field in entry:
                 entry[field] = remap_mapping_keys(entry[field])
-
-        for field in (
-            "best_shot_rankings",
-            "best_shot_winners",
-            "best_shot_scores_by_path",
-        ):
-            collection = entry.get(field)
-            if not isinstance(collection, dict):
-                continue
-            groups = (
-                collection.values()
-                if field == "best_shot_rankings"
-                else ([value] for value in collection.values())
-            )
-            for group in groups:
-                if not isinstance(group, list):
-                    continue
-                for result in group:
-                    if not isinstance(result, dict):
-                        continue
-                    path = result.get("image_path")
-                    if path in path_updates:
-                        result["image_path"] = path_updates[path]
 
         entry["version"] = CACHE_VERSION
         entry.pop("similarity_signature", None)
@@ -385,39 +280,12 @@ class AnalysisCache:
         for field in (
             "cluster_results",
             "manual_cluster_overrides",
-            "best_shot_scores_by_path",
             "subject_descriptors",
         ):
             mapping = entry.get(field)
             if isinstance(mapping, dict):
                 for path in removed:
                     mapping.pop(path, None)
-
-        rankings = entry.get("best_shot_rankings")
-        winners = entry.get("best_shot_winners")
-        if isinstance(rankings, dict):
-            for cluster_id, values in list(rankings.items()):
-                if not isinstance(values, list):
-                    continue
-                retained = [
-                    result
-                    for result in values
-                    if not (
-                        isinstance(result, dict) and result.get("image_path") in removed
-                    )
-                ]
-                if retained:
-                    rankings[cluster_id] = retained
-                    if isinstance(winners, dict):
-                        winners[cluster_id] = retained[0]
-                else:
-                    rankings.pop(cluster_id, None)
-                    if isinstance(winners, dict):
-                        winners.pop(cluster_id, None)
-        elif isinstance(winners, dict):
-            for cluster_id, winner in list(winners.items()):
-                if isinstance(winner, dict) and winner.get("image_path") in removed:
-                    winners.pop(cluster_id, None)
 
         entry["version"] = CACHE_VERSION
         entry.pop("similarity_signature", None)

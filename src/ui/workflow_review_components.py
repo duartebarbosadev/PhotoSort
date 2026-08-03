@@ -278,7 +278,6 @@ ORGANIZE_SHORTCUTS = (
     ),
     WorkflowShortcutSpec("toggle_delete", ("D",), "D", "Mark"),
     WorkflowShortcutSpec("trash_now", ("Delete", "Backspace"), "Delete", "Trash now"),
-    WorkflowShortcutSpec("commit_deletions", ("Shift+D",), "Shift+D", "Commit"),
     WorkflowShortcutSpec(
         "clear_deletions", ("Alt+D",), f"{_ALT_MODIFIER}D", "Clear marks"
     ),
@@ -345,7 +344,6 @@ CULL_SHORTCUTS = (
         "browse", ("Left", "Right", "Up", "Down"), "← ↑ → ↓", "Browse"
     ),
     WorkflowShortcutSpec("mark", ("D",), "D", "Mark"),
-    WorkflowShortcutSpec("commit", ("Shift+D",), "Shift+D", "Commit"),
     _APPLY_SHORTCUT,
     WorkflowShortcutSpec("rotate", ("R",), "R", "Rotate"),
     WorkflowShortcutSpec("details", ("I",), "I", "Details"),

@@ -35,7 +35,6 @@ REQUIRED_PACKAGED_MODULES = (
     "ui.fix_rotation_step_widget",
     "ui.metadata_sidebar",
     "ui.pick_best_step_widget",
-    "workers.best_shot_worker",
     "workers.easy_delete_worker",
     "workers.grouping_worker",
     "workers.pick_best_worker",

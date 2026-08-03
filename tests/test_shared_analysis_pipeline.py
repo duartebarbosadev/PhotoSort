@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import cv2
 import numpy as np
+import pytest
 from PIL import Image
 
 from core import app_settings
@@ -58,10 +59,15 @@ def test_easy_delete_bounds_its_worker_owned_analysis_image_cache():
     assert "photo-39.arw" in worker._analysis_rgb_cache
 
 
+def test_easy_delete_requires_the_application_image_pipeline():
+    with pytest.raises(ValueError, match="ImagePipeline"):
+        EasyDeleteWorker(["photo.arw"], image_pipeline=None)
+
+
 def test_easy_delete_dark_detection_requires_almost_complete_black_clipping(
     monkeypatch,
 ):
-    worker = EasyDeleteWorker(["photo.arw"])
+    worker = EasyDeleteWorker(["photo.arw"], image_pipeline=Mock())
     monkeypatch.setattr(worker, "_compute_local_sharpness", lambda _gray: 200.0)
 
     nearly_black = np.zeros((100, 100), dtype=np.uint8)
@@ -76,7 +82,7 @@ def test_easy_delete_dark_detection_requires_almost_complete_black_clipping(
 
 
 def test_easy_delete_preserves_dark_city_with_visible_lights(monkeypatch):
-    worker = EasyDeleteWorker(["night-city.arw"])
+    worker = EasyDeleteWorker(["night-city.arw"], image_pipeline=Mock())
     monkeypatch.setattr(worker, "_compute_local_sharpness", lambda _gray: 0.0)
     night_city = np.full((100, 100), 5, dtype=np.uint8)
     night_city[:10, :] = 80
@@ -91,7 +97,7 @@ def test_easy_delete_preserves_dark_city_with_visible_lights(monkeypatch):
 def test_easy_delete_preserves_underexposed_preview_with_shadow_variation(
     monkeypatch,
 ):
-    worker = EasyDeleteWorker(["underexposed.arw"])
+    worker = EasyDeleteWorker(["underexposed.arw"], image_pipeline=Mock())
     monkeypatch.setattr(worker, "_compute_local_sharpness", lambda _gray: 0.0)
     shadow_gradient = np.tile(
         np.linspace(1, 20, 100, dtype=np.uint8),
@@ -162,6 +168,7 @@ def test_easy_delete_uses_same_framing_when_cosine_is_outside_cutoff(
     second.write_bytes(b"second")
     worker = EasyDeleteWorker(
         [str(first), str(second)],
+        image_pipeline=Mock(),
         cluster_map={1: [str(first), str(second)]},
         embeddings_cache={
             str(first): [1.0, 0.0],
@@ -191,6 +198,7 @@ def test_easy_delete_rejects_moved_subject_even_when_cosine_is_inside_cutoff(
     second.write_bytes(b"second")
     worker = EasyDeleteWorker(
         [str(first), str(second)],
+        image_pipeline=Mock(),
         cluster_map={1: [str(first), str(second)]},
         embeddings_cache={str(first): [1.0, 0.0], str(second): [1.0, 0.0]},
     )
@@ -213,6 +221,7 @@ def test_easy_delete_rejects_concentrated_face_or_arm_movement(tmp_path, monkeyp
     second.write_bytes(b"second")
     worker = EasyDeleteWorker(
         [str(first), str(second)],
+        image_pipeline=Mock(),
         cluster_map={1: [str(first), str(second)]},
         embeddings_cache={
             str(first): [1.0, 0.0],
@@ -270,6 +279,7 @@ def test_easy_delete_duplicate_result_has_one_authoritative_classification(
     }
     worker = EasyDeleteWorker(
         [str(first), str(second)],
+        image_pipeline=Mock(),
         cluster_map={1: [str(first), str(second)]},
         embeddings_cache=embeddings,
     )
@@ -293,6 +303,7 @@ def test_easy_delete_duplicate_result_explains_sharpness_recommendation(
     sharper.write_bytes(b"sharp image")
     worker = EasyDeleteWorker(
         [str(softer), str(sharper)],
+        image_pipeline=Mock(),
         cluster_map={1: [str(softer), str(sharper)]},
         embeddings_cache={str(softer): [1.0, 0.0], str(sharper): [1.0, 0.0]},
     )
@@ -324,6 +335,7 @@ def test_easy_delete_pairs_closest_available_images_first(tmp_path, monkeypatch)
     }
     worker = EasyDeleteWorker(
         [str(path) for path in paths],
+        image_pipeline=Mock(),
         cluster_map={1: [str(path) for path in paths]},
         embeddings_cache=embeddings,
     )

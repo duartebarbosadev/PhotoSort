@@ -158,9 +158,6 @@ def test_scan_finished_defers_hidden_cull_model_until_cull_is_shown():
         for name in (
             "open_folder_action",
             "analyze_similarity_action",
-            "analyze_best_shots_selected_action",
-            "detect_blur_action",
-            "auto_rotate_action",
             "group_by_similarity_action",
             "ai_rate_images_action",
         )

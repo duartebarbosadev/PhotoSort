@@ -34,7 +34,6 @@ from core.similarity_utils import (
 
 logger = logging.getLogger(__name__)
 
-AD_HOC_SELECTION_CLUSTER_ID = -1
 PICK_BEST_REFINEMENT_EPS = 0.04
 PICK_BEST_REFINEMENT_MIN_SAMPLES = 2
 
@@ -241,20 +240,6 @@ class AppController(QObject):
         )
         self.worker_manager.similarity_error.connect(self.handle_similarity_error)
 
-        # Blur Detection Worker
-        self.worker_manager.blur_detection_progress.connect(
-            self.handle_blur_detection_progress
-        )
-        self.worker_manager.blur_detection_status_updated.connect(
-            self.handle_blur_status_updated
-        )
-        self.worker_manager.blur_detection_finished.connect(
-            self.handle_blur_detection_finished
-        )
-        self.worker_manager.blur_detection_error.connect(
-            self.handle_blur_detection_error
-        )
-
         # Rating Loader Worker
         self.worker_manager.rating_load_progress.connect(
             self.handle_rating_load_progress
@@ -268,21 +253,6 @@ class AppController(QObject):
         self.worker_manager.rating_load_error.connect(self.handle_rating_load_error)
         self.worker_manager.rating_load_cache_capacity_warning.connect(
             self.handle_exif_cache_capacity_warning
-        )
-
-        # Rotation Detection Worker
-        self.worker_manager.rotation_detection_progress.connect(
-            self.handle_rotation_detection_progress
-        )
-        self.worker_manager.rotation_detected.connect(self.handle_rotation_detected)
-        self.worker_manager.rotation_detection_finished.connect(
-            self.handle_rotation_detection_finished
-        )
-        self.worker_manager.rotation_detection_error.connect(
-            self.handle_rotation_detection_error
-        )
-        self.worker_manager.rotation_model_not_found.connect(
-            self.handle_rotation_model_not_found
         )
 
         # Update Check Worker
@@ -311,11 +281,6 @@ class AppController(QObject):
         self.worker_manager.rotation_application_error.connect(
             self.handle_rotation_application_error
         )
-
-        # Best Shot Worker
-        self.worker_manager.best_shot_progress.connect(self.handle_best_shot_progress)
-        self.worker_manager.best_shot_complete.connect(self.handle_best_shot_complete)
-        self.worker_manager.best_shot_error.connect(self.handle_best_shot_error)
 
         # AI Rating Worker
         self.worker_manager.ai_rating_progress.connect(self.handle_ai_rating_progress)
@@ -527,19 +492,12 @@ class AppController(QObject):
         )
         self.main_window.menu_manager.open_folder_action.setEnabled(False)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
-        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
-        self.main_window.menu_manager.detect_blur_action.setEnabled(False)
-        self.main_window.menu_manager.auto_rotate_action.setEnabled(False)
         self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
 
         logger.debug(
             f"Folder prep complete in {time.perf_counter() - load_folder_start_time:.2f}s. Starting file scan."
         )
-        self.worker_manager.start_file_scan(
-            folder_path,
-            perform_blur_detection=False,
-            blur_threshold=self.main_window.blur_detection_threshold,
-        )
+        self.worker_manager.start_file_scan(folder_path)
 
     def _finish_folder_load_after_workers(self) -> None:
         """Resume a folder change after cancellable workers have exited."""
@@ -656,7 +614,6 @@ class AppController(QObject):
         else:
             self.main_window.show_loading_overlay("Starting similarity analysis...")
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
-        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.worker_manager.start_similarity_analysis(
             paths_for_similarity,
             allow_model_download=allow_model_download,
@@ -814,80 +771,6 @@ class AppController(QObject):
             analysis_cache=self.app_state.analysis_cache,
         )
 
-    def start_blur_detection_analysis(self):
-        logger.info("Starting blur detection analysis.")
-        if not self.app_state.image_files_data:
-            self.main_window.statusBar().showMessage(
-                "No images loaded to analyze for blurriness.", 3000
-            )
-            return
-
-        if self.worker_manager.is_blur_detection_running():
-            self.main_window.statusBar().showMessage(
-                "Blur detection is already in progress.", 3000
-            )
-            return
-
-        self.main_window.show_loading_overlay("Starting blur detection...")
-        self.main_window.menu_manager.detect_blur_action.setEnabled(False)
-
-        image_data_list = self._get_image_file_data()
-        if not image_data_list:
-            self.main_window.hide_loading_overlay()
-            self.main_window.statusBar().showMessage(
-                "No images available for blur detection.", 3000
-            )
-            return
-        skipped_videos = len(self._get_media_paths()) - len(self._get_image_paths())
-        if skipped_videos > 0:
-            self.main_window.statusBar().showMessage(
-                f"Detecting blur for images only. Skipping {skipped_videos} video(s).",
-                4000,
-            )
-
-        self.worker_manager.start_blur_detection(
-            image_data_list,
-            self.main_window.blur_detection_threshold,
-        )
-
-    def start_auto_rotation_analysis(self):
-        """Start the auto rotation analysis process."""
-        logger.info("Starting auto-rotation analysis.")
-        if not self.app_state.image_files_data:
-            self.main_window.statusBar().showMessage(
-                "No images loaded to analyze for rotation.", 3000
-            )
-            return
-
-        if self.worker_manager.is_rotation_detection_running():
-            self.main_window.statusBar().showMessage(
-                "Rotation detection is already in progress.", 3000
-            )
-            return
-
-        self.main_window.show_loading_overlay("Starting rotation analysis...")
-        self.main_window.menu_manager.auto_rotate_action.setEnabled(False)
-
-        self.main_window.rotation_suggestions.clear()
-
-        image_paths = self._get_image_paths()
-        if not image_paths:
-            self.main_window.hide_loading_overlay()
-            self.main_window.statusBar().showMessage(
-                "No images available for rotation analysis.", 3000
-            )
-            return
-        skipped_videos = len(self._get_media_paths()) - len(image_paths)
-        if skipped_videos > 0:
-            self.main_window.statusBar().showMessage(
-                f"Rotation analysis is image-only. Skipping {skipped_videos} video(s).",
-                4000,
-            )
-        self.worker_manager.start_rotation_detection(
-            image_paths,
-            self.app_state.exif_disk_cache,
-        )
-
     def _build_cluster_path_map(self) -> dict[int, list[str]]:
         valid_image_paths = set(self._get_image_paths())
         cluster_map: dict[int, list[str]] = {}
@@ -1006,10 +889,6 @@ class AppController(QObject):
         folder_path = self.app_state.current_folder_path
         if not folder_path:
             return
-        saved = self.app_state.analysis_cache.load(folder_path)
-        if not saved:
-            return
-
         available_paths = {
             item.get("path") for item in self._get_image_file_data() if item.get("path")
         }
@@ -1059,46 +938,9 @@ class AppController(QObject):
                     self.main_window.menu_manager.set_cluster_sort_menu_visible(True)
                     self.main_window.menu_manager.set_cluster_sort_menu_enabled(True)
                     self.main_window.cluster_sort_combo.setEnabled(True)
-                self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
                 restored_anything = True
         clustered_paths = set(self.app_state.cluster_results.keys())
         missing_paths = available_paths - clustered_paths
-
-        saved_rankings = saved.get("best_shot_rankings") or {}
-        if isinstance(saved_rankings, dict):
-            normalized_rankings: dict[int, list[dict[str, Any]]] = {}
-            for key, value in saved_rankings.items():
-                cluster_id = _parse_cluster_key(key)
-                if cluster_id is None:
-                    continue
-                if isinstance(value, list):
-                    normalized_rankings[cluster_id] = value
-            if normalized_rankings:
-                self.app_state.merge_best_shot_results(normalized_rankings)
-                restored_anything = True
-
-        saved_scores = saved.get("best_shot_scores_by_path")
-        if isinstance(saved_scores, dict):
-            for path, data in saved_scores.items():
-                if path in available_paths and isinstance(data, dict):
-                    self.app_state.best_shot_scores_by_path[path] = data
-
-        saved_winners = saved.get("best_shot_winners")
-        if isinstance(saved_winners, dict):
-            for key, winner in saved_winners.items():
-                cluster_id = _parse_cluster_key(key)
-                if cluster_id is None:
-                    continue
-                if isinstance(winner, dict):
-                    self.app_state.best_shot_winners[cluster_id] = winner
-
-        if self.app_state.best_shot_rankings:
-            remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
-                self.app_state.best_shot_rankings.keys()
-            )
-            self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
-                bool(remaining_clusters)
-            )
 
         if restored_anything:
             self.main_window.statusBar().showMessage(
@@ -1106,118 +948,12 @@ class AppController(QObject):
             )
 
         if missing_paths:
-            self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
-            self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
             self.main_window.menu_manager.analyze_similarity_action.setEnabled(True)
             self.main_window.menu_manager.group_by_similarity_action.setChecked(False)
             self.main_window.menu_manager.group_by_similarity_action.setEnabled(True)
             self.main_window.statusBar().showMessage(
                 "New images detected. Run Analyze Similarity to include them.", 5000
             )
-
-    def start_best_shot_analysis(self):
-        logger.info("Starting best shot analysis.")
-        if self.worker_manager.is_best_shot_worker_running():
-            self.main_window.statusBar().showMessage(
-                "Best shot analysis is already running.", 3000
-            )
-            return
-
-        if not self.app_state.cluster_results:
-            self.main_window.statusBar().showMessage(
-                "Run Analyze Similarity before best shot analysis.", 4000
-            )
-            return
-
-        cluster_map = self._build_cluster_path_map()
-        existing_clusters = set(self.app_state.best_shot_rankings.keys())
-        if existing_clusters:
-            cluster_map = {
-                cid: paths
-                for cid, paths in cluster_map.items()
-                if cid not in existing_clusters
-            }
-        if not cluster_map:
-            self.main_window.statusBar().showMessage(
-                "All similarity clusters already have best-shot results.", 4000
-            )
-            self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
-            return
-
-        self.main_window.show_loading_overlay("Analyzing best shots...")
-        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
-        self.main_window.menu_manager.stop_best_shots_action.setEnabled(True)
-        self.worker_manager.start_best_shot_analysis(
-            cluster_map,
-            folder_path=self.app_state.current_folder_path,
-            analysis_cache=self.app_state.analysis_cache,
-        )
-
-    def start_best_shot_analysis_for_selected(self):
-        """Run best-shot analysis on currently selected images only."""
-        logger.info("Starting best shot analysis for selected images.")
-
-        if self.worker_manager.is_best_shot_worker_running():
-            self.main_window.statusBar().showMessage(
-                "Best shot analysis is already running.", 3000
-            )
-            return
-
-        # Get selected images
-        selected_file_paths = self.main_window.get_selected_file_paths()
-        selected_paths = self._filter_image_paths(selected_file_paths)
-        skipped_videos = len(selected_file_paths) - len(selected_paths)
-        if not selected_paths:
-            self.main_window.statusBar().showMessage(
-                "No images selected. Please select images first.", 3000
-            )
-            return
-        if skipped_videos > 0:
-            self.main_window.statusBar().showMessage(
-                f"Analyzing selected images only. Skipping {skipped_videos} video(s).",
-                4000,
-            )
-
-        if len(selected_paths) < 2:
-            self.main_window.statusBar().showMessage(
-                "Please select at least 2 images for comparison.", 3000
-            )
-            return
-
-        # Create a synthetic cluster for ad-hoc comparison that cannot collide with real IDs
-        cluster_map = {AD_HOC_SELECTION_CLUSTER_ID: selected_paths}
-
-        self.main_window.show_loading_overlay(
-            f"Analyzing {len(selected_paths)} selected images..."
-        )
-        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            False
-        )
-        self.main_window.menu_manager.stop_best_shots_action.setEnabled(True)
-        self.worker_manager.start_best_shot_analysis(cluster_map)
-
-    def stop_best_shot_analysis(self):
-        if not self.worker_manager.is_best_shot_worker_running():
-            self.main_window.statusBar().showMessage(
-                "Best shot analysis is not currently running.", 3000
-            )
-            return
-
-        self.worker_manager.request_stop_best_shot_analysis()
-        self.main_window.hide_loading_overlay()
-        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
-        remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
-            self.app_state.best_shot_rankings.keys()
-        )
-        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
-            bool(remaining_clusters)
-        )
-        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            bool(self._get_image_file_data())
-        )
-        self.main_window.statusBar().showMessage("Best shot analysis cancelled.", 4000)
-        self._restore_analysis_state()
-        self.main_window._rebuild_model_view()
 
     def start_ai_rating_all(self):
         """Kick off AI-driven rating for every loaded image."""
@@ -1366,11 +1102,6 @@ class AppController(QObject):
         has_images = bool(self._get_image_file_data())
         self.main_window.menu_manager.open_folder_action.setEnabled(True)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(has_images)
-        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            has_images
-        )
-        self.main_window.menu_manager.detect_blur_action.setEnabled(has_images)
-        self.main_window.menu_manager.auto_rotate_action.setEnabled(has_images)
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(has_images)
         # Rating decisions depend on the background metadata pass. Enabling AI
         # rating before it finishes would force per-file disk/EXIF reads from
@@ -1959,7 +1690,6 @@ class AppController(QObject):
             reused = False
         self.app_state.cluster_results = cluster_results_dict
         if not reused:
-            self.app_state.clear_best_shot_results()
             self.app_state.clear_pick_best_results()
 
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
@@ -2010,7 +1740,6 @@ class AppController(QObject):
             self.main_window.menu_manager.set_cluster_sort_menu_visible(True)
             self.main_window.cluster_sort_combo.setEnabled(True)
             self.main_window.menu_manager.set_cluster_sort_menu_enabled(True)
-        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(True)
         self.main_window.refresh_navigation_shortcut_actions()
         if self.main_window.group_by_similarity_mode:
             self.main_window._rebuild_model_view()
@@ -2038,57 +1767,7 @@ class AppController(QObject):
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self._get_image_file_data())
         )
-        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(False)
         self.main_window.hide_loading_overlay()
-
-    def handle_best_shot_progress(self, percentage: int, message: str):
-        suffix = (
-            f" ({percentage}%)" if percentage is not None and percentage >= 0 else ""
-        )
-        self.main_window.update_loading_text(f"Best shots: {message}{suffix}")
-
-    def handle_best_shot_complete(
-        self, rankings_by_cluster: dict[int, list[dict[str, Any]]]
-    ):
-        new_results = rankings_by_cluster or {}
-        if new_results:
-            self.app_state.merge_best_shot_results(new_results)
-        self.main_window.hide_loading_overlay()
-        analyzed = len(new_results)
-        self.main_window.statusBar().showMessage(
-            f"Best shot analysis complete for {analyzed} group(s).", 4000
-        )
-        remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
-            self.app_state.best_shot_rankings.keys()
-        )
-        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
-            bool(remaining_clusters)
-        )
-        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            bool(self._get_image_file_data())
-        )
-        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
-        self._restore_analysis_state()
-        self.main_window._rebuild_model_view()
-
-    def handle_best_shot_error(self, message: str):
-        logger.error(f"Best shot analysis failed: {message}", exc_info=True)
-        self.main_window.hide_loading_overlay()
-        self.main_window.statusBar().showMessage(
-            f"Best shot analysis error: {message}", 8000
-        )
-        remaining_clusters = set(self._build_cluster_path_map().keys()) - set(
-            self.app_state.best_shot_rankings.keys()
-        )
-        self.main_window.menu_manager.analyze_best_shots_action.setEnabled(
-            bool(remaining_clusters)
-        )
-        self.main_window.menu_manager.analyze_best_shots_selected_action.setEnabled(
-            bool(self._get_image_file_data())
-        )
-        self.main_window.menu_manager.stop_best_shots_action.setEnabled(False)
-        self._restore_analysis_state()
-        self.main_window._rebuild_model_view()
 
     def handle_ai_rating_progress(self, percentage: int, message: str):
         suffix = (
@@ -2174,118 +1853,6 @@ class AppController(QObject):
         )
         self._ai_rating_warning_messages = []
 
-    def handle_blur_detection_progress(
-        self, current: int, total: int, path_basename: str
-    ):
-        percentage = int((current / total) * 100) if total > 0 else 0
-        self.main_window.update_loading_text(
-            f"Detecting blur: {percentage}% ({current}/{total}) - {path_basename}"
-        )
-
-    def handle_blur_status_updated(self, image_path: str, is_blurred: bool):
-        self.app_state.update_blur_status(image_path, is_blurred)
-        self.main_window._update_item_blur_status(image_path, is_blurred)
-
-    def handle_blur_detection_finished(self):
-        self.main_window.hide_loading_overlay()
-        self.main_window.statusBar().showMessage("Blur detection complete.", 5000)
-        self.main_window.menu_manager.detect_blur_action.setEnabled(
-            bool(self._get_image_file_data())
-        )
-
-    def handle_blur_detection_error(self, message: str):
-        logger.error(f"Blur detection failed: {message}", exc_info=True)
-        self.main_window.hide_loading_overlay()
-        self.main_window.statusBar().showMessage(
-            f"Blur Detection Error: {message}", 8000
-        )
-        self.main_window.menu_manager.detect_blur_action.setEnabled(
-            bool(self._get_image_file_data())
-        )
-
-    # --- Rotation Detection Handlers ---
-
-    def handle_rotation_detection_progress(
-        self, current: int, total: int, path_basename: str
-    ):
-        """Handle progress updates from rotation detection."""
-        percentage = int((current / total) * 100) if total > 0 else 0
-        self.main_window.update_loading_text(
-            f"Analyzing rotation: {percentage}% ({current}/{total}) - {path_basename}"
-        )
-
-    def handle_rotation_detected(self, image_path: str, suggested_rotation: int):
-        """Handle individual rotation detection results."""
-        if not hasattr(self.main_window, "rotation_suggestions"):
-            self.main_window.rotation_suggestions = {}
-        self.main_window.rotation_suggestions[image_path] = suggested_rotation
-
-    def handle_rotation_detection_finished(self):
-        """Handle completion of rotation detection analysis."""
-        self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self._get_image_file_data())
-        )
-
-        if not self.main_window.rotation_suggestions:
-            self.main_window.hide_loading_overlay()
-            self.main_window.statusBar().showMessage(
-                "Rotation analysis complete. No rotation suggestions found.", 5000
-            )
-            return
-
-        logger.info(
-            f"Rotation analysis finished with {len(self.main_window.rotation_suggestions)} suggestions."
-        )
-
-        final_suggestions = {
-            path: rotation
-            for path, rotation in self.main_window.rotation_suggestions.items()
-            if rotation != 0
-        }
-
-        # Mutate the existing dict so the RotationController keeps the same reference
-        self.main_window.rotation_suggestions.clear()
-        self.main_window.rotation_suggestions.update(final_suggestions)
-        self.main_window.hide_loading_overlay()
-
-        if not self.main_window.rotation_suggestions:
-            self.main_window.statusBar().showMessage(
-                "Rotation analysis complete. No rotation suggestions found.", 5000
-            )
-            return
-
-        num_suggestions = len(self.main_window.rotation_suggestions)
-        logger.info(f"Displaying rotation view with {num_suggestions} suggestions.")
-        self.main_window.statusBar().showMessage(
-            f"Rotation analysis finished. Please review the {num_suggestions} suggestions.",
-            5000,
-        )
-
-        self.main_window.left_panel.view_rotation_icon.setVisible(True)
-        self.main_window.left_panel.set_view_mode_rotation()
-
-    def handle_rotation_detection_error(self, message: str):
-        """Handle errors during rotation detection."""
-        logger.error(f"Rotation detection failed: {message}", exc_info=True)
-        self.main_window.hide_loading_overlay()
-        self.main_window.statusBar().showMessage(
-            f"Rotation Detection Error: {message}", 8000
-        )
-        self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self._get_image_file_data())
-        )
-
-    def handle_rotation_model_not_found(self, model_path: str):
-        """Handle the case where the rotation model is not found."""
-        self.main_window.hide_loading_overlay()
-        self.main_window.dialog_manager.show_model_not_found_dialog(model_path)
-        self.main_window.statusBar().showMessage(
-            "Rotation model not found. Analysis cancelled.", 5000
-        )
-        self.main_window.menu_manager.auto_rotate_action.setEnabled(
-            bool(self._get_image_file_data())
-        )
-
     def _apply_approved_rotations(self, approved_rotations: dict[str, int]):
         """Apply the approved rotations to the images using background worker."""
         logger.info(
@@ -2370,10 +1937,6 @@ class AppController(QObject):
             logger.warning(f"Update check failed: {error_message}")
         else:
             logger.info("No updates available")
-
-        # If no more rotation suggestions, hide the rotation view
-        if not self.main_window.rotation_suggestions:
-            self.main_window._hide_rotation_view()
 
     # --- Rating Writer Handlers ---
 

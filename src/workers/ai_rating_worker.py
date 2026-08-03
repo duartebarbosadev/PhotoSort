@@ -11,10 +11,10 @@ from PyQt6.QtCore import QObject, pyqtSignal
 if TYPE_CHECKING:
     from core.image_pipeline import ImagePipeline
 
-from core.ai.best_shot_pipeline import (
-    BaseBestShotStrategy,
+from core.ai.ai_rating_pipeline import (
+    BaseAiRatingStrategy,
     LLMConfig,
-    create_best_shot_strategy,
+    create_ai_rating_strategy,
 )
 from core.app_settings import calculate_max_workers
 from core.utils.time_utils import format_eta
@@ -37,7 +37,7 @@ class AiRatingWorker(QObject):
         image_pipeline: ImagePipeline | None = None,
         max_workers: int | None = None,
         llm_config: LLMConfig | None = None,
-        strategy: BaseBestShotStrategy | None = None,
+        strategy: BaseAiRatingStrategy | None = None,
         parent: QObject | None = None,
         max_retries: int = 3,
         retry_delay_seconds: float = 2.0,
@@ -88,7 +88,7 @@ class AiRatingWorker(QObject):
 
     def _ensure_strategy(self) -> None:
         if self._strategy is None:
-            self._strategy = create_best_shot_strategy(
+            self._strategy = create_ai_rating_strategy(
                 image_pipeline=self._image_pipeline,
                 llm_config=self._llm_config,
             )

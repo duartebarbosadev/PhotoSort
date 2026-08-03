@@ -64,5 +64,9 @@ def test_keyboard_layout_documents_current_workflow_shortcuts():
     assert "1 · Toggle image 1 Keep / Trash" in pick_best
     assert "2 · Toggle image 2 Keep / Trash" in pick_best
     assert "R · Reset current · Shift+R · Reset all" in pick_best
-    for section in (organize, easy_delete, fix_rotation, pick_best, cull):
+    for section in (organize, easy_delete, fix_rotation, pick_best):
         assert "Shift+Enter · Apply" in section
+    assert "Shift+Enter · Commit" in cull
+    assert "Shift commit" not in organize
+    assert "Shift commit" not in cull
+    assert "Blur · Cmd/Ctrl best shots" not in cull

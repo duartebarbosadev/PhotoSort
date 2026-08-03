@@ -117,7 +117,6 @@ class CacheController:
         ctx.app_state.cluster_results.clear()
         getattr(ctx.app_state, "embeddings_cache", {}).clear()
         getattr(ctx.app_state, "regional_embeddings_cache", {}).clear()
-        ctx.app_state.clear_best_shot_results()
         clear_pick_best = getattr(ctx.app_state, "clear_pick_best_results", None)
         if callable(clear_pick_best):
             clear_pick_best()
@@ -135,10 +134,6 @@ class CacheController:
         menu.set_cluster_sort_menu_visible(False)
         menu.set_cluster_sort_menu_enabled(False)
         ctx.cluster_sort_combo.setEnabled(False)
-        menu.analyze_best_shots_action.setEnabled(False)
-        menu.stop_best_shots_action.setEnabled(False)
-        if hasattr(menu, "analyze_best_shots_selected_action"):
-            menu.analyze_best_shots_selected_action.setEnabled(has_media)
         if hasattr(menu, "analyze_similarity_action"):
             menu.analyze_similarity_action.setEnabled(has_media)
         ctx.refresh_navigation_shortcut_actions()

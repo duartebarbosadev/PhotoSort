@@ -963,8 +963,6 @@ class DialogManager:
             set_performance_mode,
             get_custom_thread_count,
             set_custom_thread_count,
-            get_best_shot_batch_size,
-            set_best_shot_batch_size,
             get_openai_config,
             set_openai_config,
             DEFAULT_OPENAI_API_KEY,
@@ -982,10 +980,7 @@ class DialogManager:
             set_similarity_clustering_eps,
             set_similarity_embedding_model_name,
         )
-        from core.ai.best_shot_pipeline import (
-            DEFAULT_BEST_SHOT_PROMPT,
-            DEFAULT_RATING_PROMPT,
-        )
+        from core.ai.ai_rating_pipeline import DEFAULT_RATING_PROMPT
 
         logger.info("Showing preferences dialog")
         dialog = QDialog(self.parent)
@@ -1320,7 +1315,7 @@ class DialogManager:
         ai_layout.addWidget(sep2)
 
         ai_desc_label = QLabel(
-            "Configure the OpenAI-compatible vision model used for best-shot analysis and AI star ratings."
+            "Configure the OpenAI-compatible vision model used for AI star ratings."
         )
         ai_desc_label.setObjectName("cardDescription")
         ai_desc_label.setWordWrap(True)
@@ -1346,9 +1341,6 @@ class DialogManager:
             )
         except TypeError, ValueError:
             max_workers_value = DEFAULT_OPENAI_MAX_WORKERS
-        best_prompt_value = (
-            openai_config.get("best_shot_prompt") or DEFAULT_BEST_SHOT_PROMPT
-        )
         rating_prompt_value = (
             openai_config.get("rating_prompt") or DEFAULT_RATING_PROMPT
         )
@@ -1428,25 +1420,6 @@ class DialogManager:
         openai_form.addWidget(max_workers_label, 5, 0)
         openai_form.addWidget(max_workers_spin, 5, 1)
 
-        best_shot_batch_label = QLabel("Best-shot Batch Size")
-        best_shot_batch_spin = QSpinBox()
-        best_shot_batch_spin.setObjectName("bestShotBatchSpin")
-        best_shot_batch_spin.setRange(2, 12)
-        best_shot_batch_spin.setValue(get_best_shot_batch_size())
-        openai_form.addWidget(best_shot_batch_label, 6, 0)
-        openai_form.addWidget(best_shot_batch_spin, 6, 1)
-
-        best_prompt_label = QLabel("Best Shot Prompt")
-        best_prompt_edit = QPlainTextEdit()
-        best_prompt_edit.setObjectName("openAIBestPromptEdit")
-        best_prompt_edit.setPlaceholderText(
-            "Leave blank to use the default best-shot prompt."
-        )
-        best_prompt_edit.setPlainText(best_prompt_value)
-        best_prompt_edit.setMinimumHeight(80)
-        openai_form.addWidget(best_prompt_label, 7, 0, Qt.AlignmentFlag.AlignTop)
-        openai_form.addWidget(best_prompt_edit, 7, 1)
-
         rating_prompt_label = QLabel("Rating Prompt")
         rating_prompt_edit = QPlainTextEdit()
         rating_prompt_edit.setObjectName("openAIRatingPromptEdit")
@@ -1455,8 +1428,8 @@ class DialogManager:
         )
         rating_prompt_edit.setPlainText(rating_prompt_value)
         rating_prompt_edit.setMinimumHeight(80)
-        openai_form.addWidget(rating_prompt_label, 8, 0, Qt.AlignmentFlag.AlignTop)
-        openai_form.addWidget(rating_prompt_edit, 8, 1)
+        openai_form.addWidget(rating_prompt_label, 6, 0, Qt.AlignmentFlag.AlignTop)
+        openai_form.addWidget(rating_prompt_edit, 6, 1)
 
         test_connection_button = QPushButton("Test Connection")
         test_connection_button.setObjectName("openAITestConnectionButton")
@@ -1670,8 +1643,6 @@ class DialogManager:
             max_tokens_value = max_tokens_spin.value()
             timeout_value = timeout_spin.value()
             max_workers_value = max_workers_spin.value()
-            best_shot_batch_value = best_shot_batch_spin.value()
-            best_prompt_text = best_prompt_edit.toPlainText()
             rating_prompt_text = rating_prompt_edit.toPlainText()
 
             def _value_or_none(value: str, default_value: str) -> str | None:
@@ -1693,16 +1664,10 @@ class DialogManager:
                 max_workers=None
                 if max_workers_value == DEFAULT_OPENAI_MAX_WORKERS
                 else max_workers_value,
-                best_shot_prompt=None
-                if best_prompt_text.strip() == DEFAULT_BEST_SHOT_PROMPT.strip()
-                else best_prompt_text.strip() or None,
                 rating_prompt=None
                 if rating_prompt_text.strip() == DEFAULT_RATING_PROMPT.strip()
                 else rating_prompt_text.strip() or None,
             )
-
-            if best_shot_batch_value != get_best_shot_batch_size():
-                set_best_shot_batch_size(best_shot_batch_value)
 
             set_similarity_embedding_model_name(
                 similarity_model_combo.currentText().strip()

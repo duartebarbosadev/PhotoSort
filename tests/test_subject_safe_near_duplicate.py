@@ -528,6 +528,7 @@ def test_subject_descriptor_cache_avoids_second_model_initialization(tmp_path):
     first_service = Service(SubjectDescriptor((_face(),)))
     first_worker = EasyDeleteWorker(
         [path],
+        image_pipeline=Mock(),
         analysis_cache=cache,
         folder_path=str(tmp_path),
         fingerprints={path: fingerprint},
@@ -539,6 +540,7 @@ def test_subject_descriptor_cache_avoids_second_model_initialization(tmp_path):
     second_service = Service(None)
     second_worker = EasyDeleteWorker(
         [path],
+        image_pipeline=Mock(),
         analysis_cache=cache,
         folder_path=str(tmp_path),
         fingerprints={path: fingerprint},
@@ -573,6 +575,7 @@ def test_worker_batches_subject_descriptor_persistence(tmp_path):
 
     worker = EasyDeleteWorker(
         paths,
+        image_pipeline=Mock(),
         analysis_cache=analysis_cache,
         folder_path=str(tmp_path),
         fingerprints={path: (index + 1, 123) for index, path in enumerate(paths)},

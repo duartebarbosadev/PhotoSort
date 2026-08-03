@@ -51,7 +51,6 @@ class _MainWindow:
             (),
             {
                 "analyze_similarity_action": _Action(),
-                "analyze_best_shots_action": _Action(),
             },
         )()
         self.pick_best_step_widget = _PickBestWidget()
@@ -231,7 +230,6 @@ def test_reused_clusters_do_not_clear_downstream_results():
     )
     menu = SimpleNamespace(
         analyze_similarity_action=action,
-        analyze_best_shots_action=action,
         group_by_similarity_action=action,
         update_cluster_filter_menu=Mock(),
         set_cluster_sort_menu_visible=Mock(),
@@ -252,7 +250,6 @@ def test_reused_clusters_do_not_clear_downstream_results():
     )
     state = SimpleNamespace(
         cluster_results={},
-        clear_best_shot_results=Mock(),
         clear_pick_best_results=Mock(),
     )
     controller = SimpleNamespace(
@@ -272,5 +269,4 @@ def test_reused_clusters_do_not_clear_downstream_results():
         ),
     )
 
-    state.clear_best_shot_results.assert_not_called()
     state.clear_pick_best_results.assert_not_called()
