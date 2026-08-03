@@ -665,7 +665,6 @@ class GroupingStepWidget(QWidget):
                 "new_folder": self._shortcut_new_folder,
                 "toggle_delete": self._shortcut_toggle_delete,
                 "trash_now": self._shortcut_trash_now,
-                "commit_deletions": self.commit_deletion_marks_requested.emit,
                 "clear_deletions": self.clear_deletion_marks_requested.emit,
                 "apply": self._shortcut_apply,
             },

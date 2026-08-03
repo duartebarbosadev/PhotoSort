@@ -3,14 +3,11 @@ import io
 import json
 import logging
 import os
-import re
 import threading
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any
-from collections.abc import Sequence
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 from core.app_settings import (
     get_openai_config,
@@ -24,22 +21,6 @@ from core.app_settings import (
 
 logger = logging.getLogger(__name__)
 
-
-class BestShotEngine(StrEnum):
-    LLM = "llm"
-
-
-DEFAULT_BEST_SHOT_PROMPT = (
-    "You are an expert photography critic tasked with selecting the best image from a similar set of {image_count} images.\n\n"
-    "Analyze each image based on the following criteria:\n"
-    "- Sharpness and Focus\n- Color/Lighting\n- Composition\n- Subject Expression\n- Technical Quality\n- Overall Appeal\n- Editing Potential\n- Subject Sharpness\n\n"
-    "If any person’s eyes are closed, the photo automatically receives a low rating (1–2).\n\n"
-    "Please analyze each image and then provide your response in the following format:\n\n"
-    "Best Image: [Image number, 1-{image_count}]\n"
-    "Confidence: [High/Medium/Low]\n"
-    "Reasoning: [Brief explanation]\n\n"
-    "Be decisive and pick ONE image as the best, even if the differences are subtle."
-)
 
 DEFAULT_RATING_PROMPT = (
     "Quantitatively evaluate the photograph by inspecting the high-frequency detail (micro-contrast), subject facial cues, noise distribution, tonal balance, color fidelity, compositional geometry, and lighting directionality.\n"
@@ -66,46 +47,12 @@ class LLMConfig:
     base_url: str | None = DEFAULT_OPENAI_BASE_URL
     max_tokens: int = DEFAULT_OPENAI_MAX_TOKENS
     timeout: int = DEFAULT_OPENAI_TIMEOUT
-    best_shot_prompt: str | None = None
     rating_prompt: str | None = None
     max_workers: int = DEFAULT_OPENAI_MAX_WORKERS
 
     def __post_init__(self) -> None:
-        if not self.best_shot_prompt:
-            self.best_shot_prompt = DEFAULT_BEST_SHOT_PROMPT
         if not self.rating_prompt:
             self.rating_prompt = DEFAULT_RATING_PROMPT
-
-
-def _load_font(image_size: tuple[int, int]) -> ImageFont.ImageFont:
-    longer_side = max(image_size)
-    font_size = max(24, int(longer_side * 0.08))
-    try:
-        return ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
-    except Exception:
-        return ImageFont.load_default()
-
-
-def _annotate_image(image: Image.Image, label: str) -> Image.Image:
-    annotated = image.copy()
-    if annotated.mode != "RGBA":
-        annotated = annotated.convert("RGBA")
-    draw = ImageDraw.Draw(annotated)
-    font = _load_font(annotated.size)
-    text_bbox = draw.textbbox((0, 0), label, font=font)
-    text_width = text_bbox[2] - text_bbox[0]
-    text_height = text_bbox[3] - text_bbox[1]
-    padding = max(10, text_height // 2)
-    position = (padding, padding)
-    background_box = (
-        position[0] - padding // 2,
-        position[1] - padding // 2,
-        position[0] + text_width + padding // 2,
-        position[1] + text_height + padding // 2,
-    )
-    draw.rectangle(background_box, fill=(0, 0, 0, 180))
-    draw.text(position, label, font=font, fill=(255, 255, 255, 255))
-    return annotated
 
 
 def _image_to_base64(image: Image.Image) -> str:
@@ -114,7 +61,7 @@ def _image_to_base64(image: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-class BaseBestShotStrategy:
+class BaseAiRatingStrategy:
     def __init__(
         self,
         image_pipeline,
@@ -126,11 +73,6 @@ class BaseBestShotStrategy:
     @property
     def max_workers(self) -> int:
         return 4
-
-    def rank_cluster(
-        self, cluster_id: int, image_paths: Sequence[str]
-    ) -> list[dict[str, object]]:
-        raise NotImplementedError
 
     def rate_image(self, image_path: str) -> dict[str, object] | None:
         raise NotImplementedError
@@ -145,14 +87,14 @@ class BaseBestShotStrategy:
         """Signal any in-flight operations to halt as soon as possible."""
 
 
-class LLMBestShotStrategy(BaseBestShotStrategy):
+class LLMAiRatingStrategy(BaseAiRatingStrategy):
     def __init__(self, image_pipeline, llm_config: LLMConfig) -> None:
         super().__init__(image_pipeline, llm_config)
         try:
             from openai import OpenAI  # type: ignore
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError(
-                "openai package not installed. Install it to use LLM best-shot engine."
+                "openai package not installed. Install it to use AI rating."
             ) from exc
 
         self._timeout = llm_config.timeout
@@ -166,7 +108,6 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         self._client = OpenAI(**client_kwargs)
         self._model = llm_config.model
         self._max_tokens = llm_config.max_tokens
-        self._prompt_template = llm_config.best_shot_prompt
         self._rating_prompt = llm_config.rating_prompt
         self._lock = threading.Lock()
         self._worker_count = llm_config.max_workers
@@ -314,90 +255,11 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
                 f"LLM endpoint reachable, but model '{self._model}' not found. Available models: {', '.join(sorted(model_ids))}."
             )
 
-    def rank_cluster(
-        self, cluster_id: int, image_paths: Sequence[str]
-    ) -> list[dict[str, object]]:
-        logger.info(
-            f"AI ranking cluster {cluster_id} with {len(image_paths)} images using LLM strategy"
-        )
-        if len(image_paths) <= 1:
-            normalized_results: list[dict[str, object]] = [
-                {
-                    "image_path": path,
-                    "composite_score": 1.0,
-                    "metrics": {"llm_selected": True},
-                    "analysis": "",
-                }
-                for path in image_paths
-            ]
-            if normalized_results:
-                logger.info(
-                    "Cluster %s has a single image; skipping LLM call.", cluster_id
-                )
-            return normalized_results
-
-        images = []
-        labelled_payloads: list[tuple[int, str]] = []
-        for idx, path in enumerate(image_paths, start=1):
-            preview = self._load_preview(path)
-            annotated = _annotate_image(preview, str(idx))
-            labelled_payloads.append((idx, _image_to_base64(annotated)))
-            images.append((idx, path))
-
-        prompt = self._prompt_template.format(image_count=len(image_paths))
-        messages = self._build_messages(prompt, labelled_payloads)
-
-        logger.info(f"Sending {len(image_paths)} images to LLM for analysis")
-        _, analysis = self._call_llm(messages)
-        logger.info(f"Received LLM analysis response (length: {len(analysis)} chars)")
-
-        best_match = re.search(r"Best Image\s*:\s*\[?\s*(\d+)", analysis, re.IGNORECASE)
-        best_index = None
-        if best_match:
-            try:
-                candidate = int(best_match.group(1))
-                if 1 <= candidate <= len(image_paths):
-                    best_index = candidate
-                    logger.info(
-                        f"LLM selected image {best_index} as best from {len(image_paths)} options"
-                    )
-            except ValueError:
-                best_index = None
-
-        if best_index is None:
-            logger.warning(
-                f"Could not parse best image selection from LLM response: {analysis[:200]}..."
-            )
-
-        ranked: list[dict[str, object]] = []
-        for idx, path in images:
-            score = 1.0 if idx == best_index else 0.5
-            ranked.append(
-                {
-                    "image_path": path,
-                    "composite_score": score,
-                    "metrics": {"llm_selected": idx == best_index},
-                    "analysis": analysis,
-                }
-            )
-
-        if best_index is not None:
-            ranked.sort(key=lambda item: item["metrics"]["llm_selected"], reverse=True)
-            logger.info(
-                f"Completed AI ranking for cluster {cluster_id}. Best image: {os.path.basename(ranked[0]['image_path'])}"
-            )
-        else:
-            logger.warning(
-                f"Completed AI ranking for cluster {cluster_id} but no clear winner identified"
-            )
-        return ranked
-
     def rate_image(self, image_path: str) -> dict[str, object] | None:
         logger.info(f"AI rating image: {os.path.basename(image_path)}")
 
         preview = self._load_preview(image_path)
-        annotated = _annotate_image(preview, "1")
-        b64 = _image_to_base64(annotated)
+        b64 = _image_to_base64(preview)
         prompt = self._rating_prompt
         system_prompt = (
             "You are a photography scientist performing repeatable image quality audits. "
@@ -552,20 +414,20 @@ class LLMBestShotStrategy(BaseBestShotStrategy):
         return payload
 
 
-def create_best_shot_strategy(
+def create_ai_rating_strategy(
     *,
     image_pipeline=None,
     llm_config: LLMConfig | None = None,
-) -> BaseBestShotStrategy:
-    """Create the LLM AI strategy for image analysis."""
+) -> BaseAiRatingStrategy:
+    """Create the configured LLM strategy for per-image ratings."""
     config = llm_config or LLMConfig(**get_openai_config())
     logger.info(f"Creating AI strategy with LLM endpoint: {config.base_url}")
-    return LLMBestShotStrategy(image_pipeline, config)
+    return LLMAiRatingStrategy(image_pipeline, config)
 
 
 __all__ = [
-    "BestShotEngine",
     "LLMConfig",
-    "LLMBestShotStrategy",
-    "create_best_shot_strategy",
+    "BaseAiRatingStrategy",
+    "LLMAiRatingStrategy",
+    "create_ai_rating_strategy",
 ]

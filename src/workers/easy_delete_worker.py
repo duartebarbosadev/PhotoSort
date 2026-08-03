@@ -10,7 +10,6 @@ import numpy as np
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core import app_settings
-from core.image_features.blur_detector import BLUR_DETECTION_PREVIEW_SIZE, BlurDetector
 from core.image_features.face_analysis import (
     FaceAnalysisService,
     SubjectDescriptor,
@@ -64,6 +63,8 @@ class EasyDeleteWorker(QObject):
         self.cluster_map = cluster_map or {}
         self.embeddings_cache = embeddings_cache or {}
         self.exif_disk_cache = exif_disk_cache
+        if image_pipeline is None:
+            raise ValueError("EasyDeleteWorker requires the shared ImagePipeline")
         self.image_pipeline = image_pipeline
         self.analysis_cache = analysis_cache
         self.folder_path = folder_path
@@ -198,7 +199,7 @@ class EasyDeleteWorker(QObject):
         if rgb is None:
             return None
         height, width = rgb.shape[:2]
-        target_width, target_height = BLUR_DETECTION_PREVIEW_SIZE
+        target_width, target_height = app_settings.BLUR_DETECTION_PREVIEW_SIZE
         scale = min(target_width / width, target_height / height, 1.0)
         if scale < 1.0:
             rgb = cv2.resize(
@@ -214,17 +215,10 @@ class EasyDeleteWorker(QObject):
             self._analysis_rgb_cache.move_to_end(path)
             return self._analysis_rgb_cache[path]
         try:
-            if self.image_pipeline is not None:
-                image = self.image_pipeline.get_analysis_image(
-                    path,
-                    target_size=ANALYSIS_CACHE_RESOLUTION,
-                )
-            else:
-                image = BlurDetector._load_image_for_detection(
-                    path,
-                    target_size=ANALYSIS_CACHE_RESOLUTION,
-                    apply_auto_edits_for_raw=False,
-                )
+            image = self.image_pipeline.get_analysis_image(
+                path,
+                target_size=ANALYSIS_CACHE_RESOLUTION,
+            )
             rgb = (
                 np.ascontiguousarray(np.asarray(image.convert("RGB")))
                 if image is not None

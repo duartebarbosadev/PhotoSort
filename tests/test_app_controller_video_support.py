@@ -22,12 +22,7 @@ class _DummyStatusBar:
 class _DummyMenuManager:
     def __init__(self):
         self.open_folder_action = _DummyAction()
-        self.analyze_best_shots_action = _DummyAction()
         self.analyze_similarity_action = _DummyAction()
-        self.analyze_best_shots_selected_action = _DummyAction()
-        self.stop_best_shots_action = _DummyAction()
-        self.detect_blur_action = _DummyAction()
-        self.auto_rotate_action = _DummyAction()
         self.group_by_similarity_action = _DummyAction()
         self.ai_rate_images_action = _DummyAction()
 
@@ -70,10 +65,6 @@ class _DummyWorkerManager:
         self.start_rating_load = Mock()
         self.start_preview_warming = Mock()
         self.start_rating_writer = Mock()
-        self.start_best_shot_analysis = Mock()
-
-    def is_best_shot_worker_running(self):
-        return False
 
 
 class _DummyAppState:
@@ -82,7 +73,6 @@ class _DummyAppState:
         self.rating_disk_cache = Mock()
         self.exif_disk_cache = Mock()
         self.cluster_results = {}
-        self.best_shot_rankings = {}
         self.current_folder_path = None
         self.analysis_cache = Mock()
 
@@ -169,21 +159,3 @@ def test_apply_rating_to_selection_video_only_does_not_start_writer():
         main_window.statusBar().messages[-1][0]
         == "Ratings are currently supported for images only."
     )
-
-
-def test_start_best_shot_analysis_excludes_video_paths_from_cluster_map():
-    controller, _, app_state, worker_manager = _make_controller(
-        [
-            {"path": "/tmp/a.jpg", "media_type": "image", "is_blurred": None},
-            {"path": "/tmp/b.mp4", "media_type": "video", "is_blurred": None},
-        ]
-    )
-    app_state.cluster_results = {"/tmp/a.jpg": 1, "/tmp/b.mp4": 1}
-    app_state.best_shot_rankings = {}
-    app_state.analysis_cache = Mock()
-
-    controller.start_best_shot_analysis()
-
-    worker_manager.start_best_shot_analysis.assert_called_once()
-    cluster_map = worker_manager.start_best_shot_analysis.call_args.args[0]
-    assert cluster_map == {1: ["/tmp/a.jpg"]}

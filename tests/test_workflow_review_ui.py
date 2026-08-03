@@ -2754,11 +2754,9 @@ def test_guided_workflows_suspend_and_restore_cull_shortcuts():
         "view_list_action",
         "view_icons_action",
         "view_grid_action",
-        "view_rotation_action",
         "toggle_folder_view_action",
         "group_by_similarity_action",
         "toggle_thumbnails_action",
-        "detect_blur_action",
         "toggle_metadata_sidebar_action",
     )
     actions = {}
@@ -2768,7 +2766,6 @@ def test_guided_workflows_suspend_and_restore_cull_shortcuts():
         actions[name] = action
     actions["commit_deletions_action"].setShortcuts(
         [
-            QKeySequence("Shift+D"),
             QKeySequence("Shift+Return"),
             QKeySequence("Shift+Enter"),
         ]
@@ -2783,4 +2780,4 @@ def test_guided_workflows_suspend_and_restore_cull_shortcuts():
     assert {
         sequence.toString()
         for sequence in actions["commit_deletions_action"].shortcuts()
-    } == {"Shift+D", "Shift+Return", "Shift+Enter"}
+    } == {"Shift+Return", "Shift+Enter"}

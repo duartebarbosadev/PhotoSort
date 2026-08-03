@@ -18,9 +18,6 @@ def test_clear_analysis_cache_resets_dependent_ui_state(monkeypatch):
     )
     menu = SimpleNamespace(
         group_by_similarity_action=_action(),
-        analyze_best_shots_action=_action(),
-        stop_best_shots_action=_action(),
-        analyze_best_shots_selected_action=_action(),
         analyze_similarity_action=_action(),
         set_cluster_sort_menu_visible=Mock(),
         set_cluster_sort_menu_enabled=Mock(),
@@ -28,7 +25,6 @@ def test_clear_analysis_cache_resets_dependent_ui_state(monkeypatch):
     app_state = SimpleNamespace(
         analysis_cache=SimpleNamespace(clear_all=Mock()),
         cluster_results={"a.jpg": 1},
-        clear_best_shot_results=Mock(),
         image_files_data=[{"path": "a.jpg"}],
     )
     context = SimpleNamespace(
@@ -52,6 +48,5 @@ def test_clear_analysis_cache_resets_dependent_ui_state(monkeypatch):
     clear_similarity_cache.assert_called_once_with()
     assert app_state.cluster_results == {}
     assert context.group_by_similarity_mode is False
-    app_state.clear_best_shot_results.assert_called_once_with()
     context._rebuild_model_view.assert_called_once_with()
     controller.update_labels.assert_called_once_with()

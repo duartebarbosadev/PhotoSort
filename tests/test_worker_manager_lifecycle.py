@@ -12,16 +12,13 @@ from ui.worker_manager import WorkerManager
     [
         "scanner_thread",
         "similarity_thread",
-        "blur_detection_thread",
         "rating_loader_thread",
-        "rotation_detection_thread",
         "cuda_detection_thread",
         "update_check_thread",
         "rating_writer_thread",
         "rotation_application_thread",
         "thumbnail_preload_thread",
         "preview_warm_thread",
-        "best_shot_thread",
         "ai_rating_thread",
         "grouping_preview_thread",
         "grouping_workflow_thread",
@@ -102,11 +99,6 @@ def test_request_stop_all_workers_never_waits_on_worker_threads():
             "request_stop_fix_rotation_detection",
             "fix_rotation_detect_thread",
             "fix_rotation_detect_worker",
-        ),
-        (
-            "request_stop_best_shot_analysis",
-            "best_shot_thread",
-            "best_shot_worker",
         ),
     ],
 )

@@ -51,7 +51,6 @@ def test_cull_row_construction_does_not_read_thumbnail_cache():
         image_pipeline=image_pipeline,
         get_cached_thumbnail_icon=Mock(return_value=cached_icon),
         deletion_controller=SimpleNamespace(apply_presentation=Mock()),
-        _decorate_best_shot_item=Mock(),
     )
 
     item = MainWindow._create_standard_item(

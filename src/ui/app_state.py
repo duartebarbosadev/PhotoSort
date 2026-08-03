@@ -48,9 +48,6 @@ class AppState:
         self.exif_disk_cache = ExifCache()  # Instance of the new disk cache for EXIF data, now reads size from app_settings
         self.analysis_cache = AnalysisCache()
         self.marked_for_deletion: set = set()  # Set of file paths marked for deletion
-        self.best_shot_rankings: dict[int, list[dict[str, Any]]] = {}
-        self.best_shot_scores_by_path: dict[str, dict[str, Any]] = {}
-        self.best_shot_winners: dict[int, dict[str, Any]] = {}
         self.ai_rating_results: dict[str, dict[str, Any]] = {}
         self.pick_best_results: PickBestResults = {}
         self.pick_best_winners_by_path: dict[str, bool] = {}  # path -> True if winner
@@ -155,7 +152,6 @@ class AppState:
         if clear_disk_caches and folder_path and self.analysis_cache:
             self.analysis_cache.clear_folder(folder_path)
         self.focused_image_path = None
-        self.clear_best_shot_results()
         self.clear_pick_best_results()
         self.ai_rating_results.clear()
         self.easy_delete_results = None
@@ -198,22 +194,6 @@ class AppState:
                     record["mtime_ns"] = stat_result.st_mtime_ns
 
         self.cluster_results.clear()
-        ad_hoc_cluster_id = -1
-        self.best_shot_rankings = {
-            cluster_id: rankings
-            for cluster_id, rankings in self.best_shot_rankings.items()
-            if cluster_id == ad_hoc_cluster_id
-        }
-        self.best_shot_winners = {
-            cluster_id: winner
-            for cluster_id, winner in self.best_shot_winners.items()
-            if cluster_id == ad_hoc_cluster_id
-        }
-        self.best_shot_scores_by_path = {
-            path: score
-            for path, score in self.best_shot_scores_by_path.items()
-            if score.get("cluster_id") == ad_hoc_cluster_id
-        }
         if not preserve_review_results:
             self.clear_pick_best_results()
             self.easy_delete_results = None
@@ -254,7 +234,6 @@ class AppState:
             self.cluster_results,
             self.embeddings_cache,
             self.regional_embeddings_cache,
-            self.best_shot_scores_by_path,
             self.ai_rating_results,
         ):
             for path in removed_paths:
@@ -266,20 +245,6 @@ class AppState:
                     self.rating_disk_cache.delete(path)
                 if self.exif_disk_cache:
                     self.exif_disk_cache.delete(path)
-
-        for cluster_id, rankings in list(self.best_shot_rankings.items()):
-            retained = [
-                entry
-                for entry in rankings
-                if entry.get("image_path") not in removed_paths
-            ]
-            if retained:
-                self.best_shot_rankings[cluster_id] = retained
-            else:
-                self.best_shot_rankings.pop(cluster_id, None)
-        for cluster_id, winner in list(self.best_shot_winners.items()):
-            if winner.get("image_path") in removed_paths:
-                self.best_shot_winners.pop(cluster_id, None)
 
         self.marked_for_deletion.difference_update(removed_paths)
         if self.focused_image_path in removed_paths:
@@ -418,21 +383,10 @@ class AppState:
             self.cluster_results,
             self.embeddings_cache,
             self.regional_embeddings_cache,
-            self.best_shot_scores_by_path,
             self.ai_rating_results,
             self.pick_best_winners_by_path,
         ):
             remap_keys(cache)
-
-        for rankings in self.best_shot_rankings.values():
-            for result in rankings:
-                path = result.get("image_path")
-                if path in updates:
-                    result["image_path"] = updates[path]
-        for winner in self.best_shot_winners.values():
-            path = winner.get("image_path")
-            if path in updates:
-                winner["image_path"] = updates[path]
 
         if migrate_disk_caches:
             for old_path, new_path in updates.items():
@@ -565,56 +519,7 @@ class AppState:
         logger.info(f"Clearing all deletion marks ({count} files)")
         self.marked_for_deletion.clear()
 
-    def clear_best_shot_results(self):
-        """Resets cached best-shot data."""
-        self.best_shot_rankings.clear()
-        self.best_shot_scores_by_path.clear()
-        self.best_shot_winners.clear()
-
-    def is_best_shot_winner(self, file_path: str) -> bool:
-        """Check winner status in O(1) for normal ranked results."""
-
-        score = self.best_shot_scores_by_path.get(file_path)
-        if score is not None:
-            cluster_id = score.get("cluster_id")
-            winner = (
-                self.best_shot_winners.get(cluster_id)
-                if isinstance(cluster_id, int)
-                else None
-            )
-            if winner is not None:
-                return winner.get("image_path") == file_path
-        return False
-
     def clear_pick_best_results(self):
         """Resets pick-best step results."""
         self.pick_best_results.clear()
         self.pick_best_winners_by_path.clear()
-
-    def merge_best_shot_results(
-        self, rankings_by_cluster: dict[int, list[dict[str, Any]]]
-    ) -> None:
-        for cluster_id, rankings in rankings_by_cluster.items():
-            if not rankings:
-                continue
-            normalized_rankings: list[dict[str, Any]] = []
-            for entry in rankings:
-                if not isinstance(entry, dict):
-                    continue
-                normalized = dict(entry)
-                normalized.setdefault("cluster_id", cluster_id)
-                normalized_rankings.append(normalized)
-                path = normalized.get("image_path")
-                if path:
-                    self.best_shot_scores_by_path[path] = normalized
-            if not normalized_rankings:
-                continue
-            self.best_shot_rankings[cluster_id] = normalized_rankings
-            self.best_shot_winners[cluster_id] = normalized_rankings[0]
-
-    def set_best_shot_results(
-        self, rankings_by_cluster: dict[int, list[dict[str, Any]]]
-    ):
-        """Persist best-shot rankings emitted by the analysis worker."""
-        self.clear_best_shot_results()
-        self.merge_best_shot_results(rankings_by_cluster)

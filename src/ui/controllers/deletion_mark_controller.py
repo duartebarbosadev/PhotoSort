@@ -36,15 +36,9 @@ class DeletionMarkController:
 
         basename = os.path.basename(file_path) or item.text() or file_path
 
-        winner_check = getattr(self.app_state, "is_best_shot_winner", None)
-        if callable(winner_check):
-            is_best = winner_check(file_path)
-        else:
-            winners = getattr(self.app_state, "best_shot_winners", {})
-            is_best = any(
-                isinstance(winner, dict) and winner.get("image_path") == file_path
-                for winner in winners.values()
-            )
+        is_best = bool(
+            getattr(self.app_state, "pick_best_winners_by_path", {}).get(file_path)
+        )
 
         pres = build_presentation(
             basename=basename,

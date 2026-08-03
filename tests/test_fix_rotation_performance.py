@@ -4,45 +4,43 @@ from unittest.mock import Mock, patch
 from PIL import Image
 
 from core.app_settings import ROTATION_MODEL_IMAGE_SIZE
-from core.image_features.rotation_detector import RotationDetector
 from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION, ImagePipeline
 from ui.app_controller import AppController
+from workers.rotation_detection_step_worker import RotationDetectionStepWorker
 
 
-def test_rotation_detector_requests_bounded_shared_analysis_image():
+def test_fix_rotation_worker_requests_bounded_shared_analysis_image():
     pipeline = Mock()
     pipeline.get_analysis_image.return_value = Image.new("RGB", (416, 300))
-    result_callback = Mock()
+    model = Mock()
+    model.predict_rotation_angle.return_value = 90
+    worker = RotationDetectionStepWorker(
+        ["photo.arw"], image_pipeline=pipeline, model_detector=model, num_workers=1
+    )
 
-    with patch(
-        "core.image_features.rotation_detector.ModelRotationDetector"
-    ) as model_class:
-        model_class.return_value.predict_rotation_angle.return_value = 90
-        detector = RotationDetector(image_pipeline=pipeline, exif_cache=Mock())
-        detector._detect_rotation_task("photo.arw", result_callback)
+    angle = worker._detect_rotation("photo.arw")
 
     expected_size = ROTATION_MODEL_IMAGE_SIZE + 32
     pipeline.get_analysis_image.assert_called_once_with(
         "photo.arw",
         target_size=(expected_size, expected_size),
     )
-    model_class.return_value.predict_rotation_angle.assert_called_once()
-    result_callback.assert_called_once_with("photo.arw", 90)
+    model.predict_rotation_angle.assert_called_once()
+    assert angle == 90
 
 
-def test_rotation_detector_does_not_retry_failed_analysis_with_full_decode():
+def test_fix_rotation_worker_does_not_retry_failed_analysis_with_full_decode():
     pipeline = Mock()
     pipeline.get_analysis_image.return_value = None
-    result_callback = Mock()
+    model = Mock()
+    worker = RotationDetectionStepWorker(
+        ["broken.arw"], image_pipeline=pipeline, model_detector=model, num_workers=1
+    )
 
-    with patch(
-        "core.image_features.rotation_detector.ModelRotationDetector"
-    ) as model_class:
-        detector = RotationDetector(image_pipeline=pipeline, exif_cache=Mock())
-        detector._detect_rotation_task("broken.arw", result_callback)
+    angle = worker._detect_rotation("broken.arw")
 
-    model_class.return_value.predict_rotation_angle.assert_not_called()
-    result_callback.assert_called_once_with("broken.arw", 0)
+    model.predict_rotation_angle.assert_not_called()
+    assert angle == 0
 
 
 def test_analysis_image_uses_neutral_raw_loader_and_reuses_cache(tmp_path):

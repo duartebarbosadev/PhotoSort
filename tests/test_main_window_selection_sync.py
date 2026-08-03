@@ -141,35 +141,6 @@ def test_inactive_workflow_cannot_replace_active_inspection_session():
     )
 
 
-def test_rotation_comparison_never_decodes_on_ui_thread(tmp_path):
-    path = str(tmp_path / "rotation.arw")
-    open(path, "wb").close()
-    pipeline = _cache_only_pipeline()
-    viewer = Mock()
-    context = SimpleNamespace(
-        image_pipeline=pipeline,
-        advanced_image_viewer=viewer,
-        rotation_suggestions={path: 90},
-        _pending_rotation_comparison_path=None,
-        invalidate_last_displayed_preview=Mock(),
-        _get_cached_metadata_for_selection=lambda _path: {"rating": 0},
-        request_interactive_preview=Mock(),
-    )
-    context._get_cached_interactive_pixmap = lambda image_path: (
-        MainWindow._get_cached_interactive_pixmap(context, image_path)
-    )
-
-    MainWindow._display_side_by_side_comparison(context, path)
-
-    images_data = viewer.set_images_data.call_args.args[0]
-    assert len(images_data) == 2
-    assert all(item["path"] == path and item["pixmap"] is None for item in images_data)
-    context.request_interactive_preview.assert_called_once_with(path)
-    assert context._pending_rotation_comparison_path == path
-    pipeline.get_preview_qpixmap.assert_not_called()
-    pipeline.get_thumbnail_qpixmap.assert_not_called()
-
-
 def test_rotation_completion_queues_cache_refresh_instead_of_decoding():
     path = "/tmp/rotation.arw"
     pipeline = _cache_only_pipeline()

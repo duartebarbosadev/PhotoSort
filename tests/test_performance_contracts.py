@@ -72,7 +72,6 @@ def test_packaging_contract_covers_every_lazy_workflow():
         "ui.fix_rotation_step_widget",
         "ui.metadata_sidebar",
         "ui.pick_best_step_widget",
-        "workers.best_shot_worker",
         "workers.grouping_worker",
     } <= required
 

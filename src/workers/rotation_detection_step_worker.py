@@ -1,12 +1,22 @@
 import logging
 import os
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from typing import Protocol
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from core.image_features.model_rotation_detector import ModelNotFoundError
-from core.image_features.rotation_detector import RotationDetector
+from core.app_settings import ROTATION_MODEL_IMAGE_SIZE, calculate_max_workers
+from core.image_features.model_rotation_detector import (
+    ModelNotFoundError,
+    ModelRotationDetector,
+)
+from core.image_pipeline import ImagePipeline
 
 logger = logging.getLogger(__name__)
+
+
+class _RotationModel(Protocol):
+    def predict_rotation_angle(self, image_path: str, image: object | None = None) -> int: ...
 
 
 class RotationDetectionStepWorker(QObject):
@@ -24,12 +34,18 @@ class RotationDetectionStepWorker(QObject):
     def __init__(
         self,
         image_paths: list[str],
-        rotation_detector: RotationDetector,
+        image_pipeline: ImagePipeline,
+        model_detector: _RotationModel | None = None,
+        num_workers: int | None = None,
         parent: QObject | None = None,
     ):
         super().__init__(parent)
         self.image_paths = list(image_paths)
-        self.rotation_detector = rotation_detector
+        self.image_pipeline = image_pipeline
+        self.model_detector = model_detector or ModelRotationDetector()
+        self.num_workers = num_workers or calculate_max_workers(
+            min_workers=4, max_workers=8
+        )
         self._should_stop = False
         self._results: dict[str, int] = {}
         self._processed = 0
@@ -50,7 +66,7 @@ class RotationDetectionStepWorker(QObject):
         finally:
             self.finished.emit()
 
-    def _on_result(self, path: str, angle: int) -> None:
+    def _record_result(self, path: str, angle: int) -> None:
         self._processed += 1
         percent = int((self._processed / max(self._total, 1)) * 100)
         self.progress_update.emit(
@@ -59,6 +75,16 @@ class RotationDetectionStepWorker(QObject):
         )
         if angle != 0:
             self._results[path] = angle
+
+    def _detect_rotation(self, path: str) -> int:
+        model_input_size = ROTATION_MODEL_IMAGE_SIZE + 32
+        image = self.image_pipeline.get_analysis_image(
+            path,
+            target_size=(model_input_size, model_input_size),
+        )
+        if image is None:
+            return 0
+        return self.model_detector.predict_rotation_angle(path, image=image)
 
     def _run(self) -> None:
         if not self.image_paths:
@@ -69,11 +95,37 @@ class RotationDetectionStepWorker(QObject):
             0, f"Starting rotation analysis for {self._total} images…"
         )
 
-        self.rotation_detector.detect_rotation_in_batch(
-            image_paths=self.image_paths,
-            result_callback=self._on_result,
-            should_continue_callback=lambda: not self._should_stop,
-        )
+        executor = ThreadPoolExecutor(max_workers=self.num_workers)
+        futures: dict[Future[int], str] = {}
+        try:
+            futures = {
+                executor.submit(self._detect_rotation, path): path
+                for path in self.image_paths
+                if not self._should_stop
+            }
+            for future in as_completed(futures):
+                if self._should_stop:
+                    break
+                path = futures[future]
+                try:
+                    angle = future.result()
+                except ModelNotFoundError:
+                    for pending in futures:
+                        pending.cancel()
+                    raise
+                except Exception:
+                    logger.error(
+                        "Fix Rotation failed to analyze %s",
+                        os.path.basename(path),
+                        exc_info=True,
+                    )
+                    angle = 0
+                self._record_result(path, angle)
+        finally:
+            if self._should_stop:
+                for pending in futures:
+                    pending.cancel()
+            executor.shutdown(wait=True, cancel_futures=True)
 
         if not self._should_stop:
             self.completed.emit(dict(self._results))

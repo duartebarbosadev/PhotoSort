@@ -61,7 +61,6 @@ from core.metadata_processor import MetadataProcessor  # New metadata processor
 from core.media_utils import is_video_extension
 from core.similarity_utils import cosine_similarity
 from core.app_settings import (
-    DEFAULT_BLUR_DETECTION_THRESHOLD,
     LEFT_PANEL_STRETCH,
     CENTER_PANEL_STRETCH,
     RIGHT_PANEL_STRETCH,
@@ -100,7 +99,6 @@ from ui.helpers.navigation_utils import (
 
 from ui.controllers.deletion_mark_controller import DeletionMarkController
 from ui.controllers.file_deletion_controller import FileDeletionController
-from ui.controllers.rotation_controller import RotationController
 from ui.controllers.filter_controller import FilterController
 from ui.controllers.hotkey_controller import HotkeyController
 from ui.controllers.navigation_controller import NavigationController
@@ -142,7 +140,6 @@ class MainWindow(QMainWindow):
         self._left_panel_views = set()
         self._image_viewer_views = set()
         self._last_displayed_preview_path: str | None = None
-        self._pending_rotation_comparison_path: str | None = None
         self._filter_apply_count = 0
         self._last_filter_search_text: str | None = None
         self._close_after_grouping_save = False
@@ -176,20 +173,12 @@ class MainWindow(QMainWindow):
         self.group_by_similarity_mode = False
         self.navigation_skip_singleton_clusters = False
         self.navigation_rating_target: int | None = None
-        self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
-        self.rotation_suggestions = {}
         # Controllers (always created – treat as invariants for simpler code paths)
         self.deletion_controller = DeletionMarkController(
             app_state=self.app_state,
             is_marked_func=lambda p: self.app_state.is_marked_for_deletion(p),
         )
         self.file_deletion_controller = FileDeletionController(self)
-        self.rotation_controller = RotationController(
-            rotation_suggestions=self.rotation_suggestions,
-            apply_rotations=lambda mapping: (
-                self.app_controller._apply_approved_rotations(mapping)
-            ),
-        )
         # Navigation & selection controllers use this MainWindow as context
         self.navigation_controller = NavigationController(self)
         self.selection_controller = SelectionController(self)
@@ -261,9 +250,6 @@ class MainWindow(QMainWindow):
             f"MainWindow initialization complete in {time.perf_counter() - init_start_time:.2f}s."
         )
 
-        # Hide rotation view by default
-        self._hide_rotation_view()
-
         # Load initial folder if provided
         if self.initial_folder and os.path.isdir(self.initial_folder):
             QTimer.singleShot(
@@ -297,7 +283,6 @@ class MainWindow(QMainWindow):
     def invalidate_last_displayed_preview(self):
         """Reset cached preview tracking so the next selection forces a refresh."""
         self._last_displayed_preview_path = None
-        self._pending_rotation_comparison_path = None
 
     def _create_loading_overlay(self):
         start_time = time.perf_counter()
@@ -500,12 +485,11 @@ class MainWindow(QMainWindow):
         self.proxy_model.setSourceModel(self.file_system_model)
         self.proxy_model.app_state_ref = self.app_state  # Link AppState to proxy model
 
-        # Left panel (views list/tree/rotation)
+        # Left panel (list/tree/grid views)
         self.left_panel = LeftPanel(self.proxy_model, self.app_state, self)
         self._left_panel_views = {
             self.left_panel.tree_display_view,
             self.left_panel.grid_display_view,
-            self.left_panel.rotation_suggestions_view,
         }
 
         self.center_pane_container = QWidget()
@@ -526,30 +510,6 @@ class MainWindow(QMainWindow):
         self._image_viewer_views = {
             v.image_view for v in self.advanced_image_viewer.image_viewers
         }
-        self.accept_all_button = QPushButton("Accept All")
-        self.accept_all_button.setObjectName("acceptAllButton")
-        self.accept_all_button.setVisible(False)
-        self.accept_button = QPushButton("Accept")
-        self.accept_button.setObjectName("acceptButton")
-        self.accept_button.setVisible(False)
-        self.refuse_button = QPushButton("Refuse")
-        self.refuse_button.setObjectName("refuseButton")
-        self.refuse_button.setVisible(False)
-        self.refuse_all_button = QPushButton("Refuse All")
-        self.refuse_all_button.setObjectName("refuseAllButton")
-        self.refuse_all_button.setVisible(False)
-
-        button_layout = QHBoxLayout()
-        button_layout.addStretch(1)
-        button_layout.addWidget(self.accept_button)
-        button_layout.addWidget(self.accept_all_button)
-        button_layout.addSpacing(20)  # Add space between button groups
-        button_layout.addWidget(self.refuse_button)
-        button_layout.addWidget(self.refuse_all_button)
-        button_layout.addStretch(1)
-
-        center_pane_layout.addLayout(button_layout)
-
         # No bottom bar - image info will be shown in status bar only
 
         self.statusBar().showMessage("Ready")
@@ -702,7 +662,6 @@ class MainWindow(QMainWindow):
         # Connect UI component signals
         self.left_panel.tree_display_view.installEventFilter(self)
         self.left_panel.grid_display_view.installEventFilter(self)
-        self.left_panel.rotation_suggestions_view.installEventFilter(self)
         for viewer in self.advanced_image_viewer.image_viewers:
             viewer.image_view.installEventFilter(self)
         self.left_panel.tree_display_view.clicked.connect(self._handle_tree_view_click)
@@ -784,9 +743,6 @@ class MainWindow(QMainWindow):
         # Delegate signal connections to the AppController
         self.app_controller.connect_signals()
 
-        self.accept_all_button.clicked.connect(self._accept_all_rotations)
-        self.accept_button.clicked.connect(self._on_accept_button_clicked)
-        self.refuse_button.clicked.connect(self._refuse_current_rotation)
         logger.debug(f"Signals connected in {time.perf_counter() - start_time:.4f}s.")
 
     # def _connect_rating_actions(self):
@@ -1283,9 +1239,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No images loaded.", 3000)
             return
 
-        if self.left_panel.current_view_mode == "rotation":
-            self._rebuild_rotation_view()
-        elif self.group_by_similarity_mode:
+        if self.group_by_similarity_mode:
             current_sort_method = self.cluster_sort_combo.currentText()
             images_by_cluster = self.similarity_controller.get_images_by_cluster()
             cluster_info = (
@@ -1839,11 +1793,9 @@ class MainWindow(QMainWindow):
             manager.view_list_action,
             manager.view_icons_action,
             manager.view_grid_action,
-            manager.view_rotation_action,
             manager.toggle_folder_view_action,
             manager.group_by_similarity_action,
             manager.toggle_thumbnails_action,
-            manager.detect_blur_action,
             manager.toggle_metadata_sidebar_action,
         ]
         if not hasattr(self, "_cull_action_shortcuts"):
@@ -2128,22 +2080,6 @@ class MainWindow(QMainWindow):
 
     def get_marked_deleted(self):  # Iterable[str] expected by NavigationController
         return self.app_state.get_marked_files()
-
-    def _rebuild_rotation_view(self):
-        self.file_system_model.clear()
-        root_item = self.file_system_model.invisibleRootItem()
-
-        if not self.rotation_suggestions:
-            no_suggestions_item = QStandardItem("No rotation suggestions available.")
-            no_suggestions_item.setEditable(False)
-            root_item.appendRow(no_suggestions_item)
-            return
-
-        for path, rotation in self.rotation_suggestions.items():
-            item = QStandardItem(os.path.basename(path))
-            item.setData({"path": path, "rotation": rotation}, Qt.ItemDataRole.UserRole)
-            root_item.appendRow(item)
-            self._note_model_item_populated()
 
     def _note_model_item_populated(self) -> None:
         self._model_population_processed = (
@@ -3191,7 +3127,6 @@ class MainWindow(QMainWindow):
         self, file_path: str, file_data_from_model: dict[str, Any] | None
     ):
         """Handles displaying preview and info for a single selected image."""
-        self._pending_rotation_comparison_path = None
         logger.debug(f"Displaying single image preview: {os.path.basename(file_path)}")
 
         metadata = self._get_cached_metadata_for_selection(file_path)
@@ -3259,11 +3194,6 @@ class MainWindow(QMainWindow):
         if pixmap is None or pixmap.isNull():
             return
 
-        if self._pending_rotation_comparison_path == file_path:
-            self._render_rotation_comparison(file_path, pixmap)
-            self._pending_rotation_comparison_path = None
-            return
-
         metadata = self._get_cached_metadata_for_selection(file_path) or {}
         rating = metadata.get("rating", 0)
         updated = self.advanced_image_viewer.update_image_pixmap(
@@ -3301,30 +3231,6 @@ class MainWindow(QMainWindow):
             7000,
         )
         self.invalidate_last_displayed_preview()
-
-    def _render_rotation_comparison(
-        self, file_path: str, current_pixmap: QPixmap
-    ) -> None:
-        """Render a cached base preview and its suggested orientation."""
-        rotation = self.rotation_suggestions.get(file_path)
-        if rotation is None or current_pixmap.isNull():
-            return
-        from PyQt6.QtGui import QTransform
-
-        transform = QTransform()
-        transform.rotate(rotation)
-        suggested_pixmap = current_pixmap.transformed(
-            transform,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        metadata = self._get_cached_metadata_for_selection(file_path) or {}
-        rating = metadata.get("rating", 0)
-        self.advanced_image_viewer.set_images_data(
-            [
-                {"pixmap": current_pixmap, "path": file_path, "rating": rating},
-                {"pixmap": suggested_pixmap, "path": file_path, "rating": rating},
-            ]
-        )
 
     def _display_single_video_preview(
         self,
@@ -3615,55 +3521,6 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # In rotation view, update the accept/refuse buttons based on selection
-        if self.left_panel.current_view_mode == "rotation":
-            num_suggestions = len(self.rotation_suggestions)
-            logger.debug(f"Rotation view with {num_suggestions} suggestions")
-            self.accept_all_button.setVisible(num_suggestions > 1)
-            self.refuse_all_button.setVisible(num_suggestions > 1)
-            num_selected = len(selected_file_paths)
-
-            self.accept_button.setVisible(num_selected > 0)
-            self.refuse_button.setVisible(num_selected > 0)
-
-            if num_selected > 0:
-                all_selected_have_suggestion = all(
-                    p in self.rotation_suggestions for p in selected_file_paths
-                )
-                logger.debug(
-                    f"Selected items have suggestions: {all_selected_have_suggestion}"
-                )
-                self.accept_button.setEnabled(all_selected_have_suggestion)
-                self.refuse_button.setEnabled(all_selected_have_suggestion)
-
-                if num_selected == 1:
-                    logger.debug(
-                        f"Displaying side-by-side comparison for: {selected_file_paths[0]}"
-                    )
-                    self.accept_button.setText("Accept (Y)")
-                    self.refuse_button.setText("Refuse (N)")
-                    self._display_side_by_side_comparison(selected_file_paths[0])
-                else:
-                    logger.debug(
-                        f"Displaying multi-selection info for {num_selected} items"
-                    )
-                    self.accept_button.setText(f"Accept ({num_selected})")
-                    self.refuse_button.setText(f"Refuse ({num_selected})")
-                    self.advanced_image_viewer.clear()
-                    self.advanced_image_viewer.setText(
-                        f"{num_selected} items selected for rotation approval."
-                    )
-            else:
-                logger.debug("No items selected in rotation view")
-                self.advanced_image_viewer.clear()
-            return
-        else:
-            logger.debug("Not in rotation view, hiding rotation buttons")
-            self.accept_all_button.setVisible(False)
-            self.accept_button.setVisible(False)
-            self.refuse_button.setVisible(False)
-            self.refuse_all_button.setVisible(False)
-
         if len(selected_file_paths) != 1:
             logger.debug(f"Selection is not single (count={len(selected_file_paths)})")
 
@@ -3907,44 +3764,9 @@ class MainWindow(QMainWindow):
         # Unified presentation (marked / blurred) delegated to deletion controller
         self.deletion_controller.apply_presentation(item, file_path, is_blurred)
 
-        self._decorate_best_shot_item(item, file_path)
-
         return item
 
-    def _decorate_best_shot_item(self, item: QStandardItem, file_path: str):
-        app_state = getattr(self, "app_state", None)
-        if not app_state or not app_state.best_shot_scores_by_path:
-            return
-        best_info = app_state.best_shot_scores_by_path.get(file_path)
-        if not best_info:
-            return
-
-        cluster_id = app_state.cluster_results.get(file_path)
-        if cluster_id is None:
-            cluster_id = best_info.get("cluster_id")
-        cluster_label = "Selection" if cluster_id is None else f"Cluster {cluster_id}"
-
-        metrics = best_info.get("metrics", {}) or {}
-        tooltip_lines = [
-            cluster_label,
-            f"Composite: {best_info.get('composite_score', 0):.3f}",
-        ]
-        metric_fields = [
-            ("technical", "Technical"),
-            ("aesthetic", "Aesthetic"),
-            ("eyes_open", "Eyes Open"),
-            ("framing", "Framing"),
-        ]
-        for metric_key, label in metric_fields:
-            if metric_key in metrics:
-                tooltip_lines.append(f"{label}: {metrics[metric_key]:.3f}")
-        tooltip = "\n".join(tooltip_lines)
-        existing_tooltip = item.toolTip()
-        if existing_tooltip:
-            tooltip = f"{tooltip}\n{existing_tooltip}"
-        item.setToolTip(tooltip)
-
-        # Text decoration for best-shot winners is handled centrally in DeletionMarkController.
+        # Pick Best winner decoration is handled centrally in DeletionMarkController.
 
     def _update_thumbnails_from_cache(self, image_paths: list[str] | None = None):
         """
@@ -4173,28 +3995,6 @@ class MainWindow(QMainWindow):
                             return True
                     if self._handle_registered_shortcut(key, modifiers):
                         return True
-                    # Rotation view-specific shortcuts
-                    if self.left_panel.current_view_mode == "rotation":
-                        if key == Qt.Key.Key_Y:
-                            if modifiers == Qt.KeyboardModifier.ShiftModifier:
-                                self._accept_all_rotations()
-                                return True
-                            elif modifiers == Qt.KeyboardModifier.NoModifier:
-                                # Prefer the single-item flow that advances selection; if multi-selected, fall back
-                                sel = self._get_selected_file_paths_from_view()
-                                if sel and len(sel) == 1:
-                                    self._accept_single_rotation_and_move_to_next()
-                                else:
-                                    self._accept_current_rotation()
-                                return True
-                        elif key == Qt.Key.Key_N:
-                            if modifiers == Qt.KeyboardModifier.ShiftModifier:
-                                self._refuse_all_rotations()
-                                return True
-                            elif modifiers == Qt.KeyboardModifier.NoModifier:
-                                self._refuse_current_rotation()
-                                return True
-
                     # --- Modifier-based actions ---
                     # On Mac, arrow keys often have KeypadModifier, so treat that as unmodified too
                     is_unmodified_or_keypad = modifiers in (
@@ -4297,11 +4097,6 @@ class MainWindow(QMainWindow):
         )
         register(
             Qt.Key.Key_D,
-            Qt.KeyboardModifier.ShiftModifier,
-            mm.commit_deletions_action.trigger,
-        )
-        register(
-            Qt.Key.Key_D,
             Qt.KeyboardModifier.AltModifier,
             mm.clear_marked_deletions_action.trigger,
         )
@@ -4334,9 +4129,6 @@ class MainWindow(QMainWindow):
             Qt.Key.Key_T,
             Qt.KeyboardModifier.NoModifier,
             mm.toggle_thumbnails_action.trigger,
-        )
-        register(
-            Qt.Key.Key_B, Qt.KeyboardModifier.NoModifier, mm.detect_blur_action.trigger
         )
         register(
             Qt.Key.Key_I,
@@ -5290,187 +5082,6 @@ class MainWindow(QMainWindow):
             self.left_panel.get_active_view,
             lambda: self._handle_file_selection_changed(),
         )
-
-    def _display_side_by_side_comparison(self, file_path):
-        """Displays the current image and the rotated suggestion side-by-side."""
-        logger.info(
-            f"Showing side-by-side comparison for: {os.path.basename(file_path)} (path: {file_path})"
-        )
-        self.invalidate_last_displayed_preview()
-
-        if file_path not in self.rotation_suggestions:
-            logger.warning(
-                f"File {os.path.basename(file_path)} not in rotation_suggestions."
-            )
-            return
-
-        current_pixmap, preview_is_cached = self._get_cached_interactive_pixmap(
-            file_path
-        )
-        if current_pixmap is not None:
-            self._render_rotation_comparison(file_path, current_pixmap)
-        else:
-            metadata = self._get_cached_metadata_for_selection(file_path) or {}
-            loading_data = {
-                "pixmap": None,
-                "path": file_path,
-                "rating": metadata.get("rating", 0),
-            }
-            self.advanced_image_viewer.set_images_data(
-                [loading_data.copy(), loading_data.copy()]
-            )
-        if not preview_is_cached:
-            self._pending_rotation_comparison_path = file_path
-            self.request_interactive_preview(file_path)
-
-    def _accept_all_rotations(self):
-        """Apply all suggested rotations and exit rotation view."""
-        if not self.rotation_controller.has_suggestions():
-            self.statusBar().showMessage("No rotation suggestions to accept.", 3000)
-            return
-        self.rotation_controller.accept_all()
-        self._hide_rotation_view()
-
-    def _accept_current_rotation(self):
-        selected_paths = self._get_selected_file_paths_from_view()
-        if not selected_paths:
-            return
-        target_paths = [
-            p
-            for p in selected_paths
-            if p in self.rotation_controller.rotation_suggestions
-        ]
-        if not target_paths:
-            return
-        visible_before = self.rotation_controller.get_visible_order()
-        accepted = self.rotation_controller.accept_paths(target_paths)
-        if not self.rotation_controller.has_suggestions():
-            self._hide_rotation_view()
-            return
-        next_path = self.rotation_controller.compute_next_after_accept(
-            visible_before, accepted, accepted[0] if accepted else None
-        )
-        self._rebuild_rotation_view()
-        if next_path:
-            proxy_idx = self._find_proxy_index_for_path(next_path)
-            if proxy_idx.isValid():
-                active_view = self._get_active_file_view()
-                if active_view:
-                    active_view.setCurrentIndex(proxy_idx)
-                    active_view.selectionModel().select(
-                        proxy_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                    )
-                    active_view.scrollTo(
-                        proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible
-                    )
-                    return
-        active_view = self._get_active_file_view()
-        if active_view:
-            active_view.selectionModel().clear()
-        self.advanced_image_viewer.clear()
-        self.accept_button.setVisible(False)
-
-    # (Legacy nested _accept_rotation removed; logic handled by controller methods above.)
-
-    def _on_accept_button_clicked(self):
-        """Handle accept button click with automatic navigation in rotation view."""
-        # Check if we're in rotation view mode
-        if self.left_panel.current_view_mode == "rotation":
-            # Use the new method that automatically moves to the next item
-            self._accept_single_rotation_and_move_to_next()
-        else:
-            # Use the standard method for other views
-            self._accept_current_rotation()
-
-    def _accept_single_rotation_and_move_to_next(self):
-        """Applies a single rotation suggestion and automatically moves to the next item."""
-        # Get the currently selected path
-        selected_paths = self._get_selected_file_paths_from_view()
-        if not selected_paths or len(selected_paths) != 1:
-            # If not exactly one item selected, fall back to the standard accept behavior
-            self._accept_current_rotation()
-            return
-        file_path = selected_paths[0]
-        if file_path not in self.rotation_controller.rotation_suggestions:
-            return
-        # Capture current visible order to compute the best next candidate
-        try:
-            visible_paths_before = self._get_all_visible_image_paths()
-        except Exception:
-            visible_paths_before = self.rotation_controller.get_visible_order()
-        accepted = self.rotation_controller.accept_paths([file_path])
-        if not self.rotation_controller.has_suggestions():
-            self._hide_rotation_view()
-            return
-        # Rebuild the view, then compute the next selection
-        self._rebuild_rotation_view()
-        path_to_select = self.rotation_controller.compute_next_after_accept(
-            visible_paths_before, accepted, file_path
-        )
-        active_view = self._get_active_file_view()
-        if path_to_select and active_view:
-            proxy_idx_to_select = self._find_proxy_index_for_path(path_to_select)
-            if proxy_idx_to_select.isValid():
-                active_view.setCurrentIndex(proxy_idx_to_select)
-                active_view.selectionModel().select(
-                    proxy_idx_to_select,
-                    QItemSelectionModel.SelectionFlag.ClearAndSelect,
-                )
-                active_view.scrollTo(
-                    proxy_idx_to_select,
-                    QAbstractItemView.ScrollHint.EnsureVisible,
-                )
-                return
-        # Fallback: clear selection and preview if we couldn't determine the next
-        if active_view:
-            active_view.selectionModel().clear()
-        self.advanced_image_viewer.clear()
-        self.accept_button.setVisible(False)
-        self.refuse_button.setVisible(False)
-
-    def _refuse_all_rotations(self):
-        """Refuses all remaining rotation suggestions."""
-        if not self.rotation_controller.has_suggestions():
-            self.statusBar().showMessage("No rotation suggestions to refuse.", 3000)
-            return
-        self.rotation_controller.refuse_all()
-        self.statusBar().showMessage(
-            "All rotation suggestions have been refused.", 5000
-        )
-        self._hide_rotation_view()
-
-    def _refuse_current_rotation(self):
-        """Refuses the currently selected rotation suggestions."""
-        selected_paths = self._get_selected_file_paths_from_view()
-        if not selected_paths:
-            return
-        target_paths = [
-            p
-            for p in selected_paths
-            if p in self.rotation_controller.rotation_suggestions
-        ]
-        if not target_paths:
-            return
-        self.rotation_controller.refuse_paths(target_paths)
-        if not self.rotation_controller.has_suggestions():
-            self._hide_rotation_view()
-            return
-        self._rebuild_rotation_view()
-        self.advanced_image_viewer.clear()
-        self.accept_button.setVisible(False)
-        self.refuse_button.setVisible(False)
-
-    def _hide_rotation_view(self):
-        """Hides the rotation view and switches back to the default list view."""
-        logger.info("Hiding rotation view as no more suggestions.")
-        self.left_panel.set_view_mode_list()
-        self.accept_all_button.setVisible(False)
-        self.accept_button.setVisible(False)
-        self.refuse_button.setVisible(False)
-        self.refuse_all_button.setVisible(False)
-        self.left_panel.view_rotation_icon.setVisible(False)
-        self.statusBar().showMessage("All rotation suggestions processed.", 5000)
-        self._rebuild_model_view()
 
     def _handle_tree_view_click(self, proxy_index: QModelIndex):
         if not proxy_index.isValid() or not self.group_by_similarity_mode:

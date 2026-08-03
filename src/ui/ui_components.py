@@ -20,7 +20,6 @@ import re
 from typing import override
 
 from core.image_pipeline import ImagePipeline
-from core.caching.exif_cache import ExifCache
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.media_utils import is_image_extension
 from ui.workflow_review_components import WorkflowProgressView
@@ -37,7 +36,7 @@ class DroppableTreeView(QTreeView):
 
     Architecture for keyboard shortcuts in PhotoSort:
 
-    1. Single-letter QAction shortcuts (D, R, A, I, S, T, F, B):
+    1. Single-letter QAction shortcuts (D, R, A, I, S, T, F):
        - Defined in MenuManager with ApplicationShortcut context
        - This class ignores them in keyPressEvent() to prevent type-ahead search
        - Qt's QAction system then processes them normally
@@ -81,7 +80,6 @@ class DroppableTreeView(QTreeView):
         # Modified shortcuts (Ctrl+S, Alt+1, etc.) are already handled correctly by Qt
         shortcut_keys = {
             Qt.Key.Key_A,  # Actual size zoom
-            Qt.Key.Key_B,  # Detect blur
             Qt.Key.Key_D,  # Mark for deletion
             Qt.Key.Key_F,  # Toggle folder view
             Qt.Key.Key_I,  # Toggle metadata sidebar
@@ -423,128 +421,6 @@ class LoadingOverlay(QWidget):
         if self.isVisible():
             self.hide()
             self.show()
-
-
-# --- Blur Detection Worker ---
-class BlurDetectionWorker(QObject):
-    progress_update = pyqtSignal(int, int, str)  # current, total, basename
-    blur_status_updated = pyqtSignal(str, bool)  # image_path, is_blurred
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-
-    def __init__(
-        self,
-        image_paths: list[str],
-        blur_threshold: float,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self._image_paths = image_paths  # Changed from image_data_list
-        self._blur_threshold = blur_threshold
-        self._is_running = True
-
-    def stop(self):
-        self._is_running = False
-
-    def _should_continue(self) -> bool:
-        return self._is_running
-
-    def run_detection(self):
-        if not self._is_running:
-            return
-        try:
-            from core.image_features.blur_detector import BlurDetector
-
-            BlurDetector.detect_blur_in_batch(
-                image_paths=self._image_paths,
-                threshold=self._blur_threshold,
-                status_update_callback=self.blur_status_updated.emit,  # Pass signal emitter directly
-                progress_callback=self.progress_update.emit,  # Pass signal emitter directly
-                should_continue_callback=self._should_continue,
-            )
-        except Exception as e:
-            err_msg = f"Error during batch blur detection: {e}"
-            logger.error(err_msg, exc_info=True)
-            self.error.emit(err_msg)
-        finally:
-            if (
-                not self._is_running and not self.signalsBlocked()
-            ):  # If stopped, error might have been emitted by batch
-                pass  # Avoid double emitting error if already cancelled and handled by batch
-            elif (
-                self.signalsBlocked()
-            ):  # If signals were blocked (e.g. due to deletion)
-                pass
-            else:  # Normal finish
-                self.finished.emit()
-
-
-# --- Rotation Detection Worker ---
-class RotationDetectionWorker(QObject):
-    """Worker thread for detecting rotation suggestions in images."""
-
-    progress_update = pyqtSignal(int, int, str)  # current, total, basename
-    rotation_detected = pyqtSignal(str, int)  # image_path, suggested_rotation
-    model_not_found = pyqtSignal(str)  # model_path
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-
-    def __init__(
-        self,
-        image_paths: list[str],
-        image_pipeline: ImagePipeline,
-        exif_cache: ExifCache,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self.image_paths = image_paths
-        self.image_pipeline = image_pipeline
-        self.exif_cache = exif_cache
-        self._should_stop = False
-
-    def stop(self):
-        """Request the worker to stop."""
-        self._should_stop = True
-
-    def run(self):
-        """Run the rotation detection process."""
-        try:
-            from core.image_features.rotation_detector import RotationDetector
-            from core.image_features.model_rotation_detector import (
-                ModelNotFoundError,
-            )
-
-            def result_callback(image_path: str, suggested_rotation: int):
-                if not self._should_stop:
-                    self.rotation_detected.emit(image_path, suggested_rotation)
-
-            def progress_callback(current: int, total: int, basename: str):
-                if not self._should_stop:
-                    self.progress_update.emit(current, total, basename)
-
-            def should_continue_callback() -> bool:
-                return not self._should_stop
-
-            # Pass the image pipeline instance to the detector
-            detector = RotationDetector(self.image_pipeline, self.exif_cache)
-            detector.detect_rotation_in_batch(
-                image_paths=self.image_paths,
-                result_callback=result_callback,
-                progress_callback=progress_callback,
-                should_continue_callback=should_continue_callback,
-            )
-
-            if not self._should_stop:
-                self.finished.emit()
-
-        except ModelNotFoundError as e:
-            logger.error(f"Rotation model not found during worker execution: {e}")
-            if not self._should_stop:
-                self.model_not_found.emit(str(e))  # Emit the model path
-        except Exception as e:
-            logger.error(f"Error in rotation detection worker: {e}")
-            if not self._should_stop:
-                self.error.emit(str(e))
 
 
 # --- Similarity Engine Worker ---

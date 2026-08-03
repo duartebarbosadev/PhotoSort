@@ -13,7 +13,7 @@ PhotoSort is a fast, powerful desktop application for managing large photo libra
 
 * **Intelligent Culling Tools**:
   * **Ratings & Labels**: Assign star ratings for quick categorization.
-  * **Blur Detection**: Automatically identify and flag blurry photos.
+  * **Easy Delete blur review**: Identify likely blurry photos inside the guided Easy Delete step.
   * **AI Orientation Detection**: Auto-detects the correct image orientation using a fine-tuned EfficientNetV2 ONNX model and proposes rotations.
   * **Similarity Analysis**: Group visually similar images to easily spot duplicates or near-duplicates.
   * **Pick Best (Local AI Ranking)**: Score each similarity cluster locally using technical quality checks plus an aesthetic model, with preview-cache reuse and RAW support.
@@ -33,8 +33,8 @@ PhotoSort uses a mix of local models and configurable external AI endpoints:
 - **Similarity analysis**: [`facebook/dinov2-small`](https://huggingface.co/facebook/dinov2-small) by default, with `facebook/dinov2-base` and a configurable grouping threshold available in Preferences, for visual image embeddings and crop-aware similarity clustering.
 - **Pick Best local aesthetic scoring**: [`cafeai/cafe_aesthetic`](https://huggingface.co/cafeai/cafe_aesthetic) via `transformers`.
 - **Pick Best local technical scoring**: OpenCV face/eye cascades plus MediaPipe Face Mesh for blur / eye-state / face-quality heuristics.
-- **Auto-rotation**: the local ONNX orientation classifier from [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection), a fine-tuned EfficientNetV2 model that predicts whether an image should stay at `0°` or be corrected by `90°`, `180°`, or `270°`. PhotoSort loads `orientation_model*.onnx` files from the project `models/` directory.
-- **AI Best Shot ranking and AI star ratings**: any **OpenAI-compatible vision model** you configure in Preferences.
+- **Fix Rotation**: the local ONNX orientation classifier from [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection), a fine-tuned EfficientNetV2 model that predicts whether an image should stay at `0°` or be corrected by `90°`, `180°`, or `270°`. PhotoSort loads `orientation_model*.onnx` files from the project `models/` directory.
+- **AI star ratings**: any **OpenAI-compatible vision model** you configure in Preferences.
   Default example in app settings: `Qwen3-VL-30B-A3B-Instruct-MLX-4bit` at `http://127.0.0.1:8000/v1`.
 
 ## Getting Started
@@ -114,7 +114,7 @@ If you prefer to build from source or want to contribute:
 
 #### Rotation Detection Model
 
-To use the **Auto Rotate Images** feature (`Ctrl+R`), download the pre-trained ONNX model used by PhotoSort's rotation detector.
+To use the **Fix Rotation** workflow step, download the pre-trained ONNX model used by PhotoSort's orientation detector.
 
 PhotoSort integrates the model published in [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection), which is trained to classify images into the four uprightness classes `0°`, `90°`, `180°`, and `270°`.
 
@@ -135,10 +135,9 @@ The following local models are downloaded or installed on first use:
 
 If you are running offline, warm these models once while online first so they are present in your local Hugging Face cache.
 
-#### AI Best Shot Ranking & Ratings
+#### AI Ratings
 
-PhotoSort relies on an OpenAI-compatible vision model to rank
-similar shots and request AI star ratings. Configure the endpoint under
+PhotoSort uses an OpenAI-compatible vision model to request AI star ratings. Configure the endpoint under
 **Preferences → AI Rating Engine** (`F10`) by providing the API key (optional for
 local deployments), base URL, model name, prompt templates, max tokens, timeout,
 and concurrency. Any server that implements the OpenAI Chat Completions API with
@@ -150,12 +149,7 @@ The app default is configured for a local OpenAI-compatible server using:
 - Base URL: `http://127.0.0.1:8000/v1`
 
 **Using the results**  
-- **Similarity stacks**: After running **View → Analyze Similarity**, launch
-  **View → Analyze Best Shots** (`Ctrl+B`) to automatically pick a winner for every cluster
-  (metrics appear in the UI tooltips). For ad-hoc comparisons select a handful of
-  images and trigger **View → Analyze Best Shots (Selected)** (`Alt+B`) to rank
-  just that group.
-- **Pick Best**: After running similarity, use the **Pick Best** workflow step to score each cluster locally using cached previews plus aesthetic and technical analysis.
+- **Pick Best**: Use the **Pick Best** workflow step to score similar-image clusters locally using cached previews plus aesthetic and technical analysis.
 - **AI star ratings**: To score every visible image, run **View → AI Rate Images**
   (`Ctrl+A`). The ratings are stored in your XMP sidecars/metadata cache so
   they survive reloads, and you can filter the library using the standard rating

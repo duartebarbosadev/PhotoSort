@@ -7,7 +7,6 @@ import ctypes
 import os
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
 from enum import Enum
 from PyQt6.QtCore import QSettings
 from core.runtime_paths import resolve_user_cache_dir
@@ -74,9 +73,7 @@ OPENAI_BASE_URL_KEY = "AI/OpenAIBaseUrl"
 OPENAI_MAX_TOKENS_KEY = "AI/OpenAIMaxTokens"
 OPENAI_TIMEOUT_KEY = "AI/OpenAITimeout"
 OPENAI_MAX_WORKERS_KEY = "AI/OpenAIMaxWorkers"
-OPENAI_BEST_SHOT_PROMPT_KEY = "AI/BestShotPrompt"
 OPENAI_RATING_PROMPT_KEY = "AI/RatingPrompt"
-BEST_SHOT_BATCH_SIZE_KEY = "AI/BestShotBatchSize"
 LOCATION_GROUPING_DEPTH_KEY = "Grouping/LocationDepth"
 COMPANION_FILES_PREFERENCE_KEY = "Grouping/CompanionFilesPreference"
 EASY_DELETE_BLUR_THRESHOLD_KEY = "EasyDelete/BlurThreshold"
@@ -115,7 +112,6 @@ DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_OPENAI_MAX_TOKENS = 200
 DEFAULT_OPENAI_TIMEOUT = 600
 DEFAULT_OPENAI_MAX_WORKERS = 4
-DEFAULT_BEST_SHOT_BATCH_SIZE = 3
 
 # Image inspection quality progression. Originals stay memory-only and are
 # bounded across the complete visible comparison set.
@@ -123,14 +119,6 @@ INSPECTION_DETAIL_DWELL_MS = 250
 INSPECTION_DETAIL_TRANSITION_MS = 180
 INSPECTION_DETAIL_BUDGET_BYTES = 512 * 1024 * 1024
 
-
-@dataclass(frozen=True, slots=True)
-class LocalBestShotConstants:
-    model_stride: int = 32
-    tensor_cache_key: str = "_photosort_pyiqa_tensor"
-
-
-_LOCAL_BEST_SHOT_CONSTANTS = LocalBestShotConstants()
 
 # --- UI Constants ---
 # Grid view settings
@@ -145,9 +133,6 @@ CENTER_PANEL_STRETCH = 3  # Center panel stretch factor
 RIGHT_PANEL_STRETCH = 1  # Right panel stretch factor
 
 # --- Processing Constants ---
-# Blur detection
-DEFAULT_BLUR_DETECTION_THRESHOLD = 100.0  # Default threshold for blur detection
-
 # Easy Delete step detection thresholds
 EASY_DELETE_BLUR_THRESHOLD = (
     100.0  # min acceptable peak local tile sharpness; below = blurry
@@ -815,24 +800,6 @@ def calculate_high_memory_decode_workers() -> int:
     return max(1, min(cpu_budget, memory_slots))
 
 
-def get_best_shot_batch_size() -> int:
-    settings = _get_settings()
-    value = settings.value(
-        BEST_SHOT_BATCH_SIZE_KEY, DEFAULT_BEST_SHOT_BATCH_SIZE, type=int
-    )
-    return max(2, int(value))
-
-
-def set_best_shot_batch_size(batch_size: int) -> None:
-    settings = _get_settings()
-    settings.setValue(BEST_SHOT_BATCH_SIZE_KEY, max(2, int(batch_size)))
-
-
-def get_local_best_shot_constants() -> LocalBestShotConstants:
-    """Return immutable constants for the local best-shot pipeline."""
-    return _LOCAL_BEST_SHOT_CONSTANTS
-
-
 def get_openai_config() -> dict:
     settings = _get_settings()
 
@@ -847,7 +814,6 @@ def get_openai_config() -> dict:
         OPENAI_MAX_WORKERS_KEY, DEFAULT_OPENAI_MAX_WORKERS, type=int
     )
 
-    best_shot_prompt = settings.value(OPENAI_BEST_SHOT_PROMPT_KEY, None, type=str)
     rating_prompt = settings.value(OPENAI_RATING_PROMPT_KEY, None, type=str)
 
     config = {
@@ -857,7 +823,6 @@ def get_openai_config() -> dict:
         "max_tokens": max_tokens,
         "timeout": timeout,
         "max_workers": max_workers,
-        "best_shot_prompt": best_shot_prompt,
         "rating_prompt": rating_prompt,
     }
     # Remove optional None entries for prompts/base_url so dataclass defaults apply
@@ -872,7 +837,6 @@ def set_openai_config(
     max_tokens: int | None = None,
     timeout: int | None = None,
     max_workers: int | None = None,
-    best_shot_prompt: str | None = None,
     rating_prompt: str | None = None,
 ) -> None:
     settings = _get_settings()
@@ -897,8 +861,6 @@ def set_openai_config(
         _set_or_clear(OPENAI_TIMEOUT_KEY, timeout)
     if max_workers is not None:
         _set_or_clear(OPENAI_MAX_WORKERS_KEY, max_workers)
-    if best_shot_prompt is not None:
-        _set_or_clear(OPENAI_BEST_SHOT_PROMPT_KEY, best_shot_prompt)
     if rating_prompt is not None:
         _set_or_clear(OPENAI_RATING_PROMPT_KEY, rating_prompt)
 
