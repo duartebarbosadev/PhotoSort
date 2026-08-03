@@ -43,6 +43,40 @@ def test_fix_rotation_worker_does_not_retry_failed_analysis_with_full_decode():
     assert angle == 0
 
 
+def test_fix_rotation_cancellation_does_not_wait_for_running_inference():
+    pipeline = Mock()
+    model = Mock()
+    worker = RotationDetectionStepWorker(
+        ["photo.arw"], image_pipeline=pipeline, model_detector=model, num_workers=1
+    )
+    executor = Mock()
+    future = Mock()
+    executor.submit.return_value = future
+    completed = Mock()
+    worker.completed.connect(completed)
+
+    def cancel_before_result(futures):
+        worker.stop()
+        yield from futures
+
+    with (
+        patch(
+            "workers.rotation_detection_step_worker.ThreadPoolExecutor",
+            return_value=executor,
+        ),
+        patch(
+            "workers.rotation_detection_step_worker.as_completed",
+            side_effect=cancel_before_result,
+        ),
+    ):
+        worker._run()
+
+    future.cancel.assert_called_once_with()
+    executor.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
+    future.result.assert_not_called()
+    completed.assert_not_called()
+
+
 def test_analysis_image_uses_neutral_raw_loader_and_reuses_cache(tmp_path):
     source = tmp_path / "photo.arw"
     source.write_bytes(b"raw-placeholder")

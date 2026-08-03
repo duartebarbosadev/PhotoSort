@@ -125,7 +125,14 @@ class RotationDetectionStepWorker(QObject):
             if self._should_stop:
                 for pending in futures:
                     pending.cancel()
-            executor.shutdown(wait=True, cancel_futures=True)
+            # ONNX inference cannot be interrupted once it has entered the runtime.
+            # On cancellation, release the workflow thread immediately and let only
+            # already-running calls finish in the executor; their results are stale
+            # and are never emitted. A normal completion still joins every task.
+            executor.shutdown(
+                wait=not self._should_stop,
+                cancel_futures=self._should_stop,
+            )
 
         if not self._should_stop:
             self.completed.emit(dict(self._results))
