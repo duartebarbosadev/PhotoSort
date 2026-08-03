@@ -16,11 +16,14 @@ def test_analysis_cache_persists_clusters(tmp_path):
     cache.save_cluster_results(folder, clusters, signature="signature")
 
     assert cache.load(folder)["cluster_results"] == clusters
-    assert cache.load_valid_cluster_results(
-        folder,
-        signature="signature",
-        expected_paths=set(clusters),
-    ) == clusters
+    assert (
+        cache.load_valid_cluster_results(
+            folder,
+            signature="signature",
+            expected_paths=set(clusters),
+        )
+        == clusters
+    )
     cache.close()
 
 
@@ -49,14 +52,20 @@ def test_analysis_cache_rejects_unsigned_partial_or_changed_clusters(tmp_path):
     clusters = {"a.jpg": 1, "b.jpg": 1}
     cache.save_cluster_results(folder, clusters, signature="current")
 
-    assert cache.load_valid_cluster_results(
-        folder, signature="changed", expected_paths=set(clusters)
-    ) is None
-    assert cache.load_valid_cluster_results(
-        folder,
-        signature="current",
-        expected_paths={"a.jpg", "b.jpg", "c.jpg"},
-    ) is None
+    assert (
+        cache.load_valid_cluster_results(
+            folder, signature="changed", expected_paths=set(clusters)
+        )
+        is None
+    )
+    assert (
+        cache.load_valid_cluster_results(
+            folder,
+            signature="current",
+            expected_paths={"a.jpg", "b.jpg", "c.jpg"},
+        )
+        is None
+    )
 
 
 def test_similarity_invalidation_preserves_manual_overrides(tmp_path):

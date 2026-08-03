@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 class _RotationModel(Protocol):
-    def predict_rotation_angle(self, image_path: str, image: object | None = None) -> int: ...
+    def predict_rotation_angle(
+        self, image_path: str, image: object | None = None
+    ) -> int: ...
 
 
 class RotationDetectionStepWorker(QObject):
