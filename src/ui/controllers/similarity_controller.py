@@ -2,6 +2,7 @@ from typing import Protocol, Any
 from datetime import datetime as datetime_obj
 
 from ui.helpers.cluster_utils import ClusterUtils
+from core.similarity_cache import normalize_cluster_results
 
 
 class SimilarityContext(Protocol):
@@ -48,23 +49,24 @@ class SimilarityController:
         self.ctx.app_state.embeddings_cache = embeddings_dict
         self.ctx.update_loading_text("Embeddings generated. Clustering...")
 
-    def clustering_complete(self, cluster_results: dict[str, int], group_mode: bool):
-        self.ctx.app_state.cluster_results = cluster_results
-        if not cluster_results:
+    def clustering_complete(self, cluster_results: dict[str, object], group_mode: bool):
+        normalized_results = normalize_cluster_results(cluster_results)
+        self.ctx.app_state.cluster_results = normalized_results
+        if not normalized_results:
             self.ctx.hide_loading_overlay()
             self.ctx.status_message("Clustering did not produce results.")
             return
         self.ctx.update_loading_text("Clustering complete. Updating view...")
         # Parse cluster IDs from values (can be "1 - 87.34%" format or integers)
         cluster_ids = set()
-        for value in cluster_results.values():
+        for value in normalized_results.values():
             parsed_id = ClusterUtils.parse_cluster_id(value)
             if parsed_id is not None:
                 cluster_ids.add(parsed_id)
         self.ctx.populate_cluster_filter(sorted(cluster_ids))
         self.ctx.enable_group_by_similarity(True)
         self.ctx.set_group_by_similarity_checked(True)
-        if cluster_results:
+        if normalized_results:
             self.ctx.set_cluster_sort_visible(True)
             self.ctx.enable_cluster_sort_combo(True)
         if group_mode:

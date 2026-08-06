@@ -85,6 +85,31 @@ def test_cull_active_focus_preserves_existing_multiselection():
     assert not context._is_syncing_selection
 
 
+def test_non_image_selection_clears_shared_inspection_session():
+    viewer = Mock()
+    inspection_controller = Mock()
+    status_bar = Mock()
+    context = SimpleNamespace(
+        app_state=SimpleNamespace(
+            image_files_data=[{"path": "a.jpg"}], focused_image_path=None
+        ),
+        advanced_image_viewer=viewer,
+        image_inspection_controller=inspection_controller,
+        invalidate_last_displayed_preview=Mock(),
+        sidebar_visible=False,
+        statusBar=lambda: status_bar,
+    )
+    context.clear_image_inspection = lambda target: MainWindow.clear_image_inspection(
+        context, target
+    )
+
+    MainWindow._handle_no_selection_or_non_image(context)
+
+    inspection_controller.clear.assert_called_once_with(viewer)
+    viewer.clear.assert_called_once()
+    viewer.setText.assert_called_once_with("Select an image or video to view details.")
+
+
 def test_multi_selection_uses_placeholders_and_one_background_request(tmp_path):
     paths = [str(tmp_path / "one.arw"), str(tmp_path / "two.arw")]
     for path in paths:

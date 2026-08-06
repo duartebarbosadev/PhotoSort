@@ -664,7 +664,9 @@ class MainWindow(QMainWindow):
         self.left_panel.grid_display_view.installEventFilter(self)
         for viewer in self.advanced_image_viewer.image_viewers:
             viewer.image_view.installEventFilter(self)
-        self.left_panel.tree_display_view.clicked.connect(self._handle_tree_view_click)
+        # Resolve group headers during the press event, before Qt can paint the
+        # transient non-image selection between press and release.
+        self.left_panel.tree_display_view.pressed.connect(self._handle_tree_view_click)
         self.left_panel.tree_display_view.customContextMenuRequested.connect(
             self.menu_manager.show_image_context_menu
         )
@@ -2889,13 +2891,77 @@ class MainWindow(QMainWindow):
     def _navigate_right_in_group(self, skip_deleted: bool = True):
         self.navigation_controller.navigate_group("right", skip_deleted)
 
+    def _select_group_and_children(self, group_index: QModelIndex) -> bool:
+        """Keep a group current while selecting its visible child images."""
+        view = self._get_active_file_view()
+        if not isinstance(view, QTreeView) or not group_index.isValid():
+            return False
+        model = view.model()
+        selection_model = view.selectionModel()
+        if model is None or selection_model is None:
+            return False
+
+        child_indices = []
+        for row in range(model.rowCount(group_index)):
+            child_index = model.index(row, 0, group_index)
+            if child_index.isValid():
+                child_indices.append(child_index)
+        if len(child_indices) == 1:
+            child_index = child_indices[0]
+            selection_model.setCurrentIndex(
+                child_index, QItemSelectionModel.SelectionFlag.ClearAndSelect
+            )
+            view.scrollTo(child_index, QAbstractItemView.ScrollHint.EnsureVisible)
+            return True
+
+        selection = QItemSelection(group_index, group_index)
+        for child_index in child_indices:
+            selection.select(child_index, child_index)
+        selection_model.select(
+            selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
+        )
+        selection_model.setCurrentIndex(
+            group_index, QItemSelectionModel.SelectionFlag.NoUpdate
+        )
+        view.scrollTo(group_index, QAbstractItemView.ScrollHint.EnsureVisible)
+        return True
+
+    def _navigate_across_tree_header(self, direction: str, skip_deleted: bool) -> bool:
+        """Navigate in view order when the next move crosses a tree header."""
+        view = self._get_active_file_view()
+        if not isinstance(view, QTreeView):
+            return False
+        current = view.currentIndex()
+        if not current.isValid():
+            return False
+        next_index = view.indexAbove if direction == "up" else view.indexBelow
+        adjacent = next_index(current)
+        if self._is_valid_image_item(current) and self._is_valid_image_item(adjacent):
+            return False
+        while adjacent.isValid():
+            if self._is_valid_image_item(adjacent):
+                if self._validate_and_select_image_candidate(
+                    adjacent, direction, skip_deleted
+                ):
+                    return True
+            else:
+                self._select_group_and_children(adjacent)
+                if view.currentIndex() != current:
+                    return True
+            adjacent = next_index(adjacent)
+        return True
+
     def _navigate_up_sequential(self, skip_deleted: bool = True):
         if self._apply_navigation_preferences("up", skip_deleted):
+            return
+        if self._navigate_across_tree_header("up", skip_deleted):
             return
         self.navigation_controller.navigate_linear("up", skip_deleted)
 
     def _navigate_down_sequential(self, skip_deleted: bool = True):
         if self._apply_navigation_preferences("down", skip_deleted):
+            return
+        if self._navigate_across_tree_header("down", skip_deleted):
             return
         self.navigation_controller.navigate_linear("down", skip_deleted)
 
@@ -3479,6 +3545,7 @@ class MainWindow(QMainWindow):
             self._get_active_file_view().viewport().update()
 
         logger.debug("Clearing viewer and setting 'Select an image or video' text")
+        self.clear_image_inspection(self.advanced_image_viewer)
         self.advanced_image_viewer.clear()
         self.advanced_image_viewer.setText("Select an image or video to view details.")
         self.invalidate_last_displayed_preview()
@@ -5095,25 +5162,7 @@ class MainWindow(QMainWindow):
 
         item_data = item.data(Qt.ItemDataRole.UserRole)
         if isinstance(item_data, str) and item_data.startswith("cluster_header_"):
-            active_view = self._get_active_file_view()
-            if not active_view or not isinstance(active_view, QTreeView):
-                return
-
-            selection = QItemSelection()
-            for row in range(item.rowCount()):
-                child_item = item.child(row)
-                if child_item:
-                    child_source_index = child_item.index()
-                    child_proxy_index = self.proxy_model.mapFromSource(
-                        child_source_index
-                    )
-                    if child_proxy_index.isValid():
-                        selection.select(child_proxy_index, child_proxy_index)
-
-            if not selection.isEmpty():
-                active_view.selectionModel().select(
-                    selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                )
+            self._select_group_and_children(proxy_index)
 
     def _on_side_by_side_availability_changed(self, is_available: bool):
         """Enable/disable the side-by-side view action based on availability."""

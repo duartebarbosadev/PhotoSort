@@ -22,6 +22,7 @@ from core.similarity_cache import (
     SimilarityClusteringResult,
     build_similarity_signature,
     normalize_fingerprints,
+    normalize_cluster_results,
 )
 from core.media_utils import is_image_extension
 from core.image_file_ops import ImageFileOperations
@@ -1678,7 +1679,7 @@ class AppController(QObject):
 
     def handle_clustering_complete(
         self,
-        result: SimilarityClusteringResult | dict[str, int],
+        result: SimilarityClusteringResult | dict[str, object],
     ):
         if getattr(self, "_ignore_similarity_results", False):
             return
@@ -1688,7 +1689,7 @@ class AppController(QObject):
         else:
             cluster_results_dict = result
             reused = False
-        self.app_state.cluster_results = cluster_results_dict
+        self.app_state.cluster_results = normalize_cluster_results(cluster_results_dict)
         if not reused:
             self.app_state.clear_pick_best_results()
 

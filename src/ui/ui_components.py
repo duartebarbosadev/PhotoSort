@@ -568,10 +568,14 @@ class SimilarityWorker(QObject):
 
         from core.similarity_cache import SimilarityClusteringResult
 
-        results = dict(cluster_results or {})
+        from core.similarity_cache import normalize_cluster_results
+
+        results = normalize_cluster_results(cluster_results)
         if self.analysis_cache is not None and self.folder_path:
             try:
-                overrides = self.analysis_cache.get_manual_overrides(self.folder_path)
+                overrides = normalize_cluster_results(
+                    self.analysis_cache.get_manual_overrides(self.folder_path)
+                )
                 for path, cluster_id in overrides.items():
                     if path in results:
                         results[path] = cluster_id

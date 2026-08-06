@@ -78,7 +78,7 @@ def test_similarity_start_and_clustering_flow():
     assert ctx.worker_manager.paths == ["a.jpg", "b.jpg"]
     sc.embeddings_generated({"a.jpg": [0, 1], "b.jpg": [1, 0]})
     assert ctx.app_state.embeddings_cache is not None
-    sc.clustering_complete({"a.jpg": 1, "b.jpg": 2}, group_mode=True)
+    sc.clustering_complete({"a.jpg": "1 - 87.34%", "b.jpg": 2}, group_mode=True)
     assert ctx.app_state.cluster_results == {"a.jpg": 1, "b.jpg": 2}
     assert ctx.cluster_ids == [1, 2]
     assert ctx.rebuilt == 1
