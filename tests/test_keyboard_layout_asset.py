@@ -70,3 +70,13 @@ def test_keyboard_layout_documents_current_workflow_shortcuts():
     assert "Shift commit" not in organize
     assert "Shift commit" not in cull
     assert "Blur · Cmd/Ctrl best shots" not in cull
+    assert 'H<span class="userText"></span>' in cull
+    assert 'J<span class="userText"></span>' in cull
+    assert 'K<span class="userText"></span>' in cull
+    assert 'L<span class="userText"></span>' in cull
+    assert cull.count("Cmd/Ctrl includes marked") == 4
+    assert "Play / pause selected video" in cull
+    assert "Cmd/Ctrl AI rate" in cull
+    assert "Alt/Option list view" in cull
+    assert "Alt/Option icon view" in cull
+    assert "Alt/Option grid view" in cull

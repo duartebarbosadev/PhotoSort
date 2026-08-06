@@ -173,6 +173,8 @@ class MainWindow(QMainWindow):
         self.group_by_similarity_mode = False
         self.navigation_skip_singleton_clusters = False
         self.navigation_rating_target: int | None = None
+        self._cull_shortcut_paths: list[str] = []
+        self._cull_side_by_side_available = False
         # Controllers (always created – treat as invariants for simpler code paths)
         self.deletion_controller = DeletionMarkController(
             app_state=self.app_state,
@@ -218,6 +220,7 @@ class MainWindow(QMainWindow):
         self._shortcut_handlers: dict[tuple[int, int], Callable[[], None]] = {}
         self._init_shortcut_handlers()
         self._create_widgets()
+        self._refresh_cull_shortcut_visibility([])
         self.grouping_step_widget.set_is_marked_func(
             self.app_state.is_marked_for_deletion
         )
@@ -664,7 +667,9 @@ class MainWindow(QMainWindow):
         self.left_panel.grid_display_view.installEventFilter(self)
         for viewer in self.advanced_image_viewer.image_viewers:
             viewer.image_view.installEventFilter(self)
-        self.left_panel.tree_display_view.clicked.connect(self._handle_tree_view_click)
+        # Resolve group headers during the press event, before Qt can paint the
+        # transient non-image selection between press and release.
+        self.left_panel.tree_display_view.pressed.connect(self._handle_tree_view_click)
         self.left_panel.tree_display_view.customContextMenuRequested.connect(
             self.menu_manager.show_image_context_menu
         )
@@ -1048,10 +1053,6 @@ class MainWindow(QMainWindow):
 
     def cancel_pending_workflow_transition(self) -> None:
         self._pending_workflow_transition = None
-
-    def _toggle_thumbnail_view(self, checked):
-        self._rebuild_model_view()
-        self.thumbnail_loader.set_enabled(checked)
 
     def reset_thumbnail_requests(self) -> None:
         self._thumbnail_icons_by_path.clear()
@@ -1795,7 +1796,6 @@ class MainWindow(QMainWindow):
             manager.view_grid_action,
             manager.toggle_folder_view_action,
             manager.group_by_similarity_action,
-            manager.toggle_thumbnails_action,
             manager.toggle_metadata_sidebar_action,
         ]
         if not hasattr(self, "_cull_action_shortcuts"):
@@ -1814,6 +1814,7 @@ class MainWindow(QMainWindow):
         ):
             if widget is not None:
                 widget.refresh_deletion_state()
+        self._refresh_cull_shortcut_visibility()
 
     def _sync_workflow_results_after_file_mutation(
         self, *, exclude: set[str] | None = None
@@ -2882,6 +2883,37 @@ class MainWindow(QMainWindow):
             self.group_by_similarity_mode and self.app_state.cluster_results
         )
         menu_manager.set_skip_singleton_action_available(can_skip)
+        self._refresh_cull_shortcut_visibility()
+
+    def _refresh_cull_shortcut_visibility(
+        self, selected_paths: list[str] | None = None
+    ) -> None:
+        """Show only Cull shortcuts that can act on the current state."""
+        if selected_paths is not None:
+            self._cull_shortcut_paths = list(selected_paths)
+        strip = getattr(self, "workflow_shortcut_strips", {}).get("cull")
+        if strip is None:
+            return
+
+        paths = self._cull_shortcut_paths
+        focus_count = min(len(paths), 9)
+        has_multiple = focus_count > 1
+        has_marks = bool(self.app_state.get_marked_files())
+
+        strip.set_shortcut_state(
+            "focus",
+            visible=has_multiple,
+            keys=f"1–{focus_count}" if has_multiple else None,
+        )
+        strip.set_shortcut_state(
+            "viewer_layout", visible=self._cull_side_by_side_available
+        )
+        strip.set_shortcut_state(
+            "playback", visible=any(is_video_extension(path) for path in paths)
+        )
+        for action in ("browse_including_marked", "clear_deletions", "apply"):
+            strip.set_shortcut_state(action, visible=has_marks)
+        strip.set_shortcut_state("groups", visible=bool(self.app_state.cluster_results))
 
     def _navigate_left_in_group(self, skip_deleted: bool = True):
         self.navigation_controller.navigate_group("left", skip_deleted)
@@ -2889,13 +2921,77 @@ class MainWindow(QMainWindow):
     def _navigate_right_in_group(self, skip_deleted: bool = True):
         self.navigation_controller.navigate_group("right", skip_deleted)
 
+    def _select_group_and_children(self, group_index: QModelIndex) -> bool:
+        """Keep a group current while selecting its visible child images."""
+        view = self._get_active_file_view()
+        if not isinstance(view, QTreeView) or not group_index.isValid():
+            return False
+        model = view.model()
+        selection_model = view.selectionModel()
+        if model is None or selection_model is None:
+            return False
+
+        child_indices = []
+        for row in range(model.rowCount(group_index)):
+            child_index = model.index(row, 0, group_index)
+            if child_index.isValid():
+                child_indices.append(child_index)
+        if len(child_indices) == 1:
+            child_index = child_indices[0]
+            selection_model.setCurrentIndex(
+                child_index, QItemSelectionModel.SelectionFlag.ClearAndSelect
+            )
+            view.scrollTo(child_index, QAbstractItemView.ScrollHint.EnsureVisible)
+            return True
+
+        selection = QItemSelection(group_index, group_index)
+        for child_index in child_indices:
+            selection.select(child_index, child_index)
+        selection_model.select(
+            selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
+        )
+        selection_model.setCurrentIndex(
+            group_index, QItemSelectionModel.SelectionFlag.NoUpdate
+        )
+        view.scrollTo(group_index, QAbstractItemView.ScrollHint.EnsureVisible)
+        return True
+
+    def _navigate_across_tree_header(self, direction: str, skip_deleted: bool) -> bool:
+        """Navigate in view order when the next move crosses a tree header."""
+        view = self._get_active_file_view()
+        if not isinstance(view, QTreeView):
+            return False
+        current = view.currentIndex()
+        if not current.isValid():
+            return False
+        next_index = view.indexAbove if direction == "up" else view.indexBelow
+        adjacent = next_index(current)
+        if self._is_valid_image_item(current) and self._is_valid_image_item(adjacent):
+            return False
+        while adjacent.isValid():
+            if self._is_valid_image_item(adjacent):
+                if self._validate_and_select_image_candidate(
+                    adjacent, direction, skip_deleted
+                ):
+                    return True
+            else:
+                self._select_group_and_children(adjacent)
+                if view.currentIndex() != current:
+                    return True
+            adjacent = next_index(adjacent)
+        return True
+
     def _navigate_up_sequential(self, skip_deleted: bool = True):
         if self._apply_navigation_preferences("up", skip_deleted):
+            return
+        if self._navigate_across_tree_header("up", skip_deleted):
             return
         self.navigation_controller.navigate_linear("up", skip_deleted)
 
     def _navigate_down_sequential(self, skip_deleted: bool = True):
         if self._apply_navigation_preferences("down", skip_deleted):
+            return
+        if self._navigate_across_tree_header("down", skip_deleted):
             return
         self.navigation_controller.navigate_linear("down", skip_deleted)
 
@@ -3479,6 +3575,7 @@ class MainWindow(QMainWindow):
             self._get_active_file_view().viewport().update()
 
         logger.debug("Clearing viewer and setting 'Select an image or video' text")
+        self.clear_image_inspection(self.advanced_image_viewer)
         self.advanced_image_viewer.clear()
         self.advanced_image_viewer.setText("Select an image or video to view details.")
         self.invalidate_last_displayed_preview()
@@ -3504,6 +3601,7 @@ class MainWindow(QMainWindow):
             logger.debug(
                 f"_handle_file_selection_changed: Retrieved {len(selected_file_paths)} paths from view"
             )
+        self._refresh_cull_shortcut_visibility(selected_file_paths)
 
         current_path = self._get_current_selected_image_path()
         if current_path and current_path in selected_file_paths:
@@ -3774,9 +3872,6 @@ class MainWindow(QMainWindow):
         Called after background thumbnail preload completes.
         This avoids blocking the UI during initial folder load.
         """
-        if not self.menu_manager.toggle_thumbnails_action.isChecked():
-            return  # Thumbnails are disabled, nothing to do
-
         if image_paths is not None:
             for file_path in dict.fromkeys(image_paths):
                 normalized_path = os.path.normpath(file_path)
@@ -4124,11 +4219,6 @@ class MainWindow(QMainWindow):
             Qt.Key.Key_S,
             Qt.KeyboardModifier.NoModifier,
             mm.group_by_similarity_action.trigger,
-        )
-        register(
-            Qt.Key.Key_T,
-            Qt.KeyboardModifier.NoModifier,
-            mm.toggle_thumbnails_action.trigger,
         )
         register(
             Qt.Key.Key_I,
@@ -5095,26 +5185,10 @@ class MainWindow(QMainWindow):
 
         item_data = item.data(Qt.ItemDataRole.UserRole)
         if isinstance(item_data, str) and item_data.startswith("cluster_header_"):
-            active_view = self._get_active_file_view()
-            if not active_view or not isinstance(active_view, QTreeView):
-                return
-
-            selection = QItemSelection()
-            for row in range(item.rowCount()):
-                child_item = item.child(row)
-                if child_item:
-                    child_source_index = child_item.index()
-                    child_proxy_index = self.proxy_model.mapFromSource(
-                        child_source_index
-                    )
-                    if child_proxy_index.isValid():
-                        selection.select(child_proxy_index, child_proxy_index)
-
-            if not selection.isEmpty():
-                active_view.selectionModel().select(
-                    selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                )
+            self._select_group_and_children(proxy_index)
 
     def _on_side_by_side_availability_changed(self, is_available: bool):
         """Enable/disable the side-by-side view action based on availability."""
+        self._cull_side_by_side_available = is_available
         self.menu_manager.side_by_side_view_action.setEnabled(is_available)
+        self._refresh_cull_shortcut_visibility()

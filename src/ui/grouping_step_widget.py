@@ -4243,8 +4243,8 @@ class GroupingStepWidget(QWidget):
                     and tree.state() != QAbstractItemView.State.EditingState
                 ):
                     return self._navigate_tree_left(tree)
-                is_up = key in (Qt.Key.Key_Up, Qt.Key.Key_K)
-                is_down = key in (Qt.Key.Key_Down, Qt.Key.Key_J)
+                is_up = key == Qt.Key.Key_Up
+                is_down = key == Qt.Key.Key_Down
                 if is_up or is_down:
                     has_shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
                     has_alt = bool(modifiers & Qt.KeyboardModifier.AltModifier)

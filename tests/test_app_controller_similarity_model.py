@@ -222,7 +222,7 @@ def test_pick_best_refreshes_cached_clusters_without_regional_inputs(monkeypatch
     assert controller._pick_best_pending_after_similarity is True
 
 
-def test_reused_clusters_do_not_clear_downstream_results():
+def test_reused_clusters_are_normalized_without_clearing_downstream_results():
     action = SimpleNamespace(
         setEnabled=Mock(),
         setChecked=Mock(),
@@ -263,10 +263,14 @@ def test_reused_clusters_do_not_clear_downstream_results():
     AppController.handle_clustering_complete(
         controller,
         SimilarityClusteringResult(
-            clusters={"photo.jpg": 1},
+            clusters={"legacy.jpg": "1 - 87.34%", "manual.jpg": 2},
             signature="signature",
             reused=True,
         ),
     )
 
+    assert state.cluster_results == {"legacy.jpg": 1, "manual.jpg": 2}
+    main_window.cluster_filter_combo.addItems.assert_called_once_with(
+        ["All Clusters", "Cluster 1", "Cluster 2"]
+    )
     state.clear_pick_best_results.assert_not_called()

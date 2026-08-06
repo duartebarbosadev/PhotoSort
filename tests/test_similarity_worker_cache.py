@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from core.similarity_cache import SimilarityClusteringResult
+from core.similarity_cache import (
+    SimilarityClusteringResult,
+    normalize_cluster_results,
+)
 from ui.ui_components import SimilarityWorker
 
 
@@ -47,6 +50,16 @@ class _FakeEngine:
         self.regional_embeddings_generated.emit({path: [[1.0, 0.0]] for path in paths})
         if kwargs["perform_clustering"]:
             self.clustering_complete.emit({path: 1 for path in paths})
+
+
+def test_cluster_results_normalize_legacy_and_manual_assignment_values():
+    assert normalize_cluster_results(
+        {
+            "legacy.jpg": "1 - 87.34%",
+            "manual.jpg": 2,
+            "invalid.jpg": "unknown",
+        }
+    ) == {"legacy.jpg": 1, "manual.jpg": 2}
 
 
 def test_worker_hydrates_artifacts_and_reuses_valid_clusters(monkeypatch):

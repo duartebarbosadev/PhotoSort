@@ -5,14 +5,11 @@ from ui.thumbnail_load_coordinator import ViewportThumbnailLoader
 
 
 def _context(item_count=100):
-    action = Mock()
-    action.isChecked.return_value = True
     worker_manager = Mock()
     worker_manager.is_thumbnail_preload_running.return_value = False
     worker_manager.start_thumbnail_session.return_value = True
     worker_manager.prioritize_thumbnail_paths.return_value = True
     return SimpleNamespace(
-        menu_manager=SimpleNamespace(toggle_thumbnails_action=action),
         worker_manager=worker_manager,
         app_state=SimpleNamespace(
             image_files_data=[

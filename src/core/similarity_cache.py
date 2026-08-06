@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import pickle
 import tempfile
+from collections.abc import Mapping
 from typing import Literal, TypedDict
 
 from compression import zstd
@@ -38,6 +39,34 @@ class SimilarityClusteringResult:
     clusters: dict[str, int]
     signature: str
     reused: bool = False
+
+
+def parse_cluster_id(value: object) -> int | None:
+    """Return the numeric ID from current or legacy cluster assignments."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.split(" - ", 1)[0].strip())
+        except ValueError:
+            return None
+    return None
+
+
+def normalize_cluster_results(clusters: object) -> dict[str, int]:
+    """Normalize a cluster mapping to the application-wide integer contract."""
+
+    if not isinstance(clusters, Mapping):
+        return {}
+    normalized: dict[str, int] = {}
+    for path, value in clusters.items():
+        cluster_id = parse_cluster_id(value)
+        if path and cluster_id is not None:
+            normalized[str(path)] = cluster_id
+    return normalized
 
 
 def fingerprint_path(path: str) -> FileFingerprint | None:

@@ -36,12 +36,12 @@ class DroppableTreeView(QTreeView):
 
     Architecture for keyboard shortcuts in PhotoSort:
 
-    1. Single-letter QAction shortcuts (D, R, A, I, S, T, F):
+    1. Single-letter QAction shortcuts (D, R, A, I, S, F):
        - Defined in MenuManager with ApplicationShortcut context
        - This class ignores them in keyPressEvent() to prevent type-ahead search
        - Qt's QAction system then processes them normally
 
-    2. Navigation keys (arrows, HJKL):
+    2. Navigation keys (arrows):
        - Handled by MainWindow.eventFilter() -> HotkeyController
 
     3. Modified shortcuts (Ctrl+S, Alt+1, Shift+R, etc.):
@@ -85,7 +85,6 @@ class DroppableTreeView(QTreeView):
             Qt.Key.Key_I,  # Toggle metadata sidebar
             Qt.Key.Key_R,  # Rotate clockwise
             Qt.Key.Key_S,  # Group by similarity
-            Qt.Key.Key_T,  # Toggle thumbnails
         }
 
         # If it's an unmodified single-letter shortcut, ignore it
@@ -568,10 +567,14 @@ class SimilarityWorker(QObject):
 
         from core.similarity_cache import SimilarityClusteringResult
 
-        results = dict(cluster_results or {})
+        from core.similarity_cache import normalize_cluster_results
+
+        results = normalize_cluster_results(cluster_results)
         if self.analysis_cache is not None and self.folder_path:
             try:
-                overrides = self.analysis_cache.get_manual_overrides(self.folder_path)
+                overrides = normalize_cluster_results(
+                    self.analysis_cache.get_manual_overrides(self.folder_path)
+                )
                 for path, cluster_id in overrides.items():
                     if path in results:
                         results[path] = cluster_id

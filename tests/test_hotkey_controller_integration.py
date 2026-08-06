@@ -36,3 +36,13 @@ def test_hotkey_controller_skip_deleted_flag_propagates():
     # Up key propagation
     hk.handle_key(Qt.Key.Key_Up, skip_deleted=False)
     assert ctx.calls[-1] == ("up", False)
+
+
+def test_hotkey_controller_does_not_use_letter_navigation():
+    ctx = DummyCtx()
+    hk = HotkeyController(ctx)
+
+    for key in (Qt.Key.Key_H, Qt.Key.Key_J, Qt.Key.Key_K, Qt.Key.Key_L):
+        assert hk.handle_key(key) is False
+
+    assert ctx.calls == []

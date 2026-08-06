@@ -107,6 +107,22 @@ def test_navigation_cancels_dwell_and_stale_results():
     assert loader.detail_requests == [("new.jpg",)]
 
 
+def test_clear_allows_same_image_to_be_activated_again():
+    controller, loader, pipeline, viewer = _make_controller()
+    specs = [InspectionImageSpec("photo.jpg")]
+    controller.activate(viewer, specs)
+
+    controller.clear(viewer)
+    viewer.clear()
+    controller.activate(viewer, specs)
+
+    assert pipeline.immediate_calls == ["photo.jpg", "photo.jpg"]
+    assert [request[0] for request in loader.preview_requests] == [
+        ("photo.jpg",),
+        ("photo.jpg",),
+    ]
+
+
 def test_zoom_and_actual_size_deduplicate_and_defer_one_to_one():
     controller, loader, _pipeline, viewer = _make_controller()
     viewer.show()

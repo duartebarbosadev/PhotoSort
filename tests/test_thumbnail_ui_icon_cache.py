@@ -19,10 +19,7 @@ def test_completed_thumbnail_is_cached_for_models_not_built_yet():
     pixmap.fill()
     pipeline = Mock()
     pipeline.get_cached_thumbnail_qpixmap.return_value = pixmap
-    action = Mock()
-    action.isChecked.return_value = True
     window = SimpleNamespace(
-        menu_manager=SimpleNamespace(toggle_thumbnails_action=action),
         image_pipeline=pipeline,
         _file_items_by_path={},
         _thumbnail_icons_by_path={},
@@ -42,13 +39,10 @@ def test_thumbnail_callback_tolerates_item_deleted_during_folder_change():
     pixmap.fill()
     pipeline = Mock()
     pipeline.get_cached_thumbnail_qpixmap.return_value = pixmap
-    action = Mock()
-    action.isChecked.return_value = True
     model = QStandardItemModel()
     stale_item = QStandardItem("old-folder.jpg")
     model.appendRow(stale_item)
     window = SimpleNamespace(
-        menu_manager=SimpleNamespace(toggle_thumbnails_action=action),
         image_pipeline=pipeline,
         _file_items_by_path={os.path.normpath(path): stale_item},
         _thumbnail_icons_by_path={},

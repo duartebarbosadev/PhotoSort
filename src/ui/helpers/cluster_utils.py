@@ -4,6 +4,7 @@ from datetime import datetime as datetime_obj
 from typing import Any
 
 import numpy as np
+from core.similarity_cache import parse_cluster_id
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +22,7 @@ class ClusterUtils:
 
         Values can be either integers or strings like "1 - 87.34%".
         """
-        if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            try:
-                return int(value.split(" - ")[0])
-            except ValueError, IndexError:
-                try:
-                    return int(value)
-                except ValueError:
-                    return None
-        return None
+        return parse_cluster_id(value)
 
     @staticmethod
     def group_images_by_cluster(
