@@ -341,14 +341,61 @@ PICK_BEST_SHORTCUTS = (
 CULL_SHORTCUTS = (
     WorkflowShortcutSpec("focus", tuple(str(i) for i in range(1, 10)), "1–9", "Focus"),
     WorkflowShortcutSpec(
-        "browse", ("Left", "Right", "Up", "Down"), "← ↑ → ↓", "Browse"
+        "browse",
+        ("Left", "Right", "Up", "Down"),
+        "← ↑ → ↓",
+        "Browse",
+    ),
+    WorkflowShortcutSpec(
+        "browse_including_marked",
+        (
+            "Ctrl+Left",
+            "Ctrl+Right",
+            "Ctrl+Up",
+            "Ctrl+Down",
+        ),
+        f"{_PRIMARY_MODIFIER}+browse",
+        "Browse including marked",
     ),
     WorkflowShortcutSpec("mark", ("D",), "D", "Mark"),
+    WorkflowShortcutSpec("trash_now", ("Delete", "Backspace"), "Delete", "Trash now"),
+    WorkflowShortcutSpec(
+        "clear_deletions", ("Alt+D",), f"{_ALT_MODIFIER}D", "Clear marks"
+    ),
     _APPLY_SHORTCUT,
-    WorkflowShortcutSpec("rotate", ("R",), "R", "Rotate"),
+    WorkflowShortcutSpec(
+        "rating",
+        tuple(f"Ctrl+{rating}" for rating in range(6)),
+        f"{_PRIMARY_MODIFIER}0–5",
+        "Rate",
+    ),
+    WorkflowShortcutSpec(
+        "rotate",
+        ("R", "Shift+R", "Alt+R"),
+        f"R / ⇧R / {_ALT_MODIFIER}R",
+        "Rotate",
+    ),
+    WorkflowShortcutSpec(
+        "zoom",
+        ("+", "-", "Ctrl++", "Ctrl+-"),
+        f"+/− / {_PRIMARY_MODIFIER}+/−",
+        "Zoom",
+    ),
+    WorkflowShortcutSpec("playback", ("Space",), "Space", "Play / pause"),
+    WorkflowShortcutSpec("actual_size", ("A",), "A", "Actual size"),
     WorkflowShortcutSpec("details", ("I",), "I", "Details"),
     WorkflowShortcutSpec("fit", ("0",), "0", "Fit"),
-    WorkflowShortcutSpec("views", ("F1", "F2"), "F1 / F2", "View"),
+    WorkflowShortcutSpec("viewer_layout", ("F1", "F2", "F3"), "F1 / F2 / F3", "Viewer"),
+    WorkflowShortcutSpec(
+        "browser_layout",
+        ("Alt+1", "Alt+2", "Alt+3"),
+        f"{_ALT_MODIFIER}1–3",
+        "Browser view",
+    ),
+    WorkflowShortcutSpec("folders", ("F",), "F", "Folders"),
+    WorkflowShortcutSpec("groups", ("S",), "S", "Similarity groups"),
+    WorkflowShortcutSpec("find", ("Ctrl+F",), f"{_PRIMARY_MODIFIER}F", "Find"),
+    WorkflowShortcutSpec("ai_rate", ("Ctrl+A",), f"{_PRIMARY_MODIFIER}A", "AI rate"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
     _WORKFLOW_STEP_SHORTCUT,
 )
@@ -665,11 +712,6 @@ class WorkflowShortcutStrip(QFrame):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(6)
 
-        heading = QLabel("SHORTCUTS")
-        heading.setObjectName("workflowShortcutHeading")
-        self._heading = heading
-        layout.addWidget(heading)
-
         items = QWidget(self)
         items.setObjectName("workflowShortcutItems")
         items_layout = QGridLayout(items)
@@ -677,14 +719,16 @@ class WorkflowShortcutStrip(QFrame):
         items_layout.setHorizontalSpacing(8)
         items_layout.setVerticalSpacing(3)
         columns = max(1, len(shortcuts))
-        self._column_limit = columns
-        self._minimum_columns = max(1, math.ceil(len(shortcuts) / max(1, max_rows)))
+        self._max_rows = max(1, max_rows)
         self._current_columns = columns
         self._items_layout = items_layout
         self.shortcut_specs = tuple(shortcuts)
         self._items: list[QWidget] = []
         self._keycaps: list[QLabel] = []
         self._action_labels: list[QLabel] = []
+        self._items_by_action: dict[str, QWidget] = {}
+        self._keycaps_by_action: dict[str, QLabel] = {}
+        self._labels_by_action: dict[str, QLabel] = {}
 
         for index, spec in enumerate(shortcuts):
             item = QWidget(self)
@@ -703,6 +747,9 @@ class WorkflowShortcutStrip(QFrame):
             self._items.append(item)
             self._keycaps.append(keycap)
             self._action_labels.append(action)
+            self._items_by_action[spec.action] = item
+            self._keycaps_by_action[spec.action] = keycap
+            self._labels_by_action[spec.action] = action
 
             item_layout.addWidget(keycap)
             item_layout.addWidget(action)
@@ -710,6 +757,28 @@ class WorkflowShortcutStrip(QFrame):
 
         layout.addWidget(items)
         layout.addStretch(1)
+
+    def set_shortcut_state(
+        self,
+        action: str,
+        *,
+        visible: bool | None = None,
+        keys: str | None = None,
+    ) -> None:
+        """Update one conditional shortcut without rebuilding the footer."""
+        item = self._items_by_action.get(action)
+        keycap = self._keycaps_by_action.get(action)
+        label = self._labels_by_action.get(action)
+        if item is None or keycap is None or label is None:
+            return
+        if keys is not None:
+            keycap.setText(keys)
+            tooltip = f"{keys} — {label.text()}"
+            keycap.setToolTip(tooltip)
+            label.setToolTip(tooltip)
+        if visible is not None:
+            item.setVisible(visible)
+        self._reflow_shortcuts()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -719,21 +788,17 @@ class WorkflowShortcutStrip(QFrame):
         self._reflow_shortcuts()
 
     def _reflow_shortcuts(self) -> None:
-        if not self._items:
+        visible_items = [item for item in self._items if not item.isHidden()]
+        if not visible_items:
             return
         margins = self.layout().contentsMargins()
-        available_width = max(
-            1,
-            self.width()
-            - margins.left()
-            - margins.right()
-            - self._heading.sizeHint().width()
-            - self.layout().spacing(),
-        )
+        available_width = max(1, self.width() - margins.left() - margins.right())
         spacing = self._items_layout.horizontalSpacing()
-        item_widths = [item.sizeHint().width() for item in self._items]
+        item_widths = [item.sizeHint().width() for item in visible_items]
+        column_limit = len(visible_items)
+        minimum_columns = max(1, math.ceil(len(visible_items) / self._max_rows))
         selected_columns = 1
-        for columns in range(self._column_limit, 0, -1):
+        for columns in range(column_limit, 0, -1):
             row_widths = [
                 sum(item_widths[start : start + columns])
                 + spacing * (min(columns, len(item_widths) - start) - 1)
@@ -742,13 +807,11 @@ class WorkflowShortcutStrip(QFrame):
             if max(row_widths, default=0) <= available_width:
                 selected_columns = columns
                 break
-        selected_columns = max(selected_columns, self._minimum_columns)
-        if selected_columns == self._current_columns:
-            return
+        selected_columns = max(selected_columns, minimum_columns)
         self._current_columns = selected_columns
         for item in self._items:
             self._items_layout.removeWidget(item)
-        for index, item in enumerate(self._items):
+        for index, item in enumerate(visible_items):
             self._items_layout.addWidget(
                 item, index // selected_columns, index % selected_columns
             )

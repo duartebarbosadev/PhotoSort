@@ -55,7 +55,7 @@ class ViewportThumbnailLoader(QObject):
         self.reset(stop_worker=True)
         self._all_paths = list(dict.fromkeys(path for path in image_paths if path))
         self._all_path_set = set(self._all_paths)
-        if not self._all_paths or not self._enabled():
+        if not self._all_paths:
             return
         self._session_id = uuid4().hex
         self.context.set_thumbnail_progress(0, len(self._all_paths), 0, False)
@@ -64,7 +64,7 @@ class ViewportThumbnailLoader(QObject):
     def _start_folder_session(self) -> None:
         """Start the current folder session once the previous worker has exited."""
 
-        if not self._session_id or not self._all_paths or not self._enabled():
+        if not self._session_id or not self._all_paths:
             return
         manager = self.context.worker_manager
         if manager.is_thumbnail_preload_running():
@@ -97,17 +97,6 @@ class ViewportThumbnailLoader(QObject):
         self._requested_paths.clear()
         self._warm_complete = False
         self.context.hide_thumbnail_progress()
-
-    def set_enabled(self, enabled: bool) -> None:
-        if not enabled:
-            self.reset(stop_worker=True)
-            return
-        paths = [
-            item.get("path")
-            for item in self.context.app_state.image_files_data
-            if item.get("path")
-        ]
-        self.start_folder(paths)
 
     def invalidate_paths(self, image_paths) -> None:
         paths = [path for path in dict.fromkeys(image_paths) if path]
@@ -161,9 +150,6 @@ class ViewportThumbnailLoader(QObject):
         # second request applies the initial viewport without requiring a scroll.
         self._layout_retry_timer.start()
 
-    def _enabled(self) -> bool:
-        return self.context.menu_manager.toggle_thumbnails_action.isChecked()
-
     def _visible_paths(self) -> list[str]:
         workflow_provider = getattr(
             self.context,
@@ -211,7 +197,7 @@ class ViewportThumbnailLoader(QObject):
         return paths
 
     def _load_visible_batch(self) -> None:
-        if not self._enabled() or not self._session_id:
+        if not self._session_id:
             return
         visible = [
             path

@@ -2548,14 +2548,6 @@ QWidget#workflowShortcutItem {
     border: none;
 }
 
-QLabel#workflowShortcutHeading {
-    color: #9AA7B1;
-    font-size: 8pt;
-    font-weight: 800;
-    letter-spacing: 1px;
-    background: transparent;
-}
-
 QLabel#workflowKeycap {
     background-color: #343A40;
     color: #F4F7F9;

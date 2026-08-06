@@ -985,6 +985,7 @@ def test_footer_shortcuts_use_at_most_three_rows_and_still_reflow():
     ) // strip._current_columns
     assert strip._current_columns < wide_columns
     assert row_count <= 3
+    assert strip.findChild(QLabel, "workflowShortcutHeading") is None
 
 
 def test_organize_top_bar_returns_to_a_single_control_row():
@@ -2612,6 +2613,101 @@ def test_visible_shortcut_specs_are_the_installed_source_of_truth():
         assert len(widget._shortcuts) == expected
 
 
+def test_cull_footer_documents_all_registered_review_shortcuts():
+    documented = {sequence for spec in CULL_SHORTCUTS for sequence in spec.sequences}
+    expected = {
+        *(str(number) for number in range(1, 10)),
+        "Left",
+        "Right",
+        "Up",
+        "Down",
+        "Ctrl+Left",
+        "Ctrl+Right",
+        "Ctrl+Up",
+        "Ctrl+Down",
+        "D",
+        "Delete",
+        "Backspace",
+        "Alt+D",
+        "Shift+Return",
+        "Shift+Enter",
+        *(f"Ctrl+{rating}" for rating in range(6)),
+        "R",
+        "Shift+R",
+        "Alt+R",
+        "Ctrl++",
+        "Ctrl+-",
+        "+",
+        "-",
+        "Space",
+        "A",
+        "I",
+        "0",
+        "F1",
+        "F2",
+        "F3",
+        "Alt+1",
+        "Alt+2",
+        "Alt+3",
+        "F",
+        "S",
+        "Ctrl+F",
+        "Ctrl+A",
+        "Ctrl+Shift+L",
+        *(f"Ctrl+Alt+{step}" for step in range(1, 6)),
+    }
+
+    assert expected <= documented
+    assert "Ctrl+S" not in documented
+
+
+def test_cull_footer_shows_contextual_shortcuts_only_when_usable():
+    strip = WorkflowShortcutStrip(CULL_SHORTCUTS)
+    marked_paths: list[str] = []
+    app_state = SimpleNamespace(
+        get_marked_files=lambda: marked_paths,
+        cluster_results={},
+    )
+    context = SimpleNamespace(
+        workflow_shortcut_strips={"cull": strip},
+        _cull_shortcut_paths=[],
+        _cull_side_by_side_available=False,
+        app_state=app_state,
+    )
+
+    MainWindow._refresh_cull_shortcut_visibility(context, ["/tmp/one.jpg"])
+
+    for action in (
+        "focus",
+        "viewer_layout",
+        "playback",
+        "browse_including_marked",
+        "clear_deletions",
+        "apply",
+        "groups",
+    ):
+        assert strip._items_by_action[action].isHidden()
+
+    marked_paths.append("/tmp/marked.jpg")
+    app_state.cluster_results = {"/tmp/one.jpg": 1}
+    context._cull_side_by_side_available = True
+    MainWindow._refresh_cull_shortcut_visibility(
+        context, ["/tmp/one.jpg", "/tmp/two.mp4"]
+    )
+
+    for action in (
+        "focus",
+        "viewer_layout",
+        "playback",
+        "browse_including_marked",
+        "clear_deletions",
+        "apply",
+        "groups",
+    ):
+        assert not strip._items_by_action[action].isHidden()
+    assert strip._keycaps_by_action["focus"].text() == "1–2"
+
+
 def test_review_workflows_use_r_and_shift_r_to_reset_defaults():
     widgets_and_specs = (
         (EasyDeleteStepWidget(), EASY_DELETE_SHORTCUTS),
@@ -2756,7 +2852,6 @@ def test_guided_workflows_suspend_and_restore_cull_shortcuts():
         "view_grid_action",
         "toggle_folder_view_action",
         "group_by_similarity_action",
-        "toggle_thumbnails_action",
         "toggle_metadata_sidebar_action",
     )
     actions = {}
