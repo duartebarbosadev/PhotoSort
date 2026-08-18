@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import resource
+import statistics
 import sys
 import tempfile
 import time
@@ -64,23 +65,61 @@ def main() -> int:
     window = MainWindow(initial_folder=str(args.folder) if args.folder else None)
     constructed_at = time.perf_counter()
     scan_finished_at: list[float] = []
+    review_finished_at: list[float] = []
+    review_metrics: list[dict] = []
     window.worker_manager.file_scan_finished.connect(
         lambda: scan_finished_at.append(time.perf_counter())
+    )
+    window.worker_manager.thumbnail_session_finished.connect(
+        lambda _session, _attempted, _failures: review_finished_at.append(
+            time.perf_counter()
+        )
+    )
+    window.worker_manager.thumbnail_session_metrics.connect(
+        lambda session, metrics: review_metrics.append(
+            {"session_id": session, **dict(metrics)}
+        )
     )
     window.show()
 
     QTimer.singleShot(max(1, int(args.duration * 1000)), app.quit)
     app.exec()
     measured_at = time.perf_counter()
+    selection_latencies_ms = []
+    for item in window.app_state.image_files_data[:50]:
+        path = item.get("path")
+        if not path or item.get("media_type") == "video":
+            continue
+        selection_started = time.perf_counter()
+        window.image_pipeline.get_cached_review_qpixmap(path)
+        selection_latencies_ms.append(
+            (time.perf_counter() - selection_started) * 1000
+        )
+
+    folder_review_metrics = review_metrics[0] if review_metrics else {}
 
     result = {
         "folder": str(args.folder.resolve()) if args.folder else None,
         "import_seconds": round(imported_at - process_started, 4),
         "window_construct_seconds": round(constructed_at - imported_at, 4),
         "measurement_seconds": round(measured_at - process_started, 4),
+        "scan_finished_seconds": (
+            round(scan_finished_at[0] - process_started, 4) if scan_finished_at else None
+        ),
         "folder_usable_seconds": (
-            round(scan_finished_at[0] - process_started, 4)
-            if scan_finished_at
+            round(review_finished_at[0] - process_started, 4)
+            if review_finished_at
+            else None
+        ),
+        "review_preparation": folder_review_metrics or None,
+        "review_preparation_sessions": review_metrics,
+        "selection_latency_ms": (
+            {
+                "median": round(statistics.median(selection_latencies_ms), 3),
+                "maximum": round(max(selection_latencies_ms), 3),
+                "samples": len(selection_latencies_ms),
+            }
+            if selection_latencies_ms
             else None
         ),
         "media_count": len(window.app_state.image_files_data),

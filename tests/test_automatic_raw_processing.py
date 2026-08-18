@@ -8,14 +8,22 @@ external apply_auto_edits parameters.
 
 import inspect
 from unittest.mock import Mock, patch
-from core.app_settings import THUMBNAIL_MAX_SIZE
+import numpy as np
+import rawpy
 from src.core.image_pipeline import CACHE_SCHEMA_VERSION, ImagePipeline
-from src.core.image_processing.raw_image_processor import is_raw_extension
+from src.core.image_processing.raw_image_processor import RawImageProcessor, is_raw_extension
 from src.core.image_processing.standard_image_processor import StandardImageProcessor
 from PIL import Image
 from PyQt6.QtWidgets import QApplication
 
 _app = QApplication.instance() or QApplication([])
+
+
+def _raw_context(raw):
+    context = Mock()
+    context.__enter__ = Mock(return_value=raw)
+    context.__exit__ = Mock(return_value=False)
+    return context
 
 
 class TestAutomaticRawProcessing:
@@ -46,6 +54,36 @@ class TestAutomaticRawProcessing:
             assert is_raw_extension(ext.upper()), (
                 f"Extension {ext.upper()} should be detected as RAW"
             )
+
+    def test_canonical_display_recipe_is_explicit_and_never_extracts_embedded_jpeg(
+        self,
+    ):
+        raw = Mock()
+        raw.postprocess.return_value = np.zeros((32, 48, 3), dtype=np.uint8)
+        raw.extract_thumb.side_effect = AssertionError(
+            "embedded JPEG must not define display appearance"
+        )
+
+        with patch(
+            "src.core.image_processing.raw_image_processor.rawpy.imread",
+            return_value=_raw_context(raw),
+        ):
+            result = RawImageProcessor.render_display("photo.arw")
+
+        assert result is not None
+        raw.extract_thumb.assert_not_called()
+        raw.postprocess.assert_called_once_with(
+            demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,
+            use_camera_wb=True,
+            output_color=rawpy.ColorSpace.sRGB,
+            output_bps=8,
+            half_size=False,
+            no_auto_bright=False,
+            auto_bright_thr=0.01,
+            bright=1.25,
+            highlight_mode=rawpy.HighlightMode.Clip,
+            gamma=(2.222, 4.5),
+        )
 
     def test_non_raw_extension_detection(self):
         """Test that non-RAW file extensions are correctly identified."""
@@ -91,38 +129,23 @@ class TestAutomaticRawProcessing:
                 f"Found parameters: {params}"
             )
 
-    def test_internal_raw_detection_in_get_pil_thumbnail(self):
-        """Test that _get_pil_thumbnail method uses is_raw_extension internally."""
+    def test_raw_thumbnail_routes_through_canonical_review_assets(self):
         pipeline = ImagePipeline()
+        result = Mock(thumbnail_ready=True)
+        with (
+            patch.object(
+                pipeline, "ensure_review_assets_cached", return_value=result
+            ) as ensure_assets,
+            patch.object(
+                pipeline, "_cache_get", return_value=Image.new("RGBA", (32, 32))
+            ),
+        ):
+            thumbnail = pipeline._get_pil_thumbnail("test.arw")
 
-        with patch("src.core.image_pipeline.is_raw_extension") as mock_is_raw:
-            mock_is_raw.return_value = True
-
-            # Mock file existence to avoid file system calls
-            with (
-                patch("os.path.exists", return_value=True),
-                patch.object(pipeline, "_memory_get", return_value=None),
-                patch.object(pipeline, "_cache_get", return_value=None),
-                patch.object(pipeline, "_cache_set"),
-                patch(
-                    "src.core.image_processing.raw_image_processor.RawImageProcessor.process_raw_for_thumbnail"
-                ) as mock_process,
-            ):
-                mock_process.return_value = Image.new("RGB", (32, 32))
-
-                # Call the internal method directly
-                pipeline._get_pil_thumbnail("test.arw")
-
-                # Verify that is_raw_extension was called (can be called multiple times internally)
-                mock_is_raw.assert_called_with(".arw")
-                assert mock_is_raw.call_count >= 1, (
-                    "is_raw_extension should be called at least once"
-                )
-                assert (
-                    mock_process.call_args.kwargs["full_decode_gate"]
-                    is pipeline._high_memory_decode_gate
-                )
-
+        assert thumbnail is not None
+        ensure_assets.assert_called_once_with(
+            "test.arw", promote_to_memory=True
+        )
     def test_cache_key_generation_includes_raw_detection(self):
         """Test that cache keys are generated correctly with RAW detection."""
         pipeline = ImagePipeline()
@@ -244,8 +267,8 @@ def test_thumbnail_warming_caches_jpeg_with_exif_orientation_applied(tmp_path):
     )
 
     with patch(
-        "src.core.image_pipeline.StandardImageProcessor.process_for_thumbnail",
-        wraps=StandardImageProcessor.process_for_thumbnail,
+        "src.core.image_pipeline.StandardImageProcessor.load_as_pil",
+        wraps=StandardImageProcessor.load_as_pil,
     ) as process_thumbnail:
         assert pipeline.ensure_thumbnail_cached(
             str(image_path),
@@ -254,8 +277,8 @@ def test_thumbnail_warming_caches_jpeg_with_exif_orientation_applied(tmp_path):
 
     process_thumbnail.assert_called_once_with(
         str(image_path),
-        THUMBNAIL_MAX_SIZE,
-        True,
+        target_mode="RGBA",
+        apply_exif_transpose=True,
     )
     pipeline.thumbnail_cache.close()
     pipeline.preview_cache.close()
@@ -265,7 +288,7 @@ def test_thumbnail_warming_caches_jpeg_with_exif_orientation_applied(tmp_path):
         preview_cache_dir=preview_cache_dir,
     )
     with patch(
-        "src.core.image_pipeline.StandardImageProcessor.process_for_thumbnail",
+        "src.core.image_pipeline.StandardImageProcessor.load_as_pil",
         side_effect=AssertionError("disk-cached thumbnail must not be decoded again"),
     ):
         assert reloaded.ensure_thumbnail_cached(str(image_path))
@@ -353,7 +376,7 @@ def test_get_cached_preview_qpixmap_uses_high_res_cache_without_generation(tmp_p
     pipeline.preview_cache.set.assert_called_once()
 
 
-def test_display_preview_uses_bounded_raw_preview_processor(tmp_path):
+def test_display_preview_uses_canonical_raw_renderer(tmp_path):
     image_path = tmp_path / "a.arw"
     image_path.write_bytes(b"raw")
     pipeline = ImagePipeline(
@@ -364,13 +387,13 @@ def test_display_preview_uses_bounded_raw_preview_processor(tmp_path):
 
     with (
         patch(
-            "src.core.image_pipeline.RawImageProcessor.process_raw_for_preview",
+            "src.core.image_pipeline.RawImageProcessor.render_display",
             return_value=expected,
-        ) as process_preview,
+        ) as render_display,
         patch(
             "src.core.image_pipeline.RawImageProcessor.load_raw_as_pil",
             side_effect=AssertionError(
-                "display previews must not fully decode RAW files"
+                "legacy RAW loader must not define display appearance"
             ),
         ),
     ):
@@ -380,8 +403,4 @@ def test_display_preview_uses_bounded_raw_preview_processor(tmp_path):
         )
 
     assert result is expected
-    process_preview.assert_called_once_with(
-        str(image_path),
-        True,
-        (800, 600),
-    )
+    render_display.assert_called_once_with(str(image_path), "RGBA")

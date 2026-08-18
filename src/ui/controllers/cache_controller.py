@@ -92,6 +92,13 @@ class CacheController:
 
     def clear_thumbnail_cache(self) -> None:
         ctx = self.context
+        protected_bytes = ctx.image_pipeline.preview_cache.protected_payload_bytes()
+        if isinstance(protected_bytes, int | float) and protected_bytes > 0:
+            ctx.status_message(
+                "Open another folder or close the current one before clearing prepared review images.",
+                5000,
+            )
+            return
         ctx.image_pipeline.thumbnail_cache.clear()
         ctx.status_message("Thumbnail cache cleared.", 5000)
         self.update_labels()
@@ -99,6 +106,13 @@ class CacheController:
 
     def clear_preview_cache(self) -> None:
         ctx = self.context
+        protected_bytes = ctx.image_pipeline.preview_cache.protected_payload_bytes()
+        if isinstance(protected_bytes, int | float) and protected_bytes > 0:
+            ctx.status_message(
+                "Open another folder or close the current one before clearing prepared review images.",
+                5000,
+            )
+            return
         ctx.image_pipeline.preview_cache.clear()
         ctx.status_message("Preview cache cleared. Previews will regenerate.", 5000)
         self.update_labels()
@@ -221,6 +235,18 @@ class CacheController:
 
         current_size_gb = get_preview_cache_size_gb()
         if new_size_gb != current_size_gb:
+            protected_bytes = (
+                ctx.image_pipeline.preview_cache.protected_payload_bytes()
+            )
+            if isinstance(protected_bytes, int | float) and int(
+                new_size_gb * 1024**3
+            ) < protected_bytes:
+                ctx.status_message(
+                    "The selected limit is smaller than the active folder's prepared "
+                    "review images. Open another folder before reducing it.",
+                    6000,
+                )
+                return
             set_preview_cache_size_gb(new_size_gb)
             ctx.image_pipeline.reinitialize_preview_cache_from_settings()
             ctx.status_message(

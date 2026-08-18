@@ -1,4 +1,5 @@
-from unittest.mock import Mock, call
+from types import SimpleNamespace
+from unittest.mock import Mock, call, patch
 
 from src.ui.app_controller import AppController
 
@@ -37,8 +38,11 @@ class _DummyMainWindow:
         self.overlay_hidden = False
         self.schedule_visible_thumbnail_load = Mock()
         self.start_thumbnail_warming = Mock()
+        self.start_thumbnail_warming.return_value = "folder-assets"
         self.set_exif_progress = Mock()
         self.hide_exif_progress = Mock()
+        self.reset_thumbnail_requests = Mock()
+        self.dialog_manager = Mock()
 
     def update_loading_text(self, text):
         self._loading_updates.append(text)
@@ -63,8 +67,8 @@ class _DummyWorkerManager:
     def __init__(self):
         self.start_thumbnail_preload = Mock()
         self.start_rating_load = Mock()
-        self.start_preview_warming = Mock()
         self.start_rating_writer = Mock()
+        self.resolve_thumbnail_capacity_request = Mock(return_value=True)
 
 
 class _DummyAppState:
@@ -75,6 +79,7 @@ class _DummyAppState:
         self.cluster_results = {}
         self.current_folder_path = None
         self.analysis_cache = Mock()
+        self.clear_all_file_specific_data = Mock()
 
 
 def _make_controller(image_files_data):
@@ -102,11 +107,13 @@ def test_handle_scan_finished_preloads_thumbnails_and_metadata_for_videos_too():
     main_window.start_thumbnail_warming.assert_called_once_with(
         [image_path, video_path]
     )
-    worker_manager.start_preview_warming.assert_called_once_with([image_path])
     args, _ = worker_manager.start_rating_load.call_args
     loaded_data = args[0]
     assert len(loaded_data) == 2
     assert {entry["media_type"] for entry in loaded_data} == {"image", "video"}
+    assert not main_window.overlay_hidden
+
+    controller.handle_review_asset_finished("folder-assets", 2, 0)
     assert main_window.overlay_hidden
 
 
@@ -133,6 +140,93 @@ def test_rating_progress_updates_the_exif_footer_progress():
         call(0, 4_482),
         call(250, 4_482),
     ]
+
+
+def test_review_cache_capacity_increase_is_required_before_preparation(tmp_path):
+    controller, main_window, _, _ = _make_controller([])
+    preview_cache = Mock(
+        _cache_dir=str(tmp_path),
+        volume=Mock(return_value=0),
+    )
+    pipeline = Mock(preview_cache=preview_cache)
+    pipeline.estimate_active_review_cache_bytes.return_value = 3 * 1024**3
+    main_window.image_pipeline = pipeline
+    main_window.dialog_manager.confirm_preview_cache_capacity_increase.return_value = (
+        True
+    )
+
+    with (
+        patch("src.ui.app_controller.get_preview_cache_size_bytes", return_value=2**30),
+        patch("src.ui.app_controller.set_preview_cache_size_gb") as set_limit,
+        patch(
+            "src.ui.app_controller.shutil.disk_usage",
+            return_value=SimpleNamespace(free=8 * 1024**3),
+        ),
+    ):
+        assert controller._prepare_review_cache_capacity(["photo.arw"])
+
+    set_limit.assert_called_once_with(3.0)
+    preview_cache.reinitialize_from_settings.assert_called_once_with()
+    pipeline.begin_active_review_working_set.assert_called_once_with(["photo.arw"])
+    preview_cache.trim_to_limit.assert_called_once_with()
+
+
+def test_declining_required_review_cache_capacity_cancels_folder(tmp_path):
+    controller, main_window, app_state, _ = _make_controller([])
+    preview_cache = Mock(
+        _cache_dir=str(tmp_path),
+        volume=Mock(return_value=0),
+    )
+    pipeline = Mock(preview_cache=preview_cache)
+    pipeline.estimate_active_review_cache_bytes.return_value = 3 * 1024**3
+    main_window.image_pipeline = pipeline
+    main_window.dialog_manager.confirm_preview_cache_capacity_increase.return_value = (
+        False
+    )
+
+    with (
+        patch("src.ui.app_controller.get_preview_cache_size_bytes", return_value=2**30),
+        patch(
+            "src.ui.app_controller.shutil.disk_usage",
+            return_value=SimpleNamespace(free=8 * 1024**3),
+        ),
+    ):
+        assert not controller._prepare_review_cache_capacity(["photo.arw"])
+
+    app_state.clear_all_file_specific_data.assert_called_once_with()
+    pipeline.begin_active_review_working_set.assert_not_called()
+    assert main_window.overlay_hidden
+
+
+def test_actual_cache_overrun_pauses_then_resumes_with_raised_live_limit(tmp_path):
+    controller, main_window, _, worker_manager = _make_controller([])
+    current_limit = 1024**3
+    required = current_limit + 1
+    preview_cache = Mock(
+        _cache_dir=str(tmp_path),
+        _size_limit_bytes=current_limit,
+        volume=Mock(return_value=0),
+    )
+    main_window.image_pipeline = Mock(preview_cache=preview_cache)
+    main_window.dialog_manager.confirm_preview_cache_capacity_increase.return_value = (
+        True
+    )
+    controller._folder_asset_session_id = "folder-assets"
+
+    with (
+        patch("src.ui.app_controller.set_preview_cache_size_gb") as set_limit,
+        patch(
+            "src.ui.app_controller.shutil.disk_usage",
+            return_value=SimpleNamespace(free=8 * 1024**3),
+        ),
+    ):
+        controller.handle_review_asset_capacity_required("folder-assets", required)
+
+    set_limit.assert_called_once_with(1.25)
+    preview_cache.increase_size_limit.assert_called_once_with(int(1.25 * 1024**3))
+    worker_manager.resolve_thumbnail_capacity_request.assert_called_once_with(
+        "folder-assets", True
+    )
 
 
 def test_apply_rating_to_selection_skips_videos_and_writes_images_only():

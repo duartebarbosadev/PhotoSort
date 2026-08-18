@@ -108,6 +108,66 @@ def is_raw_file(file_path: str) -> bool:
 class RawImageProcessor:
     """Handles loading and processing of RAW image formats."""
 
+    DISPLAY_RECIPE_VERSION = 1
+
+    @staticmethod
+    def _display_postprocess_params() -> dict:
+        """Return the single, explicit RAW recipe used by every display surface."""
+        return {
+            "demosaic_algorithm": rawpy.DemosaicAlgorithm.AHD,
+            "use_camera_wb": True,
+            "output_color": rawpy.ColorSpace.sRGB,
+            "output_bps": 8,
+            "half_size": False,
+            "no_auto_bright": False,
+            "auto_bright_thr": 0.01,
+            "bright": RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED,
+            "highlight_mode": rawpy.HighlightMode.Clip,
+            "gamma": (2.222, 4.5),
+        }
+
+    @staticmethod
+    def render_display(image_path: str, target_mode: str = "RGBA") -> Image.Image | None:
+        """Render the authoritative PhotoSort appearance for a RAW source.
+
+        Embedded camera previews and half-size demosaicing are deliberately excluded:
+        a cached proxy and a later detail decode must differ only in resolution.
+        """
+        normalized_path = os.path.normpath(image_path)
+        try:
+            with rawpy.imread(normalized_path) as raw:
+                rgb_array = raw.postprocess(
+                    **RawImageProcessor._display_postprocess_params()
+                )
+            image = Image.fromarray(rgb_array)
+            image = ImageOps.autocontrast(image)
+            image = ImageEnhance.Color(image).enhance(1.2)
+            return image.convert(target_mode)
+        except UnidentifiedImageError:
+            logger.error(
+                "Pillow could not process canonical RAW data for %s",
+                os.path.basename(normalized_path),
+            )
+        except rawpy.LibRawIOError as exc:
+            logger.error(
+                "rawpy I/O error for canonical display '%s': %s",
+                os.path.basename(normalized_path),
+                exc,
+            )
+        except rawpy.LibRawUnspecifiedError as exc:
+            logger.error(
+                "rawpy unspecified error for canonical display '%s': %s",
+                os.path.basename(normalized_path),
+                exc,
+            )
+        except Exception:
+            logger.error(
+                "Failed to render canonical RAW display for '%s'",
+                os.path.basename(normalized_path),
+                exc_info=True,
+            )
+        return None
+
     @staticmethod
     def process_raw_for_thumbnail(
         image_path: str,
@@ -395,6 +455,15 @@ class RawImageProcessor:
         'apply_auto_edits' will enable brightness adjustment and auto-contrast.
         """
         normalized_path = os.path.normpath(image_path)
+        if (
+            apply_auto_edits
+            and use_camera_wb
+            and output_bps == 8
+            and not half_size
+            and custom_whitebalance is None
+            and demosaic_algorithm is None
+        ):
+            return RawImageProcessor.render_display(normalized_path, target_mode)
         try:
             with rawpy.imread(normalized_path) as raw:
                 postprocess_params = {

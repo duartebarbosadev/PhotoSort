@@ -30,7 +30,6 @@ _WORKER_SLOTS = (
     ("rating_writer_thread", "rating_writer_worker"),
     ("rotation_application_thread", "rotation_application_worker"),
     ("thumbnail_preload_thread", "thumbnail_preload_worker"),
-    ("preview_warm_thread", "preview_warm_worker"),
     ("update_check_thread", "update_check_worker"),
     ("ai_rating_thread", "ai_rating_worker"),
     ("grouping_preview_thread", "grouping_preview_worker"),
@@ -126,9 +125,8 @@ class WorkerManager(QObject):
     thumbnail_session_progress = pyqtSignal(str, int, int, int, bool)
     thumbnail_session_finished = pyqtSignal(str, int, int)
     thumbnail_session_error = pyqtSignal(str, str)
-    preview_warm_progress = pyqtSignal(int, int)
-    preview_warm_finished = pyqtSignal(int, int)
-    preview_warm_error = pyqtSignal(str)
+    thumbnail_session_capacity_required = pyqtSignal(str, int)
+    thumbnail_session_metrics = pyqtSignal(str, object)
 
     # AI Rating Signals
     ai_rating_progress = pyqtSignal(int, str)
@@ -194,8 +192,6 @@ class WorkerManager(QObject):
 
         self.thumbnail_preload_thread: QThread | None = None
         self.thumbnail_preload_worker: ThumbnailPreloadWorker | None = None
-        self.preview_warm_thread: QThread | None = None
-        self.preview_warm_worker = None
         self.ai_rating_thread: QThread | None = None
         self.ai_rating_worker: AiRatingWorker | None = None
         self.grouping_preview_thread: QThread | None = None
@@ -820,7 +816,6 @@ class WorkerManager(QObject):
         self.stop_rating_writer()
         self.stop_rotation_application()
         self.stop_thumbnail_preload()
-        self.stop_preview_warming()
         self.stop_update_check()
         self.stop_ai_rating()
         self.stop_grouping_preview()
@@ -941,7 +936,6 @@ class WorkerManager(QObject):
             or self.is_rating_writer_running()
             or self.is_rotation_application_running()
             or self.is_thumbnail_preload_running()
-            or self.is_preview_warming_running()
             or self.is_grouping_preview_running()
             or self.is_grouping_workflow_running()
             or self.is_file_deletion_running()
@@ -1125,8 +1119,17 @@ class WorkerManager(QObject):
         self.thumbnail_preload_worker.session_error.connect(
             self.thumbnail_session_error.emit
         )
+        self.thumbnail_preload_worker.session_capacity_required.connect(
+            self.thumbnail_session_capacity_required.emit
+        )
+        self.thumbnail_preload_worker.session_metrics.connect(
+            self.thumbnail_session_metrics.emit
+        )
         self.thumbnail_preload_worker.session_finished.connect(
             self.thumbnail_preload_thread.quit
+        )
+        self.thumbnail_preload_worker.session_metrics.connect(
+            lambda _session_id, _metrics: self.thumbnail_preload_thread.quit()
         )
         self.thumbnail_preload_thread.finished.connect(
             self._cleanup_thumbnail_preload_worker
@@ -1135,6 +1138,15 @@ class WorkerManager(QObject):
             self.thumbnail_preload_worker.run_session
         )
         self.thumbnail_preload_thread.start()
+        return True
+
+    def resolve_thumbnail_capacity_request(
+        self, session_id: str, approved: bool
+    ) -> bool:
+        worker = self.thumbnail_preload_worker
+        if worker is None or worker.session_id != session_id:
+            return False
+        worker.resolve_capacity_request(approved)
         return True
 
     def prioritize_thumbnail_paths(
@@ -1171,41 +1183,6 @@ class WorkerManager(QObject):
         self._request_worker_stop(
             "thumbnail_preload_thread", "thumbnail_preload_worker"
         )
-
-    # --- Folder Preview Warming ---
-    def start_preview_warming(self, image_paths: list[str]) -> bool:
-        """Warm full display previews once for the active folder."""
-        from workers.preview_warm_worker import PreviewWarmWorker
-
-        self.stop_preview_warming()
-        paths = list(dict.fromkeys(path for path in image_paths if path))
-        if not paths:
-            return False
-
-        self.preview_warm_thread = QThread()
-        self.preview_warm_worker = PreviewWarmWorker(self.image_pipeline, paths)
-        self.preview_warm_worker.moveToThread(self.preview_warm_thread)
-        self.preview_warm_worker.progress.connect(self.preview_warm_progress.emit)
-        self.preview_warm_worker.finished.connect(self.preview_warm_finished.emit)
-        self.preview_warm_worker.error.connect(self.preview_warm_error.emit)
-        self.preview_warm_worker.finished.connect(self.preview_warm_thread.quit)
-        self.preview_warm_thread.finished.connect(self._cleanup_preview_warm_worker)
-        self.preview_warm_thread.started.connect(self.preview_warm_worker.run)
-        self.preview_warm_thread.start()
-        return True
-
-    def _cleanup_preview_warm_worker(self, *_args) -> None:
-        self._cleanup_worker_refs(
-            "preview_warm_thread",
-            "preview_warm_worker",
-            "Preview warming",
-        )
-
-    def is_preview_warming_running(self) -> bool:
-        return self.preview_warm_thread is not None
-
-    def stop_preview_warming(self) -> None:
-        self._stop_worker("preview_warm_thread", "preview_warm_worker")
 
     def _cleanup_ai_rating_worker(self):
         self._cleanup_worker_refs("ai_rating_thread", "ai_rating_worker", "AI rating")

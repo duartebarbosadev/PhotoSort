@@ -19,7 +19,6 @@ from ui.worker_manager import WorkerManager
         "rating_writer_thread",
         "rotation_application_thread",
         "thumbnail_preload_thread",
-        "preview_warm_thread",
         "ai_rating_thread",
         "grouping_preview_thread",
         "grouping_workflow_thread",

@@ -2198,6 +2198,41 @@ class DialogManager:
         warn_box.exec()
         logger.info("Closed potential cache overflow warning dialog")
 
+    def confirm_preview_cache_capacity_increase(
+        self, required_bytes: int, current_limit_bytes: int
+    ) -> bool:
+        required_gb = required_bytes / (1024**3)
+        current_gb = current_limit_bytes / (1024**3)
+        dialog = QMessageBox(self.parent)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("More Preview Cache Required")
+        dialog.setText(
+            "PhotoSort prepares every review image before opening the folder so "
+            "scrolling remains fast and RAW images keep one consistent appearance.\n\n"
+            f"This folder requires up to {required_gb:.2f} GB; the current limit is "
+            f"{current_gb:.2f} GB."
+        )
+        increase_button = dialog.addButton(
+            "Increase Cache and Continue", QMessageBox.ButtonRole.AcceptRole
+        )
+        dialog.addButton("Cancel Folder Load", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(increase_button)
+        dialog.exec()
+        return dialog.clickedButton() is increase_button
+
+    def show_preview_cache_disk_space_error(
+        self, required_bytes: int, available_bytes: int
+    ) -> None:
+        QMessageBox.critical(
+            self.parent,
+            "Not Enough Disk Space",
+            "PhotoSort cannot prepare this folder without breaking the fast-review "
+            "guarantee.\n\n"
+            f"Required: {required_bytes / (1024**3):.2f} GB\n"
+            f"Available: {available_bytes / (1024**3):.2f} GB\n\n"
+            "Free disk space or choose a smaller folder.",
+        )
+
     def show_exif_cache_capacity_warning(
         self,
         dataset_entries: int,

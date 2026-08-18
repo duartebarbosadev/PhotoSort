@@ -1,7 +1,9 @@
 import diskcache
 import os
 import logging
+import threading
 import time
+import unicodedata
 from PIL import Image
 from core.runtime_paths import resolve_user_cache_dir
 from core.caching.image_codec import decode_cached_image, encode_cached_image
@@ -13,6 +15,12 @@ from core.app_settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class PreviewCacheCapacityError(RuntimeError):
+    def __init__(self, required_bytes: int):
+        super().__init__("Preview cache capacity is insufficient")
+        self.required_bytes = int(required_bytes)
 
 
 class PreviewCache:
@@ -37,13 +45,18 @@ class PreviewCache:
         os.makedirs(cache_dir, exist_ok=True)
         self._cache_dir = cache_dir
         self._size_limit_bytes = get_preview_cache_size_bytes()
+        self._protected_paths: set[str] = set()
+        self._capacity_lock = threading.RLock()
         # Settings for general PIL images, can be adjusted.
         # Using a relatively small disk_min_file_size to ensure even smaller previews are disk-backed if desired.
         self._cache = diskcache.Cache(
             directory=cache_dir,
             size_limit=self._size_limit_bytes,
             disk_min_file_size=PREVIEW_CACHE_MIN_FILE_SIZE,
+            eviction_policy="none",
         )  # 256KB
+        self._payload_bytes_by_key: dict[tuple, int] = {}
+        self._rebuild_payload_accounting()
         log_msg = f"Preview cache initialized at {cache_dir} with size limit {self._size_limit_bytes / (1024 * 1024 * 1024):.2f} GB"
         logger.info(log_msg)
         logger.debug(
@@ -78,7 +91,7 @@ class PreviewCache:
             )
             return None
 
-    def set(self, key: tuple[str, tuple[int, int], bool], value: Image.Image) -> None:
+    def set(self, key: tuple[str, tuple[int, int], bool], value: Image.Image) -> int:
         """
         Adds or updates an item in the cache and updates the path index.
         Key is typically (normalized_path, resolution_tuple, apply_auto_edits_bool).
@@ -91,23 +104,122 @@ class PreviewCache:
             logger.error(
                 f"Attempted to cache non-Image object for key '{key}'. Type: {type(value)}"
             )
-            return
+            return 0
         try:
             file_path = key[0]
             index_key = f"index_{file_path}"
+            encoded = encode_cached_image(value, quality=92)
+            with self._capacity_lock:
+                self._reserve_space(len(encoded), incoming_key=key)
 
-            with self._cache.transact():
-                # Get current index list or create new one
-                key_list = self._cache.get(index_key, default=[])
-                if key not in key_list:
-                    key_list.append(key)
-                    self._cache.set(index_key, key_list)
-                # Set the actual data
-                self._cache.set(key, encode_cached_image(value, quality=88))
+                with self._cache.transact():
+                    # Get current index list or create new one
+                    key_list = self._cache.get(index_key, default=[])
+                    if key not in key_list:
+                        key_list.append(key)
+                        self._cache.set(index_key, key_list)
+                    # Set the actual data
+                    self._cache.set(key, encoded)
+                    self._payload_bytes_by_key[key] = len(encoded)
+            return len(encoded)
+        except PreviewCacheCapacityError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error writing to Preview cache for key '{key}': {e}", exc_info=True
             )
+            return 0
+
+    @staticmethod
+    def _normalized_path(path: str) -> str:
+        return unicodedata.normalize("NFC", os.path.normpath(path))
+
+    def begin_working_set(self, file_paths) -> None:
+        """Protect the active folder while keeping it within the approved limit."""
+        with self._capacity_lock:
+            self._protected_paths = {
+                self._normalized_path(path) for path in file_paths if path
+            }
+
+    def end_working_set(self) -> None:
+        with self._capacity_lock:
+            self._protected_paths.clear()
+
+    def trim_to_limit(self) -> None:
+        with self._capacity_lock:
+            self._reserve_space(0, incoming_key=("",))
+
+    def payload_size(self, key: tuple) -> int:
+        tracked_size = self._payload_bytes_by_key.get(key)
+        if tracked_size is not None:
+            return tracked_size
+        try:
+            value = self._cache.get(key)
+            return len(value) if isinstance(value, bytes) else 0
+        except Exception:
+            return 0
+
+    def protected_payload_bytes(self) -> int:
+        return sum(
+            size
+            for key, size in self._payload_bytes_by_key.items()
+            if self._key_is_protected(key)
+        )
+
+    def logical_payload_bytes(self) -> int:
+        """Return encoded review bytes, excluding database allocation overhead."""
+        return sum(self._payload_bytes_by_key.values())
+
+    def _rebuild_payload_accounting(self) -> None:
+        self._payload_bytes_by_key.clear()
+        for key in self._cache.iterkeys():
+            if not isinstance(key, tuple):
+                continue
+            try:
+                value = self._cache.get(key)
+            except Exception:
+                continue
+            if isinstance(value, bytes):
+                self._payload_bytes_by_key[key] = len(value)
+
+    def _key_is_protected(self, key: object) -> bool:
+        if isinstance(key, str) and key.startswith("index_"):
+            return self._normalized_path(key.removeprefix("index_")) in self._protected_paths
+        return (
+            isinstance(key, tuple)
+            and bool(key)
+            and isinstance(key[0], str)
+            and self._normalized_path(key[0]) in self._protected_paths
+        )
+
+    def _delete_cache_key(self, key: object) -> None:
+        if isinstance(key, tuple) and key and isinstance(key[0], str):
+            self.delete(key)
+        elif isinstance(key, str):
+            self._cache.delete(key)
+
+    def _reserve_space(self, additional_bytes: int, *, incoming_key: tuple) -> None:
+        """Cull unprotected entries before a write; protected entries never evict."""
+        additional_bytes = max(0, int(additional_bytes))
+        previous_size = self._payload_bytes_by_key.get(incoming_key, 0)
+        required = self.logical_payload_bytes() - previous_size + additional_bytes
+        if required <= self._size_limit_bytes:
+            return
+
+        for existing_key in list(self._cache.iterkeys()):
+            if existing_key == incoming_key or self._key_is_protected(existing_key):
+                continue
+            self._delete_cache_key(existing_key)
+            required = (
+                self.logical_payload_bytes() - previous_size + additional_bytes
+            )
+            if required <= self._size_limit_bytes:
+                return
+
+        protected_volume = self.protected_payload_bytes()
+        raise PreviewCacheCapacityError(
+            protected_volume + additional_bytes
+        )
 
     def delete(self, key: tuple[str, tuple[int, int], bool]) -> None:
         """
@@ -120,7 +232,7 @@ class PreviewCache:
             file_path = key[0]
             index_key = f"index_{file_path}"
 
-            with self._cache.transact():
+            with self._capacity_lock, self._cache.transact():
                 # Update the index first
                 key_list = self._cache.get(index_key)
                 if key_list and key in key_list:
@@ -133,6 +245,7 @@ class PreviewCache:
 
                 # Now delete the actual data. Use pop for safety.
                 self._cache.pop(key, default=None)
+                self._payload_bytes_by_key.pop(key, None)
 
         except Exception as e:
             logger.error(
@@ -158,10 +271,11 @@ class PreviewCache:
             key_list = self._cache.get(index_key)
 
             if key_list is not None:
-                with self._cache.transact():
+                with self._capacity_lock, self._cache.transact():
                     # The index exists, use it to delete entries
                     for key in key_list:
                         self._cache.pop(key, default=None)
+                        self._payload_bytes_by_key.pop(key, None)
                     self._cache.pop(index_key, default=None)
 
                 if key_list:
@@ -179,8 +293,10 @@ class PreviewCache:
     def clear(self) -> None:
         """Clears all items from the cache."""
         try:
+            self._protected_paths.clear()
             count = len(self._cache)
             self._cache.clear()
+            self._payload_bytes_by_key.clear()
             logger.info(f"Cleared {count} items from Preview cache.")
         except Exception as e:
             logger.error(f"Error clearing Preview cache: {e}", exc_info=True)
@@ -211,10 +327,19 @@ class PreviewCache:
             directory=self._cache_dir,
             size_limit=self._size_limit_bytes,
             disk_min_file_size=PREVIEW_CACHE_MIN_FILE_SIZE,
+            eviction_policy="none",
         )
+        self._rebuild_payload_accounting()
         logger.info(
             f"Preview cache reinitialized. New size limit: {self.get_current_size_limit_gb():.2f} GB."
         )
+
+    def increase_size_limit(self, size_limit_bytes: int) -> None:
+        """Raise the live limit without closing a cache used by preparation threads."""
+        with self._capacity_lock:
+            new_limit = max(self._size_limit_bytes, int(size_limit_bytes))
+            self._cache.reset("size_limit", new_limit)
+            self._size_limit_bytes = new_limit
 
     def close(self) -> None:
         """Closes the cache."""
