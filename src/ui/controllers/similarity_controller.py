@@ -2,15 +2,13 @@ from typing import Protocol, Any
 from datetime import datetime as datetime_obj
 
 from ui.helpers.cluster_utils import ClusterUtils
-from core.similarity_cache import normalize_cluster_results
+from core.similarity_cache import normalize_cluster_results, parse_cluster_id
 
 
 class SimilarityContext(Protocol):
     app_state: object
-    worker_manager: object
     menu_manager: object
 
-    def show_loading_overlay(self, text: str) -> None: ...
     def hide_loading_overlay(self) -> None: ...
     def update_loading_text(self, text: str) -> None: ...
     def status_message(self, msg: str, timeout: int = 3000) -> None: ...
@@ -38,12 +36,8 @@ class SimilarityController:
     def __init__(self, ctx: SimilarityContext):
         self.ctx = ctx
 
-    def start(self, paths: list[str]):
-        if not paths:
-            self.ctx.status_message("No valid image paths for similarity analysis.")
-            return
-        self.ctx.show_loading_overlay("Starting similarity analysis...")
-        self.ctx.worker_manager.start_similarity_analysis(paths)
+    # Similarity analysis is never started from here: AppController owns the
+    # single entry point so every start passes the model-consent gate first.
 
     def embeddings_generated(self, embeddings_dict):
         self.ctx.app_state.embeddings_cache = embeddings_dict
@@ -60,7 +54,7 @@ class SimilarityController:
         # Parse cluster IDs from values (can be "1 - 87.34%" format or integers)
         cluster_ids = set()
         for value in normalized_results.values():
-            parsed_id = ClusterUtils.parse_cluster_id(value)
+            parsed_id = parse_cluster_id(value)
             if parsed_id is not None:
                 cluster_ids.add(parsed_id)
         self.ctx.populate_cluster_filter(sorted(cluster_ids))
@@ -87,9 +81,14 @@ class SimilarityController:
         app_state = getattr(self.ctx, "app_state", None)
         if not app_state:
             return {}
+        cluster_results = (
+            app_state.cluster_results_for_workflow()
+            if hasattr(app_state, "cluster_results_for_workflow")
+            else getattr(app_state, "cluster_results", {})
+        )
         return ClusterUtils.group_images_by_cluster(
             getattr(app_state, "image_files_data", []),
-            getattr(app_state, "cluster_results", {}) or {},
+            cluster_results or {},
         )
 
     def _get_cluster_timestamps(

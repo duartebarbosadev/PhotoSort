@@ -2,22 +2,19 @@ import os
 import re
 import time
 import logging
+from datetime import datetime as datetime_obj
 from typing import Any
 
-import numpy as np
 from PyQt6.QtCore import QObject, QTimer
 from core.best_photo_finder.payloads import PickBestResults
 from core.app_settings import (
     DBSCAN_MIN_SAMPLES,
     add_recent_folder,
     get_similarity_clustering_eps,
-    get_similarity_embedding_model_name,
+    get_cull_grouping_strictness,
     get_companion_files_preference,
 )
-from core.similarity_embedding_model import (
-    SimilarityEmbeddingModel,
-    is_similarity_model_installed,
-)
+from core.similarity_embedding_model import SimilarityEmbeddingModel
 from core.similarity_cache import (
     SimilarityClusteringResult,
     build_similarity_signature,
@@ -25,18 +22,27 @@ from core.similarity_cache import (
     normalize_cluster_results,
 )
 from core.media_utils import is_image_extension
-from core.image_file_ops import ImageFileOperations
-from core.grouping import build_grouping_output_root
-from core.similarity_utils import (
-    adaptive_dbscan_eps,
-    build_regional_distance_matrix,
-    l2_normalize_rows,
+from core.subject_grouping import CullClusteringResult
+from core.model_provisioning import AESTHETIC_MODEL, EMBEDDING_MODEL, MODEL_REGISTRY
+from ui.controllers.model_prerequisites import (
+    DeferredModelStarts,
+    ModelConsentState,
+    PrerequisiteDecline,
+    PrerequisiteOutcome,
+    confirm_model_prerequisites,
 )
+from core.image_file_ops import ImageFileOperations
+from core.grouping import GroupingMode, build_grouping_output_root
 
 logger = logging.getLogger(__name__)
 
-PICK_BEST_REFINEMENT_EPS = 0.04
-PICK_BEST_REFINEMENT_MIN_SAMPLES = 2
+# Grouping modes whose plan is produced by the DINO embedding model, so they
+# need the same download/acceleration consent as Similarity, Cull and Pick Best.
+MODEL_BACKED_GROUPING_MODES = {GroupingMode.SIMILARITY.value, GroupingMode.MIXED.value}
+
+
+def _grouping_mode_needs_model(mode: str | None) -> bool:
+    return str(mode or "") in MODEL_BACKED_GROUPING_MODES
 
 
 def _workflow_is_cancelled(controller: object, workflow: str) -> bool:
@@ -161,7 +167,8 @@ class AppController(QObject):
         self._pending_rotated_paths: list[str] = []
         # Cache volume at preview-preload start, used for per-run diagnostics.
         self._ai_rating_warning_messages: list[str] = []
-        self._pick_best_pending_after_similarity: bool = False
+        self._pick_best_pending_after_subject_grouping: bool = False
+        self._pick_best_owns_subject_grouping: bool = False
         self._easy_delete_pending_after_similarity: bool = False
         self._pending_grouping_preview: tuple[object, str] | None = None
         self._pending_grouping_preview_start: (
@@ -174,10 +181,22 @@ class AppController(QObject):
         self._pending_folder_load_after_workers: tuple[str, dict[str, bool]] | None = (
             None
         )
+        self._cull_prerequisites_declined = False
+        self._model_consent = ModelConsentState()
+        self._cull_grouping_fingerprints: dict[str, tuple[int, int]] | None = None
+        # (missing model keys, torch device) resolved once per process off the UI thread.
+        self._model_environment: tuple[tuple[str, ...], str] | None = None
+        self._consent_prompt_active = False
+        # Starts waiting on the probe above, kept together so every reset path
+        # clears all of them.
+        self._deferred_starts = DeferredModelStarts()
 
     def is_workflow_analysis_running(self, workflow: str) -> bool:
         if workflow == "organize":
-            return self.worker_manager.is_grouping_preview_running()
+            return bool(
+                self.worker_manager.is_grouping_preview_running()
+                or self._deferred_starts.is_armed("grouping_preview")
+            )
         if workflow == "easy_delete":
             return bool(
                 self.worker_manager.is_easy_delete_running()
@@ -186,7 +205,8 @@ class AppController(QObject):
         if workflow == "pick_best":
             return bool(
                 self.worker_manager.is_pick_best_running()
-                or self._pick_best_pending_after_similarity
+                or self._pick_best_pending_after_subject_grouping
+                or self._deferred_starts.is_armed("pick_best_scoring")
             )
         if workflow == "fix_rotation":
             return self.worker_manager.is_fix_rotation_running()
@@ -204,15 +224,24 @@ class AppController(QObject):
             self._easy_delete_pending_after_similarity = False
             self.worker_manager.request_stop_easy_delete_analysis()
             if depended_on_similarity:
+                # Also drop a start still waiting on the model environment probe,
+                # otherwise the probe callback would silently undo this cancel.
+                self._deferred_starts.disarm("similarity")
                 self._ignore_similarity_results = True
                 self.worker_manager.request_stop_similarity_analysis()
         elif workflow == "pick_best":
-            depended_on_similarity = self._pick_best_pending_after_similarity
-            self._pick_best_pending_after_similarity = False
+            depended_on_grouping = self._pick_best_pending_after_subject_grouping
+            owned_grouping = self._pick_best_owns_subject_grouping
+            self._pick_best_pending_after_subject_grouping = False
+            self._pick_best_owns_subject_grouping = False
+            self._deferred_starts.disarm("pick_best_scoring")
             self.worker_manager.request_stop_pick_best_analysis()
-            if depended_on_similarity:
-                self._ignore_similarity_results = True
-                self.worker_manager.request_stop_similarity_analysis()
+            if depended_on_grouping and owned_grouping:
+                self._deferred_starts.disarm("cull_grouping")
+                self.worker_manager.request_stop_cull_subject_grouping()
+                self.main_window.cancel_cull_grouping_progress(
+                    "Pick Best same-subject preparation cancelled."
+                )
         elif workflow == "fix_rotation":
             self.worker_manager.request_stop_fix_rotation_detection()
 
@@ -240,6 +269,19 @@ class AppController(QObject):
             self.handle_clustering_complete
         )
         self.worker_manager.similarity_error.connect(self.handle_similarity_error)
+        self.worker_manager.cull_grouping_progress.connect(
+            self.handle_cull_grouping_progress
+        )
+        self.worker_manager.cull_grouping_complete.connect(
+            self.handle_cull_grouping_complete
+        )
+        self.worker_manager.cull_grouping_error.connect(self.handle_cull_grouping_error)
+        self.worker_manager.cull_grouping_finished.connect(
+            self._schedule_similarity_resume_after_cull
+        )
+        self.worker_manager.model_environment_ready.connect(
+            self.handle_model_environment_ready
+        )
 
         # Rating Loader Worker
         self.worker_manager.rating_load_progress.connect(
@@ -355,6 +397,13 @@ class AppController(QObject):
     ):
         load_folder_start_time = time.perf_counter()
         logger.info("Loading folder: %s", folder_path)
+        self._cull_prerequisites_declined = False
+        # A new folder starts a fresh consent slate, matching the previous
+        # per-folder reset of the download approval and CPU warning.
+        self._model_consent = ModelConsentState()
+        self._cull_grouping_fingerprints = None
+        # A new folder invalidates every start that was still waiting on the probe.
+        self._deferred_starts.clear()
 
         if self.worker_manager.is_grouping_workflow_running():
             logger.info("Folder load blocked while grouping workflow is still running.")
@@ -547,6 +596,19 @@ class AppController(QObject):
         folder_path, options = pending
         self.load_folder(folder_path, **options)
 
+    def start_active_similarity_grouping(self) -> None:
+        """Start the cluster analysis owned by the active workflow.
+
+        Cull and Pick Best use the high-precision same-subject namespace. The
+        remaining workflows use the coarse visual-similarity namespace shared by
+        Organize and Easy Delete.
+        """
+
+        if getattr(self.app_state, "workflow_step", None) in {"cull", "pick_best"}:
+            self.start_cull_similarity_workflow()
+            return
+        self.start_similarity_analysis()
+
     def start_similarity_analysis(self):
         self._ignore_similarity_results = False
         logger.info("Starting similarity analysis.")
@@ -577,37 +639,56 @@ class AppController(QObject):
                 4000,
             )
 
-        model_name = get_similarity_embedding_model_name()
-        allow_model_download = False
-        if not is_similarity_model_installed(model_name):
-            if not self.main_window.dialog_manager.confirm_similarity_model_download(
-                model_name
-            ):
-                logger.info("Similarity model download declined by user.")
-                self.main_window.hide_loading_overlay()
-                self.main_window.statusBar().showMessage(
-                    "Similarity analysis canceled. Model download was not approved.",
-                    5000,
+        if self.worker_manager.is_cull_grouping_running():
+            # Both analyses use the shared DINO execution pipeline. Keep the
+            # coarse request queued until Cull has released its model worker,
+            # rather than silently terminating Cull and orphaning dependants.
+            self._deferred_starts.arm("similarity")
+            message = "Waiting for same-subject grouping to finish…"
+            if self._easy_delete_pending_after_similarity:
+                self.main_window.easy_delete_step_widget.show_loading(
+                    f"Step 1/2: {message}", -1
                 )
-                if self._pick_best_pending_after_similarity:
-                    self._pick_best_pending_after_similarity = False
-                    self.main_window.pick_best_step_widget.show_error(
-                        "Similarity analysis canceled. Model download was not approved."
-                    )
-                if self._easy_delete_pending_after_similarity:
-                    self._easy_delete_pending_after_similarity = False
-                    self.main_window.easy_delete_step_widget.show_error(
-                        "Similarity analysis canceled. Model download was not approved."
-                    )
-                return
-            allow_model_download = True
+            else:
+                self.main_window.statusBar().showMessage(message, 3000)
+            return
 
-        if self._pick_best_pending_after_similarity:
-            self.main_window.hide_loading_overlay()
-            self.main_window.pick_best_step_widget.show_loading(
-                "Step 1/2: Starting similarity analysis...", 0
+        if self._model_environment is None:
+            # Importing torch and resolving model snapshots takes seconds, so the
+            # answer is produced by a worker and this start resumes on its signal.
+            self._deferred_starts.arm("similarity")
+            self.main_window.statusBar().showMessage(
+                "Checking the local similarity model…", 3000
             )
-        elif self._easy_delete_pending_after_similarity:
+            self._start_model_environment_probe()
+            return
+
+        outcome = self._confirm_model_prerequisites(
+            [EMBEDDING_MODEL.key],
+            feature="visual similarity grouping",
+        )
+        if not outcome.approved:
+            if outcome.declined is PrerequisiteDecline.BUSY:
+                return
+            if outcome.declined is PrerequisiteDecline.DOWNLOAD:
+                logger.info("Similarity model download declined by user.")
+                message = (
+                    "Similarity analysis canceled. Model download was not approved."
+                )
+            else:
+                message = (
+                    "Similarity analysis canceled; hardware acceleration "
+                    "is unavailable."
+                )
+            self.main_window.hide_loading_overlay()
+            self.main_window.statusBar().showMessage(message, 5000)
+            if self._easy_delete_pending_after_similarity:
+                self._easy_delete_pending_after_similarity = False
+                self.main_window.easy_delete_step_widget.show_error(message)
+            return
+        allow_model_download = outcome.allow_download
+
+        if self._easy_delete_pending_after_similarity:
             self.main_window.hide_loading_overlay()
             self.main_window.easy_delete_step_widget.show_loading(
                 "Step 1/2: Starting similarity analysis...", 0
@@ -622,6 +703,22 @@ class AppController(QObject):
             analysis_cache=getattr(self.app_state, "analysis_cache", None),
             fingerprints=self._similarity_fingerprints(paths_for_similarity),
         )
+
+    def _schedule_similarity_resume_after_cull(self) -> None:
+        """Defer arbitration until any replacement Cull worker has been installed."""
+
+        QTimer.singleShot(0, self._resume_similarity_after_cull)
+
+    def _resume_similarity_after_cull(self) -> None:
+        """Resume the one coarse request queued behind Cull, if it still exists."""
+
+        if not self._deferred_starts.is_armed("similarity"):
+            return
+        if self.worker_manager.is_cull_grouping_running():
+            QTimer.singleShot(25, self._resume_similarity_after_cull)
+            return
+        if self._deferred_starts.take("similarity") is not None:
+            self.start_similarity_analysis()
 
     def _similarity_fingerprints(
         self, paths: list[str] | None = None
@@ -641,7 +738,7 @@ class AppController(QObject):
         return normalize_fingerprints(list(requested), supplied)
 
     def _current_similarity_signature(self, paths: list[str]) -> str:
-        model = SimilarityEmbeddingModel(get_similarity_embedding_model_name())
+        model = SimilarityEmbeddingModel()
         return build_similarity_signature(
             paths,
             self._similarity_fingerprints(paths),
@@ -665,6 +762,43 @@ class AppController(QObject):
             self.main_window.grouping_step_widget.set_output_root_text(
                 "Output root: " + source_root
             )
+        allow_model_download = False
+        if _grouping_mode_needs_model(mode):
+            if self._model_environment is None:
+                # Importing torch and resolving model snapshots takes seconds, so
+                # the answer comes from a worker and this start resumes on its
+                # signal instead of blocking the UI thread.
+                self._deferred_starts.arm("grouping_preview")
+                self._show_grouping_preview_status(
+                    "Checking the local similarity model…", busy=True
+                )
+                self._start_model_environment_probe()
+                return
+            outcome = self._confirm_model_prerequisites(
+                [EMBEDDING_MODEL.key],
+                feature=f"{mode} grouping",
+                fallback=(
+                    "If you cancel, you can still group by folder, date or location."
+                ),
+            )
+            if not outcome.approved:
+                if outcome.declined is PrerequisiteDecline.BUSY:
+                    return
+                if outcome.declined is PrerequisiteDecline.DOWNLOAD:
+                    logger.info("Grouping model download declined by user.")
+                    message = (
+                        f"{mode.title()} grouping needs the local similarity model. "
+                        "Download it to continue."
+                    )
+                else:
+                    message = (
+                        f"{mode.title()} grouping was cancelled; hardware "
+                        "acceleration is unavailable."
+                    )
+                self._show_grouping_preview_status(message, busy=False)
+                return
+            allow_model_download = outcome.allow_download
+
         self.main_window.update_grouping_preview("Preparing grouping preview...")
         self.main_window.grouping_step_widget.set_loading_state(
             f"Generating {mode} preview...",
@@ -676,6 +810,7 @@ class AppController(QObject):
             mode,
             source_root,
             self.main_window.grouping_step_widget.get_location_depth(),
+            allow_model_download,
         )
         is_grouping_preview_active = getattr(
             self.worker_manager,
@@ -693,7 +828,16 @@ class AppController(QObject):
             request[1],
             request[2],
             location_depth=request[3],
+            analysis_cache=getattr(self.app_state, "analysis_cache", None),
+            folder_path=getattr(self.app_state, "current_folder_path", None),
+            allow_model_download=request[4],
         )
+
+    def _show_grouping_preview_status(self, message: str, *, busy: bool) -> None:
+        """Mirror a preview status message in both Organize surfaces."""
+
+        self.main_window.update_grouping_preview(message)
+        self.main_window.grouping_step_widget.set_loading_state(message, busy, None)
 
     def _start_pending_grouping_preview(self) -> None:
         """Start the latest preview request after the replaced worker exits."""
@@ -715,6 +859,9 @@ class AppController(QObject):
             request[1],
             request[2],
             location_depth=request[3],
+            analysis_cache=getattr(self.app_state, "analysis_cache", None),
+            folder_path=getattr(self.app_state, "current_folder_path", None),
+            allow_model_download=request[4],
         )
 
     def activate_grouping_preview(self) -> None:
@@ -749,6 +896,41 @@ class AppController(QObject):
             )
             return
         output_root = build_grouping_output_root(source_root, mode)
+        allow_model_download = False
+        if prepared_plan is None and _grouping_mode_needs_model(mode):
+            if self._model_environment is None:
+                self._deferred_starts.arm(
+                    "grouping_workflow",
+                    (mode, group_name_overrides, prepared_plan),
+                )
+                self.main_window.grouping_step_widget.set_loading_state(
+                    "Checking the local similarity model…", True, None
+                )
+                self._start_model_environment_probe()
+                return
+            outcome = self._confirm_model_prerequisites(
+                [EMBEDDING_MODEL.key],
+                feature=f"{mode} grouping",
+                fallback=(
+                    "If you cancel, you can still group by folder, date or location."
+                ),
+            )
+            if not outcome.approved:
+                if outcome.declined is PrerequisiteDecline.BUSY:
+                    return
+                message = (
+                    f"{mode.title()} grouping needs the local similarity model. "
+                    "Download it to continue."
+                    if outcome.declined is PrerequisiteDecline.DOWNLOAD
+                    else (
+                        f"{mode.title()} grouping was cancelled; hardware "
+                        "acceleration is unavailable."
+                    )
+                )
+                self._show_grouping_preview_status(message, busy=False)
+                self.main_window.statusBar().showMessage(message, 6000)
+                return
+            allow_model_download = outcome.allow_download
         self.app_state.selected_grouping_mode = mode
         self.app_state.grouping_output_root = output_root
         self.main_window.set_grouping_busy(True)
@@ -770,6 +952,7 @@ class AppController(QObject):
             rating_cache=self.app_state.rating_disk_cache,
             exif_cache=self.app_state.exif_disk_cache,
             analysis_cache=self.app_state.analysis_cache,
+            allow_model_download=allow_model_download,
         )
 
     def _build_cluster_path_map(self) -> dict[int, list[str]]:
@@ -782,109 +965,14 @@ class AppController(QObject):
         return cluster_map
 
     def _build_pick_best_cluster_map(self) -> dict[int, list[str]]:
-        raw_cluster_map = self._build_cluster_path_map()
-
-        # Exclude images already marked for deletion (e.g. from Easy Delete step)
+        valid_paths = set(self._get_image_paths())
         marked = self.app_state.marked_for_deletion
-        if marked:
-            raw_cluster_map = {
-                cid: [p for p in paths if p not in marked]
-                for cid, paths in raw_cluster_map.items()
-            }
-            raw_cluster_map = {
-                cid: paths for cid, paths in raw_cluster_map.items() if paths
-            }
-
-        base_cluster_map = raw_cluster_map
-        embeddings = getattr(self.app_state, "embeddings_cache", {}) or {}
-        regional_embeddings = (
-            getattr(self.app_state, "regional_embeddings_cache", {}) or {}
-        )
-        if not base_cluster_map or not embeddings:
-            return base_cluster_map
-
-        refined_map: dict[int, list[str]] = {}
-        next_cluster_id = 1
-
-        for _cluster_id, paths in sorted(base_cluster_map.items()):
-            if len(paths) < 2:
-                refined_map[next_cluster_id] = list(paths)
-                next_cluster_id += 1
+        cluster_map: dict[int, list[str]] = {}
+        for path, cluster_id in self.app_state.cull_cluster_results.items():
+            if cluster_id is None or path not in valid_paths or path in marked:
                 continue
-
-            embedded_paths = [path for path in paths if path in embeddings]
-            missing_paths = [path for path in paths if path not in embeddings]
-
-            if len(embedded_paths) < 2:
-                refined_map[next_cluster_id] = list(paths)
-                next_cluster_id += 1
-                continue
-
-            embedding_matrix = np.array(
-                [embeddings[path] for path in embedded_paths], dtype=np.float32
-            )
-            embedding_matrix = l2_normalize_rows(embedding_matrix)
-            if not embedding_matrix.flags["C_CONTIGUOUS"]:
-                embedding_matrix = np.ascontiguousarray(embedding_matrix)
-
-            strict_eps = min(
-                adaptive_dbscan_eps(
-                    embedding_matrix,
-                    PICK_BEST_REFINEMENT_EPS,
-                    PICK_BEST_REFINEMENT_MIN_SAMPLES,
-                ),
-                PICK_BEST_REFINEMENT_EPS,
-            )
-            from sklearn.cluster import DBSCAN
-
-            if regional_embeddings:
-                distance_matrix = build_regional_distance_matrix(
-                    embeddings, regional_embeddings, embedded_paths
-                )
-                dbscan = DBSCAN(
-                    eps=strict_eps,
-                    min_samples=PICK_BEST_REFINEMENT_MIN_SAMPLES,
-                    metric="precomputed",
-                )
-                labels = dbscan.fit_predict(distance_matrix)
-            else:
-                dbscan = DBSCAN(
-                    eps=strict_eps,
-                    min_samples=PICK_BEST_REFINEMENT_MIN_SAMPLES,
-                    metric="cosine",
-                )
-                labels = dbscan.fit_predict(embedding_matrix)
-
-            grouped: dict[int, list[str]] = {}
-            next_noise_label = 0
-            for path, label in zip(embedded_paths, labels, strict=True):
-                if label == -1:
-                    grouped[-1000000 - next_noise_label] = [path]
-                    next_noise_label += 1
-                else:
-                    grouped.setdefault(int(label), []).append(path)
-
-            for path in missing_paths:
-                grouped[-1000000 - next_noise_label] = [path]
-                next_noise_label += 1
-
-            ordered_groups = sorted(
-                grouped.values(),
-                key=lambda group: (
-                    -len(group),
-                    min(paths.index(path) for path in group if path in paths),
-                ),
-            )
-            for group_paths in ordered_groups:
-                refined_map[next_cluster_id] = list(group_paths)
-                next_cluster_id += 1
-
-        logger.info(
-            "Pick Best refinement split %d similarity cluster(s) into %d tighter cluster(s).",
-            len(base_cluster_map),
-            len(refined_map),
-        )
-        return refined_map
+            cluster_map.setdefault(cluster_id, []).append(path)
+        return cluster_map
 
     def _restore_analysis_state(self):
         folder_path = self.app_state.current_folder_path
@@ -1183,6 +1271,8 @@ class AppController(QObject):
     def handle_grouping_preview_ready(self, plan):
         if _workflow_is_cancelled(self, "organize"):
             return
+        if _grouping_mode_needs_model(getattr(plan, "mode", None)):
+            self._mark_models_installed([EMBEDDING_MODEL.key])
         mode_label = str(getattr(plan, "mode", "grouping")).title()
         source_root = (
             self.app_state.grouping_source_root or self.app_state.current_folder_path
@@ -1311,7 +1401,7 @@ class AppController(QObject):
             cancel_transition()
 
     def start_pick_best_workflow(self) -> None:
-        """Start the Pick Best workflow — auto-runs similarity if not yet done."""
+        """Start Pick Best after preparing shared same-subject groups if needed."""
         _reactivate_workflow(self, "pick_best")
         if not self.app_state.image_files_data:
             self.main_window.statusBar().showMessage("No images loaded.", 3000)
@@ -1319,7 +1409,7 @@ class AppController(QObject):
 
         if (
             self.worker_manager.is_pick_best_running()
-            or self._pick_best_pending_after_similarity
+            or self._pick_best_pending_after_subject_grouping
         ):
             return
 
@@ -1329,25 +1419,32 @@ class AppController(QObject):
         widget = self.main_window.pick_best_step_widget
 
         image_paths = set(self._get_image_paths())
-        clustered_paths = set(self.app_state.cluster_results)
-        embedded_paths = set(getattr(self.app_state, "embeddings_cache", {}) or {})
-        regional_paths = set(
-            getattr(self.app_state, "regional_embeddings_cache", {}) or {}
-        )
-        similarity_inputs_ready = bool(image_paths) and image_paths.issubset(
-            clustered_paths & embedded_paths & regional_paths
+        grouped_paths = set(self.app_state.cull_cluster_results)
+        same_subject_groups_ready = bool(image_paths) and image_paths.issubset(
+            grouped_paths
         )
 
-        if similarity_inputs_ready:
+        if same_subject_groups_ready:
             self._start_pick_best_scoring()
         else:
             logger.info(
-                "Pick Best: similarity or regional inputs are incomplete; "
-                "running shared similarity analysis first."
+                "Pick Best: same-subject groups are incomplete; "
+                "running the shared DINO grouping analysis first."
             )
-            self._pick_best_pending_after_similarity = True
-            widget.show_loading("Step 1/2: Computing similarity clusters…", 0)
-            self.start_similarity_analysis()
+            grouping_already_running = self.worker_manager.is_cull_grouping_running()
+            self._pick_best_pending_after_subject_grouping = True
+            self._pick_best_owns_subject_grouping = False
+            widget.show_loading("Step 1/2: Preparing same-subject groups…", 0)
+            self.start_cull_similarity_workflow()
+            # The grouping run may still be deferred behind the model environment
+            # probe, so a synchronous "is running" check alone would under-claim it.
+            self._pick_best_owns_subject_grouping = bool(
+                not grouping_already_running
+                and (
+                    self.worker_manager.is_cull_grouping_running()
+                    or self._deferred_starts.is_armed("cull_grouping")
+                )
+            )
 
     def _start_pick_best_scoring(self) -> None:
         cluster_map = self._build_pick_best_cluster_map()
@@ -1362,7 +1459,26 @@ class AppController(QObject):
             )
             return
         widget.show_loading(f"Step 2/2: Scoring {scorable} cluster(s)…", 0)
-        self.worker_manager.start_pick_best_analysis(cluster_map)
+        if self._model_environment is None:
+            self._deferred_starts.arm("pick_best_scoring")
+            self._start_model_environment_probe()
+            return
+        outcome = self._confirm_model_prerequisites(
+            [AESTHETIC_MODEL.key], feature="Pick Best scoring"
+        )
+        if not outcome.approved:
+            if outcome.declined is PrerequisiteDecline.BUSY:
+                return
+            message = (
+                "Pick Best needs the local scoring model. Download it to continue."
+                if outcome.declined is PrerequisiteDecline.DOWNLOAD
+                else "Pick Best was cancelled; hardware acceleration is unavailable."
+            )
+            widget.show_error(message)
+            return
+        self.worker_manager.start_pick_best_analysis(
+            cluster_map, allow_model_download=outcome.allow_download
+        )
 
     def handle_pick_best_progress(self, percent: int, message: str) -> None:
         if _workflow_is_cancelled(self, "pick_best"):
@@ -1375,6 +1491,7 @@ class AppController(QObject):
         if _workflow_is_cancelled(self, "pick_best"):
             return
         logger.info(f"Pick Best complete: {len(results)} clusters scored.")
+        self._mark_models_installed([AESTHETIC_MODEL.key])
         self.app_state.pick_best_results = results
         # Build quick path→is_winner lookup
         self.app_state.pick_best_winners_by_path.clear()
@@ -1644,11 +1761,6 @@ class AppController(QObject):
         suffix = (
             f" ({percentage}%)" if percentage is not None and percentage >= 0 else ""
         )
-        if self._pick_best_pending_after_similarity:
-            self.main_window.pick_best_step_widget.show_loading(
-                f"Step 1/2: {message}", percentage
-            )
-            return
         if self._easy_delete_pending_after_similarity:
             self.main_window.easy_delete_step_widget.show_loading(
                 f"Step 1/2: {message}", percentage
@@ -1660,11 +1772,6 @@ class AppController(QObject):
         if getattr(self, "_ignore_similarity_results", False):
             return
         self.app_state.embeddings_cache = embeddings_dict
-        if self._pick_best_pending_after_similarity:
-            self.main_window.pick_best_step_widget.show_loading(
-                "Step 1/2: Embeddings generated. Clustering...", -1
-            )
-            return
         if self._easy_delete_pending_after_similarity:
             self.main_window.easy_delete_step_widget.show_loading(
                 "Step 1/2: Embeddings generated. Clustering...", -1
@@ -1677,6 +1784,327 @@ class AppController(QObject):
             return
         self.app_state.regional_embeddings_cache = embeddings_dict
 
+    def start_cull_similarity_workflow(self) -> None:
+        """Start Cull as one consented, continuous, cancellable task."""
+        if self.worker_manager.is_cull_grouping_running():
+            return
+        if not self._get_image_paths() or not self.app_state.current_folder_path:
+            return
+
+        # An explicit start always re-offers previously declined prerequisites.
+        self._cull_prerequisites_declined = False
+        self.app_state.cull_grouping_error = None
+        self.main_window.show_cull_grouping_progress(
+            "Starting fast DINO same-subject analysis…", 0
+        )
+        self._start_cull_subject_grouping_background()
+
+    def is_cull_grouping_declined(self) -> bool:
+        """Report whether the user refused the prerequisites for Cull grouping.
+
+        Callers that start grouping implicitly (such as opening the Cull page) use
+        this to avoid re-prompting for a download the user already refused.
+        """
+
+        return self._cull_prerequisites_declined
+
+    def cancel_cull_similarity_workflow(self) -> None:
+        """Cancel Cull analysis without modifying or moving source media."""
+        self.worker_manager.request_stop_cull_subject_grouping()
+        self._cull_grouping_fingerprints = None
+        self._deferred_starts.disarm("cull_grouping")
+        self.app_state.cull_grouping_error = "Same-subject grouping was cancelled."
+        self.main_window.mark_cull_model_dirty()
+        self.main_window.cancel_cull_grouping_progress(
+            "Same-subject grouping cancelled."
+        )
+        if self.app_state.workflow_step == "cull":
+            self.main_window._ensure_cull_model_ready()
+
+    def _start_model_environment_probe(self) -> None:
+        """Probe every managed model once, off the GUI thread."""
+
+        self.worker_manager.start_model_environment_probe(sorted(MODEL_REGISTRY))
+
+    def _reset_model_environment(self) -> None:
+        """Force the next model-backed start to re-probe what is on disk.
+
+        Used when the user explicitly retries: the cached probe result may be
+        stale (a download was cancelled, or a snapshot was removed), and we want
+        the consent prompt to be offered again rather than silently reusing it.
+        """
+
+        self._model_environment = None
+        self._model_consent.forget_downloads()
+
+    def retry_pick_best_workflow(self) -> None:
+        """Re-run Pick Best, re-offering any model download the user declined."""
+
+        self._reset_model_environment()
+        # A failed or cancelled attempt can leave the "waiting for grouping" latch
+        # set, which would make the restart a silent no-op.
+        self._pick_best_pending_after_subject_grouping = False
+        self.start_pick_best_workflow()
+
+    def retry_easy_delete_workflow(self) -> None:
+        """Re-run Easy Delete, re-offering any model download the user declined."""
+
+        self._reset_model_environment()
+        self._easy_delete_pending_after_similarity = False
+        self.start_easy_delete_workflow()
+
+    def _confirm_model_prerequisites(self, model_keys, *, feature, fallback=""):
+        """Ask for any outstanding consent for ``model_keys``.
+
+        The prompt is modal, and ``QDialog.exec`` runs a nested event loop, so a
+        queued signal can re-enter a workflow start method while the user is still
+        looking at the dialog. Refusing the re-entrant call keeps a single prompt
+        on screen and stops the same workflow being started twice.
+        """
+
+        if self._consent_prompt_active:
+            logger.debug(
+                "Ignoring a re-entrant consent request for %s while a prompt is open.",
+                feature,
+            )
+            return PrerequisiteOutcome(declined=PrerequisiteDecline.BUSY)
+
+        missing_keys, torch_device = self._model_environment or ((), "cpu")
+        self._consent_prompt_active = True
+        try:
+            return confirm_model_prerequisites(
+                self.main_window.dialog_manager,
+                self._model_consent,
+                required_keys=model_keys,
+                missing_keys=missing_keys,
+                torch_device=torch_device,
+                feature=feature,
+                fallback=fallback,
+            )
+        finally:
+            self._consent_prompt_active = False
+
+    def _mark_models_installed(self, model_keys) -> None:
+        """Record that a successful run proved these models are on disk."""
+
+        self._model_consent.reset_downloads(model_keys)
+        if self._model_environment is None:
+            return
+        missing, device = self._model_environment
+        self._model_environment = (
+            tuple(key for key in missing if key not in set(model_keys)),
+            device,
+        )
+
+    def handle_model_environment_ready(
+        self, missing_model_keys: tuple[str, ...], torch_device: str
+    ) -> None:
+        """Resume deferred workflow starts once the background probe has answered."""
+        self._model_environment = (tuple(missing_model_keys), torch_device)
+        if self._deferred_starts.take("cull_grouping") is not None:
+            self._start_cull_subject_grouping_background()
+        if self._deferred_starts.take("similarity") is not None:
+            self.start_similarity_analysis()
+        if self._deferred_starts.take("pick_best_scoring") is not None:
+            self._start_pick_best_scoring()
+        if self._deferred_starts.take("grouping_preview") is not None:
+            if not _workflow_is_cancelled(self, "organize"):
+                self.refresh_grouping_preview()
+        pending_grouping_workflow = self._deferred_starts.take("grouping_workflow")
+        if pending_grouping_workflow is not None:
+            mode, overrides, prepared_plan = pending_grouping_workflow
+            self.start_grouping_workflow(
+                mode,
+                group_name_overrides=overrides,
+                prepared_plan=prepared_plan,
+            )
+
+    def _abort_cull_grouping(
+        self, *, reason: str, status_message: str, pick_best_message: str
+    ) -> None:
+        """Leave Cull usable without groups after declined prerequisites."""
+        self._cull_prerequisites_declined = True
+        self._deferred_starts.disarm("cull_grouping")
+        self.app_state.cull_cluster_results.clear()
+        self.app_state.cull_grouping_error = reason
+        self.main_window.mark_cull_model_dirty()
+        self.main_window.revert_group_by_similarity()
+        if self.app_state.workflow_step == "cull":
+            self.main_window._ensure_cull_model_ready()
+        self.main_window.fail_cull_grouping_progress(reason)
+        self.main_window.statusBar().showMessage(status_message, 6000)
+        if self._pick_best_pending_after_subject_grouping:
+            self._pick_best_pending_after_subject_grouping = False
+            self._pick_best_owns_subject_grouping = False
+            self.main_window.pick_best_step_widget.show_error(pick_best_message)
+
+    def _confirm_cull_prerequisites(self) -> bool | None:
+        """Return whether model downloads are allowed, or ``None`` if declined."""
+        outcome = self._confirm_model_prerequisites(
+            [EMBEDDING_MODEL.key],
+            feature="same-subject grouping",
+            fallback=(
+                "If you cancel, Cull remains available without similarity groups."
+            ),
+        )
+        if outcome.declined is PrerequisiteDecline.BUSY:
+            # The prompt already on screen owns this decision; do not abort Cull
+            # on behalf of a duplicate start.
+            return None
+        if outcome.declined is PrerequisiteDecline.DOWNLOAD:
+            self._abort_cull_grouping(
+                reason="Same-subject grouping requires the local Cull model.",
+                status_message=(
+                    "Download cancelled. Cull remains available without "
+                    "similarity groups."
+                ),
+                pick_best_message=(
+                    "Pick Best needs the local same-subject model. "
+                    "Download it to continue."
+                ),
+            )
+            return None
+        if outcome.declined is PrerequisiteDecline.ACCELERATION:
+            self._abort_cull_grouping(
+                reason=(
+                    "Same-subject grouping was cancelled because acceleration "
+                    "is unavailable."
+                ),
+                status_message=(
+                    "Same-subject grouping was cancelled; "
+                    "hardware acceleration is unavailable."
+                ),
+                pick_best_message="Same-subject preparation was cancelled.",
+            )
+            return None
+        return outcome.allow_download
+
+    def _start_cull_subject_grouping_background(self) -> None:
+        if self.worker_manager.is_cull_grouping_running():
+            return
+        paths = self._get_image_paths()
+        folder_path = self.app_state.current_folder_path
+        if not paths or not folder_path:
+            return
+
+        if self._model_environment is None:
+            # Importing torch and resolving model snapshots takes seconds, so the
+            # answer is produced by a worker and this start resumes on its signal.
+            self._deferred_starts.arm("cull_grouping")
+            self.main_window.show_cull_grouping_progress(
+                "Checking the local same-subject model…", -1
+            )
+            self._start_model_environment_probe()
+            return
+
+        allow_download = self._confirm_cull_prerequisites()
+        if allow_download is None:
+            return
+
+        timestamps = {}
+        for record in self._get_image_file_data():
+            path = record.get("path")
+            if not path:
+                continue
+            value = self.app_state.date_cache.get(path)
+            if value is None:
+                try:
+                    value = datetime_obj.fromtimestamp(os.path.getmtime(path))
+                except OSError:
+                    value = None
+            timestamps[path] = value
+
+        self.app_state.cull_grouping_error = None
+        fingerprints = self._similarity_fingerprints(paths)
+        self._cull_grouping_fingerprints = fingerprints
+        self.worker_manager.start_cull_subject_grouping(
+            paths=paths,
+            fingerprints=fingerprints,
+            timestamps=timestamps,
+            strictness=get_cull_grouping_strictness(),
+            analysis_cache=self.app_state.analysis_cache,
+            folder_path=folder_path,
+            allow_model_download=allow_download,
+        )
+
+    def handle_cull_grouping_progress(self, percent: int, message: str) -> None:
+        stage_match = re.search(r"\((\d+)\s*/\s*(\d+)\)", message)
+        if stage_match and int(stage_match.group(2)) > 0:
+            displayed = int(100 * int(stage_match.group(1)) / int(stage_match.group(2)))
+        else:
+            displayed = percent
+        self.main_window.show_cull_grouping_progress(message, displayed)
+        if getattr(self, "_pick_best_pending_after_subject_grouping", False):
+            self.main_window.pick_best_step_widget.show_loading(
+                f"Step 1/2: {message}", displayed
+            )
+
+    def handle_cull_grouping_complete(self, result: CullClusteringResult) -> None:
+        current_paths = set(self._get_image_paths())
+        current_fingerprints = self._similarity_fingerprints(sorted(current_paths))
+        if (
+            set(result.clusters) != current_paths
+            or self._cull_grouping_fingerprints != current_fingerprints
+        ):
+            logger.info("Discarding stale Cull grouping result.")
+            self._cull_grouping_fingerprints = None
+            self.main_window.finish_cull_grouping_progress()
+            if self._pick_best_pending_after_subject_grouping:
+                self._pick_best_pending_after_subject_grouping = False
+                self._pick_best_owns_subject_grouping = False
+                self.main_window.pick_best_step_widget.show_error(
+                    "Photos changed while same-subject groups were being prepared. "
+                    "Try Pick Best again."
+                )
+            return
+        self._cull_grouping_fingerprints = None
+        # A completed run proves the models are now installed locally.
+        self._mark_models_installed([EMBEDDING_MODEL.key])
+        normalized = normalize_cluster_results(result.clusters)
+        if normalized != self.app_state.cull_cluster_results:
+            self.app_state.clear_pick_best_results()
+        self.app_state.cull_cluster_results = normalized
+        self.app_state.cull_grouping_error = None
+        cluster_ids = sorted(set(self.app_state.cull_cluster_results.values()))
+        self.main_window.cluster_filter_combo.clear()
+        self.main_window.cluster_filter_combo.addItems(
+            ["All Clusters"] + [f"Cluster {cluster_id}" for cluster_id in cluster_ids]
+        )
+        self.main_window.cluster_filter_combo.setEnabled(bool(cluster_ids))
+        self.main_window.menu_manager.update_cluster_filter_menu(cluster_ids)
+        self.main_window.mark_cull_model_dirty()
+        if self.app_state.workflow_step == "cull":
+            self.main_window._ensure_cull_model_ready()
+        self.main_window.finish_cull_grouping_progress()
+        self.main_window.statusBar().showMessage(
+            f"Cull same-subject grouping ready: "
+            f"{len(set(self.app_state.cull_cluster_results.values()))} groups.",
+            5000,
+        )
+        if self._pick_best_pending_after_subject_grouping:
+            self._pick_best_pending_after_subject_grouping = False
+            self._pick_best_owns_subject_grouping = False
+            self._start_pick_best_scoring()
+
+    def handle_cull_grouping_error(self, message: str) -> None:
+        self._cull_grouping_fingerprints = None
+        self.app_state.cull_cluster_results.clear()
+        self.app_state.cull_grouping_error = message
+        self._model_consent.approved_downloads.discard(EMBEDDING_MODEL.key)
+        self.main_window.mark_cull_model_dirty()
+        if self.app_state.workflow_step == "cull":
+            self.main_window._ensure_cull_model_ready()
+        self.main_window.fail_cull_grouping_progress(message)
+        self.main_window.statusBar().showMessage(
+            f"Cull same-subject grouping unavailable: {message}", 8000
+        )
+        if self._pick_best_pending_after_subject_grouping:
+            self._pick_best_pending_after_subject_grouping = False
+            self._pick_best_owns_subject_grouping = False
+            self.main_window.pick_best_step_widget.show_error(
+                f"Same-subject preparation failed: {message}"
+            )
+
     def handle_clustering_complete(
         self,
         result: SimilarityClusteringResult | dict[str, object],
@@ -1685,13 +2113,9 @@ class AppController(QObject):
             return
         if isinstance(result, SimilarityClusteringResult):
             cluster_results_dict = result.clusters
-            reused = result.reused
         else:
             cluster_results_dict = result
-            reused = False
         self.app_state.cluster_results = normalize_cluster_results(cluster_results_dict)
-        if not reused:
-            self.app_state.clear_pick_best_results()
 
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(
             bool(self._get_image_file_data())
@@ -1702,11 +2126,6 @@ class AppController(QObject):
             self.main_window.statusBar().showMessage(
                 "Clustering did not produce results.", 3000
             )
-            if self._pick_best_pending_after_similarity:
-                self._pick_best_pending_after_similarity = False
-                self.main_window.pick_best_step_widget.show_error(
-                    "Clustering did not produce results."
-                )
             if self._easy_delete_pending_after_similarity:
                 self._easy_delete_pending_after_similarity = False
                 self.main_window.easy_delete_step_widget.show_error(
@@ -1714,11 +2133,7 @@ class AppController(QObject):
                 )
             return
 
-        if self._pick_best_pending_after_similarity:
-            self.main_window.pick_best_step_widget.show_loading(
-                "Step 1/2: Clustering complete. Updating view...", -1
-            )
-        elif self._easy_delete_pending_after_similarity:
+        if self._easy_delete_pending_after_similarity:
             self.main_window.easy_delete_step_widget.show_loading(
                 "Step 1/2: Clustering complete. Updating view...", -1
             )
@@ -1745,10 +2160,7 @@ class AppController(QObject):
         if self.main_window.group_by_similarity_mode:
             self.main_window._rebuild_model_view()
 
-        if self._pick_best_pending_after_similarity:
-            self._pick_best_pending_after_similarity = False
-            self._start_pick_best_scoring()
-        elif self._easy_delete_pending_after_similarity:
+        if self._easy_delete_pending_after_similarity:
             self._easy_delete_pending_after_similarity = False
             self._start_easy_delete_detection()
         else:
@@ -1758,9 +2170,6 @@ class AppController(QObject):
         if getattr(self, "_ignore_similarity_results", False):
             return
         logger.error(f"Similarity analysis failed: {message}", exc_info=True)
-        if self._pick_best_pending_after_similarity:
-            self._pick_best_pending_after_similarity = False
-            self.main_window.pick_best_step_widget.show_error(message)
         if self._easy_delete_pending_after_similarity:
             self._easy_delete_pending_after_similarity = False
             self.main_window.easy_delete_step_widget.show_error(message)

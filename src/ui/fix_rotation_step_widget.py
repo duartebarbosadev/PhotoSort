@@ -17,6 +17,7 @@ from core.runtime_paths import get_app_models_dir, is_frozen_runtime
 from core.app_settings import ROTATION_MODEL_DOWNLOAD_URL
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.controllers.image_inspection_controller import InspectionImageSpec
+from ui.selection_utils import resolve_anchor_index_after_rebuild
 
 from ui.workflow_review_components import (
     FIX_ROTATION_SHORTCUTS,
@@ -202,7 +203,13 @@ class FixRotationStepWidget(QWidget):
         self._progress_bar.setVisible(False)
         self._content_stack.setCurrentIndex(0)
 
-    def show_results(self, suggestions: dict[str, int]) -> None:
+    def show_results(
+        self,
+        suggestions: dict[str, int],
+        *,
+        anchor_path: str | None = None,
+        paths_before: list[str] | None = None,
+    ) -> None:
         self._progress_view.mark_finished()
         if (
             self._shown_suggestions is not None
@@ -232,9 +239,17 @@ class FixRotationStepWidget(QWidget):
         if self._ordered_paths:
             self._populate_list()
             self._content_stack.setCurrentIndex(1)
+            target_index = 0
+            if anchor_path and paths_before:
+                target_index = max(
+                    0,
+                    resolve_anchor_index_after_rebuild(
+                        paths_before, self._ordered_paths, anchor_path
+                    ),
+                )
             self._syncing_active_image = True
             try:
-                self._navigate_to(0)
+                self._navigate_to(target_index)
             finally:
                 self._syncing_active_image = False
             self.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -251,8 +266,20 @@ class FixRotationStepWidget(QWidget):
     ) -> None:
         """Rebuild the queue after shared file operations change its paths."""
 
+        # Preserve the reviewer's position across the rebuild so a mutation
+        # elsewhere in the queue does not send them back to the first row.
+        paths_before = list(self._ordered_paths)
+        anchor_path = (
+            self._ordered_paths[self._current_index]
+            if 0 <= self._current_index < len(self._ordered_paths)
+            else None
+        )
         self._shown_suggestions = None
-        self.show_results(suggestions if suggestions is not None else {})
+        self.show_results(
+            suggestions if suggestions is not None else {},
+            anchor_path=anchor_path,
+            paths_before=paths_before,
+        )
 
     def show_applying(self, current: int, total: int, filename: str) -> None:
         self._applying = True

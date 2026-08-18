@@ -12,8 +12,9 @@ from ui.worker_manager import WorkerManager
     [
         "scanner_thread",
         "similarity_thread",
+        "cull_grouping_thread",
         "rating_loader_thread",
-        "cuda_detection_thread",
+        "model_environment_thread",
         "update_check_thread",
         "rating_writer_thread",
         "rotation_application_thread",
@@ -74,6 +75,11 @@ def test_request_stop_all_workers_never_waits_on_worker_threads():
             "request_stop_similarity_analysis",
             "similarity_thread",
             "similarity_worker",
+        ),
+        (
+            "request_stop_cull_subject_grouping",
+            "cull_grouping_thread",
+            "cull_grouping_worker",
         ),
         (
             "request_stop_grouping_preview",

@@ -78,6 +78,7 @@ from ui.menu_manager import MenuManager
 from ui.grouping_step_widget import GroupingStepWidget
 from ui.workflow_review_components import (
     WORKFLOW_SHORTCUTS,
+    WorkflowProgressView,
     WorkflowShortcutStrip,
 )
 from ui.workflow_transition import (
@@ -348,6 +349,9 @@ class MainWindow(QMainWindow):
     def _clear_analysis_cache_action(self):
         self.cache_controller.clear_analysis_cache()
 
+    def _clear_downloaded_models_action(self):
+        self.cache_controller.clear_downloaded_models()
+
     def _apply_preview_cache_limit_action(self):
         self.cache_controller.apply_preview_cache_limit()
 
@@ -549,6 +553,29 @@ class MainWindow(QMainWindow):
         exif_progress_layout.addWidget(self.exif_progress_bar)
         self.exif_progress_container.setVisible(False)
         self.workflow_footer_right_layout.addWidget(self.exif_progress_container)
+
+        self.cull_progress_container = QWidget()
+        self.cull_progress_container.setObjectName("cullProgressContainer")
+        cull_progress_layout = QHBoxLayout(self.cull_progress_container)
+        cull_progress_layout.setContentsMargins(6, 0, 6, 0)
+        cull_progress_layout.setSpacing(6)
+        self.cull_progress_label = QLabel("Cull")
+        self.cull_progress_label.setObjectName("cullProgressLabel")
+        self.cull_progress_label.setMaximumWidth(280)
+        self.cull_progress_bar = QProgressBar()
+        self.cull_progress_bar.setObjectName("cullProgressBar")
+        self.cull_progress_bar.setTextVisible(False)
+        self.cull_progress_bar.setFixedWidth(110)
+        self.cull_progress_cancel_button = QPushButton("Cancel")
+        self.cull_progress_cancel_button.setObjectName("cullProgressCancelButton")
+        self.cull_progress_cancel_button.clicked.connect(
+            self.app_controller.cancel_cull_similarity_workflow
+        )
+        cull_progress_layout.addWidget(self.cull_progress_label)
+        cull_progress_layout.addWidget(self.cull_progress_bar)
+        cull_progress_layout.addWidget(self.cull_progress_cancel_button)
+        self.cull_progress_container.setVisible(False)
+        self.workflow_footer_right_layout.addWidget(self.cull_progress_container)
         logger.debug(f"Widgets created in {time.perf_counter() - start_time:.4f}s.")
 
     def _create_layout(self):
@@ -610,7 +637,27 @@ class MainWindow(QMainWindow):
         main_splitter.setSizes([350, 850])
         self.main_splitter = main_splitter  # Store reference for sidebar toggling
 
-        cull_page_layout.addWidget(main_splitter)
+        self.cull_content_stack = QStackedWidget()
+        self.cull_content_stack.setObjectName("cullContentStack")
+        self.cull_progress_view = WorkflowProgressView(
+            "Preparing same-subject groups",
+            default_message="Getting Cull ready…",
+            retry_label="Enable same-subject grouping",
+            dismiss_label="Continue without grouping",
+        )
+        self.cull_progress_view.set_cancel_visible(True)
+        self.cull_progress_view.cancel_requested.connect(
+            self.app_controller.cancel_cull_similarity_workflow
+        )
+        self.cull_progress_view.dismiss_requested.connect(
+            self.show_cull_content_without_grouping
+        )
+        self.cull_progress_view.retry_requested.connect(
+            self.app_controller.start_cull_similarity_workflow
+        )
+        self.cull_content_stack.addWidget(main_splitter)
+        self.cull_content_stack.addWidget(self.cull_progress_view)
+        cull_page_layout.addWidget(self.cull_content_stack)
         self.workflow_stack.addWidget(self.grouping_page)
         self.workflow_stack.addWidget(self.easy_delete_page)
         self.workflow_stack.addWidget(self.fix_rotation_page)
@@ -1093,6 +1140,45 @@ class MainWindow(QMainWindow):
     def hide_thumbnail_progress(self) -> None:
         self.thumbnail_progress_container.setVisible(False)
 
+    def show_cull_grouping_progress(self, message: str, percent: int | None) -> None:
+        """Show one persistent Cull task on its page and in the global footer."""
+        self.cull_progress_view.set_cancel_visible(True)
+        self.cull_progress_view.update_progress(message, percent)
+        if self.app_state.workflow_step == "cull":
+            self.cull_content_stack.setCurrentWidget(self.cull_progress_view)
+
+        self.cull_progress_label.setText(message)
+        self.cull_progress_label.setToolTip(message)
+        if percent is None or percent < 0:
+            self.cull_progress_bar.setRange(0, 0)
+        else:
+            self.cull_progress_bar.setRange(0, 100)
+            self.cull_progress_bar.setValue(max(0, min(100, int(percent))))
+        self.cull_progress_cancel_button.setEnabled(True)
+        self.cull_progress_container.setVisible(True)
+
+    def finish_cull_grouping_progress(self) -> None:
+        self.cull_progress_view.mark_finished()
+        self.cull_progress_container.setVisible(False)
+        self.show_cull_content_without_grouping()
+
+    def show_cull_content_without_grouping(self) -> None:
+        """Return the Cull page to its media view, whatever grouping produced."""
+        self.cull_content_stack.setCurrentWidget(self.main_splitter)
+
+    def cancel_cull_grouping_progress(self, message: str) -> None:
+        self.cull_progress_view.mark_cancelled(message)
+        self.cull_progress_container.setVisible(False)
+        if self.app_state.workflow_step != "cull":
+            self.show_cull_content_without_grouping()
+
+    def fail_cull_grouping_progress(self, message: str) -> None:
+        self.cull_progress_view.show_error(message)
+        self.cull_progress_view.set_cancel_visible(False)
+        self.cull_progress_container.setVisible(False)
+        if self.app_state.workflow_step != "cull":
+            self.show_cull_content_without_grouping()
+
     def set_exif_progress(self, current: int, total: int) -> None:
         """Show background EXIF preparation independently of thumbnails."""
         if total <= 0:
@@ -1212,6 +1298,9 @@ class MainWindow(QMainWindow):
     def mark_cull_model_dirty(self) -> None:
         self._cull_model_dirty = True
 
+    def _active_cluster_results(self) -> dict[str, int]:
+        return self.app_state.cluster_results_for_workflow()
+
     def _ensure_cull_model_ready(self) -> None:
         if self._cull_model_dirty and self.app_state.image_files_data:
             self._rebuild_model_view()
@@ -1263,8 +1352,17 @@ class MainWindow(QMainWindow):
                 if fd.get("path") not in clustered_paths
             ]
 
-            if not self.app_state.cluster_results:
-                no_cluster_item = QStandardItem("Run 'Analyze Similarity' to group.")
+            if not self._active_cluster_results():
+                if self.app_state.cull_grouping_error:
+                    # Point at the retry button on the progress card rather than
+                    # leaving the user without a way back.
+                    message = (
+                        f"{self.app_state.cull_grouping_error} "
+                        "Use 'Enable same-subject grouping' to try again."
+                    )
+                else:
+                    message = "Preparing fast same-subject groups…"
+                no_cluster_item = QStandardItem(message)
                 no_cluster_item.setEditable(False)
                 root_item.appendRow(no_cluster_item)
 
@@ -1624,6 +1722,17 @@ class MainWindow(QMainWindow):
             action.setEnabled(True)
         self.workflow_stack.setCurrentWidget(self.cull_page)
         self._ensure_cull_model_ready()
+        if (
+            self.group_by_similarity_mode
+            and not self.app_state.cull_cluster_results
+            and not self.app_controller.is_cull_grouping_declined()
+        ):
+            self.app_controller.start_cull_similarity_workflow()
+        elif not (
+            self.worker_manager.is_cull_grouping_running()
+            or self.worker_manager.is_model_environment_probe_running()
+        ):
+            self.show_cull_content_without_grouping()
         self.schedule_visible_thumbnail_load()
         self.update_workflow_navigation()
         self.active_image_controller.sync_workflow("cull")
@@ -1640,6 +1749,9 @@ class MainWindow(QMainWindow):
             widget.set_exif_disk_cache(self.app_state.detailed_metadata_cache)
             widget.skip_requested.connect(
                 lambda: self._request_next_visible_workflow_transition("easy_delete")
+            )
+            widget.retry_requested.connect(
+                self.app_controller.retry_easy_delete_workflow
             )
             widget.apply_requested.connect(self._request_workflow_resolution)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
@@ -1692,6 +1804,7 @@ class MainWindow(QMainWindow):
                 lambda: self.app_state.embeddings_cache
             )
             widget.apply_requested.connect(self._request_workflow_resolution)
+            widget.retry_requested.connect(self.app_controller.retry_pick_best_workflow)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
@@ -2001,6 +2114,23 @@ class MainWindow(QMainWindow):
     def set_group_by_similarity_checked(self, checked: bool) -> None:
         self.group_by_similarity_mode = checked
         self.menu_manager.group_by_similarity_action.setChecked(checked)
+
+    def revert_group_by_similarity(self) -> None:
+        """Turn the grouping toggle back off when no groups will arrive.
+
+        Leaving it on would claim the photos are grouped while the view still
+        shows them ungrouped.
+        """
+        if not self.menu_manager.group_by_similarity_action.isChecked():
+            return
+        # A synchronous decline lands while _toggle_group_by_similarity is still
+        # on the stack, and the rest of that handler would re-show the cluster
+        # sort controls, so undo the toggle once it has finished.
+        QTimer.singleShot(0, self._uncheck_group_by_similarity)
+
+    def _uncheck_group_by_similarity(self) -> None:
+        # Emits toggled(False), which clears the mode and rebuilds the view.
+        self.menu_manager.group_by_similarity_action.setChecked(False)
 
     def set_cluster_sort_visible(self, visible: bool) -> None:
         self.menu_manager.set_cluster_sort_menu_visible(visible)
@@ -2747,7 +2877,7 @@ class MainWindow(QMainWindow):
             return 0
 
     def _get_cluster_id_for_path(self, path: str) -> int | None:
-        value = self._lookup_path_dict(self.app_state.cluster_results, path, None)
+        value = self._lookup_path_dict(self._active_cluster_results(), path, None)
         if isinstance(value, str):
             try:
                 return int(value)
@@ -2774,7 +2904,7 @@ class MainWindow(QMainWindow):
         cluster_mode_active = (
             self.navigation_skip_singleton_clusters
             and self.group_by_similarity_mode
-            and bool(self.app_state.cluster_results)
+            and bool(self._active_cluster_results())
         )
         if rating_target is None and not cluster_mode_active:
             return False
@@ -2880,7 +3010,7 @@ class MainWindow(QMainWindow):
         if not menu_manager:
             return
         can_skip = bool(
-            self.group_by_similarity_mode and self.app_state.cluster_results
+            self.group_by_similarity_mode and self._active_cluster_results()
         )
         menu_manager.set_skip_singleton_action_available(can_skip)
         self._refresh_cull_shortcut_visibility()
@@ -2913,7 +3043,17 @@ class MainWindow(QMainWindow):
         )
         for action in ("browse_including_marked", "clear_deletions", "apply"):
             strip.set_shortcut_state(action, visible=has_marks)
-        strip.set_shortcut_state("groups", visible=bool(self.app_state.cluster_results))
+        active_cluster_provider = getattr(self, "_active_cluster_results", None)
+        active_clusters = (
+            active_cluster_provider()
+            if callable(active_cluster_provider)
+            else getattr(
+                self.app_state,
+                "cull_cluster_results",
+                getattr(self.app_state, "cluster_results", {}),
+            )
+        )
+        strip.set_shortcut_state("groups", visible=bool(active_clusters))
 
     def _navigate_left_in_group(self, skip_deleted: bool = True):
         self.navigation_controller.navigate_group("left", skip_deleted)
@@ -3416,7 +3556,7 @@ class MainWindow(QMainWindow):
             metadata=metadata,
             width=pixmap.width() if pixmap else 0,
             height=pixmap.height() if pixmap else 0,
-            cluster_lookup=self.app_state.cluster_results,
+            cluster_lookup=self._active_cluster_results(),
             file_data_from_model=file_data_from_model,
         )
         self.statusBar().showMessage(info.to_message())
@@ -3748,10 +3888,8 @@ class MainWindow(QMainWindow):
             checked
         )  # Keep the UI in sync
 
-        if checked and not self.app_state.cluster_results:
-            self.app_controller.start_similarity_analysis()
-            # The view will be rebuilt by handle_clustering_complete once analysis is done
-            return  # Exit here, as handle_clustering_complete will handle the rest
+        if checked and not self._active_cluster_results():
+            self.app_controller.start_active_similarity_grouping()
 
         # If not checking, or if already clustered, proceed to rebuild view
         if checked:  # Only show sort options if grouping is active
@@ -3966,7 +4104,7 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(0, lambda: active_view.expand(proxy_index))
 
     def _cluster_sort_changed(self):
-        if self.group_by_similarity_mode and self.app_state.cluster_results:
+        if self.group_by_similarity_mode and self._active_cluster_results():
             self._rebuild_model_view()
 
     def _perform_group_selection_from_key(
@@ -3998,7 +4136,7 @@ class MainWindow(QMainWindow):
             item_data = item.data(Qt.ItemDataRole.UserRole)
             if isinstance(item_data, dict) and "path" in item_data:
                 image_path = item_data["path"]
-                determined_cluster_id = self.app_state.cluster_results.get(image_path)
+                determined_cluster_id = self._active_cluster_results().get(image_path)
                 break
             elif isinstance(item_data, str) and item_data.startswith("cluster_header_"):
                 with contextlib.suppress(ValueError, IndexError):
@@ -4813,10 +4951,11 @@ class MainWindow(QMainWindow):
         active_view = self._get_active_file_view()
         if deleted_paths and active_view:
             visible_after = self._get_all_visible_image_paths()
-            anchor_path = (
-                current_selected_path_before
-                if current_selected_path_before in deleted_paths
-                else deleted_paths[0]
+            # Anchor on whatever was active before the batch. Only fall back to a
+            # deleted path when nothing was active, otherwise a surviving current
+            # image would be abandoned for an unrelated row.
+            anchor_path = current_selected_path_before or (
+                deleted_paths[0] if deleted_paths else None
             )
             next_path = select_next_surviving_path(
                 visible_paths_before,
@@ -4827,16 +4966,31 @@ class MainWindow(QMainWindow):
             if next_path:
                 next_index = self._find_proxy_index_for_path(next_path)
                 if next_index.isValid():
-                    active_view.setCurrentIndex(next_index)
-                    active_view.selectionModel().select(
-                        next_index,
-                        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                    selection_model = active_view.selectionModel()
+                    keeps_current_image = (
+                        next_path == current_selected_path_before
+                        and selection_model.isSelected(next_index)
                     )
+                    if keeps_current_image:
+                        # The active image survived and is still selected; re-anchor
+                        # the current index without collapsing a multi-selection or
+                        # forcing a redundant preview reload.
+                        selection_model.setCurrentIndex(
+                            next_index,
+                            QItemSelectionModel.SelectionFlag.NoUpdate,
+                        )
+                    else:
+                        active_view.setCurrentIndex(next_index)
+                        selection_model.select(
+                            next_index,
+                            QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                        )
                     active_view.scrollTo(
                         next_index,
                         QAbstractItemView.ScrollHint.EnsureVisible,
                     )
-                    QTimer.singleShot(0, self._handle_file_selection_changed)
+                    if not keeps_current_image:
+                        QTimer.singleShot(0, self._handle_file_selection_changed)
             elif not visible_after:
                 self.advanced_image_viewer.clear()
                 self.advanced_image_viewer.setText("No images left to display.")

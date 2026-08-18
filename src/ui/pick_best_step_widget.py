@@ -34,6 +34,7 @@ from ui.workflow_review_components import (
     show_confirm_or_reset_notice,
 )
 from ui.workflow_metadata import build_workflow_metadata_rows
+from ui.selection_utils import resolve_anchor_index_after_rebuild
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,8 @@ class CompareCard(WorkflowDecisionCard):
         score: float | None,
         failure_reason: str | None,
         metadata_rows: list[tuple[str, str]],
+        sharpness_eligible: bool | None = None,
+        cluster_sharpness_ratio: float | None = None,
     ) -> None:
         self.path = path
         self.is_ai_pick = is_ai_pick
@@ -99,6 +102,11 @@ class CompareCard(WorkflowDecisionCard):
         name_parts = [name]
         if is_ai_pick:
             name_parts.append("AI suggestion")
+        if sharpness_eligible is False:
+            sharpness_text = "too soft"
+            if cluster_sharpness_ratio is not None:
+                sharpness_text += f" ({cluster_sharpness_ratio:.0%})"
+            name_parts.append(sharpness_text)
         if score is None:
             name_parts.append("score unavailable")
             self._name_label.setToolTip(failure_reason or "")
@@ -213,6 +221,7 @@ class ClusterTournament:
 
 class PickBestStepWidget(QWidget):
     apply_requested = pyqtSignal()
+    retry_requested = pyqtSignal()
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
     deletion_state_requested = pyqtSignal(dict)
@@ -299,7 +308,13 @@ class PickBestStepWidget(QWidget):
         self._progress_view.show_error(message)
 
     def show_results(
-        self, results: PickBestResults, *, restore_prior_marks: bool = True
+        self,
+        results: PickBestResults,
+        *,
+        restore_prior_marks: bool = True,
+        anchor_path: str | None = None,
+        anchor_cluster_key: object | None = None,
+        cluster_keys_before: list[object] | None = None,
     ) -> None:
         self._progress_view.mark_finished()
         if self._shown_results is not None and results == self._shown_results:
@@ -331,16 +346,67 @@ class PickBestStepWidget(QWidget):
             )
             return
 
-        self._cluster_index = 0
-        self._load_cluster(0)
+        self._cluster_index = self._resolve_restored_cluster_index(
+            anchor_path, anchor_cluster_key, cluster_keys_before
+        )
+        self._load_cluster(self._cluster_index)
         self._stack.setCurrentWidget(self._page_review)
+        if anchor_path and anchor_path in self._current_tournament().ordered_paths:
+            self.focus_image(anchor_path)
         self.setFocus()
+
+    def _resolve_restored_cluster_index(
+        self,
+        anchor_path: str | None,
+        anchor_cluster_key: object | None,
+        cluster_keys_before: list[object] | None,
+    ) -> int:
+        """Keep the reviewer on their cluster when the tournaments are rebuilt."""
+
+        if anchor_path:
+            for index, tournament in enumerate(self._tournaments):
+                if anchor_path in tournament.ordered_paths:
+                    return index
+        if anchor_cluster_key is None or not cluster_keys_before:
+            return 0
+        # The anchored cluster itself was invalidated. Fall back to its nearest
+        # surviving neighbour instead of restarting from the first cluster.
+        keys_before = [str(key) for key in cluster_keys_before]
+        keys_after = [str(key) for key in self._cluster_keys]
+        index = resolve_anchor_index_after_rebuild(
+            keys_before, keys_after, str(anchor_cluster_key)
+        )
+        return max(0, min(index, len(self._tournaments) - 1))
 
     def sync_results_after_file_mutation(self, results: PickBestResults) -> None:
         """Rebuild review state after shared file operations invalidate results."""
 
+        # Rebuilding drops every tournament, so remember the reviewed cluster and
+        # photo first and restore the closest surviving equivalent afterwards.
+        cluster_keys_before = list(self._cluster_keys)
+        anchor_cluster_key = (
+            cluster_keys_before[self._cluster_index]
+            if 0 <= self._cluster_index < len(cluster_keys_before)
+            else None
+        )
+        anchor_path = self._current_focused_path()
         self._shown_results = None
-        self.show_results(results, restore_prior_marks=False)
+        self.show_results(
+            results,
+            restore_prior_marks=False,
+            anchor_path=anchor_path,
+            anchor_cluster_key=anchor_cluster_key,
+            cluster_keys_before=cluster_keys_before,
+        )
+
+    def _current_focused_path(self) -> str | None:
+        """Return the photo the reviewer is currently looking at, if any."""
+
+        if 0 <= self._focused_slot_index < len(self._subset_paths):
+            return self._subset_paths[self._focused_slot_index]
+        if self._subset_paths:
+            return self._subset_paths[0]
+        return None
 
     def _clear_review_display(self) -> None:
         """Clear all tournament paths after the shared results are invalidated."""
@@ -401,7 +467,9 @@ class PickBestStepWidget(QWidget):
         self._progress_view = WorkflowProgressView(
             "Pick Best Photos",
             default_message="Starting analysis…",
+            retry_label="Try again",
         )
+        self._progress_view.retry_requested.connect(self.retry_requested)
         self._page_loading = self._progress_view
         self._loading_label = self._progress_view.message_label
         self._progress_bar = self._progress_view.progress_bar
@@ -947,6 +1015,9 @@ class PickBestStepWidget(QWidget):
         score_by_path, failure_reason_by_path = self._cluster_score_maps(
             tournament.payload
         )
+        ranked_by_path = {
+            entry["path"]: entry for entry in tournament.payload.get("ranked", [])
+        }
 
         activate = getattr(self.window(), "activate_image_inspection", None)
         if callable(activate):
@@ -992,6 +1063,12 @@ class PickBestStepWidget(QWidget):
                     failure_reason=failure_reason_by_path.get(path),
                     metadata_rows=self._metadata_rows_for_path(
                         path, failure_reason=failure_reason_by_path.get(path)
+                    ),
+                    sharpness_eligible=ranked_by_path.get(path, {}).get(
+                        "sharpness_eligible"
+                    ),
+                    cluster_sharpness_ratio=ranked_by_path.get(path, {}).get(
+                        "cluster_sharpness_ratio"
                     ),
                 )
             else:

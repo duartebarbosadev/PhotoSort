@@ -17,14 +17,6 @@ class ClusterUtils:
     """
 
     @staticmethod
-    def parse_cluster_id(value) -> int | None:
-        """Parse cluster ID from a cluster result value.
-
-        Values can be either integers or strings like "1 - 87.34%".
-        """
-        return parse_cluster_id(value)
-
-    @staticmethod
     def group_images_by_cluster(
         image_files_data: list[dict[str, Any]],
         cluster_results: dict[str, int],
@@ -39,7 +31,7 @@ class ClusterUtils:
             if isinstance(img_data, dict)
         }
         for file_path, cluster_value in cluster_results.items():
-            cluster_id = ClusterUtils.parse_cluster_id(cluster_value)
+            cluster_id = parse_cluster_id(cluster_value)
             if cluster_id is not None and file_path in image_data_map:
                 images_by_cluster.setdefault(cluster_id, []).append(
                     image_data_map[file_path]

@@ -27,6 +27,7 @@ from ui.workflow_review_components import (
     show_confirm_or_reset_notice,
 )
 from ui.workflow_metadata import build_workflow_metadata_rows
+from ui.selection_utils import resolve_anchor_index_after_rebuild
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.controllers.image_inspection_controller import InspectionImageSpec
 
@@ -62,6 +63,7 @@ class EasyDeleteStepWidget(QWidget):
 
     apply_requested = pyqtSignal()
     skip_requested = pyqtSignal()
+    retry_requested = pyqtSignal()
     mark_for_deletion_requested = pyqtSignal(list)
     unmark_for_deletion_requested = pyqtSignal(list)
     deletion_state_requested = pyqtSignal(dict)
@@ -241,7 +243,13 @@ class EasyDeleteStepWidget(QWidget):
         self._progress_view.show_error(message)
         self._content_stack.setCurrentIndex(0)
 
-    def show_results(self, results: dict[str, dict]) -> None:
+    def show_results(
+        self,
+        results: dict[str, dict],
+        *,
+        anchor_path: str | None = None,
+        paths_before: list[str] | None = None,
+    ) -> None:
         self._progress_view.mark_finished()
         if self._shown_results is not None and results == self._shown_results:
             self.refresh_deletion_state()
@@ -284,9 +292,17 @@ class EasyDeleteStepWidget(QWidget):
         if self._flagged_paths:
             self._populate_list()
             self._content_stack.setCurrentIndex(1)
+            target_index = 0
+            if anchor_path and paths_before:
+                target_index = max(
+                    0,
+                    resolve_anchor_index_after_rebuild(
+                        paths_before, self._flagged_paths, anchor_path
+                    ),
+                )
             self._syncing_active_image = True
             try:
-                self._navigate_to(0)
+                self._navigate_to(target_index)
             finally:
                 self._syncing_active_image = False
             self.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -302,8 +318,20 @@ class EasyDeleteStepWidget(QWidget):
         # setting AppState.easy_delete_results to None. Treat that as an empty
         # live queue so deleted paths cannot remain selectable or request
         # previews while a future analysis is pending.
+        # The queue is rebuilt from scratch, so remember where the reviewer was
+        # and restore that position (or its nearest survivor) afterwards.
+        paths_before = list(self._flagged_paths)
+        anchor_path = (
+            self._flagged_paths[self._current_index]
+            if 0 <= self._current_index < len(self._flagged_paths)
+            else None
+        )
         self._shown_results = None
-        self.show_results(results if results is not None else {})
+        self.show_results(
+            results if results is not None else {},
+            anchor_path=anchor_path,
+            paths_before=paths_before,
+        )
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -1062,7 +1090,9 @@ class EasyDeleteStepWidget(QWidget):
         self._progress_view = WorkflowProgressView(
             "Easy Delete",
             default_message="Analyzing images…",
+            retry_label="Try again",
         )
+        self._progress_view.retry_requested.connect(self.retry_requested)
         # Compatibility aliases for integrations that inspect the active status.
         self._loading_label = self._progress_view.message_label
         self._progress_bar = self._progress_view.progress_bar

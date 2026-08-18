@@ -97,7 +97,7 @@ If you prefer to build from source or want to contribute:
    The main entry point is [`src/main.py`](src/main.py).
 
   ```
-  python -m src.main [--folder FOLDER_PATH | --last-folder] [--clear-cache]
+  python -m src.main [--folder FOLDER_PATH | --last-folder] [--clear-cache] [--clear-models]
 
   # Examples:
   #   Open a specific folder at startup:
@@ -106,6 +106,8 @@ If you prefer to build from source or want to contribute:
   #       python -m src.main --last-folder
   #   Clear all caches before starting:
   #       python -m src.main --clear-cache
+  #   Delete downloaded AI models so they are fetched again (needs internet):
+  #       python -m src.main --clear-models
   #   Open folder and clear caches (useful for development):
   #       python -m src.main --folder "C:/Users/MyUser/Pictures" --clear-cache
   ```
@@ -130,8 +132,8 @@ The application will automatically detect and load the newest matching `orientat
 
 The following local models are downloaded or installed on first use:
 
-- `facebook/dinov2-small` or `facebook/dinov2-base` for similarity embeddings. PhotoSort asks before downloading the selected model, then reuses the local Hugging Face cache for offline runs. Preferences also include a similarity grouping threshold.
-- `cafeai/cafe_aesthetic` for Pick Best local aesthetic scoring
+- `facebook/dinov2-small` for visual-similarity and same-subject grouping shared across Organize, Easy Delete, Cull, and Pick Best. PhotoSort asks before downloading it, then reuses the local model and cached analysis on later runs.
+- `cafeai/cafe_aesthetic` for Pick Best local aesthetic scoring.
 
 If you are running offline, warm these models once while online first so they are present in your local Hugging Face cache.
 

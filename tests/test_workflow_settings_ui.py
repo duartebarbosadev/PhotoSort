@@ -2,7 +2,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QCheckBox, QDialog, QWidget
+from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QWidget
 
 from ui.dialog_manager import DialogManager
 
@@ -33,3 +33,12 @@ def test_preferences_exposes_optional_workflow_step_controls(monkeypatch):
     assert fix_rotation is not None and fix_rotation.isEnabled()
     assert pick_best is not None and pick_best.isEnabled()
     assert cull is not None and not cull.isEnabled()
+
+    strictness = dialog.findChild(QComboBox, "cullGroupingStrictnessCombo")
+    assert strictness is not None
+    assert [strictness.itemText(index) for index in range(strictness.count())] == [
+        "Conservative",
+        "Standard",
+        "Broad",
+    ]
+    assert dialog.findChild(QWidget, "similarityThresholdSpin") is None

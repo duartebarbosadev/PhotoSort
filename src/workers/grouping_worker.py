@@ -30,6 +30,9 @@ class GroupingPreviewWorker(QObject):
         source_root: str | None = None,
         location_depth: int = 3,
         image_pipeline: ImagePipeline | None = None,
+        analysis_cache=None,
+        folder_path: str | None = None,
+        allow_model_download: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -38,6 +41,9 @@ class GroupingPreviewWorker(QObject):
         self.source_root = source_root
         self.location_depth = location_depth
         self.image_pipeline = image_pipeline
+        self.analysis_cache = analysis_cache
+        self.folder_path = folder_path
+        self.allow_model_download = allow_model_download
         self._should_stop = False
         self._similarity_engine = None
 
@@ -56,7 +62,8 @@ class GroupingPreviewWorker(QObject):
                 from core.similarity_engine import SimilarityEngine
 
                 self._similarity_engine = SimilarityEngine(
-                    image_pipeline=self.image_pipeline
+                    image_pipeline=self.image_pipeline,
+                    allow_model_download=self.allow_model_download,
                 )
                 if self._should_stop:
                     self._similarity_engine.stop()
@@ -70,6 +77,8 @@ class GroupingPreviewWorker(QObject):
                 image_pipeline=self.image_pipeline,
                 should_continue=lambda: not self._should_stop,
                 similarity_engine=self._similarity_engine,
+                analysis_cache=self.analysis_cache,
+                folder_path=self.folder_path,
             )
             plan = augment_grouping_plan_with_filesystem_paths(
                 plan,
@@ -108,6 +117,7 @@ class GroupingWorkflowWorker(QObject):
         rating_cache=None,
         exif_cache=None,
         analysis_cache=None,
+        allow_model_download: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -123,10 +133,14 @@ class GroupingWorkflowWorker(QObject):
         self.rating_cache = rating_cache
         self.exif_cache = exif_cache
         self.analysis_cache = analysis_cache
+        self.allow_model_download = allow_model_download
         self._should_stop = False
+        self._similarity_engine = None
 
     def stop(self):
         self._should_stop = True
+        if self._similarity_engine is not None:
+            self._similarity_engine.stop()
 
     def run(self):
         try:
@@ -136,13 +150,24 @@ class GroupingWorkflowWorker(QObject):
             if self.prepared_plan is not None:
                 plan = self.prepared_plan
             else:
+                mode = GroupingMode(self.mode)
+                if mode in {GroupingMode.SIMILARITY, GroupingMode.MIXED}:
+                    from core.similarity_engine import SimilarityEngine
+
+                    self._similarity_engine = SimilarityEngine(
+                        image_pipeline=self.image_pipeline,
+                        allow_model_download=self.allow_model_download,
+                    )
                 plan = build_grouping_plan(
                     self.items,
-                    GroupingMode(self.mode),
+                    mode,
                     progress_callback=self.progress_update.emit,
                     source_root=self.source_root,
                     location_depth=self.location_depth,
                     image_pipeline=self.image_pipeline,
+                    similarity_engine=self._similarity_engine,
+                    analysis_cache=self.analysis_cache,
+                    folder_path=self.source_root,
                 )
             plan = augment_grouping_plan_with_filesystem_paths(
                 plan,

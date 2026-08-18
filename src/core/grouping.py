@@ -11,8 +11,14 @@ from collections.abc import Callable, Iterable, Sequence
 import numpy as np
 from PIL import Image
 
+from core.app_settings import (
+    FACE_GROUPING_DBSCAN_EPS,
+    FACE_GROUPING_DBSCAN_MIN_SAMPLES,
+)
 from core.image_file_ops import ImageFileOperations
 from core.media_utils import is_video_extension
+from core.similarity_cache import parse_cluster_id
+from core.similarity_clustering import cluster_paths_with_cache
 from core.metadata_processor import (
     DATE_TAGS_PREFERENCE,
     MetadataProcessor,
@@ -859,27 +865,21 @@ def _build_groups_from_assignments(
     ]
 
 
-def _parse_cluster_id(value: Any) -> int | None:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        try:
-            return int(value.split(" - ")[0])
-        except Exception:
-            try:
-                return int(value)
-            except Exception:
-                return None
-    return None
-
-
 def _run_ml_similarity_pipeline(
     image_paths: Sequence[str],
     progress_callback=None,
     shared_engine: SimilarityEngine | None = None,
     image_pipeline: ImagePipeline | None = None,
     should_continue: Callable[[], bool] | None = None,
+    analysis_cache=None,
+    folder_path: str | None = None,
 ) -> dict[str, int]:
+    """Cluster ``image_paths``, sharing the warm cache with the similarity view.
+
+    The cache entry describes one exact set of paths, so callers that analyse a
+    subset (such as date buckets in mixed mode) deliberately pass no cache.
+    """
+
     _raise_if_grouping_cancelled(should_continue)
     if not image_paths:
         return {}
@@ -889,14 +889,17 @@ def _run_ml_similarity_pipeline(
         engine = SimilarityEngine(image_pipeline=image_pipeline)
     else:
         engine = shared_engine
-    _embeddings, cluster_results = engine.run_analysis_sync(
+    cluster_results = cluster_paths_with_cache(
+        engine,
         list(image_paths),
+        analysis_cache=analysis_cache,
+        folder_path=folder_path,
         progress_callback=progress_callback,
-    )
+    ).clusters
     _raise_if_grouping_cancelled(should_continue)
     assignments: dict[str, int] = {}
     for path, raw_cluster in cluster_results.items():
-        cluster_id = _parse_cluster_id(raw_cluster)
+        cluster_id = parse_cluster_id(raw_cluster)
         if cluster_id is not None:
             assignments[path] = cluster_id
     return assignments
@@ -911,6 +914,8 @@ def build_grouping_plan(
     image_pipeline: ImagePipeline | None = None,
     should_continue: Callable[[], bool] | None = None,
     similarity_engine: SimilarityEngine | None = None,
+    analysis_cache=None,
+    folder_path: str | None = None,
 ) -> GroupingPlan:
     _raise_if_grouping_cancelled(should_continue)
     mode_value = GroupingMode(mode)
@@ -964,6 +969,8 @@ def build_grouping_plan(
         image_pipeline=image_pipeline,
         should_continue=should_continue,
         similarity_engine=similarity_engine,
+        analysis_cache=analysis_cache,
+        folder_path=folder_path,
     )
 
 
@@ -1019,11 +1026,15 @@ def _build_similarity_plan(
     image_pipeline: ImagePipeline | None = None,
     should_continue: Callable[[], bool] | None = None,
     similarity_engine: SimilarityEngine | None = None,
+    analysis_cache=None,
+    folder_path: str | None = None,
 ) -> GroupingPlan:
     pipeline_kwargs = {
         "progress_callback": progress_callback,
         "shared_engine": similarity_engine,
         "image_pipeline": image_pipeline,
+        "analysis_cache": analysis_cache,
+        "folder_path": folder_path,
     }
     if should_continue is not None:
         pipeline_kwargs["should_continue"] = should_continue
@@ -1062,7 +1073,11 @@ def _build_face_plan(
             unassigned.append(path)
             continue
         vectors[path] = vector
-    assignments = _cluster_vectors(vectors, eps=0.16, min_samples=1)
+    assignments = _cluster_vectors(
+        vectors,
+        eps=FACE_GROUPING_DBSCAN_EPS,
+        min_samples=FACE_GROUPING_DBSCAN_MIN_SAMPLES,
+    )
     assigned_paths = set(assignments)
     unassigned.extend(path for path in vectors if path not in assigned_paths)
     groups = _build_groups_from_assignments(

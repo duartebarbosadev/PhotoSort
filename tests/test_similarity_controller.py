@@ -70,12 +70,9 @@ class DummyCtx:
         self.cluster_ids = cluster_ids
 
 
-def test_similarity_start_and_clustering_flow():
+def test_similarity_clustering_flow():
     ctx = DummyCtx()
     sc = SimilarityController(ctx)
-    sc.start(["a.jpg", "b.jpg"])
-    assert ctx.worker_manager.started is True
-    assert ctx.worker_manager.paths == ["a.jpg", "b.jpg"]
     sc.embeddings_generated({"a.jpg": [0, 1], "b.jpg": [1, 0]})
     assert ctx.app_state.embeddings_cache is not None
     sc.clustering_complete({"a.jpg": "1 - 87.34%", "b.jpg": 2}, group_mode=True)
@@ -84,9 +81,10 @@ def test_similarity_start_and_clustering_flow():
     assert ctx.rebuilt == 1
 
 
-def test_similarity_no_paths():
-    ctx = DummyCtx()
-    sc = SimilarityController(ctx)
-    sc.start([])
-    assert ctx.worker_manager.started is False
-    assert any("No valid image paths" in s for s in ctx.statuses)
+def test_similarity_controller_cannot_start_analysis():
+    """Guards the consent gate: AppController is the only way to start.
+
+    A ``start`` helper here would let a caller launch similarity analysis
+    without first asking the user to approve the model download.
+    """
+    assert not hasattr(SimilarityController, "start")

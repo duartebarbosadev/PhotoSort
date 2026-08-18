@@ -330,6 +330,11 @@ def main():
         "--clear-cache", action="store_true", help="Clear all caches before starting"
     )
     parser.add_argument(
+        "--clear-models",
+        action="store_true",
+        help="Delete downloaded AI models before starting (forces a re-download)",
+    )
+    parser.add_argument(
         "--smoke-test",
         action="store_true",
         help="Start the UI and auto-exit after a short delay (for CI sanity checks)",
@@ -425,6 +430,19 @@ def main():
         logging.info(
             f"Caches cleared via command line in {time.perf_counter() - clear_application_caches_start_time:.4f}s"
         )
+
+    if args.clear_models:
+        from core.model_provisioning import clear_model_caches
+
+        removed_models = clear_model_caches()
+        if removed_models:
+            logging.info(
+                "Deleted %d downloaded model(s) via command line: %s",
+                len(removed_models),
+                ", ".join(removed_models),
+            )
+        else:
+            logging.info("No downloaded models to delete.")
 
     initial_folder = args.folder
     if not initial_folder and args.last_folder:

@@ -99,6 +99,7 @@ hiddenimports = [
     "ui.pick_best_step_widget",
     "workers.best_shot_worker",
     "workers.easy_delete_worker",
+    "workers.cull_subject_grouping_worker",
     "workers.grouping_worker",
     "workers.pick_best_worker",
     "workers.rotation_detection_step_worker",
