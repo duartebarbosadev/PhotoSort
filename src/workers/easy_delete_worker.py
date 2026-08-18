@@ -72,6 +72,7 @@ class EasyDeleteWorker(QObject):
         self._face_analysis_service = face_analysis_service
         self._should_stop = False
         self._sharpness_cache: dict[str, float] = {}
+        self._unmeasurable_sharpness: set[str] = set()
         self._analysis_rgb_cache: OrderedDict[str, np.ndarray | None] = OrderedDict()
         self._subject_descriptor_cache: dict[str, SubjectDescriptor | None] = {}
         self._pending_subject_descriptors: dict[str, dict[str, object]] = {}
@@ -343,7 +344,7 @@ class EasyDeleteWorker(QObject):
         try:
             gray = self._load_gray_for_detection(path)
             if gray is None:
-                self._sharpness_cache[path] = 0.0
+                self._mark_sharpness_unmeasurable(path)
                 return 0.0
             return self._sharpness_for_gray(path, gray)
         except Exception:
@@ -352,8 +353,26 @@ class EasyDeleteWorker(QObject):
                 path,
                 exc_info=True,
             )
-            self._sharpness_cache[path] = 0.0
+            self._mark_sharpness_unmeasurable(path)
             return 0.0
+
+    def _mark_sharpness_unmeasurable(self, path: str) -> None:
+        """Record that a photo could not be measured, as opposed to scoring zero."""
+
+        self._sharpness_cache[path] = 0.0
+        self._unmeasurable_sharpness.add(path)
+
+    def _sharpness_is_known(self, path: str) -> bool:
+        """Whether the sharpness of ``path`` was actually measured.
+
+        A file that failed to decode also reports 0.0, which is the worst possible
+        score. Treating that as a measurement would make an unreadable photo lose
+        every duplicate comparison and be suggested for deletion, so the two cases
+        must stay distinguishable.
+        """
+
+        self._get_sharpness(path)
+        return path not in self._unmeasurable_sharpness
 
     def _detect_duplicates(self) -> dict[str, dict]:
         results: dict[str, dict] = {}
@@ -503,8 +522,14 @@ class EasyDeleteWorker(QObject):
                     continue
                 assigned_paths.update((path_i, path_j))
 
-                score_i = self._keep_score(path_i)
-                score_j = self._keep_score(path_j)
+                # An unreadable photo reports the worst possible sharpness, which
+                # would always elect it for deletion. When either side of the pair
+                # could not be measured, decide on the remaining signals instead.
+                use_sharpness = self._sharpness_is_known(
+                    path_i
+                ) and self._sharpness_is_known(path_j)
+                score_i = self._keep_score(path_i, use_sharpness=use_sharpness)
+                score_j = self._keep_score(path_j, use_sharpness=use_sharpness)
                 if score_i >= score_j:
                     delete_path, keep_path = path_j, path_i
                 else:
@@ -590,9 +615,9 @@ class EasyDeleteWorker(QObject):
         )
         return results
 
-    def _keep_score(self, path: str) -> int:
+    def _keep_score(self, path: str, *, use_sharpness: bool = True) -> int:
         """Higher = prefer to keep. Sharpness first, then EXIF richness, then file size."""
-        sharpness_component = round(self._get_sharpness(path))
+        sharpness_component = round(self._get_sharpness(path)) if use_sharpness else 0
         exif_component = min(self._exif_field_count(path), _MAX_EXIF_FIELDS_FOR_SCORE)
         file_size_component = min(self._file_size(path), _MAX_FILE_SIZE_SCORE)
         return (
@@ -613,7 +638,11 @@ class EasyDeleteWorker(QObject):
                         if v is not None and v != "" and str(v) != "None"
                     )
             except Exception:
-                pass
+                logger.debug(
+                    "EasyDeleteWorker: EXIF cache unreadable for %s",
+                    path,
+                    exc_info=True,
+                )
 
         return exif_count
 
@@ -656,9 +685,12 @@ class EasyDeleteWorker(QObject):
             return "The files are byte-for-byte identical"
 
         reasons = []
+        sharpness_known = self._sharpness_is_known(
+            delete_path
+        ) and self._sharpness_is_known(keep_path)
         delete_sharpness = self._get_sharpness(delete_path)
         keep_sharpness = self._get_sharpness(keep_path)
-        if round(keep_sharpness) > round(delete_sharpness):
+        if sharpness_known and round(keep_sharpness) > round(delete_sharpness):
             reasons.append(
                 f"lower sharpness ({delete_sharpness:.1f} vs {keep_sharpness:.1f})"
             )
@@ -691,9 +723,12 @@ class EasyDeleteWorker(QObject):
             reason = "byte-for-byte identical"
             return reason, reason
 
+        sharpness_known = self._sharpness_is_known(
+            delete_path
+        ) and self._sharpness_is_known(keep_path)
         delete_sharpness = self._get_sharpness(delete_path)
         keep_sharpness = self._get_sharpness(keep_path)
-        if round(keep_sharpness) > round(delete_sharpness):
+        if sharpness_known and round(keep_sharpness) > round(delete_sharpness):
             values = f"{keep_sharpness:.1f} vs {delete_sharpness:.1f}"
             return (
                 f"lower sharpness ({delete_sharpness:.1f} vs {keep_sharpness:.1f})",

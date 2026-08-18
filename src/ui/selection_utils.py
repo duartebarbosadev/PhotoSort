@@ -1,3 +1,6 @@
+from collections.abc import Sequence
+
+
 def select_next_surviving_path(
     visible_paths_before: list[str],
     removed_paths: list[str],
@@ -102,3 +105,29 @@ def select_next_surviving_path(
 
     # Final fallback: last available item
     return visible_paths_after[-1] if visible_paths_after else None
+
+
+def resolve_anchor_index_after_rebuild(
+    paths_before: Sequence[str],
+    paths_after: Sequence[str],
+    anchor_path: str | None,
+) -> int:
+    """Return the index in ``paths_after`` that best preserves ``anchor_path``.
+
+    Shared by every workflow review queue that is rebuilt after a file mutation.
+    Keeps the anchor selected when it survives, otherwise falls back to its
+    nearest surviving neighbour instead of jumping back to the first item.
+    Returns ``-1`` when nothing can be selected.
+    """
+    if not paths_after:
+        return -1
+    after = list(paths_after)
+    before = list(paths_before)
+    removed = [path for path in before if path not in set(after)]
+    next_path = select_next_surviving_path(before, removed, anchor_path, after)
+    if next_path is None:
+        return 0
+    try:
+        return after.index(next_path)
+    except ValueError:
+        return 0

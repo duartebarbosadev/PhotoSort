@@ -22,6 +22,7 @@ from typing import override
 from core.image_pipeline import ImagePipeline
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.media_utils import is_image_extension
+from core.similarity_cache import parse_cluster_id
 from ui.workflow_review_components import WorkflowProgressView
 import logging
 
@@ -101,7 +102,13 @@ class DroppableTreeView(QTreeView):
         if not self.main_window.group_by_similarity_mode:
             return False
 
-        if not self.main_window.app_state.cluster_results:
+        app_state = self.main_window.app_state
+        cluster_results = (
+            app_state.cluster_results_for_workflow()
+            if hasattr(app_state, "cluster_results_for_workflow")
+            else app_state.cluster_results
+        )
+        if not cluster_results:
             return False
 
         pos = event.position().toPoint()
@@ -138,12 +145,6 @@ class DroppableTreeView(QTreeView):
                 return None
         return None
 
-    def _parse_cluster_id(self, value) -> int | None:
-        """Delegate to the shared parser used elsewhere in the UI."""
-        from ui.helpers.cluster_utils import ClusterUtils
-
-        return ClusterUtils.parse_cluster_id(value)
-
     def _move_dragged_items_to_cluster(self, target_cluster_id: int):
         """Move currently selected items to the target cluster."""
         selected_paths = [
@@ -156,22 +157,25 @@ class DroppableTreeView(QTreeView):
 
         app_state = self.main_window.app_state
         folder_path = app_state.current_folder_path
+        cluster_results = app_state.cluster_results_for_workflow()
 
         overrides_to_save = {}
         for path in selected_paths:
-            app_state.cluster_results[path] = target_cluster_id
+            cluster_results[path] = target_cluster_id
             overrides_to_save[path] = target_cluster_id
 
         # Persist to cache
         if folder_path:
             app_state.analysis_cache.save_manual_cluster_overrides(
-                folder_path, overrides_to_save
+                folder_path,
+                overrides_to_save,
+                namespace=app_state.manual_override_namespace_for_workflow(),
             )
 
         # Update UI - extract cluster IDs for display
         cluster_ids = set()
-        for value in app_state.cluster_results.values():
-            parsed_id = self._parse_cluster_id(value)
+        for value in cluster_results.values():
+            parsed_id = parse_cluster_id(value)
             if parsed_id is not None:
                 cluster_ids.add(parsed_id)
         sorted_cluster_ids = sorted(cluster_ids)
@@ -476,15 +480,11 @@ class SimilarityWorker(QObject):
             return
         try:
             from core.similarity_engine import SimilarityEngine
-            from core.app_settings import (
-                DBSCAN_MIN_SAMPLES,
-                get_similarity_clustering_eps,
-            )
             from core.similarity_cache import (
                 SimilarityClusteringResult,
-                build_similarity_signature,
                 normalize_fingerprints,
             )
+            from core.similarity_clustering import build_signature, load_cached_clusters
 
             # 1. Instantiate the engine inside the worker thread
             self.similarity_engine = SimilarityEngine(
@@ -499,21 +499,15 @@ class SimilarityWorker(QObject):
             normalized_fingerprints = normalize_fingerprints(
                 self.file_paths, self.fingerprints
             )
-            self._similarity_signature = build_similarity_signature(
-                self.file_paths,
-                normalized_fingerprints,
-                model_cache_key=self.similarity_engine.model.cache_key,
-                regional_cache_key=self.similarity_engine.model.region_cache_key,
-                clustering_eps=get_similarity_clustering_eps(),
-                min_samples=DBSCAN_MIN_SAMPLES,
+            self._similarity_signature = build_signature(
+                self.similarity_engine, self.file_paths, normalized_fingerprints
             )
-            cached_clusters = None
-            if self.analysis_cache is not None and self.folder_path:
-                cached_clusters = self.analysis_cache.load_valid_cluster_results(
-                    self.folder_path,
-                    signature=self._similarity_signature,
-                    expected_paths=set(self.file_paths),
-                )
+            cached_clusters = load_cached_clusters(
+                self.analysis_cache,
+                self.folder_path,
+                signature=self._similarity_signature,
+                expected_paths=set(self.file_paths),
+            )
 
             # 2. Connect its signals to this worker's signals
             self.similarity_engine.progress_update.connect(self.progress_update)
@@ -566,25 +560,14 @@ class SimilarityWorker(QObject):
             return
 
         from core.similarity_cache import SimilarityClusteringResult
+        from core.similarity_clustering import persist_clusters
 
-        from core.similarity_cache import normalize_cluster_results
-
-        results = normalize_cluster_results(cluster_results)
-        if self.analysis_cache is not None and self.folder_path:
-            try:
-                overrides = normalize_cluster_results(
-                    self.analysis_cache.get_manual_overrides(self.folder_path)
-                )
-                for path, cluster_id in overrides.items():
-                    if path in results:
-                        results[path] = cluster_id
-                self.analysis_cache.save_cluster_results(
-                    self.folder_path,
-                    results,
-                    signature=self._similarity_signature,
-                )
-            except Exception:
-                logger.exception("Failed to persist similarity results.")
+        results = persist_clusters(
+            self.analysis_cache,
+            self.folder_path,
+            cluster_results,
+            signature=self._similarity_signature,
+        )
         self.clustering_complete.emit(
             SimilarityClusteringResult(
                 clusters=results,
@@ -593,18 +576,3 @@ class SimilarityWorker(QObject):
             )
         )
         self.finished.emit()
-
-
-# --- CUDA Detection Worker ---
-class CudaDetectionWorker(QObject):
-    finished = pyqtSignal(str)  # torch_device
-
-    def run(self):
-        from core.app_settings import get_preferred_torch_device
-
-        try:
-            device = get_preferred_torch_device()
-        except Exception as e:
-            logger.error(f"Error during torch device detection: {e}", exc_info=True)
-            device = "cpu"
-        self.finished.emit(device)

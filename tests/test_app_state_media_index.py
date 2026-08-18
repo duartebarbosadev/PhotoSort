@@ -52,6 +52,27 @@ def test_bulk_deletion_marks_update_atomically():
     assert state.marked_for_deletion == {"keep-marked.jpg", "new-mark.jpg"}
 
 
+def test_cull_uses_its_own_clusters_without_replacing_coarse_results():
+    state = _state()
+    state.cluster_results = {"a.jpg": 1, "b.jpg": 1}
+    state.cull_cluster_results = {"a.jpg": 7, "b.jpg": 8}
+
+    assert state.cluster_results_for_workflow("easy_delete") == state.cluster_results
+    assert state.cluster_results_for_workflow("pick_best") == state.cull_cluster_results
+    assert state.cluster_results_for_workflow("cull") == state.cull_cluster_results
+
+
+def test_manual_override_namespace_follows_the_workflow_cluster_map():
+    """Overrides must be stored beside the cluster ids they were derived from."""
+
+    state = _state()
+
+    assert state.manual_override_namespace_for_workflow("organize") == "similarity"
+    assert state.manual_override_namespace_for_workflow("easy_delete") == "similarity"
+    assert state.manual_override_namespace_for_workflow("cull") == "cull"
+    assert state.manual_override_namespace_for_workflow("pick_best") == "cull"
+
+
 def test_assignment_removal_and_rename_keep_index_consistent():
     state = _state()
     state.image_files_data = [

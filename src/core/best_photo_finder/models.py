@@ -28,11 +28,14 @@ class ImageScore:
     status: Literal["scored", "failed"] = "scored"
     blur_variance: float | None = None
     blur_penalty: float = 0.0
+    cluster_sharpness_ratio: float = 1.0
+    sharpness_eligible: bool = True
     face_count: int = 0
     closed_face_count: int = 0
     eye_penalty: float = 0.0
     technical_penalty: float = 0.0
     aesthetic_score: float | None = None
+    base_score: float | None = None
     final_score: float | None = None
     max_face_area_ratio: float = 0.0
     image_width: int | None = None

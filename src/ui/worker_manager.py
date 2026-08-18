@@ -1,7 +1,8 @@
 import logging
+from datetime import datetime
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from typing import Any, TYPE_CHECKING
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 # Import worker classes
 from core.file_scanner import FileScanner
@@ -23,12 +24,13 @@ logger = logging.getLogger(__name__)
 _WORKER_SLOTS = (
     ("scanner_thread", "file_scanner"),
     ("similarity_thread", "similarity_worker"),
+    ("cull_grouping_thread", "cull_grouping_worker"),
+    ("model_environment_thread", "model_environment_worker"),
     ("rating_loader_thread", "rating_loader_worker"),
     ("rating_writer_thread", "rating_writer_worker"),
     ("rotation_application_thread", "rotation_application_worker"),
     ("thumbnail_preload_thread", "thumbnail_preload_worker"),
     ("preview_warm_thread", "preview_warm_worker"),
-    ("cuda_detection_thread", "cuda_detection_worker"),
     ("update_check_thread", "update_check_worker"),
     ("ai_rating_thread", "ai_rating_worker"),
     ("grouping_preview_thread", "grouping_preview_worker"),
@@ -41,11 +43,12 @@ _WORKER_SLOTS = (
 
 if TYPE_CHECKING:
     from ui.ui_components import (
-        CudaDetectionWorker,
         SimilarityWorker,
     )
     from workers.ai_rating_worker import AiRatingWorker
     from workers.easy_delete_worker import EasyDeleteWorker
+    from workers.cull_subject_grouping_worker import CullSubjectGroupingWorker
+    from workers.model_environment_probe_worker import ModelEnvironmentProbeWorker
     from workers.file_deletion_worker import FileDeletionWorker
     from workers.grouping_worker import GroupingPreviewWorker, GroupingWorkflowWorker
     from workers.pick_best_worker import PickBestWorker
@@ -77,6 +80,14 @@ class WorkerManager(QObject):
     similarity_clustering_complete = pyqtSignal(object)
     similarity_error = pyqtSignal(str)
 
+    # Cull same-subject grouping signals
+    cull_grouping_progress = pyqtSignal(int, str)
+    cull_grouping_complete = pyqtSignal(object)
+    cull_grouping_error = pyqtSignal(str)
+    cull_grouping_finished = pyqtSignal()
+    # (missing model keys, torch device)
+    model_environment_ready = pyqtSignal(tuple, str)
+
     # Rating Loader Signals
     rating_load_progress = pyqtSignal(int, int, str)  # current, total, basename
     rating_load_metadata_batch_loaded = pyqtSignal(
@@ -87,7 +98,6 @@ class WorkerManager(QObject):
     rating_load_cache_capacity_warning = pyqtSignal(int, int, object)
 
     # CUDA Detection Signals
-    cuda_detection_finished = pyqtSignal(str)
 
     # Update Check Signals
     update_check_finished = pyqtSignal(
@@ -168,6 +178,10 @@ class WorkerManager(QObject):
 
         self.similarity_thread: QThread | None = None
         self.similarity_worker: SimilarityWorker | None = None
+        self.cull_grouping_thread: QThread | None = None
+        self.cull_grouping_worker: CullSubjectGroupingWorker | None = None
+        self.model_environment_thread: QThread | None = None
+        self.model_environment_worker: ModelEnvironmentProbeWorker | None = None
 
         self.rating_loader_thread: QThread | None = None
         self.rating_loader_worker: RatingLoaderWorker | None = None
@@ -199,9 +213,6 @@ class WorkerManager(QObject):
 
         self.fix_rotation_detect_thread: QThread | None = None
         self.fix_rotation_detect_worker: RotationDetectionStepWorker | None = None
-
-        self.cuda_detection_thread: QThread | None = None
-        self.cuda_detection_worker: CudaDetectionWorker | None = None
 
         self.update_check_thread: QThread | None = None
         self.update_check_worker: UpdateCheckWorker | None = None
@@ -451,6 +462,114 @@ class WorkerManager(QObject):
         self._advance_worker_generation("similarity")
         self._stop_worker("similarity_thread", "similarity_worker")
 
+    def start_cull_subject_grouping(
+        self,
+        *,
+        paths: list[str],
+        fingerprints: dict[str, tuple[int, int]],
+        timestamps: dict[str, datetime | None],
+        strictness,
+        analysis_cache,
+        folder_path: str,
+        allow_model_download: bool,
+    ) -> None:
+        from workers.cull_subject_grouping_worker import CullSubjectGroupingWorker
+
+        self.stop_cull_subject_grouping()
+        generation = self._advance_worker_generation("cull_grouping")
+        self.cull_grouping_thread = QThread()
+        self.cull_grouping_worker = CullSubjectGroupingWorker(
+            paths=paths,
+            fingerprints=fingerprints,
+            timestamps=timestamps,
+            strictness=strictness,
+            image_pipeline=self.image_pipeline,
+            analysis_cache=analysis_cache,
+            folder_path=folder_path,
+            allow_model_download=allow_model_download,
+        )
+        self.cull_grouping_worker.moveToThread(self.cull_grouping_thread)
+        self.cull_grouping_worker.progress_update.connect(
+            lambda percent, message: self._emit_if_current(
+                "cull_grouping",
+                generation,
+                self.cull_grouping_progress,
+                percent,
+                message,
+            )
+        )
+        self.cull_grouping_worker.completed.connect(
+            lambda result: self._emit_if_current(
+                "cull_grouping", generation, self.cull_grouping_complete, result
+            )
+        )
+        self.cull_grouping_worker.error.connect(
+            lambda message: self._emit_if_current(
+                "cull_grouping", generation, self.cull_grouping_error, message
+            )
+        )
+        self.cull_grouping_worker.finished.connect(self.cull_grouping_thread.quit)
+        self.cull_grouping_thread.finished.connect(self._cleanup_cull_grouping_refs)
+        self.cull_grouping_thread.started.connect(self.cull_grouping_worker.run)
+        self.cull_grouping_thread.start()
+
+    def _cleanup_cull_grouping_refs(self) -> None:
+        self._cleanup_worker_refs(
+            "cull_grouping_thread", "cull_grouping_worker", "Cull subject grouping"
+        )
+        self.cull_grouping_finished.emit()
+
+    def start_model_environment_probe(self, model_keys: Sequence[str]) -> None:
+        """Resolve model availability and the torch device off the GUI thread."""
+
+        if self.model_environment_thread is not None:
+            return
+        from workers.model_environment_probe_worker import ModelEnvironmentProbeWorker
+
+        generation = self._advance_worker_generation("model_environment")
+        self.model_environment_thread = QThread()
+        self.model_environment_worker = ModelEnvironmentProbeWorker(model_keys)
+        self.model_environment_worker.moveToThread(self.model_environment_thread)
+        self.model_environment_worker.completed.connect(
+            lambda missing, device: self._emit_if_current(
+                "model_environment",
+                generation,
+                self.model_environment_ready,
+                missing,
+                device,
+            )
+        )
+        self.model_environment_worker.finished.connect(
+            self.model_environment_thread.quit
+        )
+        self.model_environment_thread.finished.connect(
+            self._cleanup_model_environment_refs
+        )
+        self.model_environment_thread.started.connect(self.model_environment_worker.run)
+        self.model_environment_thread.start()
+
+    def _cleanup_model_environment_refs(self) -> None:
+        self._cleanup_worker_refs(
+            "model_environment_thread",
+            "model_environment_worker",
+            "Model environment probe",
+        )
+
+    def is_model_environment_probe_running(self) -> bool:
+        return self.model_environment_thread is not None
+
+    def stop_model_environment_probe(self) -> None:
+        self._advance_worker_generation("model_environment")
+        self._stop_worker("model_environment_thread", "model_environment_worker")
+
+    def stop_cull_subject_grouping(self) -> None:
+        self._advance_worker_generation("cull_grouping")
+        self._stop_worker("cull_grouping_thread", "cull_grouping_worker")
+
+    def request_stop_cull_subject_grouping(self) -> None:
+        self._advance_worker_generation("cull_grouping")
+        self._request_worker_stop("cull_grouping_thread", "cull_grouping_worker")
+
     def request_stop_similarity_analysis(self) -> None:
         self._advance_worker_generation("similarity")
         self._request_worker_stop("similarity_thread", "similarity_worker")
@@ -504,31 +623,6 @@ class WorkerManager(QObject):
             before_stop=lambda worker: worker.disable_emits(),
         )
 
-    def _cleanup_cuda_detection_refs(self):
-        self._cleanup_worker_refs(
-            "cuda_detection_thread", "cuda_detection_worker", "CUDA detection"
-        )
-
-    # --- CUDA Detection Management ---
-    def start_cuda_detection(self):
-        from ui.ui_components import CudaDetectionWorker
-
-        self.stop_cuda_detection()
-        self.cuda_detection_thread = QThread()
-        self.cuda_detection_worker = CudaDetectionWorker()
-        self.cuda_detection_worker.moveToThread(self.cuda_detection_thread)
-
-        self.cuda_detection_worker.finished.connect(self.cuda_detection_finished)
-        self.cuda_detection_worker.finished.connect(self.cuda_detection_thread.quit)
-        self.cuda_detection_thread.started.connect(self.cuda_detection_worker.run)
-        self.cuda_detection_thread.finished.connect(self._cleanup_cuda_detection_refs)
-
-        self.cuda_detection_thread.start()
-        logger.info("CUDA detection thread and worker started.")
-
-    def stop_cuda_detection(self):
-        self._stop_worker("cuda_detection_thread", "cuda_detection_worker")
-
     def _cleanup_grouping_preview_refs(self):
         self._cleanup_worker_refs(
             "grouping_preview_thread", "grouping_preview_worker", "Grouping preview"
@@ -540,6 +634,9 @@ class WorkerManager(QObject):
         mode: str,
         source_root: str | None = None,
         location_depth: int = 3,
+        analysis_cache=None,
+        folder_path: str | None = None,
+        allow_model_download: bool = False,
     ):
         from workers.grouping_worker import GroupingPreviewWorker
 
@@ -553,6 +650,9 @@ class WorkerManager(QObject):
             source_root,
             location_depth,
             image_pipeline=self.image_pipeline,
+            analysis_cache=analysis_cache,
+            folder_path=folder_path,
+            allow_model_download=allow_model_download,
         )
         self.grouping_preview_worker.moveToThread(self.grouping_preview_thread)
 
@@ -612,6 +712,7 @@ class WorkerManager(QObject):
         rating_cache=None,
         exif_cache=None,
         analysis_cache=None,
+        allow_model_download: bool = False,
     ):
         from workers.grouping_worker import GroupingWorkflowWorker
 
@@ -630,6 +731,7 @@ class WorkerManager(QObject):
             rating_cache=rating_cache,
             exif_cache=exif_cache,
             analysis_cache=analysis_cache,
+            allow_model_download=allow_model_download,
         )
         self.grouping_workflow_worker.moveToThread(self.grouping_workflow_thread)
 
@@ -712,12 +814,13 @@ class WorkerManager(QObject):
         logger.info("Stopping all workers...")
         self.stop_file_scan()
         self.stop_similarity_analysis()
+        self.stop_cull_subject_grouping()
+        self.stop_model_environment_probe()
         self.stop_rating_load()
         self.stop_rating_writer()
         self.stop_rotation_application()
         self.stop_thumbnail_preload()
         self.stop_preview_warming()
-        self.stop_cuda_detection()
         self.stop_update_check()
         self.stop_ai_rating()
         self.stop_grouping_preview()
@@ -734,6 +837,7 @@ class WorkerManager(QObject):
         logger.info("Requesting all workers stop without blocking...")
         for generation_name in (
             "similarity",
+            "cull_grouping",
             "pick_best",
             "easy_delete",
             "fix_rotation",
@@ -760,11 +864,11 @@ class WorkerManager(QObject):
     def is_similarity_worker_running(self) -> bool:
         return self.similarity_thread is not None
 
+    def is_cull_grouping_running(self) -> bool:
+        return self.cull_grouping_thread is not None
+
     def is_rating_loader_running(self) -> bool:
         return self.rating_loader_thread is not None
-
-    def is_cuda_detection_running(self) -> bool:
-        return self.cuda_detection_thread is not None
 
     def is_ai_rating_running(self) -> bool:
         return self.ai_rating_thread is not None
@@ -830,8 +934,9 @@ class WorkerManager(QObject):
         return (
             self.is_file_scanner_running()
             or self.is_similarity_worker_running()
+            or self.is_cull_grouping_running()
             or self.is_rating_loader_running()
-            or self.is_cuda_detection_running()
+            or self.is_model_environment_probe_running()
             or self.is_update_check_running()
             or self.is_rating_writer_running()
             or self.is_rotation_application_running()
@@ -858,6 +963,7 @@ class WorkerManager(QObject):
         """Whether low-priority thumbnail warming should yield compute resources."""
         return (
             self.is_similarity_worker_running()
+            or self.is_cull_grouping_running()
             or self.is_rotation_application_running()
             or self.is_ai_rating_running()
             or self.is_pick_best_running()
@@ -1104,7 +1210,12 @@ class WorkerManager(QObject):
     def _cleanup_ai_rating_worker(self):
         self._cleanup_worker_refs("ai_rating_thread", "ai_rating_worker", "AI rating")
 
-    def start_pick_best_analysis(self, cluster_map: dict[int, list[str]]) -> None:
+    def start_pick_best_analysis(
+        self,
+        cluster_map: dict[int, list[str]],
+        *,
+        allow_model_download: bool = False,
+    ) -> None:
         """Start the pick-best scoring worker."""
         from workers.pick_best_worker import PickBestWorker
 
@@ -1118,6 +1229,7 @@ class WorkerManager(QObject):
         self.pick_best_worker = PickBestWorker(
             cluster_map=cluster_map,
             image_pipeline=self.image_pipeline,
+            allow_model_download=allow_model_download,
         )
         self.pick_best_worker.moveToThread(self.pick_best_thread)
 

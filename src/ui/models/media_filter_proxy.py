@@ -14,7 +14,12 @@ class FilterStateView(Protocol):
     """The small slice of application state needed by the proxy model."""
 
     rating_cache: dict[str, int]
-    cluster_results: dict[str, int]
+    workflow_step: str
+
+    def cluster_results_for_workflow(
+        self, workflow_step: str | None = ...
+    ) -> dict[str, int]:
+        """Return the cluster map owned by the active workflow."""
 
 
 RatingRule = tuple[str, int]
@@ -77,7 +82,11 @@ class MediaFilterProxyModel(QSortFilterProxyModel):
             return False
 
         cluster_id = self.current_cluster_filter_id
-        return cluster_id == -1 or state.cluster_results.get(file_path) == cluster_id
+        if cluster_id == -1:
+            return True
+        # AppState owns which cluster map each workflow filters against.
+        cluster_results = state.cluster_results_for_workflow()
+        return cluster_results.get(file_path) == cluster_id
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         source_model = self.sourceModel()

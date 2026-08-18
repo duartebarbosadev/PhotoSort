@@ -20,6 +20,7 @@ from core.similarity_embedding_model import (
     SimilarityEmbeddingModel,
     SimilarityModelDownloadError,
     SimilarityModelNotInstalledError,
+    normalize_similarity_model_name,
 )
 from core.similarity_utils import (
     SimilarityAnalysisCancelled,
@@ -33,7 +34,6 @@ from .app_settings import (
     DBSCAN_MIN_SAMPLES,
     DEFAULT_SIMILARITY_BATCH_SIZE,
     get_similarity_clustering_eps,
-    get_similarity_embedding_model_name,
 )  # Import from app_settings
 from .runtime_paths import get_app_cache_root, resolve_user_cache_dir
 import contextlib
@@ -54,6 +54,34 @@ def _analysis_stop_requested(engine: object) -> bool:
     except AttributeError:
         return False
     return not state.get("_is_running", True)
+
+
+def prune_stale_embedding_artifacts(cache_dir: Path, current_filename: str) -> int:
+    """Delete embedding caches that no longer belong to the shipped model.
+
+    The app used to let users pick between embedding models, which left one
+    artifact file per model on disk. Only the active model's cache is reachable
+    now, so the rest are removed instead of occupying space indefinitely.
+    """
+
+    removed = 0
+    try:
+        stale = [
+            path
+            for path in cache_dir.glob("artifacts_*.pkl.zst")
+            if path.name != current_filename
+        ]
+    except OSError:
+        logger.debug("Could not scan %s for stale artifacts.", cache_dir, exc_info=True)
+        return 0
+    for path in stale:
+        try:
+            path.unlink()
+            removed += 1
+            logger.info("Removed unreachable embedding cache: %s", path.name)
+        except OSError:
+            logger.debug("Could not remove %s.", path, exc_info=True)
+    return removed
 
 
 class SimilarityEngine(QObject):
@@ -79,7 +107,7 @@ class SimilarityEngine(QObject):
         super().__init__(parent)
         init_start_time = time.perf_counter()
         logger.info("Initializing SimilarityEngine...")
-        self.model_name = model_name or get_similarity_embedding_model_name()
+        self.model_name = normalize_similarity_model_name(model_name)
         self.model = SimilarityEmbeddingModel(
             self.model_name,
             allow_download=allow_model_download,
@@ -91,6 +119,7 @@ class SimilarityEngine(QObject):
         )
         embedding_cache_dir = Path(resolve_user_cache_dir("embeddings"))
         self._cache_path = embedding_cache_dir / self._cache_filename
+        prune_stale_embedding_artifacts(embedding_cache_dir, self._cache_filename)
 
         self.image_pipeline = image_pipeline or ImagePipeline()
         logger.info(

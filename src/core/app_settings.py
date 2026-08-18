@@ -57,8 +57,8 @@ INTRO_VIDEO_SHOWN_KEY = "UI/IntroVideoShown"  # Whether the first-run intro vide
 ORIENTATION_MODEL_NAME_KEY = (
     "Models/OrientationModelName"  # Key for the orientation model file name
 )
-SIMILARITY_EMBEDDING_MODEL_KEY = "Models/SimilarityEmbeddingModel"
 SIMILARITY_CLUSTERING_EPS_KEY = "Models/SimilarityClusteringEps"
+CULL_GROUPING_STRICTNESS_KEY = "Models/CullGroupingStrictness"
 UPDATE_CHECK_ENABLED_KEY = "Updates/CheckEnabled"  # Enable automatic update checks
 UPDATE_LAST_CHECK_KEY = "Updates/LastCheckTime"  # Last time updates were checked
 PERFORMANCE_MODE_KEY = (
@@ -200,6 +200,10 @@ DBSCAN_EPS = (
 )
 DBSCAN_MIN_SAMPLES = 2  # Minimum number of images to form a dense region (cluster)
 DEFAULT_SIMILARITY_BATCH_SIZE = 16  # Default batch size for similarity processing
+# Face grouping compares face-region descriptors rather than whole images, so it
+# tolerates a wider cosine distance than whole-image similarity clustering.
+FACE_GROUPING_DBSCAN_EPS = 0.16
+FACE_GROUPING_DBSCAN_MIN_SAMPLES = 1
 MIN_SIMILARITY_CLUSTERING_EPS = 0.02
 MAX_SIMILARITY_CLUSTERING_EPS = 0.20
 DEFAULT_SIMILARITY_CLUSTERING_EPS = DBSCAN_EPS
@@ -214,11 +218,19 @@ RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED = (
 
 # Model settings
 ROTATION_MODEL_IMAGE_SIZE = 384  # Image size for rotation detection model
-SUPPORTED_SIMILARITY_EMBEDDING_MODELS = (
-    "facebook/dinov2-small",
-    "facebook/dinov2-base",
-)
-DEFAULT_SIMILARITY_EMBEDDING_MODEL = "facebook/dinov2-small"
+# The embedding model itself is declared once in core.model_provisioning; it is
+# deliberately not user-selectable so every workflow shares one download.
+
+
+class CullGroupingStrictness(Enum):
+    """User-facing precision policy for Cull same-subject grouping."""
+
+    CONSERVATIVE = "conservative"
+    STANDARD = "standard"
+    BROAD = "broad"
+
+
+DEFAULT_CULL_GROUPING_STRICTNESS = CullGroupingStrictness.CONSERVATIVE
 
 # --- Cache Constants ---
 # Thumbnail cache
@@ -540,27 +552,6 @@ def set_orientation_model_name(model_name: str):
     settings.setValue(ORIENTATION_MODEL_NAME_KEY, model_name)
 
 
-def get_similarity_embedding_model_name() -> str:
-    """Gets the configured visual embedding model for similarity analysis."""
-    settings = _get_settings()
-    model_name = settings.value(
-        SIMILARITY_EMBEDDING_MODEL_KEY,
-        DEFAULT_SIMILARITY_EMBEDDING_MODEL,
-        type=str,
-    )
-    if model_name not in SUPPORTED_SIMILARITY_EMBEDDING_MODELS:
-        return DEFAULT_SIMILARITY_EMBEDDING_MODEL
-    return model_name
-
-
-def set_similarity_embedding_model_name(model_name: str):
-    """Sets the visual embedding model for similarity analysis."""
-    if model_name not in SUPPORTED_SIMILARITY_EMBEDDING_MODELS:
-        raise ValueError(f"Unsupported similarity embedding model: {model_name}")
-    settings = _get_settings()
-    settings.setValue(SIMILARITY_EMBEDDING_MODEL_KEY, model_name)
-
-
 def get_similarity_clustering_eps() -> float:
     """Gets the DBSCAN cosine-distance threshold used for similarity clustering."""
     settings = _get_settings()
@@ -590,6 +581,33 @@ def set_similarity_clustering_eps(eps: float):
         )
     settings = _get_settings()
     settings.setValue(SIMILARITY_CLUSTERING_EPS_KEY, eps)
+
+
+def get_cull_grouping_strictness() -> CullGroupingStrictness:
+    """Return the high-precision Cull grouping policy."""
+
+    value = _get_settings().value(
+        CULL_GROUPING_STRICTNESS_KEY,
+        DEFAULT_CULL_GROUPING_STRICTNESS.value,
+        type=str,
+    )
+    try:
+        return CullGroupingStrictness(str(value))
+    except ValueError:
+        return DEFAULT_CULL_GROUPING_STRICTNESS
+
+
+def set_cull_grouping_strictness(
+    strictness: CullGroupingStrictness | str,
+) -> None:
+    """Persist the high-precision Cull grouping policy."""
+
+    resolved = (
+        strictness
+        if isinstance(strictness, CullGroupingStrictness)
+        else CullGroupingStrictness(str(strictness))
+    )
+    _get_settings().setValue(CULL_GROUPING_STRICTNESS_KEY, resolved.value)
 
 
 # --- Update Check Settings ---

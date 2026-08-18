@@ -12,8 +12,7 @@ from core.best_photo_finder.errors import (
     SelectionError,
 )
 from core.best_photo_finder.models import TechnicalMetrics
-from core.app_settings import get_huggingface_cache_dir
-from core.huggingface_progress import build_hf_tqdm_class
+from core.model_provisioning import AESTHETIC_MODEL, resolve_snapshot
 from core.image_features.face_analysis import FaceAnalysisService
 from core.runtime_paths import resolve_face_landmarker_model_path
 import contextlib
@@ -280,8 +279,11 @@ class OpenCvMediapipeTechnicalScorer:
 
 @dataclass(slots=True)
 class HuggingFaceAestheticScorer:
-    model_name: str = "cafeai/cafe_aesthetic"
+    model_name: str = AESTHETIC_MODEL.repo_id
     progress_callback: Callable[[int, str], None] | None = None
+    # Downloads happen only after the user consents, exactly like every other
+    # managed model.
+    allow_download: bool = False
     _model: object | None = field(default=None, init=False, repr=False)
     _aesthetic_label_index: int | None = field(default=None, init=False, repr=False)
     _resolved_device: ResolvedDevice | None = field(
@@ -308,38 +310,22 @@ class HuggingFaceAestheticScorer:
         image.thumbnail((size, size), Image.Resampling.LANCZOS)
         return image
 
-    def _resolve_model_snapshot(self, snapshot_download) -> str:
-        """Resolve cached weights first and report downloads only on a cache miss."""
+    def _resolve_model_snapshot(self) -> str:
+        """Resolve the aesthetic weights through the shared model service."""
 
-        download_kwargs = {
-            "cache_dir": get_huggingface_cache_dir(),
-        }
-        try:
-            model_path = snapshot_download(
-                self.model_name,
-                local_files_only=True,
-                **download_kwargs,
-            )
-        except Exception:
-            model_path = snapshot_download(
-                self.model_name,
-                local_files_only=False,
-                tqdm_class=build_hf_tqdm_class(
-                    self.progress_callback,
-                    label=f"Downloading {self.model_name}",
-                ),
-                **download_kwargs,
-            )
-
+        model_path = resolve_snapshot(
+            AESTHETIC_MODEL,
+            allow_download=self.allow_download,
+            progress_callback=self.progress_callback,
+        )
         if self.progress_callback:
-            self.progress_callback(-1, f"Loading {self.model_name}")
+            self.progress_callback(-1, f"Loading {AESTHETIC_MODEL.label}")
         return model_path
 
     def _build_model(self, config: SelectorConfig):
         self._resolved_device = resolve_device(config.device)
         try:
             import torch
-            from huggingface_hub import snapshot_download
             from transformers import AutoModelForImageClassification
         except ImportError as exc:
             raise MissingDependencyError(
@@ -353,7 +339,7 @@ class HuggingFaceAestheticScorer:
                 torch, self._resolved_device.torch_dtype_name
             )
 
-        model_path = self._resolve_model_snapshot(snapshot_download)
+        model_path = self._resolve_model_snapshot()
         model = AutoModelForImageClassification.from_pretrained(
             model_path, local_files_only=True, **model_kwargs
         )

@@ -137,7 +137,7 @@ def test_similarity_grouping_plan_uses_ml_similarity_pipeline(tmp_path, monkeypa
 
     monkeypatch.setattr(
         "src.core.grouping._run_ml_similarity_pipeline",
-        lambda paths, progress_callback=None, shared_engine=None, image_pipeline=None: {
+        lambda paths, **_kwargs: {
             str(red_a): 1,
             str(red_b): 1,
             str(blue_a): 2,
@@ -272,12 +272,7 @@ def test_similarity_grouping_remains_image_only_and_skips_videos(tmp_path, monke
     video_path.write_bytes(b"video")
     analyzed_paths = []
 
-    def run_similarity(
-        paths,
-        progress_callback=None,
-        shared_engine=None,
-        image_pipeline=None,
-    ):
+    def run_similarity(paths, **_kwargs):
         analyzed_paths.extend(paths)
         return {str(image_path): 1}
 
@@ -396,7 +391,7 @@ def test_mixed_grouping_partitions_by_date_then_similarity(tmp_path, monkeypatch
     )
     monkeypatch.setattr(
         "src.core.grouping._run_ml_similarity_pipeline",
-        lambda paths, progress_callback=None, shared_engine=None, image_pipeline=None: (
+        lambda paths, **_kwargs: (
             {str(a): 1, str(b): 1} if set(paths) == {str(a), str(b)} else {str(c): 1}
         ),
     )

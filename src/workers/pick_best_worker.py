@@ -66,11 +66,13 @@ class PickBestWorker(QObject):
         self,
         cluster_map: dict[int, list[str]],
         image_pipeline=None,
+        allow_model_download: bool = False,
         parent: QObject | None = None,
     ):
         super().__init__(parent)
         self.cluster_map = cluster_map
         self.image_pipeline = image_pipeline
+        self.allow_model_download = allow_model_download
         self._should_stop = False
 
     def stop(self) -> None:
@@ -100,7 +102,8 @@ class PickBestWorker(QObject):
         selector = PhotoSelector(
             technical_scorer=OpenCvMediapipeTechnicalScorer(),
             aesthetic_scorer=HuggingFaceAestheticScorer(
-                progress_callback=self._handle_model_progress
+                progress_callback=self._handle_model_progress,
+                allow_download=self.allow_model_download,
             ),
             preview_loader=self._load_preview_image,
         )

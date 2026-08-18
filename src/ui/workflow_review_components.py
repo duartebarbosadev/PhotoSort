@@ -42,11 +42,17 @@ _PROGRESS_NAMED_COUNT_RE = re.compile(
 class WorkflowProgressView(QFrame):
     """Shared, phase-aware loading presentation for workflow pages."""
 
+    cancel_requested = pyqtSignal()
+    dismiss_requested = pyqtSignal()
+    retry_requested = pyqtSignal()
+
     def __init__(
         self,
         workflow_name: str,
         *,
         default_message: str,
+        retry_label: str | None = None,
+        dismiss_label: str | None = None,
         parent: QWidget | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -58,6 +64,11 @@ class WorkflowProgressView(QFrame):
         self._phase_started_percent = 0
         self._last_percent: int | None = None
         self._active = False
+        # Only workflows that can restart themselves advertise a retry action.
+        self._retry_offered = retry_label is not None
+        # Likewise, only workflows that act on the dismissal advertise the escape
+        # hatch; an unconnected button would look clickable and do nothing.
+        self._dismiss_offered = dismiss_label is not None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 24, 24, 24)
@@ -131,7 +142,33 @@ class WorkflowProgressView(QFrame):
         self.detail_container.setVisible(False)
         card_layout.addWidget(self.detail_container)
 
-        outer.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignCenter)
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        actions.addStretch(1)
+        self.retry_button = QPushButton(retry_label or "Try again")
+        self.retry_button.setObjectName("workflowProgressRetryButton")
+        self.retry_button.setVisible(False)
+        self.retry_button.clicked.connect(self.retry_requested)
+        self.dismiss_button = QPushButton(dismiss_label or "Continue anyway")
+        self.dismiss_button.setObjectName("workflowProgressDismissButton")
+        self.dismiss_button.setVisible(False)
+        self.dismiss_button.clicked.connect(self.dismiss_requested)
+        actions.addWidget(self.dismiss_button)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setObjectName("workflowProgressCancelButton")
+        self.cancel_button.setVisible(False)
+        self.cancel_button.clicked.connect(self.cancel_requested)
+        actions.addWidget(self.cancel_button)
+        actions.addWidget(self.retry_button)
+        card_layout.addLayout(actions)
+
+        # A centring alignment flag makes the layout ignore height-for-width, so a
+        # wrapped message would overlap the title. Centre with stretches instead.
+        card_row = QHBoxLayout()
+        card_row.addStretch(1)
+        card_row.addWidget(self.card)
+        card_row.addStretch(1)
+        outer.addLayout(card_row)
         outer.addStretch(1)
 
         self._timer = QTimer(self)
@@ -143,6 +180,23 @@ class WorkflowProgressView(QFrame):
 
     def set_detail_visible(self, visible: bool) -> None:
         self.detail_container.setVisible(visible)
+
+    def set_cancel_visible(self, visible: bool) -> None:
+        """Expose cancellation only for workflows whose worker supports it."""
+        self.cancel_button.setVisible(visible)
+        self.cancel_button.setEnabled(visible)
+
+    def set_dismiss_visible(self, visible: bool) -> None:
+        """Offer an escape from a terminal state so the page never traps the user."""
+        show = visible and self._dismiss_offered
+        self.dismiss_button.setVisible(show)
+        self.dismiss_button.setEnabled(show)
+
+    def set_retry_visible(self, visible: bool) -> None:
+        """Offer a one-click restart after a recoverable failure."""
+        show = visible and self._retry_offered
+        self.retry_button.setVisible(show)
+        self.retry_button.setEnabled(show)
 
     def update_progress(self, message: str, percent: int | None) -> None:
         now = self._clock()
@@ -167,6 +221,8 @@ class WorkflowProgressView(QFrame):
 
         self.setProperty("state", "loading")
         _refresh_style(self)
+        self.set_dismiss_visible(False)
+        self.set_retry_visible(False)
         self.message_label.setText(message)
         match = _PROGRESS_COUNT_RE.search(message) or _PROGRESS_NAMED_COUNT_RE.search(
             message
@@ -198,12 +254,21 @@ class WorkflowProgressView(QFrame):
         self.remaining_caption.setText("Status")
         self.remaining_label.setText("Needs attention")
         self.count_label.setText("Not completed")
+        self.set_dismiss_visible(True)
+        self.set_retry_visible(True)
         self._refresh_time_labels()
+
+    def mark_cancelled(self, message: str = "Cancelled") -> None:
+        self.show_error(message)
+        self.remaining_label.setText("Cancelled")
+        self.cancel_button.setEnabled(False)
 
     def mark_finished(self) -> None:
         self._active = False
         self._timer.stop()
         self._last_percent = None
+        self.set_dismiss_visible(False)
+        self.set_retry_visible(False)
 
     def _refresh_time_labels(self) -> None:
         if self._started_at is None:

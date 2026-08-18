@@ -1,57 +1,87 @@
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crash
+
+import json
+from pathlib import Path
+
+import pytest
+
 from core.best_photo_finder.scorers import HuggingFaceAestheticScorer
+from core.model_provisioning import AESTHETIC_MODEL, ModelNotInstalledError
 
 
-def test_cached_aesthetic_model_reports_loading_without_downloading(monkeypatch):
+def _snapshot(root: Path) -> str:
+    path = root / "cafe-aesthetic"
+    path.mkdir()
+    (path / "config.json").write_text(json.dumps({"model_type": "beit"}), "utf-8")
+    (path / "preprocessor_config.json").write_text("{}", encoding="utf-8")
+    (path / "pytorch_model.bin").write_bytes(b"weights-placeholder")
+    return str(path)
+
+
+def _install_downloader(monkeypatch, downloader) -> None:
+    monkeypatch.setattr(
+        "core.model_provisioning._snapshot_download", lambda: downloader
+    )
+
+
+def test_cached_aesthetic_model_loads_without_downloading(monkeypatch, tmp_path):
     events: list[tuple[int, str]] = []
     calls: list[dict] = []
+    snapshot = _snapshot(tmp_path)
+
+    def downloader(repo_id, **kwargs):
+        calls.append({"repo_id": repo_id, **kwargs})
+        return snapshot
+
+    _install_downloader(monkeypatch, downloader)
     scorer = HuggingFaceAestheticScorer(
         progress_callback=lambda percent, message: events.append((percent, message))
     )
-    monkeypatch.setattr(
-        "core.best_photo_finder.scorers.get_huggingface_cache_dir",
-        lambda: "/models",
-    )
 
-    def snapshot_download(model_name, **kwargs):
-        calls.append({"model_name": model_name, **kwargs})
-        return "/models/cached-snapshot"
-
-    result = scorer._resolve_model_snapshot(snapshot_download)
-
-    assert result == "/models/cached-snapshot"
-    assert calls == [
-        {
-            "model_name": "cafeai/cafe_aesthetic",
-            "cache_dir": "/models",
-            "local_files_only": True,
-        }
-    ]
-    assert events == [(-1, "Loading cafeai/cafe_aesthetic")]
+    assert scorer._resolve_model_snapshot() == snapshot
+    assert [call["local_files_only"] for call in calls] == [True]
+    assert calls[0]["revision"] == AESTHETIC_MODEL.revision
+    assert events == [(-1, f"Loading {AESTHETIC_MODEL.label}")]
 
 
-def test_aesthetic_model_reports_download_only_after_cache_miss(monkeypatch):
+def test_aesthetic_model_is_not_downloaded_without_consent(monkeypatch):
+    calls: list[bool] = []
+
+    def downloader(repo_id, **kwargs):
+        calls.append(kwargs["local_files_only"])
+        raise FileNotFoundError("not cached")
+
+    _install_downloader(monkeypatch, downloader)
+    scorer = HuggingFaceAestheticScorer()
+
+    with pytest.raises(ModelNotInstalledError):
+        scorer._resolve_model_snapshot()
+    assert calls == [True], "an unapproved scorer must never reach the network"
+
+
+def test_approved_aesthetic_model_downloads_after_cache_miss(monkeypatch, tmp_path):
     events: list[tuple[int, str]] = []
-    calls: list[dict] = []
-    scorer = HuggingFaceAestheticScorer(
-        progress_callback=lambda percent, message: events.append((percent, message))
-    )
-    monkeypatch.setattr(
-        "core.best_photo_finder.scorers.get_huggingface_cache_dir",
-        lambda: "/models",
-    )
+    calls: list[bool] = []
+    snapshot = _snapshot(tmp_path)
 
-    def snapshot_download(model_name, **kwargs):
-        calls.append({"model_name": model_name, **kwargs})
+    def downloader(repo_id, **kwargs):
+        calls.append(kwargs["local_files_only"])
         if kwargs["local_files_only"]:
             raise FileNotFoundError("not cached")
         progress = kwargs["tqdm_class"](total=10, unit="B")
         progress.update(10)
         progress.close()
-        return "/models/downloaded-snapshot"
+        return snapshot
 
-    result = scorer._resolve_model_snapshot(snapshot_download)
+    _install_downloader(monkeypatch, downloader)
+    scorer = HuggingFaceAestheticScorer(
+        allow_download=True,
+        progress_callback=lambda percent, message: events.append((percent, message)),
+    )
 
-    assert result == "/models/downloaded-snapshot"
-    assert [call["local_files_only"] for call in calls] == [True, False]
-    assert any("Downloading cafeai/cafe_aesthetic" in message for _, message in events)
-    assert events[-1] == (-1, "Loading cafeai/cafe_aesthetic")
+    assert scorer._resolve_model_snapshot() == snapshot
+    assert calls == [True, False]
+    assert any(
+        f"Downloading {AESTHETIC_MODEL.label}" in message for _, message in events
+    )
+    assert events[-1] == (-1, f"Loading {AESTHETIC_MODEL.label}")

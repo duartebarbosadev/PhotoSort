@@ -21,6 +21,7 @@ class CacheContext(Protocol):
     cluster_filter_combo: Any
     cluster_sort_combo: Any
     group_by_similarity_mode: bool
+    app_controller: Any
     preview_cache_size_combo: Any
     preview_cache_size_options_gb: list[float]
     exif_cache_size_combo: Any
@@ -77,6 +78,18 @@ class CacheController:
                     usage_text = "Error"
             analysis_label.setText(usage_text)
 
+        models_label = getattr(ctx, "model_cache_usage_label", None)
+        if models_label is not None:
+            usage_text = "N/A"
+            try:
+                from core.model_provisioning import model_cache_usage_bytes
+
+                usage_text = f"{model_cache_usage_bytes() / (1024 * 1024):.2f} MB"
+            except Exception:
+                logger.exception("Failed to read model cache usage.")
+                usage_text = "Error"
+            models_label.setText(usage_text)
+
     def clear_thumbnail_cache(self) -> None:
         ctx = self.context
         ctx.image_pipeline.thumbnail_cache.clear()
@@ -115,6 +128,9 @@ class CacheController:
         ctx = self.context
         ctx.group_by_similarity_mode = False
         ctx.app_state.cluster_results.clear()
+        cull_clusters = getattr(ctx.app_state, "cull_cluster_results", None)
+        if cull_clusters is not None:
+            cull_clusters.clear()
         getattr(ctx.app_state, "embeddings_cache", {}).clear()
         getattr(ctx.app_state, "regional_embeddings_cache", {}).clear()
         clear_pick_best = getattr(ctx.app_state, "clear_pick_best_results", None)
@@ -138,6 +154,58 @@ class CacheController:
             menu.analyze_similarity_action.setEnabled(has_media)
         ctx.refresh_navigation_shortcut_actions()
         ctx._rebuild_model_view()
+
+    def _invalidate_model_environment(self) -> None:
+        """Make the next model-backed run re-check what is actually installed."""
+
+        app_controller = getattr(self.context, "app_controller", None)
+        reset = getattr(app_controller, "_reset_model_environment", None)
+        if reset is None:
+            return
+        reset()
+
+    def clear_downloaded_models(self) -> None:
+        """Delete every downloaded model so the next run fetches them again."""
+
+        ctx = self.context
+        logger.info("User requested deletion of all downloaded models.")
+        try:
+            from core.model_provisioning import (
+                clear_model_caches,
+                model_cache_usage_bytes,
+            )
+
+            usage_before = model_cache_usage_bytes()
+            removed = clear_model_caches()
+        except Exception:
+            logger.exception("Failed to delete downloaded models.")
+            ctx.status_message("Failed to delete downloaded models.", 5000)
+            return
+
+        # The controller resolves "which models are on disk" once per process, so
+        # deleting them behind its back would leave it certain nothing is missing.
+        # The next model-backed run would then start without download consent and
+        # fail with "has not been downloaded yet" instead of prompting.
+        self._invalidate_model_environment()
+
+        if removed:
+            logger.info(
+                "Deleted %d downloaded model(s): %s", len(removed), ", ".join(removed)
+            )
+            ctx.status_message(
+                f"Deleted {len(removed)} model(s), freeing "
+                f"{self._format_mb(usage_before)}. They will download again when "
+                "next needed.",
+                6000,
+            )
+        else:
+            logger.info("No downloaded models to delete.")
+            ctx.status_message("No downloaded models to delete.", 5000)
+        self.update_labels()
+
+    @staticmethod
+    def _format_mb(num_bytes: int) -> str:
+        return f"{num_bytes / (1024 * 1024):.0f} MB"
 
     def apply_preview_cache_limit(self) -> None:
         ctx = self.context

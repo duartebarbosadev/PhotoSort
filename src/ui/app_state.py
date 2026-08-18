@@ -6,10 +6,17 @@ import logging
 import os
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
-from core.caching.analysis_cache import AnalysisCache
+from core.caching.analysis_cache import (
+    AnalysisCache,
+    MANUAL_OVERRIDE_NAMESPACE_CULL,
+    MANUAL_OVERRIDE_NAMESPACE_SIMILARITY,
+)
 from core.best_photo_finder.payloads import PickBestResults
 
 logger = logging.getLogger(__name__)
+
+# Workflows that group media with the high-precision Cull cluster map.
+_CULL_CLUSTER_WORKFLOWS = frozenset({"pick_best", "cull"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +45,8 @@ class AppState:
         self.date_cache: dict[str, datetime_obj | None] = {}
         self.detailed_metadata_cache: dict[str, dict[str, Any]] = {}
         self.cluster_results: dict[str, int] = {}  # {image_path: cluster_id}
+        self.cull_cluster_results: dict[str, int] = {}
+        self.cull_grouping_error: str | None = None
         self.embeddings_cache: dict[
             str, list[float]
         ] = {}  # {image_path: embedding_vector}
@@ -134,6 +143,30 @@ class AppState:
 
         return self._media_summary
 
+    def cluster_results_for_workflow(
+        self, workflow_step: str | None = None
+    ) -> dict[str, int]:
+        """Return the independently owned cluster map for one workflow."""
+
+        workflow = workflow_step or self.workflow_step
+        if workflow in _CULL_CLUSTER_WORKFLOWS:
+            return self.cull_cluster_results
+        return self.cluster_results
+
+    def manual_override_namespace_for_workflow(
+        self, workflow_step: str | None = None
+    ) -> str:
+        """Return the persisted override namespace matching a workflow's clusters.
+
+        Cull and similarity cluster ids are independent, so an override recorded in
+        one namespace must never be replayed onto the other's cluster map.
+        """
+
+        workflow = workflow_step or self.workflow_step
+        if workflow in _CULL_CLUSTER_WORKFLOWS:
+            return MANUAL_OVERRIDE_NAMESPACE_CULL
+        return MANUAL_OVERRIDE_NAMESPACE_SIMILARITY
+
     def clear_all_file_specific_data(self, clear_disk_caches: bool = False):
         """Clears file/folder-scoped state and optionally disk caches."""
         folder_path = self.current_folder_path
@@ -142,6 +175,8 @@ class AppState:
         self.date_cache.clear()
         self.detailed_metadata_cache.clear()
         self.cluster_results.clear()
+        self.cull_cluster_results.clear()
+        self.cull_grouping_error = None
         self.embeddings_cache.clear()
         self.regional_embeddings_cache.clear()
         self.marked_for_deletion.clear()  # Clear marked for deletion set
@@ -194,13 +229,17 @@ class AppState:
                     record["mtime_ns"] = stat_result.st_mtime_ns
 
         self.cluster_results.clear()
+        self.cull_cluster_results.clear()
+        self.cull_grouping_error = None
         if not preserve_review_results:
             self.clear_pick_best_results()
             self.easy_delete_results = None
             self.easy_delete_pair_assessments.clear()
 
         if invalidate_disk_cache and self.current_folder_path and self.analysis_cache:
-            self.analysis_cache.invalidate_similarity(self.current_folder_path)
+            self.analysis_cache.invalidate_similarity(
+                self.current_folder_path, changed_paths=changed_paths
+            )
 
     def remove_data_for_paths(
         self,
@@ -232,6 +271,7 @@ class AppState:
             self.date_cache,
             self.detailed_metadata_cache,
             self.cluster_results,
+            self.cull_cluster_results,
             self.embeddings_cache,
             self.regional_embeddings_cache,
             self.ai_rating_results,
@@ -381,6 +421,7 @@ class AppState:
             self.date_cache,
             self.detailed_metadata_cache,
             self.cluster_results,
+            self.cull_cluster_results,
             self.embeddings_cache,
             self.regional_embeddings_cache,
             self.ai_rating_results,

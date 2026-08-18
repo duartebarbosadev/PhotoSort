@@ -808,11 +808,15 @@ class DialogManager:
             ],
         )
 
-        # Start CUDA detection worker
+        # Resolve the execution device through the shared model environment probe.
         worker_manager = self.parent.app_controller.worker_manager
         if embeddings_label_ref:
 
-            def update_embeddings_label(device_name: str):
+            def update_embeddings_label(_missing_models: tuple, device_name: str):
+                with contextlib.suppress(TypeError):
+                    worker_manager.model_environment_ready.disconnect(
+                        update_embeddings_label
+                    )
                 device_key = (device_name or "cpu").lower()
                 friendly = {
                     "cuda": "GPU (CUDA)",
@@ -828,8 +832,8 @@ class DialogManager:
                 except RuntimeError:
                     pass
 
-            worker_manager.cuda_detection_finished.connect(update_embeddings_label)
-            worker_manager.start_cuda_detection()
+            worker_manager.model_environment_ready.connect(update_embeddings_label)
+            worker_manager.start_model_environment_probe([])
 
         if block:
             dialog.exec()
@@ -958,6 +962,7 @@ class DialogManager:
         """Show the application preferences dialog."""
         from core.app_settings import (
             PerformanceMode,
+            CullGroupingStrictness,
             get_available_cpu_count,
             get_performance_mode,
             set_performance_mode,
@@ -971,14 +976,9 @@ class DialogManager:
             DEFAULT_OPENAI_MAX_TOKENS,
             DEFAULT_OPENAI_TIMEOUT,
             DEFAULT_OPENAI_MAX_WORKERS,
-            SUPPORTED_SIMILARITY_EMBEDDING_MODELS,
-            DEFAULT_SIMILARITY_CLUSTERING_EPS,
-            MAX_SIMILARITY_CLUSTERING_EPS,
-            MIN_SIMILARITY_CLUSTERING_EPS,
             get_similarity_clustering_eps,
-            get_similarity_embedding_model_name,
-            set_similarity_clustering_eps,
-            set_similarity_embedding_model_name,
+            get_cull_grouping_strictness,
+            set_cull_grouping_strictness,
         )
         from core.ai.ai_rating_pipeline import DEFAULT_RATING_PROMPT
 
@@ -1181,34 +1181,34 @@ class DialogManager:
         similarity_form = QGridLayout()
         similarity_form.setHorizontalSpacing(12)
         similarity_form.setVerticalSpacing(12)
-        similarity_model_label = QLabel("Model")
-        similarity_model_combo = QComboBox()
-        similarity_model_combo.setObjectName("similarityModelCombo")
-        similarity_model_combo.addItems(list(SUPPORTED_SIMILARITY_EMBEDDING_MODELS))
-        similarity_model_combo.setCurrentText(get_similarity_embedding_model_name())
-        similarity_form.addWidget(similarity_model_label, 0, 0)
-        similarity_form.addWidget(similarity_model_combo, 0, 1)
-
-        similarity_threshold_label = QLabel("Grouping Threshold")
-        similarity_threshold_spin = QDoubleSpinBox()
-        similarity_threshold_spin.setObjectName("similarityThresholdSpin")
-        similarity_threshold_spin.setRange(
-            MIN_SIMILARITY_CLUSTERING_EPS, MAX_SIMILARITY_CLUSTERING_EPS
+        cull_strictness_label = QLabel("Cull & Pick Best same-subject strictness")
+        cull_strictness_combo = QComboBox()
+        cull_strictness_combo.setObjectName("cullGroupingStrictnessCombo")
+        strictness_labels = {
+            "Conservative": CullGroupingStrictness.CONSERVATIVE,
+            "Standard": CullGroupingStrictness.STANDARD,
+            "Broad": CullGroupingStrictness.BROAD,
+        }
+        cull_strictness_combo.addItems(list(strictness_labels))
+        current_strictness = get_cull_grouping_strictness()
+        cull_strictness_combo.setCurrentText(
+            next(
+                label
+                for label, strictness in strictness_labels.items()
+                if strictness is current_strictness
+            )
         )
-        similarity_threshold_spin.setDecimals(3)
-        similarity_threshold_spin.setSingleStep(0.005)
-        similarity_threshold_spin.setValue(get_similarity_clustering_eps())
-        similarity_threshold_spin.setToolTip(
-            "Higher values create looser similarity groups. Default: "
-            f"{DEFAULT_SIMILARITY_CLUSTERING_EPS:.3f}."
+        cull_strictness_combo.setToolTip(
+            "Conservative splits uncertain photos and prevents similarity chaining."
         )
-        similarity_form.addWidget(similarity_threshold_label, 1, 0)
-        similarity_form.addWidget(similarity_threshold_spin, 1, 1)
+        similarity_form.addWidget(cull_strictness_label, 1, 0)
+        similarity_form.addWidget(cull_strictness_combo, 1, 1)
         similarity_layout.addLayout(similarity_form)
 
         similarity_note = QLabel(
-            "Changing the model starts a new embedding cache and may require a one-time download. "
-            "Higher grouping thresholds find broader visual matches; lower thresholds only group near-duplicates."
+            "Changing a model starts a versioned local cache and may require a one-time download. "
+            "Cull and Pick Best share complete physical subject-set groups; Easy Delete keeps its "
+            "separate near-duplicate analysis."
         )
         similarity_note.setObjectName("cardNote")
         similarity_note.setWordWrap(True)
@@ -1669,10 +1669,10 @@ class DialogManager:
                 else rating_prompt_text.strip() or None,
             )
 
-            set_similarity_embedding_model_name(
-                similarity_model_combo.currentText().strip()
-            )
-            set_similarity_clustering_eps(similarity_threshold_spin.value())
+            selected_cull_strictness = strictness_labels[
+                cull_strictness_combo.currentText()
+            ]
+            set_cull_grouping_strictness(selected_cull_strictness)
             set_easy_delete_blur_threshold(blur_threshold_spin.value())
             set_easy_delete_dark_threshold(dark_threshold_spin.value())
             set_easy_delete_white_threshold(white_threshold_spin.value())
@@ -1689,6 +1689,26 @@ class DialogManager:
                 for step, checkbox in workflow_step_checkboxes.items()
             }
             set_workflow_step_visibility(selected_workflow_visibility)
+            if selected_cull_strictness is not current_strictness:
+                app_state = getattr(self.parent, "app_state", None)
+                if app_state is not None:
+                    app_state.cull_cluster_results.clear()
+                    app_state.cull_grouping_error = None
+                mark_cull_dirty = getattr(self.parent, "mark_cull_model_dirty", None)
+                if callable(mark_cull_dirty):
+                    mark_cull_dirty()
+                worker_manager = getattr(self.parent, "worker_manager", None)
+                stop_grouping = getattr(
+                    worker_manager, "stop_cull_subject_grouping", None
+                )
+                if callable(stop_grouping):
+                    stop_grouping()
+                app_controller = getattr(self.parent, "app_controller", None)
+                restart_grouping = getattr(
+                    app_controller, "_start_cull_subject_grouping_background", None
+                )
+                if callable(restart_grouping):
+                    restart_grouping()
             apply_step_visibility = getattr(
                 self.parent, "apply_workflow_step_visibility", None
             )
@@ -1696,15 +1716,15 @@ class DialogManager:
                 apply_step_visibility(selected_workflow_visibility)
 
             logger.info(
-                "Preferences saved: mode=%s, custom_threads=%s, similarity_model=%s, "
-                "similarity_eps=%.3f, easy_delete_blur=%.1f, "
+                "Preferences saved: mode=%s, custom_threads=%s, "
+                "similarity_eps=%.3f, cull_strictness=%s, easy_delete_blur=%.1f, "
                 "easy_delete_dark=%.1f, easy_delete_white=%.1f, "
                 "easy_delete_duplicate=%.3f, show_workflow_shortcuts=%s, "
                 "workflow_steps=%s",
                 get_performance_mode().value,
                 get_custom_thread_count(),
-                get_similarity_embedding_model_name(),
                 get_similarity_clustering_eps(),
+                get_cull_grouping_strictness().value,
                 get_easy_delete_blur_threshold(),
                 get_easy_delete_dark_threshold(),
                 get_easy_delete_white_threshold(),
@@ -1963,6 +1983,26 @@ class DialogManager:
             self.parent._clear_analysis_cache_action
         )
         analysis_card_layout.addWidget(clear_analysis_cache_button)
+
+        # --- AI Models Card ---
+        models_card_layout = self._build_cache_card("AI Models", "🤖", main_layout)
+        self.parent.model_cache_usage_label = QLabel()
+        self._build_cache_row(
+            "Disk Usage", self.parent.model_cache_usage_label, models_card_layout
+        )
+
+        def _confirm_and_delete_models():
+            if self.confirm_model_cache_deletion():
+                self.parent._clear_downloaded_models_action()
+
+        delete_models_button = QPushButton("Delete All Models")
+        delete_models_button.setObjectName("deleteDownloadedModelsButton")
+        delete_models_button.setToolTip(
+            "Delete every downloaded model. They will be downloaded again when "
+            "next needed."
+        )
+        delete_models_button.clicked.connect(_confirm_and_delete_models)
+        models_card_layout.addWidget(delete_models_button)
 
         main_layout.addStretch()
 
@@ -2507,25 +2547,192 @@ class DialogManager:
         dialog.exec()
         logger.info("Closed model not found dialog")
 
-    def confirm_similarity_model_download(self, model_name: str) -> bool:
-        """Ask whether PhotoSort may download the selected similarity model."""
-        dialog = QMessageBox(self.parent)
-        dialog.setWindowTitle("Download Similarity Model?")
-        dialog.setIcon(QMessageBox.Icon.Question)
+    def _build_consent_dialog(
+        self,
+        *,
+        object_name: str,
+        window_title: str,
+        header_icon: str,
+        header_title: str,
+        headline: str,
+        summary: str,
+        accept_text: str,
+        accept_object_name: str,
+    ):
+        """Create the shared frameless shell every model-consent dialog uses."""
+
+        dialog = QDialog(self.parent)
+        dialog.setObjectName(object_name)
+        dialog.setWindowTitle(window_title)
+        dialog.setModal(True)
+        dialog.setMinimumWidth(520)
+        dialog.setMaximumWidth(620)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        dialog.setText("Download similarity model?")
+        make_dialog_draggable(dialog)
+
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        build_dialog_header(header_title, header_icon, outer)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(22, 18, 22, 14)
+        body.setSpacing(12)
+
+        headline_label = QLabel(headline)
+        headline_label.setObjectName("modelConsentHeadline")
+        headline_label.setWordWrap(True)
+        body.addWidget(headline_label)
+
+        summary_label = QLabel(summary)
+        summary_label.setObjectName("modelConsentSummary")
+        summary_label.setWordWrap(True)
+        body.addWidget(summary_label)
+
+        outer.addLayout(body)
+        build_dialog_footer(
+            outer,
+            [
+                ("Cancel", "modelConsentCancelButton", dialog.reject, False),
+                (accept_text, accept_object_name, dialog.accept, True),
+            ],
+        )
+        return dialog, body
+
+    def confirm_model_download(
+        self, model_keys: list[str], *, feature: str, fallback: str = ""
+    ) -> bool:
+        """Ask once before downloading the local models a feature needs.
+
+        Every workflow asks the same question, so the wording is shared and only
+        the feature name and the consequence of cancelling vary. Each model is
+        named by its published repository so the user can see exactly what is
+        fetched and from where.
+        """
+
+        from core.model_provisioning import MODEL_REGISTRY
+
+        models = [MODEL_REGISTRY[key] for key in model_keys if key in MODEL_REGISTRY]
+        unknown = [key for key in model_keys if key not in MODEL_REGISTRY]
+        total_mb = sum(model.approx_download_mb for model in models)
+        single = len(model_keys) == 1
+        noun = "model" if single else "models"
+        if single:
+            summary = f"PhotoSort needs this model to run {feature}."
+        else:
+            summary = (
+                f"PhotoSort needs these {len(model_keys)} models to run {feature}."
+            )
+            if total_mb:
+                summary += f" About {total_mb} MB in total."
+
+        dialog, body = self._build_consent_dialog(
+            object_name="modelDownloadDialog",
+            window_title="Download Model?",
+            header_icon="⬇",
+            header_title="One-time model download",
+            headline=f"Download the {noun} needed for {feature}?",
+            summary=summary,
+            accept_text="Download",
+            accept_object_name="modelConsentAcceptButton",
+        )
+
+        for model in models:
+            card, card_layout = build_card("modelConsentCard")
+            card_layout.setSpacing(4)
+
+            name = QLabel(model.label)
+            name.setObjectName("modelConsentModelName")
+            name.setWordWrap(True)
+            card_layout.addWidget(name)
+
+            meta = QLabel(
+                f"{model.repo_id}"
+                + (
+                    f"  ·  about {model.approx_download_mb} MB"
+                    if model.approx_download_mb
+                    else ""
+                )
+            )
+            meta.setObjectName("modelConsentModelMeta")
+            meta.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            meta.setWordWrap(True)
+            card_layout.addWidget(meta)
+            body.addWidget(card)
+
+        for key in unknown:
+            orphan = QLabel(key)
+            orphan.setObjectName("modelConsentModelName")
+            orphan.setWordWrap(True)
+            body.addWidget(orphan)
+
+        footnote_text = (
+            "Downloaded once, then loaded from the local PhotoSort cache. "
+            "PhotoSort works offline afterwards."
+        )
+        if fallback:
+            footnote_text += f"\n{fallback}"
+        footnote = QLabel(footnote_text)
+        footnote.setObjectName("modelConsentFootnote")
+        footnote.setWordWrap(True)
+        body.addWidget(footnote)
+
+        approved = dialog.exec() == QDialog.DialogCode.Accepted
+        logger.info(
+            "Model download %s for %s (%s).",
+            "approved" if approved else "declined",
+            feature,
+            ", ".join(model.repo_id for model in models) or "unknown model",
+        )
+        return approved
+
+    def confirm_slow_cpu_processing(self, feature: str) -> bool:
+        """Warn before running a torch workflow without hardware acceleration."""
+
+        dialog, body = self._build_consent_dialog(
+            object_name="modelConsentDialog",
+            window_title="Run on CPU?",
+            header_icon="⚠",
+            header_title="Hardware acceleration unavailable",
+            headline=f"Run {feature} on the CPU?",
+            summary=f"Running {feature} can take considerably longer without a GPU.",
+            accept_text="Run on CPU",
+            accept_object_name="modelConsentAcceptButton",
+        )
+        footnote = QLabel(
+            "It runs in the background and can be cancelled safely at any time."
+        )
+        footnote.setObjectName("modelConsentFootnote")
+        footnote.setWordWrap(True)
+        body.addWidget(footnote)
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
+    def confirm_model_cache_deletion(self) -> bool:
+        """Confirm before deleting models, since they must be downloaded again."""
+
+        from core.model_provisioning import model_cache_usage_bytes
+
+        try:
+            usage_mb = model_cache_usage_bytes() / (1024 * 1024)
+            usage_text = f" ({usage_mb:.0f} MB)"
+        except Exception:
+            logger.exception("Failed to read model cache usage.")
+            usage_text = ""
+
+        dialog = QMessageBox(self.parent)
+        dialog.setWindowTitle("Delete Downloaded Models?")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        dialog.setText(f"Delete every downloaded AI model{usage_text}?")
         dialog.setInformativeText(
-            "PhotoSort needs the visual similarity model before it can group similar photos.\n\n"
-            f"Model: {model_name}\n\n"
-            "This is a one-time download. After it is installed, similarity analysis loads it from the local PhotoSort cache and can run offline."
+            "Similarity grouping, same-subject grouping and Pick Best will "
+            "download their models again the next time you use them, which "
+            "needs an internet connection.\n\nYour photos are not affected."
         )
-        download_button = dialog.addButton(
-            "Download", QMessageBox.ButtonRole.AcceptRole
+        delete_button = dialog.addButton(
+            "Delete", QMessageBox.ButtonRole.DestructiveRole
         )
-        cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        dialog.setDefaultButton(download_button)
+        keep_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(keep_button)
         dialog.exec()
-        return (
-            dialog.clickedButton() == download_button
-            and dialog.clickedButton() != cancel_button
-        )
+        return dialog.clickedButton() == delete_button

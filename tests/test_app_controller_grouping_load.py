@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from src.ui.app_controller import AppController
+from src.ui.controllers.model_prerequisites import DeferredModelStarts
 
 
 class _DummyStatusBar:
@@ -21,6 +22,7 @@ def test_load_folder_blocks_while_grouping_workflow_is_running():
         main_window=SimpleNamespace(
             statusBar=lambda: status_bar,
         ),
+        _deferred_starts=DeferredModelStarts(),
     )
 
     AppController.load_folder(controller, "/tmp/demo")
@@ -57,6 +59,7 @@ def test_load_folder_cancels_analysis_without_blocking(monkeypatch):
         main_window=main_window,
         _pending_folder_load_after_workers=None,
         _finish_folder_load_after_workers=Mock(),
+        _deferred_starts=DeferredModelStarts(),
     )
     monkeypatch.setattr("src.ui.app_controller.add_recent_folder", lambda _path: None)
     monkeypatch.setattr(

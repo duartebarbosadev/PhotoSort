@@ -6,13 +6,15 @@ from typing import Any
 
 import numpy as np
 
-from core.app_settings import (
-    DEFAULT_SIMILARITY_EMBEDDING_MODEL,
-    SUPPORTED_SIMILARITY_EMBEDDING_MODELS,
-    get_huggingface_cache_dir,
-    get_preferred_torch_device,
+from core.app_settings import get_preferred_torch_device
+from core.huggingface_progress import ProgressCallback
+from core.model_provisioning import (
+    EMBEDDING_MODEL,
+    ModelDownloadError as SimilarityModelDownloadError,
+    ModelNotInstalledError as SimilarityModelNotInstalledError,
+    is_installed,
+    resolve_snapshot,
 )
-from core.huggingface_progress import ProgressCallback, build_hf_tqdm_class
 from core.similarity_utils import l2_normalize_rows
 
 logger = logging.getLogger(__name__)
@@ -21,13 +23,19 @@ SIMILARITY_EMBEDDING_PIPELINE_VERSION = "dinov2-cls-v1"
 SIMILARITY_REGION_PIPELINE_VERSION = "dinov2-regions-v1"
 SIMILARITY_ENCODE_CHUNK_SIZE = 32
 
-
-class SimilarityModelNotInstalledError(RuntimeError):
-    """Raised when the configured similarity model is not present locally."""
-
-
-class SimilarityModelDownloadError(RuntimeError):
-    """Raised when the configured similarity model cannot be downloaded."""
+__all__ = [
+    "SIMILARITY_EMBEDDING_PIPELINE_VERSION",
+    "SIMILARITY_ENCODE_CHUNK_SIZE",
+    "SIMILARITY_REGION_PIPELINE_VERSION",
+    "SimilarityEmbeddingModel",
+    "SimilarityModelDownloadError",
+    "SimilarityModelNotInstalledError",
+    "SimilarityModelSpec",
+    "build_similarity_image_regions",
+    "is_similarity_model_installed",
+    "resolve_similarity_model_snapshot",
+    "sanitize_model_id",
+]
 
 
 def sanitize_model_id(model_name: str) -> str:
@@ -84,9 +92,15 @@ def build_similarity_image_regions(image: object) -> list[object]:
 
 
 def normalize_similarity_model_name(model_name: str | None) -> str:
-    if model_name in SUPPORTED_SIMILARITY_EMBEDDING_MODELS:
-        return str(model_name)
-    return DEFAULT_SIMILARITY_EMBEDDING_MODEL
+    """Return the single embedding model id, ignoring legacy overrides."""
+
+    if model_name is not None and model_name != EMBEDDING_MODEL.repo_id:
+        logger.debug(
+            "Ignoring legacy similarity model '%s'; using %s.",
+            model_name,
+            EMBEDDING_MODEL.repo_id,
+        )
+    return EMBEDDING_MODEL.repo_id
 
 
 def resolve_similarity_model_snapshot(
@@ -95,59 +109,23 @@ def resolve_similarity_model_snapshot(
     allow_download: bool = False,
     progress_callback: ProgressCallback | None = None,
 ) -> str:
-    """Return a local Hugging Face snapshot path for the selected model.
+    """Return a local snapshot path for the shared embedding model.
 
-    The first lookup is always local-only. Online access is used only when
-    explicitly allowed by the caller after user confirmation.
+    Provisioning lives in :mod:`core.model_provisioning` so similarity, Cull and
+    Pick Best resolve identical weights through one pinned, validated path.
     """
-    resolved_model_name = normalize_similarity_model_name(model_name)
-    cache_dir = get_huggingface_cache_dir()
 
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError as exc:
-        raise SimilarityModelDownloadError(
-            "Missing dependency 'huggingface_hub'. Install PhotoSort dependencies and try again."
-        ) from exc
-
-    try:
-        return snapshot_download(
-            resolved_model_name,
-            cache_dir=cache_dir,
-            local_files_only=True,
-        )
-    except Exception as local_exc:
-        if not allow_download:
-            raise SimilarityModelNotInstalledError(
-                f"Similarity model '{resolved_model_name}' is not installed locally."
-            ) from local_exc
-
-    try:
-        logger.info("Downloading similarity model snapshot: %s", resolved_model_name)
-        return snapshot_download(
-            resolved_model_name,
-            cache_dir=cache_dir,
-            local_files_only=False,
-            tqdm_class=build_hf_tqdm_class(
-                progress_callback,
-                label=f"Downloading {resolved_model_name}",
-            ),
-        )
-    except Exception as download_exc:
-        raise SimilarityModelDownloadError(
-            f"Could not download similarity model '{resolved_model_name}'. Check your internet connection and try again."
-        ) from download_exc
+    normalize_similarity_model_name(model_name)
+    return resolve_snapshot(
+        EMBEDDING_MODEL,
+        allow_download=allow_download,
+        progress_callback=progress_callback,
+    )
 
 
 def is_similarity_model_installed(model_name: str | None = None) -> bool:
-    try:
-        resolve_similarity_model_snapshot(model_name, allow_download=False)
-        return True
-    except SimilarityModelNotInstalledError:
-        return False
-    except Exception:
-        logger.exception("Failed to check local similarity model snapshot.")
-        return False
+    normalize_similarity_model_name(model_name)
+    return is_installed(EMBEDDING_MODEL)
 
 
 class SimilarityEmbeddingModel:
@@ -180,7 +158,14 @@ class SimilarityEmbeddingModel:
     def region_cache_key(self) -> str:
         return self.spec.region_cache_key
 
-    def load(self) -> None:
+    def load(self, *, snapshot_path: str | None = None) -> None:
+        """Load the weights, optionally from an already resolved snapshot.
+
+        Callers that resolved the snapshot earlier (to download it with consent
+        and progress) pass it in so provisioning is never repeated, while model
+        construction, device placement and eval mode stay owned here.
+        """
+
         if self.model is not None and self.processor is not None:
             return
 
@@ -192,7 +177,7 @@ class SimilarityEmbeddingModel:
             ) from exc
 
         load_start = time.perf_counter()
-        self.snapshot_path = resolve_similarity_model_snapshot(
+        self.snapshot_path = snapshot_path or resolve_similarity_model_snapshot(
             self.model_name,
             allow_download=self.allow_download,
             progress_callback=self.progress_callback,
@@ -291,3 +276,34 @@ class SimilarityEmbeddingModel:
 
         embeddings_np = np.vstack(encoded_chunks)
         return l2_normalize_rows(embeddings_np)
+
+    def encode_with_patches(
+        self, images: Iterable[object]
+    ) -> tuple[np.ndarray, list[np.ndarray]]:
+        """Encode global CLS and normalized dense patch tokens for each image."""
+
+        if self.model is None or self.processor is None:
+            self.load()
+        if self.model is None or self.processor is None:
+            raise RuntimeError("Similarity embedding model is not loaded.")
+        batch_images = list(images)
+        if not batch_images:
+            return np.empty((0, 0), dtype=np.float32), []
+
+        import torch
+
+        globals_out: list[np.ndarray] = []
+        patches_out: list[np.ndarray] = []
+        for start in range(0, len(batch_images), SIMILARITY_ENCODE_CHUNK_SIZE):
+            chunk = batch_images[start : start + SIMILARITY_ENCODE_CHUNK_SIZE]
+            inputs = self.processor(images=chunk, return_tensors="pt")
+            inputs = {key: value.to(self.device) for key, value in inputs.items()}
+            with torch.no_grad():
+                hidden = self.model(**inputs).last_hidden_state
+            global_chunk = hidden[:, 0, :].detach().cpu().numpy().astype(np.float32)
+            patch_chunk = hidden[:, 1:, :].detach().cpu().numpy().astype(np.float32)
+            globals_out.append(l2_normalize_rows(global_chunk))
+            patches_out.extend(
+                l2_normalize_rows(patch_values) for patch_values in patch_chunk
+            )
+        return np.vstack(globals_out), patches_out

@@ -44,6 +44,9 @@ QWidget#thumbnailProgressContainer QProgressBar,
 QWidget#exifProgressContainer,
 QWidget#exifProgressContainer QLabel,
 QWidget#exifProgressContainer QProgressBar,
+QWidget#cullProgressContainer,
+QWidget#cullProgressContainer QLabel,
+QWidget#cullProgressContainer QProgressBar,
 QStackedWidget#workflowShortcutStack {
     background: transparent;
     background-color: transparent;
@@ -3250,4 +3253,129 @@ QPushButton#retryBtn:hover {
 QPushButton#retryBtn:pressed {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
         stop: 0 #0F6D39, stop: 1 #0B582E);
+}
+
+/* --- Model consent dialogs (download / CPU) --- */
+QDialog#modelDownloadDialog,
+QDialog#modelConsentDialog {
+    background: #272A2D;
+    border: 1px solid #4A5158;
+    border-radius: 14px;
+}
+
+QLabel#modelConsentHeadline {
+    background: transparent;
+    color: #F2F5F7;
+    font-size: 14pt;
+    font-weight: bold;
+}
+
+QLabel#modelConsentSummary {
+    background: transparent;
+    color: #C5CFD8;
+    font-size: 10.5pt;
+}
+
+QFrame#modelConsentCard {
+    background: #202326;
+    border: 1px solid #3E454B;
+    border-radius: 9px;
+}
+
+QLabel#modelConsentModelName {
+    background: transparent;
+    color: #E4EAEF;
+    font-size: 10.5pt;
+    font-weight: 600;
+}
+
+QLabel#modelConsentModelMeta {
+    background: transparent;
+    color: #8FA3B5;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 9pt;
+}
+
+QLabel#modelConsentFootnote {
+    background: transparent;
+    color: #8D9AA5;
+    font-size: 9pt;
+}
+
+QPushButton#modelConsentCancelButton {
+    background: #353A3E;
+    color: #D1D8DE;
+    border: 1px solid #515A61;
+    border-radius: 8px;
+    padding: 9px 18px;
+    min-width: 110px;
+    font-weight: 600;
+}
+
+QPushButton#modelConsentCancelButton:hover {
+    background: #41474C;
+    border-color: #69747C;
+    color: #FFFFFF;
+}
+
+QPushButton#modelConsentAcceptButton {
+    background: #3569B8;
+    color: #FFFFFF;
+    border: 1px solid #4A7BC5;
+    border-radius: 8px;
+    padding: 9px 20px;
+    min-width: 110px;
+    font-weight: bold;
+}
+
+QPushButton#modelConsentAcceptButton:hover {
+    background: #4177C7;
+    border-color: #6090D3;
+}
+
+QPushButton#modelConsentAcceptButton:pressed,
+QPushButton#modelConsentCancelButton:pressed {
+    padding-top: 10px;
+    padding-bottom: 8px;
+}
+
+/* --- Workflow progress actions (retry / dismiss / cancel) --- */
+QPushButton#workflowProgressRetryButton {
+    background: #3569B8;
+    color: #FFFFFF;
+    border: 1px solid #4A7BC5;
+    border-radius: 8px;
+    padding: 8px 18px;
+    min-width: 130px;
+    font-weight: bold;
+}
+
+QPushButton#workflowProgressRetryButton:hover {
+    background: #4177C7;
+    border-color: #6090D3;
+}
+
+QPushButton#workflowProgressDismissButton,
+QPushButton#workflowProgressCancelButton {
+    background: #2E3336;
+    color: #C3CCD3;
+    border: 1px solid #454C52;
+    border-radius: 8px;
+    padding: 8px 16px;
+    min-width: 130px;
+    font-weight: 600;
+}
+
+QPushButton#workflowProgressDismissButton:hover,
+QPushButton#workflowProgressCancelButton:hover {
+    background: #3A4045;
+    border-color: #5C666D;
+    color: #FFFFFF;
+}
+
+QPushButton#workflowProgressRetryButton:pressed,
+QPushButton#workflowProgressDismissButton:pressed,
+QPushButton#workflowProgressCancelButton:pressed {
+    padding-top: 9px;
+    padding-bottom: 7px;
 }
