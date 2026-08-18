@@ -469,7 +469,6 @@ class FixRotationStepWidget(QWidget):
                         label="Rotated preview",
                     ),
                 ],
-                force_default_brightness=True,
             )
         else:
             pixmap = self._load_pixmap(path)

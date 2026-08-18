@@ -159,11 +159,7 @@ def test_inactive_workflow_cannot_replace_active_inspection_session():
 
     specs = [Mock()]
     MainWindow.activate_image_inspection(context, active_viewer, specs)
-    inspection_controller.activate.assert_called_once_with(
-        active_viewer,
-        specs,
-        force_default_brightness=False,
-    )
+    inspection_controller.activate.assert_called_once_with(active_viewer, specs)
 
 
 def test_rotation_completion_queues_cache_refresh_instead_of_decoding():
@@ -186,8 +182,6 @@ def test_rotation_completion_queues_cache_refresh_instead_of_decoding():
 
     pipeline.invalidate_path.assert_called_once_with(path)
     thumbnail_loader.invalidate_paths.assert_called_once_with([path])
-    context.request_interactive_preview.assert_called_once_with(
-        path, force_default_brightness=True
-    )
+    context.request_interactive_preview.assert_called_once_with(path)
     pipeline.get_preview_qpixmap.assert_not_called()
     pipeline.get_thumbnail_qpixmap.assert_not_called()

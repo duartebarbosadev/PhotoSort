@@ -231,7 +231,6 @@ class RawImageProcessor:
         image_path: str,
         apply_auto_edits: bool = False,
         preview_max_resolution: tuple = PRELOAD_MAX_RESOLUTION,
-        force_default_brightness: bool = False,
     ) -> Image.Image | None:
         """
         Generates a PIL.Image preview from a RAW file for preloading.
@@ -271,9 +270,8 @@ class RawImageProcessor:
                                         "preview_auto_edits", basename
                                     )
                                     temp_img = ImageOps.autocontrast(temp_img)
-                                    if not force_default_brightness:
-                                        enhancer = ImageEnhance.Brightness(temp_img)
-                                        temp_img = enhancer.enhance(1.2)
+                                    enhancer = ImageEnhance.Brightness(temp_img)
+                                    temp_img = enhancer.enhance(1.2)
                                 # Copy to preserve image data after context exit
                                 pil_img = temp_img.convert("RGBA").copy()
                             if pil_img is not None and (
@@ -318,11 +316,9 @@ class RawImageProcessor:
                         "output_bps": 8,
                         "half_size": True,
                     }
-                    if apply_auto_edits and not force_default_brightness:
+                    if apply_auto_edits:
                         _record_raw_preview_stat("preview_auto_edits", basename)
                         postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_STANDARD
-                        postprocess_params["no_auto_bright"] = False
-                    elif apply_auto_edits:
                         postprocess_params["no_auto_bright"] = False
                     else:
                         logger.debug(
@@ -393,13 +389,10 @@ class RawImageProcessor:
         custom_whitebalance: list | None = None,  # e.g. [R, G, B, G2]
         demosaic_algorithm: rawpy.DemosaicAlgorithm
         | None = None,  # e.g. rawpy.DemosaicAlgorithm.AAHD
-        force_default_brightness: bool = False,
     ) -> Image.Image | None:
         """
         Loads a RAW image as a PIL Image object, with more granular control over rawpy postprocessing.
         'apply_auto_edits' will enable brightness adjustment and auto-contrast.
-        'force_default_brightness' can be used with 'apply_auto_edits' to skip the
-        extra brightness factor, which is useful for post-rotation processing.
         """
         normalized_path = os.path.normpath(image_path)
         try:
@@ -417,17 +410,10 @@ class RawImageProcessor:
                     postprocess_params.pop("use_camera_wb", None)
 
                 if apply_auto_edits:
-                    if not force_default_brightness:
-                        logger.debug(
-                            f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED}) via rawpy for: {os.path.basename(normalized_path)}"
-                        )
-                        postprocess_params["bright"] = (
-                            RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED  # Apply custom brightness
-                        )
-                    else:
-                        logger.debug(
-                            f"Applying auto-edits but forcing default brightness for: {os.path.basename(normalized_path)}"
-                        )
+                    logger.debug(
+                        f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED}) via rawpy for: {os.path.basename(normalized_path)}"
+                    )
+                    postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED
                     postprocess_params["no_auto_bright"] = False
                 else:
                     # When auto_edits are OFF, disable rawpy's auto-brightening

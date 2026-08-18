@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import weakref
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import TYPE_CHECKING
@@ -77,8 +78,6 @@ class ImageInspectionController(QObject):
         self,
         viewer: SynchronizedImageViewer,
         specs: list[InspectionImageSpec] | tuple[InspectionImageSpec, ...],
-        *,
-        force_default_brightness: bool = False,
     ) -> None:
         normalized = tuple(spec for spec in specs if spec.path)
         if viewer is self._viewer and normalized == self._specs:
@@ -122,10 +121,7 @@ class ImageInspectionController(QObject):
 
         viewer.set_inspection_images(normalized, pixmaps)
         if self._paths:
-            self._loader.request(
-                self._paths,
-                force_default_brightness=force_default_brightness,
-            )
+            self._loader.request(self._paths)
             self._timer.start()
 
     def request_detail(
@@ -139,9 +135,12 @@ class ImageInspectionController(QObject):
             return
         if reason == "actual_size":
             self._pending_actual_size = True
-        if all(
-            self._quality.get(path) == InspectionQuality.DETAIL for path in self._paths
-        ):
+        paths_needing_detail = tuple(
+            path
+            for path in self._paths
+            if self._quality.get(path) != InspectionQuality.DETAIL
+        )
+        if not paths_needing_detail:
             if self._pending_actual_size and self._viewer is not None:
                 self._pending_actual_size = False
                 self._viewer.zoom_to_actual_size()
@@ -150,7 +149,65 @@ class ImageInspectionController(QObject):
         if self._detail_requested:
             return
         self._detail_requested = True
-        self._loader.request_details(self._paths)
+        self._loader.request_details(paths_needing_detail)
+
+    def refresh_paths(
+        self,
+        image_paths: Iterable[str],
+    ) -> tuple[str, ...]:
+        """Refresh active sources that changed without rebuilding the viewer.
+
+        File mutations such as rotation keep the same path, so normal activation
+        deduplication cannot distinguish the new source from the frame already on
+        screen. Reset only the changed paths' quality and restart cancellable
+        background loading while retaining the current layout, focus, and view.
+        """
+
+        if self._viewer is None or not self._paths:
+            return ()
+
+        active_path_set = set(self._paths)
+        changed_paths = tuple(
+            path
+            for path in dict.fromkeys(path for path in image_paths if path)
+            if path in active_path_set
+        )
+        if not changed_paths:
+            return ()
+
+        self._timer.stop()
+        self._loader.cancel()
+        self._loader.cancel_details()
+        self._pending_detail_images.clear()
+        self._detail_requested = False
+
+        for path in changed_paths:
+            self._quality[path] = InspectionQuality.PLACEHOLDER
+            self._pixel_area[path] = 0
+            try:
+                pixmap, cached = self._pipeline.get_immediate_review_qpixmap(path)
+            except Exception:
+                logger.debug(
+                    "Immediate inspection refresh failed: %s", path, exc_info=True
+                )
+                continue
+            if pixmap is None or pixmap.isNull():
+                continue
+            if self._viewer.update_image_pixmap(
+                path,
+                pixmap,
+                preserve_view=True,
+            ):
+                self._quality[path] = (
+                    InspectionQuality.PREVIEW
+                    if cached
+                    else InspectionQuality.PLACEHOLDER
+                )
+                self._pixel_area[path] = pixmap.width() * pixmap.height()
+
+        self._loader.request(changed_paths)
+        self._timer.start()
+        return changed_paths
 
     def clear(self, viewer: SynchronizedImageViewer | None = None) -> None:
         if viewer is not None and viewer is not self._viewer:
