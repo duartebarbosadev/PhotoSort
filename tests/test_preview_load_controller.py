@@ -6,11 +6,9 @@ from PIL import Image
 class _Pipeline:
     def __init__(self):
         self.generated = []
-        self.options = []
 
-    def ensure_preview_cached(self, path, **options):
+    def ensure_preview_cached(self, path):
         self.generated.append(path)
-        self.options.append(options)
         return True
 
     def get_source_dimensions(self, _path):
@@ -86,19 +84,22 @@ def test_new_selection_cancels_stale_work_and_only_emits_latest_result():
     assert pool.clear_count >= 2
 
 
-def test_force_default_brightness_is_part_of_request_identity_and_reaches_worker():
+def test_explicit_cancel_restarts_same_path_request_after_source_change():
     pipeline = _Pipeline()
     controller = PreviewLoadController(pipeline)
     pool = _Pool()
     controller._pool = pool
 
     controller.request(["rotated.arw"])
-    controller.request(["rotated.arw"], force_default_brightness=True)
+    old_worker = pool.started[-1]
+    controller.cancel()
+    controller.request(["rotated.arw"])
+    current_worker = pool.started[-1]
 
     assert len(pool.started) == 2
-    pool.started[-1].run()
+    old_worker.run()
+    current_worker.run()
     assert pipeline.generated == ["rotated.arw"]
-    assert pipeline.options == [{"force_default_brightness": True}]
 
 
 def test_new_detail_set_cancels_stale_results():

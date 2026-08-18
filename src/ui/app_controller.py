@@ -45,6 +45,9 @@ def _grouping_mode_needs_model(mode: str | None) -> bool:
     return str(mode or "") in MODEL_BACKED_GROUPING_MODES
 
 
+ROTATION_LOADING_OVERLAY_DELAY_MS = 2000
+
+
 def _workflow_is_cancelled(controller: object, workflow: str) -> bool:
     return workflow in getattr(controller, "_cancelled_workflows", set())
 
@@ -165,6 +168,13 @@ class AppController(QObject):
         self.worker_manager = worker_manager
         # Track pending rotations for batch preview regeneration
         self._pending_rotated_paths: list[str] = []
+        self._rotation_loading_text = "Applying rotations..."
+        self._rotation_loading_overlay_visible = False
+        self._rotation_loading_overlay_timer = QTimer(self)
+        self._rotation_loading_overlay_timer.setSingleShot(True)
+        self._rotation_loading_overlay_timer.timeout.connect(
+            self._show_delayed_rotation_loading_overlay
+        )
         # Cache volume at preview-preload start, used for per-run diagnostics.
         self._ai_rating_warning_messages: list[str] = []
         self._pick_best_pending_after_subject_grouping: bool = False
@@ -2278,14 +2288,39 @@ class AppController(QObject):
             )
             return
 
-        # Show loading overlay
-        self.main_window.show_loading_overlay("Applying rotations...")
+        AppController._begin_rotation_loading_feedback(self)
+        try:
+            self.worker_manager.start_rotation_application(
+                approved_rotations=approved_rotations,
+                exif_disk_cache=self.app_state.exif_disk_cache,
+            )
+        except Exception:
+            AppController._finish_rotation_loading_feedback(self)
+            raise
 
-        # Start the worker
-        self.worker_manager.start_rotation_application(
-            approved_rotations=approved_rotations,
-            exif_disk_cache=self.app_state.exif_disk_cache,
-        )
+    def _begin_rotation_loading_feedback(self) -> None:
+        """Delay disruptive rotation feedback so fast operations stay seamless."""
+
+        self._rotation_loading_overlay_timer.stop()
+        self._rotation_loading_text = "Applying rotations..."
+        self._rotation_loading_overlay_visible = False
+        self._rotation_loading_overlay_timer.start(ROTATION_LOADING_OVERLAY_DELAY_MS)
+
+    def _show_delayed_rotation_loading_overlay(self) -> None:
+        """Show the latest rotation progress only if work is still running."""
+
+        if not self.worker_manager.is_rotation_application_running():
+            return
+        self._rotation_loading_overlay_visible = True
+        self.main_window.show_loading_overlay(self._rotation_loading_text)
+
+    def _finish_rotation_loading_feedback(self) -> None:
+        """Cancel delayed feedback and hide it only when it was actually shown."""
+
+        self._rotation_loading_overlay_timer.stop()
+        if self._rotation_loading_overlay_visible:
+            self.main_window.hide_loading_overlay()
+        self._rotation_loading_overlay_visible = False
 
     # --- Update Check Handlers ---
 
@@ -2439,7 +2474,9 @@ class AppController(QObject):
     ):
         """Handle progress updates from rotation application worker."""
         progress_text = f"Rotating {current}/{total}: {filename}"
-        self.main_window.update_loading_text(progress_text)
+        self._rotation_loading_text = progress_text
+        if self._rotation_loading_overlay_visible:
+            self.main_window.update_loading_text(progress_text)
 
     def handle_rotation_applied(
         self,
@@ -2481,6 +2518,7 @@ class AppController(QObject):
             f"Rotation batch finished: {successful_count} successful, {failed_count} failed. "
             f"Processing {len(self._pending_rotated_paths)} rotated images..."
         )
+        AppController._finish_rotation_loading_feedback(self)
 
         try:
             if self._pending_rotated_paths:
@@ -2499,6 +2537,9 @@ class AppController(QObject):
 
                 selected_paths = self.main_window._get_selected_file_paths_from_view()
                 if any(path in selected_paths for path in rotated_paths):
+                    self.main_window.image_inspection_controller.refresh_paths(
+                        rotated_paths
+                    )
                     self.main_window.invalidate_last_displayed_preview()
                     self.main_window._handle_file_selection_changed()
 
@@ -2509,7 +2550,6 @@ class AppController(QObject):
         finally:
             # Clear pending list
             self._pending_rotated_paths.clear()
-            self.main_window.hide_loading_overlay()
 
         # Show summary message
         if successful_count > 0 and failed_count == 0:
@@ -2529,7 +2569,7 @@ class AppController(QObject):
     def handle_rotation_application_error(self, error_message: str):
         """Handle errors from rotation application worker."""
         logger.error(f"Rotation application error: {error_message}")
-        self.main_window.hide_loading_overlay()
+        AppController._finish_rotation_loading_feedback(self)
         self.main_window.statusBar().showMessage(
             f"Error applying rotations: {error_message}", 5000
         )

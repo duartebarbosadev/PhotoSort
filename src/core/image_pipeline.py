@@ -577,7 +577,6 @@ class ImagePipeline:
         self,
         image_path: str,
         display_max_size: tuple[int, int] | None,
-        force_default_brightness: bool = False,
     ) -> Image.Image | None:
         """
         Generates a PIL image sized for display, without using preload cache.
@@ -607,7 +606,6 @@ class ImagePipeline:
                 normalized_path,
                 apply_auto_edits,
                 target_resolution,
-                force_default_brightness=force_default_brightness,
             )
 
         elif ext in SUPPORTED_STANDARD_EXTENSIONS:
@@ -629,7 +627,6 @@ class ImagePipeline:
         image_path: str,
         display_max_size: tuple[int, int] | None = None,
         force_regenerate: bool = False,
-        force_default_brightness: bool = False,
     ) -> Image.Image | None:
         """Return a PIL image suitable for analysis/display, leveraging preview cache."""
         normalized_path = os.path.normpath(image_path)
@@ -685,7 +682,6 @@ class ImagePipeline:
                 generated_display_pil = self._generate_pil_preview_for_display(
                     normalized_path,
                     display_max_size,
-                    force_default_brightness,
                 )
         if generated_display_pil:
             self._cache_set(
@@ -782,7 +778,6 @@ class ImagePipeline:
         display_max_size: tuple[int, int]
         | None,  # Max size for the QPixmap to be displayed
         force_regenerate: bool = False,
-        force_default_brightness: bool = False,
     ) -> QPixmap | None:
         """
         Gets a QPixmap preview for the image path, scaled to display_max_size.
@@ -846,7 +841,6 @@ class ImagePipeline:
                 generated_display_pil = self._generate_pil_preview_for_display(
                     normalized_path,
                     display_max_size,
-                    force_default_brightness,
                 )
         if generated_display_pil:
             self._cache_set(
@@ -864,12 +858,7 @@ class ImagePipeline:
         """Worker function for preload_thumbnails."""
         self.ensure_thumbnail_cached(image_path)
 
-    def ensure_preview_cached(
-        self,
-        image_path: str,
-        *,
-        force_default_brightness: bool = False,
-    ) -> bool:
+    def ensure_preview_cached(self, image_path: str) -> bool:
         """
         Generate and cache one navigation-sized preview when it is missing.
 
@@ -889,17 +878,11 @@ class ImagePipeline:
             normalized_path, PRELOAD_MAX_RESOLUTION
         )
 
-        if (
-            not force_default_brightness
-            and self._cache_get(self.preview_cache, preload_cache_key) is not None
-        ):
+        if self._cache_get(self.preview_cache, preload_cache_key) is not None:
             return True
 
         with self._generation_lock(preload_cache_key):
-            if (
-                not force_default_brightness
-                and self._cache_get(self.preview_cache, preload_cache_key) is not None
-            ):
+            if self._cache_get(self.preview_cache, preload_cache_key) is not None:
                 return True
 
             pil_img: Image.Image | None = None
@@ -915,7 +898,6 @@ class ImagePipeline:
                         normalized_path,
                         apply_auto_edits,
                         PRELOAD_MAX_RESOLUTION,
-                        force_default_brightness=force_default_brightness,
                     )
                 elif ext in SUPPORTED_STANDARD_EXTENSIONS:
                     pil_img = StandardImageProcessor.process_for_preview(

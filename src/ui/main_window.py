@@ -1206,36 +1206,18 @@ class MainWindow(QMainWindow):
             path for path in image_paths if not is_video_extension(path)
         )
 
-    def request_interactive_preview(
-        self,
-        image_path: str,
-        *,
-        force_default_brightness: bool = False,
-    ) -> None:
-        self.request_interactive_previews(
-            [image_path],
-            force_default_brightness=force_default_brightness,
-        )
+    def request_interactive_preview(self, image_path: str) -> None:
+        self.request_interactive_previews([image_path])
 
-    def request_interactive_previews(
-        self,
-        image_paths,
-        *,
-        force_default_brightness: bool = False,
-    ) -> None:
+    def request_interactive_previews(self, image_paths) -> None:
         paths = [path for path in image_paths if path and not is_video_extension(path)]
         if paths:
-            self.preview_load_controller.request(
-                paths,
-                force_default_brightness=force_default_brightness,
-            )
+            self.preview_load_controller.request(paths)
 
     def activate_image_inspection(
         self,
         viewer: SynchronizedImageViewer,
         specs: list[InspectionImageSpec],
-        *,
-        force_default_brightness: bool = False,
     ) -> None:
         active_viewer = self._active_workflow_inspection_viewer()
         if viewer is not active_viewer:
@@ -1243,11 +1225,7 @@ class MainWindow(QMainWindow):
                 "Ignoring inspection activation from an inactive workflow viewer"
             )
             return
-        self.image_inspection_controller.activate(
-            viewer,
-            specs,
-            force_default_brightness=force_default_brightness,
-        )
+        self.image_inspection_controller.activate(viewer, specs)
 
     def _active_workflow_inspection_viewer(
         self,
@@ -3540,10 +3518,7 @@ class MainWindow(QMainWindow):
         )
         self._last_displayed_preview_path = file_path
         if not preview_is_cached:
-            self.request_interactive_preview(
-                file_path,
-                force_default_brightness=True,
-            )
+            self.request_interactive_preview(file_path)
 
         if self.sidebar_visible:
             self._update_sidebar_with_current_selection()
@@ -4599,10 +4574,7 @@ class MainWindow(QMainWindow):
         selected_paths = self._get_selected_file_paths_from_view()
         if file_path in selected_paths:
             self._handle_file_selection_changed()
-            self.request_interactive_preview(
-                file_path,
-                force_default_brightness=True,
-            )
+            self.request_interactive_preview(file_path)
 
         self.statusBar().showMessage(message, 5000)
         logger.info(message)

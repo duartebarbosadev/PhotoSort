@@ -8,7 +8,7 @@ external apply_auto_edits parameters.
 
 import inspect
 from unittest.mock import Mock, patch
-from core.app_settings import PRELOAD_MAX_RESOLUTION, THUMBNAIL_MAX_SIZE
+from core.app_settings import THUMBNAIL_MAX_SIZE
 from src.core.image_pipeline import CACHE_SCHEMA_VERSION, ImagePipeline
 from src.core.image_processing.raw_image_processor import is_raw_extension
 from src.core.image_processing.standard_image_processor import StandardImageProcessor
@@ -384,33 +384,4 @@ def test_display_preview_uses_bounded_raw_preview_processor(tmp_path):
         str(image_path),
         True,
         (800, 600),
-        force_default_brightness=False,
-    )
-
-
-def test_forced_default_brightness_replaces_existing_navigation_preview(tmp_path):
-    image_path = tmp_path / "rotated.arw"
-    image_path.write_bytes(b"raw")
-    pipeline = ImagePipeline(
-        thumbnail_cache_dir=str(tmp_path / "thumb"),
-        preview_cache_dir=str(tmp_path / "preview"),
-    )
-    pipeline.preview_cache.get = Mock(
-        return_value=Image.new("RGB", (32, 32), color="red")
-    )
-    replacement = Image.new("RGB", (64, 64), color="blue")
-
-    with patch(
-        "src.core.image_pipeline.RawImageProcessor.process_raw_for_preview",
-        return_value=replacement,
-    ) as process_preview:
-        assert pipeline.ensure_preview_cached(
-            str(image_path), force_default_brightness=True
-        )
-
-    process_preview.assert_called_once_with(
-        str(image_path),
-        True,
-        PRELOAD_MAX_RESOLUTION,
-        force_default_brightness=True,
     )

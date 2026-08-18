@@ -29,6 +29,7 @@ class _Loader(QObject):
         super().__init__()
         self.preview_requests = []
         self.detail_requests = []
+        self.cancel_count = 0
         self.cancel_details_count = 0
 
     def request(self, paths, **options):
@@ -36,6 +37,9 @@ class _Loader(QObject):
 
     def request_details(self, paths):
         self.detail_requests.append(tuple(paths))
+
+    def cancel(self):
+        self.cancel_count += 1
 
     def cancel_details(self):
         self.cancel_details_count += 1
@@ -121,6 +125,45 @@ def test_clear_allows_same_image_to_be_activated_again():
         ("photo.jpg",),
         ("photo.jpg",),
     ]
+
+
+def test_source_change_refreshes_same_path_and_preserves_inspection_session():
+    controller, loader, pipeline, viewer = _make_controller()
+    controller.activate(viewer, [InspectionImageSpec("photo.jpg")])
+    loader.preview_ready.emit("photo.jpg")
+    loader.detail_ready.emit("photo.jpg", Image.new("RGB", (4000, 3000)))
+    loader.detail_batch_finished.emit()
+    original_viewer = controller._viewer
+
+    refreshed = controller.refresh_paths(["other.jpg", "photo.jpg", "photo.jpg"])
+
+    assert refreshed == ("photo.jpg",)
+    assert controller._viewer is original_viewer
+    assert controller.active_paths == ("photo.jpg",)
+    assert pipeline.immediate_calls == ["photo.jpg", "photo.jpg"]
+    assert loader.preview_requests[-1] == (("photo.jpg",), {})
+    assert loader.cancel_count == 1
+    assert loader.cancel_details_count == 2
+    assert controller._quality["photo.jpg"] == InspectionQuality.PLACEHOLDER
+
+    loader.preview_ready.emit("photo.jpg")
+    assert controller._quality["photo.jpg"] == InspectionQuality.PREVIEW
+
+
+def test_source_change_reloads_detail_only_for_changed_active_path():
+    controller, loader, _pipeline, viewer = _make_controller()
+    controller.activate(
+        viewer,
+        [InspectionImageSpec("left.jpg"), InspectionImageSpec("right.jpg")],
+    )
+    for path in ("left.jpg", "right.jpg"):
+        loader.detail_ready.emit(path, Image.new("RGB", (4000, 3000)))
+    loader.detail_batch_finished.emit()
+
+    controller.refresh_paths(["right.jpg"])
+    controller._timer.timeout.emit()
+
+    assert loader.detail_requests == [("right.jpg",)]
 
 
 def test_zoom_and_actual_size_deduplicate_and_defer_one_to_one():
