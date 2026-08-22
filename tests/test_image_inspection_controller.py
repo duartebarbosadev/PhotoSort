@@ -1,5 +1,6 @@
 from PIL import Image
-from PyQt6.QtCore import QObject, pyqtSignal
+import pytest
+from PyQt6.QtCore import QCoreApplication, QEvent, QObject, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
@@ -16,6 +17,22 @@ from ui.controllers.image_inspection_controller import (
 )
 
 _app = QApplication.instance() or QApplication([])
+_test_resources = []
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_inspection_resources():
+    """Do not leave delayed viewer fits queued for unrelated Qt tests."""
+    yield
+    while _test_resources:
+        controller, viewer = _test_resources.pop()
+        controller.clear()
+        viewer._layout_fit_timer.stop()
+        for image_viewer in viewer.image_viewers:
+            image_viewer.image_view._resize_timer.stop()
+        viewer.close()
+        viewer.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 class _Loader(QObject):
@@ -76,6 +93,7 @@ def _make_controller():
     controller = ImageInspectionController(pipeline, loader)
     viewer = SynchronizedImageViewer()
     viewer.configure_toolbar(show_view_modes=False)
+    _test_resources.append((controller, viewer))
     return controller, loader, pipeline, viewer
 
 

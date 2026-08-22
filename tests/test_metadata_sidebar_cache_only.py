@@ -20,6 +20,7 @@ def test_sidebar_rendering_uses_cached_file_data_without_stat(monkeypatch):
         SimpleNamespace(path=os.path, stat=unexpected_stat),
     )
     sidebar = MetadataSidebar()
+    assert sidebar.update_timer.parent() is sidebar
     sidebar.update_metadata(
         "/slow-volume/photo.jpg",
         {
@@ -34,3 +35,5 @@ def test_sidebar_rendering_uses_cached_file_data_without_stat(monkeypatch):
 
     assert sidebar.raw_metadata["file_size"] == 2048
     assert sidebar.raw_metadata["Exif.Image.Model"] == "Camera"
+    sidebar.update_timer.stop()
+    sidebar.deleteLater()

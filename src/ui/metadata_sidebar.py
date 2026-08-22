@@ -237,7 +237,7 @@ class MetadataSidebar(QWidget):
         self.setup_animations()
 
         # Update timer for smooth transitions
-        self.update_timer = QTimer()
+        self.update_timer = QTimer(self)
         self.update_timer.setSingleShot(True)
         self.update_timer.timeout.connect(self._delayed_update)
 
