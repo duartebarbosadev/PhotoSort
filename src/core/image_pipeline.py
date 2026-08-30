@@ -253,10 +253,17 @@ class ImagePipeline:
     def end_active_review_working_set(self) -> None:
         self.preview_cache.end_working_set()
 
-    def estimate_active_review_cache_bytes(self, image_paths) -> int:
+    def estimate_active_review_cache_bytes(
+        self,
+        image_paths,
+        *,
+        should_continue_callback: Callable[[], bool] | None = None,
+    ) -> int | None:
         """Return a conservative upper bound for the active folder's proxies."""
         total = 0
         for path in dict.fromkeys(path for path in image_paths if path):
+            if should_continue_callback and not should_continue_callback():
+                return None
             normalized_path = os.path.normpath(path)
             if is_video_extension(normalized_path):
                 continue
@@ -301,12 +308,17 @@ class ImagePipeline:
             decode_gate.acquire()
         try:
             if is_raw_extension(ext):
-                image = RawImageProcessor.render_display(normalized_path, "RGBA")
+                image = RawImageProcessor.render_display(
+                    normalized_path,
+                    "RGBA",
+                    target_size=target_size,
+                )
             elif ext in SUPPORTED_STANDARD_EXTENSIONS:
                 image = StandardImageProcessor.load_as_pil(
                     normalized_path,
                     target_mode="RGBA",
                     apply_exif_transpose=True,
+                    target_size=target_size,
                 )
             else:
                 return None
@@ -395,12 +407,23 @@ class ImagePipeline:
                 normalized_path,
                 promote_to_memory=promote_to_memory,
             )
+            thumbnail_ready = (
+                thumbnail is not None and thumbnail_key in self.thumbnail_cache
+            )
             return ReviewAssetResult(
                 normalized_path,
                 True,
-                thumbnail is not None,
+                thumbnail_ready,
                 thumbnail_hit,
-                error=None if thumbnail is not None else "Video thumbnail failed",
+                error=(
+                    None
+                    if thumbnail_ready
+                    else (
+                        "Video thumbnail cache write failed"
+                        if thumbnail is not None
+                        else "Video thumbnail failed"
+                    )
+                ),
             )
 
         if not (is_raw_extension(ext) or ext in SUPPORTED_STANDARD_EXTENSIONS):
@@ -457,13 +480,22 @@ class ImagePipeline:
                         error="Canonical preview decode failed",
                     )
                 if promote_to_memory:
-                    encoded_bytes += self._cache_set(
+                    preview_bytes = self._cache_set(
                         self.preview_cache, preview_key, preview
                     )
                 else:
-                    encoded_bytes += int(
+                    preview_bytes = int(
                         self.preview_cache.set(preview_key, preview) or 0
                     )
+                if preview_bytes <= 0:
+                    return ReviewAssetResult(
+                        normalized_path,
+                        False,
+                        thumbnail_hit,
+                        False,
+                        error="Preview cache write failed",
+                    )
+                encoded_bytes += preview_bytes
 
             thumbnail = (
                 self._cache_get(self.thumbnail_cache, thumbnail_key)
@@ -476,13 +508,23 @@ class ImagePipeline:
                 if thumbnail.mode != "RGBA":
                     thumbnail = thumbnail.convert("RGBA")
                 if promote_to_memory:
-                    encoded_bytes += self._cache_set(
+                    thumbnail_bytes = self._cache_set(
                         self.thumbnail_cache, thumbnail_key, thumbnail
                     )
                 else:
-                    encoded_bytes += int(
+                    thumbnail_bytes = int(
                         self.thumbnail_cache.set(thumbnail_key, thumbnail) or 0
                     )
+                if thumbnail_bytes <= 0:
+                    return ReviewAssetResult(
+                        normalized_path,
+                        True,
+                        False,
+                        False,
+                        encoded_bytes=encoded_bytes,
+                        error="Thumbnail cache write failed",
+                    )
+                encoded_bytes += thumbnail_bytes
 
             return ReviewAssetResult(
                 normalized_path,

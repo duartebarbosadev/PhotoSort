@@ -80,6 +80,7 @@ class ViewportThumbnailLoader(QObject):
             self._session_id,
             self._all_paths,
             visible,
+            prepare_folder_working_set=True,
         ):
             self._folder_start_timer.start()
 

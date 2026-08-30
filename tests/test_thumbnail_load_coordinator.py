@@ -37,6 +37,9 @@ def test_folder_session_prioritizes_visible_and_warms_every_path_once():
     args = context.worker_manager.start_thumbnail_session.call_args.args
     assert args[1] == ["image-0.jpg", "image-1.jpg", "image-2.jpg"]
     assert args[2] == ["image-2.jpg"]
+    assert context.worker_manager.start_thumbnail_session.call_args.kwargs == {
+        "prepare_folder_working_set": True
+    }
     context.set_thumbnail_progress.assert_called_once_with(0, 3, 0, False)
 
 

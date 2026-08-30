@@ -1090,6 +1090,8 @@ class WorkerManager(QObject):
         session_id: str,
         image_paths: list[str],
         foreground_paths: list[str] | None = None,
+        *,
+        prepare_folder_working_set: bool = False,
     ) -> bool:
         """Start one prioritized thumbnail session for the active folder."""
         from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
@@ -1105,6 +1107,7 @@ class WorkerManager(QObject):
             foreground_paths=foreground_paths or [],
             should_pause_background=self.is_resource_intensive_analysis_running,
             materialize_background=True,
+            prepare_folder_working_set=prepare_folder_working_set,
         )
         self.thumbnail_preload_worker.moveToThread(self.thumbnail_preload_thread)
         self.thumbnail_preload_worker.session_batch_ready.connect(

@@ -271,6 +271,136 @@ def test_review_asset_generation_decodes_standard_source_once(tmp_path):
     assert pipeline.thumbnail_cache_key(str(source)) in pipeline.thumbnail_cache
 
 
+def test_standard_display_downsamples_before_rgba_conversion(tmp_path):
+    source = tmp_path / "large.jpg"
+    Image.new("RGB", (1200, 800), "orange").save(source)
+    converted_sizes = []
+    original_convert = Image.Image.convert
+
+    def record_convert(image, *args, **kwargs):
+        converted_sizes.append(image.size)
+        return original_convert(image, *args, **kwargs)
+
+    with patch.object(
+        Image.Image,
+        "convert",
+        autospec=True,
+        side_effect=record_convert,
+    ):
+        result = StandardImageProcessor.load_as_pil(
+            str(source),
+            target_mode="RGBA",
+            target_size=(300, 300),
+        )
+
+    assert result is not None
+    assert result.size == (300, 200)
+    assert converted_sizes[-1] == result.size
+    assert (1200, 800) not in converted_sizes
+
+
+def test_review_capacity_estimation_stops_before_inspecting_more_sources(tmp_path):
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+
+    with patch.object(
+        pipeline,
+        "get_source_dimensions",
+        side_effect=AssertionError("cancelled estimation must not inspect sources"),
+    ):
+        result = pipeline.estimate_active_review_cache_bytes(
+            ["first.jpg", "second.jpg"],
+            should_continue_callback=lambda: False,
+        )
+
+    assert result is None
+
+
+def test_standard_proxy_preserves_full_detail_appearance(tmp_path):
+    source = tmp_path / "source.jpg"
+    Image.effect_noise((3000, 1800), 48).convert("RGB").save(
+        source,
+        quality=95,
+    )
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+
+    prepared = pipeline.ensure_review_assets_cached(str(source))
+    proxy = pipeline.preview_cache.get(
+        pipeline.preview_cache_key(str(source), REVIEW_PROXY_MAX_RESOLUTION)
+    )
+    detail = pipeline.load_detail_image(str(source))
+
+    assert prepared.success
+    assert proxy is not None and detail is not None
+    detail.thumbnail(proxy.size, Image.Resampling.LANCZOS, reducing_gap=3.0)
+    difference = ImageStat.Stat(
+        ImageChops.difference(proxy.convert("RGB"), detail.convert("RGB"))
+    ).mean
+    assert max(difference) < 4.0
+
+
+def test_failed_preview_write_is_not_reported_as_ready(tmp_path):
+    source = tmp_path / "source.jpg"
+    Image.new("RGB", (1200, 800), "orange").save(source)
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+
+    with (
+        patch.object(pipeline.preview_cache, "set", return_value=0),
+        patch.object(pipeline.thumbnail_cache, "set") as thumbnail_write,
+    ):
+        result = pipeline.ensure_review_assets_cached(str(source))
+
+    assert not result.success
+    assert not result.preview_ready
+    assert result.error == "Preview cache write failed"
+    thumbnail_write.assert_not_called()
+
+
+def test_failed_thumbnail_write_is_not_reported_as_ready(tmp_path):
+    source = tmp_path / "source.jpg"
+    Image.new("RGB", (1200, 800), "teal").save(source)
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+
+    with patch.object(pipeline.thumbnail_cache, "set", return_value=0):
+        result = pipeline.ensure_review_assets_cached(str(source))
+
+    assert not result.success
+    assert result.preview_ready
+    assert not result.thumbnail_ready
+    assert result.error == "Thumbnail cache write failed"
+
+
+def test_failed_video_thumbnail_write_is_not_reported_as_ready(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+
+    with patch.object(
+        pipeline,
+        "_get_pil_thumbnail",
+        return_value=Image.new("RGBA", (256, 144), "black"),
+    ):
+        result = pipeline.ensure_review_assets_cached(str(source))
+
+    assert not result.success
+    assert not result.thumbnail_ready
+    assert result.error == "Video thumbnail cache write failed"
+
+
 def test_missing_thumbnail_is_derived_from_cached_proxy_without_source_decode(tmp_path):
     source = tmp_path / "source.jpg"
     Image.new("RGB", (1200, 800), "teal").save(source)

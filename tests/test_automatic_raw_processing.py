@@ -279,6 +279,7 @@ def test_thumbnail_warming_caches_jpeg_with_exif_orientation_applied(tmp_path):
         str(image_path),
         target_mode="RGBA",
         apply_exif_transpose=True,
+        target_size=(2560, 2560),
     )
     pipeline.thumbnail_cache.close()
     pipeline.preview_cache.close()
@@ -403,4 +404,8 @@ def test_display_preview_uses_canonical_raw_renderer(tmp_path):
         )
 
     assert result is expected
-    render_display.assert_called_once_with(str(image_path), "RGBA")
+    render_display.assert_called_once_with(
+        str(image_path),
+        "RGBA",
+        target_size=(800, 600),
+    )

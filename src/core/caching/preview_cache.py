@@ -315,6 +315,11 @@ class PreviewCache:
         """Returns the current configured size limit in GB."""
         return self._size_limit_bytes / (1024 * 1024 * 1024)
 
+    @property
+    def size_limit_bytes(self) -> int:
+        with self._capacity_lock:
+            return self._size_limit_bytes
+
     def reinitialize_from_settings(self) -> None:
         """
         Closes and reinitializes the cache with the current size limit from app_settings.

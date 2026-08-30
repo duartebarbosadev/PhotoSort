@@ -36,6 +36,7 @@ class ThumbnailPreloadWorker(QObject):
         foreground_paths: Iterable[str] | None = None,
         should_pause_background: Callable[[], bool] | None = None,
         materialize_background: bool = True,
+        prepare_folder_working_set: bool = False,
         max_workers: int | None = None,
     ):
         super().__init__()
@@ -46,6 +47,7 @@ class ThumbnailPreloadWorker(QObject):
         self._wake = threading.Condition(self._lock)
         self._should_pause_background = should_pause_background or (lambda: False)
         self._materialize_background = materialize_background
+        self._prepare_folder_working_set = prepare_folder_working_set
         configured_workers = getattr(image_pipeline, "thumbnail_worker_count", 4)
         if not isinstance(configured_workers, int):
             configured_workers = 4
@@ -75,11 +77,13 @@ class ThumbnailPreloadWorker(QObject):
         self._capacity_waiters = 0
         self._capacity_decision: bool | None = None
         self._capacity_cancelled = False
+        self._stop_requested = False
         self._last_progress_emit_at = 0.0
 
     def stop(self):
         with self._wake:
             self._is_running = False
+            self._stop_requested = True
             self._wake.notify_all()
         with self._capacity_condition:
             self._capacity_decision = False
@@ -115,6 +119,34 @@ class ThumbnailPreloadWorker(QObject):
                 self._capacity_waiting = False
                 self._capacity_decision = None
             return approved
+
+    def _prepare_working_set(self) -> bool:
+        """Estimate and reserve the active folder cache entirely off the UI thread."""
+        if not self._prepare_folder_working_set:
+            return True
+
+        with self._lock:
+            working_set_paths = tuple(self._pending)
+        self.image_pipeline.begin_active_review_working_set(working_set_paths)
+        required_bytes = self.image_pipeline.estimate_active_review_cache_bytes(
+            working_set_paths,
+            should_continue_callback=lambda: self._is_running,
+        )
+        if required_bytes is None or not self._is_running:
+            return False
+
+        while self._is_running:
+            current_limit = self.image_pipeline.preview_cache.size_limit_bytes
+            if required_bytes > current_limit and not self._wait_for_capacity(
+                required_bytes
+            ):
+                return False
+            try:
+                self.image_pipeline.preview_cache.trim_to_limit()
+                return True
+            except PreviewCacheCapacityError as exc:
+                required_bytes = max(required_bytes, exc.required_bytes)
+        return False
 
     def prioritize(self, image_paths: Iterable[str]) -> None:
         """Move pending paths to the foreground without duplicating work."""
@@ -257,6 +289,8 @@ class ThumbnailPreloadWorker(QObject):
         paused_emitted = False
         started_at = time.perf_counter()
         try:
+            if not self._prepare_working_set():
+                return
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=self._max_workers
             ) as executor:
@@ -369,7 +403,7 @@ class ThumbnailPreloadWorker(QObject):
                 metrics["throughput_per_second"],
             )
             self.session_metrics.emit(self.session_id, metrics)
-            if not self._capacity_cancelled:
+            if not self._capacity_cancelled and not self._stop_requested:
                 self.session_finished.emit(
                     self.session_id,
                     self._attempted,

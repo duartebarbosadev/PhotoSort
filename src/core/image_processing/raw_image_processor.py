@@ -127,7 +127,11 @@ class RawImageProcessor:
         }
 
     @staticmethod
-    def render_display(image_path: str, target_mode: str = "RGBA") -> Image.Image | None:
+    def render_display(
+        image_path: str,
+        target_mode: str = "RGBA",
+        target_size: tuple[int, int] | None = None,
+    ) -> Image.Image | None:
         """Render the authoritative PhotoSort appearance for a RAW source.
 
         Embedded camera previews and half-size demosaicing are deliberately excluded:
@@ -142,6 +146,14 @@ class RawImageProcessor:
             image = Image.fromarray(rgb_array)
             image = ImageOps.autocontrast(image)
             image = ImageEnhance.Color(image).enhance(1.2)
+            if target_size and (
+                image.width > target_size[0] or image.height > target_size[1]
+            ):
+                image.thumbnail(
+                    target_size,
+                    Image.Resampling.LANCZOS,
+                    reducing_gap=3.0,
+                )
             return image.convert(target_mode)
         except UnidentifiedImageError:
             logger.error(

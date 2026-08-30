@@ -117,6 +117,17 @@ def test_handle_scan_finished_preloads_thumbnails_and_metadata_for_videos_too():
     assert main_window.overlay_hidden
 
 
+def test_scan_finished_does_not_inspect_source_dimensions_on_ui_thread():
+    controller, main_window, _, _ = _make_controller(
+        [{"path": "/tmp/a.jpg", "media_type": "image", "is_blurred": None}]
+    )
+    main_window.image_pipeline = Mock()
+
+    controller.handle_scan_finished()
+
+    main_window.image_pipeline.estimate_active_review_cache_bytes.assert_not_called()
+
+
 def test_rating_completion_does_not_trigger_global_preview_preload():
     controller, main_window, _, worker_manager = _make_controller(
         [{"path": "/tmp/a.jpg", "media_type": "image", "is_blurred": None}]
@@ -142,69 +153,13 @@ def test_rating_progress_updates_the_exif_footer_progress():
     ]
 
 
-def test_review_cache_capacity_increase_is_required_before_preparation(tmp_path):
-    controller, main_window, _, _ = _make_controller([])
-    preview_cache = Mock(
-        _cache_dir=str(tmp_path),
-        volume=Mock(return_value=0),
-    )
-    pipeline = Mock(preview_cache=preview_cache)
-    pipeline.estimate_active_review_cache_bytes.return_value = 3 * 1024**3
-    main_window.image_pipeline = pipeline
-    main_window.dialog_manager.confirm_preview_cache_capacity_increase.return_value = (
-        True
-    )
-
-    with (
-        patch("src.ui.app_controller.get_preview_cache_size_bytes", return_value=2**30),
-        patch("src.ui.app_controller.set_preview_cache_size_gb") as set_limit,
-        patch(
-            "src.ui.app_controller.shutil.disk_usage",
-            return_value=SimpleNamespace(free=8 * 1024**3),
-        ),
-    ):
-        assert controller._prepare_review_cache_capacity(["photo.arw"])
-
-    set_limit.assert_called_once_with(3.0)
-    preview_cache.reinitialize_from_settings.assert_called_once_with()
-    pipeline.begin_active_review_working_set.assert_called_once_with(["photo.arw"])
-    preview_cache.trim_to_limit.assert_called_once_with()
-
-
-def test_declining_required_review_cache_capacity_cancels_folder(tmp_path):
-    controller, main_window, app_state, _ = _make_controller([])
-    preview_cache = Mock(
-        _cache_dir=str(tmp_path),
-        volume=Mock(return_value=0),
-    )
-    pipeline = Mock(preview_cache=preview_cache)
-    pipeline.estimate_active_review_cache_bytes.return_value = 3 * 1024**3
-    main_window.image_pipeline = pipeline
-    main_window.dialog_manager.confirm_preview_cache_capacity_increase.return_value = (
-        False
-    )
-
-    with (
-        patch("src.ui.app_controller.get_preview_cache_size_bytes", return_value=2**30),
-        patch(
-            "src.ui.app_controller.shutil.disk_usage",
-            return_value=SimpleNamespace(free=8 * 1024**3),
-        ),
-    ):
-        assert not controller._prepare_review_cache_capacity(["photo.arw"])
-
-    app_state.clear_all_file_specific_data.assert_called_once_with()
-    pipeline.begin_active_review_working_set.assert_not_called()
-    assert main_window.overlay_hidden
-
-
 def test_actual_cache_overrun_pauses_then_resumes_with_raised_live_limit(tmp_path):
     controller, main_window, _, worker_manager = _make_controller([])
     current_limit = 1024**3
     required = current_limit + 1
     preview_cache = Mock(
         _cache_dir=str(tmp_path),
-        _size_limit_bytes=current_limit,
+        size_limit_bytes=current_limit,
         volume=Mock(return_value=0),
     )
     main_window.image_pipeline = Mock(preview_cache=preview_cache)

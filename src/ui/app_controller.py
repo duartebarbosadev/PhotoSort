@@ -15,7 +15,6 @@ from core.app_settings import (
     get_similarity_clustering_eps,
     get_cull_grouping_strictness,
     get_companion_files_preference,
-    get_preview_cache_size_bytes,
     set_preview_cache_size_gb,
 )
 from core.similarity_embedding_model import SimilarityEmbeddingModel
@@ -1234,8 +1233,6 @@ class AppController(QObject):
                 self.app_state,
             )
             paths = [item["path"] for item in media_file_data if item.get("path")]
-            if not self._prepare_review_cache_capacity(paths):
-                return
             session_id = self.main_window.start_thumbnail_warming(paths)
             self._folder_asset_session_id = str(session_id) if session_id else None
             if self._folder_asset_session_id is not None:
@@ -1245,48 +1242,6 @@ class AppController(QObject):
             self._activate_loaded_folder(asset_failures=len(paths))
         else:
             self._activate_loaded_folder(asset_failures=0)
-
-    def _prepare_review_cache_capacity(self, media_paths: list[str]) -> bool:
-        pipeline = getattr(self.main_window, "image_pipeline", None)
-        if pipeline is None:
-            return True
-
-        pipeline.end_active_review_working_set()
-        required_bytes = pipeline.estimate_active_review_cache_bytes(media_paths)
-        current_limit = get_preview_cache_size_bytes()
-        if required_bytes > current_limit:
-            cache_dir = getattr(pipeline.preview_cache, "_cache_dir", "")
-            try:
-                free_bytes = shutil.disk_usage(cache_dir).free
-            except OSError:
-                free_bytes = 0
-            available_bytes = free_bytes + pipeline.preview_cache.volume()
-            if required_bytes > available_bytes:
-                self.main_window.dialog_manager.show_preview_cache_disk_space_error(
-                    required_bytes,
-                    available_bytes,
-                )
-                self._cancel_folder_for_review_capacity()
-                return False
-
-            approved = (
-                self.main_window.dialog_manager.confirm_preview_cache_capacity_increase(
-                    required_bytes,
-                    current_limit,
-                )
-            )
-            if not approved:
-                self._cancel_folder_for_review_capacity()
-                return False
-
-            required_gb = required_bytes / (1024**3)
-            approved_gb = math.ceil(required_gb * 4) / 4
-            set_preview_cache_size_gb(approved_gb)
-            pipeline.preview_cache.reinitialize_from_settings()
-
-        pipeline.begin_active_review_working_set(media_paths)
-        pipeline.preview_cache.trim_to_limit()
-        return True
 
     def _cancel_folder_for_review_capacity(self) -> None:
         pipeline = getattr(self.main_window, "image_pipeline", None)
@@ -1383,7 +1338,7 @@ class AppController(QObject):
             return
 
         pipeline = self.main_window.image_pipeline
-        current_limit = pipeline.preview_cache._size_limit_bytes
+        current_limit = pipeline.preview_cache.size_limit_bytes
         required_bytes = max(int(required_bytes), current_limit + 1)
         cache_dir = pipeline.preview_cache._cache_dir
         try:
