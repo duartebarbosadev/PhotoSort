@@ -3,6 +3,12 @@ import os
 import time
 import contextlib
 
+# PyInstaller must dispatch download children before initializing Qt or models.
+if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+
 SUPPORTED_PYTHON = (3, 14)
 if sys.version_info[:2] != SUPPORTED_PYTHON:
     detected = f"{sys.version_info.major}.{sys.version_info.minor}"

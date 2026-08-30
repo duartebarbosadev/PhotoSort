@@ -9,6 +9,8 @@ from core.best_photo_finder.scorers import HuggingFaceAestheticScorer
 from core.model_provisioning import AESTHETIC_MODEL, ModelNotInstalledError
 
 
+pytestmark = pytest.mark.usefixtures("inline_model_download")
+
 def _snapshot(root: Path) -> str:
     path = root / "cafe-aesthetic"
     path.mkdir()

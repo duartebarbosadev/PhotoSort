@@ -55,7 +55,7 @@ def test_fix_rotation_cancellation_does_not_wait_for_running_inference():
     completed = Mock()
     worker.completed.connect(completed)
 
-    def cancel_before_result(futures):
+    def cancel_before_result(futures, should_cancel):
         worker.stop()
         yield from futures
 
@@ -65,7 +65,7 @@ def test_fix_rotation_cancellation_does_not_wait_for_running_inference():
             return_value=executor,
         ),
         patch(
-            "workers.rotation_detection_step_worker.as_completed",
+            "workers.rotation_detection_step_worker.completed_until_cancelled",
             side_effect=cancel_before_result,
         ),
     ):

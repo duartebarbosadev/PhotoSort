@@ -33,6 +33,7 @@ def resolve_subject_model_snapshots(
     *,
     allow_download: bool,
     progress_callback: Callable[[int, str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, str]:
     """Resolve the shared, pinned DINO checkpoint used by Cull."""
 
@@ -41,6 +42,7 @@ def resolve_subject_model_snapshots(
             EMBEDDING_MODEL,
             allow_download=allow_download,
             progress_callback=progress_callback,
+            should_cancel=should_cancel,
         )
     }
 

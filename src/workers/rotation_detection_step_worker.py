@@ -1,6 +1,6 @@
 import logging
 import os
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Protocol
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -11,6 +11,7 @@ from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
 )
 from core.image_pipeline import ImagePipeline
+from core.utils.futures import completed_until_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +80,14 @@ class RotationDetectionStepWorker(QObject):
             self._results[path] = angle
 
     def _detect_rotation(self, path: str) -> int:
+        if self._should_stop:
+            return 0
         model_input_size = ROTATION_MODEL_IMAGE_SIZE + 32
         image = self.image_pipeline.get_analysis_image(
             path,
             target_size=(model_input_size, model_input_size),
         )
-        if image is None:
+        if image is None or self._should_stop:
             return 0
         return self.model_detector.predict_rotation_angle(path, image=image)
 
@@ -105,7 +108,7 @@ class RotationDetectionStepWorker(QObject):
                 for path in self.image_paths
                 if not self._should_stop
             }
-            for future in as_completed(futures):
+            for future in completed_until_cancelled(futures, lambda: self._should_stop):
                 if self._should_stop:
                     break
                 path = futures[future]

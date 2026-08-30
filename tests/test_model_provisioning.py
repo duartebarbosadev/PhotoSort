@@ -23,6 +23,8 @@ from core.model_provisioning import (
 )
 
 
+pytestmark = pytest.mark.usefixtures("inline_model_download")
+
 def _valid_snapshot(root: Path, model=EMBEDDING_MODEL, *, model_type="dinov2") -> Path:
     """Build a directory that satisfies the model's validation contract."""
 

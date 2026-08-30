@@ -352,25 +352,29 @@ class WorkerManager(QObject):
         folder_path: str,
     ):
         self.stop_file_scan()  # Ensure any previous scan is stopped
+        generation = self._advance_worker_generation("file_scan")
         self.scanner_thread = QThread()
         self.file_scanner = FileScanner(
-            image_pipeline=self.image_pipeline
+            image_pipeline=self.image_pipeline, directory_path=folder_path
         )  # Inject shared pipeline instance
         self.file_scanner.moveToThread(self.scanner_thread)
 
         # Connect signals from FileScanner to WorkerManager's signals
-        self.file_scanner.files_found.connect(self.file_scan_found_files)
+        self.file_scanner.files_found.connect(
+            lambda files: self._emit_if_current("file_scan", generation, self.file_scan_found_files, files)
+        )
         self.file_scanner.thumbnail_preload_finished.connect(
-            self.file_scan_thumbnail_preload_finished
+            lambda files: self._emit_if_current("file_scan", generation, self.file_scan_thumbnail_preload_finished, files)
         )
-        self.file_scanner.finished.connect(self.file_scan_finished)
-        self.file_scanner.error.connect(self.file_scan_error)
+        self.file_scanner.finished.connect(
+            lambda: self._emit_if_current("file_scan", generation, self.file_scan_finished)
+        )
+        self.file_scanner.error.connect(
+            lambda message: self._emit_if_current("file_scan", generation, self.file_scan_error, message)
+        )
 
-        self.scanner_thread.started.connect(
-            lambda: self.file_scanner.scan_directory(folder_path)
-        )
-        self.file_scan_finished.connect(self.scanner_thread.quit)
-        self.file_scan_error.connect(self.scanner_thread.quit)
+        self.scanner_thread.started.connect(self.file_scanner.run)
+        self.file_scanner.finished.connect(self.scanner_thread.quit)
 
         # Connect to our cleanup method instead of direct deleteLater from here
         self.scanner_thread.finished.connect(self._cleanup_scanner_refs)
@@ -379,6 +383,7 @@ class WorkerManager(QObject):
         logger.info("File scanner thread started.")
 
     def stop_file_scan(self):
+        self._advance_worker_generation("file_scan")
         self._stop_worker("scanner_thread", "file_scanner")
 
     def _cleanup_similarity_refs(self):
@@ -831,6 +836,9 @@ class WorkerManager(QObject):
 
         logger.info("Requesting all workers stop without blocking...")
         for generation_name in (
+            "file_scan",
+            "ai_rating",
+            "update_check",
             "similarity",
             "cull_grouping",
             "pick_best",
@@ -889,6 +897,7 @@ class WorkerManager(QObject):
             return
 
         logger.info("Starting update check...")
+        generation = self._advance_worker_generation("update_check")
 
         self.update_check_thread = QThread()
         self.update_check_worker = UpdateCheckWorker(current_version)
@@ -896,7 +905,9 @@ class WorkerManager(QObject):
 
         # Connect signals
         self.update_check_worker.update_check_finished.connect(
-            self.update_check_finished.emit
+            lambda available, info, error: self._emit_if_current(
+                "update_check", generation, self.update_check_finished, available, info, error
+            )
         )
         self.update_check_worker.update_check_finished.connect(
             self.update_check_thread.quit
@@ -923,6 +934,7 @@ class WorkerManager(QObject):
     def stop_update_check(self) -> None:
         """Stop an in-flight update check during application shutdown."""
 
+        self._advance_worker_generation("update_check")
         self._stop_worker("update_check_thread", "update_check_worker")
 
     def is_any_worker_running(self) -> bool:
@@ -1423,6 +1435,7 @@ class WorkerManager(QObject):
         from workers.ai_rating_worker import AiRatingWorker
 
         self.stop_ai_rating()
+        generation = self._advance_worker_generation("ai_rating")
         if not image_paths:
             self.ai_rating_complete.emit({})
             return
@@ -1434,10 +1447,20 @@ class WorkerManager(QObject):
         )
         self.ai_rating_worker.moveToThread(self.ai_rating_thread)
 
-        self.ai_rating_worker.progress_update.connect(self.ai_rating_progress.emit)
-        self.ai_rating_worker.completed.connect(self.ai_rating_complete.emit)
-        self.ai_rating_worker.error.connect(self.ai_rating_error.emit)
-        self.ai_rating_worker.warning.connect(self.ai_rating_warning.emit)
+        self.ai_rating_worker.progress_update.connect(
+            lambda percent, message: self._emit_if_current(
+                "ai_rating", generation, self.ai_rating_progress, percent, message
+            )
+        )
+        self.ai_rating_worker.completed.connect(
+            lambda results: self._emit_if_current("ai_rating", generation, self.ai_rating_complete, results)
+        )
+        self.ai_rating_worker.error.connect(
+            lambda message: self._emit_if_current("ai_rating", generation, self.ai_rating_error, message)
+        )
+        self.ai_rating_worker.warning.connect(
+            lambda message: self._emit_if_current("ai_rating", generation, self.ai_rating_warning, message)
+        )
         self.ai_rating_worker.finished.connect(self.ai_rating_thread.quit)
         self.ai_rating_worker.finished.connect(self.ai_rating_worker.deleteLater)
         self.ai_rating_thread.finished.connect(self._cleanup_ai_rating_worker)
@@ -1447,4 +1470,5 @@ class WorkerManager(QObject):
         logger.info("AI rating thread started.")
 
     def stop_ai_rating(self) -> None:
+        self._advance_worker_generation("ai_rating")
         self._stop_worker("ai_rating_thread", "ai_rating_worker")

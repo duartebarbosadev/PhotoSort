@@ -32,7 +32,7 @@ def _worker_manager(*, grouping=False, rotations=False):
     )
 
 
-def test_clean_transition_cancels_current_analysis_and_switches_directly():
+def test_clean_transition_confirms_before_cancelling_current_analysis():
     controller = SimpleNamespace(
         is_workflow_analysis_running=lambda workflow: workflow == "easy_delete",
         cancel_workflow_analysis=Mock(),
@@ -41,6 +41,9 @@ def test_clean_transition_cancels_current_analysis_and_switches_directly():
         app_state=SimpleNamespace(workflow_step="easy_delete"),
         worker_manager=_worker_manager(),
         app_controller=controller,
+        dialog_manager=SimpleNamespace(
+            confirm_interrupt_for_workflow_change=Mock(return_value=True)
+        ),
         _collect_workflow_pending_state=lambda _source: SimpleNamespace(
             has_resolvable_work=False
         ),
@@ -50,7 +53,46 @@ def test_clean_transition_cancels_current_analysis_and_switches_directly():
     MainWindow._request_workflow_transition(window, "fix_rotation")
 
     controller.cancel_workflow_analysis.assert_called_once_with("easy_delete")
+    window.dialog_manager.confirm_interrupt_for_workflow_change.assert_called_once_with(
+        "Easy Delete", "Fix Rotation"
+    )
     window._show_workflow_destination.assert_called_once_with("fix_rotation")
+
+
+def test_declining_analysis_interrupt_keeps_current_workflow():
+    controller = SimpleNamespace(
+        is_workflow_analysis_running=lambda _workflow: True,
+        cancel_workflow_analysis=Mock(),
+    )
+    window = SimpleNamespace(
+        app_state=SimpleNamespace(workflow_step="pick_best"),
+        worker_manager=_worker_manager(),
+        app_controller=controller,
+        dialog_manager=SimpleNamespace(
+            confirm_interrupt_for_workflow_change=Mock(return_value=False)
+        ),
+        _collect_workflow_pending_state=lambda _: WorkflowPendingState(),
+        _show_workflow_destination=Mock(),
+        update_workflow_navigation=Mock(),
+    )
+    MainWindow._request_workflow_transition(window, "cull")
+    controller.cancel_workflow_analysis.assert_not_called()
+    window._show_workflow_destination.assert_not_called()
+    window.update_workflow_navigation.assert_called_once()
+
+
+def test_cancelling_queued_background_starts_prevents_probe_and_timer_restarts():
+    controller = AppController(SimpleNamespace(), SimpleNamespace(), SimpleNamespace())
+    controller._deferred_starts.arm("grouping_preview")
+    controller._deferred_starts.arm("pick_best_scoring")
+    controller._pending_grouping_preview_start = ([{"path": "old.jpg"}], "current", "/old", 3, False)
+    controller.refresh_grouping_preview = Mock()
+    controller._start_pick_best_scoring = Mock()
+    controller.cancel_pending_background_starts()
+    controller.handle_model_environment_ready((), "cpu")
+    controller._start_pending_grouping_preview()
+    controller.refresh_grouping_preview.assert_not_called()
+    controller._start_pick_best_scoring.assert_not_called()
 
 
 def test_dirty_review_blocks_workflow_switch_before_pending_resolution():

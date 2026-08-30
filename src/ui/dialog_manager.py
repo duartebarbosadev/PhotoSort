@@ -2512,6 +2512,51 @@ class DialogManager:
             return "close"
         return "cancel"
 
+    def confirm_interrupt_for_folder_change(self, folder_path: str) -> bool:
+        """Ask before cancelling work, including analysis on a hidden page."""
+        return self._confirm_interrupt_background_work(
+            headline=f"Stop working in this folder and open {folder_path}?",
+            accept_text="Stop and Open Folder",
+            object_name="folderInterruptDialog",
+        )
+
+    def confirm_interrupt_for_workflow_change(self, source: str, destination: str) -> bool:
+        return self._confirm_interrupt_background_work(
+            headline=f"Stop unfinished {source} analysis and switch to {destination}?",
+            accept_text="Stop and Switch",
+        )
+
+    def confirm_interrupt_for_close(self) -> bool:
+        return self._confirm_interrupt_background_work(
+            headline="Stop background work and close PhotoSort?",
+            accept_text="Stop and Close",
+        )
+
+    def _confirm_interrupt_background_work(
+        self, *, headline: str, accept_text: str, object_name: str = "backgroundInterruptDialog"
+    ) -> bool:
+        dialog, _body = self._build_consent_dialog(
+            object_name=object_name,
+            window_title="Interrupt Background Work?",
+            header_icon="⚠",
+            header_title="Background work is still running",
+            headline=headline,
+            summary=(
+                "Unfinished work affected by this action will be interrupted, including "
+                "analysis and model downloads. Completed cached work will remain available."
+            ),
+            accept_text=accept_text,
+            accept_object_name="modelConsentAcceptButton",
+            cancel_text="Keep Working",
+        )
+        stop_button = dialog.findChild(QPushButton, "modelConsentAcceptButton")
+        stop_button.setAutoDefault(False)
+        stop_button.setDefault(False)
+        stay_button = dialog.findChild(QPushButton, "modelConsentCancelButton")
+        stay_button.setDefault(True)
+        stay_button.setFocus()
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
     def show_folder_change_confirmation_dialog(self, marked_files: list[str]) -> str:
         """
         Shows a confirmation dialog when changing folders with marked files.
@@ -2593,8 +2638,9 @@ class DialogManager:
         summary: str,
         accept_text: str,
         accept_object_name: str,
+        cancel_text: str = "Cancel",
     ):
-        """Create the shared frameless shell every model-consent dialog uses."""
+        """Create the shared frameless shell for consent dialogs."""
 
         dialog = QDialog(self.parent)
         dialog.setObjectName(object_name)
@@ -2628,7 +2674,7 @@ class DialogManager:
         build_dialog_footer(
             outer,
             [
-                ("Cancel", "modelConsentCancelButton", dialog.reject, False),
+                (cancel_text, "modelConsentCancelButton", dialog.reject, False),
                 (accept_text, accept_object_name, dialog.accept, True),
             ],
         )

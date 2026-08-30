@@ -122,3 +122,38 @@ def test_ui_cancellation_methods_never_wait(
     worker.stop.assert_called_once_with()
     thread.quit.assert_called_once_with()
     thread.wait.assert_not_called()
+
+
+def test_cancelled_ai_ratings_cannot_trigger_old_folder_rating_writes(monkeypatch):
+    from PyQt6.QtCore import QThread
+
+    monkeypatch.setattr(QThread, "start", lambda self: None)
+    manager = WorkerManager(Mock())
+    results, errors = [], []
+    manager.ai_rating_complete.connect(results.append)
+    manager.ai_rating_error.connect(errors.append)
+    manager.start_ai_rating(["old.jpg"])
+    worker = manager.ai_rating_worker
+    worker.completed.emit({"old.jpg": {"rating": 4}})
+    assert len(results) == 1
+    results.clear()
+    manager.request_stop_all_workers()
+    worker.completed.emit({"old.jpg": {"rating": 5}})
+    worker.error.emit("late error")
+    assert results == errors == []
+    manager._cleanup_ai_rating_worker()
+
+
+def test_cancelled_update_check_cannot_open_a_late_dialog(monkeypatch):
+    from PyQt6.QtCore import QThread
+
+    monkeypatch.setattr(QThread, "start", lambda self: None)
+    manager = WorkerManager(Mock())
+    results = []
+    manager.update_check_finished.connect(lambda *args: results.append(args))
+    manager.start_update_check("1.0.0")
+    worker = manager.update_check_worker
+    manager.request_stop_all_workers()
+    worker.update_check_finished.emit(True, None, "")
+    assert results == []
+    manager._cleanup_update_check_worker()

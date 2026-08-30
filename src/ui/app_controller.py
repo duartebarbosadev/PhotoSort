@@ -231,6 +231,7 @@ class AppController(QObject):
         """Cancel only work owned by the departing workflow."""
         self._cancelled_workflows.add(workflow)
         if workflow == "organize":
+            self._deferred_starts.disarm("grouping_preview")
             self.worker_manager.request_stop_grouping_preview()
             self._pending_grouping_preview = None
             self._pending_grouping_preview_start = None
@@ -259,6 +260,14 @@ class AppController(QObject):
                 )
         elif workflow == "fix_rotation":
             self.worker_manager.request_stop_fix_rotation_detection()
+
+    def cancel_pending_background_starts(self) -> None:
+        """Discard queued follow-up work before a folder change or shutdown."""
+        self._deferred_starts.clear()
+        self._pending_grouping_preview_start = None
+        self._pick_best_pending_after_subject_grouping = False
+        self._pick_best_owns_subject_grouping = False
+        self._easy_delete_pending_after_similarity = False
 
     def _sync_active_image(self, workflow_step: str) -> None:
         controller = getattr(self.main_window, "active_image_controller", None)
@@ -421,17 +430,10 @@ class AppController(QObject):
         skip_grouping_step: bool = False,
         record_as_source: bool = True,
         preserve_deletion_marks: bool = False,
+        _interrupt_confirmed: bool = False,
     ):
         load_folder_start_time = time.perf_counter()
         logger.info("Loading folder: %s", folder_path)
-        self._cull_prerequisites_declined = False
-        # A new folder starts a fresh consent slate, matching the previous
-        # per-folder reset of the download approval and CPU warning.
-        self._model_consent = ModelConsentState()
-        self._cull_grouping_fingerprints = None
-        # A new folder invalidates every start that was still waiting on the probe.
-        self._deferred_starts.clear()
-
         if self.worker_manager.is_grouping_workflow_running():
             logger.info("Folder load blocked while grouping workflow is still running.")
             self.main_window.statusBar().showMessage(
@@ -458,6 +460,16 @@ class AppController(QObject):
             )
             return
 
+        if not _interrupt_confirmed and self.worker_manager.is_any_worker_running():
+            if not self.main_window.dialog_manager.confirm_interrupt_for_folder_change(
+                folder_path
+            ):
+                logger.info("Folder change cancelled; current background work retained.")
+                return
+        # Keep approval with deferred requests so resuming after deletion or
+        # worker shutdown does not ask the same question again.
+        _interrupt_confirmed = True
+
         marked_files = self.app_state.get_marked_files()
         preserved_marks = set(marked_files) if preserve_deletion_marks else set()
         if marked_files and not preserve_deletion_marks:
@@ -477,6 +489,7 @@ class AppController(QObject):
                         "skip_grouping_step": skip_grouping_step,
                         "record_as_source": record_as_source,
                         "preserve_deletion_marks": preserve_deletion_marks,
+                        "_interrupt_confirmed": _interrupt_confirmed,
                     },
                 )
                 started = (
@@ -496,10 +509,13 @@ class AppController(QObject):
                 self.main_window.statusBar().showMessage("Folder load cancelled.", 3000)
                 return
 
+        # Do not change consent, queued starts or folder state until all dialogs
+        # have been accepted. Choosing to stay must leave the current run intact.
+        self._cull_prerequisites_declined = False
+        self._model_consent = ModelConsentState()
+        self._cull_grouping_fingerprints = None
+        AppController.cancel_pending_background_starts(self)
         self.main_window.show_loading_overlay("Preparing to scan folder...")
-
-        add_recent_folder(folder_path)
-        self.main_window.menu_manager.update_recent_folders_menu()
 
         self.worker_manager.request_stop_all_workers()
         is_any_worker_active = getattr(
@@ -514,6 +530,7 @@ class AppController(QObject):
                     "skip_grouping_step": skip_grouping_step,
                     "record_as_source": record_as_source,
                     "preserve_deletion_marks": preserve_deletion_marks,
+                    "_interrupt_confirmed": _interrupt_confirmed,
                 },
             )
             self.main_window.update_loading_text(
@@ -521,6 +538,9 @@ class AppController(QObject):
             )
             QTimer.singleShot(25, self._finish_folder_load_after_workers)
             return
+
+        add_recent_folder(folder_path)
+        self.main_window.menu_manager.update_recent_folders_menu()
 
         image_pipeline = getattr(self.main_window, "image_pipeline", None)
         if image_pipeline is not None:
@@ -874,6 +894,8 @@ class AppController(QObject):
     def _start_pending_grouping_preview(self) -> None:
         """Start the latest preview request after the replaced worker exits."""
 
+        if self._pending_grouping_preview_start is None:
+            return
         is_grouping_preview_active = getattr(
             self.worker_manager,
             "is_grouping_preview_active",

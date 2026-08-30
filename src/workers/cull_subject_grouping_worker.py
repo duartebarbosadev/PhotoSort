@@ -8,6 +8,7 @@ import logging
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.app_settings import CullGroupingStrictness
+from core.model_download import ModelDownloadCancelled
 from core.caching.analysis_cache import MANUAL_OVERRIDE_NAMESPACE_CULL
 from core.subject_grouping import (
     CullClusteringResult,
@@ -76,7 +77,7 @@ class CullSubjectGroupingWorker(QObject):
     def run(self) -> None:
         try:
             self._run()
-        except SubjectGroupingCancelled:
+        except (SubjectGroupingCancelled, ModelDownloadCancelled):
             logger.info("Cull same-subject grouping cancelled.")
         except Exception as exc:
             logger.error("Cull same-subject grouping failed", exc_info=True)
@@ -96,6 +97,7 @@ class CullSubjectGroupingWorker(QObject):
         snapshots = resolve_subject_model_snapshots(
             allow_download=self.allow_model_download,
             progress_callback=model_progress,
+            should_cancel=lambda: self._should_stop,
         )
         model_signature = subject_model_signature(snapshots)
         pair_context_signature = build_cull_pair_context_signature(

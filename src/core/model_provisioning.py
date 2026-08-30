@@ -22,7 +22,8 @@ import shutil
 import time
 
 from core.app_settings import get_huggingface_cache_dir
-from core.huggingface_progress import ProgressCallback, build_hf_tqdm_class
+from core.huggingface_progress import ProgressCallback
+from core.model_download import ModelDownloadCancelled, download_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,7 @@ def resolve_snapshot(
     *,
     allow_download: bool = False,
     progress_callback: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> str:
     """Return a validated local snapshot path for one managed model.
 
@@ -168,6 +170,8 @@ def resolve_snapshot(
     caller explicitly allows it, which happens after the user consents.
     """
 
+    if should_cancel and should_cancel():
+        raise ModelDownloadCancelled
     download = _snapshot_download()
     common = {
         "revision": model.revision,
@@ -203,14 +207,16 @@ def resolve_snapshot(
         progress_callback(-1, f"Downloading {model.label}")
     download_started = time.perf_counter()
     try:
-        snapshot = download(
+        snapshot = download_snapshot(
             model.repo_id,
-            local_files_only=False,
-            tqdm_class=build_hf_tqdm_class(
-                progress_callback, label=f"Downloading {model.label}"
-            ),
-            **common,
+            options=common,
+            label=f"Downloading {model.label}",
+            progress_callback=progress_callback,
+            should_cancel=should_cancel,
         )
+    except ModelDownloadCancelled:
+        logger.info("Model download cancelled: %s", model.repo_id)
+        raise
     except Exception as download_error:
         logger.error(
             "Failed to download model %s@%s: %s",

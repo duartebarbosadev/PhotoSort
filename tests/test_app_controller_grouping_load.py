@@ -49,6 +49,9 @@ def test_load_folder_cancels_analysis_without_blocking(monkeypatch):
         clear_all_file_specific_data=Mock(),
     )
     main_window = SimpleNamespace(
+        dialog_manager=SimpleNamespace(
+            confirm_interrupt_for_folder_change=Mock(return_value=True),
+        ),
         show_loading_overlay=Mock(),
         update_loading_text=Mock(),
         menu_manager=SimpleNamespace(update_recent_folders_menu=Mock()),
@@ -77,9 +80,13 @@ def test_load_folder_cancels_analysis_without_blocking(monkeypatch):
             "skip_grouping_step": False,
             "record_as_source": True,
             "preserve_deletion_marks": False,
+            "_interrupt_confirmed": True,
         },
     )
     assert callbacks == [controller._finish_folder_load_after_workers]
+    main_window.dialog_manager.confirm_interrupt_for_folder_change.assert_called_once_with(
+        "/tmp/demo"
+    )
 
 
 def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch):
