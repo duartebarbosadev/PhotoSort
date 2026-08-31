@@ -2587,7 +2587,9 @@ class MainWindow(QMainWindow):
     def _has_active_background_work(self) -> bool:
         """Keep owners alive until both managed workers and preview pools drain."""
         workers_active = getattr(
-            self.worker_manager, "is_any_worker_active", self.worker_manager.is_any_worker_running
+            self.worker_manager,
+            "is_any_worker_active",
+            self.worker_manager.is_any_worker_running,
         )
         previews = getattr(self, "preview_load_controller", None)
         return bool(workers_active() or getattr(previews, "is_active", lambda: False)())
@@ -2622,12 +2624,15 @@ class MainWindow(QMainWindow):
             return
 
         if (
-            getattr(self.worker_manager, "is_rotation_application_running", lambda: False)()
+            getattr(
+                self.worker_manager, "is_rotation_application_running", lambda: False
+            )()
             or getattr(self.worker_manager, "is_rating_writer_running", lambda: False)()
         ):
             event.ignore()
             self.statusBar().showMessage(
-                "Rotations or ratings are still being written. Wait before closing.", 4000
+                "Rotations or ratings are still being written. Wait before closing.",
+                4000,
             )
             return
 

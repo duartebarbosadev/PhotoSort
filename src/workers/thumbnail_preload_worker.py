@@ -259,8 +259,7 @@ class ThumbnailPreloadWorker(QObject):
                         self._cache_hits += int(cache_hit)
                         extension = path.rsplit(".", 1)[-1] if "." in path else ""
                         self._raw_decode_count += int(
-                            not cache_hit
-                            and is_raw_extension(f".{extension.lower()}")
+                            not cache_hit and is_raw_extension(f".{extension.lower()}")
                         )
                 return result.success
             except PreviewCacheCapacityError as exc:

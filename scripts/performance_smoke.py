@@ -92,9 +92,7 @@ def main() -> int:
             continue
         selection_started = time.perf_counter()
         window.image_pipeline.get_cached_review_qpixmap(path)
-        selection_latencies_ms.append(
-            (time.perf_counter() - selection_started) * 1000
-        )
+        selection_latencies_ms.append((time.perf_counter() - selection_started) * 1000)
 
     folder_review_metrics = review_metrics[0] if review_metrics else {}
 
@@ -104,7 +102,9 @@ def main() -> int:
         "window_construct_seconds": round(constructed_at - imported_at, 4),
         "measurement_seconds": round(measured_at - process_started, 4),
         "scan_finished_seconds": (
-            round(scan_finished_at[0] - process_started, 4) if scan_finished_at else None
+            round(scan_finished_at[0] - process_started, 4)
+            if scan_finished_at
+            else None
         ),
         "folder_usable_seconds": (
             round(review_finished_at[0] - process_started, 4)

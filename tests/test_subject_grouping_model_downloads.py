@@ -16,6 +16,7 @@ from core.subject_grouping_models import (
 
 pytestmark = pytest.mark.usefixtures("inline_model_download")
 
+
 def _snapshot(root: Path, model_id: str) -> str:
     path = root / model_id.replace("/", "-")
     path.mkdir()

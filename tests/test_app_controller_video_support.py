@@ -67,6 +67,7 @@ class _DummyWorkerManager:
     def __init__(self):
         self.start_thumbnail_preload = Mock()
         self.start_rating_load = Mock()
+        self.request_stop_rating_load = Mock()
         self.start_rating_writer = Mock()
         self.resolve_thumbnail_capacity_request = Mock(return_value=True)
 
@@ -208,3 +209,20 @@ def test_apply_rating_to_selection_video_only_does_not_start_writer():
         main_window.statusBar().messages[-1][0]
         == "Ratings are currently supported for images only."
     )
+
+
+def test_capacity_cancel_invalidates_metadata_before_clearing_folder():
+    controller, window, state, workers = _make_controller([{"path": "/old.jpg"}])
+    events = []
+    workers.request_stop_rating_load.side_effect = lambda: events.append("cancel")
+    state.clear_all_file_specific_data.side_effect = lambda: events.append("clear")
+    controller._folder_asset_session_id = "old-session"
+    controller._pending_exif_cache_capacity_warning = (2, 1, 100)
+    controller._cancel_folder_for_review_capacity()
+    assert events == ["cancel", "clear"]
+    assert controller._folder_asset_session_id is None
+    assert controller._pending_exif_cache_capacity_warning is None
+    assert state.current_folder_path is None
+    window.hide_exif_progress.assert_called_once()
+    controller.handle_review_asset_finished("old-session", 1, 0)
+    assert window.rebuild_count == 0

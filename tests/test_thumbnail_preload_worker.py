@@ -44,8 +44,7 @@ class TestThumbnailPreloadWorker:
         calls = []
         pipeline.ensure_review_assets_cached.side_effect = (
             lambda path, *, promote_to_memory: (
-                calls.append((path, promote_to_memory))
-                or SimpleNamespace(success=True)
+                calls.append((path, promote_to_memory)) or SimpleNamespace(success=True)
             )
         )
         worker = ThumbnailPreloadWorker(
@@ -168,7 +167,9 @@ class TestThumbnailPreloadWorker:
 
     def test_session_emits_background_results_without_waiting_for_scroll(self):
         pipeline = Mock()
-        pipeline.ensure_review_assets_cached.return_value = SimpleNamespace(success=True)
+        pipeline.ensure_review_assets_cached.return_value = SimpleNamespace(
+            success=True
+        )
         worker = ThumbnailPreloadWorker(
             pipeline,
             session_id="folder",
@@ -188,7 +189,9 @@ class TestThumbnailPreloadWorker:
 
     def test_foreground_work_runs_while_background_is_paused(self):
         pipeline = Mock()
-        pipeline.ensure_review_assets_cached.return_value = SimpleNamespace(success=True)
+        pipeline.ensure_review_assets_cached.return_value = SimpleNamespace(
+            success=True
+        )
         worker = ThumbnailPreloadWorker(
             pipeline,
             session_id="folder",
@@ -202,8 +205,7 @@ class TestThumbnailPreloadWorker:
         worker.prioritize(["visible"])
         deadline = time.time() + 2
         while (
-            time.time() < deadline
-            and not pipeline.ensure_review_assets_cached.called
+            time.time() < deadline and not pipeline.ensure_review_assets_cached.called
         ):
             time.sleep(0.01)
         worker.stop()

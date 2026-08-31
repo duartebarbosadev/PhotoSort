@@ -209,9 +209,7 @@ def test_scan_finished_defers_hidden_cull_model_until_cull_is_shown():
         AppController._supports_grouping_workflow_ui(controller)
     )
     controller._activate_loaded_folder = lambda *, asset_failures: (
-        AppController._activate_loaded_folder(
-            controller, asset_failures=asset_failures
-        )
+        AppController._activate_loaded_folder(controller, asset_failures=asset_failures)
     )
 
     AppController.handle_scan_finished(controller)

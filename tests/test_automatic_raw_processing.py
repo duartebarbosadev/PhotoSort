@@ -11,7 +11,10 @@ from unittest.mock import Mock, patch
 import numpy as np
 import rawpy
 from src.core.image_pipeline import CACHE_SCHEMA_VERSION, ImagePipeline
-from src.core.image_processing.raw_image_processor import RawImageProcessor, is_raw_extension
+from src.core.image_processing.raw_image_processor import (
+    RawImageProcessor,
+    is_raw_extension,
+)
 from src.core.image_processing.standard_image_processor import StandardImageProcessor
 from PIL import Image
 from PyQt6.QtWidgets import QApplication
@@ -143,9 +146,8 @@ class TestAutomaticRawProcessing:
             thumbnail = pipeline._get_pil_thumbnail("test.arw")
 
         assert thumbnail is not None
-        ensure_assets.assert_called_once_with(
-            "test.arw", promote_to_memory=True
-        )
+        ensure_assets.assert_called_once_with("test.arw", promote_to_memory=True)
+
     def test_cache_key_generation_includes_raw_detection(self):
         """Test that cache keys are generated correctly with RAW detection."""
         pipeline = ImagePipeline()

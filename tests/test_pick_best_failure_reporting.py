@@ -121,7 +121,9 @@ def test_pick_best_worker_stops_when_cluster_cannot_be_scored(monkeypatch):
     assert "cluster 7 could not be scored" in errors[0]
 
 
-def test_pick_best_worker_skips_selector_initialization_when_already_cancelled(monkeypatch):
+def test_pick_best_worker_skips_selector_initialization_when_already_cancelled(
+    monkeypatch,
+):
     closed = []
 
     class _FakeSelector:

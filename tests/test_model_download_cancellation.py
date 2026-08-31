@@ -1,5 +1,7 @@
 """Exercise real spawned transfers without network access or real model weights."""
 
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crashes
+
 import multiprocessing
 import threading
 import time

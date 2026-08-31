@@ -213,9 +213,7 @@ class WorkflowProgressView(QFrame):
         if match:
             completed, total = int(match.group(1)), int(match.group(2))
             if total > 0:
-                count_progress = max(
-                    0.0, min(100.0, completed * 100.0 / total)
-                )
+                count_progress = max(0.0, min(100.0, completed * 100.0 / total))
                 # Some workflows show a local item count alongside a weighted
                 # multi-phase percentage. Use exact counts only when they describe
                 # the same overall progress value (allowing for integer rounding).
@@ -269,7 +267,9 @@ class WorkflowProgressView(QFrame):
                 progress_value is not None
                 and progress_value > self._phase_started_progress
                 and self._phase_started_at is not None
-                and (self._last_progress is None or progress_value > self._last_progress)
+                and (
+                    self._last_progress is None or progress_value > self._last_progress
+                )
             ):
                 phase_elapsed = max(0.0, now - self._phase_started_at)
                 progress_delta = progress_value - self._phase_started_progress
@@ -325,9 +325,7 @@ class WorkflowProgressView(QFrame):
         if self._eta_sampled_at is None or self._eta_seconds_at_sample is None:
             self.remaining_label.setText("Estimating…")
             return
-        remaining_seconds = self._eta_seconds_at_sample - (
-            now - self._eta_sampled_at
-        )
+        remaining_seconds = self._eta_seconds_at_sample - (now - self._eta_sampled_at)
         if remaining_seconds <= 0:
             self.remaining_label.setText("Re-estimating…")
             return

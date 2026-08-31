@@ -1,4 +1,7 @@
+from collections.abc import Callable
+
 import diskcache
+from diskcache.core import MODE_BINARY, MODE_RAW
 import os
 import logging
 import threading
@@ -150,41 +153,48 @@ class PreviewCache:
             self._reserve_space(0, incoming_key=("",))
 
     def payload_size(self, key: tuple) -> int:
-        tracked_size = self._payload_bytes_by_key.get(key)
-        if tracked_size is not None:
-            return tracked_size
-        try:
-            value = self._cache.get(key)
-            return len(value) if isinstance(value, bytes) else 0
-        except Exception:
-            return 0
+        with self._capacity_lock:
+            return self._payload_bytes_by_key.get(key, 0)
 
     def protected_payload_bytes(self) -> int:
-        return sum(
-            size
-            for key, size in self._payload_bytes_by_key.items()
-            if self._key_is_protected(key)
-        )
+        with self._capacity_lock:
+            return sum(
+                size
+                for key, size in self._payload_bytes_by_key.items()
+                if self._key_is_protected(key)
+            )
 
     def logical_payload_bytes(self) -> int:
         """Return encoded review bytes, excluding database allocation overhead."""
-        return sum(self._payload_bytes_by_key.values())
+        with self._capacity_lock:
+            return sum(self._payload_bytes_by_key.values())
 
     def _rebuild_payload_accounting(self) -> None:
-        self._payload_bytes_by_key.clear()
-        for key in self._cache.iterkeys():
-            if not isinstance(key, tuple):
-                continue
-            try:
-                value = self._cache.get(key)
-            except Exception:
-                continue
-            if isinstance(value, bytes):
-                self._payload_bytes_by_key[key] = len(value)
+        """Read DiskCache's persisted sizes without materializing image payloads.
+
+        DiskCache records file-backed byte lengths in `size`; SQLite can report
+        inline BLOB lengths without returning those BLOBs. Keep this schema
+        dependency here so old cache entries need no payload-reading migration.
+        """
+        with self._capacity_lock:
+            rows = self._cache._sql(
+                "SELECT key, raw, CASE WHEN mode = ? THEN size ELSE length(value) END "
+                "FROM Cache WHERE mode = ? OR (mode = ? AND typeof(value) = 'blob')",
+                (MODE_BINARY, MODE_BINARY, MODE_RAW),
+            )
+            sizes = {}
+            for stored_key, raw, size in rows:
+                key = self._cache.disk.get(stored_key, raw)
+                if isinstance(key, tuple):
+                    sizes[key] = int(size)
+            self._payload_bytes_by_key = sizes
 
     def _key_is_protected(self, key: object) -> bool:
         if isinstance(key, str) and key.startswith("index_"):
-            return self._normalized_path(key.removeprefix("index_")) in self._protected_paths
+            return (
+                self._normalized_path(key.removeprefix("index_"))
+                in self._protected_paths
+            )
         return (
             isinstance(key, tuple)
             and bool(key)
@@ -210,16 +220,12 @@ class PreviewCache:
             if existing_key == incoming_key or self._key_is_protected(existing_key):
                 continue
             self._delete_cache_key(existing_key)
-            required = (
-                self.logical_payload_bytes() - previous_size + additional_bytes
-            )
+            required = self.logical_payload_bytes() - previous_size + additional_bytes
             if required <= self._size_limit_bytes:
                 return
 
         protected_volume = self.protected_payload_bytes()
-        raise PreviewCacheCapacityError(
-            protected_volume + additional_bytes
-        )
+        raise PreviewCacheCapacityError(protected_volume + additional_bytes)
 
     def delete(self, key: tuple[str, tuple[int, int], bool]) -> None:
         """
@@ -290,16 +296,28 @@ class PreviewCache:
                 exc_info=True,
             )
 
-    def clear(self) -> None:
-        """Clears all items from the cache."""
-        try:
-            self._protected_paths.clear()
+    def run_when_inactive(self, operation: Callable[[], None]) -> bool:
+        """Serialize cache maintenance with working-set registration and writes."""
+        with self._capacity_lock:
+            if self._protected_paths:
+                return False
+            operation()
+            return True
+
+    def clear(self) -> bool:
+        """Clear only when no folder owns a working set, including unwritten sets."""
+
+        def clear_entries() -> None:
             count = len(self._cache)
             self._cache.clear()
             self._payload_bytes_by_key.clear()
             logger.info(f"Cleared {count} items from Preview cache.")
+
+        try:
+            return self.run_when_inactive(clear_entries)
         except Exception as e:
             logger.error(f"Error clearing Preview cache: {e}", exc_info=True)
+            return False
 
     def volume(self) -> int:
         """
@@ -320,24 +338,19 @@ class PreviewCache:
         with self._capacity_lock:
             return self._size_limit_bytes
 
-    def reinitialize_from_settings(self) -> None:
-        """
-        Closes and reinitializes the cache with the current size limit from app_settings.
-        """
-        logger.info("Reinitializing Preview cache with new settings...")
-        self.close()  # Close the existing cache
+    def reinitialize_from_settings(self) -> bool:
+        """Apply settings in place; never replace a cache used by worker threads."""
+        return self.set_size_limit(get_preview_cache_size_bytes())
 
-        self._size_limit_bytes = get_preview_cache_size_bytes()
-        self._cache = diskcache.Cache(
-            directory=self._cache_dir,
-            size_limit=self._size_limit_bytes,
-            disk_min_file_size=PREVIEW_CACHE_MIN_FILE_SIZE,
-            eviction_policy="none",
-        )
-        self._rebuild_payload_accounting()
-        logger.info(
-            f"Preview cache reinitialized. New size limit: {self.get_current_size_limit_gb():.2f} GB."
-        )
+    def set_size_limit(self, size_limit_bytes: int) -> bool:
+        """Allow live increases, but defer reductions until the folder is released."""
+        with self._capacity_lock:
+            new_limit = max(1, int(size_limit_bytes))
+            if new_limit < self._size_limit_bytes and self._protected_paths:
+                return False
+            self._cache.reset("size_limit", new_limit)
+            self._size_limit_bytes = new_limit
+            return True
 
     def increase_size_limit(self, size_limit_bytes: int) -> None:
         """Raise the live limit without closing a cache used by preparation threads."""

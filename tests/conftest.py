@@ -24,7 +24,9 @@ def inline_model_download(monkeypatch):
     from core import model_provisioning
     from core.huggingface_progress import build_hf_tqdm_class
 
-    def download(repo_id, *, options, label, progress_callback=None, should_cancel=None):
+    def download(
+        repo_id, *, options, label, progress_callback=None, should_cancel=None
+    ):
         return model_provisioning._snapshot_download()(
             repo_id,
             local_files_only=False,

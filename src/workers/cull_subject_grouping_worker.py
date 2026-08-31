@@ -77,7 +77,7 @@ class CullSubjectGroupingWorker(QObject):
     def run(self) -> None:
         try:
             self._run()
-        except (SubjectGroupingCancelled, ModelDownloadCancelled):
+        except SubjectGroupingCancelled, ModelDownloadCancelled:
             logger.info("Cull same-subject grouping cancelled.")
         except Exception as exc:
             logger.error("Cull same-subject grouping failed", exc_info=True)

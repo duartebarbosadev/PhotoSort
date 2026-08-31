@@ -85,7 +85,13 @@ def test_cancelling_queued_background_starts_prevents_probe_and_timer_restarts()
     controller = AppController(SimpleNamespace(), SimpleNamespace(), SimpleNamespace())
     controller._deferred_starts.arm("grouping_preview")
     controller._deferred_starts.arm("pick_best_scoring")
-    controller._pending_grouping_preview_start = ([{"path": "old.jpg"}], "current", "/old", 3, False)
+    controller._pending_grouping_preview_start = (
+        [{"path": "old.jpg"}],
+        "current",
+        "/old",
+        3,
+        False,
+    )
     controller.refresh_grouping_preview = Mock()
     controller._start_pick_best_scoring = Mock()
     controller.cancel_pending_background_starts()

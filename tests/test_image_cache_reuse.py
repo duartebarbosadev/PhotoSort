@@ -265,9 +265,10 @@ def test_review_asset_generation_decodes_standard_source_once(tmp_path):
 
     assert result.success
     assert decode.call_count == 1
-    assert pipeline.preview_cache_key(
-        str(source), REVIEW_PROXY_MAX_RESOLUTION
-    ) in pipeline.preview_cache
+    assert (
+        pipeline.preview_cache_key(str(source), REVIEW_PROXY_MAX_RESOLUTION)
+        in pipeline.preview_cache
+    )
     assert pipeline.thumbnail_cache_key(str(source)) in pipeline.thumbnail_cache
 
 

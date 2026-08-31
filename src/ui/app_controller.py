@@ -464,7 +464,9 @@ class AppController(QObject):
             if not self.main_window.dialog_manager.confirm_interrupt_for_folder_change(
                 folder_path
             ):
-                logger.info("Folder change cancelled; current background work retained.")
+                logger.info(
+                    "Folder change cancelled; current background work retained."
+                )
                 return
         # Keep approval with deferred requests so resuming after deletion or
         # worker shutdown does not ask the same question again.
@@ -1266,6 +1268,11 @@ class AppController(QObject):
             self._activate_loaded_folder(asset_failures=0)
 
     def _cancel_folder_for_review_capacity(self) -> None:
+        self.worker_manager.request_stop_rating_load()
+        self._folder_asset_session_id = None
+        self._rating_load_complete = False
+        self._pending_exif_cache_capacity_warning = None
+        self.main_window.hide_exif_progress()
         pipeline = getattr(self.main_window, "image_pipeline", None)
         if pipeline is not None:
             pipeline.end_active_review_working_set()
@@ -1377,8 +1384,10 @@ class AppController(QObject):
             self._cancel_folder_for_review_capacity()
             return
 
-        approved = self.main_window.dialog_manager.confirm_preview_cache_capacity_increase(
-            required_bytes, current_limit
+        approved = (
+            self.main_window.dialog_manager.confirm_preview_cache_capacity_increase(
+                required_bytes, current_limit
+            )
         )
         if not approved:
             self.worker_manager.resolve_thumbnail_capacity_request(session_id, False)

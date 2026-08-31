@@ -361,16 +361,27 @@ class WorkerManager(QObject):
 
         # Connect signals from FileScanner to WorkerManager's signals
         self.file_scanner.files_found.connect(
-            lambda files: self._emit_if_current("file_scan", generation, self.file_scan_found_files, files)
+            lambda files: self._emit_if_current(
+                "file_scan", generation, self.file_scan_found_files, files
+            )
         )
         self.file_scanner.thumbnail_preload_finished.connect(
-            lambda files: self._emit_if_current("file_scan", generation, self.file_scan_thumbnail_preload_finished, files)
+            lambda files: self._emit_if_current(
+                "file_scan",
+                generation,
+                self.file_scan_thumbnail_preload_finished,
+                files,
+            )
         )
         self.file_scanner.finished.connect(
-            lambda: self._emit_if_current("file_scan", generation, self.file_scan_finished)
+            lambda: self._emit_if_current(
+                "file_scan", generation, self.file_scan_finished
+            )
         )
         self.file_scanner.error.connect(
-            lambda message: self._emit_if_current("file_scan", generation, self.file_scan_error, message)
+            lambda message: self._emit_if_current(
+                "file_scan", generation, self.file_scan_error, message
+            )
         )
 
         self.scanner_thread.started.connect(self.file_scanner.run)
@@ -590,6 +601,7 @@ class WorkerManager(QObject):
         from workers.rating_loader_worker import RatingLoaderWorker
 
         self.stop_rating_load()
+        generation = self._advance_worker_generation("rating_load")
         self.rating_loader_thread = QThread()
         self.rating_loader_worker = RatingLoaderWorker(
             image_data_list,
@@ -598,19 +610,42 @@ class WorkerManager(QObject):
         )
         self.rating_loader_worker.moveToThread(self.rating_loader_thread)
 
-        self.rating_loader_worker.progress_update.connect(self.rating_load_progress)
+        self.rating_loader_worker.progress_update.connect(
+            lambda current, total, basename: self._emit_if_current(
+                "rating_load",
+                generation,
+                self.rating_load_progress,
+                current,
+                total,
+                basename,
+            )
+        )
         self.rating_loader_worker.metadata_batch_loaded.connect(
-            self.rating_load_metadata_batch_loaded
-        )  # Connect to the new batched signal
-        self.rating_loader_worker.finished.connect(self.rating_load_finished)
-        self.rating_loader_worker.error.connect(self.rating_load_error)
+            lambda batch: self._accept_rating_metadata(generation, app_state, batch)
+        )
+        self.rating_loader_worker.finished.connect(
+            lambda: self._emit_if_current(
+                "rating_load", generation, self.rating_load_finished
+            )
+        )
+        self.rating_loader_worker.error.connect(
+            lambda message: self._emit_if_current(
+                "rating_load", generation, self.rating_load_error, message
+            )
+        )
         self.rating_loader_worker.cache_capacity_warning.connect(
-            self.rating_load_cache_capacity_warning
+            lambda total, resident, limit: self._emit_if_current(
+                "rating_load",
+                generation,
+                self.rating_load_cache_capacity_warning,
+                total,
+                resident,
+                limit,
+            )
         )
 
         self.rating_loader_thread.started.connect(self.rating_loader_worker.run_load)
-        self.rating_load_finished.connect(self.rating_loader_thread.quit)
-        self.rating_load_error.connect(self.rating_loader_thread.quit)
+        self.rating_loader_worker.finished.connect(self.rating_loader_thread.quit)
 
         self.rating_loader_thread.finished.connect(self._cleanup_rating_loader_refs)
 
@@ -618,11 +653,39 @@ class WorkerManager(QObject):
         logger.info("Rating loader thread started.")
 
     def stop_rating_load(self):
+        self._advance_worker_generation("rating_load")
         self._stop_worker(
             "rating_loader_thread",
             "rating_loader_worker",
             before_stop=lambda worker: worker.disable_emits(),
         )
+
+    def request_stop_rating_load(self) -> None:
+        self._advance_worker_generation("rating_load")
+        self._request_worker_stop(
+            "rating_loader_thread",
+            "rating_loader_worker",
+            before_stop=lambda worker: worker.disable_emits(),
+        )
+
+    def _accept_rating_metadata(
+        self, generation: int, app_state: AppState, batch: list
+    ) -> None:
+        """Publish metadata on the UI thread only for the current folder load."""
+        if self._worker_generations.get("rating_load") != generation:
+            return
+        for path, metadata in batch:
+            app_state.rating_cache[path] = metadata.get("rating", 0)
+            if metadata.get("date"):
+                app_state.date_cache[path] = metadata["date"]
+            else:
+                app_state.date_cache.pop(path, None)
+            raw_metadata = metadata.get("raw_metadata")
+            if isinstance(raw_metadata, dict):
+                app_state.detailed_metadata_cache[path] = raw_metadata
+            else:
+                app_state.detailed_metadata_cache.pop(path, None)
+        self.rating_load_metadata_batch_loaded.emit(batch)
 
     def _cleanup_grouping_preview_refs(self):
         self._cleanup_worker_refs(
@@ -836,6 +899,7 @@ class WorkerManager(QObject):
 
         logger.info("Requesting all workers stop without blocking...")
         for generation_name in (
+            "rating_load",
             "file_scan",
             "ai_rating",
             "update_check",
@@ -906,7 +970,12 @@ class WorkerManager(QObject):
         # Connect signals
         self.update_check_worker.update_check_finished.connect(
             lambda available, info, error: self._emit_if_current(
-                "update_check", generation, self.update_check_finished, available, info, error
+                "update_check",
+                generation,
+                self.update_check_finished,
+                available,
+                info,
+                error,
             )
         )
         self.update_check_worker.update_check_finished.connect(
@@ -1453,13 +1522,19 @@ class WorkerManager(QObject):
             )
         )
         self.ai_rating_worker.completed.connect(
-            lambda results: self._emit_if_current("ai_rating", generation, self.ai_rating_complete, results)
+            lambda results: self._emit_if_current(
+                "ai_rating", generation, self.ai_rating_complete, results
+            )
         )
         self.ai_rating_worker.error.connect(
-            lambda message: self._emit_if_current("ai_rating", generation, self.ai_rating_error, message)
+            lambda message: self._emit_if_current(
+                "ai_rating", generation, self.ai_rating_error, message
+            )
         )
         self.ai_rating_worker.warning.connect(
-            lambda message: self._emit_if_current("ai_rating", generation, self.ai_rating_warning, message)
+            lambda message: self._emit_if_current(
+                "ai_rating", generation, self.ai_rating_warning, message
+            )
         )
         self.ai_rating_worker.finished.connect(self.ai_rating_thread.quit)
         self.ai_rating_worker.finished.connect(self.ai_rating_worker.deleteLater)

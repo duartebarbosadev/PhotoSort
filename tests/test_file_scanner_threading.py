@@ -1,3 +1,5 @@
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crashes
+
 import threading
 from unittest.mock import Mock
 

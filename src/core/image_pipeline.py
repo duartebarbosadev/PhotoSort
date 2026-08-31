@@ -243,12 +243,11 @@ class ImagePipeline:
             return None
 
     def begin_active_review_working_set(self, image_paths) -> None:
-        image_only = [
-            os.path.normpath(path)
-            for path in image_paths
-            if path and not is_video_extension(path)
-        ]
-        self.preview_cache.begin_working_set(image_only)
+        # Video-only folders also own prepared thumbnails even though they do
+        # not write review proxies into the preview cache.
+        self.preview_cache.begin_working_set(
+            os.path.normpath(path) for path in image_paths if path
+        )
 
     def end_active_review_working_set(self) -> None:
         self.preview_cache.end_working_set()
@@ -267,9 +266,7 @@ class ImagePipeline:
             normalized_path = os.path.normpath(path)
             if is_video_extension(normalized_path):
                 continue
-            key = self.preview_cache_key(
-                normalized_path, REVIEW_PROXY_MAX_RESOLUTION
-            )
+            key = self.preview_cache_key(normalized_path, REVIEW_PROXY_MAX_RESOLUTION)
             existing_size = self.preview_cache.payload_size(key)
             if existing_size:
                 total += existing_size + 65536
@@ -283,9 +280,7 @@ class ImagePipeline:
                 REVIEW_PROXY_MAX_RESOLUTION[0] / max(1, width),
                 REVIEW_PROXY_MAX_RESOLUTION[1] / max(1, height),
             )
-            target_pixels = max(1, int(width * scale)) * max(
-                1, int(height * scale)
-            )
+            target_pixels = max(1, int(width * scale)) * max(1, int(height * scale))
             # Four bytes per target pixel plus cache metadata is deliberately
             # conservative for a quality-92 JPEG and avoids a mid-load eviction.
             total += (target_pixels * 4) + 65536
@@ -1388,15 +1383,22 @@ class ImagePipeline:
             pixmap = None
         return pixmap, False
 
-    def clear_all_image_caches(self):
-        """Clears both thumbnail and preview caches."""
-        logger.warning("Clearing all image caches (thumbnails and previews)...")
-        with self._memory_cache_lock:
-            self._memory_cache.clear()
-            self._memory_cache_bytes = 0
-        self.thumbnail_cache.clear()
-        self.preview_cache.clear()
-        logger.info("All image caches have been cleared.")
+    def clear_thumbnail_cache(self) -> bool:
+        """Keep thumbnails belonging to the active review working set intact."""
+        return self.preview_cache.run_when_inactive(self.thumbnail_cache.clear)
+
+    def clear_all_image_caches(self) -> bool:
+        """Clear image caches only after the active review folder is released."""
+
+        def clear_caches() -> None:
+            with self._memory_cache_lock:
+                self._memory_cache.clear()
+                self._memory_cache_bytes = 0
+            self.thumbnail_cache.clear()
+            self.preview_cache.clear()
+            logger.info("All image caches have been cleared.")
+
+        return self.preview_cache.run_when_inactive(clear_caches)
 
     def invalidate_path(self, file_path: str) -> None:
         """Remove all memory and disk cache variants for one source file."""
@@ -1409,6 +1411,6 @@ class ImagePipeline:
         self.thumbnail_cache.delete_all_for_path(normalized_path)
         self.preview_cache.delete_all_for_path(normalized_path)
 
-    def reinitialize_preview_cache_from_settings(self):
-        """Reinitializes the preview cache using current application settings."""
-        self.preview_cache.reinitialize_from_settings()
+    def reinitialize_preview_cache_from_settings(self) -> bool:
+        """Apply preview settings without replacing the live cache."""
+        return self.preview_cache.reinitialize_from_settings()

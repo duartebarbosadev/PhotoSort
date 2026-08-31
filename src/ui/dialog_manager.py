@@ -2520,7 +2520,9 @@ class DialogManager:
             object_name="folderInterruptDialog",
         )
 
-    def confirm_interrupt_for_workflow_change(self, source: str, destination: str) -> bool:
+    def confirm_interrupt_for_workflow_change(
+        self, source: str, destination: str
+    ) -> bool:
         return self._confirm_interrupt_background_work(
             headline=f"Stop unfinished {source} analysis and switch to {destination}?",
             accept_text="Stop and Switch",
@@ -2533,7 +2535,11 @@ class DialogManager:
         )
 
     def _confirm_interrupt_background_work(
-        self, *, headline: str, accept_text: str, object_name: str = "backgroundInterruptDialog"
+        self,
+        *,
+        headline: str,
+        accept_text: str,
+        object_name: str = "backgroundInterruptDialog",
     ) -> bool:
         dialog, _body = self._build_consent_dialog(
             object_name=object_name,

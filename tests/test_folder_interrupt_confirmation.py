@@ -1,3 +1,5 @@
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crashes
+
 from unittest.mock import Mock
 
 import pytest
