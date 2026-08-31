@@ -16,6 +16,7 @@ from core.image_pipeline import ImagePipeline
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
 from ui.app_state import AppState
+from ui.helpers.ui_dispatch import UiResultDispatcher
 
 sip = _sip
 
@@ -213,6 +214,7 @@ class WorkerManager(QObject):
         self.update_check_thread: QThread | None = None
         self.update_check_worker: UpdateCheckWorker | None = None
         self._worker_generations: dict[str, int] = {}
+        self._ui_results = UiResultDispatcher(self)
 
     def _advance_worker_generation(self, name: str) -> int:
         generation = self._worker_generations.get(name, 0) + 1
@@ -221,8 +223,12 @@ class WorkerManager(QObject):
 
     def _emit_if_current(self, name: str, generation: int, signal, *args) -> None:
         """Drop queued callbacks belonging to a cancelled or replaced worker."""
-        if self._worker_generations.get(name) == generation:
-            signal.emit(*args)
+
+        def deliver() -> None:
+            if self._worker_generations.get(name) == generation:
+                signal.emit(*args)
+
+        self._ui_results.dispatch(deliver)
 
     def _terminate_thread(
         self,
@@ -621,7 +627,9 @@ class WorkerManager(QObject):
             )
         )
         self.rating_loader_worker.metadata_batch_loaded.connect(
-            lambda batch: self._accept_rating_metadata(generation, app_state, batch)
+            lambda batch: self._ui_results.dispatch(
+                lambda: self._accept_rating_metadata(generation, app_state, batch)
+            )
         )
         self.rating_loader_worker.finished.connect(
             lambda: self._emit_if_current(
@@ -899,6 +907,7 @@ class WorkerManager(QObject):
 
         logger.info("Requesting all workers stop without blocking...")
         for generation_name in (
+            "thumbnail_session",
             "rating_load",
             "file_scan",
             "ai_rating",
@@ -1180,6 +1189,7 @@ class WorkerManager(QObject):
         if self.thumbnail_preload_thread is not None:
             return False
 
+        generation = self._advance_worker_generation("thumbnail_session")
         self.thumbnail_preload_thread = QThread()
         self.thumbnail_preload_worker = ThumbnailPreloadWorker(
             image_pipeline=self.image_pipeline,
@@ -1192,28 +1202,48 @@ class WorkerManager(QObject):
         )
         self.thumbnail_preload_worker.moveToThread(self.thumbnail_preload_thread)
         self.thumbnail_preload_worker.session_batch_ready.connect(
-            self.thumbnail_session_batch_ready.emit
+            lambda *args: self._emit_if_current(
+                "thumbnail_session",
+                generation,
+                self.thumbnail_session_batch_ready,
+                *args,
+            )
         )
         self.thumbnail_preload_worker.session_progress.connect(
-            self.thumbnail_session_progress.emit
+            lambda *args: self._emit_if_current(
+                "thumbnail_session", generation, self.thumbnail_session_progress, *args
+            )
         )
         self.thumbnail_preload_worker.session_finished.connect(
-            self.thumbnail_session_finished.emit
+            lambda *args: self._emit_if_current(
+                "thumbnail_session", generation, self.thumbnail_session_finished, *args
+            )
         )
         self.thumbnail_preload_worker.session_error.connect(
-            self.thumbnail_session_error.emit
+            lambda *args: self._emit_if_current(
+                "thumbnail_session", generation, self.thumbnail_session_error, *args
+            )
         )
         self.thumbnail_preload_worker.session_capacity_required.connect(
-            self.thumbnail_session_capacity_required.emit
+            lambda *args: self._emit_if_current(
+                "thumbnail_session",
+                generation,
+                self.thumbnail_session_capacity_required,
+                *args,
+            )
         )
         self.thumbnail_preload_worker.session_metrics.connect(
-            self.thumbnail_session_metrics.emit
+            lambda *args: self._emit_if_current(
+                "thumbnail_session", generation, self.thumbnail_session_metrics, *args
+            )
         )
         self.thumbnail_preload_worker.session_finished.connect(
             self.thumbnail_preload_thread.quit
         )
         self.thumbnail_preload_worker.session_metrics.connect(
-            lambda _session_id, _metrics: self.thumbnail_preload_thread.quit()
+            lambda _session_id, _metrics, thread=self.thumbnail_preload_thread: (
+                thread.quit()
+            )
         )
         self.thumbnail_preload_thread.finished.connect(
             self._cleanup_thumbnail_preload_worker
@@ -1259,11 +1289,13 @@ class WorkerManager(QObject):
 
     def stop_thumbnail_preload(self):
         """Stop the thumbnail preload thread."""
+        self._advance_worker_generation("thumbnail_session")
         self._stop_worker("thumbnail_preload_thread", "thumbnail_preload_worker")
 
     def request_stop_thumbnail_preload(self) -> None:
         """Cancel thumbnail warming without blocking the UI thread."""
 
+        self._advance_worker_generation("thumbnail_session")
         self._request_worker_stop(
             "thumbnail_preload_thread", "thumbnail_preload_worker"
         )

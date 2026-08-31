@@ -92,6 +92,7 @@ from ui.helpers.index_lookup_utils import (
     find_proxy_indices_for_paths,
 )
 from ui.helpers.ui_yield import cooperative_ui_yield
+from ui.helpers.ui_dispatch import bulk_ui_update
 from ui.helpers.navigation_utils import (
     find_next_multi_image_cluster_head,
     find_next_rating_match,
@@ -1288,6 +1289,7 @@ class MainWindow(QMainWindow):
         if self._cull_model_dirty and self.app_state.image_files_data:
             self._rebuild_model_view()
 
+    @bulk_ui_update()
     def _rebuild_model_view(
         self,
         preserved_selection_paths: list[str] | None = None,

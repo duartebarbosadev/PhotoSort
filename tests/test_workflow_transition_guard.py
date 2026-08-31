@@ -460,7 +460,8 @@ def test_cancelled_workflow_discards_late_analysis_results():
 
 def test_worker_generation_drops_callback_from_replaced_run():
     signal = SimpleNamespace(emit=Mock())
-    manager = SimpleNamespace(_worker_generations={"easy_delete": 3})
+    manager = WorkerManager(Mock())
+    manager._worker_generations["easy_delete"] = 3
 
     WorkerManager._emit_if_current(manager, "easy_delete", 2, signal, {"stale": True})
     WorkerManager._emit_if_current(manager, "easy_delete", 3, signal, {"current": True})
