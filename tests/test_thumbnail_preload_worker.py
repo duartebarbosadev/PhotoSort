@@ -9,9 +9,14 @@ import pyexiv2  # noqa: F401 - Must be first import to prevent Windows DLL issue
 
 import threading
 import time
-from unittest.mock import Mock
-from PyQt6.QtCore import QObject
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from PyQt6.QtCore import QObject, Qt
 from src.workers.thumbnail_preload_worker import ThumbnailPreloadWorker
+
+PreviewCacheCapacityError = ThumbnailPreloadWorker._ensure.__globals__[
+    "PreviewCacheCapacityError"
+]
 
 
 class TestThumbnailPreloadWorker:
@@ -37,9 +42,9 @@ class TestThumbnailPreloadWorker:
     def test_session_processes_foreground_first_and_materializes_background(self):
         pipeline = Mock()
         calls = []
-        pipeline.ensure_thumbnail_cached.side_effect = (
+        pipeline.ensure_review_assets_cached.side_effect = (
             lambda path, *, promote_to_memory: (
-                calls.append((path, promote_to_memory)) or True
+                calls.append((path, promote_to_memory)) or SimpleNamespace(success=True)
             )
         )
         worker = ThumbnailPreloadWorker(
@@ -85,9 +90,9 @@ class TestThumbnailPreloadWorker:
             elif path == "jump-target":
                 jump_started.set()
                 release_jump.wait(timeout=2)
-            return True
+            return SimpleNamespace(success=True)
 
-        pipeline.ensure_thumbnail_cached.side_effect = ensure
+        pipeline.ensure_review_assets_cached.side_effect = ensure
         worker = ThumbnailPreloadWorker(
             pipeline,
             session_id="folder",
@@ -142,9 +147,9 @@ class TestThumbnailPreloadWorker:
             release.wait(timeout=2)
             with state_lock:
                 active -= 1
-            return True
+            return SimpleNamespace(success=True)
 
-        pipeline.ensure_thumbnail_cached.side_effect = ensure
+        pipeline.ensure_review_assets_cached.side_effect = ensure
         worker = ThumbnailPreloadWorker(
             pipeline,
             session_id="folder",
@@ -162,7 +167,9 @@ class TestThumbnailPreloadWorker:
 
     def test_session_emits_background_results_without_waiting_for_scroll(self):
         pipeline = Mock()
-        pipeline.ensure_thumbnail_cached.return_value = True
+        pipeline.ensure_review_assets_cached.return_value = SimpleNamespace(
+            success=True
+        )
         worker = ThumbnailPreloadWorker(
             pipeline,
             session_id="folder",
@@ -182,7 +189,9 @@ class TestThumbnailPreloadWorker:
 
     def test_foreground_work_runs_while_background_is_paused(self):
         pipeline = Mock()
-        pipeline.ensure_thumbnail_cached.return_value = True
+        pipeline.ensure_review_assets_cached.return_value = SimpleNamespace(
+            success=True
+        )
         worker = ThumbnailPreloadWorker(
             pipeline,
             session_id="folder",
@@ -195,11 +204,159 @@ class TestThumbnailPreloadWorker:
 
         worker.prioritize(["visible"])
         deadline = time.time() + 2
-        while time.time() < deadline and not pipeline.ensure_thumbnail_cached.called:
+        while (
+            time.time() < deadline and not pipeline.ensure_review_assets_cached.called
+        ):
             time.sleep(0.01)
         worker.stop()
         thread.join(timeout=2)
 
-        pipeline.ensure_thumbnail_cached.assert_called_with(
+        pipeline.ensure_review_assets_cached.assert_called_with(
             "visible", promote_to_memory=True
         )
+
+    def test_capacity_pressure_pauses_and_retries_after_approval(self):
+        pipeline = Mock()
+        pipeline.ensure_review_assets_cached.side_effect = [
+            PreviewCacheCapacityError(300_000),
+            SimpleNamespace(
+                success=True,
+                encoded_bytes=125_000,
+                cache_hit=False,
+            ),
+        ]
+        worker = ThumbnailPreloadWorker(
+            pipeline,
+            session_id="folder",
+            all_paths=["photo.arw"],
+            max_workers=1,
+        )
+        capacity_requested = threading.Event()
+        required = []
+        metrics = []
+        worker.session_capacity_required.connect(
+            lambda _session, size: (required.append(size), capacity_requested.set()),
+            Qt.ConnectionType.DirectConnection,
+        )
+        worker.session_metrics.connect(
+            lambda _session, payload: metrics.append(payload),
+            Qt.ConnectionType.DirectConnection,
+        )
+
+        thread = threading.Thread(target=worker.run_session)
+        thread.start()
+        assert capacity_requested.wait(timeout=2)
+        assert thread.is_alive()
+
+        worker.resolve_capacity_request(True)
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert required == [300_000]
+        assert pipeline.ensure_review_assets_cached.call_count == 2
+        assert metrics[0]["raw_decode_count"] == 1
+        assert metrics[0]["encoded_bytes"] == 125_000
+
+    def test_folder_capacity_estimation_and_trimming_run_in_worker(self):
+        pipeline = Mock()
+        pipeline.preview_cache.size_limit_bytes = 200_000
+        pipeline.ensure_review_assets_cached.return_value = SimpleNamespace(
+            success=True,
+            encoded_bytes=100_000,
+            cache_hit=False,
+        )
+        estimate_thread_ids = []
+
+        def estimate(paths, *, should_continue_callback):
+            estimate_thread_ids.append(threading.get_ident())
+            assert set(paths) == {"photo.arw"}
+            assert should_continue_callback()
+            return 300_000
+
+        pipeline.estimate_active_review_cache_bytes.side_effect = estimate
+        worker = ThumbnailPreloadWorker(
+            pipeline,
+            session_id="folder",
+            all_paths=["photo.arw"],
+            prepare_folder_working_set=True,
+            max_workers=1,
+        )
+        capacity_requested = threading.Event()
+        worker.session_capacity_required.connect(
+            lambda _session, _size: capacity_requested.set(),
+            Qt.ConnectionType.DirectConnection,
+        )
+
+        ui_thread_id = threading.get_ident()
+        thread = threading.Thread(target=worker.run_session)
+        thread.start()
+        assert capacity_requested.wait(timeout=2)
+        pipeline.preview_cache.size_limit_bytes = 300_000
+        worker.resolve_capacity_request(True)
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert estimate_thread_ids and estimate_thread_ids[0] != ui_thread_id
+        pipeline.begin_active_review_working_set.assert_called_once()
+        pipeline.preview_cache.trim_to_limit.assert_called_once_with()
+        pipeline.ensure_review_assets_cached.assert_called_once_with(
+            "photo.arw", promote_to_memory=True
+        )
+
+    def test_stop_during_folder_estimation_does_not_finish_stale_session(self):
+        pipeline = Mock()
+        pipeline.preview_cache.size_limit_bytes = 200_000
+        estimate_started = threading.Event()
+        release_estimate = threading.Event()
+
+        def estimate(_paths, *, should_continue_callback):
+            estimate_started.set()
+            release_estimate.wait(timeout=2)
+            return 100_000 if should_continue_callback() else None
+
+        pipeline.estimate_active_review_cache_bytes.side_effect = estimate
+        worker = ThumbnailPreloadWorker(
+            pipeline,
+            session_id="folder",
+            all_paths=["photo.jpg"],
+            prepare_folder_working_set=True,
+        )
+        finished = []
+        worker.session_finished.connect(
+            lambda *_args: finished.append(True),
+            Qt.ConnectionType.DirectConnection,
+        )
+
+        thread = threading.Thread(target=worker.run_session)
+        thread.start()
+        assert estimate_started.wait(timeout=2)
+        worker.stop()
+        release_estimate.set()
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert finished == []
+        pipeline.ensure_review_assets_cached.assert_not_called()
+
+    def test_progress_is_time_throttled_between_twenty_item_checkpoints(self):
+        worker = ThumbnailPreloadWorker(
+            Mock(),
+            session_id="folder",
+            all_paths=["one", "two", "three", "four"],
+        )
+        updates = []
+        worker.session_progress.connect(
+            lambda _session, attempted, _total, _failures, _paused: updates.append(
+                attempted
+            )
+        )
+
+        with patch(
+            "src.workers.thumbnail_preload_worker.time.monotonic",
+            side_effect=[0.0, 0.1, 0.4],
+        ):
+            worker._record_results(["one"], ["one"], foreground=False)
+            worker._record_results(["two"], ["two"], foreground=False)
+            worker._record_results(["three"], ["three"], foreground=False)
+
+        assert updates == [1, 3]

@@ -38,8 +38,11 @@ class PreviewLoadController(QObject):
         self._detail_request_id = 0
         self._detail_cancel_event: Event | None = None
         self._detail_requested_paths: tuple[str, ...] = ()
+        self._shutdown_requested = False
 
     def request(self, image_paths: Iterable[str]) -> None:
+        if self._shutdown_requested:
+            return
         ordered_paths = tuple(dict.fromkeys(path for path in image_paths if path))
         if not ordered_paths:
             return
@@ -78,6 +81,8 @@ class PreviewLoadController(QObject):
         *,
         max_display_bytes: int = INSPECTION_DETAIL_BUDGET_BYTES,
     ) -> None:
+        if self._shutdown_requested:
+            return
         ordered_paths = tuple(dict.fromkeys(path for path in image_paths if path))
         if not ordered_paths:
             return
@@ -109,6 +114,8 @@ class PreviewLoadController(QObject):
     def cancel(self) -> None:
         if self._cancel_event is not None:
             self._cancel_event.set()
+        self._request_id += 1
+        self._cancel_event = None
         # Drop queued stale work. A decode already in progress exits after its
         # current file, and its result is ignored using the request id.
         self._pool.clear()
@@ -129,9 +136,14 @@ class PreviewLoadController(QObject):
         self._detail_requested_paths = ()
 
     def shutdown(self) -> None:
+        """Request cancellation; the window polls is_active before destruction."""
+        self._shutdown_requested = True
         self.reset()
-        self._pool.waitForDone(5000)
-        self._detail_pool.waitForDone(5000)
+
+    def is_active(self) -> bool:
+        return bool(
+            self._pool.activeThreadCount() or self._detail_pool.activeThreadCount()
+        )
 
     def _handle_preview_ready(self, image_path: str, request_id: int) -> None:
         if request_id == self._request_id:

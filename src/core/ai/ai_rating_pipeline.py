@@ -110,6 +110,7 @@ class LLMAiRatingStrategy(BaseAiRatingStrategy):
         self._max_tokens = llm_config.max_tokens
         self._rating_prompt = llm_config.rating_prompt
         self._lock = threading.Lock()
+        self._close_lock = threading.Lock()
         self._worker_count = llm_config.max_workers
         self._cancel_event = threading.Event()
         self._client_closed = False
@@ -128,7 +129,9 @@ class LLMAiRatingStrategy(BaseAiRatingStrategy):
         return client
 
     def _close_client(self) -> None:
-        with self._lock:
+        # A request holds _lock for its entire network round trip. Cleanup must
+        # not wait for that request before it can close the cancelled transport.
+        with self._close_lock:
             try:
                 if hasattr(self._client, "close") and not self._client_closed:
                     self._client.close()
@@ -138,7 +141,8 @@ class LLMAiRatingStrategy(BaseAiRatingStrategy):
 
     def request_cancel(self) -> None:
         self._cancel_event.set()
-        self._close_client()
+        # Called by the UI thread. Socket/client cleanup belongs to shutdown()
+        # on the analysis worker, never in the caller requesting cancellation.
 
     def shutdown(self) -> None:
         self._close_client()

@@ -50,16 +50,17 @@ class ViewportThumbnailLoader(QObject):
         manager.thumbnail_session_finished.connect(self._handle_finished)
         manager.thumbnail_session_error.connect(self._handle_error)
 
-    def start_folder(self, image_paths: Iterable[str]) -> None:
-        """Begin one non-blocking warming session for the active folder."""
+    def start_folder(self, image_paths: Iterable[str]) -> str:
+        """Begin one review-asset preparation session for the active folder."""
         self.reset(stop_worker=True)
         self._all_paths = list(dict.fromkeys(path for path in image_paths if path))
         self._all_path_set = set(self._all_paths)
         if not self._all_paths:
-            return
+            return ""
         self._session_id = uuid4().hex
         self.context.set_thumbnail_progress(0, len(self._all_paths), 0, False)
         self._start_folder_session()
+        return self._session_id
 
     def _start_folder_session(self) -> None:
         """Start the current folder session once the previous worker has exited."""
@@ -79,6 +80,7 @@ class ViewportThumbnailLoader(QObject):
             self._session_id,
             self._all_paths,
             visible,
+            prepare_folder_working_set=True,
         ):
             self._folder_start_timer.start()
 

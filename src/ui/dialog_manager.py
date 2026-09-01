@@ -2198,6 +2198,41 @@ class DialogManager:
         warn_box.exec()
         logger.info("Closed potential cache overflow warning dialog")
 
+    def confirm_preview_cache_capacity_increase(
+        self, required_bytes: int, current_limit_bytes: int
+    ) -> bool:
+        required_gb = required_bytes / (1024**3)
+        current_gb = current_limit_bytes / (1024**3)
+        dialog = QMessageBox(self.parent)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("More Preview Cache Required")
+        dialog.setText(
+            "PhotoSort prepares every review image before opening the folder so "
+            "scrolling remains fast and RAW images keep one consistent appearance.\n\n"
+            f"This folder requires up to {required_gb:.2f} GB; the current limit is "
+            f"{current_gb:.2f} GB."
+        )
+        increase_button = dialog.addButton(
+            "Increase Cache and Continue", QMessageBox.ButtonRole.AcceptRole
+        )
+        dialog.addButton("Cancel Folder Load", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(increase_button)
+        dialog.exec()
+        return dialog.clickedButton() is increase_button
+
+    def show_preview_cache_disk_space_error(
+        self, required_bytes: int, available_bytes: int
+    ) -> None:
+        QMessageBox.critical(
+            self.parent,
+            "Not Enough Disk Space",
+            "PhotoSort cannot prepare this folder without breaking the fast-review "
+            "guarantee.\n\n"
+            f"Required: {required_bytes / (1024**3):.2f} GB\n"
+            f"Available: {available_bytes / (1024**3):.2f} GB\n\n"
+            "Free disk space or choose a smaller folder.",
+        )
+
     def show_exif_cache_capacity_warning(
         self,
         dataset_entries: int,
@@ -2477,6 +2512,51 @@ class DialogManager:
             return "close"
         return "cancel"
 
+    def confirm_interrupt_for_folder_change(self, folder_path: str) -> bool:
+        """Ask before cancelling work, including analysis on a hidden page."""
+        return self._confirm_interrupt_background_work(
+            headline=f"Stop working in this folder and open {folder_path}?",
+            accept_text="Stop and Open Folder",
+            object_name="folderInterruptDialog",
+        )
+
+    def confirm_interrupt_for_workflow_change(
+        self, source: str, destination: str
+    ) -> bool:
+        return self._confirm_interrupt_background_work(
+            headline=f"Stop unfinished {source} analysis and switch to {destination}?",
+            accept_text="Stop and Switch",
+        )
+
+    def _confirm_interrupt_background_work(
+        self,
+        *,
+        headline: str,
+        accept_text: str,
+        object_name: str = "backgroundInterruptDialog",
+    ) -> bool:
+        dialog, _body = self._build_consent_dialog(
+            object_name=object_name,
+            window_title="Interrupt Background Work?",
+            header_icon="⚠",
+            header_title="Background work is still running",
+            headline=headline,
+            summary=(
+                "Unfinished work affected by this action will be interrupted, including "
+                "analysis and model downloads. Completed cached work will remain available."
+            ),
+            accept_text=accept_text,
+            accept_object_name="modelConsentAcceptButton",
+            cancel_text="Keep Working",
+        )
+        stop_button = dialog.findChild(QPushButton, "modelConsentAcceptButton")
+        stop_button.setAutoDefault(False)
+        stop_button.setDefault(False)
+        stay_button = dialog.findChild(QPushButton, "modelConsentCancelButton")
+        stay_button.setDefault(True)
+        stay_button.setFocus()
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
     def show_folder_change_confirmation_dialog(self, marked_files: list[str]) -> str:
         """
         Shows a confirmation dialog when changing folders with marked files.
@@ -2558,8 +2638,9 @@ class DialogManager:
         summary: str,
         accept_text: str,
         accept_object_name: str,
+        cancel_text: str = "Cancel",
     ):
-        """Create the shared frameless shell every model-consent dialog uses."""
+        """Create the shared frameless shell for consent dialogs."""
 
         dialog = QDialog(self.parent)
         dialog.setObjectName(object_name)
@@ -2593,7 +2674,7 @@ class DialogManager:
         build_dialog_footer(
             outer,
             [
-                ("Cancel", "modelConsentCancelButton", dialog.reject, False),
+                (cancel_text, "modelConsentCancelButton", dialog.reject, False),
                 (accept_text, accept_object_name, dialog.accept, True),
             ],
         )

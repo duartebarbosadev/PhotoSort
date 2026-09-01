@@ -131,16 +131,31 @@ class StandardImageProcessor:
 
     @staticmethod
     def load_as_pil(
-        image_path: str, target_mode: str = "RGB", apply_exif_transpose: bool = True
+        image_path: str,
+        target_mode: str = "RGB",
+        apply_exif_transpose: bool = True,
+        target_size: tuple[int, int] | None = None,
     ) -> Image.Image | None:
         """
-        Loads a standard image as a PIL Image object.
+        Load a standard image, optionally bounding it before mode conversion.
+
+        Resizing the oriented source before converting it to RGBA avoids allocating
+        a full-resolution four-channel display buffer. Lanczos remains the final
+        resampler, so the bounded result retains review-quality detail.
         """
         normalized_path = os.path.normpath(image_path)
         try:
             with Image.open(normalized_path) as img:
                 if apply_exif_transpose:
                     img = ImageOps.exif_transpose(img)  # Correct orientation
+                if target_size and (
+                    img.width > target_size[0] or img.height > target_size[1]
+                ):
+                    img.thumbnail(
+                        target_size,
+                        Image.Resampling.LANCZOS,
+                        reducing_gap=3.0,
+                    )
                 pil_img = img.convert(target_mode)
                 return pil_img
         except UnidentifiedImageError:

@@ -47,8 +47,12 @@ def test_load_folder_cancels_analysis_without_blocking(monkeypatch):
     app_state = SimpleNamespace(
         get_marked_files=lambda: [],
         clear_all_file_specific_data=Mock(),
+        current_folder_path="/tmp/old-folder",
     )
     main_window = SimpleNamespace(
+        dialog_manager=SimpleNamespace(
+            confirm_interrupt_for_folder_change=Mock(return_value=True),
+        ),
         show_loading_overlay=Mock(),
         update_loading_text=Mock(),
         menu_manager=SimpleNamespace(update_recent_folders_menu=Mock()),
@@ -77,9 +81,13 @@ def test_load_folder_cancels_analysis_without_blocking(monkeypatch):
             "skip_grouping_step": False,
             "record_as_source": True,
             "preserve_deletion_marks": False,
+            "_interrupt_confirmed": True,
         },
     )
     assert callbacks == [controller._finish_folder_load_after_workers]
+    main_window.dialog_manager.confirm_interrupt_for_folder_change.assert_called_once_with(
+        "/tmp/demo"
+    )
 
 
 def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch):
@@ -196,9 +204,13 @@ def test_scan_finished_defers_hidden_cull_model_until_cull_is_shown():
         _get_media_file_data=lambda: [],
         _restore_analysis_state=Mock(),
         refresh_grouping_preview=refresh_grouping_preview,
+        _rating_load_complete=False,
     )
     controller._supports_grouping_workflow_ui = lambda: (
         AppController._supports_grouping_workflow_ui(controller)
+    )
+    controller._activate_loaded_folder = lambda *, asset_failures: (
+        AppController._activate_loaded_folder(controller, asset_failures=asset_failures)
     )
 
     AppController.handle_scan_finished(controller)

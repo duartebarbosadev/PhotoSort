@@ -32,6 +32,14 @@ def test_viewer_pool_shrinks_after_single_selection():
     viewer.deleteLater()
 
 
+def test_individual_viewer_resize_timer_is_owned_by_the_viewer():
+    viewer = IndividualViewer()
+
+    assert viewer.image_view._resize_timer.parent() is viewer.image_view
+
+    viewer.deleteLater()
+
+
 def test_viewer_pool_matches_multi_selection_size():
     viewer = SynchronizedImageViewer()
 

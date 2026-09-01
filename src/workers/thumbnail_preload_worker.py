@@ -4,22 +4,28 @@ import concurrent.futures
 from collections import deque
 import logging
 import threading
+import time
 from collections.abc import Callable, Iterable
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.image_pipeline import ImagePipeline
+from core.caching.preview_cache import PreviewCacheCapacityError
+from core.image_processing.raw_image_processor import is_raw_extension
 
 logger = logging.getLogger(__name__)
+PROGRESS_EMIT_INTERVAL_SECONDS = 0.25
 
 
 class ThumbnailPreloadWorker(QObject):
-    """Warm a folder while allowing viewport paths to jump ahead safely."""
+    """Prepare canonical review assets while allowing paths to jump ahead."""
 
     session_batch_ready = pyqtSignal(str, object)
     session_progress = pyqtSignal(str, int, int, int, bool)
     session_finished = pyqtSignal(str, int, int)
     session_error = pyqtSignal(str, str)
+    session_capacity_required = pyqtSignal(str, int)
+    session_metrics = pyqtSignal(str, object)
 
     def __init__(
         self,
@@ -30,6 +36,7 @@ class ThumbnailPreloadWorker(QObject):
         foreground_paths: Iterable[str] | None = None,
         should_pause_background: Callable[[], bool] | None = None,
         materialize_background: bool = True,
+        prepare_folder_working_set: bool = False,
         max_workers: int | None = None,
     ):
         super().__init__()
@@ -40,6 +47,7 @@ class ThumbnailPreloadWorker(QObject):
         self._wake = threading.Condition(self._lock)
         self._should_pause_background = should_pause_background or (lambda: False)
         self._materialize_background = materialize_background
+        self._prepare_folder_working_set = prepare_folder_working_set
         configured_workers = getattr(image_pipeline, "thumbnail_worker_count", 4)
         if not isinstance(configured_workers, int):
             configured_workers = 4
@@ -61,12 +69,84 @@ class ThumbnailPreloadWorker(QObject):
         self._total = len(ordered)
         self._attempted = 0
         self._failures = 0
+        self._encoded_bytes = 0
+        self._cache_hits = 0
+        self._raw_decode_count = 0
+        self._capacity_condition = threading.Condition()
+        self._capacity_waiting = False
+        self._capacity_waiters = 0
+        self._capacity_decision: bool | None = None
+        self._capacity_cancelled = False
+        self._stop_requested = False
+        self._last_progress_emit_at = 0.0
 
     def stop(self):
         with self._wake:
             self._is_running = False
+            self._stop_requested = True
             self._wake.notify_all()
+        with self._capacity_condition:
+            self._capacity_decision = False
+            self._capacity_condition.notify_all()
         logger.info("Thumbnail preload worker stop requested")
+
+    def resolve_capacity_request(self, approved: bool) -> None:
+        """Resume blocked decoders after the UI raises capacity, or cancel them."""
+        with self._capacity_condition:
+            self._capacity_decision = bool(approved)
+            if not approved:
+                self._capacity_cancelled = True
+            self._capacity_condition.notify_all()
+
+    def _wait_for_capacity(self, required_bytes: int) -> bool:
+        emit_request = False
+        with self._capacity_condition:
+            if not self._capacity_waiting:
+                self._capacity_waiting = True
+                self._capacity_decision = None
+                emit_request = True
+            self._capacity_waiters += 1
+
+        if emit_request:
+            self.session_capacity_required.emit(self.session_id, required_bytes)
+
+        with self._capacity_condition:
+            while self._capacity_decision is None and self._is_running:
+                self._capacity_condition.wait(timeout=0.25)
+            approved = bool(self._capacity_decision) and self._is_running
+            self._capacity_waiters -= 1
+            if self._capacity_waiters == 0:
+                self._capacity_waiting = False
+                self._capacity_decision = None
+            return approved
+
+    def _prepare_working_set(self) -> bool:
+        """Estimate and reserve the active folder cache entirely off the UI thread."""
+        if not self._prepare_folder_working_set:
+            return True
+
+        with self._lock:
+            working_set_paths = tuple(self._pending)
+        self.image_pipeline.begin_active_review_working_set(working_set_paths)
+        required_bytes = self.image_pipeline.estimate_active_review_cache_bytes(
+            working_set_paths,
+            should_continue_callback=lambda: self._is_running,
+        )
+        if required_bytes is None or not self._is_running:
+            return False
+
+        while self._is_running:
+            current_limit = self.image_pipeline.preview_cache.size_limit_bytes
+            if required_bytes > current_limit and not self._wait_for_capacity(
+                required_bytes
+            ):
+                return False
+            try:
+                self.image_pipeline.preview_cache.trim_to_limit()
+                return True
+            except PreviewCacheCapacityError as exc:
+                required_bytes = max(required_bytes, exc.required_bytes)
+        return False
 
     def prioritize(self, image_paths: Iterable[str]) -> None:
         """Move pending paths to the foreground without duplicating work."""
@@ -146,12 +226,16 @@ class ThumbnailPreloadWorker(QObject):
                 self._background_ready = []
         if ready_paths:
             self.session_batch_ready.emit(self.session_id, ready_paths)
-        if (
+        now = time.monotonic()
+        should_emit_progress = (
             attempted == 1
             or attempted == self._total
             or attempted % 20 == 0
             or failed_this_batch
-        ):
+            or now - self._last_progress_emit_at >= PROGRESS_EMIT_INTERVAL_SECONDS
+        )
+        if should_emit_progress:
+            self._last_progress_emit_at = now
             self.session_progress.emit(
                 self.session_id,
                 attempted,
@@ -161,14 +245,32 @@ class ThumbnailPreloadWorker(QObject):
             )
 
     def _ensure(self, path: str, promote_to_memory: bool) -> bool:
-        try:
-            return self.image_pipeline.ensure_thumbnail_cached(
-                path,
-                promote_to_memory=promote_to_memory,
-            )
-        except Exception:
-            logger.error("Thumbnail preparation failed for %s", path, exc_info=True)
-            return False
+        while self._is_running:
+            try:
+                result = self.image_pipeline.ensure_review_assets_cached(
+                    path,
+                    promote_to_memory=promote_to_memory,
+                )
+                if result.success:
+                    with self._lock:
+                        encoded_bytes = int(getattr(result, "encoded_bytes", 0))
+                        cache_hit = bool(getattr(result, "cache_hit", False))
+                        self._encoded_bytes += encoded_bytes
+                        self._cache_hits += int(cache_hit)
+                        extension = path.rsplit(".", 1)[-1] if "." in path else ""
+                        self._raw_decode_count += int(
+                            not cache_hit and is_raw_extension(f".{extension.lower()}")
+                        )
+                return result.success
+            except PreviewCacheCapacityError as exc:
+                if not self._wait_for_capacity(exc.required_bytes):
+                    return False
+            except Exception:
+                logger.error(
+                    "Review-asset preparation failed for %s", path, exc_info=True
+                )
+                return False
+        return False
 
     def run_session(self) -> None:
         """Run until the session queue is exhausted or cancellation is requested."""
@@ -184,7 +286,10 @@ class ThumbnailPreloadWorker(QObject):
             self._max_workers,
         )
         paused_emitted = False
+        started_at = time.perf_counter()
         try:
+            if not self._prepare_working_set():
+                return
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=self._max_workers
             ) as executor:
@@ -272,15 +377,34 @@ class ThumbnailPreloadWorker(QObject):
                     self._background_ready,
                 )
                 self._background_ready = []
+            elapsed = max(0.000001, time.perf_counter() - started_at)
+            metrics = {
+                "attempted": self._attempted,
+                "failures": self._failures,
+                "cache_hits": self._cache_hits,
+                "cache_hit_rate": (
+                    self._cache_hits / self._attempted if self._attempted else 0.0
+                ),
+                "raw_decode_count": self._raw_decode_count,
+                "encoded_bytes": self._encoded_bytes,
+                "elapsed_seconds": elapsed,
+                "throughput_per_second": self._attempted / elapsed,
+            }
             logger.info(
-                "Thumbnail session %s finished: attempted=%d/%d failures=%d",
+                "Review session %s finished: attempted=%d/%d failures=%d "
+                "cache_hits=%d raw_decodes=%d throughput=%.2f/s",
                 self.session_id,
                 self._attempted,
                 self._total,
                 self._failures,
+                self._cache_hits,
+                self._raw_decode_count,
+                metrics["throughput_per_second"],
             )
-            self.session_finished.emit(
-                self.session_id,
-                self._attempted,
-                self._failures,
-            )
+            self.session_metrics.emit(self.session_id, metrics)
+            if not self._capacity_cancelled and not self._stop_requested:
+                self.session_finished.emit(
+                    self.session_id,
+                    self._attempted,
+                    self._failures,
+                )

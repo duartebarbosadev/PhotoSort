@@ -118,7 +118,7 @@ class ZoomableImageView(QGraphicsView):
         self.setMouseTracking(True)
 
         # Timer for debouncing resize events
-        self._resize_timer = QTimer()
+        self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
         self._resize_timer.timeout.connect(self.fit_in_view)
 

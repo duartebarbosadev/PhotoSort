@@ -16,6 +16,7 @@ from core.image_pipeline import ImagePipeline
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
 from ui.app_state import AppState
+from ui.helpers.ui_dispatch import UiResultDispatcher
 
 sip = _sip
 
@@ -30,7 +31,6 @@ _WORKER_SLOTS = (
     ("rating_writer_thread", "rating_writer_worker"),
     ("rotation_application_thread", "rotation_application_worker"),
     ("thumbnail_preload_thread", "thumbnail_preload_worker"),
-    ("preview_warm_thread", "preview_warm_worker"),
     ("update_check_thread", "update_check_worker"),
     ("ai_rating_thread", "ai_rating_worker"),
     ("grouping_preview_thread", "grouping_preview_worker"),
@@ -126,9 +126,8 @@ class WorkerManager(QObject):
     thumbnail_session_progress = pyqtSignal(str, int, int, int, bool)
     thumbnail_session_finished = pyqtSignal(str, int, int)
     thumbnail_session_error = pyqtSignal(str, str)
-    preview_warm_progress = pyqtSignal(int, int)
-    preview_warm_finished = pyqtSignal(int, int)
-    preview_warm_error = pyqtSignal(str)
+    thumbnail_session_capacity_required = pyqtSignal(str, int)
+    thumbnail_session_metrics = pyqtSignal(str, object)
 
     # AI Rating Signals
     ai_rating_progress = pyqtSignal(int, str)
@@ -194,8 +193,6 @@ class WorkerManager(QObject):
 
         self.thumbnail_preload_thread: QThread | None = None
         self.thumbnail_preload_worker: ThumbnailPreloadWorker | None = None
-        self.preview_warm_thread: QThread | None = None
-        self.preview_warm_worker = None
         self.ai_rating_thread: QThread | None = None
         self.ai_rating_worker: AiRatingWorker | None = None
         self.grouping_preview_thread: QThread | None = None
@@ -217,6 +214,10 @@ class WorkerManager(QObject):
         self.update_check_thread: QThread | None = None
         self.update_check_worker: UpdateCheckWorker | None = None
         self._worker_generations: dict[str, int] = {}
+        self._ui_results = UiResultDispatcher(self)
+
+    def has_pending_ui_results(self) -> bool:
+        return self._ui_results.has_pending()
 
     def _advance_worker_generation(self, name: str) -> int:
         generation = self._worker_generations.get(name, 0) + 1
@@ -225,8 +226,12 @@ class WorkerManager(QObject):
 
     def _emit_if_current(self, name: str, generation: int, signal, *args) -> None:
         """Drop queued callbacks belonging to a cancelled or replaced worker."""
-        if self._worker_generations.get(name) == generation:
-            signal.emit(*args)
+
+        def deliver() -> None:
+            if self._worker_generations.get(name) == generation:
+                signal.emit(*args)
+
+        self._ui_results.dispatch(deliver)
 
     def _terminate_thread(
         self,
@@ -356,25 +361,40 @@ class WorkerManager(QObject):
         folder_path: str,
     ):
         self.stop_file_scan()  # Ensure any previous scan is stopped
+        generation = self._advance_worker_generation("file_scan")
         self.scanner_thread = QThread()
         self.file_scanner = FileScanner(
-            image_pipeline=self.image_pipeline
+            image_pipeline=self.image_pipeline, directory_path=folder_path
         )  # Inject shared pipeline instance
         self.file_scanner.moveToThread(self.scanner_thread)
 
         # Connect signals from FileScanner to WorkerManager's signals
-        self.file_scanner.files_found.connect(self.file_scan_found_files)
+        self.file_scanner.files_found.connect(
+            lambda files: self._emit_if_current(
+                "file_scan", generation, self.file_scan_found_files, files
+            )
+        )
         self.file_scanner.thumbnail_preload_finished.connect(
-            self.file_scan_thumbnail_preload_finished
+            lambda files: self._emit_if_current(
+                "file_scan",
+                generation,
+                self.file_scan_thumbnail_preload_finished,
+                files,
+            )
         )
-        self.file_scanner.finished.connect(self.file_scan_finished)
-        self.file_scanner.error.connect(self.file_scan_error)
+        self.file_scanner.finished.connect(
+            lambda: self._emit_if_current(
+                "file_scan", generation, self.file_scan_finished
+            )
+        )
+        self.file_scanner.error.connect(
+            lambda message: self._emit_if_current(
+                "file_scan", generation, self.file_scan_error, message
+            )
+        )
 
-        self.scanner_thread.started.connect(
-            lambda: self.file_scanner.scan_directory(folder_path)
-        )
-        self.file_scan_finished.connect(self.scanner_thread.quit)
-        self.file_scan_error.connect(self.scanner_thread.quit)
+        self.scanner_thread.started.connect(self.file_scanner.run)
+        self.file_scanner.finished.connect(self.scanner_thread.quit)
 
         # Connect to our cleanup method instead of direct deleteLater from here
         self.scanner_thread.finished.connect(self._cleanup_scanner_refs)
@@ -383,6 +403,7 @@ class WorkerManager(QObject):
         logger.info("File scanner thread started.")
 
     def stop_file_scan(self):
+        self._advance_worker_generation("file_scan")
         self._stop_worker("scanner_thread", "file_scanner")
 
     def _cleanup_similarity_refs(self):
@@ -589,6 +610,7 @@ class WorkerManager(QObject):
         from workers.rating_loader_worker import RatingLoaderWorker
 
         self.stop_rating_load()
+        generation = self._advance_worker_generation("rating_load")
         self.rating_loader_thread = QThread()
         self.rating_loader_worker = RatingLoaderWorker(
             image_data_list,
@@ -597,19 +619,44 @@ class WorkerManager(QObject):
         )
         self.rating_loader_worker.moveToThread(self.rating_loader_thread)
 
-        self.rating_loader_worker.progress_update.connect(self.rating_load_progress)
+        self.rating_loader_worker.progress_update.connect(
+            lambda current, total, basename: self._emit_if_current(
+                "rating_load",
+                generation,
+                self.rating_load_progress,
+                current,
+                total,
+                basename,
+            )
+        )
         self.rating_loader_worker.metadata_batch_loaded.connect(
-            self.rating_load_metadata_batch_loaded
-        )  # Connect to the new batched signal
-        self.rating_loader_worker.finished.connect(self.rating_load_finished)
-        self.rating_loader_worker.error.connect(self.rating_load_error)
+            lambda batch: self._ui_results.dispatch(
+                lambda: self._accept_rating_metadata(generation, app_state, batch)
+            )
+        )
+        self.rating_loader_worker.finished.connect(
+            lambda: self._emit_if_current(
+                "rating_load", generation, self.rating_load_finished
+            )
+        )
+        self.rating_loader_worker.error.connect(
+            lambda message: self._emit_if_current(
+                "rating_load", generation, self.rating_load_error, message
+            )
+        )
         self.rating_loader_worker.cache_capacity_warning.connect(
-            self.rating_load_cache_capacity_warning
+            lambda total, resident, limit: self._emit_if_current(
+                "rating_load",
+                generation,
+                self.rating_load_cache_capacity_warning,
+                total,
+                resident,
+                limit,
+            )
         )
 
         self.rating_loader_thread.started.connect(self.rating_loader_worker.run_load)
-        self.rating_load_finished.connect(self.rating_loader_thread.quit)
-        self.rating_load_error.connect(self.rating_loader_thread.quit)
+        self.rating_loader_worker.finished.connect(self.rating_loader_thread.quit)
 
         self.rating_loader_thread.finished.connect(self._cleanup_rating_loader_refs)
 
@@ -617,11 +664,39 @@ class WorkerManager(QObject):
         logger.info("Rating loader thread started.")
 
     def stop_rating_load(self):
+        self._advance_worker_generation("rating_load")
         self._stop_worker(
             "rating_loader_thread",
             "rating_loader_worker",
             before_stop=lambda worker: worker.disable_emits(),
         )
+
+    def request_stop_rating_load(self) -> None:
+        self._advance_worker_generation("rating_load")
+        self._request_worker_stop(
+            "rating_loader_thread",
+            "rating_loader_worker",
+            before_stop=lambda worker: worker.disable_emits(),
+        )
+
+    def _accept_rating_metadata(
+        self, generation: int, app_state: AppState, batch: list
+    ) -> None:
+        """Publish metadata on the UI thread only for the current folder load."""
+        if self._worker_generations.get("rating_load") != generation:
+            return
+        for path, metadata in batch:
+            app_state.rating_cache[path] = metadata.get("rating", 0)
+            if metadata.get("date"):
+                app_state.date_cache[path] = metadata["date"]
+            else:
+                app_state.date_cache.pop(path, None)
+            raw_metadata = metadata.get("raw_metadata")
+            if isinstance(raw_metadata, dict):
+                app_state.detailed_metadata_cache[path] = raw_metadata
+            else:
+                app_state.detailed_metadata_cache.pop(path, None)
+        self.rating_load_metadata_batch_loaded.emit(batch)
 
     def _cleanup_grouping_preview_refs(self):
         self._cleanup_worker_refs(
@@ -820,7 +895,6 @@ class WorkerManager(QObject):
         self.stop_rating_writer()
         self.stop_rotation_application()
         self.stop_thumbnail_preload()
-        self.stop_preview_warming()
         self.stop_update_check()
         self.stop_ai_rating()
         self.stop_grouping_preview()
@@ -836,6 +910,11 @@ class WorkerManager(QObject):
 
         logger.info("Requesting all workers stop without blocking...")
         for generation_name in (
+            "thumbnail_session",
+            "rating_load",
+            "file_scan",
+            "ai_rating",
+            "update_check",
             "similarity",
             "cull_grouping",
             "pick_best",
@@ -894,6 +973,7 @@ class WorkerManager(QObject):
             return
 
         logger.info("Starting update check...")
+        generation = self._advance_worker_generation("update_check")
 
         self.update_check_thread = QThread()
         self.update_check_worker = UpdateCheckWorker(current_version)
@@ -901,7 +981,14 @@ class WorkerManager(QObject):
 
         # Connect signals
         self.update_check_worker.update_check_finished.connect(
-            self.update_check_finished.emit
+            lambda available, info, error: self._emit_if_current(
+                "update_check",
+                generation,
+                self.update_check_finished,
+                available,
+                info,
+                error,
+            )
         )
         self.update_check_worker.update_check_finished.connect(
             self.update_check_thread.quit
@@ -928,6 +1015,7 @@ class WorkerManager(QObject):
     def stop_update_check(self) -> None:
         """Stop an in-flight update check during application shutdown."""
 
+        self._advance_worker_generation("update_check")
         self._stop_worker("update_check_thread", "update_check_worker")
 
     def is_any_worker_running(self) -> bool:
@@ -941,7 +1029,6 @@ class WorkerManager(QObject):
             or self.is_rating_writer_running()
             or self.is_rotation_application_running()
             or self.is_thumbnail_preload_running()
-            or self.is_preview_warming_running()
             or self.is_grouping_preview_running()
             or self.is_grouping_workflow_running()
             or self.is_file_deletion_running()
@@ -1096,6 +1183,8 @@ class WorkerManager(QObject):
         session_id: str,
         image_paths: list[str],
         foreground_paths: list[str] | None = None,
+        *,
+        prepare_folder_working_set: bool = False,
     ) -> bool:
         """Start one prioritized thumbnail session for the active folder."""
         from workers.thumbnail_preload_worker import ThumbnailPreloadWorker
@@ -1103,6 +1192,7 @@ class WorkerManager(QObject):
         if self.thumbnail_preload_thread is not None:
             return False
 
+        generation = self._advance_worker_generation("thumbnail_session")
         self.thumbnail_preload_thread = QThread()
         self.thumbnail_preload_worker = ThumbnailPreloadWorker(
             image_pipeline=self.image_pipeline,
@@ -1111,22 +1201,52 @@ class WorkerManager(QObject):
             foreground_paths=foreground_paths or [],
             should_pause_background=self.is_resource_intensive_analysis_running,
             materialize_background=True,
+            prepare_folder_working_set=prepare_folder_working_set,
         )
         self.thumbnail_preload_worker.moveToThread(self.thumbnail_preload_thread)
         self.thumbnail_preload_worker.session_batch_ready.connect(
-            self.thumbnail_session_batch_ready.emit
+            lambda *args: self._emit_if_current(
+                "thumbnail_session",
+                generation,
+                self.thumbnail_session_batch_ready,
+                *args,
+            )
         )
         self.thumbnail_preload_worker.session_progress.connect(
-            self.thumbnail_session_progress.emit
+            lambda *args: self._emit_if_current(
+                "thumbnail_session", generation, self.thumbnail_session_progress, *args
+            )
         )
         self.thumbnail_preload_worker.session_finished.connect(
-            self.thumbnail_session_finished.emit
+            lambda *args: self._emit_if_current(
+                "thumbnail_session", generation, self.thumbnail_session_finished, *args
+            )
         )
         self.thumbnail_preload_worker.session_error.connect(
-            self.thumbnail_session_error.emit
+            lambda *args: self._emit_if_current(
+                "thumbnail_session", generation, self.thumbnail_session_error, *args
+            )
+        )
+        self.thumbnail_preload_worker.session_capacity_required.connect(
+            lambda *args: self._emit_if_current(
+                "thumbnail_session",
+                generation,
+                self.thumbnail_session_capacity_required,
+                *args,
+            )
+        )
+        self.thumbnail_preload_worker.session_metrics.connect(
+            lambda *args: self._emit_if_current(
+                "thumbnail_session", generation, self.thumbnail_session_metrics, *args
+            )
         )
         self.thumbnail_preload_worker.session_finished.connect(
             self.thumbnail_preload_thread.quit
+        )
+        self.thumbnail_preload_worker.session_metrics.connect(
+            lambda _session_id, _metrics, thread=self.thumbnail_preload_thread: (
+                thread.quit()
+            )
         )
         self.thumbnail_preload_thread.finished.connect(
             self._cleanup_thumbnail_preload_worker
@@ -1135,6 +1255,15 @@ class WorkerManager(QObject):
             self.thumbnail_preload_worker.run_session
         )
         self.thumbnail_preload_thread.start()
+        return True
+
+    def resolve_thumbnail_capacity_request(
+        self, session_id: str, approved: bool
+    ) -> bool:
+        worker = self.thumbnail_preload_worker
+        if worker is None or worker.session_id != session_id:
+            return False
+        worker.resolve_capacity_request(approved)
         return True
 
     def prioritize_thumbnail_paths(
@@ -1163,49 +1292,16 @@ class WorkerManager(QObject):
 
     def stop_thumbnail_preload(self):
         """Stop the thumbnail preload thread."""
+        self._advance_worker_generation("thumbnail_session")
         self._stop_worker("thumbnail_preload_thread", "thumbnail_preload_worker")
 
     def request_stop_thumbnail_preload(self) -> None:
         """Cancel thumbnail warming without blocking the UI thread."""
 
+        self._advance_worker_generation("thumbnail_session")
         self._request_worker_stop(
             "thumbnail_preload_thread", "thumbnail_preload_worker"
         )
-
-    # --- Folder Preview Warming ---
-    def start_preview_warming(self, image_paths: list[str]) -> bool:
-        """Warm full display previews once for the active folder."""
-        from workers.preview_warm_worker import PreviewWarmWorker
-
-        self.stop_preview_warming()
-        paths = list(dict.fromkeys(path for path in image_paths if path))
-        if not paths:
-            return False
-
-        self.preview_warm_thread = QThread()
-        self.preview_warm_worker = PreviewWarmWorker(self.image_pipeline, paths)
-        self.preview_warm_worker.moveToThread(self.preview_warm_thread)
-        self.preview_warm_worker.progress.connect(self.preview_warm_progress.emit)
-        self.preview_warm_worker.finished.connect(self.preview_warm_finished.emit)
-        self.preview_warm_worker.error.connect(self.preview_warm_error.emit)
-        self.preview_warm_worker.finished.connect(self.preview_warm_thread.quit)
-        self.preview_warm_thread.finished.connect(self._cleanup_preview_warm_worker)
-        self.preview_warm_thread.started.connect(self.preview_warm_worker.run)
-        self.preview_warm_thread.start()
-        return True
-
-    def _cleanup_preview_warm_worker(self, *_args) -> None:
-        self._cleanup_worker_refs(
-            "preview_warm_thread",
-            "preview_warm_worker",
-            "Preview warming",
-        )
-
-    def is_preview_warming_running(self) -> bool:
-        return self.preview_warm_thread is not None
-
-    def stop_preview_warming(self) -> None:
-        self._stop_worker("preview_warm_thread", "preview_warm_worker")
 
     def _cleanup_ai_rating_worker(self):
         self._cleanup_worker_refs("ai_rating_thread", "ai_rating_worker", "AI rating")
@@ -1443,6 +1539,7 @@ class WorkerManager(QObject):
         from workers.ai_rating_worker import AiRatingWorker
 
         self.stop_ai_rating()
+        generation = self._advance_worker_generation("ai_rating")
         if not image_paths:
             self.ai_rating_complete.emit({})
             return
@@ -1454,10 +1551,26 @@ class WorkerManager(QObject):
         )
         self.ai_rating_worker.moveToThread(self.ai_rating_thread)
 
-        self.ai_rating_worker.progress_update.connect(self.ai_rating_progress.emit)
-        self.ai_rating_worker.completed.connect(self.ai_rating_complete.emit)
-        self.ai_rating_worker.error.connect(self.ai_rating_error.emit)
-        self.ai_rating_worker.warning.connect(self.ai_rating_warning.emit)
+        self.ai_rating_worker.progress_update.connect(
+            lambda percent, message: self._emit_if_current(
+                "ai_rating", generation, self.ai_rating_progress, percent, message
+            )
+        )
+        self.ai_rating_worker.completed.connect(
+            lambda results: self._emit_if_current(
+                "ai_rating", generation, self.ai_rating_complete, results
+            )
+        )
+        self.ai_rating_worker.error.connect(
+            lambda message: self._emit_if_current(
+                "ai_rating", generation, self.ai_rating_error, message
+            )
+        )
+        self.ai_rating_worker.warning.connect(
+            lambda message: self._emit_if_current(
+                "ai_rating", generation, self.ai_rating_warning, message
+            )
+        )
         self.ai_rating_worker.finished.connect(self.ai_rating_thread.quit)
         self.ai_rating_worker.finished.connect(self.ai_rating_worker.deleteLater)
         self.ai_rating_thread.finished.connect(self._cleanup_ai_rating_worker)
@@ -1467,4 +1580,5 @@ class WorkerManager(QObject):
         logger.info("AI rating thread started.")
 
     def stop_ai_rating(self) -> None:
+        self._advance_worker_generation("ai_rating")
         self._stop_worker("ai_rating_thread", "ai_rating_worker")

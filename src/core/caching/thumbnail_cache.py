@@ -82,7 +82,7 @@ class ThumbnailCache:
             )
             return None
 
-    def set(self, key: tuple[str, bool], value: Image.Image) -> None:
+    def set(self, key: tuple[str, bool], value: Image.Image) -> int:
         """
         Adds or updates an item in the cache.
         The key is typically (normalized_path, apply_auto_edits_bool).
@@ -95,13 +95,16 @@ class ThumbnailCache:
             logger.error(
                 f"Attempted to cache non-Image object for key '{key}'. Type: {type(value)}"
             )
-            return
+            return 0
         try:
-            self._cache.set(key, encode_cached_image(value, quality=82))
+            encoded = encode_cached_image(value, quality=82)
+            self._cache.set(key, encoded)
+            return len(encoded)
         except Exception as e:
             logger.error(
                 f"Error writing to Thumbnail cache for key '{key}': {e}", exc_info=True
             )
+            return 0
 
     def delete(self, key: tuple[str, bool]) -> None:
         """

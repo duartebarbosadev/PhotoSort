@@ -63,6 +63,10 @@ class WorkflowProgressView(QFrame):
         self._phase_started_at: float | None = None
         self._phase_started_percent = 0
         self._last_percent: int | None = None
+        self._phase_started_progress = 0.0
+        self._last_progress: float | None = None
+        self._eta_sampled_at: float | None = None
+        self._eta_seconds_at_sample: float | None = None
         self._active = False
         # Only workflows that can restart themselves advertise a retry action.
         self._retry_offered = retry_label is not None
@@ -202,20 +206,39 @@ class WorkflowProgressView(QFrame):
         now = self._clock()
         determinate = percent is not None and percent >= 0
         normalized = max(0, min(100, int(percent))) if determinate else None
+        match = _PROGRESS_COUNT_RE.search(message) or _PROGRESS_NAMED_COUNT_RE.search(
+            message
+        )
+        progress_value = float(normalized) if normalized is not None else None
+        if match:
+            completed, total = int(match.group(1)), int(match.group(2))
+            if total > 0:
+                count_progress = max(0.0, min(100.0, completed * 100.0 / total))
+                # Some workflows show a local item count alongside a weighted
+                # multi-phase percentage. Use exact counts only when they describe
+                # the same overall progress value (allowing for integer rounding).
+                if normalized is None or abs(count_progress - normalized) <= 1.0:
+                    progress_value = count_progress
         should_restart = not self._active
         if (
             not should_restart
-            and normalized is not None
-            and self._last_percent is not None
-            and normalized < self._last_percent
+            and progress_value is not None
+            and self._last_progress is not None
+            and progress_value < self._last_progress
         ):
             self._phase_started_at = now
-            self._phase_started_percent = normalized
+            self._phase_started_percent = normalized or 0
+            self._phase_started_progress = progress_value
+            self._eta_sampled_at = None
+            self._eta_seconds_at_sample = None
 
         if should_restart:
             self._started_at = now
             self._phase_started_at = now
             self._phase_started_percent = normalized or 0
+            self._phase_started_progress = progress_value or 0.0
+            self._eta_sampled_at = None
+            self._eta_seconds_at_sample = None
             self._active = True
             self._timer.start()
 
@@ -224,9 +247,6 @@ class WorkflowProgressView(QFrame):
         self.set_dismiss_visible(False)
         self.set_retry_visible(False)
         self.message_label.setText(message)
-        match = _PROGRESS_COUNT_RE.search(message) or _PROGRESS_NAMED_COUNT_RE.search(
-            message
-        )
         self.count_label.setText(
             f"{match.group(1)} of {match.group(2)}" if match else "In progress"
         )
@@ -235,11 +255,30 @@ class WorkflowProgressView(QFrame):
             self.progress_bar.setRange(0, 0)
             self.percent_label.setText("•••")
             self.remaining_label.setText("Estimating…")
+            self._last_progress = None
+            self._eta_sampled_at = None
+            self._eta_seconds_at_sample = None
         else:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(normalized)
             self.percent_label.setText(f"{normalized}%")
             self._last_percent = normalized
+            if (
+                progress_value is not None
+                and progress_value > self._phase_started_progress
+                and self._phase_started_at is not None
+                and (
+                    self._last_progress is None or progress_value > self._last_progress
+                )
+            ):
+                phase_elapsed = max(0.0, now - self._phase_started_at)
+                progress_delta = progress_value - self._phase_started_progress
+                if phase_elapsed >= 1.0 and progress_delta >= 0.1:
+                    self._eta_seconds_at_sample = (
+                        phase_elapsed * (100.0 - progress_value) / progress_delta
+                    )
+                    self._eta_sampled_at = now
+            self._last_progress = progress_value
         self._refresh_time_labels()
 
     def show_error(self, message: str) -> None:
@@ -267,6 +306,9 @@ class WorkflowProgressView(QFrame):
         self._active = False
         self._timer.stop()
         self._last_percent = None
+        self._last_progress = None
+        self._eta_sampled_at = None
+        self._eta_seconds_at_sample = None
         self.set_dismiss_visible(False)
         self.set_retry_visible(False)
 
@@ -278,21 +320,15 @@ class WorkflowProgressView(QFrame):
         self.elapsed_label.setText(format_duration(elapsed))
         self.remaining_caption.setText("Remaining")
 
-        percent = self._last_percent
-        phase_started_at = self._phase_started_at
-        if (
-            not self._active
-            or percent is None
-            or percent <= self._phase_started_percent
-            or phase_started_at is None
-        ):
+        if not self._active or self._last_percent is None:
             return
-        phase_elapsed = max(0.0, now - phase_started_at)
-        progress_delta = percent - self._phase_started_percent
-        if phase_elapsed < 1.0 or progress_delta < 2:
+        if self._eta_sampled_at is None or self._eta_seconds_at_sample is None:
             self.remaining_label.setText("Estimating…")
             return
-        remaining_seconds = phase_elapsed * (100 - percent) / progress_delta
+        remaining_seconds = self._eta_seconds_at_sample - (now - self._eta_sampled_at)
+        if remaining_seconds <= 0:
+            self.remaining_label.setText("Re-estimating…")
+            return
         self.remaining_label.setText(f"About {format_duration(remaining_seconds)}")
 
 
