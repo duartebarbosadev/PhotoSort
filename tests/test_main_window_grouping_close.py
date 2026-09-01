@@ -93,9 +93,7 @@ def test_close_requests_worker_stop_without_waiting(monkeypatch):
     )
     window = SimpleNamespace(
         worker_manager=worker_manager,
-        dialog_manager=SimpleNamespace(
-            confirm_interrupt_for_close=Mock(return_value=True)
-        ),
+        dialog_manager=SimpleNamespace(confirm_interrupt_for_close=Mock()),
         grouping_step_widget=SimpleNamespace(
             pending_grouping_action_lines=lambda: [],
             has_unsaved_grouping_edits=lambda: False,
@@ -115,33 +113,13 @@ def test_close_requests_worker_stop_without_waiting(monkeypatch):
 
     MainWindow.closeEvent(window, event)
 
+    window.dialog_manager.confirm_interrupt_for_close.assert_not_called()
     worker_manager.request_stop_all_workers.assert_called_once_with()
     assert event.ignored
     assert not event.accepted
     assert window._shutdown_in_progress is True
     assert callbacks == [window._finish_close_after_workers]
     assert status_bar.messages[-1][0] == "Stopping background work…"
-
-
-def test_declining_close_interrupt_preserves_pending_changes_and_workers():
-    window = SimpleNamespace(
-        worker_manager=SimpleNamespace(
-            is_grouping_workflow_running=lambda: False,
-            is_any_worker_running=lambda: True,
-            request_stop_all_workers=Mock(),
-        ),
-        dialog_manager=SimpleNamespace(
-            confirm_interrupt_for_close=Mock(return_value=False)
-        ),
-        preview_load_controller=SimpleNamespace(shutdown=Mock()),
-        grouping_step_widget=Mock(),
-    )
-    event = _DummyEvent()
-    MainWindow.closeEvent(window, event)
-    assert event.ignored and not event.accepted
-    window.worker_manager.request_stop_all_workers.assert_not_called()
-    window.preview_load_controller.shutdown.assert_not_called()
-    window.grouping_step_widget.has_unsaved_grouping_edits.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -184,3 +162,14 @@ def test_close_keeps_preview_owner_alive_until_pools_drain(monkeypatch):
     active[0] = False
     MainWindow._finish_close_after_workers(window)
     window.close.assert_called_once()
+
+
+def test_active_background_work_includes_queued_ui_results():
+    window = SimpleNamespace(
+        worker_manager=SimpleNamespace(
+            is_any_worker_running=lambda: False,
+            has_pending_ui_results=lambda: True,
+        ),
+        preview_load_controller=SimpleNamespace(is_active=lambda: False),
+    )
+    assert MainWindow._has_active_background_work(window) is True

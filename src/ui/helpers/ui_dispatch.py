@@ -42,6 +42,10 @@ class UiResultDispatcher(QObject):
     def _blocked() -> bool:
         return bool(_bulk_update_depth or QApplication.activeModalWidget() is not None)
 
+    def has_pending(self) -> bool:
+        """Return whether a worker result is waiting for a safe UI boundary."""
+        return bool(self._pending or self._delivering)
+
     def dispatch(self, callback: Callable[[], None]) -> None:
         if self._blocked() or self._delivering or self._pending:
             self._pending.append(callback)

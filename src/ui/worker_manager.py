@@ -216,6 +216,9 @@ class WorkerManager(QObject):
         self._worker_generations: dict[str, int] = {}
         self._ui_results = UiResultDispatcher(self)
 
+    def has_pending_ui_results(self) -> bool:
+        return self._ui_results.has_pending()
+
     def _advance_worker_generation(self, name: str) -> int:
         generation = self._worker_generations.get(name, 0) + 1
         self._worker_generations[name] = generation

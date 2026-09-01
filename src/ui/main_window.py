@@ -2594,7 +2594,14 @@ class MainWindow(QMainWindow):
             self.worker_manager.is_any_worker_running,
         )
         previews = getattr(self, "preview_load_controller", None)
-        return bool(workers_active() or getattr(previews, "is_active", lambda: False)())
+        pending_results = getattr(
+            self.worker_manager, "has_pending_ui_results", lambda: False
+        )
+        return bool(
+            workers_active()
+            or getattr(previews, "is_active", lambda: False)()
+            or pending_results()
+        )
 
     @override
     def closeEvent(self, event):
@@ -2637,11 +2644,6 @@ class MainWindow(QMainWindow):
                 4000,
             )
             return
-
-        if MainWindow._has_active_background_work(self):
-            if not self.dialog_manager.confirm_interrupt_for_close():
-                event.ignore()
-                return
 
         # Compare the in-memory signature before building the worker-inventoried
         # action preview. No source-tree walk occurs on the UI thread.

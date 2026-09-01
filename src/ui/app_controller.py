@@ -460,7 +460,22 @@ class AppController(QObject):
             )
             return
 
-        if not _interrupt_confirmed and self.worker_manager.is_any_worker_running():
+        current_folder = getattr(self.app_state, "current_folder_path", None)
+        is_folder_switch = True
+        if current_folder is None:
+            is_folder_switch = False
+        elif isinstance(current_folder, (str, os.PathLike)):
+            is_folder_switch = os.path.normcase(
+                os.path.abspath(os.fspath(current_folder))
+            ) != os.path.normcase(os.path.abspath(os.fspath(folder_path)))
+        active_work = getattr(self.main_window, "_has_active_background_work", None)
+        active_work_result = active_work() if callable(active_work) else None
+        has_active_work = (
+            active_work_result
+            if isinstance(active_work_result, bool)
+            else self.worker_manager.is_any_worker_running()
+        )
+        if not _interrupt_confirmed and is_folder_switch and has_active_work:
             if not self.main_window.dialog_manager.confirm_interrupt_for_folder_change(
                 folder_path
             ):

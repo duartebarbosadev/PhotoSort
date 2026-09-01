@@ -47,6 +47,7 @@ def test_load_folder_cancels_analysis_without_blocking(monkeypatch):
     app_state = SimpleNamespace(
         get_marked_files=lambda: [],
         clear_all_file_specific_data=Mock(),
+        current_folder_path="/tmp/old-folder",
     )
     main_window = SimpleNamespace(
         dialog_manager=SimpleNamespace(

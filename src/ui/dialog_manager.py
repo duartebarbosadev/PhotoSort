@@ -2528,12 +2528,6 @@ class DialogManager:
             accept_text="Stop and Switch",
         )
 
-    def confirm_interrupt_for_close(self) -> bool:
-        return self._confirm_interrupt_background_work(
-            headline="Stop background work and close PhotoSort?",
-            accept_text="Stop and Close",
-        )
-
     def _confirm_interrupt_background_work(
         self,
         *,

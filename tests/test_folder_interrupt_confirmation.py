@@ -33,6 +33,8 @@ def test_staying_preserves_work_across_all_workflows(slot):
     state = Mock()
     window = Mock()
     window.dialog_manager.confirm_interrupt_for_folder_change.return_value = False
+    window._has_active_background_work.return_value = True
+    state.current_folder_path = "/old-folder"
     controller = AppController(window, state, manager)
     consent = controller._model_consent
     consent.approved_downloads.add("aesthetic")
@@ -54,6 +56,55 @@ def test_staying_preserves_work_across_all_workflows(slot):
     assert controller._pending_folder_load_after_workers is None
 
 
+@pytest.mark.parametrize(
+    ("current_folder", "new_folder"),
+    [
+        ("/olaola/xyz", "/olaola"),
+        ("/olaola", "/olaola/xyz"),
+        ("/olaola", "/dsa"),
+    ],
+)
+def test_active_parent_child_and_unrelated_folder_switches_all_prompt(
+    current_folder, new_folder
+):
+    manager = WorkerManager(Mock())
+    manager.request_stop_all_workers = Mock()
+    state = Mock()
+    state.current_folder_path = current_folder
+    window = Mock()
+    window._has_active_background_work.return_value = True
+    window.dialog_manager.confirm_interrupt_for_folder_change.return_value = False
+    controller = AppController(window, state, manager)
+
+    controller.load_folder(new_folder)
+
+    window.dialog_manager.confirm_interrupt_for_folder_change.assert_called_once_with(
+        new_folder
+    )
+    manager.request_stop_all_workers.assert_not_called()
+
+
+@pytest.mark.parametrize("current_folder", [None, "/olaola"])
+def test_initial_or_same_folder_load_does_not_show_switch_prompt(
+    monkeypatch, current_folder
+):
+    manager = WorkerManager(Mock())
+    manager.request_stop_all_workers = Mock()
+    manager.start_file_scan = Mock()
+    state = Mock()
+    state.current_folder_path = current_folder
+    state.get_marked_files.return_value = []
+    window = Mock()
+    window._has_active_background_work.return_value = True
+    window._shutdown_in_progress = False
+    controller = AppController(window, state, manager)
+    monkeypatch.setattr("ui.app_controller.add_recent_folder", Mock())
+
+    controller.load_folder("/olaola")
+
+    window.dialog_manager.confirm_interrupt_for_folder_change.assert_not_called()
+
+
 def test_approved_change_waits_then_scans_once_without_prompting_again(monkeypatch):
     manager = WorkerManager(Mock())
     manager.pick_best_thread = Mock()
@@ -63,7 +114,9 @@ def test_approved_change_waits_then_scans_once_without_prompting_again(monkeypat
     state.get_marked_files.return_value = []
     window = Mock()
     window._shutdown_in_progress = False
+    window._has_active_background_work.return_value = True
     window.dialog_manager.confirm_interrupt_for_folder_change.return_value = True
+    state.current_folder_path = "/old-folder"
     controller = AppController(window, state, manager)
     callbacks = []
     monkeypatch.setattr(
