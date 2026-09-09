@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from math import dist
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from core.best_photo_finder.config import SelectorConfig
@@ -17,6 +17,9 @@ from core.image_features.face_analysis import FaceAnalysisService
 from core.runtime_paths import resolve_face_landmarker_model_path
 import contextlib
 import sys
+
+if TYPE_CHECKING:
+    from transformers import BeitImageProcessor
 
 LEFT_EYE_INDICES = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_INDICES = (362, 385, 387, 263, 373, 380)
@@ -305,6 +308,9 @@ class HuggingFaceAestheticScorer:
     allow_download: bool = False
     should_cancel: Callable[[], bool] | None = None
     _model: object | None = field(default=None, init=False, repr=False)
+    _image_processor: BeitImageProcessor | None = field(
+        default=None, init=False, repr=False
+    )
     _aesthetic_label_index: int | None = field(default=None, init=False, repr=False)
     _resolved_device: ResolvedDevice | None = field(
         default=None, init=False, repr=False
@@ -415,33 +421,30 @@ class HuggingFaceAestheticScorer:
             return buffer.dtype
         return torch.float32
 
-    def _preprocess_for_model(self, image):
-        try:
-            import numpy as np
-            import torch
-            from PIL import Image
-        except ImportError as exc:
-            raise MissingDependencyError(
-                "Missing optional dependency required for aesthetic scoring. "
-                "Install the aesthetic extras before running the selector."
-            ) from exc
+    def _preprocess_batch(self, images):
+        from PIL import Image
+        from transformers import BeitImageProcessor
 
-        image_size = config_size = 384
-        if self._model is not None:
-            model_config = getattr(self._model, "config", None)
-            image_size = int(
-                getattr(model_config, "image_size", config_size) or config_size
+        model_config = getattr(self._model, "config", None)
+        image_size = int(getattr(model_config, "image_size", 384) or 384)
+        if self._image_processor is None:
+            # Keep the existing PIL bicubic resize: Torchvision's resize produces
+            # different pixels. Batch only tensor conversion and normalization.
+            self._image_processor = BeitImageProcessor(
+                do_resize=False,
+                do_center_crop=False,
+                image_mean=(0.5, 0.5, 0.5),
+                image_std=(0.5, 0.5, 0.5),
             )
-
-        if image.size != (image_size, image_size):
-            image = image.resize((image_size, image_size), Image.Resampling.BICUBIC)
-
-        pixels = np.asarray(image, dtype="float32") / 255.0
-        mean = np.array((0.5, 0.5, 0.5), dtype="float32")
-        std = np.array((0.5, 0.5, 0.5), dtype="float32")
-        pixels = (pixels - mean) / std
-        tensor = torch.from_numpy(pixels).permute(2, 0, 1)
-        return tensor
+        resized = [
+            image.resize((image_size, image_size), Image.Resampling.BICUBIC)
+            if image.size != (image_size, image_size)
+            else image
+            for image in images
+        ]
+        return self._image_processor(images=resized, return_tensors="pt")[
+            "pixel_values"
+        ]
 
     def _extract_aesthetic_score(
         self, predictions: Iterable[dict[str, float]]
@@ -490,9 +493,7 @@ class HuggingFaceAestheticScorer:
         for start in range(0, len(items), batch_size):
             batch_items = items[start : start + batch_size]
             input_dtype = self._model_input_dtype(model)
-            pixel_values = torch.stack(
-                [self._preprocess_for_model(image) for _, image in batch_items]
-            )
+            pixel_values = self._preprocess_batch([image for _, image in batch_items])
             if device == "cuda":
                 pixel_values = pixel_values.to(device="cuda", dtype=input_dtype)
             elif device == "mps":
@@ -500,16 +501,20 @@ class HuggingFaceAestheticScorer:
             else:
                 pixel_values = pixel_values.to(dtype=input_dtype)
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 logits = model(pixel_values=pixel_values).logits
-                probabilities = torch.softmax(logits, dim=-1)[:, aesthetic_label_index]
+                # Transfer the batch once instead of synchronizing the accelerator
+                # separately for every image score.
+                probabilities = (
+                    torch.softmax(logits, dim=-1)[:, aesthetic_label_index]
+                    .cpu()
+                    .tolist()
+                )
 
             for (path, _image), probability in zip(
                 batch_items, probabilities, strict=True
             ):
-                scores[path] = _clamp(
-                    float(probability.detach().cpu().item()), 0.0, 1.0
-                )
+                scores[path] = _clamp(probability, 0.0, 1.0)
         return scores
 
     def score_batch(
