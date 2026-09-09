@@ -284,6 +284,7 @@ class HuggingFaceAestheticScorer:
     # Downloads happen only after the user consents, exactly like every other
     # managed model.
     allow_download: bool = False
+    should_cancel: Callable[[], bool] | None = None
     _model: object | None = field(default=None, init=False, repr=False)
     _aesthetic_label_index: int | None = field(default=None, init=False, repr=False)
     _resolved_device: ResolvedDevice | None = field(
@@ -317,6 +318,7 @@ class HuggingFaceAestheticScorer:
             AESTHETIC_MODEL,
             allow_download=self.allow_download,
             progress_callback=self.progress_callback,
+            should_cancel=self.should_cancel,
         )
         if self.progress_callback:
             self.progress_callback(-1, f"Loading {AESTHETIC_MODEL.label}")

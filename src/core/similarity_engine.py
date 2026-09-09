@@ -9,6 +9,7 @@ from core.utils.time_utils import format_eta
 
 from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION, ImagePipeline
 from core.image_file_ops import ImageFileOperations
+from core.model_download import ModelDownloadCancelled
 from core.similarity_cache import (
     FileFingerprint,
     SimilarityArtifact,
@@ -112,6 +113,7 @@ class SimilarityEngine(QObject):
             self.model_name,
             allow_download=allow_model_download,
             progress_callback=self._handle_model_progress,
+            should_cancel=lambda: not self._is_running,
         )
         self._is_running = True
         self._cache_filename = (
@@ -200,6 +202,8 @@ class SimilarityEngine(QObject):
                 time.perf_counter() - model_load_start_time,
             )
             return True
+        except ModelDownloadCancelled:
+            logger.info("Similarity model download cancelled.")
         except SimilarityModelNotInstalledError as e:
             logger.warning("Similarity model is not installed: %s", e)
             self.error.emit(str(e))
@@ -390,6 +394,9 @@ class SimilarityEngine(QObject):
                     f"Generating embeddings ({processed_count}/{total_to_process}) • ETA {eta_text}",
                 )
 
+            except ModelDownloadCancelled:
+                logger.info("Similarity analysis cancelled during model download.")
+                return
             except Exception as e:
                 logger.error("Error encoding image batch.", exc_info=True)
                 self.error.emit(f"Error during embedding generation: {e}")
