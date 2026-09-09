@@ -130,3 +130,83 @@ def test_provisioning_preserves_cancellation_instead_of_reporting_network_error(
             model_provisioning.AESTHETIC_MODEL,
             allow_download=True,
         )
+
+
+def test_folder_switch_cancels_live_pick_best_download_and_keeps_qt_responsive(
+    monkeypatch,
+):
+    from PyQt6.QtCore import QEventLoop, QTimer
+    from PyQt6.QtWidgets import QApplication
+    from ui.app_controller import AppController
+    from ui.worker_manager import WorkerManager
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(model_download, "_download_child", _stalled_transfer)
+    monkeypatch.setattr(
+        model_provisioning, "_snapshot_download", lambda: lambda *a, **k: "missing"
+    )
+    monkeypatch.setattr("ui.app_controller.add_recent_folder", lambda _path: None)
+    closed = []
+
+    class DownloadOnlySelector:
+        def __init__(self, *, aesthetic_scorer, **kwargs):
+            self.scorer = aesthetic_scorer
+
+        def select(self, _paths):
+            self.scorer._resolve_model_snapshot()
+            raise AssertionError("The stalled transfer must be cancelled")
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr("workers.pick_best_worker.PhotoSelector", DownloadOnlySelector)
+    manager = WorkerManager(Mock())
+    manager.start_file_scan = Mock()
+    state = Mock()
+    state.get_marked_files.return_value = []
+    window = Mock()
+    window._shutdown_in_progress = False
+    window.dialog_manager.confirm_interrupt_for_folder_change.return_value = True
+    controller = AppController(window, state, manager)
+    errors, results, ticks = [], [], []
+    manager.pick_best_error.connect(errors.append)
+    manager.pick_best_complete.connect(results.append)
+
+    def on_progress(_percent, message):
+        if message == "Transfer started":
+            # Let the UI tick while the transfer is blocked, then switch folders.
+            QTimer.singleShot(100, lambda: controller.load_folder("/new-folder"))
+
+    manager.pick_best_progress.connect(on_progress)
+    loop = QEventLoop()
+    heartbeat = QTimer()
+
+    def tick():
+        ticks.append(True)
+        if manager.start_file_scan.called:
+            loop.quit()
+
+    heartbeat.timeout.connect(tick)
+    deadline = QTimer()
+    deadline.setSingleShot(True)
+    deadline.timeout.connect(loop.quit)
+    heartbeat.start(10)
+    deadline.start(10000)
+    manager.start_pick_best_analysis(
+        {1: ["/a.jpg", "/b.jpg"]}, allow_model_download=True
+    )
+    try:
+        loop.exec()
+        assert manager.start_file_scan.call_count == 1
+        assert not manager.is_any_worker_active()
+        assert len(ticks) >= 5
+        assert closed == [True]
+        assert errors == results == []
+        window.dialog_manager.confirm_interrupt_for_folder_change.assert_called_once()
+    finally:
+        heartbeat.stop()
+        deadline.stop()
+        manager.request_stop_all_workers()
+        if manager.pick_best_thread is not None:
+            manager.pick_best_thread.wait(3000)
+        app.processEvents()

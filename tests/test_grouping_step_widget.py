@@ -2224,3 +2224,33 @@ def test_organize_left_arrow_keeps_collapsed_root_selected(tmp_path):
     assert widget.eventFilter(widget.preview_tree, left) is True
     assert widget.preview_tree.currentItem() is root_item
     assert not root_item.isExpanded()
+
+
+def test_large_tree_render_indexes_groups_once_and_rebuilds_after_edits():
+    class CountedPaths(list):
+        membership_checks = 0
+
+        def __contains__(self, path):
+            self.membership_checks += 1
+            return super().__contains__(path)
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder("/photos")
+    paths = [CountedPaths([f"/photos/group-{i}/photo.jpg"]) for i in range(600)]
+    widget._editable_groups = [
+        GroupingGroup(group_id=str(i), group_label=f"group-{i}", source_paths=members)
+        for i, members in enumerate(paths)
+    ]
+    widget._current_output_root = "/photos"
+    widget._refresh_preview_trees(preserve_selection=False)
+    # Rendering both trees must not search every group's source list per file.
+    assert sum(members.membership_checks for members in paths) == 0
+    assert len(widget._before_file_items_by_path) == 600
+    assert len(widget._after_file_items_by_path) == 600
+    first = paths[0][0]
+    assert widget._group_id_for_path(first) == "0"
+    widget._editable_groups[0].group_label = "renamed"
+    widget._refresh_preview_trees(preserve_selection=False)
+    assert widget._projected_path_for_source(first) == "/photos/renamed/photo.jpg"
+    assert widget._tree_groups_by_path is None
+    widget.close()
