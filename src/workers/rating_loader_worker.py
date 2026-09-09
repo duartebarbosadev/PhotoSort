@@ -19,12 +19,9 @@ BATCH_LOG_INTERVAL = 10
 
 
 class MetadataState(Protocol):
-    """Application-state fields the metadata worker is allowed to update."""
+    """Read-only application dependencies used by the metadata worker."""
 
     exif_disk_cache: Any
-    rating_cache: dict[str, int]
-    date_cache: dict[str, Any]
-    detailed_metadata_cache: dict[str, dict[str, Any]]
 
 
 class RatingLoaderWorker(QObject):
@@ -128,13 +125,6 @@ class RatingLoaderWorker(QObject):
 
             metadata_batch_to_emit = []
             emitted_batch_count = 0
-            detailed_metadata_cache = getattr(
-                self._app_state, "detailed_metadata_cache", None
-            )
-            if not isinstance(detailed_metadata_cache, dict):
-                detailed_metadata_cache = {}
-                self._app_state.detailed_metadata_cache = detailed_metadata_cache
-
             for i, image_path_norm in enumerate(image_paths_to_process):
                 if not self._is_running:
                     logger.info(f"Processing stopped by request at index {i}.")
@@ -146,19 +136,8 @@ class RatingLoaderWorker(QObject):
 
                 current_metadata_tuple = None
                 if metadata:
-                    # Update AppState's in-memory caches directly here
-                    self._app_state.rating_cache[image_path_norm] = metadata.get(
-                        "rating", 0
-                    )
-                    if metadata.get("date"):
-                        self._app_state.date_cache[image_path_norm] = metadata["date"]
-                    else:
-                        self._app_state.date_cache.pop(image_path_norm, None)
-                    raw_metadata = metadata.get("raw_metadata")
-                    if isinstance(raw_metadata, dict):
-                        detailed_metadata_cache[image_path_norm] = raw_metadata
-                    else:
-                        detailed_metadata_cache.pop(image_path_norm, None)
+                    # Shared state is updated on the UI thread only after the
+                    # manager verifies that this load still owns the folder.
                     current_metadata_tuple = (image_path_norm, metadata)
                 else:
                     logger.warning(

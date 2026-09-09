@@ -87,6 +87,7 @@ from core.app_settings import (
     UI_POPULATION_CHUNK_SIZE,
 )
 from ui.helpers.ui_yield import cooperative_ui_yield
+from ui.helpers.ui_dispatch import bulk_ui_update
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.controllers.image_inspection_controller import InspectionImageSpec
 from ui.workflow_review_components import (
@@ -1589,6 +1590,7 @@ class GroupingStepWidget(QWidget):
             ),
         )
 
+    @bulk_ui_update()
     def _refresh_preview_trees(self, preserve_selection: bool = True) -> None:
         start_time = time.perf_counter()
         self._cancel_all_tree_expansion_operations()
@@ -1605,6 +1607,20 @@ class GroupingStepWidget(QWidget):
             self._capture_selection_state() if preserve_selection else None
         )
         self._update_stats()
+        # These indexes exist only for this render. Editing remains authoritative
+        # in the groups/buckets; a later refresh always builds a fresh snapshot.
+        self._tree_groups_by_path = {}
+        self._tree_groups_by_label = {}
+        self._tree_buckets_by_path = dict.fromkeys(self._editable_skipped, ITEM_SKIPPED)
+        self._tree_buckets_by_path.update(
+            dict.fromkeys(self._editable_unassigned, ITEM_UNASSIGNED)
+        )
+        for group in self._editable_groups:
+            self._tree_groups_by_label.setdefault(
+                self._normalize_relative_path(group.group_label), group
+            )
+            for path in group.source_paths:
+                self._tree_groups_by_path.setdefault(path, group)
         self.before_tree.setUpdatesEnabled(False)
         self.preview_tree.setUpdatesEnabled(False)
         try:
@@ -1615,6 +1631,9 @@ class GroupingStepWidget(QWidget):
             self._render_after_tree(selection_state)
             after_duration = time.perf_counter() - after_start
         finally:
+            self._tree_groups_by_path = None
+            self._tree_groups_by_label = None
+            self._tree_buckets_by_path = None
             self.before_tree.setUpdatesEnabled(True)
             self.preview_tree.setUpdatesEnabled(True)
             self.before_tree.viewport().update()
@@ -2258,6 +2277,10 @@ class GroupingStepWidget(QWidget):
         return self._common_relative_directory_for_paths(group.source_paths)
 
     def _match_relative_path_for_after_directory(self, relative_path: str) -> str:
+        groups = getattr(self, "_tree_groups_by_label", None)
+        if groups is not None:
+            group = groups.get(relative_path)
+            return self._match_relative_path_for_group(group) if group else ""
         for group in self._editable_groups:
             normalized_label = self._normalize_relative_path(group.group_label)
             if normalized_label == relative_path:
@@ -2326,12 +2349,19 @@ class GroupingStepWidget(QWidget):
         return os.path.join(output_root, normalized) if normalized else output_root
 
     def _group_id_for_path(self, source_path: str) -> str | None:
+        groups = getattr(self, "_tree_groups_by_path", None)
+        if groups is not None:
+            group = groups.get(source_path)
+            return str(group.group_id) if group else None
         for group in self._editable_groups:
             if source_path in group.source_paths:
                 return str(group.group_id)
         return None
 
     def _bucket_for_path(self, source_path: str) -> str | None:
+        buckets = getattr(self, "_tree_buckets_by_path", None)
+        if buckets is not None:
+            return buckets.get(source_path)
         if source_path in self._editable_unassigned:
             return ITEM_UNASSIGNED
         if source_path in self._editable_skipped:
@@ -2340,6 +2370,20 @@ class GroupingStepWidget(QWidget):
 
     def _projected_path_for_source(self, source_path: str) -> str:
         filename = self._display_name_for_source(source_path)
+        groups = getattr(self, "_tree_groups_by_path", None)
+        if groups is not None:
+            group = groups.get(source_path)
+            if group is not None:
+                return os.path.join(
+                    self._projected_directory_path(group.group_label), filename
+                )
+            if self._bucket_for_path(source_path) == ITEM_UNASSIGNED:
+                return os.path.join(
+                    self._current_output_root or self._source_root or "",
+                    "Unassigned",
+                    filename,
+                )
+            return source_path
         for group in self._editable_groups:
             if source_path in group.source_paths:
                 return os.path.join(

@@ -33,6 +33,9 @@ class _Pool:
     def waitForDone(self, _timeout):
         return True
 
+    def activeThreadCount(self):
+        return 0
+
 
 def test_same_primary_request_keeps_existing_lookahead_work():
     pipeline = _Pipeline()
@@ -120,3 +123,75 @@ def test_new_detail_set_cancels_stale_results():
 
     assert set(pipeline.generated) == {"current-left.jpg", "current-right.jpg"}
     assert set(ready) == {"current-left.jpg", "current-right.jpg"}
+
+
+def test_reset_discards_callbacks_already_queued_by_old_preview():
+    controller = PreviewLoadController(_Pipeline())
+    controller._pool = pool = _Pool()
+    ready, failed = [], []
+    controller.preview_ready.connect(ready.append)
+    controller.preview_failed.connect(failed.append)
+    controller.request(["old.jpg"])
+    old_id = pool.started[-1].request_id
+
+    controller.reset()
+    controller._handle_preview_ready("old.jpg", old_id)
+    controller._handle_preview_failed("old.jpg", old_id)
+
+    assert ready == failed == []
+
+
+def test_shutdown_never_waits_and_refuses_new_preview_work():
+    from unittest.mock import Mock
+
+    controller = PreviewLoadController(_Pipeline())
+    controller._pool = pool = _Pool()
+    controller._detail_pool = detail_pool = _Pool()
+    pool.waitForDone = Mock()
+    detail_pool.waitForDone = Mock()
+    pool.activeThreadCount = lambda: 1
+    controller.request(["old.jpg"])
+
+    controller.shutdown()
+    controller.request(["new.jpg"])
+    controller.request_details(["new.jpg"])
+
+    assert controller.is_active()
+    pool.activeThreadCount = lambda: 0
+    assert not controller.is_active()
+    pool.waitForDone.assert_not_called()
+    detail_pool.waitForDone.assert_not_called()
+    assert len(pool.started) == 1
+    assert detail_pool.started == []
+
+
+def test_shutdown_returns_while_a_real_preview_pool_is_decoding():
+    import threading
+    import time
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    started, release = threading.Event(), threading.Event()
+
+    class SlowPipeline:
+        def ensure_preview_cached(self, path):
+            started.set()
+            release.wait(5)
+            return True
+
+    controller = PreviewLoadController(SlowPipeline())
+    ready = []
+    controller.preview_ready.connect(ready.append)
+    controller.request(["slow.arw"])
+    try:
+        assert started.wait(1)
+        before = time.monotonic()
+        controller.shutdown()
+        assert time.monotonic() - before < 0.5
+        assert controller.is_active()
+    finally:
+        release.set()
+        assert controller._pool.waitForDone(2000)
+        app.processEvents()
+    assert not controller.is_active()
+    assert ready == []

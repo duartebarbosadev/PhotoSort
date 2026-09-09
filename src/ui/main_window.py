@@ -92,6 +92,7 @@ from ui.helpers.index_lookup_utils import (
     find_proxy_indices_for_paths,
 )
 from ui.helpers.ui_yield import cooperative_ui_yield
+from ui.helpers.ui_dispatch import bulk_ui_update
 from ui.helpers.navigation_utils import (
     find_next_multi_image_cluster_head,
     find_next_rating_match,
@@ -982,31 +983,36 @@ class MainWindow(QMainWindow):
             return
 
         pending = self._collect_workflow_pending_state(source)
+        choices = {}
+        if pending.has_resolvable_work:
+            choices = self.dialog_manager.show_workflow_transition_dialog(
+                WORKFLOW_STEP_LABELS.get(source, source.title()),
+                (
+                    WORKFLOW_STEP_LABELS.get(destination, destination.title())
+                    if destination is not None
+                    else WORKFLOW_STEP_LABELS.get(source, source.title())
+                ),
+                pending,
+                switching=switching,
+            )
+            if choices is None:
+                self.update_workflow_navigation()
+                return
+
+        if switching and self.app_controller.is_workflow_analysis_running(source):
+            if not self.dialog_manager.confirm_interrupt_for_workflow_change(
+                WORKFLOW_STEP_LABELS.get(source, source.title()),
+                WORKFLOW_STEP_LABELS.get(destination, destination.title()),
+            ):
+                self.update_workflow_navigation()
+                return
+            self.app_controller.cancel_workflow_analysis(source)
         if not pending.has_resolvable_work:
-            if switching and self.app_controller.is_workflow_analysis_running(source):
-                self.app_controller.cancel_workflow_analysis(source)
             if destination is not None:
                 self._show_workflow_destination(destination)
             else:
                 self.statusBar().showMessage("No pending changes to apply.", 3000)
             return
-
-        choices = self.dialog_manager.show_workflow_transition_dialog(
-            WORKFLOW_STEP_LABELS.get(source, source.title()),
-            (
-                WORKFLOW_STEP_LABELS.get(destination, destination.title())
-                if destination is not None
-                else WORKFLOW_STEP_LABELS.get(source, source.title())
-            ),
-            pending,
-            switching=switching,
-        )
-        if choices is None:
-            self.update_workflow_navigation()
-            return
-
-        if switching and self.app_controller.is_workflow_analysis_running(source):
-            self.app_controller.cancel_workflow_analysis(source)
         request = WorkflowTransitionRequest(
             source=source,
             destination=destination,
@@ -1105,8 +1111,8 @@ class MainWindow(QMainWindow):
         self._thumbnail_icons_by_path.clear()
         self.thumbnail_loader.reset()
 
-    def start_thumbnail_warming(self, image_paths: list[str]) -> None:
-        self.thumbnail_loader.start_folder(image_paths)
+    def start_thumbnail_warming(self, image_paths: list[str]) -> str:
+        return self.thumbnail_loader.start_folder(image_paths)
 
     def notify_thumbnail_items_rebuilt(self) -> None:
         self.thumbnail_loader.model_rebuilt()
@@ -1283,6 +1289,7 @@ class MainWindow(QMainWindow):
         if self._cull_model_dirty and self.app_state.image_files_data:
             self._rebuild_model_view()
 
+    @bulk_ui_update()
     def _rebuild_model_view(
         self,
         preserved_selection_paths: list[str] | None = None,
@@ -2579,17 +2586,29 @@ class MainWindow(QMainWindow):
 
         return QModelIndex()  # No visible image item found in this subtree
 
+    def _has_active_background_work(self) -> bool:
+        """Keep owners alive until both managed workers and preview pools drain."""
+        workers_active = getattr(
+            self.worker_manager,
+            "is_any_worker_active",
+            self.worker_manager.is_any_worker_running,
+        )
+        previews = getattr(self, "preview_load_controller", None)
+        pending_results = getattr(
+            self.worker_manager, "has_pending_ui_results", lambda: False
+        )
+        return bool(
+            workers_active()
+            or getattr(previews, "is_active", lambda: False)()
+            or pending_results()
+        )
+
     @override
     def closeEvent(self, event):
         close_start = time.perf_counter()
         logger.info("Application close requested.")
         if getattr(self, "_shutdown_in_progress", False):
-            is_any_worker_active = getattr(
-                self.worker_manager,
-                "is_any_worker_active",
-                self.worker_manager.is_any_worker_running,
-            )
-            if is_any_worker_active():
+            if MainWindow._has_active_background_work(self):
                 event.ignore()
                 return
             self._shutdown_in_progress = False
@@ -2609,6 +2628,19 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.statusBar().showMessage(
                 "Files are still moving to Trash. Wait for deletion to finish before closing.",
+                4000,
+            )
+            return
+
+        if (
+            getattr(
+                self.worker_manager, "is_rotation_application_running", lambda: False
+            )()
+            or getattr(self.worker_manager, "is_rating_writer_running", lambda: False)()
+        ):
+            event.ignore()
+            self.statusBar().showMessage(
+                "Rotations or ratings are still being written. Wait before closing.",
                 4000,
             )
             return
@@ -2674,14 +2706,17 @@ class MainWindow(QMainWindow):
             "Requesting all workers stop on application close (preflight %.3fs).",
             time.perf_counter() - close_start,
         )
+        self._shutdown_in_progress = True
+        controller = getattr(self, "app_controller", None)
+        cancel_starts = getattr(controller, "cancel_pending_background_starts", None)
+        if callable(cancel_starts):
+            cancel_starts()
+        reset_thumbnails = getattr(self, "reset_thumbnail_requests", None)
+        if callable(reset_thumbnails):
+            reset_thumbnails()
         self.preview_load_controller.shutdown()
         self.worker_manager.request_stop_all_workers()
-        is_any_worker_active = getattr(
-            self.worker_manager,
-            "is_any_worker_active",
-            self.worker_manager.is_any_worker_running,
-        )
-        if is_any_worker_active():
+        if MainWindow._has_active_background_work(self):
             self._shutdown_in_progress = True
             self.statusBar().showMessage("Stopping background work…", 0)
             QTimer.singleShot(25, self._finish_close_after_workers)
@@ -2694,12 +2729,7 @@ class MainWindow(QMainWindow):
     def _finish_close_after_workers(self) -> None:
         """Retry closing through Qt's event loop once worker threads have exited."""
 
-        is_any_worker_active = getattr(
-            self.worker_manager,
-            "is_any_worker_active",
-            self.worker_manager.is_any_worker_running,
-        )
-        if is_any_worker_active():
+        if MainWindow._has_active_background_work(self):
             QTimer.singleShot(25, self._finish_close_after_workers)
             return
         self.close()

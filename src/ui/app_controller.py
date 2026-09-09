@@ -2,6 +2,8 @@ import os
 import re
 import time
 import logging
+import math
+import shutil
 from datetime import datetime as datetime_obj
 from typing import Any
 
@@ -13,6 +15,7 @@ from core.app_settings import (
     get_similarity_clustering_eps,
     get_cull_grouping_strictness,
     get_companion_files_preference,
+    set_preview_cache_size_gb,
 )
 from core.similarity_embedding_model import SimilarityEmbeddingModel
 from core.similarity_cache import (
@@ -191,6 +194,8 @@ class AppController(QObject):
         self._pending_folder_load_after_workers: tuple[str, dict[str, bool]] | None = (
             None
         )
+        self._folder_asset_session_id: str | None = None
+        self._rating_load_complete = False
         self._cull_prerequisites_declined = False
         self._model_consent = ModelConsentState()
         self._cull_grouping_fingerprints: dict[str, tuple[int, int]] | None = None
@@ -226,6 +231,7 @@ class AppController(QObject):
         """Cancel only work owned by the departing workflow."""
         self._cancelled_workflows.add(workflow)
         if workflow == "organize":
+            self._deferred_starts.disarm("grouping_preview")
             self.worker_manager.request_stop_grouping_preview()
             self._pending_grouping_preview = None
             self._pending_grouping_preview_start = None
@@ -255,6 +261,14 @@ class AppController(QObject):
         elif workflow == "fix_rotation":
             self.worker_manager.request_stop_fix_rotation_detection()
 
+    def cancel_pending_background_starts(self) -> None:
+        """Discard queued follow-up work before a folder change or shutdown."""
+        self._deferred_starts.clear()
+        self._pending_grouping_preview_start = None
+        self._pick_best_pending_after_subject_grouping = False
+        self._pick_best_owns_subject_grouping = False
+        self._easy_delete_pending_after_similarity = False
+
     def _sync_active_image(self, workflow_step: str) -> None:
         controller = getattr(self.main_window, "active_image_controller", None)
         if controller is not None:
@@ -266,6 +280,18 @@ class AppController(QObject):
         self.worker_manager.file_scan_found_files.connect(self.handle_files_found)
         self.worker_manager.file_scan_finished.connect(self.handle_scan_finished)
         self.worker_manager.file_scan_error.connect(self.handle_scan_error)
+        self.worker_manager.thumbnail_session_progress.connect(
+            self.handle_review_asset_progress
+        )
+        self.worker_manager.thumbnail_session_finished.connect(
+            self.handle_review_asset_finished
+        )
+        self.worker_manager.thumbnail_session_error.connect(
+            self.handle_review_asset_error
+        )
+        self.worker_manager.thumbnail_session_capacity_required.connect(
+            self.handle_review_asset_capacity_required
+        )
 
         # Similarity Worker
         self.worker_manager.similarity_progress.connect(self.handle_similarity_progress)
@@ -404,17 +430,10 @@ class AppController(QObject):
         skip_grouping_step: bool = False,
         record_as_source: bool = True,
         preserve_deletion_marks: bool = False,
+        _interrupt_confirmed: bool = False,
     ):
         load_folder_start_time = time.perf_counter()
         logger.info("Loading folder: %s", folder_path)
-        self._cull_prerequisites_declined = False
-        # A new folder starts a fresh consent slate, matching the previous
-        # per-folder reset of the download approval and CPU warning.
-        self._model_consent = ModelConsentState()
-        self._cull_grouping_fingerprints = None
-        # A new folder invalidates every start that was still waiting on the probe.
-        self._deferred_starts.clear()
-
         if self.worker_manager.is_grouping_workflow_running():
             logger.info("Folder load blocked while grouping workflow is still running.")
             self.main_window.statusBar().showMessage(
@@ -441,6 +460,33 @@ class AppController(QObject):
             )
             return
 
+        current_folder = getattr(self.app_state, "current_folder_path", None)
+        is_folder_switch = True
+        if current_folder is None:
+            is_folder_switch = False
+        elif isinstance(current_folder, (str, os.PathLike)):
+            is_folder_switch = os.path.normcase(
+                os.path.abspath(os.fspath(current_folder))
+            ) != os.path.normcase(os.path.abspath(os.fspath(folder_path)))
+        active_work = getattr(self.main_window, "_has_active_background_work", None)
+        active_work_result = active_work() if callable(active_work) else None
+        has_active_work = (
+            active_work_result
+            if isinstance(active_work_result, bool)
+            else self.worker_manager.is_any_worker_running()
+        )
+        if not _interrupt_confirmed and is_folder_switch and has_active_work:
+            if not self.main_window.dialog_manager.confirm_interrupt_for_folder_change(
+                folder_path
+            ):
+                logger.info(
+                    "Folder change cancelled; current background work retained."
+                )
+                return
+        # Keep approval with deferred requests so resuming after deletion or
+        # worker shutdown does not ask the same question again.
+        _interrupt_confirmed = True
+
         marked_files = self.app_state.get_marked_files()
         preserved_marks = set(marked_files) if preserve_deletion_marks else set()
         if marked_files and not preserve_deletion_marks:
@@ -460,6 +506,7 @@ class AppController(QObject):
                         "skip_grouping_step": skip_grouping_step,
                         "record_as_source": record_as_source,
                         "preserve_deletion_marks": preserve_deletion_marks,
+                        "_interrupt_confirmed": _interrupt_confirmed,
                     },
                 )
                 started = (
@@ -479,10 +526,13 @@ class AppController(QObject):
                 self.main_window.statusBar().showMessage("Folder load cancelled.", 3000)
                 return
 
+        # Do not change consent, queued starts or folder state until all dialogs
+        # have been accepted. Choosing to stay must leave the current run intact.
+        self._cull_prerequisites_declined = False
+        self._model_consent = ModelConsentState()
+        self._cull_grouping_fingerprints = None
+        AppController.cancel_pending_background_starts(self)
         self.main_window.show_loading_overlay("Preparing to scan folder...")
-
-        add_recent_folder(folder_path)
-        self.main_window.menu_manager.update_recent_folders_menu()
 
         self.worker_manager.request_stop_all_workers()
         is_any_worker_active = getattr(
@@ -497,6 +547,7 @@ class AppController(QObject):
                     "skip_grouping_step": skip_grouping_step,
                     "record_as_source": record_as_source,
                     "preserve_deletion_marks": preserve_deletion_marks,
+                    "_interrupt_confirmed": _interrupt_confirmed,
                 },
             )
             self.main_window.update_loading_text(
@@ -505,7 +556,15 @@ class AppController(QObject):
             QTimer.singleShot(25, self._finish_folder_load_after_workers)
             return
 
+        add_recent_folder(folder_path)
+        self.main_window.menu_manager.update_recent_folders_menu()
+
+        image_pipeline = getattr(self.main_window, "image_pipeline", None)
+        if image_pipeline is not None:
+            image_pipeline.end_active_review_working_set()
         self.app_state.clear_all_file_specific_data()
+        self._folder_asset_session_id = None
+        self._rating_load_complete = False
         if preserved_marks:
             self.app_state.marked_for_deletion.update(preserved_marks)
         self.main_window.reset_thumbnail_requests()
@@ -852,6 +911,8 @@ class AppController(QObject):
     def _start_pending_grouping_preview(self) -> None:
         """Start the latest preview request after the replaced worker exits."""
 
+        if self._pending_grouping_preview_start is None:
+            return
         is_grouping_preview_active = getattr(
             self.worker_manager,
             "is_grouping_preview_active",
@@ -1196,16 +1257,59 @@ class AppController(QObject):
 
     def handle_scan_finished(self):
         self.main_window.update_loading_text(
-            "Scan finished. Populating view and starting background loads..."
+            "Scan finished. Preparing review images..."
         )
+        self.main_window.menu_manager.open_folder_action.setEnabled(False)
+        self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
+        self.main_window.menu_manager.group_by_similarity_action.setEnabled(False)
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
+
+        media_file_data = self._get_media_file_data()
+        if media_file_data:
+            self.worker_manager.start_rating_load(
+                media_file_data.copy(),
+                self.app_state.rating_disk_cache,
+                self.app_state,
+            )
+            paths = [item["path"] for item in media_file_data if item.get("path")]
+            session_id = self.main_window.start_thumbnail_warming(paths)
+            self._folder_asset_session_id = str(session_id) if session_id else None
+            if self._folder_asset_session_id is not None:
+                return
+
+            logger.error("Could not start review-asset preparation")
+            self._activate_loaded_folder(asset_failures=len(paths))
+        else:
+            self._activate_loaded_folder(asset_failures=0)
+
+    def _cancel_folder_for_review_capacity(self) -> None:
+        self.worker_manager.request_stop_rating_load()
+        self._folder_asset_session_id = None
+        self._rating_load_complete = False
+        self._pending_exif_cache_capacity_warning = None
+        self.main_window.hide_exif_progress()
+        pipeline = getattr(self.main_window, "image_pipeline", None)
+        if pipeline is not None:
+            pipeline.end_active_review_working_set()
+        self.app_state.clear_all_file_specific_data()
+        self.app_state.current_folder_path = None
+        self.main_window.reset_thumbnail_requests()
+        self.main_window.hide_loading_overlay()
+        self.main_window.menu_manager.open_folder_action.setEnabled(True)
+        self.main_window.statusBar().showMessage(
+            "Folder load canceled because its review images do not fit in the approved cache.",
+            7000,
+        )
+
+    def _activate_loaded_folder(self, *, asset_failures: int) -> None:
+        """Expose workflows only after every review asset has been attempted."""
         has_images = bool(self._get_image_file_data())
         self.main_window.menu_manager.open_folder_action.setEnabled(True)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(has_images)
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(has_images)
-        # Rating decisions depend on the background metadata pass. Enabling AI
-        # rating before it finishes would force per-file disk/EXIF reads from
-        # the UI thread to discover already-rated images.
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
+        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
+            has_images and self._rating_load_complete
+        )
 
         self._restore_analysis_state()
         if self._supports_grouping_workflow_ui():
@@ -1223,30 +1327,12 @@ class AppController(QObject):
         else:
             self.main_window._rebuild_model_view()
 
-        # The folder is usable now. Metadata and thumbnails are enhancements and
-        # must not keep the blocking overlay on screen.
         self.main_window.hide_loading_overlay()
-
-        media_file_data = self._get_media_file_data()
-        if media_file_data:
-            self.main_window.start_thumbnail_warming(
-                [item["path"] for item in media_file_data if item.get("path")]
+        if asset_failures:
+            self.main_window.statusBar().showMessage(
+                f"Review preparation finished with {asset_failures} file(s) that could not be displayed.",
+                7000,
             )
-            self.worker_manager.start_preview_warming(
-                [
-                    item["path"]
-                    for item in self._get_image_file_data()
-                    if item.get("path")
-                ]
-            )
-
-            self.worker_manager.start_rating_load(
-                media_file_data.copy(),
-                self.app_state.rating_disk_cache,
-                self.app_state,
-            )
-        else:
-            self.main_window.hide_loading_overlay()
 
         self.main_window._update_image_info_label()
         resume_transition = getattr(
@@ -1254,6 +1340,81 @@ class AppController(QObject):
         )
         if callable(resume_transition):
             resume_transition()
+
+    def handle_review_asset_progress(
+        self,
+        session_id: str,
+        attempted: int,
+        total: int,
+        failures: int,
+        _paused: bool,
+    ) -> None:
+        if session_id != self._folder_asset_session_id or total <= 0:
+            return
+        percent = min(100, round((attempted / total) * 100))
+        failure_suffix = f" — {failures} failed" if failures else ""
+        self.main_window.update_loading_text(
+            f"Preparing review images {attempted:,} / {total:,} ({percent}%){failure_suffix}"
+        )
+
+    def handle_review_asset_finished(
+        self, session_id: str, _attempted: int, failures: int
+    ) -> None:
+        if session_id != self._folder_asset_session_id:
+            return
+        self._folder_asset_session_id = None
+        self._activate_loaded_folder(asset_failures=failures)
+
+    def handle_review_asset_error(self, session_id: str, message: str) -> None:
+        if session_id != self._folder_asset_session_id:
+            return
+        logger.error("Review-asset preparation error: %s", message)
+        self.main_window.update_loading_text(
+            "Review preparation encountered an error; finishing available files..."
+        )
+
+    def handle_review_asset_capacity_required(
+        self, session_id: str, required_bytes: int
+    ) -> None:
+        """Pause preparation until the user approves enough additional storage."""
+        if session_id != self._folder_asset_session_id:
+            self.worker_manager.resolve_thumbnail_capacity_request(session_id, False)
+            return
+
+        pipeline = self.main_window.image_pipeline
+        current_limit = pipeline.preview_cache.size_limit_bytes
+        required_bytes = max(int(required_bytes), current_limit + 1)
+        cache_dir = pipeline.preview_cache._cache_dir
+        try:
+            free_bytes = shutil.disk_usage(cache_dir).free
+        except OSError:
+            free_bytes = 0
+        available_bytes = free_bytes + pipeline.preview_cache.volume()
+        if required_bytes > available_bytes:
+            self.main_window.dialog_manager.show_preview_cache_disk_space_error(
+                required_bytes, available_bytes
+            )
+            self.worker_manager.resolve_thumbnail_capacity_request(session_id, False)
+            self._folder_asset_session_id = None
+            self._cancel_folder_for_review_capacity()
+            return
+
+        approved = (
+            self.main_window.dialog_manager.confirm_preview_cache_capacity_increase(
+                required_bytes, current_limit
+            )
+        )
+        if not approved:
+            self.worker_manager.resolve_thumbnail_capacity_request(session_id, False)
+            self._folder_asset_session_id = None
+            self._cancel_folder_for_review_capacity()
+            return
+
+        approved_gb = math.ceil((required_bytes / (1024**3)) * 4) / 4
+        set_preview_cache_size_gb(approved_gb)
+        approved_bytes = int(approved_gb * (1024**3))
+        pipeline.preview_cache.increase_size_limit(approved_bytes)
+        self.worker_manager.resolve_thumbnail_capacity_request(session_id, True)
 
     def handle_scan_error(self, message: str):
         logger.error(f"File scan error: {message}")
@@ -1720,16 +1881,21 @@ class AppController(QObject):
 
     def handle_rating_load_finished(self):
         logger.info("Background rating loading finished.")
+        self._rating_load_complete = True
         self.main_window.statusBar().showMessage(
             "Background rating loading finished.", 3000
         )
 
-        self.main_window.hide_loading_overlay()
+        if self._folder_asset_session_id is None:
+            self.main_window.hide_loading_overlay()
         self.main_window.hide_exif_progress()
         menu_manager = getattr(self.main_window, "menu_manager", None)
         ai_rating_action = getattr(menu_manager, "ai_rate_images_action", None)
         if ai_rating_action is not None:
-            ai_rating_action.setEnabled(bool(self._get_image_file_data()))
+            ai_rating_action.setEnabled(
+                self._folder_asset_session_id is None
+                and bool(self._get_image_file_data())
+            )
 
         warning = self._pending_exif_cache_capacity_warning
         self._pending_exif_cache_capacity_warning = None
@@ -1762,7 +1928,8 @@ class AppController(QObject):
     def handle_rating_load_error(self, message: str):
         logger.error(f"Rating load failed: {message}", exc_info=True)
         self.main_window.statusBar().showMessage(f"Rating Load Error: {message}", 5000)
-        self.main_window.hide_loading_overlay()
+        if self._folder_asset_session_id is None:
+            self.main_window.hide_loading_overlay()
         self.main_window.hide_exif_progress()
 
     def handle_similarity_progress(self, percentage, message):

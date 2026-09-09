@@ -62,6 +62,39 @@ def test_progress_view_estimates_remaining_time_and_extracts_counts():
     assert view.count_label.text() == "6 of 12"
 
 
+def test_remaining_time_counts_down_between_sparse_progress_updates():
+    now = [0.0]
+    view = WorkflowProgressView(
+        "Preparing review images",
+        default_message="Preparing…",
+        clock=lambda: now[0],
+    )
+    view.update_progress("Preparing review images 10 / 100 (10%)", 10)
+    now[0] = 10.0
+    view.update_progress("Preparing review images 50 / 100 (50%)", 50)
+    first_estimate = view.remaining_label.text()
+
+    now[0] = 15.0
+    view._refresh_time_labels()
+
+    assert first_estimate == "About 12s"
+    assert view.remaining_label.text() == "About 8s"
+
+
+def test_exact_counts_update_eta_even_when_rounded_percent_is_unchanged():
+    now = [0.0]
+    view = WorkflowProgressView(
+        "Preparing review images",
+        default_message="Preparing…",
+        clock=lambda: now[0],
+    )
+    view.update_progress("Preparing review images 1 / 1000 (0%)", 0)
+    now[0] = 5.0
+    view.update_progress("Preparing review images 5 / 1000 (0%)", 0)
+
+    assert view.remaining_label.text() != "Estimating…"
+
+
 def test_progress_view_resets_eta_when_a_new_phase_restarts_percentage():
     now = [0.0]
     view = WorkflowProgressView(
