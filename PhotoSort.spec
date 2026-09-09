@@ -84,6 +84,10 @@ excluded_transformer_models = [
 
 hiddenimports = [
     "compression.zstd",
+    # Torchvision 0.29 uses stable-ABI extensions, loaded indirectly at runtime.
+    # The upstream PyInstaller hooks still collect the pre-0.29 names.
+    "torchvision._C_stable",
+    "torchvision.image_stable",
     "core.build_info",
     "core.packaging_smoke",
     "mediapipe.tasks.python.vision.face_landmarker",
@@ -178,6 +182,7 @@ if IS_MACOS:
         bundle_identifier="dev.duartebarbosa.photosort",
         info_plist={
             "CFBundleDisplayName": "PhotoSort",
+            "LSMinimumSystemVersion": "15.0",
             "NSHighResolutionCapable": True,
         },
     )

@@ -32,7 +32,7 @@ jobs:
             artifact_name: PhotoSort-Windows-x64-CUDA
             requirements_file: requirements-cuda.txt
             max_artifact_mb: 750
-          - os: macos-14
+          - os: macos-15
             python: '3.14'
             artifact_name: PhotoSort-macOS-AppleSilicon
             requirements_file: requirements.txt

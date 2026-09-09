@@ -16,6 +16,7 @@ from core.model_provisioning import AESTHETIC_MODEL, resolve_snapshot
 from core.image_features.face_analysis import FaceAnalysisService
 from core.runtime_paths import resolve_face_landmarker_model_path
 import contextlib
+import sys
 
 LEFT_EYE_INDICES = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_INDICES = (362, 385, 387, 263, 373, 380)
@@ -81,14 +82,29 @@ class MediaPipeTasksFaceLandmarker:
         try:
             tasks = mediapipe.tasks
             vision = tasks.vision
+            # MediaPipe 1.0.1 aborts on macOS CPU graphs (upstream #6356).
+            # Metal requires four-channel pixel buffers, including for RGB input.
+            self._use_metal = sys.platform == "darwin"
+            base_options = tasks.BaseOptions(
+                model_asset_path=str(model_path),
+                delegate=(
+                    tasks.BaseOptions.Delegate.GPU
+                    if self._use_metal
+                    else tasks.BaseOptions.Delegate.CPU
+                ),
+            )
             options = vision.FaceLandmarkerOptions(
-                base_options=tasks.BaseOptions(model_asset_path=str(model_path)),
+                base_options=base_options,
                 running_mode=vision.RunningMode.IMAGE,
                 num_faces=10,
             )
             self._landmarker = vision.FaceLandmarker.create_from_options(options)
             self._image_type = mediapipe.Image
-            self._image_format = mediapipe.ImageFormat.SRGB
+            self._image_format = (
+                mediapipe.ImageFormat.SRGBA
+                if self._use_metal
+                else mediapipe.ImageFormat.SRGB
+            )
         except (AttributeError, ValueError, RuntimeError) as exc:
             version = getattr(mediapipe, "__version__", "unknown")
             raise MissingDependencyError(
@@ -103,10 +119,13 @@ class MediaPipeTasksFaceLandmarker:
             raise MissingDependencyError(
                 "Missing optional dependency 'numpy'. Install the required extras before running the selector."
             ) from exc
-        image = self._image_type(
-            image_format=self._image_format,
-            data=np.ascontiguousarray(rgb_image),
-        )
+        if self._use_metal:
+            pixels = np.empty((*rgb_image.shape[:2], 4), dtype=np.uint8)
+            pixels[..., :3] = rgb_image
+            pixels[..., 3] = 255
+        else:
+            pixels = np.ascontiguousarray(rgb_image)
+        image = self._image_type(image_format=self._image_format, data=pixels)
         return self._landmarker.detect(image).face_landmarks
 
     def close(self) -> None:
