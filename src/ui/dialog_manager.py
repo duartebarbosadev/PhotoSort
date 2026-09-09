@@ -1,7 +1,6 @@
 import webbrowser
 import os
 import logging
-import time
 import contextlib
 
 from PyQt6.QtWidgets import (
@@ -15,16 +14,13 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QComboBox,
-    QSizePolicy,
     QScrollArea,
     QListWidget,
     QListWidgetItem,
     QStyle,
     QRadioButton,
     QSlider,
-    QLineEdit,
     QPlainTextEdit,
-    QSpinBox,
     QDoubleSpinBox,
     QButtonGroup,
     QWidget,
@@ -968,19 +964,10 @@ class DialogManager:
             set_performance_mode,
             get_custom_thread_count,
             set_custom_thread_count,
-            get_openai_config,
-            set_openai_config,
-            DEFAULT_OPENAI_API_KEY,
-            DEFAULT_OPENAI_MODEL,
-            DEFAULT_OPENAI_BASE_URL,
-            DEFAULT_OPENAI_MAX_TOKENS,
-            DEFAULT_OPENAI_TIMEOUT,
-            DEFAULT_OPENAI_MAX_WORKERS,
             get_similarity_clustering_eps,
             get_cull_grouping_strictness,
             set_cull_grouping_strictness,
         )
-        from core.ai.ai_rating_pipeline import DEFAULT_RATING_PROMPT
 
         logger.info("Showing preferences dialog")
         dialog = QDialog(self.parent)
@@ -1302,330 +1289,6 @@ class DialogManager:
 
         content_layout.addWidget(easy_delete_card)
 
-        # --- AI Engine Card ---
-        ai_card, ai_layout = build_card("dialogCard")
-        ai_title = QLabel("AI Rating Engine")
-        ai_title.setObjectName("cardSectionTitle")
-        ai_layout.addWidget(ai_title)
-
-        sep2 = QFrame()
-        sep2.setObjectName("cardSeparator")
-        sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setFixedHeight(1)
-        ai_layout.addWidget(sep2)
-
-        ai_desc_label = QLabel(
-            "Configure the OpenAI-compatible vision model used for AI star ratings."
-        )
-        ai_desc_label.setObjectName("cardDescription")
-        ai_desc_label.setWordWrap(True)
-        ai_layout.addWidget(ai_desc_label)
-
-        openai_config = get_openai_config()
-        api_key_value = openai_config.get("api_key") or DEFAULT_OPENAI_API_KEY
-        model_value = openai_config.get("model") or DEFAULT_OPENAI_MODEL
-        base_url_value = openai_config.get("base_url") or DEFAULT_OPENAI_BASE_URL
-        try:
-            max_tokens_value = int(
-                openai_config.get("max_tokens") or DEFAULT_OPENAI_MAX_TOKENS
-            )
-        except TypeError, ValueError:
-            max_tokens_value = DEFAULT_OPENAI_MAX_TOKENS
-        try:
-            timeout_value = int(openai_config.get("timeout") or DEFAULT_OPENAI_TIMEOUT)
-        except TypeError, ValueError:
-            timeout_value = DEFAULT_OPENAI_TIMEOUT
-        try:
-            max_workers_value = int(
-                openai_config.get("max_workers") or DEFAULT_OPENAI_MAX_WORKERS
-            )
-        except TypeError, ValueError:
-            max_workers_value = DEFAULT_OPENAI_MAX_WORKERS
-        rating_prompt_value = (
-            openai_config.get("rating_prompt") or DEFAULT_RATING_PROMPT
-        )
-
-        openai_form = QGridLayout()
-        openai_form.setHorizontalSpacing(12)
-        openai_form.setVerticalSpacing(12)
-
-        api_key_label = QLabel("API Key")
-        api_key_input = QLineEdit()
-        api_key_input.setObjectName("openAIKeyInput")
-        api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        api_key_input.setPlaceholderText("sk-...")
-        api_key_input.setClearButtonEnabled(True)
-        api_key_input.setText(api_key_value)
-        openai_form.addWidget(api_key_label, 0, 0)
-        openai_form.addWidget(api_key_input, 0, 1)
-
-        model_label = QLabel("Model")
-        model_combo = QComboBox()
-        model_combo.setObjectName("openAIModelCombo")
-        model_combo.setEditable(True)
-        model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        model_combo.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        if model_value:
-            model_combo.addItem(model_value)
-            model_combo.setCurrentText(model_value)
-        else:
-            model_combo.setCurrentText(DEFAULT_OPENAI_MODEL)
-
-        fetch_models_button = QPushButton("Fetch Models")
-        fetch_models_button.setObjectName("openAIFetchModelsButton")
-
-        model_row = QHBoxLayout()
-        model_row.setContentsMargins(0, 0, 0, 0)
-        model_row.setSpacing(6)
-        model_row.addWidget(model_combo)
-        model_row.addWidget(fetch_models_button)
-
-        openai_form.addWidget(model_label, 1, 0)
-        openai_form.addLayout(model_row, 1, 1)
-
-        base_url_label = QLabel("Base URL")
-        base_url_input = QLineEdit()
-        base_url_input.setObjectName("openAIBaseUrlInput")
-        base_url_input.setPlaceholderText(DEFAULT_OPENAI_BASE_URL)
-        base_url_input.setClearButtonEnabled(True)
-        base_url_input.setText(base_url_value)
-        openai_form.addWidget(base_url_label, 2, 0)
-        openai_form.addWidget(base_url_input, 2, 1)
-
-        max_tokens_label = QLabel("Max Tokens")
-        max_tokens_spin = QSpinBox()
-        max_tokens_spin.setObjectName("openAIMaxTokensSpin")
-        max_tokens_spin.setRange(64, 32768)
-        max_tokens_spin.setSingleStep(64)
-        max_tokens_spin.setValue(max_tokens_value)
-        openai_form.addWidget(max_tokens_label, 3, 0)
-        openai_form.addWidget(max_tokens_spin, 3, 1)
-
-        timeout_label = QLabel("Timeout (s)")
-        timeout_spin = QSpinBox()
-        timeout_spin.setObjectName("openAITimeoutSpin")
-        timeout_spin.setRange(10, 600)
-        timeout_spin.setSingleStep(5)
-        timeout_spin.setValue(timeout_value)
-        openai_form.addWidget(timeout_label, 4, 0)
-        openai_form.addWidget(timeout_spin, 4, 1)
-
-        max_workers_label = QLabel("Concurrent Workers")
-        max_workers_spin = QSpinBox()
-        max_workers_spin.setObjectName("openAIMaxWorkersSpin")
-        max_workers_spin.setRange(1, 16)
-        max_workers_spin.setValue(max_workers_value)
-        openai_form.addWidget(max_workers_label, 5, 0)
-        openai_form.addWidget(max_workers_spin, 5, 1)
-
-        rating_prompt_label = QLabel("Rating Prompt")
-        rating_prompt_edit = QPlainTextEdit()
-        rating_prompt_edit.setObjectName("openAIRatingPromptEdit")
-        rating_prompt_edit.setPlaceholderText(
-            "Leave blank to use the default rating prompt."
-        )
-        rating_prompt_edit.setPlainText(rating_prompt_value)
-        rating_prompt_edit.setMinimumHeight(80)
-        openai_form.addWidget(rating_prompt_label, 6, 0, Qt.AlignmentFlag.AlignTop)
-        openai_form.addWidget(rating_prompt_edit, 6, 1)
-
-        test_connection_button = QPushButton("Test Connection")
-        test_connection_button.setObjectName("openAITestConnectionButton")
-
-        def _resolve_or_default(value: str, default_value: str) -> str:
-            stripped = value.strip()
-            return stripped or default_value
-
-        def _create_openai_client():
-            try:
-                from openai import OpenAI  # type: ignore
-            except ImportError:
-                QMessageBox.warning(
-                    dialog,
-                    "OpenAI Package Missing",
-                    "Install the 'openai' package to test the connection.",
-                )
-                return None
-
-            try:
-                return OpenAI(
-                    api_key=_resolve_or_default(
-                        api_key_input.text(), DEFAULT_OPENAI_API_KEY
-                    ),
-                    base_url=_resolve_or_default(
-                        base_url_input.text(), DEFAULT_OPENAI_BASE_URL
-                    ),
-                    timeout=timeout_spin.value(),
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                QMessageBox.critical(
-                    dialog,
-                    "Client Creation Failed",
-                    f"Unable to create OpenAI client:\n{exc}",
-                )
-                return None
-
-        def _extract_model_ids(response) -> set[str]:
-            model_ids: set[str] = set()
-            data = getattr(response, "data", None)
-            if data is None and isinstance(response, dict):
-                data = response.get("data")
-            if not data:
-                return model_ids
-            for entry in data:
-                if isinstance(entry, dict):
-                    identifier = entry.get("id") or entry.get("name")
-                else:
-                    identifier = getattr(entry, "id", None) or getattr(
-                        entry, "name", None
-                    )
-                if identifier:
-                    model_ids.add(str(identifier))
-            return model_ids
-
-        def handle_test_connection():
-            client = _create_openai_client()
-            if client is None:
-                return
-            test_connection_button.setEnabled(False)
-            fetch_models_button.setEnabled(False)
-            try:
-                probe_timeout = min(timeout_spin.value(), 30)
-                probe_client = (
-                    client.with_options(timeout=probe_timeout)
-                    if hasattr(client, "with_options")
-                    else client
-                )
-
-                models_start = time.perf_counter()
-                response = probe_client.models.list()
-                models_duration = time.perf_counter() - models_start
-                model_ids = _extract_model_ids(response)
-                test_model = _resolve_or_default(
-                    model_combo.currentText(), DEFAULT_OPENAI_MODEL
-                )
-                completion_duration: float | None = None
-                completion_error: Exception | None = None
-                try:
-                    completion_client = (
-                        client.with_options(timeout=probe_timeout)
-                        if hasattr(client, "with_options")
-                        else client
-                    )
-                    completion_start = time.perf_counter()
-                    completion_client.chat.completions.create(
-                        model=test_model,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": "PhotoSort connectivity check.",
-                            }
-                        ],
-                        max_tokens=8,
-                    )
-                    completion_duration = time.perf_counter() - completion_start
-                except Exception as exc:  # pragma: no cover - network dependent
-                    completion_error = exc
-
-                if completion_error is None:
-                    QMessageBox.information(
-                        dialog,
-                        "Connection Successful",
-                        (
-                            f"Models endpoint responded in {models_duration:.2f}s ("
-                            f"{len(model_ids)} models).\n"
-                            f"Chat completion succeeded in {completion_duration:.2f}s using '{test_model}'."
-                        ),
-                    )
-                else:
-                    QMessageBox.warning(
-                        dialog,
-                        "Partial Success",
-                        (
-                            f"Models endpoint responded in {models_duration:.2f}s ("
-                            f"{len(model_ids)} models).\n"
-                            f"Chat completion failed for '{test_model}':\n{completion_error}"
-                        ),
-                    )
-            except Exception as exc:  # pragma: no cover - network dependent
-                QMessageBox.critical(
-                    dialog,
-                    "Connection Failed",
-                    f"Connection test failed:\n{exc}",
-                )
-            finally:
-                test_connection_button.setEnabled(True)
-                fetch_models_button.setEnabled(True)
-
-        def handle_fetch_models():
-            client = _create_openai_client()
-            if client is None:
-                return
-            test_connection_button.setEnabled(False)
-            fetch_models_button.setEnabled(False)
-            start = time.perf_counter()
-            try:
-                probe_client = (
-                    client.with_options(timeout=min(timeout_spin.value(), 30))
-                    if hasattr(client, "with_options")
-                    else client
-                )
-                response = probe_client.models.list()
-                duration = time.perf_counter() - start
-                model_ids = _extract_model_ids(response)
-                if not model_ids:
-                    QMessageBox.information(
-                        dialog,
-                        "No Models Found",
-                        "The endpoint is reachable but returned no models.",
-                    )
-                else:
-                    existing_text = model_combo.currentText().strip()
-                    sorted_ids = sorted(model_ids)
-                    model_combo.blockSignals(True)
-                    model_combo.clear()
-                    for identifier in sorted_ids:
-                        model_combo.addItem(identifier)
-                    if existing_text and existing_text in model_ids:
-                        model_combo.setCurrentText(existing_text)
-                    else:
-                        model_combo.setCurrentText(sorted_ids[0])
-                        if existing_text and existing_text not in model_ids:
-                            model_combo.insertItem(0, existing_text)
-                            model_combo.setCurrentIndex(0)
-                    model_combo.blockSignals(False)
-                    QMessageBox.information(
-                        dialog,
-                        "Models Retrieved",
-                        (
-                            f"Loaded {len(model_ids)} models in {duration:.2f}s.\n"
-                            "You can pick one from the dropdown."
-                        ),
-                    )
-            except Exception as exc:  # pragma: no cover - network dependent
-                QMessageBox.critical(
-                    dialog,
-                    "Fetch Models Failed",
-                    f"Failed to fetch models:\n{exc}",
-                )
-            finally:
-                fetch_models_button.setEnabled(True)
-                test_connection_button.setEnabled(True)
-
-        fetch_models_button.clicked.connect(handle_fetch_models)
-        test_connection_button.clicked.connect(handle_test_connection)
-
-        ai_layout.addLayout(openai_form)
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.setSpacing(6)
-        btn_row.addWidget(test_connection_button)
-        btn_row.addStretch()
-        ai_layout.addLayout(btn_row)
-        content_layout.addWidget(ai_card)
-
         content_layout.addStretch()
 
         def save_preferences():
@@ -1636,38 +1299,6 @@ class DialogManager:
             else:
                 set_performance_mode(PerformanceMode.CUSTOM)
                 set_custom_thread_count(thread_count_slider.value())
-
-            api_key_text = api_key_input.text().strip()
-            base_url_text = base_url_input.text().strip()
-            model_text = model_combo.currentText().strip()
-            max_tokens_value = max_tokens_spin.value()
-            timeout_value = timeout_spin.value()
-            max_workers_value = max_workers_spin.value()
-            rating_prompt_text = rating_prompt_edit.toPlainText()
-
-            def _value_or_none(value: str, default_value: str) -> str | None:
-                trimmed = value.strip()
-                if not trimmed or trimmed == default_value:
-                    return ""
-                return trimmed
-
-            set_openai_config(
-                api_key=_value_or_none(api_key_text, DEFAULT_OPENAI_API_KEY),
-                model=_value_or_none(model_text, DEFAULT_OPENAI_MODEL),
-                base_url=_value_or_none(base_url_text, DEFAULT_OPENAI_BASE_URL),
-                max_tokens=None
-                if max_tokens_value == DEFAULT_OPENAI_MAX_TOKENS
-                else max_tokens_value,
-                timeout=None
-                if timeout_value == DEFAULT_OPENAI_TIMEOUT
-                else timeout_value,
-                max_workers=None
-                if max_workers_value == DEFAULT_OPENAI_MAX_WORKERS
-                else max_workers_value,
-                rating_prompt=None
-                if rating_prompt_text.strip() == DEFAULT_RATING_PROMPT.strip()
-                else rating_prompt_text.strip() or None,
-            )
 
             selected_cull_strictness = strictness_labels[
                 cull_strictness_combo.currentText()

@@ -178,8 +178,6 @@ class AppController(QObject):
         self._rotation_loading_overlay_timer.timeout.connect(
             self._show_delayed_rotation_loading_overlay
         )
-        # Cache volume at preview-preload start, used for per-run diagnostics.
-        self._ai_rating_warning_messages: list[str] = []
         self._pick_best_pending_after_subject_grouping: bool = False
         self._pick_best_owns_subject_grouping: bool = False
         self._easy_delete_pending_after_similarity: bool = False
@@ -195,7 +193,6 @@ class AppController(QObject):
             None
         )
         self._folder_asset_session_id: str | None = None
-        self._rating_load_complete = False
         self._cull_prerequisites_declined = False
         self._model_consent = ModelConsentState()
         self._cull_grouping_fingerprints: dict[str, tuple[int, int]] | None = None
@@ -361,11 +358,6 @@ class AppController(QObject):
             self.handle_rotation_application_error
         )
 
-        # AI Rating Worker
-        self.worker_manager.ai_rating_progress.connect(self.handle_ai_rating_progress)
-        self.worker_manager.ai_rating_complete.connect(self.handle_ai_rating_complete)
-        self.worker_manager.ai_rating_error.connect(self.handle_ai_rating_error)
-        self.worker_manager.ai_rating_warning.connect(self.handle_ai_rating_warning)
         self.worker_manager.grouping_preview_progress.connect(
             self.handle_grouping_preview_progress
         )
@@ -564,7 +556,6 @@ class AppController(QObject):
             image_pipeline.end_active_review_working_set()
         self.app_state.clear_all_file_specific_data()
         self._folder_asset_session_id = None
-        self._rating_load_complete = False
         if preserved_marks:
             self.app_state.marked_for_deletion.update(preserved_marks)
         self.main_window.reset_thumbnail_requests()
@@ -611,7 +602,6 @@ class AppController(QObject):
         )
         self.main_window.menu_manager.open_folder_action.setEnabled(False)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
 
         logger.debug(
             f"Folder prep complete in {time.perf_counter() - load_folder_start_time:.2f}s. Starting file scan."
@@ -1115,59 +1105,6 @@ class AppController(QObject):
                 "New images detected. Run Analyze Similarity to include them.", 5000
             )
 
-    def start_ai_rating_all(self):
-        """Kick off AI-driven rating for every loaded image."""
-        logger.info("Starting AI rating for all images.")
-
-        if self.worker_manager.is_ai_rating_running():
-            self.main_window.statusBar().showMessage(
-                "AI rating is already running.", 3000
-            )
-            return
-        if self.worker_manager.is_rating_loader_running():
-            self.main_window.statusBar().showMessage(
-                "Metadata is still loading. AI rating will be available when it finishes.",
-                4000,
-            )
-            return
-
-        if not self.app_state.image_files_data:
-            self.main_window.statusBar().showMessage("No images loaded to rate.", 3000)
-            return
-
-        image_paths = self._get_image_paths()
-        if not image_paths:
-            self.main_window.statusBar().showMessage(
-                "No valid image paths available for AI rating.", 3000
-            )
-            return
-        skipped_videos = len(self._get_media_paths()) - len(image_paths)
-        if skipped_videos > 0:
-            self.main_window.statusBar().showMessage(
-                f"AI rating is image-only. Skipping {skipped_videos} video(s).",
-                4000,
-            )
-
-        image_paths_to_rate, already_rated_count = self._partition_unrated_images(
-            image_paths
-        )
-        if not image_paths_to_rate:
-            self.main_window.statusBar().showMessage(
-                "All images already have ratings.", 4000
-            )
-            return
-
-        self.main_window.show_loading_overlay("Requesting AI ratings...")
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
-        status_message = f"AI rating started for {len(image_paths_to_rate)} image(s)..."
-        if already_rated_count:
-            status_message += f" ({already_rated_count} already-rated image(s) skipped)"
-        self.main_window.statusBar().showMessage(status_message, 4000)
-
-        self._ai_rating_warning_messages = []
-
-        self.worker_manager.start_ai_rating(image_paths=image_paths_to_rate)
-
     def reload_current_folder(self):
         if self.app_state.image_files_data:
             if (
@@ -1231,21 +1168,6 @@ class AppController(QObject):
     def _filter_image_paths(self, paths: list[str]) -> list[str]:
         return [path for path in paths if path and is_image_extension(path)]
 
-    def _partition_unrated_images(
-        self, image_paths: list[str]
-    ) -> tuple[list[str], int]:
-        """Partition from the worker-populated memory cache only."""
-
-        unrated: list[str] = []
-        already_rated_count = 0
-        for path in image_paths:
-            existing_rating = self.app_state.rating_cache.get(os.path.normpath(path), 0)
-            if existing_rating is not None and existing_rating != 0:
-                already_rated_count += 1
-                continue
-            unrated.append(path)
-        return unrated, already_rated_count
-
     # --- Slots for WorkerManager Signals ---
 
     def handle_files_found(self, batch_of_file_data: list[dict[str, Any]]):
@@ -1262,7 +1184,6 @@ class AppController(QObject):
         self.main_window.menu_manager.open_folder_action.setEnabled(False)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(False)
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(False)
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
 
         media_file_data = self._get_media_file_data()
         if media_file_data:
@@ -1285,7 +1206,6 @@ class AppController(QObject):
     def _cancel_folder_for_review_capacity(self) -> None:
         self.worker_manager.request_stop_rating_load()
         self._folder_asset_session_id = None
-        self._rating_load_complete = False
         self._pending_exif_cache_capacity_warning = None
         self.main_window.hide_exif_progress()
         pipeline = getattr(self.main_window, "image_pipeline", None)
@@ -1307,9 +1227,6 @@ class AppController(QObject):
         self.main_window.menu_manager.open_folder_action.setEnabled(True)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(has_images)
         self.main_window.menu_manager.group_by_similarity_action.setEnabled(has_images)
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
-            has_images and self._rating_load_complete
-        )
 
         self._restore_analysis_state()
         if self._supports_grouping_workflow_ui():
@@ -1431,7 +1348,6 @@ class AppController(QObject):
         )
 
         self.main_window.hide_loading_overlay()
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(False)
 
     def handle_grouping_preview_progress(self, _progress: int, message: str):
         if _workflow_is_cancelled(self, "organize"):
@@ -1881,7 +1797,6 @@ class AppController(QObject):
 
     def handle_rating_load_finished(self):
         logger.info("Background rating loading finished.")
-        self._rating_load_complete = True
         self.main_window.statusBar().showMessage(
             "Background rating loading finished.", 3000
         )
@@ -1889,14 +1804,6 @@ class AppController(QObject):
         if self._folder_asset_session_id is None:
             self.main_window.hide_loading_overlay()
         self.main_window.hide_exif_progress()
-        menu_manager = getattr(self.main_window, "menu_manager", None)
-        ai_rating_action = getattr(menu_manager, "ai_rate_images_action", None)
-        if ai_rating_action is not None:
-            ai_rating_action.setEnabled(
-                self._folder_asset_session_id is None
-                and bool(self._get_image_file_data())
-            )
-
         warning = self._pending_exif_cache_capacity_warning
         self._pending_exif_cache_capacity_warning = None
         if warning is not None:
@@ -2355,90 +2262,6 @@ class AppController(QObject):
             bool(self._get_image_file_data())
         )
         self.main_window.hide_loading_overlay()
-
-    def handle_ai_rating_progress(self, percentage: int, message: str):
-        suffix = (
-            f" ({percentage}%)" if percentage is not None and percentage >= 0 else ""
-        )
-        self.main_window.update_loading_text(f"AI rating: {message}{suffix}")
-
-    def handle_ai_rating_warning(self, message: str):
-        logger.warning("AI rating warning: %s", message)
-        self.main_window.statusBar().showMessage(message, 6000)
-        lowered = message.lower()
-        if "failed" in lowered or "skipped" in lowered:
-            self._ai_rating_warning_messages.append(message)
-
-    def handle_ai_rating_complete(self, results: dict[str, dict[str, Any]]):
-        self.main_window.hide_loading_overlay()
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
-            bool(self._get_image_file_data())
-        )
-
-        normalized_results = results or {}
-        self.app_state.ai_rating_results = dict(normalized_results)
-
-        ratings_applied = 0
-        rating_operations: list[tuple[str, int]] = []
-        for image_path, payload in normalized_results.items():
-            if not isinstance(payload, dict):
-                continue
-            rating_value = payload.get("rating")
-            if rating_value is None:
-                continue
-            try:
-                rating_int = int(round(float(rating_value)))
-            except TypeError, ValueError:
-                logger.debug("Skipping non-numeric AI rating for %s", image_path)
-                continue
-
-            ratings_applied += 1
-            self.app_state.rating_cache[image_path] = rating_int
-
-            for viewer in self.main_window.advanced_image_viewer.image_viewers:
-                if viewer.isVisible() and viewer._file_path == image_path:
-                    viewer.update_rating_display(rating_int)
-
-            rating_operations.append((image_path, rating_int))
-
-        if ratings_applied:
-            self.main_window._apply_filter()
-            self.main_window.statusBar().showMessage(
-                f"AI rating complete for {ratings_applied} image(s).", 4000
-            )
-            if rating_operations:
-                if self.worker_manager.is_rating_writer_running():
-                    logger.info(
-                        "Rating writer already running; skipping automatic metadata write"
-                    )
-                else:
-                    self.main_window.statusBar().showMessage(
-                        f"Saving AI ratings to image metadata ({len(rating_operations)} files)...",
-                        5000,
-                    )
-                    self.worker_manager.start_rating_writer(
-                        rating_operations=rating_operations,
-                        rating_disk_cache=self.app_state.rating_disk_cache,
-                        exif_disk_cache=self.app_state.exif_disk_cache,
-                    )
-        else:
-            self.main_window.statusBar().showMessage(
-                "AI rating finished but no ratings were applied.", 5000
-            )
-
-        if self._ai_rating_warning_messages:
-            summary_message = self._ai_rating_warning_messages[-1]
-            self.main_window.statusBar().showMessage(summary_message, 7000)
-            self._ai_rating_warning_messages = []
-
-    def handle_ai_rating_error(self, message: str):
-        logger.error(f"AI rating failed: {message}", exc_info=True)
-        self.main_window.hide_loading_overlay()
-        self.main_window.statusBar().showMessage(f"AI rating error: {message}", 8000)
-        self.main_window.menu_manager.ai_rate_images_action.setEnabled(
-            bool(self._get_image_file_data())
-        )
-        self._ai_rating_warning_messages = []
 
     def _apply_approved_rotations(self, approved_rotations: dict[str, int]):
         """Apply the approved rotations to the images using background worker."""

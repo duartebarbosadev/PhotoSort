@@ -57,7 +57,6 @@ class AppState:
         self.exif_disk_cache = ExifCache()  # Instance of the new disk cache for EXIF data, now reads size from app_settings
         self.analysis_cache = AnalysisCache()
         self.marked_for_deletion: set = set()  # Set of file paths marked for deletion
-        self.ai_rating_results: dict[str, dict[str, Any]] = {}
         self.pick_best_results: PickBestResults = {}
         self.pick_best_winners_by_path: dict[str, bool] = {}  # path -> True if winner
         self.easy_delete_results: dict[str, dict[str, Any]] | None = (
@@ -188,7 +187,6 @@ class AppState:
             self.analysis_cache.clear_folder(folder_path)
         self.focused_image_path = None
         self.clear_pick_best_results()
-        self.ai_rating_results.clear()
         self.easy_delete_results = None
         self.easy_delete_pair_assessments.clear()
         self.fix_rotation_results = None
@@ -274,7 +272,6 @@ class AppState:
             self.cull_cluster_results,
             self.embeddings_cache,
             self.regional_embeddings_cache,
-            self.ai_rating_results,
         ):
             for path in removed_paths:
                 cache.pop(path, None)
@@ -424,7 +421,6 @@ class AppState:
             self.cull_cluster_results,
             self.embeddings_cache,
             self.regional_embeddings_cache,
-            self.ai_rating_results,
             self.pick_best_winners_by_path,
         ):
             remap_keys(cache)

@@ -2,7 +2,6 @@
 
 import pyexiv2  # noqa: F401 - initialize native metadata libraries before Qt
 
-import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -83,91 +82,6 @@ def test_mediapipe_adapter_runs_bundled_face_model():
         assert not adapter.detect_landmarks(np.zeros((64, 64, 3), dtype=np.uint8))
     finally:
         adapter.close()
-
-
-def test_openai_sdk_serializes_rating_request_and_parses_tool_response(monkeypatch):
-    import httpx2
-    import openai
-
-    from core.ai.ai_rating_pipeline import LLMConfig, LLMAiRatingStrategy
-
-    requests = []
-
-    def respond(request):
-        requests.append(request)
-        if request.url.path.endswith("/models"):
-            return httpx2.Response(
-                200, json={"object": "list", "data": [{"id": "test-model"}]}
-            )
-        return httpx2.Response(
-            200,
-            json={
-                "id": "test-completion",
-                "object": "chat.completion",
-                "created": 0,
-                "model": "test-model",
-                "choices": [
-                    {
-                        "index": 0,
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": "rating",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "rate_photo",
-                                        "arguments": json.dumps(
-                                            {
-                                                "overall_rating": 4,
-                                                "notes": "Sharp image",
-                                            }
-                                        ),
-                                    },
-                                }
-                            ],
-                        },
-                    }
-                ],
-            },
-        )
-
-    real_client = openai.OpenAI
-    transport = httpx2.MockTransport(respond)
-    monkeypatch.setattr(
-        openai,
-        "OpenAI",
-        lambda **kw: real_client(
-            **kw, http_client=httpx2.Client(transport=transport), max_retries=0
-        ),
-    )
-    pipeline = Mock()
-    pipeline.get_analysis_image.return_value = Image.new("RGB", (8, 8), "teal")
-    strategy = LLMAiRatingStrategy(
-        pipeline,
-        LLMConfig(
-            api_key="test-key",
-            model="test-model",
-            base_url="https://example.invalid/v1",
-        ),
-    )
-    try:
-        strategy.validate_connection()
-        result = strategy.rate_image("photo.jpg")
-        assert result["rating"] == 4
-        assert len(requests) == 2
-        body = json.loads(requests[1].content)
-        assert body["model"] == "test-model"
-        assert body["tool_choice"] == "required"
-        assert body["messages"][-1]["content"][1]["image_url"]["url"].startswith(
-            "data:image/png;base64,"
-        )
-        pipeline.get_analysis_image.assert_called_once()
-    finally:
-        strategy.shutdown()
-    assert strategy._client.is_closed()
 
 
 def test_heif_preview_reuses_shared_cache(tmp_path, monkeypatch):

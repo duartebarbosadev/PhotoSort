@@ -17,7 +17,6 @@ REQUIRED_PACKAGED_MODULES = (
     "cv2",
     "mediapipe.tasks.python.vision.face_landmarker",
     "onnxruntime",
-    "openai",
     "pillow_heif",
     "pyexiv2",
     "rawpy",

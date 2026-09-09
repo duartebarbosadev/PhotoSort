@@ -496,7 +496,6 @@ CULL_SHORTCUTS = (
     WorkflowShortcutSpec("folders", ("F",), "F", "Folders"),
     WorkflowShortcutSpec("groups", ("S",), "S", "Similarity groups"),
     WorkflowShortcutSpec("find", ("Ctrl+F",), f"{_PRIMARY_MODIFIER}F", "Find"),
-    WorkflowShortcutSpec("ai_rate", ("Ctrl+A",), f"{_PRIMARY_MODIFIER}A", "AI rate"),
     _TOGGLE_LEFT_PANEL_SHORTCUT,
     _WORKFLOW_STEP_SHORTCUT,
 )
