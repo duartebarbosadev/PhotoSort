@@ -178,6 +178,7 @@ if IS_MACOS:
         bundle_identifier="dev.duartebarbosa.photosort",
         info_plist={
             "CFBundleDisplayName": "PhotoSort",
+            "LSMinimumSystemVersion": "15.0",
             "NSHighResolutionCapable": True,
         },
     )

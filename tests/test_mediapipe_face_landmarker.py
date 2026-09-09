@@ -39,7 +39,10 @@ def test_vendored_face_landmarker_model_is_resolvable():
     assert model_path.stat().st_size == 3_758_596
 
 
-def test_tasks_adapter_converts_rgb_array_and_returns_landmarks(monkeypatch, tmp_path):
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+def test_tasks_adapter_converts_rgb_array_and_returns_landmarks(
+    monkeypatch, tmp_path, platform
+):
     created = {}
     expected_landmarks = [[SimpleNamespace(x=0.2, y=0.3)]]
 
@@ -62,6 +65,9 @@ def test_tasks_adapter_converts_rgb_array_and_returns_landmarks(monkeypatch, tmp
             self.image_format = image_format
             self.data = data
 
+    class FakeBaseOptions(SimpleNamespace):
+        Delegate = SimpleNamespace(CPU="cpu", GPU="gpu")
+
     fake_vision = SimpleNamespace(
         FaceLandmarkerOptions=lambda **kwargs: SimpleNamespace(**kwargs),
         FaceLandmarker=FakeFaceLandmarker,
@@ -70,24 +76,36 @@ def test_tasks_adapter_converts_rgb_array_and_returns_landmarks(monkeypatch, tmp
     fake_mediapipe = SimpleNamespace(
         __version__="test",
         tasks=SimpleNamespace(
-            BaseOptions=lambda **kwargs: SimpleNamespace(**kwargs),
+            BaseOptions=FakeBaseOptions,
             vision=fake_vision,
         ),
         Image=FakeImage,
-        ImageFormat=SimpleNamespace(SRGB="srgb"),
+        ImageFormat=SimpleNamespace(SRGB="srgb", SRGBA="srgba"),
     )
     monkeypatch.setattr(
         "core.best_photo_finder.scorers._require_module",
         lambda name: fake_mediapipe,
     )
 
+    monkeypatch.setattr(
+        "core.best_photo_finder.scorers.sys", SimpleNamespace(platform=platform)
+    )
     model_path = tmp_path / "face_landmarker.task"
     adapter = MediaPipeTasksFaceLandmarker(model_path)
-    rgb = np.zeros((4, 5, 3), dtype=np.uint8)[:, ::-1]
+    rgb = np.arange(60, dtype=np.uint8).reshape(4, 5, 3)[:, ::-1]
 
     assert adapter.detect_landmarks(rgb) == expected_landmarks
     assert created["options"].base_options.model_asset_path == str(model_path)
     assert created["image"].data.flags.c_contiguous
+    np.testing.assert_array_equal(created["image"].data[..., :3], rgb)
+    if platform == "darwin":
+        assert created["options"].base_options.delegate == "gpu"
+        assert created["image"].image_format == "srgba"
+        assert (created["image"].data[..., 3] == 255).all()
+    else:
+        assert created["options"].base_options.delegate == "cpu"
+        assert created["image"].image_format == "srgb"
+        assert created["image"].data.shape == rgb.shape
 
     adapter.close()
     assert created["closed"] is True
