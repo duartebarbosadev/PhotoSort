@@ -183,8 +183,8 @@ def test_heif_preview_reuses_shared_cache(tmp_path, monkeypatch):
         thumbnail_cache_dir=str(tmp_path / "thumbnails"),
         preview_cache_dir=str(tmp_path / "previews"),
     )
-    decode = Mock(wraps=StandardImageProcessor.process_for_preview)
-    monkeypatch.setattr(StandardImageProcessor, "process_for_preview", decode)
+    decode = Mock(wraps=StandardImageProcessor.load_as_pil)
+    monkeypatch.setattr(StandardImageProcessor, "load_as_pil", decode)
     try:
         first = pipeline.get_preview_image(str(path), (40, 40))
         second = pipeline.get_preview_image(str(path), (40, 40))
