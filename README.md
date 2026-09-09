@@ -1,232 +1,240 @@
 # PhotoSort
 
-**Choose the photos worth keeping, before you start editing.**
+**Choose which photos to keep before you start editing.**
 
-PhotoSort is a desktop photo culling and organizing app. Browse a shoot, compare
-similar frames side by side, rate your favorites, and remove the rejects. It
-builds and reuses previews—including for RAW files—so revisiting a photo does
-not mean decoding the original again every time.
+PhotoSort helps you go through your photos, compare similar shots, and decide
+what to keep. You can give your favorites a star rating, sort photos into
+folders, and mark the ones you don't want.
 
-![PhotoSort showing a night photograph in the Cull workspace](assets/main-window-screenshot.png)
+It saves previews as you browse, including for RAW files, so going back to a
+photo doesn't mean loading it from scratch again.
+
+![PhotoSort showing a night photograph in Cull](assets/main-window-screenshot.png)
 
 [Download PhotoSort](https://github.com/duartebarbosadev/PhotoSort/releases) ·
-[Your first cull](#your-first-cull) · [Workflows](#choose-your-workflow) ·
-[What changes on disk?](#what-changes-on-disk)
+[Get started](#your-first-cull) · [The five steps](#choose-your-workflow) ·
+[Can I undo it?](#can-i-undo-it)
 
 ## Is it for me?
 
-PhotoSort is a good fit if you want to:
+If you've come home with hundreds of photos and want to pick the good ones
+before editing, that's what PhotoSort is for. You can:
 
-- Work through a large folder with keyboard controls and reusable previews.
-- Compare bursts and similar shots, then keep the frames you prefer.
-- Review suggestions for duplicates, blur, exposure problems, or incorrect rotation.
-- Arrange photos into folders and add star ratings before using an editor.
+- Browse with the keyboard and quickly mark photos you don't want.
+- Compare similar shots side by side to check focus or expressions.
+- Get help finding duplicates, blurry photos, and photos that need rotating.
+- Give photos star ratings and organize them into folders.
 
-It is a review tool, not a full photo editor or a replacement for a library
-catalog. It supports common image formats and many camera RAW formats, plus
-browsing and playback of common video formats. Ratings and image analysis are
-for photos, not videos.
+PhotoSort isn't a photo editor or a full library catalog. It opens common image
+formats and many RAW formats. You can also browse and play common video formats,
+but ratings and analysis only work with photos.
 
-**No subscription, API key, or local LLM server is required.** Optional analysis
-uses local models; some need an initial download. You can start with manual
-browsing, comparison, ratings, and culling without those models.
+**You don't need a subscription, API key, or local LLM.** The AI features run on
+your computer. Some need a model download the first time you use them, but you
+can browse, compare, rate, and cull photos without setting any of that up.
 
 ## Download and open
 
-Get a build from the official [GitHub Releases page](https://github.com/duartebarbosadev/PhotoSort/releases).
-Prebuilt downloads do not require Python or a development environment.
+Download PhotoSort from the [Releases page](https://github.com/duartebarbosadev/PhotoSort/releases).
+You don't need to install Python or run any commands.
 
-| Your computer | Download | Open it |
+| Your computer | Download | How to open it |
 | --- | --- | --- |
-| Windows, including computers without an NVIDIA GPU | `PhotoSort-Windows-x64.zip` | Extract the ZIP, then run `PhotoSort.exe` inside the extracted folder. |
-| Windows with a compatible NVIDIA GPU, for optional acceleration | `PhotoSort-Windows-x64-CUDA.zip` | Extract the ZIP, then run `PhotoSort.exe`. |
+| Windows | `PhotoSort-Windows-x64.zip` | Extract the ZIP and run `PhotoSort.exe` from the extracted folder. |
+| Windows with an NVIDIA GPU | `PhotoSort-Windows-x64-CUDA.zip` | Extract the ZIP and run `PhotoSort.exe`. |
 | Apple Silicon Mac | `PhotoSort-macOS-AppleSilicon.dmg` | Open the DMG and drag PhotoSort to Applications. |
 
-**Unsure which Windows build to choose? Use the regular build.** CUDA is an
-optional way to accelerate supported analysis on compatible NVIDIA hardware;
-it does not unlock extra workflows. Check the release notes for requirements
-and any differences in asset names. Linux users can [run from source](#running-from-source).
+If you're not sure which Windows download to choose, **use the regular one**.
+The CUDA version can make some analysis faster on compatible NVIDIA GPUs.
+Both versions have the same features. Check the release notes for requirements
+and download names. On Linux, you can [run from source](#running-from-source).
 
-Release builds are currently unsigned. Download them from this repository's
-release page and review any operating-system warning before opening them.
-Where a release includes a `.sha256` file, you can use it to check that your
-download matches the published artifact. This is an integrity check, not a
-malware scan. If you want a VirusTotal check, scan the exact file you downloaded;
-PhotoSort does not claim that every release has been scanned or certified safe.
+The downloads aren't signed yet, so your computer may show a warning when you
+open them. Use the official release page linked above. If you'd like to check a
+download with VirusTotal, scan the file you downloaded. Not every release has
+been scanned. Some releases also include a `.sha256` file to check that the
+download is complete and matches the published file. That isn't a malware scan.
 
 ## Your first cull
 
-Start with a copy of a small photo folder while you learn the controls. Keep
+Try a copy of a small folder first so you can get a feel for the app. Keep
 backups of your originals.
 
-1. Open PhotoSort and choose your folder with **File → Open Folder**.
-2. Select **Cull** in the workflow bar at the bottom. You can go straight here;
-   the earlier steps are optional.
-3. Use **Up/Down** to browse. Press **D** to mark a reject; press it again to
-   remove the mark. Marking alone does not delete the file.
-4. Give favorites **5 stars** using the stars below the photo, or **Ctrl+5**
-   (**⌘5** on macOS). Use the rating filter to review your favorites together.
-5. When ready, press **Shift+Enter** to review pending work. Check the listed
-   files and confirm before sending rejects to the system Trash or Recycle Bin.
+1. Open PhotoSort and choose **File → Open Folder**.
+2. Click **Cull** at the bottom. You can start here and skip the other steps.
+3. Use **Up/Down** to browse. Press **D** to mark a photo for deletion. Press it
+   again to unmark it. The file stays where it is until you confirm deletion.
+4. Give your favorites **5 stars** with the stars below the photo, or press
+   **Ctrl+5** (**⌘5** on macOS). You can then filter by rating to find them again.
+5. When you're ready, press **Shift+Enter**. Check the list of changes and
+   confirm which photos you want to send to the Trash or Recycle Bin.
 
-To reconsider before applying, use **Alt+D** (**⌥D** on macOS) to clear deletion
-marks. **Delete/Backspace is a separate “Trash now” action**: it asks for
-confirmation and can remove the current selection without waiting for the
-end of your cull.
+Changed your mind? **Alt+D** (**⌥D** on macOS) clears the deletion marks.
 
-### Compare a few similar shots
+**Delete/Backspace works differently from D.** It asks to send the selected
+photos to the Trash straight away, instead of marking them for later.
 
-Select multiple photos in the browser to compare them side by side. Use
-**Compare** above the viewer, then **Sync** to pan and zoom together while
-checking focus or expressions. Return to **Single** to inspect one photo.
+### Compare similar shots
+
+Select a few photos in the browser to see them side by side. Click **Compare**
+above the photo, then **Sync** to zoom and move around them together. This is
+useful for checking focus or small differences between shots. Click **Single**
+to go back to one photo.
 
 ## Choose your workflow
 
-The bottom bar lets you move between five steps. Use the ones that help with
-your shoot; you do not have to complete all five. When leaving a step with
-pending changes, PhotoSort asks how to handle them.
+There are five steps along the bottom of the window. Use whichever ones you
+need. You don't have to go through them all or follow a particular order. If
+you leave a step with changes you haven't applied, PhotoSort asks what you want
+to do with them.
 
-| Step | Use it to… | What you review |
-| --- | --- | --- |
-| **Organize** | Plan folders and move photos into them. | The current **Before** tree and proposed **After** tree, with a photo preview. |
-| **Easy Delete** | Find obvious rejects sooner. | Suggestions for duplicates, blur, very dark photos, and very bright photos; choose Keep or Trash and confirm your decisions. |
-| **Fix Rotation** | Correct a batch of sideways or upside-down photos. | Proposed rotations, with manual overrides, before applying them. |
-| **Pick Best** | Choose among similar shots. | Local quality suggestions and comparisons; keep one, several, or all of the frames. |
-| **Cull** | Browse freely and finish your review. | Photos, ratings, comparisons, and deletion marks. |
+| Step | What it's for |
+| --- | --- |
+| **Organize** | Sort photos into folders. See the current layout in **Before** and your changes in **After** before moving anything. |
+| **Easy Delete** | Look through suggestions for duplicates, blur, and photos that are very dark or bright. |
+| **Fix Rotation** | Find sideways or upside down photos and check the suggested correction. |
+| **Pick Best** | Compare similar shots and choose which ones to keep. You can keep more than one, or all of them. |
+| **Cull** | Browse your photos, compare them, add ratings, and mark rejects yourself. |
 
-Analysis suggestions are starting points. Review them yourself before applying
-changes, especially for intentional blur, silhouettes, or unusual compositions.
+You make the final choice. A suggestion might not be right for intentional blur,
+a silhouette, or a photo you simply like.
 
-### Favorites, keepers, and RAW+JPEG pairs
+### Organize your favorites and keepers
 
-For a simple favorite/keep/delete system, use **5 stars for favorites**, leave
-other keepers unmarked, and use **D for rejects**. A rating does not move a file.
+One simple way to work is to give favorites **5 stars**, leave other keepers
+unmarked, and press **D** for photos you don't want. Stars don't move files.
 
-To make an actual `Favorites` or `Keep` folder:
+If you'd rather have a `Favorites` or `Keep` folder:
 
-1. Open **Organize** and use **Current** to start from the existing structure.
-2. In the **After** tree, right-click and choose **Create folder**. Name it
-   `Favorites` or `Keep`.
-3. Drag the photos into the destination in the After tree. Review the proposed
-   structure and preview the photos before applying.
-4. Apply the plan and confirm the filesystem changes.
+1. Open **Organize** and select **Current**.
+2. Right click in the **After** tree and choose **Create folder**. Give it a
+   name, such as `Favorites` or `Keep`.
+3. Drag photos into that folder in the After tree.
+4. Check the layout, then apply and confirm the changes.
 
-This is a reviewed folder plan, not a dedicated one-key “move to Favorites”
-command. When PhotoSort finds companion files, choose **Yes, move companions**
-to include matching same-name RAW/JPEG files and XMP sidecars. Check that choice
-and the proposed destinations before moving files; do not assume every action
-in every workflow automatically includes a RAW+JPEG pair.
+There isn't a single shortcut that sends a photo to Favorites. You do that
+through Organize.
 
-![Organize previewing USA, Porto, and Australia folders alongside the original structure](assets/organize-screenshot.png)
+If you shoot RAW+JPEG, choose **Yes, move companions** when asked to move
+matching files together. This can include RAW/JPEG files with the same name
+and XMP sidecars. Check the files and destinations before applying. Other
+photo actions don't necessarily include the matching RAW or JPEG.
 
-### Easy Delete: review suggested rejects
+![Organize previewing USA, Porto, and Australia folders](assets/organize-screenshot.png)
 
-Inspect the flagged photo and its comparison before confirming Keep or Trash.
-This example compares a softer photo with its sharper counterpart.
+### Easy Delete
 
-![Easy Delete reviewing test sample images](assets/easy-delete-screenshot.png)
+PhotoSort points out possible rejects for you to check. Choose **Keep** or
+**Trash** for each photo, then confirm. Here, a softer photo is being compared
+with a sharper version.
 
-### Fix Rotation: check the proposed correction
+![Easy Delete comparing a softer photo with a sharper version](assets/easy-delete-screenshot.png)
 
-Review the proposed orientation and adjust it before applying the correction.
+### Fix Rotation
 
-![Fix Rotation reviewing a test sample image](assets/fix-rotation-screenshot.png)
+See the original next to the suggested rotation. You can change the rotation
+if it doesn't look right, then confirm it before applying.
 
-### Pick Best: compare the candidates
+![Fix Rotation showing the original and suggested correction](assets/fix-rotation-screenshot.png)
 
-Review the local ranking and choose the frames you want to keep. This example
-compares sharpness and local scores within a group of three similar photos.
+### Pick Best
 
-![Pick Best comparing test sample images](assets/pick-best-screenshot.png)
+Compare the photos in each group and choose the ones you like. PhotoSort gives
+you a suggestion based on its local scoring, but you're free to keep any of
+them. This example compares three similar photos with different sharpness.
 
-### A few useful shortcuts
+![Pick Best comparing similar photos](assets/pick-best-screenshot.png)
 
-These are the everyday **Cull** controls. Other steps have their own controls;
-enable **Settings → Preferences → Show shortcuts in the footer** to see them.
-On macOS, use **⌘** for Ctrl and **⌥** for Alt in this table.
+### Useful shortcuts
 
-| Action | Shortcut |
+These shortcuts are for **Cull**. Each step has its own controls. To show them,
+turn on **Settings → Preferences → Show shortcuts in the footer**.
+On macOS, use **⌘** instead of Ctrl and **⌥** instead of Alt.
+
+| What you want to do | Shortcut |
 | --- | --- |
 | Browse photos | Up / Down |
-| Mark or unmark a reject | D |
+| Mark or unmark a photo for deletion | D |
 | Clear deletion marks | Alt+D |
-| Review and apply pending work | Shift+Enter |
-| Trash the selection, after confirmation | Delete / Backspace |
-| Set a star rating; 0 clears it | Ctrl+0–5 |
+| Review and apply your changes | Shift+Enter |
+| Send selected photos to Trash, after confirming | Delete / Backspace |
+| Give a star rating, or clear it with 0 | Ctrl+0 to Ctrl+5 |
 | Show photo details | I |
 | Fit the photo / show actual size | 0 / A |
-| Single / side-by-side view | F1 / F2 |
-| Preferences | F10 |
+| Show one photo / compare side by side | F1 / F2 |
+| Open Preferences | F10 |
 
-Number keys **1–9** focus a photo in a comparison; they do not assign stars.
+Pressing **1 to 9** on its own focuses a photo in a comparison. It doesn't give
+it a star rating.
 
-## What changes on disk?
+## Can I undo it?
 
-**There is no universal Undo for every action.** Review pending work before
-applying it, and keep backups for operations that change files.
+**Some choices can be changed before you apply them, but there isn't an Undo
+button for everything.**
 
-| Action | Effect and recovery |
+| What you do | What happens |
 | --- | --- |
-| Browse, compare, or analyze | Creates caches and suggestions; preview generation does not replace your originals. |
-| Mark a reject or edit an unapplied folder plan | Stages a decision. You can change your mind before applying it. |
-| Confirm deletion | Moves files to the operating system's Trash/Recycle Bin. Restore them there if needed; PhotoSort has no in-app undelete. |
-| Apply an Organize plan | Moves/renames files and creates the planned folders. There is no automatic rollback of the whole operation. |
-| Assign stars | Writes the rating to supported image metadata immediately, in the background. Set a different rating or 0 to change it; this does not wait for Apply. |
-| Apply rotations or use manual rotation controls | Changes orientation metadata where possible; pixel rotation may be used when needed. Do not rely on an inverse rotation as a lossless undo. |
+| Browse, compare, or run analysis | PhotoSort makes previews and suggestions. It doesn't replace your originals. |
+| Mark a photo for deletion | Nothing is deleted yet. Unmark it or clear the marks to change your mind. |
+| Edit a folder layout in Organize | The changes wait for you to apply them. You can still change the plan. |
+| Confirm deletion | Files go to the system Trash or Recycle Bin. Restore them there if needed. PhotoSort doesn't have its own restore button. |
+| Apply changes in Organize | Files are moved or renamed and folders are created. There isn't a button to undo the whole operation. |
+| Give a star rating | The rating is saved to the photo's metadata where supported, without waiting for Apply. Choose another rating or 0 to change it. |
+| Apply a rotation or rotate manually | PhotoSort changes orientation metadata where possible. Some formats need the image pixels rotated instead, so rotating back may not fully restore the original. |
 
-Ratings use XMP rating metadata where writing is supported. Other applications
-that read that metadata can use them, but format support and metadata refresh
-behavior vary. Try a few files with your preferred editor first.
+Keep backups, especially before moving files or applying rotations.
 
-## Local analysis and model downloads
+PhotoSort writes ratings to XMP metadata where supported. Editors that read
+those ratings can use them too. Try a few photos with your editor first, since
+support varies by format and the editor may need to reload the metadata.
 
-The current version's analysis runs locally. Your photos do not need to be sent
-to a vision API, and the older LLM rating/ranking setup is no longer part of the
-app. Internet access is needed to obtain missing models.
+## Do I need to set up AI?
 
-| Feature | Setup |
+Only if you want to use the analysis features. They run on your computer, and
+you don't need to send photos to a vision API. The older LLM setup has been
+removed.
+
+| Feature | What you need |
 | --- | --- |
-| Similarity and same-subject grouping | PhotoSort asks before downloading the similarity model, then reuses it and cached results. |
-| Pick Best | Uses local technical checks and an aesthetic model; the aesthetic model may download on first use. |
-| Fix Rotation | Requires an `orientation_model*.onnx` file. If it is missing, follow the app's model prompt. |
+| Group similar photos | PhotoSort asks to download a model the first time, then reuses it. |
+| Pick Best | Uses local quality checks and a model that may need downloading the first time. |
+| Fix Rotation | Needs an `orientation_model*.onnx` file. The app explains what to do if it's missing. |
 
-For manual rotation-model setup, download an `orientation_model*.onnx` asset
-from [deep-image-orientation-detection releases](https://github.com/duartebarbosadev/deep-image-orientation-detection/releases).
-Open **Help → About → Models Folder** in PhotoSort and place the file there.
-Versioned model filenames work without renaming. Download the models you need
-before working offline.
+To install the rotation model yourself, download an `orientation_model*.onnx`
+file from [the model's releases page](https://github.com/duartebarbosadev/deep-image-orientation-detection/releases).
+In PhotoSort, open **Help → About → Models Folder** and put the file there.
+You don't need to rename it.
 
-Large folders need time for their first scan and analysis, plus disk space for
-cached previews. **Settings → Preferences** includes cache and performance
-options. Cached previews make subsequent browsing cheaper; they do not make
-every first-time analysis instantaneous.
+Download any models you need before working offline. The first scan or analysis
+of a large folder can take a while. Previews also use disk space. You can adjust
+cache and performance settings in **Settings → Preferences**.
 
 <details>
-<summary>Models used</summary>
+<summary>Which models does PhotoSort use?</summary>
 
-- Similarity: `facebook/dinov2-small` by default, with `facebook/dinov2-base`
-  available in Preferences.
+- Similarity: `facebook/dinov2-small` by default. You can choose
+  `facebook/dinov2-base` in Preferences.
 - Pick Best aesthetic scoring: `cafeai/cafe_aesthetic`.
-- Pick Best technical checks: OpenCV and MediaPipe face/eye analysis.
-- Rotation: the local ONNX classifier from
+- Pick Best face and eye checks: OpenCV and MediaPipe.
+- Rotation: the ONNX model from
   [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection).
 
 </details>
 
-## Help and feedback
+## Questions or feedback?
 
-[Open an issue](https://github.com/duartebarbosadev/PhotoSort/issues) for a bug,
-a workflow question, or a feature request. Include your PhotoSort version,
-operating system, file formats, and steps to reproduce the problem. A small
-sample you can share is especially helpful for format-specific problems.
+[Open an issue](https://github.com/duartebarbosadev/PhotoSort/issues) if something
+isn't working, a step is confusing, or you'd like a feature. For bugs, include
+your PhotoSort version, operating system, file formats, and what you did before
+the problem happened. A small sample photo helps if you can share one.
 
-The screenshots above were captured on macOS using the project’s test images.
-An older release may look different.
+The screenshots here were taken on macOS with the project's test images.
+Older releases may look different.
 
 ## Running from source
 
-This section is for developers and users who want the development version.
-**Python 3.14.x is required**; the application checks this at startup.
+You only need these instructions if you want to run the development version
+or work on the code. You'll need **Python 3.14.x**.
 
 ```bash
 git clone https://github.com/duartebarbosadev/PhotoSort.git
@@ -268,9 +276,9 @@ python -m src.main --last-folder
 python -m src.main --clear-cache
 ```
 
-`--clear-cache` removes cached data, which must then be regenerated.
-`--clear-models` removes downloaded models, so using those features again
-requires downloading them again.
+`--clear-cache` deletes saved previews and other cached data. PhotoSort will
+build them again when needed. `--clear-models` deletes downloaded models, so
+you will need to download them again to use those features.
 
 ### Debug logs
 
