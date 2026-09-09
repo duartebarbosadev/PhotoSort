@@ -2,7 +2,7 @@ import os
 import logging
 import time
 from typing import Any
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from .image_pipeline import ImagePipeline
 from .media_utils import (
     SUPPORTED_MEDIA_EXTENSIONS,
@@ -34,12 +34,19 @@ class FileScanner(QObject):
         list
     )  # New signal, will also emit list of dicts
 
-    def __init__(self, image_pipeline: ImagePipeline, parent=None):
+    def __init__(
+        self,
+        image_pipeline: ImagePipeline,
+        parent=None,
+        *,
+        directory_path: str | None = None,
+    ):
         super().__init__(parent)
         init_start_time = time.perf_counter()
         logger.debug("Initializing FileScanner.")
         self._is_running = True
         self.image_pipeline = image_pipeline
+        self.directory_path = directory_path
         logger.debug(
             f"FileScanner initialized in {time.perf_counter() - init_start_time:.2f}s."
         )
@@ -48,10 +55,20 @@ class FileScanner(QObject):
         """Signals the scanner to stop."""
         self._is_running = False
 
+    @pyqtSlot()
+    def run(self) -> None:
+        """Bound Qt entry point, dispatched on the scanner's owning thread."""
+        if self.directory_path is None:
+            self.error.emit("No folder was provided for scanning.")
+            self.finished.emit()
+            return
+        self.scan_directory(self.directory_path)
+
     def scan_directory(self, directory_path: str):
         """Discover supported media without performing workflow analysis."""
         if not self._is_running:
             logger.info("File scan skipped because cancellation was already requested.")
+            self.finished.emit()
             return
         all_file_data: list[dict[str, Any]] = []
         discovery_batch: list[dict[str, Any]] = []
