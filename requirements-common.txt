@@ -16,4 +16,4 @@ send2trash==2.1.0
 setuptools==83.0.0
 torch==2.13.0
 torchvision==0.28.0
-transformers==5.7.0
+transformers==5.10.4
