@@ -1105,8 +1105,8 @@ class MainWindow(QMainWindow):
         self._thumbnail_icons_by_path.clear()
         self.thumbnail_loader.reset()
 
-    def start_thumbnail_warming(self, image_paths: list[str]) -> None:
-        self.thumbnail_loader.start_folder(image_paths)
+    def start_thumbnail_warming(self, image_paths: list[str]) -> str:
+        return self.thumbnail_loader.start_folder(image_paths)
 
     def notify_thumbnail_items_rebuilt(self) -> None:
         self.thumbnail_loader.model_rebuilt()
