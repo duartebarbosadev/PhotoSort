@@ -119,3 +119,49 @@ def test_deleting_models_makes_the_next_run_re_check_what_is_installed():
     _Controller(context).clear_downloaded_models()
 
     assert context.app_controller.resets == 1
+
+
+def test_preview_limit_rejection_does_not_persist_settings(monkeypatch):
+    from ui.controllers.cache_controller import CacheController
+
+    context = Mock()
+    context.preview_cache_size_combo.currentIndex.return_value = 0
+    context.preview_cache_size_combo.itemText.return_value = "1 GB"
+    context.preview_cache_size_options_gb = [1]
+    context.image_pipeline.preview_cache.set_size_limit.return_value = False
+    save = Mock()
+    monkeypatch.setattr(
+        "ui.controllers.cache_controller.get_preview_cache_size_gb", lambda: 2
+    )
+    monkeypatch.setattr(
+        "ui.controllers.cache_controller.set_preview_cache_size_gb", save
+    )
+    CacheController(context).apply_preview_cache_limit()
+    save.assert_not_called()
+    context.image_pipeline.reinitialize_preview_cache_from_settings.assert_not_called()
+    context.status_message.assert_called_once()
+
+
+def test_preview_limit_increase_uses_live_cache(monkeypatch):
+    from ui.controllers.cache_controller import CacheController
+
+    context = Mock()
+    context.preview_cache_size_combo.currentIndex.return_value = 0
+    context.preview_cache_size_combo.itemText.return_value = "2 GB"
+    context.preview_cache_size_options_gb = [2]
+    context.image_pipeline.preview_cache.set_size_limit.return_value = True
+    save = Mock()
+    monkeypatch.setattr(
+        "ui.controllers.cache_controller.get_preview_cache_size_gb", lambda: 1
+    )
+    monkeypatch.setattr(
+        "ui.controllers.cache_controller.set_preview_cache_size_gb", save
+    )
+    controller = CacheController(context)
+    controller.update_labels = Mock()
+    controller.apply_preview_cache_limit()
+    context.image_pipeline.preview_cache.set_size_limit.assert_called_once_with(
+        2 * 1024**3
+    )
+    save.assert_called_once_with(2)
+    context.image_pipeline.reinitialize_preview_cache_from_settings.assert_not_called()

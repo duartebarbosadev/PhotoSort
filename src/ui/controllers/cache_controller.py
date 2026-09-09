@@ -92,14 +92,24 @@ class CacheController:
 
     def clear_thumbnail_cache(self) -> None:
         ctx = self.context
-        ctx.image_pipeline.thumbnail_cache.clear()
+        if ctx.image_pipeline.clear_thumbnail_cache() is False:
+            ctx.status_message(
+                "Open another folder or close the current one before clearing prepared review images.",
+                5000,
+            )
+            return
         ctx.status_message("Thumbnail cache cleared.", 5000)
         self.update_labels()
         ctx._refresh_visible_items_icons()
 
     def clear_preview_cache(self) -> None:
         ctx = self.context
-        ctx.image_pipeline.preview_cache.clear()
+        if ctx.image_pipeline.preview_cache.clear() is False:
+            ctx.status_message(
+                "Open another folder or close the current one before clearing prepared review images.",
+                5000,
+            )
+            return
         ctx.status_message("Preview cache cleared. Previews will regenerate.", 5000)
         self.update_labels()
         ctx._refresh_current_selection_preview()
@@ -221,11 +231,21 @@ class CacheController:
 
         current_size_gb = get_preview_cache_size_gb()
         if new_size_gb != current_size_gb:
+            if (
+                ctx.image_pipeline.preview_cache.set_size_limit(
+                    int(new_size_gb * 1024**3)
+                )
+                is False
+            ):
+                ctx.status_message(
+                    "Open another folder or close the current one before reducing "
+                    "the preview cache limit.",
+                    6000,
+                )
+                return
             set_preview_cache_size_gb(new_size_gb)
-            ctx.image_pipeline.reinitialize_preview_cache_from_settings()
             ctx.status_message(
-                f"Preview cache limit set to {new_size_gb:.2f} GB. "
-                "Cache reinitialized.",
+                f"Preview cache limit set to {new_size_gb:.2f} GB.",
                 5000,
             )
         else:
