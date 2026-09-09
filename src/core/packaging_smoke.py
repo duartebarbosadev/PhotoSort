@@ -17,7 +17,6 @@ REQUIRED_PACKAGED_MODULES = (
     "cv2",
     "mediapipe.tasks.python.vision.face_landmarker",
     "onnxruntime",
-    "openai",
     "pillow_heif",
     "pyexiv2",
     "rawpy",
@@ -35,7 +34,6 @@ REQUIRED_PACKAGED_MODULES = (
     "ui.fix_rotation_step_widget",
     "ui.metadata_sidebar",
     "ui.pick_best_step_widget",
-    "workers.best_shot_worker",
     "workers.easy_delete_worker",
     "workers.grouping_worker",
     "workers.pick_best_worker",
@@ -84,7 +82,12 @@ def run_packaging_smoke() -> int:
         face_landmarker = MediaPipeTasksFaceLandmarker(
             resolve_face_landmarker_model_path()
         )
-        face_landmarker.close()
+        try:
+            import numpy as np
+
+            face_landmarker.detect_landmarks(np.zeros((64, 64, 3), dtype=np.uint8))
+        finally:
+            face_landmarker.close()
         modules[runtime_check_name] = {"ok": True}
     except Exception as exc:
         modules[runtime_check_name] = {

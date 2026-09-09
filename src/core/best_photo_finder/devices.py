@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from core.app_settings import get_preferred_torch_device
 from core.best_photo_finder.config import DevicePreference
 
 
@@ -12,33 +13,21 @@ class ResolvedDevice:
 
 
 def resolve_device(preference: DevicePreference) -> ResolvedDevice:
-    try:
-        import torch
-    except ImportError:
-        return ResolvedDevice(
-            requested=preference,
-            backend="cpu",
-            pipeline_device="cpu",
-            torch_dtype_name=None,
-        )
+    """Resolve one torch backend, honouring the app-wide device policy.
 
-    backend = "cpu"
-    if preference == "cuda":
-        backend = "cuda" if torch.cuda.is_available() else "cpu"
-    elif preference == "mps":
-        backend = (
-            "mps"
-            if getattr(torch.backends, "mps", None)
-            and torch.backends.mps.is_available()
-            else "cpu"
-        )
+    ``get_preferred_torch_device`` is the single chooser for the whole app, so
+    the ``PHOTOSORT_TORCH_DEVICE`` and ``PHOTOSORT_FORCE_CPU`` overrides apply
+    here exactly as they do to similarity and Cull. An explicit non-auto
+    preference is still honoured, but only when the hardware supports it.
+    """
+
+    available = get_preferred_torch_device()
+    if preference in ("cuda", "mps"):
+        backend = preference if preference == available else "cpu"
     elif preference == "cpu":
         backend = "cpu"
     else:
-        if torch.cuda.is_available():
-            backend = "cuda"
-        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-            backend = "mps"
+        backend = available
 
     pipeline_device: str | int
     torch_dtype_name: str | None

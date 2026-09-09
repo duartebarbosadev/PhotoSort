@@ -6,6 +6,7 @@ from src.ui.main_window import MainWindow
 
 def _cache_only_pipeline():
     return SimpleNamespace(
+        get_immediate_review_qpixmap=Mock(return_value=(None, False)),
         get_cached_preview_qpixmap=Mock(return_value=None),
         get_cached_thumbnail_qpixmap=Mock(return_value=None),
         get_preview_qpixmap=Mock(side_effect=AssertionError("synchronous preview")),
@@ -61,6 +62,54 @@ def test_viewer_focus_sync_releases_guard_before_next_event_loop_turn():
     assert not context._is_syncing_selection
 
 
+def test_cull_active_focus_preserves_existing_multiselection():
+    path = "/tmp/focused.jpg"
+    proxy_index = Mock()
+    proxy_index.isValid.return_value = True
+    selection_model = Mock()
+    selection_model.selectedIndexes.return_value = [Mock(), Mock()]
+    active_view = Mock()
+    active_view.selectionModel.return_value = selection_model
+    context = SimpleNamespace(
+        app_state=SimpleNamespace(workflow_step="organize"),
+        _is_syncing_selection=False,
+        _get_active_file_view=Mock(return_value=active_view),
+        _find_proxy_index_for_path=Mock(return_value=proxy_index),
+    )
+
+    assert MainWindow.focus_image(context, path)
+
+    selection_model.select.assert_not_called()
+    selection_model.setCurrentIndex.assert_called_once()
+    active_view.scrollTo.assert_called_once()
+    assert not context._is_syncing_selection
+
+
+def test_non_image_selection_clears_shared_inspection_session():
+    viewer = Mock()
+    inspection_controller = Mock()
+    status_bar = Mock()
+    context = SimpleNamespace(
+        app_state=SimpleNamespace(
+            image_files_data=[{"path": "a.jpg"}], focused_image_path=None
+        ),
+        advanced_image_viewer=viewer,
+        image_inspection_controller=inspection_controller,
+        invalidate_last_displayed_preview=Mock(),
+        sidebar_visible=False,
+        statusBar=lambda: status_bar,
+    )
+    context.clear_image_inspection = lambda target: MainWindow.clear_image_inspection(
+        context, target
+    )
+
+    MainWindow._handle_no_selection_or_non_image(context)
+
+    inspection_controller.clear.assert_called_once_with(viewer)
+    viewer.clear.assert_called_once()
+    viewer.setText.assert_called_once_with("Select an image or video to view details.")
+
+
 def test_multi_selection_uses_placeholders_and_one_background_request(tmp_path):
     paths = [str(tmp_path / "one.arw"), str(tmp_path / "two.arw")]
     for path in paths:
@@ -96,33 +145,21 @@ def test_multi_selection_uses_placeholders_and_one_background_request(tmp_path):
     pipeline.get_thumbnail_qpixmap.assert_not_called()
 
 
-def test_rotation_comparison_never_decodes_on_ui_thread(tmp_path):
-    path = str(tmp_path / "rotation.arw")
-    open(path, "wb").close()
-    pipeline = _cache_only_pipeline()
-    viewer = Mock()
+def test_inactive_workflow_cannot_replace_active_inspection_session():
+    active_viewer = Mock()
+    hidden_viewer = Mock()
+    inspection_controller = Mock()
     context = SimpleNamespace(
-        image_pipeline=pipeline,
-        advanced_image_viewer=viewer,
-        rotation_suggestions={path: 90},
-        _pending_rotation_comparison_path=None,
-        invalidate_last_displayed_preview=Mock(),
-        _get_cached_metadata_for_selection=lambda _path: {"rating": 0},
-        request_interactive_preview=Mock(),
-    )
-    context._get_cached_interactive_pixmap = lambda image_path: (
-        MainWindow._get_cached_interactive_pixmap(context, image_path)
+        image_inspection_controller=inspection_controller,
+        _active_workflow_inspection_viewer=lambda: active_viewer,
     )
 
-    MainWindow._display_side_by_side_comparison(context, path)
+    MainWindow.activate_image_inspection(context, hidden_viewer, [Mock()])
+    inspection_controller.activate.assert_not_called()
 
-    images_data = viewer.set_images_data.call_args.args[0]
-    assert len(images_data) == 2
-    assert all(item["path"] == path and item["pixmap"] is None for item in images_data)
-    context.request_interactive_preview.assert_called_once_with(path)
-    assert context._pending_rotation_comparison_path == path
-    pipeline.get_preview_qpixmap.assert_not_called()
-    pipeline.get_thumbnail_qpixmap.assert_not_called()
+    specs = [Mock()]
+    MainWindow.activate_image_inspection(context, active_viewer, specs)
+    inspection_controller.activate.assert_called_once_with(active_viewer, specs)
 
 
 def test_rotation_completion_queues_cache_refresh_instead_of_decoding():
@@ -145,8 +182,6 @@ def test_rotation_completion_queues_cache_refresh_instead_of_decoding():
 
     pipeline.invalidate_path.assert_called_once_with(path)
     thumbnail_loader.invalidate_paths.assert_called_once_with([path])
-    context.request_interactive_preview.assert_called_once_with(
-        path, force_default_brightness=True
-    )
+    context.request_interactive_preview.assert_called_once_with(path)
     pipeline.get_preview_qpixmap.assert_not_called()
     pipeline.get_thumbnail_qpixmap.assert_not_called()

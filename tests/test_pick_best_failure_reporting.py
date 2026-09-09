@@ -121,12 +121,14 @@ def test_pick_best_worker_stops_when_cluster_cannot_be_scored(monkeypatch):
     assert "cluster 7 could not be scored" in errors[0]
 
 
-def test_pick_best_worker_closes_selector_when_cancelled(monkeypatch):
+def test_pick_best_worker_skips_selector_initialization_when_already_cancelled(
+    monkeypatch,
+):
     closed = []
 
     class _FakeSelector:
         def __init__(self, **_kwargs):
-            pass
+            raise AssertionError("Cancelled work must not initialize scorers")
 
         def select(self, paths):  # pragma: no cover - cancelled before selection
             raise AssertionError(paths)
@@ -140,7 +142,7 @@ def test_pick_best_worker_closes_selector_when_cancelled(monkeypatch):
     worker.stop()
     worker.run()
 
-    assert closed == [True]
+    assert closed == []
 
 
 def test_pick_best_worker_stops_on_face_landmarker_failure(monkeypatch):
@@ -181,8 +183,8 @@ def test_pick_best_worker_stops_on_face_landmarker_failure(monkeypatch):
 
 def test_pick_best_widget_shows_failure_reason_for_unscored_image(monkeypatch):
     monkeypatch.setattr(
-        "ui.pick_best_step_widget.MetadataProcessor.get_detailed_metadata",
-        lambda path, cache: {},
+        "ui.pick_best_step_widget.build_workflow_metadata_rows",
+        lambda path, cache: [("Metadata", "No EXIF details available")],
     )
 
     widget = PickBestStepWidget()
@@ -207,9 +209,9 @@ def test_pick_best_widget_shows_failure_reason_for_unscored_image(monkeypatch):
 
     failed_card = widget._compare_cards[0]
     assert failed_card.path == "/tmp/failed.jpg"
-    assert failed_card._score_label.text() == "Score unavailable"
+    assert failed_card._name_label.text() == "failed.jpg · score unavailable"
     assert (
-        failed_card._score_label.toolTip()
+        failed_card._name_label.toolTip()
         == "Aesthetic model did not return a score for this image."
     )
     assert failed_card._meta_rows[0][0].text() == "Scoring"
@@ -221,7 +223,7 @@ def test_pick_best_widget_shows_failure_reason_for_unscored_image(monkeypatch):
 
 def test_pick_best_widget_shows_capture_date_in_metadata(monkeypatch):
     monkeypatch.setattr(
-        "ui.pick_best_step_widget.MetadataProcessor.get_cached_detailed_metadata",
+        "ui.workflow_metadata.MetadataProcessor.get_cached_detailed_metadata",
         lambda path, cache: {
             "Exif.Photo.DateTimeOriginal": "2024:01:02 03:04:05",
             "Exif.Image.Make": "SONY",

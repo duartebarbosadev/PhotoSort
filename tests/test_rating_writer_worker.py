@@ -28,6 +28,15 @@ class TestRatingWriterWorker:
         assert worker._is_running is False
 
     @patch("workers.rating_writer_worker.MetadataProcessor")
+    def test_stop_before_start_is_not_lost(self, mock_metadata_processor):
+        worker = RatingWriterWorker()
+        worker.stop()
+
+        worker.write_ratings([("/tmp/photo.jpg", 5)])
+
+        mock_metadata_processor.set_rating.assert_not_called()
+
+    @patch("workers.rating_writer_worker.MetadataProcessor")
     def test_write_single_rating_success(self, mock_metadata_processor):
         """Test writing a single rating successfully"""
         mock_metadata_processor.set_rating.return_value = True

@@ -18,6 +18,29 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+def _filter_state(
+    *,
+    rating_cache=None,
+    cluster_results=None,
+    cull_cluster_results=None,
+    workflow_step="organize",
+):
+    """Mirror ``AppState``'s workflow-owned cluster map resolution."""
+
+    state = SimpleNamespace(
+        rating_cache=rating_cache or {},
+        cluster_results=cluster_results or {},
+        cull_cluster_results=cull_cluster_results or {},
+        workflow_step=workflow_step,
+    )
+    state.cluster_results_for_workflow = lambda step=None: (
+        state.cull_cluster_results
+        if (step or state.workflow_step) in {"pick_best", "cull"}
+        else state.cluster_results
+    )
+    return state
+
+
 @pytest.mark.parametrize(
     ("label", "rating", "expected"),
     [
@@ -41,13 +64,55 @@ def test_proxy_combines_search_rating_and_cluster_filters(qapp):
 
     proxy = MediaFilterProxyModel()
     proxy.setSourceModel(source)
-    proxy.app_state_ref = SimpleNamespace(
+    proxy.app_state_ref = _filter_state(
         rating_cache={"a.jpg": 5, "b.jpg": 2},
         cluster_results={"a.jpg": 7, "b.jpg": 8},
     )
     proxy.current_rating_filter = "4 Stars +"
     proxy.current_cluster_filter_id = 7
     proxy.setFilterRegularExpression("alpha")
+
+    assert proxy.rowCount() == 1
+    assert proxy.index(0, 0).data() == "alpha.jpg"
+
+
+def test_proxy_reads_separate_cull_clusters(qapp):
+    source = QStandardItemModel()
+    for name, path in (("alpha.jpg", "a.jpg"), ("beta.jpg", "b.jpg")):
+        item = QStandardItem(name)
+        item.setData({"path": path}, Qt.ItemDataRole.UserRole)
+        source.appendRow(item)
+
+    proxy = MediaFilterProxyModel()
+    proxy.setSourceModel(source)
+    proxy.app_state_ref = _filter_state(
+        workflow_step="cull",
+        cluster_results={"a.jpg": 1, "b.jpg": 1},
+        cull_cluster_results={"a.jpg": 7, "b.jpg": 8},
+    )
+    proxy.current_cluster_filter_id = 7
+
+    assert proxy.rowCount() == 1
+    assert proxy.index(0, 0).data() == "alpha.jpg"
+
+
+def test_proxy_filters_pick_best_against_cull_clusters(qapp):
+    """Pick Best builds its tree from the Cull map, so it must filter on it too."""
+
+    source = QStandardItemModel()
+    for name, path in (("alpha.jpg", "a.jpg"), ("beta.jpg", "b.jpg")):
+        item = QStandardItem(name)
+        item.setData({"path": path}, Qt.ItemDataRole.UserRole)
+        source.appendRow(item)
+
+    proxy = MediaFilterProxyModel()
+    proxy.setSourceModel(source)
+    proxy.app_state_ref = _filter_state(
+        workflow_step="pick_best",
+        cluster_results={},
+        cull_cluster_results={"a.jpg": 7, "b.jpg": 8},
+    )
+    proxy.current_cluster_filter_id = 7
 
     assert proxy.rowCount() == 1
     assert proxy.index(0, 0).data() == "alpha.jpg"

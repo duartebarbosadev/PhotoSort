@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from src.ui.app_controller import AppController
+from src.ui.controllers.model_prerequisites import DeferredModelStarts
 
 
 class _DummyStatusBar:
@@ -21,6 +22,7 @@ def test_load_folder_blocks_while_grouping_workflow_is_running():
         main_window=SimpleNamespace(
             statusBar=lambda: status_bar,
         ),
+        _deferred_starts=DeferredModelStarts(),
     )
 
     AppController.load_folder(controller, "/tmp/demo")
@@ -30,6 +32,62 @@ def test_load_folder_blocks_while_grouping_workflow_is_running():
     assert timeout == 4000
     assert "Grouping is still moving files" in message
     assert "loading another folder" in message
+
+
+def test_load_folder_cancels_analysis_without_blocking(monkeypatch):
+    callbacks = []
+    worker_manager = SimpleNamespace(
+        is_grouping_workflow_running=lambda: False,
+        is_file_deletion_running=lambda: False,
+        is_rotation_application_running=lambda: False,
+        is_rating_writer_running=lambda: False,
+        is_any_worker_running=lambda: True,
+        request_stop_all_workers=Mock(),
+    )
+    app_state = SimpleNamespace(
+        get_marked_files=lambda: [],
+        clear_all_file_specific_data=Mock(),
+        current_folder_path="/tmp/old-folder",
+    )
+    main_window = SimpleNamespace(
+        dialog_manager=SimpleNamespace(
+            confirm_interrupt_for_folder_change=Mock(return_value=True),
+        ),
+        show_loading_overlay=Mock(),
+        update_loading_text=Mock(),
+        menu_manager=SimpleNamespace(update_recent_folders_menu=Mock()),
+    )
+    controller = SimpleNamespace(
+        worker_manager=worker_manager,
+        app_state=app_state,
+        main_window=main_window,
+        _pending_folder_load_after_workers=None,
+        _finish_folder_load_after_workers=Mock(),
+        _deferred_starts=DeferredModelStarts(),
+    )
+    monkeypatch.setattr("src.ui.app_controller.add_recent_folder", lambda _path: None)
+    monkeypatch.setattr(
+        "src.ui.app_controller.QTimer.singleShot",
+        lambda _delay, callback: callbacks.append(callback),
+    )
+
+    AppController.load_folder(controller, "/tmp/demo")
+
+    worker_manager.request_stop_all_workers.assert_called_once_with()
+    app_state.clear_all_file_specific_data.assert_not_called()
+    assert controller._pending_folder_load_after_workers == (
+        "/tmp/demo",
+        {
+            "skip_grouping_step": False,
+            "record_as_source": True,
+            "preserve_deletion_marks": False,
+            "_interrupt_confirmed": True,
+        },
+    )
+    assert callbacks == [controller._finish_folder_load_after_workers]
+    main_window.dialog_manager.confirm_interrupt_for_folder_change.assert_called_once_with(
+        "/tmp/demo"
+    )
 
 
 def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch):
@@ -49,12 +107,15 @@ def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch
     )
     controller.app_state = SimpleNamespace(
         update_path=lambda old_path, new_path: None,
+        update_paths=Mock(),
         grouping_run_summary=None,
         grouping_output_root=None,
     )
+    sync_workflows = Mock()
     controller.main_window = SimpleNamespace(
         set_grouping_busy=lambda busy: None,
         hide_loading_overlay=lambda: None,
+        _sync_workflow_results_after_file_mutation=sync_workflows,
         grouping_step_widget=SimpleNamespace(
             set_loading_state=lambda message, busy: None,
         ),
@@ -62,8 +123,15 @@ def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch
         finish_pending_close_after_grouping=lambda: close_calls.append(True),
     )
     controller.load_folder = (
-        lambda folder_path, skip_grouping_step=False, record_as_source=True: (
-            load_calls.append((folder_path, skip_grouping_step, record_as_source))
+        lambda folder_path, skip_grouping_step=False, record_as_source=True, preserve_deletion_marks=False: (
+            load_calls.append(
+                (
+                    folder_path,
+                    skip_grouping_step,
+                    record_as_source,
+                    preserve_deletion_marks,
+                )
+            )
         )
     )
     controller._finalize_grouping_workflow_completion = lambda summary: (
@@ -79,7 +147,6 @@ def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch
         entries=[],
         mode="current",
         output_root="/tmp/demo",
-        manifest_path="/tmp/demo/grouping-manifest.json",
         moved_count=1,
         unassigned_count=0,
         skipped_count=0,
@@ -87,7 +154,12 @@ def test_handle_grouping_workflow_complete_waits_for_thread_shutdown(monkeypatch
 
     AppController.handle_grouping_workflow_complete(controller, summary)
 
-    assert load_calls == [("/tmp/demo", True, False)]
+    controller.app_state.update_paths.assert_called_once_with(
+        {},
+        migrate_disk_caches=False,
+    )
+    sync_workflows.assert_called_once_with()
+    assert load_calls == [("/tmp/demo", True, False, True)]
     assert close_calls == [True]
 
 
@@ -97,11 +169,7 @@ def test_scan_finished_defers_hidden_cull_model_until_cull_is_shown():
         for name in (
             "open_folder_action",
             "analyze_similarity_action",
-            "analyze_best_shots_selected_action",
-            "detect_blur_action",
-            "auto_rotate_action",
             "group_by_similarity_action",
-            "ai_rate_images_action",
         )
     }
     rebuild_model = Mock()
@@ -138,6 +206,9 @@ def test_scan_finished_defers_hidden_cull_model_until_cull_is_shown():
     )
     controller._supports_grouping_workflow_ui = lambda: (
         AppController._supports_grouping_workflow_ui(controller)
+    )
+    controller._activate_loaded_folder = lambda *, asset_failures: (
+        AppController._activate_loaded_folder(controller, asset_failures=asset_failures)
     )
 
     AppController.handle_scan_finished(controller)

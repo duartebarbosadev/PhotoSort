@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QSplitter,
     QFileDialog,
     QTreeView,
@@ -18,6 +19,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QLabel,
     QProgressBar,
+    QSizePolicy,
 )
 import os
 from datetime import datetime as datetime_obj, date as date_obj
@@ -46,19 +48,25 @@ from PyQt6.QtGui import (
     QStandardItem,
     QResizeEvent,
     QPixmap,
+    QShortcut,
 )
 import sys
 
 from core.image_pipeline import ImagePipeline
-from core.image_file_ops import ImageFileOperations
+from ui.controllers.image_inspection_controller import (
+    ImageInspectionController,
+    InspectionImageSpec,
+)
 from core.metadata_processor import MetadataProcessor  # New metadata processor
 from core.media_utils import is_video_extension
+from core.similarity_utils import cosine_similarity
 from core.app_settings import (
-    DEFAULT_BLUR_DETECTION_THRESHOLD,
     LEFT_PANEL_STRETCH,
     CENTER_PANEL_STRETCH,
     RIGHT_PANEL_STRETCH,
     DISPLAY_MAX_RESOLUTION,
+    get_show_workflow_shortcuts,
+    get_workflow_step_visibility,
 )
 from ui.app_state import AppState
 from ui.ui_components import LoadingOverlay
@@ -68,9 +76,23 @@ from ui.left_panel import LeftPanel
 from ui.app_controller import AppController
 from ui.menu_manager import MenuManager
 from ui.grouping_step_widget import GroupingStepWidget
+from ui.workflow_review_components import (
+    WORKFLOW_SHORTCUTS,
+    WorkflowProgressView,
+    WorkflowShortcutStrip,
+)
+from ui.workflow_transition import (
+    WorkflowPendingState,
+    WorkflowTransitionRequest,
+)
 from ui.selection_utils import select_next_surviving_path
 from ui.helpers.statusbar_utils import build_status_bar_info
-from ui.helpers.index_lookup_utils import find_proxy_index_for_path
+from ui.helpers.index_lookup_utils import (
+    find_proxy_index_for_path,
+    find_proxy_indices_for_paths,
+)
+from ui.helpers.ui_yield import cooperative_ui_yield
+from ui.helpers.ui_dispatch import bulk_ui_update
 from ui.helpers.navigation_utils import (
     find_next_multi_image_cluster_head,
     find_next_rating_match,
@@ -79,7 +101,6 @@ from ui.helpers.navigation_utils import (
 
 from ui.controllers.deletion_mark_controller import DeletionMarkController
 from ui.controllers.file_deletion_controller import FileDeletionController
-from ui.controllers.rotation_controller import RotationController
 from ui.controllers.filter_controller import FilterController
 from ui.controllers.hotkey_controller import HotkeyController
 from ui.controllers.navigation_controller import NavigationController
@@ -89,6 +110,7 @@ from ui.controllers.metadata_controller import MetadataController
 from ui.controllers.cache_controller import CacheController
 from ui.controllers.status_controller import StatusController
 from ui.controllers.preview_load_controller import PreviewLoadController
+from ui.controllers.active_image_controller import ActiveImageController
 from ui.thumbnail_load_coordinator import ViewportThumbnailLoader
 from ui.models.media_filter_proxy import (
     MediaFilterProxyModel,
@@ -105,6 +127,7 @@ WORKFLOW_STEP_LABELS = {
     "pick_best": "Pick Best",
     "cull": "Cull",
 }
+WORKFLOW_STEP_ORDER = tuple(WORKFLOW_STEP_LABELS)
 
 
 class MainWindow(QMainWindow):
@@ -119,10 +142,13 @@ class MainWindow(QMainWindow):
         self._left_panel_views = set()
         self._image_viewer_views = set()
         self._last_displayed_preview_path: str | None = None
-        self._pending_rotation_comparison_path: str | None = None
         self._filter_apply_count = 0
         self._last_filter_search_text: str | None = None
         self._close_after_grouping_save = False
+        self._close_after_deletion = False
+        self._shutdown_in_progress = False
+        self._pending_workflow_transition: WorkflowTransitionRequest | None = None
+        self._pending_deletion_context: dict[str, Any] | None = None
 
         self.image_pipeline = ImagePipeline()
         self.app_state = AppState()
@@ -149,23 +175,18 @@ class MainWindow(QMainWindow):
         self.group_by_similarity_mode = False
         self.navigation_skip_singleton_clusters = False
         self.navigation_rating_target: int | None = None
-        self.blur_detection_threshold = DEFAULT_BLUR_DETECTION_THRESHOLD
-        self.rotation_suggestions = {}
+        self._cull_shortcut_paths: list[str] = []
+        self._cull_side_by_side_available = False
         # Controllers (always created – treat as invariants for simpler code paths)
         self.deletion_controller = DeletionMarkController(
             app_state=self.app_state,
             is_marked_func=lambda p: self.app_state.is_marked_for_deletion(p),
         )
         self.file_deletion_controller = FileDeletionController(self)
-        self.rotation_controller = RotationController(
-            rotation_suggestions=self.rotation_suggestions,
-            apply_rotations=lambda mapping: (
-                self.app_controller._apply_approved_rotations(mapping)
-            ),
-        )
         # Navigation & selection controllers use this MainWindow as context
         self.navigation_controller = NavigationController(self)
         self.selection_controller = SelectionController(self)
+        self.active_image_controller = ActiveImageController(self)
         self.filter_controller = FilterController(self)
         self.similarity_controller = SimilarityController(self)
         self.metadata_controller = MetadataController(self)
@@ -174,6 +195,9 @@ class MainWindow(QMainWindow):
         self.preview_load_controller = PreviewLoadController(self.image_pipeline, self)
         self.preview_load_controller.preview_ready.connect(self._handle_preview_ready)
         self.preview_load_controller.preview_failed.connect(self._handle_preview_failed)
+        self.image_inspection_controller = ImageInspectionController(
+            self.image_pipeline, self.preview_load_controller, self
+        )
 
         # Hotkey controller wraps navigation key handling
         self.hotkey_controller = HotkeyController(self)
@@ -183,12 +207,12 @@ class MainWindow(QMainWindow):
         self.cluster_filter_combo = QComboBox()
         self.cluster_filter_combo.addItems(["All Clusters"])
         self.cluster_filter_combo.setEnabled(False)
-        self.cluster_filter_combo.setToolTip("Filter images by similarity cluster")
+        self.cluster_filter_combo.setToolTip("Filter images by similarity group")
         self.cluster_sort_combo = QComboBox()
         self.cluster_sort_combo.addItems(["Time", "Similarity then Time"])
         self.cluster_sort_combo.setEnabled(False)
         self.cluster_sort_combo.setToolTip(
-            "Order of clusters when 'Group by Similarity' is active"
+            "Order similarity clusters by time or similarity"
         )
         logger.debug("Filter controls created.")
 
@@ -198,6 +222,13 @@ class MainWindow(QMainWindow):
         self._shortcut_handlers: dict[tuple[int, int], Callable[[], None]] = {}
         self._init_shortcut_handlers()
         self._create_widgets()
+        self._refresh_cull_shortcut_visibility([])
+        self.grouping_step_widget.set_is_marked_func(
+            self.app_state.is_marked_for_deletion
+        )
+        self.grouping_step_widget.set_has_any_marked_func(
+            lambda: bool(self.app_state.marked_for_deletion)
+        )
         self.thumbnail_loader = ViewportThumbnailLoader(self, self)
 
         # At this point _create_widgets() built file_system_model + proxy_model and wired it;
@@ -210,6 +241,9 @@ class MainWindow(QMainWindow):
             logger.debug(f"FilterController ensure_initialized skipped: {e}")
 
         self._create_layout()
+        self.apply_workflow_step_visibility(
+            get_workflow_step_visibility(), transition_if_hidden=False
+        )
         self._create_loading_overlay()
         self.left_panel.thumbnail_delegate = self.thumbnail_delegate
         self._connect_signals()
@@ -220,9 +254,6 @@ class MainWindow(QMainWindow):
         logger.info(
             f"MainWindow initialization complete in {time.perf_counter() - init_start_time:.2f}s."
         )
-
-        # Hide rotation view by default
-        self._hide_rotation_view()
 
         # Load initial folder if provided
         if self.initial_folder and os.path.isdir(self.initial_folder):
@@ -257,7 +288,6 @@ class MainWindow(QMainWindow):
     def invalidate_last_displayed_preview(self):
         """Reset cached preview tracking so the next selection forces a refresh."""
         self._last_displayed_preview_path = None
-        self._pending_rotation_comparison_path = None
 
     def _create_loading_overlay(self):
         start_time = time.perf_counter()
@@ -320,6 +350,9 @@ class MainWindow(QMainWindow):
     def _clear_analysis_cache_action(self):
         self.cache_controller.clear_analysis_cache()
 
+    def _clear_downloaded_models_action(self):
+        self.cache_controller.clear_downloaded_models()
+
     def _apply_preview_cache_limit_action(self):
         self.cache_controller.apply_preview_cache_limit()
 
@@ -350,35 +383,99 @@ class MainWindow(QMainWindow):
         self.pick_best_step_widget = None
         self.workflow_nav = QWidget()
         self.workflow_nav.setObjectName("workflowNav")
+        self.workflow_nav_host = QWidget()
+        self.workflow_nav_host.setObjectName("workflowNavHost")
+        self.workflow_nav_host_layout = QGridLayout(self.workflow_nav_host)
+        self.workflow_nav_host_layout.setContentsMargins(6, 0, 6, 0)
+        self.workflow_nav_host_layout.setColumnStretch(0, 1)
+        self.workflow_nav_host_layout.setColumnStretch(2, 1)
+        self.workflow_status_label = QLabel()
+        self.workflow_status_label.setObjectName("workflowStatusLabel")
+        self.workflow_status_label.setMinimumWidth(0)
+        self.workflow_status_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.workflow_status_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.workflow_nav_host_layout.addWidget(self.workflow_status_label, 0, 0)
+        self.workflow_nav_host_layout.addWidget(
+            self.workflow_nav, 0, 1, alignment=Qt.AlignmentFlag.AlignCenter
+        )
+        self.workflow_shortcut_stack = QStackedWidget()
+        self.workflow_shortcut_stack.setObjectName("workflowShortcutStack")
+        self.workflow_shortcut_stack.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.workflow_shortcut_strips = {}
+        for workflow_step, shortcuts in WORKFLOW_SHORTCUTS.items():
+            strip = WorkflowShortcutStrip(shortcuts)
+            self.workflow_shortcut_stack.addWidget(strip)
+            self.workflow_shortcut_strips[workflow_step] = strip
+        self.workflow_shortcut_stack.setVisible(get_show_workflow_shortcuts())
+        self._toggle_workflow_left_panel_shortcut = QShortcut(
+            QKeySequence("Ctrl+Shift+L"), self
+        )
+        self._toggle_workflow_left_panel_shortcut.setContext(
+            Qt.ShortcutContext.WindowShortcut
+        )
+        self._toggle_workflow_left_panel_shortcut.activated.connect(
+            self.toggle_workflow_left_panel
+        )
+        self._workflow_step_shortcuts: list[QShortcut] = []
+        for step_number in range(1, 6):
+            shortcut = QShortcut(QKeySequence(f"Ctrl+Alt+{step_number}"), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(
+                lambda step_number=step_number: self._go_to_workflow_step_by_shortcut(
+                    step_number
+                )
+            )
+            self._workflow_step_shortcuts.append(shortcut)
+
+        self.workflow_footer_right = QWidget()
+        self.workflow_footer_right.setObjectName("workflowFooterRight")
+        self.workflow_footer_right.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.workflow_footer_right_layout = QHBoxLayout(self.workflow_footer_right)
+        self.workflow_footer_right_layout.setContentsMargins(0, 0, 0, 0)
+        self.workflow_footer_right_layout.setSpacing(6)
+        self.workflow_footer_right_layout.addWidget(self.workflow_shortcut_stack, 1)
+        self.workflow_nav_host_layout.addWidget(
+            self.workflow_footer_right,
+            0,
+            2,
+        )
         self.step_organize_button = QPushButton("1. Organize")
         self.step_organize_button.setObjectName("workflowStepButton")
         self.step_organize_button.setCheckable(True)
         self.step_organize_button.setToolTip(
-            "Plan folder changes, review them, then apply explicitly"
+            "Group photos into folders by date, year, or event"
         )
         self.step_easy_delete_button = QPushButton("2. Easy Delete")
         self.step_easy_delete_button.setObjectName("workflowStepButton")
         self.step_easy_delete_button.setCheckable(True)
         self.step_easy_delete_button.setToolTip(
-            "Review obvious issues and stage reversible Trash marks"
+            "Detect blurry, dark, overexposed, and duplicate photos"
         )
         self.step_fix_rotation_button = QPushButton("3. Fix Rotation")
         self.step_fix_rotation_button.setObjectName("workflowStepButton")
         self.step_fix_rotation_button.setCheckable(True)
         self.step_fix_rotation_button.setToolTip(
-            "Preview rotation corrections and apply only the queued changes"
+            "Detect and fix sideways or upside-down photos"
         )
         self.step_pick_best_button = QPushButton("4. Pick Best")
         self.step_pick_best_button.setObjectName("workflowStepButton")
         self.step_pick_best_button.setCheckable(True)
         self.step_pick_best_button.setToolTip(
-            "Compare similar photos and stage Keep or Trash choices"
+            "Compare similar photos and pick the single best shot"
         )
         self.step_cull_button = QPushButton("5. Cull")
         self.step_cull_button.setObjectName("workflowStepButton")
         self.step_cull_button.setCheckable(True)
         self.step_cull_button.setToolTip(
-            "Review all staged marks and confirm any move to Trash"
+            "Inspect flagged photos before moving them to Trash"
         )
 
         # Models
@@ -396,12 +493,11 @@ class MainWindow(QMainWindow):
         self.proxy_model.setSourceModel(self.file_system_model)
         self.proxy_model.app_state_ref = self.app_state  # Link AppState to proxy model
 
-        # Left panel (views list/tree/rotation)
+        # Left panel (list/tree/grid views)
         self.left_panel = LeftPanel(self.proxy_model, self.app_state, self)
         self._left_panel_views = {
             self.left_panel.tree_display_view,
             self.left_panel.grid_display_view,
-            self.left_panel.rotation_suggestions_view,
         }
 
         self.center_pane_container = QWidget()
@@ -422,46 +518,65 @@ class MainWindow(QMainWindow):
         self._image_viewer_views = {
             v.image_view for v in self.advanced_image_viewer.image_viewers
         }
-        self.accept_all_button = QPushButton("Accept All")
-        self.accept_all_button.setObjectName("acceptAllButton")
-        self.accept_all_button.setVisible(False)
-        self.accept_button = QPushButton("Accept")
-        self.accept_button.setObjectName("acceptButton")
-        self.accept_button.setVisible(False)
-        self.refuse_button = QPushButton("Refuse")
-        self.refuse_button.setObjectName("refuseButton")
-        self.refuse_button.setVisible(False)
-        self.refuse_all_button = QPushButton("Refuse All")
-        self.refuse_all_button.setObjectName("refuseAllButton")
-        self.refuse_all_button.setVisible(False)
-
-        button_layout = QHBoxLayout()
-        button_layout.addStretch(1)
-        button_layout.addWidget(self.accept_button)
-        button_layout.addWidget(self.accept_all_button)
-        button_layout.addSpacing(20)  # Add space between button groups
-        button_layout.addWidget(self.refuse_button)
-        button_layout.addWidget(self.refuse_all_button)
-        button_layout.addStretch(1)
-
-        center_pane_layout.addLayout(button_layout)
-
         # No bottom bar - image info will be shown in status bar only
 
         self.statusBar().showMessage("Ready")
+        self.statusBar().messageChanged.connect(self.workflow_status_label.setText)
+        self.workflow_status_label.setText(self.statusBar().currentMessage())
         self.thumbnail_progress_container = QWidget()
+        self.thumbnail_progress_container.setObjectName("thumbnailProgressContainer")
         thumbnail_progress_layout = QHBoxLayout(self.thumbnail_progress_container)
         thumbnail_progress_layout.setContentsMargins(6, 0, 6, 0)
         thumbnail_progress_layout.setSpacing(6)
         self.thumbnail_progress_label = QLabel()
+        self.thumbnail_progress_label.setObjectName("thumbnailProgressLabel")
         self.thumbnail_progress_bar = QProgressBar()
+        self.thumbnail_progress_bar.setObjectName("thumbnailProgressBar")
         self.thumbnail_progress_bar.setTextVisible(False)
         self.thumbnail_progress_bar.setFixedWidth(110)
         thumbnail_progress_layout.addWidget(self.thumbnail_progress_label)
         thumbnail_progress_layout.addWidget(self.thumbnail_progress_bar)
         self.thumbnail_progress_container.setVisible(False)
-        self.statusBar().addPermanentWidget(self.thumbnail_progress_container, 0)
-        self.statusBar().addPermanentWidget(self.workflow_nav, 0)
+        self.workflow_footer_right_layout.addWidget(self.thumbnail_progress_container)
+
+        self.exif_progress_container = QWidget()
+        self.exif_progress_container.setObjectName("exifProgressContainer")
+        exif_progress_layout = QHBoxLayout(self.exif_progress_container)
+        exif_progress_layout.setContentsMargins(6, 0, 6, 0)
+        exif_progress_layout.setSpacing(6)
+        self.exif_progress_label = QLabel()
+        self.exif_progress_label.setObjectName("exifProgressLabel")
+        self.exif_progress_bar = QProgressBar()
+        self.exif_progress_bar.setObjectName("exifProgressBar")
+        self.exif_progress_bar.setTextVisible(False)
+        self.exif_progress_bar.setFixedWidth(110)
+        exif_progress_layout.addWidget(self.exif_progress_label)
+        exif_progress_layout.addWidget(self.exif_progress_bar)
+        self.exif_progress_container.setVisible(False)
+        self.workflow_footer_right_layout.addWidget(self.exif_progress_container)
+
+        self.cull_progress_container = QWidget()
+        self.cull_progress_container.setObjectName("cullProgressContainer")
+        cull_progress_layout = QHBoxLayout(self.cull_progress_container)
+        cull_progress_layout.setContentsMargins(6, 0, 6, 0)
+        cull_progress_layout.setSpacing(6)
+        self.cull_progress_label = QLabel("Cull")
+        self.cull_progress_label.setObjectName("cullProgressLabel")
+        self.cull_progress_label.setMaximumWidth(280)
+        self.cull_progress_bar = QProgressBar()
+        self.cull_progress_bar.setObjectName("cullProgressBar")
+        self.cull_progress_bar.setTextVisible(False)
+        self.cull_progress_bar.setFixedWidth(110)
+        self.cull_progress_cancel_button = QPushButton("Cancel")
+        self.cull_progress_cancel_button.setObjectName("cullProgressCancelButton")
+        self.cull_progress_cancel_button.clicked.connect(
+            self.app_controller.cancel_cull_similarity_workflow
+        )
+        cull_progress_layout.addWidget(self.cull_progress_label)
+        cull_progress_layout.addWidget(self.cull_progress_bar)
+        cull_progress_layout.addWidget(self.cull_progress_cancel_button)
+        self.cull_progress_container.setVisible(False)
+        self.workflow_footer_right_layout.addWidget(self.cull_progress_container)
         logger.debug(f"Widgets created in {time.perf_counter() - start_time:.4f}s.")
 
     def _create_layout(self):
@@ -482,7 +597,7 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(self.step_fix_rotation_button)
         nav_layout.addWidget(self.step_pick_best_button)
         nav_layout.addWidget(self.step_cull_button)
-        nav_layout.addStretch(1)
+        self.statusBar().addPermanentWidget(self.workflow_nav_host, 1)
 
         self.grouping_page = QWidget()
         grouping_page_layout = QVBoxLayout(self.grouping_page)
@@ -523,7 +638,27 @@ class MainWindow(QMainWindow):
         main_splitter.setSizes([350, 850])
         self.main_splitter = main_splitter  # Store reference for sidebar toggling
 
-        cull_page_layout.addWidget(main_splitter)
+        self.cull_content_stack = QStackedWidget()
+        self.cull_content_stack.setObjectName("cullContentStack")
+        self.cull_progress_view = WorkflowProgressView(
+            "Preparing same-subject groups",
+            default_message="Getting Cull ready…",
+            retry_label="Enable same-subject grouping",
+            dismiss_label="Continue without grouping",
+        )
+        self.cull_progress_view.set_cancel_visible(True)
+        self.cull_progress_view.cancel_requested.connect(
+            self.app_controller.cancel_cull_similarity_workflow
+        )
+        self.cull_progress_view.dismiss_requested.connect(
+            self.show_cull_content_without_grouping
+        )
+        self.cull_progress_view.retry_requested.connect(
+            self.app_controller.start_cull_similarity_workflow
+        )
+        self.cull_content_stack.addWidget(main_splitter)
+        self.cull_content_stack.addWidget(self.cull_progress_view)
+        cull_page_layout.addWidget(self.cull_content_stack)
         self.workflow_stack.addWidget(self.grouping_page)
         self.workflow_stack.addWidget(self.easy_delete_page)
         self.workflow_stack.addWidget(self.fix_rotation_page)
@@ -537,6 +672,12 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         start_time = time.perf_counter()
         logger.debug("Connecting signals...")
+        self.worker_manager.file_deletion_progress.connect(
+            self._handle_file_deletion_progress
+        )
+        self.worker_manager.file_deletion_complete.connect(
+            self._handle_file_deletion_complete
+        )
         # Connect to the new signals from the advanced viewer
         self.advanced_image_viewer.ratingChanged.connect(self._apply_rating)
         self.advanced_image_viewer.deleteRequested.connect(self._delete_image)
@@ -572,10 +713,11 @@ class MainWindow(QMainWindow):
         # Connect UI component signals
         self.left_panel.tree_display_view.installEventFilter(self)
         self.left_panel.grid_display_view.installEventFilter(self)
-        self.left_panel.rotation_suggestions_view.installEventFilter(self)
         for viewer in self.advanced_image_viewer.image_viewers:
             viewer.image_view.installEventFilter(self)
-        self.left_panel.tree_display_view.clicked.connect(self._handle_tree_view_click)
+        # Resolve group headers during the press event, before Qt can paint the
+        # transient non-image selection between press and release.
+        self.left_panel.tree_display_view.pressed.connect(self._handle_tree_view_click)
         self.left_panel.tree_display_view.customContextMenuRequested.connect(
             self.menu_manager.show_image_context_menu
         )
@@ -620,16 +762,28 @@ class MainWindow(QMainWindow):
         self.grouping_step_widget.mode_changed.connect(
             self._handle_grouping_mode_changed
         )
-        self.grouping_step_widget.create_requested.connect(
-            self._handle_grouping_create_requested
+        self.grouping_step_widget.active_image_changed.connect(
+            lambda path: self.active_image_controller.publish(path, source="organize")
+        )
+        self.grouping_step_widget.apply_requested.connect(
+            self._request_workflow_resolution
         )
         self.grouping_step_widget.back_requested.connect(
             self._return_to_grouping_source
         )
-        self.grouping_step_widget.skip_requested.connect(self._skip_grouping_step)
         self.grouping_step_widget.select_folder_requested.connect(
             self._open_folder_dialog
         )
+        self.grouping_step_widget.toggle_deletion_marks_requested.connect(
+            self._toggle_organize_deletion_marks
+        )
+        self.grouping_step_widget.commit_deletion_marks_requested.connect(
+            self._commit_marked_deletions
+        )
+        self.grouping_step_widget.clear_deletion_marks_requested.connect(
+            self._clear_all_deletion_marks
+        )
+        self.grouping_step_widget.trash_requested.connect(self._trash_from_organize)
         self.step_organize_button.clicked.connect(self._go_to_grouping_step)
         self.step_easy_delete_button.clicked.connect(self._go_to_easy_delete_step)
         self.step_fix_rotation_button.clicked.connect(self._go_to_fix_rotation_step)
@@ -642,9 +796,6 @@ class MainWindow(QMainWindow):
         # Delegate signal connections to the AppController
         self.app_controller.connect_signals()
 
-        self.accept_all_button.clicked.connect(self._accept_all_rotations)
-        self.accept_button.clicked.connect(self._on_accept_button_clicked)
-        self.refuse_button.clicked.connect(self._refuse_current_rotation)
         logger.debug(f"Signals connected in {time.perf_counter() - start_time:.4f}s.")
 
     # def _connect_rating_actions(self):
@@ -672,52 +823,296 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Folder selection cancelled.")
 
-    def _skip_grouping_step(self) -> None:
-        self.app_controller.skip_grouping_to_cull()
-
     def _go_to_grouping_step(self) -> None:
-        self.show_grouping_step()
-        if self.app_state.image_files_data:
-            self.app_controller.activate_grouping_preview()
+        self._request_workflow_transition("organize")
 
     def _go_to_easy_delete_step(self) -> None:
+        if not self._is_workflow_step_visible("easy_delete"):
+            self.statusBar().showMessage("Easy Delete is hidden in Preferences.", 3000)
+            return
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
             return
-        self.show_easy_delete_step()
+        self._request_workflow_transition("easy_delete")
 
     def _go_to_fix_rotation_step(self) -> None:
+        if not self._is_workflow_step_visible("fix_rotation"):
+            self.statusBar().showMessage("Fix Rotation is hidden in Preferences.", 3000)
+            return
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
             return
-        self.show_fix_rotation_step()
+        self._request_workflow_transition("fix_rotation")
 
     def _go_to_pick_best_step(self) -> None:
+        if not self._is_workflow_step_visible("pick_best"):
+            self.statusBar().showMessage("Pick Best is hidden in Preferences.", 3000)
+            return
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
             return
-        self.show_pick_best_step()
+        self._request_workflow_transition("pick_best")
 
     def _go_to_cull_step(self) -> None:
         if not self.app_state.image_files_data:
             self.statusBar().showMessage("Load a folder first.", 3000)
             self.update_workflow_navigation()
             return
-        self.show_cull_step()
+        self._request_workflow_transition("cull")
 
-    def _toggle_thumbnail_view(self, checked):
-        self._rebuild_model_view()
-        self.thumbnail_loader.set_enabled(checked)
+    def _go_to_workflow_step_by_shortcut(self, step_number: int) -> None:
+        """Navigate directly to a numbered workflow step through its normal guard."""
+
+        handlers = {
+            1: self._go_to_grouping_step,
+            2: self._go_to_easy_delete_step,
+            3: self._go_to_fix_rotation_step,
+            4: self._go_to_pick_best_step,
+            5: self._go_to_cull_step,
+        }
+        handler = handlers.get(step_number)
+        if handler is not None:
+            handler()
+
+    def _is_workflow_step_visible(self, workflow_step: str) -> bool:
+        return self._workflow_step_visibility.get(workflow_step, True)
+
+    def _next_visible_workflow_step(self, workflow_step: str) -> str:
+        """Return the next configured step, always ending at Cull."""
+
+        try:
+            current_index = WORKFLOW_STEP_ORDER.index(workflow_step)
+        except ValueError:
+            return "cull"
+        return next(
+            (
+                step
+                for step in WORKFLOW_STEP_ORDER[current_index + 1 :]
+                if self._is_workflow_step_visible(step)
+            ),
+            "cull",
+        )
+
+    def _request_next_visible_workflow_transition(self, workflow_step: str) -> None:
+        self._request_workflow_transition(
+            self._next_visible_workflow_step(workflow_step)
+        )
+
+    def _show_workflow_destination(self, destination: str) -> None:
+        """Perform a trusted transition after the navigation guard resolves."""
+        if destination == "organize":
+            self.show_grouping_step()
+            if self.app_state.image_files_data:
+                self.app_controller.activate_grouping_preview()
+        elif destination == "easy_delete":
+            self.show_easy_delete_step()
+        elif destination == "fix_rotation":
+            self.show_fix_rotation_step()
+        elif destination == "pick_best":
+            self.show_pick_best_step()
+        elif destination == "cull":
+            self.show_cull_step()
+
+    def _collect_workflow_pending_state(self, source: str) -> WorkflowPendingState:
+        organize_actions: list[str] = []
+        organize_delete_paths: list[str] = []
+        organize_removed_folders: list[str] = []
+        if (
+            source == "organize"
+            and self.grouping_step_widget.has_unsaved_grouping_edits()
+        ):
+            organize_actions = self.grouping_step_widget.pending_grouping_action_lines()
+            (
+                organize_delete_paths,
+                organize_removed_folders,
+            ) = self.grouping_step_widget.pending_grouping_deletion_paths(
+                organize_actions
+            )
+        rotations: dict[str, int] = {}
+        if source == "fix_rotation" and self.fix_rotation_step_widget is not None:
+            rotations = self.fix_rotation_step_widget.pending_rotations()
+        directory_paths = self.grouping_step_widget.known_directory_paths()
+        return WorkflowPendingState(
+            organize_actions=organize_actions,
+            organize_delete_paths=organize_delete_paths,
+            organize_removed_folders=organize_removed_folders,
+            rotation_count=len(rotations),
+            rotation_changes=rotations,
+            trash_paths=self.app_state.get_marked_files(),
+            directory_paths=directory_paths,
+        )
+
+    def _has_blocking_review_edit(self, workflow_step: str) -> bool:
+        adapter_getter = getattr(self, "get_active_image_adapter", None)
+        if not callable(adapter_getter):
+            return False
+        widget = adapter_getter(workflow_step)
+        has_changes = getattr(widget, "has_unconfirmed_changes", None)
+        if not callable(has_changes) or not has_changes():
+            return False
+        show_required = getattr(widget, "show_confirm_or_reset_required", None)
+        if callable(show_required):
+            show_required()
+        refresh_navigation = getattr(self, "update_workflow_navigation", None)
+        if callable(refresh_navigation):
+            refresh_navigation()
+        return True
+
+    def _request_workflow_transition(self, destination: str | None) -> None:
+        source = self.app_state.workflow_step
+        switching = destination is not None
+        if switching and source == destination:
+            self.update_workflow_navigation()
+            return
+        if (
+            self.worker_manager.is_grouping_workflow_running()
+            or self.worker_manager.is_rotation_application_running()
+            or getattr(self.worker_manager, "is_file_deletion_running", lambda: False)()
+        ):
+            self.statusBar().showMessage(
+                "Files are still being changed. Wait for the operation to finish before switching.",
+                4000,
+            )
+            self.update_workflow_navigation()
+            return
+
+        if MainWindow._has_blocking_review_edit(self, source):
+            return
+
+        pending = self._collect_workflow_pending_state(source)
+        choices = {}
+        if pending.has_resolvable_work:
+            choices = self.dialog_manager.show_workflow_transition_dialog(
+                WORKFLOW_STEP_LABELS.get(source, source.title()),
+                (
+                    WORKFLOW_STEP_LABELS.get(destination, destination.title())
+                    if destination is not None
+                    else WORKFLOW_STEP_LABELS.get(source, source.title())
+                ),
+                pending,
+                switching=switching,
+            )
+            if choices is None:
+                self.update_workflow_navigation()
+                return
+
+        if switching and self.app_controller.is_workflow_analysis_running(source):
+            if not self.dialog_manager.confirm_interrupt_for_workflow_change(
+                WORKFLOW_STEP_LABELS.get(source, source.title()),
+                WORKFLOW_STEP_LABELS.get(destination, destination.title()),
+            ):
+                self.update_workflow_navigation()
+                return
+            self.app_controller.cancel_workflow_analysis(source)
+        if not pending.has_resolvable_work:
+            if destination is not None:
+                self._show_workflow_destination(destination)
+            else:
+                self.statusBar().showMessage("No pending changes to apply.", 3000)
+            return
+        request = WorkflowTransitionRequest(
+            source=source,
+            destination=destination,
+            organize_resolution=choices.get("organize"),
+            rotation_resolution=choices.get("rotation"),
+            trash_resolution=choices.get("trash"),
+        )
+
+        if request.organize_resolution == "discard":
+            self.grouping_step_widget.discard_unsaved_grouping_edits()
+        if request.rotation_resolution == "discard" and self.fix_rotation_step_widget:
+            self.fix_rotation_step_widget.discard_pending_rotations()
+
+        if request.organize_resolution == "apply":
+            self._pending_workflow_transition = request
+            plan = self.grouping_step_widget.get_effective_plan()
+            self.grouping_step_widget.prepare_plan_for_apply(plan)
+            self._handle_grouping_create_requested(
+                self.grouping_step_widget.current_mode(),
+                self.grouping_step_widget.get_group_name_overrides(),
+                plan,
+            )
+            return
+        if request.rotation_resolution == "apply" and self.fix_rotation_step_widget:
+            self._pending_workflow_transition = request
+            self.fix_rotation_step_widget.apply_pending_rotations()
+            return
+        self._finish_workflow_transition(request)
+
+    def _request_workflow_resolution(self) -> None:
+        """Resolve pending work without leaving the current workflow."""
+        self._request_workflow_transition(None)
+
+    def _reset_deletion_workflow_decisions(self) -> None:
+        if self.easy_delete_step_widget is not None:
+            self.easy_delete_step_widget.discard_pending_decisions()
+        if self.pick_best_step_widget is not None:
+            self.pick_best_step_widget.discard_pending_decisions()
+        self._refresh_workflow_deletion_state()
+
+    def _finish_workflow_transition(
+        self, request: WorkflowTransitionRequest | None = None
+    ) -> bool:
+        request = request or self._pending_workflow_transition
+        if request is None:
+            return False
+        if request.trash_resolution == "commit":
+            marked = self.app_state.get_marked_files()
+            deletion_result = (
+                self._perform_deletion_of_marked_files(marked) if marked else True
+            )
+            if deletion_result is None:
+                self._pending_workflow_transition = request
+                return False
+            if not deletion_result:
+                self._pending_workflow_transition = None
+                self.statusBar().showMessage(
+                    "Some marked files could not be moved to Trash. Resolve them before switching.",
+                    5000,
+                )
+                return False
+            self._reset_deletion_workflow_decisions()
+        elif request.trash_resolution == "clear":
+            if self.app_state.get_marked_files():
+                self._clear_all_deletion_marks()
+            self._reset_deletion_workflow_decisions()
+        self._pending_workflow_transition = None
+        if request.destination is not None:
+            self._show_workflow_destination(request.destination)
+        else:
+            self.update_workflow_navigation()
+        return True
+
+    def resume_workflow_transition_after_reload(self) -> None:
+        """Continue an Organize-triggered transition after its folder rescan."""
+        if self._pending_workflow_transition is not None:
+            self._finish_workflow_transition()
+
+    def finish_workflow_transition_after_rotations(
+        self, successful: int, failed: int
+    ) -> None:
+        if self._pending_workflow_transition is None:
+            return
+        if failed:
+            self._pending_workflow_transition = None
+            self.statusBar().showMessage(
+                f"{failed} rotation(s) failed. Resolve them before switching.", 5000
+            )
+            return
+        self._finish_workflow_transition()
+
+    def cancel_pending_workflow_transition(self) -> None:
+        self._pending_workflow_transition = None
 
     def reset_thumbnail_requests(self) -> None:
         self._thumbnail_icons_by_path.clear()
         self.thumbnail_loader.reset()
 
-    def start_thumbnail_warming(self, image_paths: list[str]) -> None:
-        self.thumbnail_loader.start_folder(image_paths)
+    def start_thumbnail_warming(self, image_paths: list[str]) -> str:
+        return self.thumbnail_loader.start_folder(image_paths)
 
     def notify_thumbnail_items_rebuilt(self) -> None:
         self.thumbnail_loader.model_rebuilt()
@@ -751,60 +1146,130 @@ class MainWindow(QMainWindow):
     def hide_thumbnail_progress(self) -> None:
         self.thumbnail_progress_container.setVisible(False)
 
+    def show_cull_grouping_progress(self, message: str, percent: int | None) -> None:
+        """Show one persistent Cull task on its page and in the global footer."""
+        self.cull_progress_view.set_cancel_visible(True)
+        self.cull_progress_view.update_progress(message, percent)
+        if self.app_state.workflow_step == "cull":
+            self.cull_content_stack.setCurrentWidget(self.cull_progress_view)
+
+        self.cull_progress_label.setText(message)
+        self.cull_progress_label.setToolTip(message)
+        if percent is None or percent < 0:
+            self.cull_progress_bar.setRange(0, 0)
+        else:
+            self.cull_progress_bar.setRange(0, 100)
+            self.cull_progress_bar.setValue(max(0, min(100, int(percent))))
+        self.cull_progress_cancel_button.setEnabled(True)
+        self.cull_progress_container.setVisible(True)
+
+    def finish_cull_grouping_progress(self) -> None:
+        self.cull_progress_view.mark_finished()
+        self.cull_progress_container.setVisible(False)
+        self.show_cull_content_without_grouping()
+
+    def show_cull_content_without_grouping(self) -> None:
+        """Return the Cull page to its media view, whatever grouping produced."""
+        self.cull_content_stack.setCurrentWidget(self.main_splitter)
+
+    def cancel_cull_grouping_progress(self, message: str) -> None:
+        self.cull_progress_view.mark_cancelled(message)
+        self.cull_progress_container.setVisible(False)
+        if self.app_state.workflow_step != "cull":
+            self.show_cull_content_without_grouping()
+
+    def fail_cull_grouping_progress(self, message: str) -> None:
+        self.cull_progress_view.show_error(message)
+        self.cull_progress_view.set_cancel_visible(False)
+        self.cull_progress_container.setVisible(False)
+        if self.app_state.workflow_step != "cull":
+            self.show_cull_content_without_grouping()
+
+    def set_exif_progress(self, current: int, total: int) -> None:
+        """Show background EXIF preparation independently of thumbnails."""
+        if total <= 0:
+            self.hide_exif_progress()
+            return
+        if current <= 0:
+            self.exif_progress_label.setText("Preparing EXIF data…")
+            self.exif_progress_bar.setRange(0, 0)
+        else:
+            self.exif_progress_label.setText(
+                f"Preparing EXIF data {current:,} / {total:,}"
+            )
+            self.exif_progress_bar.setRange(0, total)
+            self.exif_progress_bar.setValue(min(current, total))
+        self.exif_progress_container.setVisible(True)
+
+    def hide_exif_progress(self) -> None:
+        self.exif_progress_container.setVisible(False)
+
     def reset_preview_requests(self) -> None:
-        self.preview_load_controller.reset()
+        self.image_inspection_controller.reset()
 
     def prefetch_navigation_previews(self, image_paths: list[str]) -> None:
         self.preview_load_controller.request(
             path for path in image_paths if not is_video_extension(path)
         )
 
-    def request_interactive_preview(
-        self,
-        image_path: str,
-        *,
-        force_default_brightness: bool = False,
-    ) -> None:
-        self.request_interactive_previews(
-            [image_path],
-            force_default_brightness=force_default_brightness,
-        )
+    def request_interactive_preview(self, image_path: str) -> None:
+        self.request_interactive_previews([image_path])
 
-    def request_interactive_previews(
-        self,
-        image_paths,
-        *,
-        force_default_brightness: bool = False,
-    ) -> None:
+    def request_interactive_previews(self, image_paths) -> None:
         paths = [path for path in image_paths if path and not is_video_extension(path)]
         if paths:
-            self.preview_load_controller.request(
-                paths,
-                force_default_brightness=force_default_brightness,
+            self.preview_load_controller.request(paths)
+
+    def activate_image_inspection(
+        self,
+        viewer: SynchronizedImageViewer,
+        specs: list[InspectionImageSpec],
+    ) -> None:
+        active_viewer = self._active_workflow_inspection_viewer()
+        if viewer is not active_viewer:
+            logger.debug(
+                "Ignoring inspection activation from an inactive workflow viewer"
             )
+            return
+        self.image_inspection_controller.activate(viewer, specs)
+
+    def _active_workflow_inspection_viewer(
+        self,
+    ) -> SynchronizedImageViewer | None:
+        """Return the sole viewer allowed to own the application inspection session."""
+        workflow_step = getattr(self.app_state, "workflow_step", "organize")
+        if workflow_step == "organize":
+            return self.grouping_step_widget.large_preview_view
+        if workflow_step == "easy_delete":
+            widget = self.easy_delete_step_widget
+            return widget._sync_viewer if widget is not None else None
+        if workflow_step == "fix_rotation":
+            widget = self.fix_rotation_step_widget
+            return widget._sync_viewer if widget is not None else None
+        if workflow_step == "pick_best":
+            widget = self.pick_best_step_widget
+            return widget._sync_viewer if widget is not None else None
+        if workflow_step == "cull":
+            return self.advanced_image_viewer
+        return None
+
+    def clear_image_inspection(
+        self, viewer: SynchronizedImageViewer | None = None
+    ) -> None:
+        self.image_inspection_controller.clear(viewer)
 
     def _get_cached_interactive_pixmap(
         self,
         image_path: str,
         *,
-        apply_thumbnail_orientation: bool = False,
+        apply_thumbnail_orientation: bool = True,
     ) -> tuple[QPixmap | None, bool]:
         """Return an immediately available pixmap without decoding on the UI thread."""
-        pixmap = self.image_pipeline.get_cached_preview_qpixmap(
+        return self.image_pipeline.get_immediate_review_qpixmap(
             image_path,
             display_max_size=DISPLAY_MAX_RESOLUTION,
-            memory_only=True,
+            thumbnail_apply_orientation=apply_thumbnail_orientation,
         )
-        preview_is_cached = bool(pixmap and not pixmap.isNull())
-        if not preview_is_cached:
-            pixmap = self.image_pipeline.get_cached_thumbnail_qpixmap(
-                image_path,
-                apply_orientation=apply_thumbnail_orientation,
-                memory_only=True,
-            )
-        if pixmap is not None and pixmap.isNull():
-            pixmap = None
-        return pixmap, preview_is_cached
 
     def schedule_visible_thumbnail_load(self, *_args) -> None:
         self.thumbnail_loader.schedule()
@@ -817,10 +1282,14 @@ class MainWindow(QMainWindow):
     def mark_cull_model_dirty(self) -> None:
         self._cull_model_dirty = True
 
+    def _active_cluster_results(self) -> dict[str, int]:
+        return self.app_state.cluster_results_for_workflow()
+
     def _ensure_cull_model_ready(self) -> None:
         if self._cull_model_dirty and self.app_state.image_files_data:
             self._rebuild_model_view()
 
+    @bulk_ui_update()
     def _rebuild_model_view(
         self,
         preserved_selection_paths: list[str] | None = None,
@@ -832,6 +1301,8 @@ class MainWindow(QMainWindow):
             preserved_focused_path = self.app_state.focused_image_path
 
         self.update_loading_text("Rebuilding view...")
+        self._model_population_processed = 0
+        self._model_population_total = len(self.app_state.image_files_data)
         # Drop Python wrappers before Qt deletes their underlying model items.
         # Queued thumbnail callbacks may run re-entrantly during UI updates.
         self._file_items_by_path.clear()
@@ -843,9 +1314,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No images loaded.", 3000)
             return
 
-        if self.left_panel.current_view_mode == "rotation":
-            self._rebuild_rotation_view()
-        elif self.group_by_similarity_mode:
+        if self.group_by_similarity_mode:
             current_sort_method = self.cluster_sort_combo.currentText()
             images_by_cluster = self.similarity_controller.get_images_by_cluster()
             cluster_info = (
@@ -868,8 +1337,17 @@ class MainWindow(QMainWindow):
                 if fd.get("path") not in clustered_paths
             ]
 
-            if not self.app_state.cluster_results:
-                no_cluster_item = QStandardItem("Run 'Analyze Similarity' to group.")
+            if not self._active_cluster_results():
+                if self.app_state.cull_grouping_error:
+                    # Point at the retry button on the progress card rather than
+                    # leaving the user without a way back.
+                    message = (
+                        f"{self.app_state.cull_grouping_error} "
+                        "Use 'Enable same-subject grouping' to try again."
+                    )
+                else:
+                    message = "Preparing fast same-subject groups…"
+                no_cluster_item = QStandardItem(message)
                 no_cluster_item.setEditable(False)
                 root_item.appendRow(no_cluster_item)
 
@@ -980,15 +1458,17 @@ class MainWindow(QMainWindow):
             active_view.updateGeometries()
             active_view.viewport().update()
 
-            focused_proxy_idx = (
-                self._find_proxy_index_for_path(preserved_focused_path)
-                if preserved_focused_path
-                else QModelIndex()
+            restore_paths = list(preserved_selection_paths)
+            if preserved_focused_path:
+                restore_paths.append(preserved_focused_path)
+            restore_indices = self._find_proxy_indices_for_paths(restore_paths)
+            focused_proxy_idx = restore_indices.get(
+                preserved_focused_path, QModelIndex()
             )
 
             selection_to_restore = QItemSelection()
             for path in preserved_selection_paths:
-                proxy_idx = self._find_proxy_index_for_path(path)
+                proxy_idx = restore_indices.get(path, QModelIndex())
                 if proxy_idx.isValid():
                     selection_to_restore.select(proxy_idx, proxy_idx)
 
@@ -1037,6 +1517,8 @@ class MainWindow(QMainWindow):
                         active_view.expand(idx_to_expand)
 
         self._cull_model_dirty = False
+        self._model_population_processed = 0
+        self._model_population_total = 0
         thumbnail_loader = getattr(self, "thumbnail_loader", None)
         if thumbnail_loader is not None:
             # The model owns new item objects now. Re-request only its viewport
@@ -1044,6 +1526,65 @@ class MainWindow(QMainWindow):
             thumbnail_loader.model_rebuilt()
 
     # --- Controller adapter helpers (SimilarityContext / PreviewContext / MetadataContext) ---
+    def _publish_active_image(
+        self, file_path: str | None, *, source: str | None = None
+    ) -> None:
+        controller = getattr(self, "active_image_controller", None)
+        if controller is not None:
+            controller.publish(file_path, source=source)
+        else:
+            self.app_state.focused_image_path = file_path
+
+    def get_active_image_adapter(self, workflow_step: str):
+        """Return an initialized path-focus adapter for a workflow."""
+
+        if workflow_step == "organize":
+            return self.grouping_step_widget
+        if workflow_step == "easy_delete":
+            return self.easy_delete_step_widget
+        if workflow_step == "fix_rotation":
+            return self.fix_rotation_step_widget
+        if workflow_step == "pick_best":
+            return self.pick_best_step_widget
+        if workflow_step == "cull":
+            return self
+        return None
+
+    def focus_image(self, file_path: str) -> bool:
+        """Focus a Cull row without replacing an existing local multi-selection."""
+
+        active_view = self._get_active_file_view()
+        if active_view is None:
+            return False
+        proxy_index = self._find_proxy_index_for_path(file_path)
+        if not proxy_index.isValid():
+            return False
+
+        selection_model = active_view.selectionModel()
+        if selection_model is None:
+            return False
+        self._is_syncing_selection = True
+        try:
+            if not selection_model.selectedIndexes():
+                selection_model.select(
+                    proxy_index,
+                    QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                )
+            selection_model.setCurrentIndex(
+                proxy_index,
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
+            active_view.scrollTo(
+                proxy_index, QAbstractItemView.ScrollHint.PositionAtCenter
+            )
+            active_view.viewport().update()
+        finally:
+            self._is_syncing_selection = False
+
+        if self.app_state.workflow_step == "cull":
+            self._handle_file_selection_changed(override_selected_paths=[file_path])
+        return True
+
     def status_message(self, msg: str, timeout: int = 3000) -> None:
         self.statusBar().showMessage(msg, timeout)
 
@@ -1054,6 +1595,11 @@ class MainWindow(QMainWindow):
         """Update the shared workflow state and log real view transitions once."""
         previous_step = getattr(self.app_state, "workflow_step", "")
         self.app_state.workflow_step = workflow_step
+        shortcut_strip = getattr(self, "workflow_shortcut_strips", {}).get(
+            workflow_step
+        )
+        if shortcut_strip is not None:
+            self.workflow_shortcut_stack.setCurrentWidget(shortcut_strip)
         if previous_step == workflow_step:
             return
         previous_label = WORKFLOW_STEP_LABELS.get(
@@ -1070,6 +1616,67 @@ class MainWindow(QMainWindow):
             item_count,
         )
 
+    def set_workflow_shortcuts_visible(self, visible: bool) -> None:
+        """Apply the persisted shortcut-footer visibility preference immediately."""
+        self.workflow_shortcut_stack.setVisible(bool(visible))
+        self.workflow_nav_host.updateGeometry()
+        self.statusBar().updateGeometry()
+
+    def apply_workflow_step_visibility(
+        self,
+        visibility: dict[str, bool],
+        *,
+        transition_if_hidden: bool = True,
+    ) -> None:
+        """Apply persisted step visibility to navigation and transition policy."""
+
+        normalized = {
+            step: bool(visibility.get(step, True)) for step in WORKFLOW_STEP_ORDER
+        }
+        normalized["organize"] = True
+        normalized["cull"] = True
+        self._workflow_step_visibility = normalized
+        buttons = {
+            "organize": self.step_organize_button,
+            "easy_delete": self.step_easy_delete_button,
+            "fix_rotation": self.step_fix_rotation_button,
+            "pick_best": self.step_pick_best_button,
+            "cull": self.step_cull_button,
+        }
+        for step, button in buttons.items():
+            button.setVisible(normalized[step])
+        self.workflow_nav.updateGeometry()
+        self.update_workflow_navigation()
+
+        current_step = getattr(self.app_state, "workflow_step", "organize")
+        if transition_if_hidden and not normalized.get(current_step, True):
+            destination = self._next_visible_workflow_step(current_step)
+            QTimer.singleShot(0, lambda: self._request_workflow_transition(destination))
+
+    def _active_workflow_left_panel(self) -> QWidget | None:
+        """Return the left-side panel owned by the active workflow."""
+
+        workflow_step = getattr(self.app_state, "workflow_step", "organize")
+        if workflow_step == "organize":
+            return self.grouping_step_widget.before_panel
+        if workflow_step == "easy_delete" and self.easy_delete_step_widget:
+            return self.easy_delete_step_widget._review_list_panel
+        if workflow_step == "fix_rotation" and self.fix_rotation_step_widget:
+            return self.fix_rotation_step_widget._review_list_panel
+        if workflow_step == "pick_best" and self.pick_best_step_widget:
+            return self.pick_best_step_widget._review_list_panel
+        if workflow_step == "cull":
+            return self.left_panel
+        return None
+
+    def toggle_workflow_left_panel(self) -> None:
+        """Hide or restore the left panel for the active workflow step."""
+
+        panel = self._active_workflow_left_panel()
+        if panel is None:
+            return
+        panel.setVisible(panel.isHidden())
+
     def show_grouping_step(self) -> None:
         self.reset_preview_requests()
         self._set_workflow_step("organize")
@@ -1077,6 +1684,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(True)
         self.workflow_stack.setCurrentWidget(self.grouping_page)
         self.grouping_step_widget.set_source_folder(self.app_state.grouping_source_root)
+        self.grouping_step_widget.refresh_deletion_state()
         self.grouping_step_widget.set_current_mode(
             self.app_state.selected_grouping_mode or "current"
         )
@@ -1090,6 +1698,7 @@ class MainWindow(QMainWindow):
             != self.app_state.grouping_source_root
         )
         self.update_workflow_navigation()
+        self.active_image_controller.sync_workflow("organize")
 
     def show_cull_step(self) -> None:
         self.reset_preview_requests()
@@ -1098,8 +1707,20 @@ class MainWindow(QMainWindow):
             action.setEnabled(True)
         self.workflow_stack.setCurrentWidget(self.cull_page)
         self._ensure_cull_model_ready()
+        if (
+            self.group_by_similarity_mode
+            and not self.app_state.cull_cluster_results
+            and not self.app_controller.is_cull_grouping_declined()
+        ):
+            self.app_controller.start_cull_similarity_workflow()
+        elif not (
+            self.worker_manager.is_cull_grouping_running()
+            or self.worker_manager.is_model_environment_probe_running()
+        ):
+            self.show_cull_content_without_grouping()
         self.schedule_visible_thumbnail_load()
         self.update_workflow_navigation()
+        self.active_image_controller.sync_workflow("cull")
 
     def _ensure_easy_delete_widget(self):
         if self.easy_delete_step_widget is None:
@@ -1110,11 +1731,23 @@ class MainWindow(QMainWindow):
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
             )
-            widget.skip_requested.connect(self.show_fix_rotation_step)
-            widget.proceed_to_pick_best_requested.connect(self.show_fix_rotation_step)
+            widget.set_exif_disk_cache(self.app_state.detailed_metadata_cache)
+            widget.skip_requested.connect(
+                lambda: self._request_next_visible_workflow_transition("easy_delete")
+            )
+            widget.retry_requested.connect(
+                self.app_controller.retry_easy_delete_workflow
+            )
+            widget.apply_requested.connect(self._request_workflow_resolution)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
+            )
+            widget.deletion_state_requested.connect(self._set_paths_deletion_state)
+            widget.active_image_changed.connect(
+                lambda path: self.active_image_controller.publish(
+                    path, source="easy_delete"
+                )
             )
             self.easy_delete_page_layout.addWidget(widget)
             self.easy_delete_step_widget = widget
@@ -1125,10 +1758,19 @@ class MainWindow(QMainWindow):
             from ui.fix_rotation_step_widget import FixRotationStepWidget
 
             widget = FixRotationStepWidget(self)
-            widget.skip_requested.connect(self.show_pick_best_step)
-            widget.proceed_requested.connect(self.show_pick_best_step)
+            widget.proceed_requested.connect(
+                lambda: self._request_next_visible_workflow_transition("fix_rotation")
+            )
             widget.apply_rotations_requested.connect(
                 self.app_controller.start_fix_rotation_apply
+            )
+            widget.active_image_changed.connect(
+                lambda path: self.active_image_controller.publish(
+                    path, source="fix_rotation"
+                )
+            )
+            widget.retry_requested.connect(
+                self.app_controller.start_fix_rotation_workflow
             )
             self.fix_rotation_page_layout.addWidget(widget)
             self.fix_rotation_step_widget = widget
@@ -1143,11 +1785,20 @@ class MainWindow(QMainWindow):
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
             )
-            widget.skip_requested.connect(self.show_cull_step)
-            widget.proceed_to_cull_requested.connect(self.show_cull_step)
+            widget.set_similarity_embeddings_provider(
+                lambda: self.app_state.embeddings_cache
+            )
+            widget.apply_requested.connect(self._request_workflow_resolution)
+            widget.retry_requested.connect(self.app_controller.retry_pick_best_workflow)
             widget.mark_for_deletion_requested.connect(self._mark_paths_for_deletion)
             widget.unmark_for_deletion_requested.connect(
                 self._unmark_paths_for_deletion
+            )
+            widget.deletion_state_requested.connect(self._set_paths_deletion_state)
+            widget.active_image_changed.connect(
+                lambda path: self.active_image_controller.publish(
+                    path, source="pick_best"
+                )
             )
             self.pick_best_page_layout.addWidget(widget)
             self.pick_best_step_widget = widget
@@ -1164,6 +1815,7 @@ class MainWindow(QMainWindow):
         self.update_workflow_navigation()
         if self.app_state.easy_delete_results is not None:
             widget.show_results(self.app_state.easy_delete_results)
+            self.active_image_controller.sync_workflow("easy_delete")
             return
         self.app_controller.start_easy_delete_workflow()
 
@@ -1176,6 +1828,7 @@ class MainWindow(QMainWindow):
         widget.set_image_pipeline(self.image_pipeline)
         self.workflow_stack.setCurrentWidget(self.fix_rotation_page)
         self.update_workflow_navigation()
+        self.active_image_controller.sync_workflow("fix_rotation")
         self.app_controller.start_fix_rotation_workflow()
 
     def show_pick_best_step(self) -> None:
@@ -1188,7 +1841,9 @@ class MainWindow(QMainWindow):
             action.setEnabled(False)
         self.update_workflow_navigation()
         if self.app_state.pick_best_results:
+            widget.show_results(self.app_state.pick_best_results)
             widget.refresh_deletion_state()
+            self.active_image_controller.sync_workflow("pick_best")
             return
         self.app_controller.start_pick_best_workflow()
 
@@ -1237,27 +1892,126 @@ class MainWindow(QMainWindow):
             manager.view_list_action,
             manager.view_icons_action,
             manager.view_grid_action,
-            manager.view_rotation_action,
             manager.toggle_folder_view_action,
             manager.group_by_similarity_action,
-            manager.toggle_thumbnails_action,
-            manager.detect_blur_action,
             manager.toggle_metadata_sidebar_action,
         ]
         if not hasattr(self, "_cull_action_shortcuts"):
             self._cull_action_shortcuts = {
-                action: action.shortcut() for action in actions
+                action: action.shortcuts() for action in actions
             }
         for action in actions:
             original = self._cull_action_shortcuts.get(action)
-            action.setShortcut(
-                original if active and original is not None else QKeySequence()
-            )
+            action.setShortcuts(original if active and original is not None else [])
 
     def _refresh_workflow_deletion_state(self) -> None:
-        for widget in (self.easy_delete_step_widget, self.pick_best_step_widget):
+        for widget in (
+            self.grouping_step_widget,
+            self.easy_delete_step_widget,
+            self.pick_best_step_widget,
+        ):
             if widget is not None:
                 widget.refresh_deletion_state()
+        self._refresh_cull_shortcut_visibility()
+
+    def _sync_workflow_results_after_file_mutation(
+        self, *, exclude: set[str] | None = None
+    ) -> None:
+        """Synchronize every instantiated workflow queue with shared AppState."""
+
+        excluded = exclude or set()
+        if "easy_delete" not in excluded and self.easy_delete_step_widget is not None:
+            self.easy_delete_step_widget.sync_results_after_file_mutation(
+                self.app_state.easy_delete_results
+            )
+        if "fix_rotation" not in excluded and self.fix_rotation_step_widget is not None:
+            self.fix_rotation_step_widget.sync_results_after_file_mutation(
+                self.app_state.fix_rotation_results
+            )
+        if "pick_best" not in excluded and self.pick_best_step_widget is not None:
+            self.pick_best_step_widget.sync_results_after_file_mutation(
+                self.app_state.pick_best_results
+            )
+
+    def _toggle_organize_deletion_marks(self, paths: list[str]) -> None:
+        existing_paths = list(dict.fromkeys(path for path in paths if path))
+        directory_paths = self.grouping_step_widget.known_directory_paths()
+        normalized_directories = {
+            os.path.normcase(os.path.normpath(path)) for path in directory_paths
+        }
+        contains_directory = any(
+            os.path.normcase(os.path.normpath(path)) in normalized_directories
+            for path in existing_paths
+        )
+        mark_state: dict[str, bool] = {}
+        if contains_directory:
+            should_unmark = all(
+                self.app_state.is_marked_for_deletion(path) for path in existing_paths
+            )
+            mark_state = dict.fromkeys(existing_paths, not should_unmark)
+        else:
+            mark_state = {
+                path: not self.app_state.is_marked_for_deletion(path)
+                for path in existing_paths
+            }
+        toggled = len(mark_state)
+        if not toggled:
+            self.statusBar().showMessage(
+                "No files or folders are available to mark.", 3000
+            )
+            return
+        self.deletion_controller.set_paths_marked(
+            mark_state,
+            self.file_system_model,
+            self.proxy_model,
+        )
+        self.proxy_model.invalidate()
+        self._refresh_visible_items_icons()
+        self._refresh_workflow_deletion_state()
+        self.statusBar().showMessage(f"Toggled Trash mark for {toggled} item(s).", 4000)
+
+    def _trash_from_organize(
+        self, target_path: str, represented_paths: list[str]
+    ) -> None:
+        represented = list(dict.fromkeys(represented_paths))
+        directory_paths = self.grouping_step_widget.known_directory_paths()
+        normalized_directories = {
+            os.path.normcase(os.path.normpath(path)) for path in directory_paths
+        }
+        is_directory = bool(
+            target_path
+            and os.path.normcase(os.path.normpath(target_path))
+            in normalized_directories
+        )
+        if is_directory:
+            if not self.dialog_manager.show_confirm_trash_target_dialog(
+                target_path, represented
+            ):
+                return
+            targets = [target_path]
+        else:
+            targets = [target_path] if target_path else represented
+            targets = list(dict.fromkeys(path for path in targets if path))
+            if not targets or not self.dialog_manager.show_confirm_delete_dialog(
+                targets
+            ):
+                return
+
+        represented_by_target = {
+            target: (represented if is_directory else [target]) for target in targets
+        }
+        self._start_deletion_batch(
+            targets,
+            represented_by_target,
+            completion=lambda successful, deleted, failures, _resolved: (
+                self._finish_ad_hoc_deletion(
+                    successful,
+                    deleted,
+                    failures,
+                    operation_label="Trash",
+                )
+            ),
+        )
 
     def _mark_paths_for_deletion(self, paths: list) -> None:
         self.deletion_controller.mark_paths(
@@ -1277,6 +2031,24 @@ class MainWindow(QMainWindow):
             self.proxy_model,
         )
         self.proxy_model.invalidate()
+        self._refresh_workflow_deletion_state()
+
+    def _set_paths_deletion_state(self, mark_state: dict[str, bool]) -> None:
+        """Apply a bulk review decision with one model pass and one UI refresh."""
+
+        active_view = self._get_active_file_view()
+        active_model = active_view.model() if active_view is not None else None
+        proxy_model = (
+            active_model
+            if isinstance(active_model, QSortFilterProxyModel)
+            else self.proxy_model
+        )
+        self.deletion_controller.set_paths_marked(
+            mark_state,
+            self.file_system_model,
+            proxy_model,
+        )
+        proxy_model.invalidate()
         self._refresh_workflow_deletion_state()
 
     def update_grouping_preview(self, text: str) -> None:
@@ -1327,6 +2099,23 @@ class MainWindow(QMainWindow):
     def set_group_by_similarity_checked(self, checked: bool) -> None:
         self.group_by_similarity_mode = checked
         self.menu_manager.group_by_similarity_action.setChecked(checked)
+
+    def revert_group_by_similarity(self) -> None:
+        """Turn the grouping toggle back off when no groups will arrive.
+
+        Leaving it on would claim the photos are grouped while the view still
+        shows them ungrouped.
+        """
+        if not self.menu_manager.group_by_similarity_action.isChecked():
+            return
+        # A synchronous decline lands while _toggle_group_by_similarity is still
+        # on the stack, and the rest of that handler would re-show the cluster
+        # sort controls, so undo the toggle once it has finished.
+        QTimer.singleShot(0, self._uncheck_group_by_similarity)
+
+    def _uncheck_group_by_similarity(self) -> None:
+        # Emits toggled(False), which clears the mode and rebuilds the view.
+        self.menu_manager.group_by_similarity_action.setChecked(False)
 
     def set_cluster_sort_visible(self, visible: bool) -> None:
         self.menu_manager.set_cluster_sort_menu_visible(visible)
@@ -1408,32 +2197,24 @@ class MainWindow(QMainWindow):
     def get_marked_deleted(self):  # Iterable[str] expected by NavigationController
         return self.app_state.get_marked_files()
 
-    def _rebuild_rotation_view(self):
-        self.file_system_model.clear()
-        root_item = self.file_system_model.invisibleRootItem()
-
-        if not self.rotation_suggestions:
-            no_suggestions_item = QStandardItem("No rotation suggestions available.")
-            no_suggestions_item.setEditable(False)
-            root_item.appendRow(no_suggestions_item)
-            return
-
-        for path, rotation in self.rotation_suggestions.items():
-            item = QStandardItem(os.path.basename(path))
-            item.setData({"path": path, "rotation": rotation}, Qt.ItemDataRole.UserRole)
-            root_item.appendRow(item)
+    def _note_model_item_populated(self) -> None:
+        self._model_population_processed = (
+            getattr(self, "_model_population_processed", 0) + 1
+        )
+        total = getattr(self, "_model_population_total", 0)
+        cooperative_ui_yield(
+            self._model_population_processed,
+            total,
+            progress_callback=lambda processed, count: self.update_loading_text(
+                f"Populating view: {processed}/{count}..."
+            ),
+        )
 
     def _populate_model_standard(
         self, parent_item: QStandardItem, image_data_list: list[dict[str, Any]]
     ):
         if not image_data_list:
             return
-
-        from core.app_settings import LARGE_FOLDER_THRESHOLD, UI_POPULATION_CHUNK_SIZE
-
-        total_items = len(image_data_list)
-        use_chunked_processing = total_items > LARGE_FOLDER_THRESHOLD
-        processed_count = 0
 
         if self.show_folders_mode and not self.group_by_similarity_mode:
             files_by_folder: dict[str, list[dict[str, Any]]] = {}
@@ -1460,17 +2241,7 @@ class MainWindow(QMainWindow):
                 ):
                     image_item = self._create_standard_item(file_data)
                     folder_item.appendRow(image_item)
-
-                    if use_chunked_processing:
-                        processed_count += 1
-                        if processed_count % UI_POPULATION_CHUNK_SIZE == 0:
-                            progress_msg = (
-                                f"Populating view: {processed_count}/{total_items}..."
-                            )
-                            self.update_loading_text(progress_msg)
-                            logger.info(
-                                progress_msg
-                            )  # Log progress so user can see what's happening
+                    self._note_model_item_populated()
         else:  # Not showing folders, or grouping by similarity (which creates its own top-level groups)
 
             def image_sort_key_func(fd):
@@ -1497,22 +2268,10 @@ class MainWindow(QMainWindow):
             for file_data in sorted(image_data_list, key=image_sort_key_func):
                 image_item = self._create_standard_item(file_data)
                 parent_item.appendRow(image_item)
-
-                if use_chunked_processing:
-                    processed_count += 1
-                    if processed_count % UI_POPULATION_CHUNK_SIZE == 0:
-                        progress_msg = (
-                            f"Populating view: {processed_count}/{total_items}..."
-                        )
-                        self.update_loading_text(progress_msg)
-                        logger.info(
-                            progress_msg
-                        )  # Log progress so user can see what's happening
+                self._note_model_item_populated()
 
     def _apply_rating(self, file_path: str, rating: int):
         """Handle a viewer rating request through the shared background worker."""
-        if not os.path.exists(file_path):
-            return
         # Use the background worker for all rating operations
         self.app_controller.apply_rating_to_selection(rating, [file_path])
 
@@ -1536,73 +2295,65 @@ class MainWindow(QMainWindow):
     def _delete_image(self, file_path: str):
         """Delete a single image file."""
         logger.debug(f"Deleting image: {file_path}")
-        if not os.path.exists(file_path):
-            logger.warning(f"File does not exist: {file_path}")
-            return
 
         # Show confirmation dialog
         if not self.dialog_manager.show_confirm_delete_dialog([file_path]):
             logger.debug("User cancelled deletion")
             return
 
-        # Move to trash
-        logger.info(f"Moving file to trash: {file_path}")
-        success, message = ImageFileOperations.move_to_trash(file_path)
-        if success:
-            # Remove from app state
-            self.app_state.remove_data_for_path(file_path)
-            self.statusBar().showMessage(f"Deleted {os.path.basename(file_path)}", 5000)
-            logger.info(f"Successfully deleted: {file_path}")
-            # Refresh the view
-            self._handle_file_selection_changed()
-            # Reapply filters to hide deleted items
-            self._apply_filter()
-        else:
-            self.statusBar().showMessage(
-                f"Failed to delete {os.path.basename(file_path)}: {message}", 5000
-            )
-            logger.error(f"Failed to delete {file_path}: {message}")
+        self._start_deletion_batch(
+            [file_path],
+            {file_path: [file_path]},
+            completion=lambda successful, deleted, failures, _resolved: (
+                self._finish_ad_hoc_deletion(successful, deleted, failures)
+            ),
+        )
 
     def _delete_multiple_images(self, file_paths: list[str]):
         """Delete multiple image files at once."""
         logger.debug(f"Deleting multiple images: {file_paths}")
 
-        # Filter out non-existent files
-        existing_file_paths = [path for path in file_paths if os.path.exists(path)]
-        if not existing_file_paths:
+        target_paths = list(dict.fromkeys(path for path in file_paths if path))
+        if not target_paths:
             logger.warning("No valid files to delete")
             return
 
         # Show confirmation dialog for all files at once
-        if not self.dialog_manager.show_confirm_delete_dialog(existing_file_paths):
+        if not self.dialog_manager.show_confirm_delete_dialog(target_paths):
             logger.debug("User cancelled deletion")
             return
 
-        # Delete each file
-        deleted_count = 0
-        for file_path in existing_file_paths:
-            logger.info(f"Moving file to trash: {file_path}")
-            success, message = ImageFileOperations.move_to_trash(file_path)
-            if success:
-                # Remove from app state
-                self.app_state.remove_data_for_path(file_path)
-                logger.info(f"Successfully deleted: {file_path}")
-                deleted_count += 1
-            else:
-                self.statusBar().showMessage(
-                    f"Failed to delete {os.path.basename(file_path)}: {message}", 5000
-                )
-                logger.error(f"Failed to delete {file_path}: {message}")
+        self._start_deletion_batch(
+            target_paths,
+            {path: [path] for path in target_paths},
+            completion=lambda successful, deleted, failures, _resolved: (
+                self._finish_ad_hoc_deletion(successful, deleted, failures)
+            ),
+        )
 
-        # Show status message
-        if deleted_count > 0:
-            self.statusBar().showMessage(f"Deleted {deleted_count} image(s)", 5000)
-            # Refresh the view
+    def _finish_ad_hoc_deletion(
+        self,
+        successful_targets: list[str],
+        deleted_paths: list[str],
+        failures: dict[str, str],
+        *,
+        operation_label: str = "Delete",
+    ) -> None:
+        if deleted_paths:
+            self.statusBar().showMessage(
+                f"Moved {len(successful_targets)} item(s) to Trash.", 5000
+            )
             self._handle_file_selection_changed()
-            # Reapply filters to hide deleted items
-            self._apply_filter()
-        elif len(existing_file_paths) > 0:
-            self.statusBar().showMessage("Failed to delete any images", 5000)
+            self._update_image_info_label()
+        if failures:
+            details = "\n".join(
+                f"{os.path.basename(path) or path}: {message}"
+                for path, message in list(failures.items())[:5]
+            )
+            self.dialog_manager.show_error_dialog(
+                f"{operation_label} Error",
+                details,
+            )
 
     def _log_qmodelindex(self, index: QModelIndex, prefix: str = "") -> str:
         if not index.isValid():
@@ -1631,13 +2382,10 @@ class MainWindow(QMainWindow):
             return False
 
         item_user_data = item.data(Qt.ItemDataRole.UserRole)
-        is_image = (
-            isinstance(item_user_data, dict)
-            and "path" in item_user_data
-            and os.path.isfile(item_user_data["path"])
-        )
-
-        return is_image
+        # The scanner-backed model is the source of truth here. Calling
+        # ``isfile`` while traversing the model turns selection and navigation
+        # into one filesystem round trip per row on slow/network volumes.
+        return isinstance(item_user_data, dict) and bool(item_user_data.get("path"))
 
     def _get_active_file_view(self):
         return self.left_panel.get_active_view() if self.left_panel else None
@@ -1783,11 +2531,7 @@ class MainWindow(QMainWindow):
             if (
                 user_data.startswith("cluster_header_")
                 or user_data.startswith("date_header_")
-                or (
-                    self.show_folders_mode
-                    and not self.group_by_similarity_mode
-                    and os.path.isdir(user_data)
-                )
+                or (self.show_folders_mode and not self.group_by_similarity_mode)
             ):
                 is_group = True
 
@@ -1842,10 +2586,37 @@ class MainWindow(QMainWindow):
 
         return QModelIndex()  # No visible image item found in this subtree
 
+    def _has_active_background_work(self) -> bool:
+        """Keep owners alive until both managed workers and preview pools drain."""
+        workers_active = getattr(
+            self.worker_manager,
+            "is_any_worker_active",
+            self.worker_manager.is_any_worker_running,
+        )
+        previews = getattr(self, "preview_load_controller", None)
+        pending_results = getattr(
+            self.worker_manager, "has_pending_ui_results", lambda: False
+        )
+        return bool(
+            workers_active()
+            or getattr(previews, "is_active", lambda: False)()
+            or pending_results()
+        )
+
     @override
     def closeEvent(self, event):
         close_start = time.perf_counter()
         logger.info("Application close requested.")
+        if getattr(self, "_shutdown_in_progress", False):
+            if MainWindow._has_active_background_work(self):
+                event.ignore()
+                return
+            self._shutdown_in_progress = False
+            MetadataIO.shutdown_worker_thread(immediate=True, timeout=0.0)
+            logger.info("Background workers stopped; application close can complete.")
+            event.accept()
+            return
+
         if self.worker_manager.is_grouping_workflow_running():
             event.ignore()
             self.statusBar().showMessage(
@@ -1853,10 +2624,29 @@ class MainWindow(QMainWindow):
                 4000,
             )
             return
+        if getattr(self.worker_manager, "is_file_deletion_running", lambda: False)():
+            event.ignore()
+            self.statusBar().showMessage(
+                "Files are still moving to Trash. Wait for deletion to finish before closing.",
+                4000,
+            )
+            return
 
-        # The detailed action preview walks the complete source tree. Most closes
-        # have no Organize edits, so compare the in-memory plan signature first
-        # and only perform filesystem work when a dialog is actually required.
+        if (
+            getattr(
+                self.worker_manager, "is_rotation_application_running", lambda: False
+            )()
+            or getattr(self.worker_manager, "is_rating_writer_running", lambda: False)()
+        ):
+            event.ignore()
+            self.statusBar().showMessage(
+                "Rotations or ratings are still being written. Wait before closing.",
+                4000,
+            )
+            return
+
+        # Compare the in-memory signature before building the worker-inventoried
+        # action preview. No source-tree walk occurs on the UI thread.
         has_grouping_edits = self.grouping_step_widget.has_unsaved_grouping_edits()
         grouping_action_lines = (
             self.grouping_step_widget.pending_grouping_action_lines()
@@ -1891,9 +2681,12 @@ class MainWindow(QMainWindow):
 
             if choice == "commit":
                 logger.info("User chose to commit deletions on close")
-                # Commit the deletions and then close
-                self._commit_marked_deletions_without_confirmation()
-                # Continue with closing
+                self._close_after_deletion = True
+                started = self._commit_marked_deletions_without_confirmation()
+                if started is False:
+                    self._close_after_deletion = False
+                event.ignore()
+                return
             elif choice == "ignore":
                 logger.info("User chose to ignore deletions on close")
                 # Ignore the marked files and close
@@ -1910,13 +2703,36 @@ class MainWindow(QMainWindow):
 
         self._close_after_grouping_save = False
         logger.info(
-            "Stopping all workers on application close (preflight %.3fs).",
+            "Requesting all workers stop on application close (preflight %.3fs).",
             time.perf_counter() - close_start,
         )
+        self._shutdown_in_progress = True
+        controller = getattr(self, "app_controller", None)
+        cancel_starts = getattr(controller, "cancel_pending_background_starts", None)
+        if callable(cancel_starts):
+            cancel_starts()
+        reset_thumbnails = getattr(self, "reset_thumbnail_requests", None)
+        if callable(reset_thumbnails):
+            reset_thumbnails()
         self.preview_load_controller.shutdown()
-        self.worker_manager.stop_all_workers()  # Use WorkerManager to stop all
-        MetadataIO.shutdown_worker_thread(immediate=True)
+        self.worker_manager.request_stop_all_workers()
+        if MainWindow._has_active_background_work(self):
+            self._shutdown_in_progress = True
+            self.statusBar().showMessage("Stopping background work…", 0)
+            QTimer.singleShot(25, self._finish_close_after_workers)
+            event.ignore()
+            return
+
+        MetadataIO.shutdown_worker_thread(immediate=True, timeout=0.0)
         event.accept()
+
+    def _finish_close_after_workers(self) -> None:
+        """Retry closing through Qt's event loop once worker threads have exited."""
+
+        if MainWindow._has_active_background_work(self):
+            QTimer.singleShot(25, self._finish_close_after_workers)
+            return
+        self.close()
 
     def _get_current_group_sibling_images(
         self, current_image_proxy_idx: QModelIndex
@@ -2069,7 +2885,7 @@ class MainWindow(QMainWindow):
             return 0
 
     def _get_cluster_id_for_path(self, path: str) -> int | None:
-        value = self._lookup_path_dict(self.app_state.cluster_results, path, None)
+        value = self._lookup_path_dict(self._active_cluster_results(), path, None)
         if isinstance(value, str):
             try:
                 return int(value)
@@ -2096,7 +2912,7 @@ class MainWindow(QMainWindow):
         cluster_mode_active = (
             self.navigation_skip_singleton_clusters
             and self.group_by_similarity_mode
-            and bool(self.app_state.cluster_results)
+            and bool(self._active_cluster_results())
         )
         if rating_target is None and not cluster_mode_active:
             return False
@@ -2202,9 +3018,50 @@ class MainWindow(QMainWindow):
         if not menu_manager:
             return
         can_skip = bool(
-            self.group_by_similarity_mode and self.app_state.cluster_results
+            self.group_by_similarity_mode and self._active_cluster_results()
         )
         menu_manager.set_skip_singleton_action_available(can_skip)
+        self._refresh_cull_shortcut_visibility()
+
+    def _refresh_cull_shortcut_visibility(
+        self, selected_paths: list[str] | None = None
+    ) -> None:
+        """Show only Cull shortcuts that can act on the current state."""
+        if selected_paths is not None:
+            self._cull_shortcut_paths = list(selected_paths)
+        strip = getattr(self, "workflow_shortcut_strips", {}).get("cull")
+        if strip is None:
+            return
+
+        paths = self._cull_shortcut_paths
+        focus_count = min(len(paths), 9)
+        has_multiple = focus_count > 1
+        has_marks = bool(self.app_state.get_marked_files())
+
+        strip.set_shortcut_state(
+            "focus",
+            visible=has_multiple,
+            keys=f"1–{focus_count}" if has_multiple else None,
+        )
+        strip.set_shortcut_state(
+            "viewer_layout", visible=self._cull_side_by_side_available
+        )
+        strip.set_shortcut_state(
+            "playback", visible=any(is_video_extension(path) for path in paths)
+        )
+        for action in ("browse_including_marked", "clear_deletions", "apply"):
+            strip.set_shortcut_state(action, visible=has_marks)
+        active_cluster_provider = getattr(self, "_active_cluster_results", None)
+        active_clusters = (
+            active_cluster_provider()
+            if callable(active_cluster_provider)
+            else getattr(
+                self.app_state,
+                "cull_cluster_results",
+                getattr(self.app_state, "cluster_results", {}),
+            )
+        )
+        strip.set_shortcut_state("groups", visible=bool(active_clusters))
 
     def _navigate_left_in_group(self, skip_deleted: bool = True):
         self.navigation_controller.navigate_group("left", skip_deleted)
@@ -2212,13 +3069,77 @@ class MainWindow(QMainWindow):
     def _navigate_right_in_group(self, skip_deleted: bool = True):
         self.navigation_controller.navigate_group("right", skip_deleted)
 
+    def _select_group_and_children(self, group_index: QModelIndex) -> bool:
+        """Keep a group current while selecting its visible child images."""
+        view = self._get_active_file_view()
+        if not isinstance(view, QTreeView) or not group_index.isValid():
+            return False
+        model = view.model()
+        selection_model = view.selectionModel()
+        if model is None or selection_model is None:
+            return False
+
+        child_indices = []
+        for row in range(model.rowCount(group_index)):
+            child_index = model.index(row, 0, group_index)
+            if child_index.isValid():
+                child_indices.append(child_index)
+        if len(child_indices) == 1:
+            child_index = child_indices[0]
+            selection_model.setCurrentIndex(
+                child_index, QItemSelectionModel.SelectionFlag.ClearAndSelect
+            )
+            view.scrollTo(child_index, QAbstractItemView.ScrollHint.EnsureVisible)
+            return True
+
+        selection = QItemSelection(group_index, group_index)
+        for child_index in child_indices:
+            selection.select(child_index, child_index)
+        selection_model.select(
+            selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
+        )
+        selection_model.setCurrentIndex(
+            group_index, QItemSelectionModel.SelectionFlag.NoUpdate
+        )
+        view.scrollTo(group_index, QAbstractItemView.ScrollHint.EnsureVisible)
+        return True
+
+    def _navigate_across_tree_header(self, direction: str, skip_deleted: bool) -> bool:
+        """Navigate in view order when the next move crosses a tree header."""
+        view = self._get_active_file_view()
+        if not isinstance(view, QTreeView):
+            return False
+        current = view.currentIndex()
+        if not current.isValid():
+            return False
+        next_index = view.indexAbove if direction == "up" else view.indexBelow
+        adjacent = next_index(current)
+        if self._is_valid_image_item(current) and self._is_valid_image_item(adjacent):
+            return False
+        while adjacent.isValid():
+            if self._is_valid_image_item(adjacent):
+                if self._validate_and_select_image_candidate(
+                    adjacent, direction, skip_deleted
+                ):
+                    return True
+            else:
+                self._select_group_and_children(adjacent)
+                if view.currentIndex() != current:
+                    return True
+            adjacent = next_index(adjacent)
+        return True
+
     def _navigate_up_sequential(self, skip_deleted: bool = True):
         if self._apply_navigation_preferences("up", skip_deleted):
+            return
+        if self._navigate_across_tree_header("up", skip_deleted):
             return
         self.navigation_controller.navigate_linear("up", skip_deleted)
 
     def _navigate_down_sequential(self, skip_deleted: bool = True):
         if self._apply_navigation_preferences("down", skip_deleted):
+            return
+        if self._navigate_across_tree_header("down", skip_deleted):
             return
         self.navigation_controller.navigate_linear("down", skip_deleted)
 
@@ -2391,9 +3312,26 @@ class MainWindow(QMainWindow):
             proxy_model=proxy_model,
             source_model=self.file_system_model,
             is_valid_image_item=self._is_valid_image_item,
-            is_expanded=(lambda idx: active_view.isExpanded(idx))
-            if isinstance(active_view, QTreeView)
-            else None,
+            is_expanded=None,
+        )
+
+    def _find_proxy_indices_for_paths(
+        self, target_paths: list[str] | set[str]
+    ) -> dict[str, QModelIndex]:
+        """Resolve a path collection without repeatedly walking the model."""
+
+        active_view = self._get_active_file_view()
+        if not active_view:
+            return {}
+        proxy_model = active_view.model()
+        if not isinstance(proxy_model, QSortFilterProxyModel):
+            return {}
+        return find_proxy_indices_for_paths(
+            target_paths=target_paths,
+            proxy_model=proxy_model,
+            source_model=self.file_system_model,
+            is_valid_image_item=self._is_valid_image_item,
+            is_expanded=None,
         )
 
     def _get_selected_file_paths_from_view(self) -> list[str]:
@@ -2406,37 +3344,34 @@ class MainWindow(QMainWindow):
     def _get_cached_metadata_for_selection(
         self, file_path: str
     ) -> dict[str, Any] | None:
-        """Gets metadata from AppState caches. Assumes caches are populated by RatingLoaderWorker."""
-        if not os.path.isfile(file_path):
-            logger.warning(
-                f"[_get_cached_metadata_for_selection] File not found: {file_path}"
-            )
-            return None
+        """Return scanner/worker-populated metadata without filesystem access."""
 
-        # Data should have been populated by RatingLoaderWorker into AppState caches
-        # os.path.normpath is important for cache key consistency.
-        # RatingLoaderWorker stores with normalized paths.
         normalized_path = os.path.normpath(file_path)
-
-        current_rating = self.app_state.rating_cache.get(normalized_path, 0)
-        current_date = self.app_state.date_cache.get(normalized_path)
-
-        return {"rating": current_rating, "date": current_date}
+        get_file_data = getattr(self.app_state, "get_file_data_by_path", None)
+        file_data = (
+            get_file_data(file_path) or get_file_data(normalized_path)
+            if callable(get_file_data)
+            else None
+        )
+        metadata = dict(file_data or {})
+        metadata.update(
+            rating=self.app_state.rating_cache.get(normalized_path, 0),
+            date=self.app_state.date_cache.get(normalized_path),
+        )
+        raw_metadata = getattr(self.app_state, "detailed_metadata_cache", {}).get(
+            normalized_path
+        )
+        if isinstance(raw_metadata, dict):
+            label = raw_metadata.get("Xmp.xmp.Label")
+            if label is not None:
+                metadata["label"] = label
+        return metadata
 
     def _display_single_image_preview(
         self, file_path: str, file_data_from_model: dict[str, Any] | None
     ):
         """Handles displaying preview and info for a single selected image."""
-        self._pending_rotation_comparison_path = None
         logger.debug(f"Displaying single image preview: {os.path.basename(file_path)}")
-        if not os.path.exists(file_path):
-            logger.warning(f"File not found: {file_path}")
-            self.advanced_image_viewer.clear()
-            self.statusBar().showMessage(
-                f"Error: File not found - {os.path.basename(file_path)}", 5000
-            )
-            self.invalidate_last_displayed_preview()
-            return
 
         metadata = self._get_cached_metadata_for_selection(file_path)
         if not metadata:
@@ -2453,38 +3388,17 @@ class MainWindow(QMainWindow):
             )
             return
 
-        primary_viewer = self.advanced_image_viewer.get_primary_viewer()
-        reuse_preview = (
-            primary_viewer is not None
-            and primary_viewer.get_file_path() == file_path
-            and primary_viewer.has_image()
-            and self._last_displayed_preview_path == file_path
+        self.activate_image_inspection(
+            self.advanced_image_viewer,
+            [
+                InspectionImageSpec(
+                    path=file_path,
+                    rating=metadata.get("rating", 0),
+                    label=metadata.get("label"),
+                )
+            ],
         )
-
-        pixmap: QPixmap | None = None
-        if reuse_preview:
-            pixmap = primary_viewer.get_current_pixmap()
-            if pixmap is None or pixmap.isNull():
-                reuse_preview = False
-                logger.debug("Primary viewer pixmap unavailable; regenerating preview.")
-            else:
-                logger.debug("Skipping preview regeneration for repeated selection.")
-                primary_viewer.update_rating_display(metadata.get("rating", 0))
-
-        if not reuse_preview:
-            pixmap, preview_is_cached = self._get_cached_interactive_pixmap(file_path)
-            image_data = {
-                "pixmap": pixmap,
-                "path": file_path,
-                "rating": metadata.get("rating", 0),
-            }
-            self.advanced_image_viewer.set_image_data(image_data)
-
-            if not preview_is_cached:
-                # A cache miss must never decode on the UI thread. Keyboard
-                # navigation may already have queued this path and its lookahead;
-                # the controller deduplicates this narrower mouse request.
-                self.request_interactive_preview(file_path)
+        pixmap = self.advanced_image_viewer.current_pixmap()
 
         self._last_displayed_preview_path = file_path
         self._update_status_bar_for_image(
@@ -2497,6 +3411,16 @@ class MainWindow(QMainWindow):
 
     def _handle_preview_ready(self, file_path: str) -> None:
         """Upgrade the current thumbnail only when the result is still relevant."""
+        if file_path in self.image_inspection_controller.active_paths:
+            if self.app_state.focused_image_path == file_path:
+                metadata = self._get_cached_metadata_for_selection(file_path) or {}
+                self._update_status_bar_for_image(
+                    file_path,
+                    metadata,
+                    self.advanced_image_viewer.current_pixmap(),
+                    self.app_state.get_file_data_by_path(file_path),
+                )
+            return
         workflow_widget = {
             "organize": self.grouping_step_widget,
             "easy_delete": self.easy_delete_step_widget,
@@ -2512,11 +3436,6 @@ class MainWindow(QMainWindow):
             memory_only=True,
         )
         if pixmap is None or pixmap.isNull():
-            return
-
-        if self._pending_rotation_comparison_path == file_path:
-            self._render_rotation_comparison(file_path, pixmap)
-            self._pending_rotation_comparison_path = None
             return
 
         metadata = self._get_cached_metadata_for_selection(file_path) or {}
@@ -2539,6 +3458,8 @@ class MainWindow(QMainWindow):
         )
 
     def _handle_preview_failed(self, file_path: str) -> None:
+        if file_path in self.image_inspection_controller.active_paths:
+            return
         if self.app_state.workflow_step == "organize":
             self.grouping_step_widget.handle_preview_failed(file_path)
         self.advanced_image_viewer.show_preview_message(
@@ -2555,30 +3476,6 @@ class MainWindow(QMainWindow):
         )
         self.invalidate_last_displayed_preview()
 
-    def _render_rotation_comparison(
-        self, file_path: str, current_pixmap: QPixmap
-    ) -> None:
-        """Render a cached base preview and its suggested orientation."""
-        rotation = self.rotation_suggestions.get(file_path)
-        if rotation is None or current_pixmap.isNull():
-            return
-        from PyQt6.QtGui import QTransform
-
-        transform = QTransform()
-        transform.rotate(rotation)
-        suggested_pixmap = current_pixmap.transformed(
-            transform,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        metadata = self._get_cached_metadata_for_selection(file_path) or {}
-        rating = metadata.get("rating", 0)
-        self.advanced_image_viewer.set_images_data(
-            [
-                {"pixmap": current_pixmap, "path": file_path, "rating": rating},
-                {"pixmap": suggested_pixmap, "path": file_path, "rating": rating},
-            ]
-        )
-
     def _display_single_video_preview(
         self,
         file_path: str,
@@ -2586,20 +3483,17 @@ class MainWindow(QMainWindow):
         file_data_from_model: dict[str, Any] | None,
     ):
         logger.debug(f"Displaying single video preview: {os.path.basename(file_path)}")
-        if not os.path.exists(file_path):
-            self.advanced_image_viewer.clear()
-            self.statusBar().showMessage(
-                f"Error: File not found - {os.path.basename(file_path)}", 5000
-            )
-            self.invalidate_last_displayed_preview()
-            return
 
-        self.advanced_image_viewer.set_image_data(
-            {
-                "media_type": "video",
-                "path": file_path,
-                "rating": metadata.get("rating", 0),
-            }
+        self.activate_image_inspection(
+            self.advanced_image_viewer,
+            [
+                InspectionImageSpec(
+                    path=file_path,
+                    media_type="video",
+                    rating=metadata.get("rating", 0),
+                    label=metadata.get("label"),
+                )
+            ],
         )
         self._last_displayed_preview_path = file_path
         self._update_status_bar_for_image(
@@ -2617,13 +3511,6 @@ class MainWindow(QMainWindow):
     ):
         """Handles displaying preview after rotation, preserving view mode."""
         logger.debug(f"Displaying rotated image preview: {os.path.basename(file_path)}")
-        if not os.path.exists(file_path):
-            self.advanced_image_viewer.clear()
-            self.statusBar().showMessage(
-                f"Error: File not found - {os.path.basename(file_path)}", 5000
-            )
-            self.invalidate_last_displayed_preview()
-            return
 
         if preserve_side_by_side:
             # In side-by-side mode, we need to refresh the entire view to show the updated image
@@ -2661,10 +3548,7 @@ class MainWindow(QMainWindow):
         )
         self._last_displayed_preview_path = file_path
         if not preview_is_cached:
-            self.request_interactive_preview(
-                file_path,
-                force_default_brightness=True,
-            )
+            self.request_interactive_preview(file_path)
 
         if self.sidebar_visible:
             self._update_sidebar_with_current_selection()
@@ -2677,7 +3561,7 @@ class MainWindow(QMainWindow):
             metadata=metadata,
             width=pixmap.width() if pixmap else 0,
             height=pixmap.height() if pixmap else 0,
-            cluster_lookup=self.app_state.cluster_results,
+            cluster_lookup=self._active_cluster_results(),
             file_data_from_model=file_data_from_model,
         )
         self.statusBar().showMessage(info.to_message())
@@ -2692,8 +3576,8 @@ class MainWindow(QMainWindow):
             return
 
         images_data_for_viewer = []
+        inspection_specs = []
         metadata_for_sidebar = []
-        missing_preview_paths = []
 
         for path in selected_paths:
             if is_video_extension(path):
@@ -2710,27 +3594,38 @@ class MainWindow(QMainWindow):
                         else None,
                     }
                 )
+                inspection_specs.append(
+                    InspectionImageSpec(
+                        path=path,
+                        media_type="video",
+                        rating=basic_metadata.get("rating", 0) if basic_metadata else 0,
+                        label=basic_metadata.get("label") if basic_metadata else None,
+                    )
+                )
                 combined_meta = (basic_metadata or {}).copy()
                 combined_meta["raw_exif"] = {}
                 metadata_for_sidebar.append(combined_meta)
                 continue
 
-            pixmap, preview_is_cached = self._get_cached_interactive_pixmap(path)
-            if not preview_is_cached:
-                missing_preview_paths.append(path)
             basic_metadata = self._get_cached_metadata_for_selection(path)
-            raw_exif = MetadataProcessor.get_cached_detailed_metadata(
-                path, self.app_state.exif_disk_cache
+            raw_exif = getattr(self.app_state, "detailed_metadata_cache", {}).get(
+                os.path.normpath(path)
             )
 
             images_data_for_viewer.append(
                 {
                     "media_type": "image",
-                    "pixmap": pixmap,
                     "path": path,
                     "rating": basic_metadata.get("rating", 0) if basic_metadata else 0,
                     "label": basic_metadata.get("label") if basic_metadata else None,
                 }
+            )
+            inspection_specs.append(
+                InspectionImageSpec(
+                    path=path,
+                    rating=basic_metadata.get("rating", 0) if basic_metadata else 0,
+                    label=basic_metadata.get("label") if basic_metadata else None,
+                )
             )
 
             combined_meta = (basic_metadata or {}).copy()
@@ -2738,9 +3633,23 @@ class MainWindow(QMainWindow):
             metadata_for_sidebar.append(combined_meta)
 
         if images_data_for_viewer:
-            self.advanced_image_viewer.set_images_data(images_data_for_viewer)
-            if missing_preview_paths:
-                self.preview_load_controller.request(missing_preview_paths)
+            activate = getattr(self, "activate_image_inspection", None)
+            if callable(activate):
+                activate(self.advanced_image_viewer, inspection_specs)
+            else:
+                missing_preview_paths = []
+                for image_data in images_data_for_viewer:
+                    if image_data.get("media_type") == "video":
+                        continue
+                    pixmap, cached = self._get_cached_interactive_pixmap(
+                        image_data["path"]
+                    )
+                    image_data["pixmap"] = pixmap
+                    if not cached:
+                        missing_preview_paths.append(image_data["path"])
+                self.advanced_image_viewer.set_images_data(images_data_for_viewer)
+                if missing_preview_paths:
+                    self.preview_load_controller.request(missing_preview_paths)
 
             if self.sidebar_visible:
                 if len(images_data_for_viewer) >= 2:
@@ -2767,22 +3676,15 @@ class MainWindow(QMainWindow):
                     self.app_state.embeddings_cache.get(path2),
                 )
                 if emb1 is not None and emb2 is not None:
-                    try:
-                        import numpy as np
-
-                        first = np.asarray(emb1, dtype=np.float32)
-                        second = np.asarray(emb2, dtype=np.float32)
-                        denominator = np.linalg.norm(first) * np.linalg.norm(second)
-                        similarity = (
-                            float(np.dot(first, second) / denominator)
-                            if denominator
-                            else 0.0
-                        )
+                    similarity = cosine_similarity(emb1, emb2)
+                    if similarity is not None:
                         self.statusBar().showMessage(
                             f"Comparing {len(images_data_for_viewer)} images. Similarity (first 2): {similarity:.4f}"
                         )
-                    except Exception as e:
-                        logger.error(f"Error calculating similarity: {e}")
+                    else:
+                        self.statusBar().showMessage(
+                            f"Comparing {len(images_data_for_viewer)} images. Similarity unavailable."
+                        )
                 else:
                     self.statusBar().showMessage(
                         f"Comparing {len(images_data_for_viewer)} images."
@@ -2814,10 +3716,11 @@ class MainWindow(QMainWindow):
         # Clear focused image path and repaint view to remove underline
         if self.app_state.focused_image_path:
             logger.debug("Clearing focused image path")
-            self.app_state.focused_image_path = None
+            MainWindow._publish_active_image(self, None, source="cull")
             self._get_active_file_view().viewport().update()
 
         logger.debug("Clearing viewer and setting 'Select an image or video' text")
+        self.clear_image_inspection(self.advanced_image_viewer)
         self.advanced_image_viewer.clear()
         self.advanced_image_viewer.setText("Select an image or video to view details.")
         self.invalidate_last_displayed_preview()
@@ -2843,6 +3746,17 @@ class MainWindow(QMainWindow):
             logger.debug(
                 f"_handle_file_selection_changed: Retrieved {len(selected_file_paths)} paths from view"
             )
+        self._refresh_cull_shortcut_visibility(selected_file_paths)
+
+        current_path = self._get_current_selected_image_path()
+        if current_path and current_path in selected_file_paths:
+            MainWindow._publish_active_image(self, current_path, source="cull")
+        elif len(selected_file_paths) == 1:
+            MainWindow._publish_active_image(
+                self, selected_file_paths[0], source="cull"
+            )
+        elif not selected_file_paths:
+            MainWindow._publish_active_image(self, None, source="cull")
 
         if not self.app_state.image_files_data:
             logger.debug(
@@ -2850,71 +3764,15 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # In rotation view, update the accept/refuse buttons based on selection
-        if self.left_panel.current_view_mode == "rotation":
-            num_suggestions = len(self.rotation_suggestions)
-            logger.debug(f"Rotation view with {num_suggestions} suggestions")
-            self.accept_all_button.setVisible(num_suggestions > 1)
-            self.refuse_all_button.setVisible(num_suggestions > 1)
-            num_selected = len(selected_file_paths)
-
-            self.accept_button.setVisible(num_selected > 0)
-            self.refuse_button.setVisible(num_selected > 0)
-
-            if num_selected > 0:
-                all_selected_have_suggestion = all(
-                    p in self.rotation_suggestions for p in selected_file_paths
-                )
-                logger.debug(
-                    f"Selected items have suggestions: {all_selected_have_suggestion}"
-                )
-                self.accept_button.setEnabled(all_selected_have_suggestion)
-                self.refuse_button.setEnabled(all_selected_have_suggestion)
-
-                if num_selected == 1:
-                    logger.debug(
-                        f"Displaying side-by-side comparison for: {selected_file_paths[0]}"
-                    )
-                    self.accept_button.setText("Accept (Y)")
-                    self.refuse_button.setText("Refuse (N)")
-                    self._display_side_by_side_comparison(selected_file_paths[0])
-                else:
-                    logger.debug(
-                        f"Displaying multi-selection info for {num_selected} items"
-                    )
-                    self.accept_button.setText(f"Accept ({num_selected})")
-                    self.refuse_button.setText(f"Refuse ({num_selected})")
-                    self.advanced_image_viewer.clear()
-                    self.advanced_image_viewer.setText(
-                        f"{num_selected} items selected for rotation approval."
-                    )
-            else:
-                logger.debug("No items selected in rotation view")
-                self.advanced_image_viewer.clear()
-            return
-        else:
-            logger.debug("Not in rotation view, hiding rotation buttons")
-            self.accept_all_button.setVisible(False)
-            self.accept_button.setVisible(False)
-            self.refuse_button.setVisible(False)
-            self.refuse_all_button.setVisible(False)
-
-        # When selection changes, clear the focused image path unless it's a single selection
         if len(selected_file_paths) != 1:
             logger.debug(f"Selection is not single (count={len(selected_file_paths)})")
-            if self.app_state.focused_image_path:
-                logger.debug("Clearing focused image path")
-                self.app_state.focused_image_path = None
-                active_view = self._get_active_file_view()
-                if active_view:
-                    active_view.viewport().update()  # Trigger repaint to remove underline
 
         if len(selected_file_paths) == 1:
             file_path = selected_file_paths[0]
             # Avoid logging full path each change; keep concise
             logger.debug("Handling single selection")
             # This is a single selection, so it's also the "focused" image.
-            self.app_state.focused_image_path = file_path
+            MainWindow._publish_active_image(self, file_path, source="cull")
             active_view = self._get_active_file_view()
             if active_view:
                 active_view.viewport().update()
@@ -3035,10 +3893,8 @@ class MainWindow(QMainWindow):
             checked
         )  # Keep the UI in sync
 
-        if checked and not self.app_state.cluster_results:
-            self.app_controller.start_similarity_analysis()
-            # The view will be rebuilt by handle_clustering_complete once analysis is done
-            return  # Exit here, as handle_clustering_complete will handle the rest
+        if checked and not self._active_cluster_results():
+            self.app_controller.start_active_similarity_grouping()
 
         # If not checking, or if already clustered, proceed to rebuild view
         if checked:  # Only show sort options if grouping is active
@@ -3126,6 +3982,7 @@ class MainWindow(QMainWindow):
                 for file_data in files_in_group_data:
                     image_item = self._create_standard_item(file_data)
                     parent_for_images.appendRow(image_item)
+                    self._note_model_item_populated()
 
     def _create_standard_item(self, file_data: dict[str, Any]):
         file_path = file_data["path"]
@@ -3148,44 +4005,9 @@ class MainWindow(QMainWindow):
         # Unified presentation (marked / blurred) delegated to deletion controller
         self.deletion_controller.apply_presentation(item, file_path, is_blurred)
 
-        self._decorate_best_shot_item(item, file_path)
-
         return item
 
-    def _decorate_best_shot_item(self, item: QStandardItem, file_path: str):
-        app_state = getattr(self, "app_state", None)
-        if not app_state or not app_state.best_shot_scores_by_path:
-            return
-        best_info = app_state.best_shot_scores_by_path.get(file_path)
-        if not best_info:
-            return
-
-        cluster_id = app_state.cluster_results.get(file_path)
-        if cluster_id is None:
-            cluster_id = best_info.get("cluster_id")
-        cluster_label = "Selection" if cluster_id is None else f"Cluster {cluster_id}"
-
-        metrics = best_info.get("metrics", {}) or {}
-        tooltip_lines = [
-            cluster_label,
-            f"Composite: {best_info.get('composite_score', 0):.3f}",
-        ]
-        metric_fields = [
-            ("technical", "Technical"),
-            ("aesthetic", "Aesthetic"),
-            ("eyes_open", "Eyes Open"),
-            ("framing", "Framing"),
-        ]
-        for metric_key, label in metric_fields:
-            if metric_key in metrics:
-                tooltip_lines.append(f"{label}: {metrics[metric_key]:.3f}")
-        tooltip = "\n".join(tooltip_lines)
-        existing_tooltip = item.toolTip()
-        if existing_tooltip:
-            tooltip = f"{tooltip}\n{existing_tooltip}"
-        item.setToolTip(tooltip)
-
-        # Text decoration for best-shot winners is handled centrally in DeletionMarkController.
+        # Pick Best winner decoration is handled centrally in DeletionMarkController.
 
     def _update_thumbnails_from_cache(self, image_paths: list[str] | None = None):
         """
@@ -3193,9 +4015,6 @@ class MainWindow(QMainWindow):
         Called after background thumbnail preload completes.
         This avoids blocking the UI during initial folder load.
         """
-        if not self.menu_manager.toggle_thumbnails_action.isChecked():
-            return  # Thumbnails are disabled, nothing to do
-
         if image_paths is not None:
             for file_path in dict.fromkeys(image_paths):
                 normalized_path = os.path.normpath(file_path)
@@ -3290,7 +4109,7 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(0, lambda: active_view.expand(proxy_index))
 
     def _cluster_sort_changed(self):
-        if self.group_by_similarity_mode and self.app_state.cluster_results:
+        if self.group_by_similarity_mode and self._active_cluster_results():
             self._rebuild_model_view()
 
     def _perform_group_selection_from_key(
@@ -3322,11 +4141,8 @@ class MainWindow(QMainWindow):
             item_data = item.data(Qt.ItemDataRole.UserRole)
             if isinstance(item_data, dict) and "path" in item_data:
                 image_path = item_data["path"]
-                if os.path.exists(image_path):
-                    determined_cluster_id = self.app_state.cluster_results.get(
-                        image_path
-                    )
-                    break
+                determined_cluster_id = self._active_cluster_results().get(image_path)
+                break
             elif isinstance(item_data, str) and item_data.startswith("cluster_header_"):
                 with contextlib.suppress(ValueError, IndexError):
                     determined_cluster_id = int(item_data.split("_")[-1])
@@ -3417,28 +4233,6 @@ class MainWindow(QMainWindow):
                             return True
                     if self._handle_registered_shortcut(key, modifiers):
                         return True
-                    # Rotation view-specific shortcuts
-                    if self.left_panel.current_view_mode == "rotation":
-                        if key == Qt.Key.Key_Y:
-                            if modifiers == Qt.KeyboardModifier.ShiftModifier:
-                                self._accept_all_rotations()
-                                return True
-                            elif modifiers == Qt.KeyboardModifier.NoModifier:
-                                # Prefer the single-item flow that advances selection; if multi-selected, fall back
-                                sel = self._get_selected_file_paths_from_view()
-                                if sel and len(sel) == 1:
-                                    self._accept_single_rotation_and_move_to_next()
-                                else:
-                                    self._accept_current_rotation()
-                                return True
-                        elif key == Qt.Key.Key_N:
-                            if modifiers == Qt.KeyboardModifier.ShiftModifier:
-                                self._refuse_all_rotations()
-                                return True
-                            elif modifiers == Qt.KeyboardModifier.NoModifier:
-                                self._refuse_current_rotation()
-                                return True
-
                     # --- Modifier-based actions ---
                     # On Mac, arrow keys often have KeypadModifier, so treat that as unmodified too
                     is_unmodified_or_keypad = modifiers in (
@@ -3541,11 +4335,6 @@ class MainWindow(QMainWindow):
         )
         register(
             Qt.Key.Key_D,
-            Qt.KeyboardModifier.ShiftModifier,
-            mm.commit_deletions_action.trigger,
-        )
-        register(
-            Qt.Key.Key_D,
             Qt.KeyboardModifier.AltModifier,
             mm.clear_marked_deletions_action.trigger,
         )
@@ -3573,14 +4362,6 @@ class MainWindow(QMainWindow):
             Qt.Key.Key_S,
             Qt.KeyboardModifier.NoModifier,
             mm.group_by_similarity_action.trigger,
-        )
-        register(
-            Qt.Key.Key_T,
-            Qt.KeyboardModifier.NoModifier,
-            mm.toggle_thumbnails_action.trigger,
-        )
-        register(
-            Qt.Key.Key_B, Qt.KeyboardModifier.NoModifier, mm.detect_blur_action.trigger
         )
         register(
             Qt.Key.Key_I,
@@ -3783,12 +4564,6 @@ class MainWindow(QMainWindow):
             f"_update_sidebar_with_current_selection: Processing {os.path.basename(file_path)} (extension: {file_ext})"
         )
 
-        if not os.path.exists(file_path):
-            logger.error(
-                f"_update_sidebar_with_current_selection: File does not exist: {file_path}"
-            )
-            return
-
         # Get cached metadata
         metadata = self._get_cached_metadata_for_selection(file_path)
         if not metadata:
@@ -3804,11 +4579,8 @@ class MainWindow(QMainWindow):
         # Detailed metadata is populated by the folder's batch metadata worker.
         # A selection change must remain cache-only so a slow RAW/video parser can
         # never block navigation on the UI thread.
-        raw_exif = (
-            MetadataProcessor.get_cached_detailed_metadata(
-                file_path, self.app_state.exif_disk_cache
-            )
-            or {}
+        raw_exif = self.app_state.detailed_metadata_cache.get(
+            os.path.normpath(file_path), {}
         )
 
         # Update sidebar
@@ -3832,10 +4604,7 @@ class MainWindow(QMainWindow):
         selected_paths = self._get_selected_file_paths_from_view()
         if file_path in selected_paths:
             self._handle_file_selection_changed()
-            self.request_interactive_preview(
-                file_path,
-                force_default_brightness=True,
-            )
+            self.request_interactive_preview(file_path)
 
         self.statusBar().showMessage(message, 5000)
         logger.info(message)
@@ -3967,167 +4736,333 @@ class MainWindow(QMainWindow):
         self._perform_deletion_of_marked_files(marked_files)
 
     def _perform_deletion_of_marked_files(self, marked_files: list[str]):
-        """Performs the actual deletion of marked files, updating the view in-place."""
+        """Start one background Trash batch for all effective marked targets."""
         active_view = self._get_active_file_view()
         if not active_view:
-            return
+            return False
+        if self.worker_manager.is_file_deletion_running():
+            self.statusBar().showMessage("A deletion is already in progress.", 3000)
+            return False
 
-        # --- Pre-computation for next selection ---
         visible_paths_before = self._get_all_visible_image_paths()
-        logger.debug(f"Visible paths before deletion: {visible_paths_before}")
-        logger.debug(f"Marked files for deletion: {marked_files}")
+        current_selected_path_before = (
+            self.app_state.focused_image_path or self._get_current_selected_image_path()
+        )
 
-        # Find the index of the first marked file in the visible list
-        first_marked_index = -1
-        if visible_paths_before and marked_files:
+        def is_within(path: str, directory: str) -> bool:
             try:
-                first_marked_index = visible_paths_before.index(marked_files[0])
-                logger.debug(f"First marked file index: {first_marked_index}")
-            except ValueError:
-                first_marked_index = 0
-                logger.debug(
-                    "First marked file not found in visible paths, using index 0"
-                )
+                return os.path.normcase(
+                    os.path.commonpath(
+                        [os.path.normpath(path), os.path.normpath(directory)]
+                    )
+                ) == os.path.normcase(os.path.normpath(directory))
+            except ValueError, OSError:
+                return False
 
-        # --- Group indices by parent for safe removal ---
-        source_indices_by_parent = {}
-        for path in marked_files:
-            proxy_idx = self._find_proxy_index_for_path(path)
-            if proxy_idx.isValid():
-                source_idx = self.proxy_model.mapToSource(proxy_idx)
-                parent_idx = source_idx.parent()
-                if parent_idx not in source_indices_by_parent:
-                    source_indices_by_parent[parent_idx] = []
-                source_indices_by_parent[parent_idx].append(source_idx.row())
-
-        # --- Delete files and update model ---
-        deleted_count = 0
-        for file_path in marked_files:
-            try:
-                self.app_controller.move_to_trash(file_path)
-                self.app_state.remove_data_for_path(file_path)
-                deleted_count += 1
-                logger.info(f"Moved file to trash: {os.path.basename(file_path)}")
-            except Exception as e:
-                logger.error(f"Error moving marked file '{file_path}' to trash: {e}")
-
-        # Clear the marked files from app state after successful deletion
-        self.app_state.clear_all_deletion_marks()
-
-        if deleted_count > 0:
-            for parent_idx, rows in source_indices_by_parent.items():
-                parent_item = (
-                    self.file_system_model.itemFromIndex(parent_idx)
-                    if parent_idx.isValid()
-                    else self.file_system_model.invisibleRootItem()
-                )
-                if parent_item:
-                    for row in sorted(rows, reverse=True):
-                        parent_item.takeRow(row)
-
-            self.proxy_model.invalidate()
-            self.statusBar().showMessage(f"Committed {deleted_count} deletions.", 5000)
-
-            # --- Select next item using robust advancement to next valid image ---
-            visible_paths_after_delete = self._get_all_visible_image_paths()
-            logger.debug(
-                f"{len(visible_paths_after_delete)} visible paths remaining after deletion."
+        known_directories = {
+            os.path.normcase(os.path.normpath(path))
+            for path in self.grouping_step_widget.known_directory_paths()
+        }
+        directory_targets = [
+            path
+            for path in marked_files
+            if os.path.normcase(os.path.normpath(path)) in known_directories
+        ]
+        effective_targets = [
+            path
+            for path in marked_files
+            if not any(
+                path != directory and is_within(path, directory)
+                for directory in directory_targets
             )
-            logger.debug("Visible paths after deletion list suppressed for brevity")
-
-            # Determine the anchor path for selection after deletion
-            # This determines which image position to use as reference for finding the next selection
-            current_selected_path_before = (
-                self.app_state.focused_image_path
-                or self._get_current_selected_image_path()
-            )
-
-            # If the current selection is one of the deleted files, use it as anchor
-            # This will ensure we select the next image after the deleted one
-            if current_selected_path_before in marked_files:
-                anchor_path = current_selected_path_before
-            # If there are deleted files and current selection is not one of them,
-            # use the first deleted file as anchor for better UX
-            # This handles cases where user marks files for deletion without having them selected
-            elif marked_files:
-                anchor_path = marked_files[
-                    0
-                ]  # Use first deleted file as reference point
-            # Fallback to current selection
+        ]
+        represented_by_target: dict[str, list[str]] = {}
+        marks_by_target: dict[str, list[str]] = {}
+        media_paths = [
+            item.get("path")
+            for item in self.app_state.image_files_data
+            if item.get("path")
+        ]
+        for target in effective_targets:
+            if os.path.normcase(os.path.normpath(target)) in known_directories:
+                represented_by_target[target] = [
+                    path for path in media_paths if is_within(path, target)
+                ]
+                marks_by_target[target] = [
+                    marked
+                    for marked in marked_files
+                    if marked == target or is_within(marked, target)
+                ]
             else:
-                anchor_path = current_selected_path_before
+                represented_by_target[target] = [target]
+                marks_by_target[target] = [target]
 
-            logger.debug(
-                f"Current selected (focused) path before deletion: {current_selected_path_before}"
-            )
-            logger.debug(f"Anchor path for selection after deletion: {anchor_path}")
-
-            if not visible_paths_after_delete:
-                logger.debug("No visible image items left after deletion.")
-                self.advanced_image_viewer.clear()
-                self.advanced_image_viewer.setText("No images left to display.")
-                self.statusBar().showMessage("No images left or visible.")
-            else:
-                # Always find the best next selection. The function is smart enough
-                # to keep the current selection if it's still valid.
-                logger.debug("Finding next selection after deletion.")
-                next_path = select_next_surviving_path(
+        started = self._start_deletion_batch(
+            effective_targets,
+            represented_by_target,
+            marks_by_target=marks_by_target,
+            completion=lambda successful_targets, deleted_paths, failures, resolved: (
+                self._finish_marked_deletion_batch(
                     visible_paths_before,
+                    current_selected_path_before,
                     marked_files,
-                    anchor_path,
-                    visible_paths_after_delete,
+                    successful_targets,
+                    deleted_paths,
+                    failures,
+                    resolved,
                 )
+            ),
+        )
+        return None if started else False
 
-                if next_path:
-                    next_proxy_idx = self._find_proxy_index_for_path(next_path)
-                    if next_proxy_idx.isValid():
-                        logger.debug("Selecting next path after deletion")
-                        active_view.setCurrentIndex(next_proxy_idx)
-                        active_view.selectionModel().select(
-                            next_proxy_idx,
+    def _start_deletion_batch(
+        self,
+        targets: list[str],
+        represented_by_target: dict[str, list[str]],
+        *,
+        marks_by_target: dict[str, list[str]] | None = None,
+        completion: Callable[[list[str], list[str], dict[str, str], set[str]], None],
+    ) -> bool:
+        if self._pending_deletion_context is not None:
+            return False
+        normalized_targets = list(dict.fromkeys(path for path in targets if path))
+        if not normalized_targets:
+            return False
+        self._pending_deletion_context = {
+            "represented_by_target": represented_by_target,
+            "marks_by_target": marks_by_target or {},
+            "completion": completion,
+        }
+        started = self.worker_manager.start_file_deletion(
+            normalized_targets,
+            cache_paths_by_target=represented_by_target,
+            rating_cache=self.app_state.rating_disk_cache,
+            exif_cache=self.app_state.exif_disk_cache,
+            analysis_cache=self.app_state.analysis_cache,
+            folder_path=self.app_state.current_folder_path,
+        )
+        if not started:
+            self._pending_deletion_context = None
+            return False
+        self.statusBar().showMessage(
+            f"Moving {len(normalized_targets)} item(s) to Trash…"
+        )
+        return True
+
+    def _handle_file_deletion_progress(
+        self, current: int, total: int, filename: str
+    ) -> None:
+        self.statusBar().showMessage(f"Moving to Trash {current}/{total}: {filename}")
+
+    def _handle_file_deletion_complete(self, result) -> None:
+        context = self._pending_deletion_context
+        self._pending_deletion_context = None
+        if context is None:
+            return
+        successful_targets = list(getattr(result, "successful_targets", []))
+        failures = dict(getattr(result, "failures", {}))
+        represented_by_target = context["represented_by_target"]
+        marks_by_target = context["marks_by_target"]
+        deleted_paths = list(
+            dict.fromkeys(
+                path
+                for target in successful_targets
+                for path in represented_by_target.get(target, [target])
+            )
+        )
+        resolved_marks = {
+            path
+            for target in successful_targets
+            for path in marks_by_target.get(target, [])
+        }
+
+        self.app_state.remove_data_for_paths(
+            deleted_paths,
+            clear_disk_caches=False,
+        )
+        if resolved_marks:
+            self.app_state.set_deletion_marks(dict.fromkeys(resolved_marks, False))
+
+        if deleted_paths:
+            # Synchronize workflow-owned review queues before mutating the
+            # general file model. Removing source rows can emit selection
+            # changes, and no deleted review path may remain available to
+            # request a stale preview.
+            self._sync_workflow_results_after_file_mutation()
+            for path in deleted_paths:
+                self.image_pipeline.invalidate_path(path)
+            self.thumbnail_loader.invalidate_paths(deleted_paths)
+            self._remove_model_paths_batch(deleted_paths)
+            self.proxy_model.invalidate()
+            self.grouping_step_widget.remove_deleted_paths(deleted_paths)
+            self.mark_cull_model_dirty()
+            self._refresh_workflow_deletion_state()
+
+        completion = context["completion"]
+        completion(
+            successful_targets,
+            deleted_paths,
+            failures,
+            resolved_marks,
+        )
+
+    def _remove_model_paths_batch(self, deleted_paths: list[str]) -> None:
+        """Remove matching source rows with one model traversal."""
+
+        targets = set(deleted_paths)
+        if not targets:
+            return
+        root = self.file_system_model.invisibleRootItem()
+        queue = [root]
+        rows_by_parent: dict[int, tuple[QStandardItem, list[int]]] = {}
+        parent_candidates: list[QStandardItem] = []
+        while queue:
+            parent = queue.pop()
+            for row in range(parent.rowCount()):
+                child = parent.child(row)
+                if child is None:
+                    continue
+                data = child.data(Qt.ItemDataRole.UserRole)
+                path = data.get("path") if isinstance(data, dict) else None
+                if path in targets:
+                    entry = rows_by_parent.setdefault(id(parent), (parent, []))
+                    entry[1].append(row)
+                    if parent not in parent_candidates:
+                        parent_candidates.append(parent)
+                elif child.hasChildren():
+                    queue.append(child)
+        for parent, rows in rows_by_parent.values():
+            for row in sorted(rows, reverse=True):
+                parent.takeRow(row)
+        for path in targets:
+            normalized = os.path.normpath(path)
+            self._file_items_by_path.pop(normalized, None)
+            self._thumbnail_icons_by_path.pop(normalized, None)
+        self.file_deletion_controller._prune_empty_parent_groups(parent_candidates)
+
+    def _finish_marked_deletion_batch(
+        self,
+        visible_paths_before: list[str],
+        current_selected_path_before: str | None,
+        marked_files: list[str],
+        successful_targets: list[str],
+        deleted_paths: list[str],
+        failures: dict[str, str],
+        resolved_marks: set[str],
+    ) -> None:
+        active_view = self._get_active_file_view()
+        if deleted_paths and active_view:
+            visible_after = self._get_all_visible_image_paths()
+            # Anchor on whatever was active before the batch. Only fall back to a
+            # deleted path when nothing was active, otherwise a surviving current
+            # image would be abandoned for an unrelated row.
+            anchor_path = current_selected_path_before or (
+                deleted_paths[0] if deleted_paths else None
+            )
+            next_path = select_next_surviving_path(
+                visible_paths_before,
+                deleted_paths,
+                anchor_path,
+                visible_after,
+            )
+            if next_path:
+                next_index = self._find_proxy_index_for_path(next_path)
+                if next_index.isValid():
+                    selection_model = active_view.selectionModel()
+                    keeps_current_image = (
+                        next_path == current_selected_path_before
+                        and selection_model.isSelected(next_index)
+                    )
+                    if keeps_current_image:
+                        # The active image survived and is still selected; re-anchor
+                        # the current index without collapsing a multi-selection or
+                        # forcing a redundant preview reload.
+                        selection_model.setCurrentIndex(
+                            next_index,
+                            QItemSelectionModel.SelectionFlag.NoUpdate,
+                        )
+                    else:
+                        active_view.setCurrentIndex(next_index)
+                        selection_model.select(
+                            next_index,
                             QItemSelectionModel.SelectionFlag.ClearAndSelect,
                         )
-                        active_view.scrollTo(
-                            next_proxy_idx,
-                            QAbstractItemView.ScrollHint.EnsureVisible,
-                        )
-                        # The selection change will trigger the preview update.
-                        # We might need to manually trigger if the selection doesn't change
-                        # but this is safer.
+                    active_view.scrollTo(
+                        next_index,
+                        QAbstractItemView.ScrollHint.EnsureVisible,
+                    )
+                    if not keeps_current_image:
                         QTimer.singleShot(0, self._handle_file_selection_changed)
-                    else:
-                        logger.warning(
-                            f"Could not find a valid proxy index for the next path: {next_path}"
-                        )
-                        self.advanced_image_viewer.clear()
-                        self.advanced_image_viewer.setText(
-                            "Could not select next image."
-                        )
-                else:
-                    logger.debug("No next valid path found; clearing UI.")
-                    self.advanced_image_viewer.clear()
-                    self.advanced_image_viewer.setText("No valid image to select.")
-
+            elif not visible_after:
+                self.advanced_image_viewer.clear()
+                self.advanced_image_viewer.setText("No images left to display.")
             self._update_image_info_label()
 
-        logger.info(f"Completed committing {deleted_count} deletions")
+        if failures:
+            self.statusBar().showMessage(
+                f"Moved {len(successful_targets)} item(s) to Trash; "
+                f"{len(failures)} failed.",
+                5000,
+            )
+        else:
+            self.statusBar().showMessage(
+                f"Committed {len(successful_targets)} deletion(s).", 5000
+            )
+
+        all_resolved = len(resolved_marks) == len(set(marked_files))
+        resume_folder_load = getattr(
+            self.app_controller, "resume_folder_load_after_deletion", None
+        )
+        if callable(resume_folder_load):
+            resume_folder_load(all_resolved)
+        if self._close_after_deletion:
+            self._close_after_deletion = False
+            if all_resolved:
+                self._finish_close_after_deletion()
+            else:
+                self.statusBar().showMessage(
+                    "Some items could not be moved to Trash. Close was cancelled.",
+                    5000,
+                )
+        request = self._pending_workflow_transition
+        if request is not None and request.trash_resolution == "commit":
+            self._pending_workflow_transition = None
+            if not all_resolved:
+                self.statusBar().showMessage(
+                    "Some marked files could not be moved to Trash. "
+                    "Resolve them before switching.",
+                    5000,
+                )
+                return
+            self._reset_deletion_workflow_decisions()
+            if request.destination is not None:
+                self._show_workflow_destination(request.destination)
+            else:
+                self.update_workflow_navigation()
+
+    def _finish_close_after_deletion(self) -> None:
+        """Close only after the deletion worker thread has fully shut down."""
+        if getattr(self.worker_manager, "is_file_deletion_running", lambda: False)():
+            QTimer.singleShot(25, self._finish_close_after_deletion)
+            return
+        self.close()
 
     def _commit_marked_deletions_without_confirmation(self):
         """Finds all marked files and moves them to trash without confirmation, updating the view in-place."""
         active_view = self._get_active_file_view()
         if not self.app_state.current_folder_path or not active_view:
             self.statusBar().showMessage("No folder loaded.", 3000)
-            return
+            return False
 
         marked_files = self.app_state.get_marked_files()
         if not marked_files:
             self.statusBar().showMessage("No images are marked for deletion.", 3000)
-            return
+            return False
 
         logger.info(
             f"Committing {len(marked_files)} marked deletions without confirmation"
         )
-        self._perform_deletion_of_marked_files(marked_files)
+        return self._perform_deletion_of_marked_files(marked_files)
 
     def _mark_selection_for_deletion(self):
         """Toggles the deletion mark for selected files, updating the model in-place."""
@@ -4174,22 +5109,19 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        # Mark the file for deletion in the app state
-        is_marked = self._is_marked_for_deletion(file_path)
-        if is_marked:
-            self.app_state.unmark_for_deletion(file_path)
-        else:
-            self.app_state.mark_for_deletion(file_path)
-
-        # Update the UI
-        self.deletion_controller.toggle_paths(
+        changed = self.deletion_controller.mark_paths(
             [file_path],
             self._find_proxy_index_for_path,
             self.file_system_model,
             self.proxy_model,
         )
 
-        self.statusBar().showMessage("Marked 1 image for deletion.", 5000)
+        self.statusBar().showMessage(
+            "Marked 1 image for deletion."
+            if changed
+            else "Image is already marked for deletion.",
+            5000,
+        )
         self.proxy_model.invalidate()
 
     def _mark_others_for_deletion(self, file_path_to_keep: str):
@@ -4234,10 +5166,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Image is not marked for deletion.", 3000)
             return
 
-        # Unmark the file for deletion in the app state
-        self.app_state.unmark_for_deletion(file_path)
-
-        self.deletion_controller.toggle_paths(
+        self.deletion_controller.unmark_paths(
             [file_path],
             self._find_proxy_index_for_path,
             self.file_system_model,
@@ -4294,6 +5223,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No images are marked for deletion.", 3000)
             return
 
+        preserved_selection = self._get_selected_file_paths_from_view()
         self.deletion_controller.clear_all_and_update(
             self._find_proxy_index_for_path,
             self.file_system_model,
@@ -4305,54 +5235,10 @@ class MainWindow(QMainWindow):
         )
         self.proxy_model.invalidate()
         self._refresh_workflow_deletion_state()
-
-        visible_paths = self._get_all_visible_image_paths()
-        if not visible_paths:
-            self.advanced_image_viewer.clear()
-            return
-
-        first_path = marked_files[0]
-        first_proxy_idx = self._find_proxy_index_for_path(first_path)
-        if first_proxy_idx.isValid():
-            active_view = self._get_active_file_view()
-            if active_view:
-                active_view.setCurrentIndex(first_proxy_idx)
-                active_view.selectionModel().select(
-                    first_proxy_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                )
-                active_view.scrollTo(
-                    first_proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible
-                )
-
-        final_selection_paths = list(marked_files)
-        self._handle_file_selection_changed(
-            override_selected_paths=final_selection_paths
-        )
-
-        if first_path:
-            self.advanced_image_viewer.set_focused_viewer_by_path(first_path)
-
-        selection = QItemSelection()
-        first_idx = QModelIndex()
-        for path in final_selection_paths:
-            proxy_idx = self._find_proxy_index_for_path(path)
-            if proxy_idx.isValid():
-                selection.select(proxy_idx, proxy_idx)
-                if not first_idx.isValid():
-                    first_idx = proxy_idx
-
-        if not selection.isEmpty():
-            active_view = self._get_active_file_view()
-            if active_view:
-                active_view.selectionModel().blockSignals(True)
-                active_view.selectionModel().select(
-                    selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                )
-                active_view.selectionModel().blockSignals(False)
-                if first_idx.isValid():
-                    active_view.scrollTo(
-                        first_idx, QAbstractItemView.ScrollHint.EnsureVisible
-                    )
+        if preserved_selection:
+            self._handle_file_selection_changed(
+                override_selected_paths=preserved_selection
+            )
 
     def _get_current_selected_image_path(self) -> str | None:
         """Get the file path of the currently selected image."""
@@ -4375,18 +5261,14 @@ class MainWindow(QMainWindow):
         if not isinstance(item_data, dict) or "path" not in item_data:
             return None
 
-        file_path = item_data["path"]
-        if not os.path.exists(file_path):
-            return None
-
-        return file_path
+        return item_data["path"]
 
     def _handle_focused_image_changed(self, index: int, file_path: str):
         """Slot to handle when the focused image changes in the viewer."""
         if not file_path:
             # If the focused image is cleared, remove the underline
             if self.app_state.focused_image_path:
-                self.app_state.focused_image_path = None
+                MainWindow._publish_active_image(self, None, source="cull")
                 view = self._get_active_file_view()
                 if view:
                     view.viewport().update()
@@ -4397,7 +5279,7 @@ class MainWindow(QMainWindow):
             return
 
         # Update the app state with the new focused path
-        self.app_state.focused_image_path = file_path
+        MainWindow._publish_active_image(self, file_path, source="cull")
         # Trigger a repaint of the view to draw the underline
         active_view.viewport().update()
 
@@ -4447,187 +5329,6 @@ class MainWindow(QMainWindow):
             lambda: self._handle_file_selection_changed(),
         )
 
-    def _display_side_by_side_comparison(self, file_path):
-        """Displays the current image and the rotated suggestion side-by-side."""
-        logger.info(
-            f"Showing side-by-side comparison for: {os.path.basename(file_path)} (path: {file_path})"
-        )
-        self.invalidate_last_displayed_preview()
-
-        if file_path not in self.rotation_suggestions:
-            logger.warning(
-                f"File {os.path.basename(file_path)} not in rotation_suggestions."
-            )
-            return
-
-        current_pixmap, preview_is_cached = self._get_cached_interactive_pixmap(
-            file_path
-        )
-        if current_pixmap is not None:
-            self._render_rotation_comparison(file_path, current_pixmap)
-        else:
-            metadata = self._get_cached_metadata_for_selection(file_path) or {}
-            loading_data = {
-                "pixmap": None,
-                "path": file_path,
-                "rating": metadata.get("rating", 0),
-            }
-            self.advanced_image_viewer.set_images_data(
-                [loading_data.copy(), loading_data.copy()]
-            )
-        if not preview_is_cached:
-            self._pending_rotation_comparison_path = file_path
-            self.request_interactive_preview(file_path)
-
-    def _accept_all_rotations(self):
-        """Apply all suggested rotations and exit rotation view."""
-        if not self.rotation_controller.has_suggestions():
-            self.statusBar().showMessage("No rotation suggestions to accept.", 3000)
-            return
-        self.rotation_controller.accept_all()
-        self._hide_rotation_view()
-
-    def _accept_current_rotation(self):
-        selected_paths = self._get_selected_file_paths_from_view()
-        if not selected_paths:
-            return
-        target_paths = [
-            p
-            for p in selected_paths
-            if p in self.rotation_controller.rotation_suggestions
-        ]
-        if not target_paths:
-            return
-        visible_before = self.rotation_controller.get_visible_order()
-        accepted = self.rotation_controller.accept_paths(target_paths)
-        if not self.rotation_controller.has_suggestions():
-            self._hide_rotation_view()
-            return
-        next_path = self.rotation_controller.compute_next_after_accept(
-            visible_before, accepted, accepted[0] if accepted else None
-        )
-        self._rebuild_rotation_view()
-        if next_path:
-            proxy_idx = self._find_proxy_index_for_path(next_path)
-            if proxy_idx.isValid():
-                active_view = self._get_active_file_view()
-                if active_view:
-                    active_view.setCurrentIndex(proxy_idx)
-                    active_view.selectionModel().select(
-                        proxy_idx, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                    )
-                    active_view.scrollTo(
-                        proxy_idx, QAbstractItemView.ScrollHint.EnsureVisible
-                    )
-                    return
-        active_view = self._get_active_file_view()
-        if active_view:
-            active_view.selectionModel().clear()
-        self.advanced_image_viewer.clear()
-        self.accept_button.setVisible(False)
-
-    # (Legacy nested _accept_rotation removed; logic handled by controller methods above.)
-
-    def _on_accept_button_clicked(self):
-        """Handle accept button click with automatic navigation in rotation view."""
-        # Check if we're in rotation view mode
-        if self.left_panel.current_view_mode == "rotation":
-            # Use the new method that automatically moves to the next item
-            self._accept_single_rotation_and_move_to_next()
-        else:
-            # Use the standard method for other views
-            self._accept_current_rotation()
-
-    def _accept_single_rotation_and_move_to_next(self):
-        """Applies a single rotation suggestion and automatically moves to the next item."""
-        # Get the currently selected path
-        selected_paths = self._get_selected_file_paths_from_view()
-        if not selected_paths or len(selected_paths) != 1:
-            # If not exactly one item selected, fall back to the standard accept behavior
-            self._accept_current_rotation()
-            return
-        file_path = selected_paths[0]
-        if file_path not in self.rotation_controller.rotation_suggestions:
-            return
-        # Capture current visible order to compute the best next candidate
-        try:
-            visible_paths_before = self._get_all_visible_image_paths()
-        except Exception:
-            visible_paths_before = self.rotation_controller.get_visible_order()
-        accepted = self.rotation_controller.accept_paths([file_path])
-        if not self.rotation_controller.has_suggestions():
-            self._hide_rotation_view()
-            return
-        # Rebuild the view, then compute the next selection
-        self._rebuild_rotation_view()
-        path_to_select = self.rotation_controller.compute_next_after_accept(
-            visible_paths_before, accepted, file_path
-        )
-        active_view = self._get_active_file_view()
-        if path_to_select and active_view:
-            proxy_idx_to_select = self._find_proxy_index_for_path(path_to_select)
-            if proxy_idx_to_select.isValid():
-                active_view.setCurrentIndex(proxy_idx_to_select)
-                active_view.selectionModel().select(
-                    proxy_idx_to_select,
-                    QItemSelectionModel.SelectionFlag.ClearAndSelect,
-                )
-                active_view.scrollTo(
-                    proxy_idx_to_select,
-                    QAbstractItemView.ScrollHint.EnsureVisible,
-                )
-                return
-        # Fallback: clear selection and preview if we couldn't determine the next
-        if active_view:
-            active_view.selectionModel().clear()
-        self.advanced_image_viewer.clear()
-        self.accept_button.setVisible(False)
-        self.refuse_button.setVisible(False)
-
-    def _refuse_all_rotations(self):
-        """Refuses all remaining rotation suggestions."""
-        if not self.rotation_controller.has_suggestions():
-            self.statusBar().showMessage("No rotation suggestions to refuse.", 3000)
-            return
-        self.rotation_controller.refuse_all()
-        self.statusBar().showMessage(
-            "All rotation suggestions have been refused.", 5000
-        )
-        self._hide_rotation_view()
-
-    def _refuse_current_rotation(self):
-        """Refuses the currently selected rotation suggestions."""
-        selected_paths = self._get_selected_file_paths_from_view()
-        if not selected_paths:
-            return
-        target_paths = [
-            p
-            for p in selected_paths
-            if p in self.rotation_controller.rotation_suggestions
-        ]
-        if not target_paths:
-            return
-        self.rotation_controller.refuse_paths(target_paths)
-        if not self.rotation_controller.has_suggestions():
-            self._hide_rotation_view()
-            return
-        self._rebuild_rotation_view()
-        self.advanced_image_viewer.clear()
-        self.accept_button.setVisible(False)
-        self.refuse_button.setVisible(False)
-
-    def _hide_rotation_view(self):
-        """Hides the rotation view and switches back to the default list view."""
-        logger.info("Hiding rotation view as no more suggestions.")
-        self.left_panel.set_view_mode_list()
-        self.accept_all_button.setVisible(False)
-        self.accept_button.setVisible(False)
-        self.refuse_button.setVisible(False)
-        self.refuse_all_button.setVisible(False)
-        self.left_panel.view_rotation_icon.setVisible(False)
-        self.statusBar().showMessage("All rotation suggestions processed.", 5000)
-        self._rebuild_model_view()
-
     def _handle_tree_view_click(self, proxy_index: QModelIndex):
         if not proxy_index.isValid() or not self.group_by_similarity_mode:
             return
@@ -4640,26 +5341,10 @@ class MainWindow(QMainWindow):
 
         item_data = item.data(Qt.ItemDataRole.UserRole)
         if isinstance(item_data, str) and item_data.startswith("cluster_header_"):
-            active_view = self._get_active_file_view()
-            if not active_view or not isinstance(active_view, QTreeView):
-                return
-
-            selection = QItemSelection()
-            for row in range(item.rowCount()):
-                child_item = item.child(row)
-                if child_item:
-                    child_source_index = child_item.index()
-                    child_proxy_index = self.proxy_model.mapFromSource(
-                        child_source_index
-                    )
-                    if child_proxy_index.isValid():
-                        selection.select(child_proxy_index, child_proxy_index)
-
-            if not selection.isEmpty():
-                active_view.selectionModel().select(
-                    selection, QItemSelectionModel.SelectionFlag.ClearAndSelect
-                )
+            self._select_group_and_children(proxy_index)
 
     def _on_side_by_side_availability_changed(self, is_available: bool):
         """Enable/disable the side-by-side view action based on availability."""
+        self._cull_side_by_side_available = is_available
         self.menu_manager.side_by_side_view_action.setEnabled(is_available)
+        self._refresh_cull_shortcut_visibility()

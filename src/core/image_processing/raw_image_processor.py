@@ -108,6 +108,78 @@ def is_raw_file(file_path: str) -> bool:
 class RawImageProcessor:
     """Handles loading and processing of RAW image formats."""
 
+    DISPLAY_RECIPE_VERSION = 1
+
+    @staticmethod
+    def _display_postprocess_params() -> dict:
+        """Return the single, explicit RAW recipe used by every display surface."""
+        return {
+            "demosaic_algorithm": rawpy.DemosaicAlgorithm.AHD,
+            "use_camera_wb": True,
+            "output_color": rawpy.ColorSpace.sRGB,
+            "output_bps": 8,
+            "half_size": False,
+            "no_auto_bright": False,
+            "auto_bright_thr": 0.01,
+            "bright": RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED,
+            "highlight_mode": rawpy.HighlightMode.Clip,
+            "gamma": (2.222, 4.5),
+        }
+
+    @staticmethod
+    def render_display(
+        image_path: str,
+        target_mode: str = "RGBA",
+        target_size: tuple[int, int] | None = None,
+    ) -> Image.Image | None:
+        """Render the authoritative PhotoSort appearance for a RAW source.
+
+        Embedded camera previews and half-size demosaicing are deliberately excluded:
+        a cached proxy and a later detail decode must differ only in resolution.
+        """
+        normalized_path = os.path.normpath(image_path)
+        try:
+            with rawpy.imread(normalized_path) as raw:
+                rgb_array = raw.postprocess(
+                    **RawImageProcessor._display_postprocess_params()
+                )
+            image = Image.fromarray(rgb_array)
+            image = ImageOps.autocontrast(image)
+            image = ImageEnhance.Color(image).enhance(1.2)
+            if target_size and (
+                image.width > target_size[0] or image.height > target_size[1]
+            ):
+                image.thumbnail(
+                    target_size,
+                    Image.Resampling.LANCZOS,
+                    reducing_gap=3.0,
+                )
+            return image.convert(target_mode)
+        except UnidentifiedImageError:
+            logger.error(
+                "Pillow could not process canonical RAW data for %s",
+                os.path.basename(normalized_path),
+            )
+        except rawpy.LibRawIOError as exc:
+            logger.error(
+                "rawpy I/O error for canonical display '%s': %s",
+                os.path.basename(normalized_path),
+                exc,
+            )
+        except rawpy.LibRawUnspecifiedError as exc:
+            logger.error(
+                "rawpy unspecified error for canonical display '%s': %s",
+                os.path.basename(normalized_path),
+                exc,
+            )
+        except Exception:
+            logger.error(
+                "Failed to render canonical RAW display for '%s'",
+                os.path.basename(normalized_path),
+                exc_info=True,
+            )
+        return None
+
     @staticmethod
     def process_raw_for_thumbnail(
         image_path: str,
@@ -231,7 +303,6 @@ class RawImageProcessor:
         image_path: str,
         apply_auto_edits: bool = False,
         preview_max_resolution: tuple = PRELOAD_MAX_RESOLUTION,
-        force_default_brightness: bool = False,
     ) -> Image.Image | None:
         """
         Generates a PIL.Image preview from a RAW file for preloading.
@@ -271,9 +342,8 @@ class RawImageProcessor:
                                         "preview_auto_edits", basename
                                     )
                                     temp_img = ImageOps.autocontrast(temp_img)
-                                    if not force_default_brightness:
-                                        enhancer = ImageEnhance.Brightness(temp_img)
-                                        temp_img = enhancer.enhance(1.2)
+                                    enhancer = ImageEnhance.Brightness(temp_img)
+                                    temp_img = enhancer.enhance(1.2)
                                 # Copy to preserve image data after context exit
                                 pil_img = temp_img.convert("RGBA").copy()
                             if pil_img is not None and (
@@ -318,11 +388,9 @@ class RawImageProcessor:
                         "output_bps": 8,
                         "half_size": True,
                     }
-                    if apply_auto_edits and not force_default_brightness:
+                    if apply_auto_edits:
                         _record_raw_preview_stat("preview_auto_edits", basename)
                         postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_STANDARD
-                        postprocess_params["no_auto_bright"] = False
-                    elif apply_auto_edits:
                         postprocess_params["no_auto_bright"] = False
                     else:
                         logger.debug(
@@ -393,15 +461,21 @@ class RawImageProcessor:
         custom_whitebalance: list | None = None,  # e.g. [R, G, B, G2]
         demosaic_algorithm: rawpy.DemosaicAlgorithm
         | None = None,  # e.g. rawpy.DemosaicAlgorithm.AAHD
-        force_default_brightness: bool = False,
     ) -> Image.Image | None:
         """
         Loads a RAW image as a PIL Image object, with more granular control over rawpy postprocessing.
         'apply_auto_edits' will enable brightness adjustment and auto-contrast.
-        'force_default_brightness' can be used with 'apply_auto_edits' to skip the
-        extra brightness factor, which is useful for post-rotation processing.
         """
         normalized_path = os.path.normpath(image_path)
+        if (
+            apply_auto_edits
+            and use_camera_wb
+            and output_bps == 8
+            and not half_size
+            and custom_whitebalance is None
+            and demosaic_algorithm is None
+        ):
+            return RawImageProcessor.render_display(normalized_path, target_mode)
         try:
             with rawpy.imread(normalized_path) as raw:
                 postprocess_params = {
@@ -417,17 +491,10 @@ class RawImageProcessor:
                     postprocess_params.pop("use_camera_wb", None)
 
                 if apply_auto_edits:
-                    if not force_default_brightness:
-                        logger.debug(
-                            f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED}) via rawpy for: {os.path.basename(normalized_path)}"
-                        )
-                        postprocess_params["bright"] = (
-                            RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED  # Apply custom brightness
-                        )
-                    else:
-                        logger.debug(
-                            f"Applying auto-edits but forcing default brightness for: {os.path.basename(normalized_path)}"
-                        )
+                    logger.debug(
+                        f"Applying auto-edits (bright={RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED}) via rawpy for: {os.path.basename(normalized_path)}"
+                    )
+                    postprocess_params["bright"] = RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED
                     postprocess_params["no_auto_bright"] = False
                 else:
                     # When auto_edits are OFF, disable rawpy's auto-brightening

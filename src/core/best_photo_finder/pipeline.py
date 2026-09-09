@@ -80,6 +80,9 @@ def _format_failure_summary(
 
 def _sort_comparator(tie_threshold: float):
     def compare(left: ImageScore, right: ImageScore) -> int:
+        if left.sharpness_eligible != right.sharpness_eligible:
+            return -1 if left.sharpness_eligible else 1
+
         left_final = left.final_score if left.final_score is not None else float("-inf")
         right_final = (
             right.final_score if right.final_score is not None else float("-inf")
@@ -107,6 +110,57 @@ def _sort_comparator(tie_threshold: float):
         return -1 if left.path < right.path else 1 if left.path > right.path else 0
 
     return compare
+
+
+def _apply_cluster_relative_sharpness(
+    images: Sequence[ImageScore], floor: float
+) -> None:
+    """Exclude substantially softer frames using within-cluster measurements."""
+
+    variances = [
+        max(0.0, float(image.blur_variance))
+        for image in images
+        if image.blur_variance is not None
+    ]
+    reference = max(variances, default=0.0)
+    normalized_floor = max(0.0, min(1.0, float(floor)))
+    for image in images:
+        variance = max(0.0, float(image.blur_variance or 0.0))
+        ratio = variance / reference if reference > 0.0 else 1.0
+        image.cluster_sharpness_ratio = min(1.0, ratio)
+        image.sharpness_eligible = ratio >= normalized_floor
+        if not image.sharpness_eligible:
+            image.issues = (
+                *image.issues,
+                f"Substantially softer than this cluster's sharpest frame "
+                f"({ratio:.0%} relative sharpness)",
+            )
+
+
+def _enforce_sharpness_gate(images: Sequence[ImageScore], tie_threshold: float) -> None:
+    """Keep every ineligible display score below every eligible display score."""
+
+    eligible_scores = [
+        image.final_score
+        for image in images
+        if image.sharpness_eligible and image.final_score is not None
+    ]
+    ineligible_scores = [
+        image.final_score
+        for image in images
+        if not image.sharpness_eligible and image.final_score is not None
+    ]
+    if not eligible_scores or not ineligible_scores:
+        return
+    offset = max(
+        0.0,
+        max(ineligible_scores) - min(eligible_scores) + max(1e-6, tie_threshold),
+    )
+    if offset <= 0.0:
+        return
+    for image in images:
+        if not image.sharpness_eligible and image.final_score is not None:
+            image.final_score -= offset
 
 
 class PhotoSelector:
@@ -174,6 +228,8 @@ class PhotoSelector:
                 failures=failures,
             )
 
+        _apply_cluster_relative_sharpness(scored, config.relative_sharpness_floor)
+
         if preview_images:
             preview_batch = {
                 path: preview_images[path]
@@ -202,7 +258,8 @@ class PhotoSelector:
                 )
                 continue
             image_score.aesthetic_score = score
-            image_score.final_score = score - image_score.technical_penalty
+            image_score.base_score = score - image_score.technical_penalty
+            image_score.final_score = image_score.base_score
             rankable.append(image_score)
 
         if not rankable:
@@ -219,6 +276,8 @@ class PhotoSelector:
                 + _format_failure_summary(failures),
                 failures=failures,
             )
+
+        _enforce_sharpness_gate(rankable, config.tie_threshold)
 
         ranked = sorted(
             rankable, key=cmp_to_key(_sort_comparator(config.tie_threshold))

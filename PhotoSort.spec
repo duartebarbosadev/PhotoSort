@@ -51,6 +51,8 @@ datas = [
         "models",
     ),
 ]
+if (PROJECT_ROOT / "art" / "video.mp4").exists():
+    datas.append((str(PROJECT_ROOT / "art" / "video.mp4"), "art"))
 datas += copy_metadata("pyexiv2")
 
 binaries = collect_dynamic_libs("pyexiv2")
@@ -82,6 +84,10 @@ excluded_transformer_models = [
 
 hiddenimports = [
     "compression.zstd",
+    # Torchvision 0.29 uses stable-ABI extensions, loaded indirectly at runtime.
+    # The upstream PyInstaller hooks still collect the pre-0.29 names.
+    "torchvision._C_stable",
+    "torchvision.image_stable",
     "core.build_info",
     "core.packaging_smoke",
     "mediapipe.tasks.python.vision.face_landmarker",
@@ -97,6 +103,7 @@ hiddenimports = [
     "ui.pick_best_step_widget",
     "workers.best_shot_worker",
     "workers.easy_delete_worker",
+    "workers.cull_subject_grouping_worker",
     "workers.grouping_worker",
     "workers.pick_best_worker",
     "workers.rotation_detection_step_worker",
@@ -175,6 +182,7 @@ if IS_MACOS:
         bundle_identifier="dev.duartebarbosa.photosort",
         info_plist={
             "CFBundleDisplayName": "PhotoSort",
+            "LSMinimumSystemVersion": "15.0",
             "NSHighResolutionCapable": True,
         },
     )

@@ -152,6 +152,27 @@ def resolve_face_landmarker_model_path() -> Path:
     )
 
 
+def resolve_intro_video_path() -> str | None:
+    """Resolve the path to PhotoSort's first-run intro video.
+
+    Checked, in order: bundled PyInstaller roots, the source checkout's
+    ``art/`` directory, and the current working directory. Returns None if no
+    video file is found (e.g. it was stripped from a minimal build).
+    """
+    candidates = [
+        Path(root) / "art" / "video.mp4"
+        for root in iter_bundle_roots(include_executable_dir=False)
+    ]
+    project_root = Path(__file__).resolve().parents[2]
+    candidates.append(project_root / "art" / "video.mp4")
+    candidates.append(Path("art") / "video.mp4")
+
+    for candidate in dict.fromkeys(path.resolve() for path in candidates):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def get_app_log_dir() -> str:
     """Return the OS-appropriate directory for PhotoSort log files.
 

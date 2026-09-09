@@ -1,10 +1,11 @@
-import json
 import os
 
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw
 
 from src.core.grouping import (
+    GroupingAnalysisCancelled,
     GroupingMode,
     GroupingGroup,
     GroupingPlan,
@@ -13,6 +14,30 @@ from src.core.grouping import (
     build_grouping_plan,
     execute_grouping_plan,
 )
+
+
+def test_grouping_metadata_modes_honor_cancellation(monkeypatch):
+    loaded = []
+    cancellation_checks = 0
+
+    def should_continue():
+        nonlocal cancellation_checks
+        cancellation_checks += 1
+        return cancellation_checks < 3
+
+    monkeypatch.setattr(
+        "src.core.grouping._load_comprehensive_metadata",
+        lambda path: loaded.append(path) or {},
+    )
+
+    with pytest.raises(GroupingAnalysisCancelled):
+        build_grouping_plan(
+            [{"path": "/tmp/a.jpg"}, {"path": "/tmp/b.jpg"}],
+            GroupingMode.LOCATION,
+            should_continue=should_continue,
+        )
+
+    assert loaded == ["/tmp/a.jpg"]
 
 
 def _create_solid_image(path: str, color: tuple[int, int, int]) -> None:
@@ -112,7 +137,7 @@ def test_similarity_grouping_plan_uses_ml_similarity_pipeline(tmp_path, monkeypa
 
     monkeypatch.setattr(
         "src.core.grouping._run_ml_similarity_pipeline",
-        lambda paths, progress_callback=None, shared_engine=None, image_pipeline=None: {
+        lambda paths, **_kwargs: {
             str(red_a): 1,
             str(red_b): 1,
             str(blue_a): 2,
@@ -155,6 +180,44 @@ def test_current_structure_grouping_plan_preserves_relative_folders(tmp_path):
 
     labels = sorted(group.group_label for group in plan.groups)
     assert labels == ["day_one", "day_two"]
+
+
+def test_current_structure_grouping_plan_preserves_photos_and_videos(tmp_path):
+    source_root = tmp_path / "source"
+    mixed_dir = source_root / "mixed"
+    video_only_dir = source_root / "video_only"
+    mixed_dir.mkdir(parents=True)
+    video_only_dir.mkdir()
+    image_path = mixed_dir / "a.jpg"
+    paired_video = mixed_dir / "a.mov"
+    root_video = source_root / "root.mp4"
+    video_only_path = video_only_dir / "clip.mkv"
+    _create_solid_image(str(image_path), (220, 40, 40))
+    for video_path in (paired_video, root_video, video_only_path):
+        video_path.write_bytes(b"video")
+
+    plan = build_grouping_plan(
+        [
+            {"path": str(image_path), "media_type": "image"},
+            {"path": str(paired_video), "media_type": "video"},
+            {"path": str(root_video), "media_type": "video"},
+            {"path": str(video_only_path), "media_type": "video"},
+        ],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+
+    paths_by_label = {
+        group.group_label: set(group.source_paths) for group in plan.groups
+    }
+    assert paths_by_label == {
+        "": {str(root_video)},
+        "mixed": {str(image_path), str(paired_video)},
+        "video_only": {str(video_only_path)},
+    }
+    assert plan.total_items == 4
+    assert plan.supported_items == 4
+    assert plan.skipped_paths == []
 
 
 def test_current_structure_grouping_plan_keeps_root_level_files_at_root(tmp_path):
@@ -200,6 +263,35 @@ def test_face_grouping_plan_assigns_face_like_images_and_unassigns_flat_image(tm
     assert len(plan.groups) == 1
     assert len(plan.groups[0].source_paths) == 2
     assert str(blank) in plan.unassigned_paths
+
+
+def test_similarity_grouping_remains_image_only_and_skips_videos(tmp_path, monkeypatch):
+    image_path = tmp_path / "a.jpg"
+    video_path = tmp_path / "a.mp4"
+    _create_solid_image(str(image_path), (220, 40, 40))
+    video_path.write_bytes(b"video")
+    analyzed_paths = []
+
+    def run_similarity(paths, **_kwargs):
+        analyzed_paths.extend(paths)
+        return {str(image_path): 1}
+
+    monkeypatch.setattr(
+        "src.core.grouping._run_ml_similarity_pipeline",
+        run_similarity,
+    )
+
+    plan = build_grouping_plan(
+        [
+            {"path": str(image_path), "media_type": "image"},
+            {"path": str(video_path), "media_type": "video"},
+        ],
+        GroupingMode.SIMILARITY,
+    )
+
+    assert analyzed_paths == [str(image_path)]
+    assert plan.supported_items == 1
+    assert plan.skipped_paths == [str(video_path)]
 
 
 def test_face_grouping_plan_uses_detected_face_region_for_offset_faces(
@@ -299,7 +391,7 @@ def test_mixed_grouping_partitions_by_date_then_similarity(tmp_path, monkeypatch
     )
     monkeypatch.setattr(
         "src.core.grouping._run_ml_similarity_pipeline",
-        lambda paths, progress_callback=None, shared_engine=None, image_pipeline=None: (
+        lambda paths, **_kwargs: (
             {str(a): 1, str(b): 1} if set(paths) == {str(a), str(b)} else {str(c): 1}
         ),
     )
@@ -320,7 +412,7 @@ def test_mixed_grouping_partitions_by_date_then_similarity(tmp_path, monkeypatch
     assert plan.unassigned_paths == []
 
 
-def test_execute_grouping_plan_moves_files_handles_name_collisions_and_writes_manifest(
+def test_execute_grouping_plan_moves_files_and_handles_name_collisions(
     tmp_path,
 ):
     source_root = tmp_path / "source"
@@ -357,11 +449,9 @@ def test_execute_grouping_plan_moves_files_handles_name_collisions_and_writes_ma
     assert os.path.exists(moved_paths[0])
     assert os.path.exists(moved_paths[1])
     assert moved_paths[0] != moved_paths[1]
-    assert os.path.exists(summary.manifest_path)
-    with open(summary.manifest_path, encoding="utf-8") as fh:
-        manifest = json.load(fh)
-    assert manifest["moved_count"] == 2
-    assert len(manifest["entries"]) == 2
+    assert summary.moved_count == 2
+    assert len(summary.entries) == 2
+    assert not (source_root / "grouping-manifest.json").exists()
 
 
 def test_build_grouping_output_root_uses_source_root_directly(tmp_path):
@@ -380,10 +470,15 @@ def test_execute_grouping_plan_keeps_current_mode_files_in_place_when_already_gr
     day_one = source_root / "day_one"
     day_one.mkdir(parents=True)
     image_path = day_one / "a.jpg"
+    video_path = day_one / "a.mov"
     _create_solid_image(str(image_path), (220, 40, 40))
+    video_path.write_bytes(b"video")
 
     plan = build_grouping_plan(
-        [{"path": str(image_path)}],
+        [
+            {"path": str(image_path), "media_type": "image"},
+            {"path": str(video_path), "media_type": "video"},
+        ],
         GroupingMode.CURRENT,
         source_root=str(source_root),
     )
@@ -395,8 +490,13 @@ def test_execute_grouping_plan_keeps_current_mode_files_in_place_when_already_gr
 
     assert summary.moved_count == 0
     assert image_path.exists()
-    assert summary.entries[0].status == "unchanged"
-    assert summary.entries[0].new_path == str(image_path)
+    assert video_path.exists()
+    assert summary.skipped_count == 0
+    assert {entry.status for entry in summary.entries} == {"unchanged"}
+    assert {entry.new_path for entry in summary.entries} == {
+        str(image_path),
+        str(video_path),
+    }
 
 
 def test_execute_grouping_plan_removes_empty_source_directories(tmp_path):
@@ -544,12 +644,17 @@ def test_execute_grouping_plan_renames_entire_folder_and_keeps_unmanaged_files(
     old_dir = source_root / "old_folder"
     old_dir.mkdir(parents=True)
     image_path = old_dir / "a.jpg"
+    video_path = old_dir / "a.mov"
     zip_path = old_dir / "archive.zip"
     _create_solid_image(str(image_path), (220, 40, 40))
+    video_path.write_bytes(b"video")
     zip_path.write_bytes(b"zip-data")
 
     plan = build_grouping_plan(
-        [{"path": str(image_path)}],
+        [
+            {"path": str(image_path), "media_type": "image"},
+            {"path": str(video_path), "media_type": "video"},
+        ],
         GroupingMode.CURRENT,
         source_root=str(source_root),
     )
@@ -561,9 +666,11 @@ def test_execute_grouping_plan_renames_entire_folder_and_keeps_unmanaged_files(
         output_root=str(source_root),
     )
 
-    assert summary.moved_count == 1
+    assert summary.moved_count == 2
+    assert summary.skipped_count == 0
     assert not old_dir.exists()
     assert (source_root / "renamed_folder" / "a.jpg").exists()
+    assert (source_root / "renamed_folder" / "a.mov").exists()
     assert (source_root / "renamed_folder" / "archive.zip").exists()
 
 

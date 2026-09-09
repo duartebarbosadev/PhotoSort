@@ -35,16 +35,167 @@ def test_scan_batches_maintain_media_summary_and_path_index():
     assert state.get_file_data_by_path("a.jpg")["is_blurred"] is True
 
 
+def test_bulk_deletion_marks_update_atomically():
+    state = _state()
+    state.marked_for_deletion = {"keep-marked.jpg", "remove-mark.jpg"}
+
+    changed = state.set_deletion_marks(
+        {
+            "keep-marked.jpg": True,
+            "remove-mark.jpg": False,
+            "new-mark.jpg": True,
+            "stay-clear.jpg": False,
+        }
+    )
+
+    assert changed == 2
+    assert state.marked_for_deletion == {"keep-marked.jpg", "new-mark.jpg"}
+
+
+def test_cull_uses_its_own_clusters_without_replacing_coarse_results():
+    state = _state()
+    state.cluster_results = {"a.jpg": 1, "b.jpg": 1}
+    state.cull_cluster_results = {"a.jpg": 7, "b.jpg": 8}
+
+    assert state.cluster_results_for_workflow("easy_delete") == state.cluster_results
+    assert state.cluster_results_for_workflow("pick_best") == state.cull_cluster_results
+    assert state.cluster_results_for_workflow("cull") == state.cull_cluster_results
+
+
+def test_manual_override_namespace_follows_the_workflow_cluster_map():
+    """Overrides must be stored beside the cluster ids they were derived from."""
+
+    state = _state()
+
+    assert state.manual_override_namespace_for_workflow("organize") == "similarity"
+    assert state.manual_override_namespace_for_workflow("easy_delete") == "similarity"
+    assert state.manual_override_namespace_for_workflow("cull") == "cull"
+    assert state.manual_override_namespace_for_workflow("pick_best") == "cull"
+
+
 def test_assignment_removal_and_rename_keep_index_consistent():
     state = _state()
     state.image_files_data = [
         {"path": "old.jpg", "media_type": "image", "file_size": 42}
     ]
+    state.mark_for_deletion("old.jpg")
+    state.focused_image_path = "old.jpg"
+    state.easy_delete_results = {
+        "other.jpg": {"pair_path": "old.jpg"},
+        "unrelated.jpg": {"pair_path": "keep.jpg"},
+    }
+    state.fix_rotation_results = {"old.jpg": 90}
+    state.pick_best_results = {
+        1: {
+            "winner_path": "old.jpg",
+            "all_paths": ["old.jpg", "other.jpg"],
+            "ranked": [{"path": "old.jpg"}],
+            "failed": [{"path": "old.jpg", "failure_reason": "unreadable"}],
+            "unsupported_paths": ["old.jpg"],
+            "_mark_state": {"old.jpg": True},
+        }
+    }
+    state.pick_best_winners_by_path = {"old.jpg": True}
 
     state.update_path("old.jpg", "new.jpg")
     assert state.get_file_data_by_path("old.jpg") is None
     assert state.get_file_data_by_path("new.jpg")["path"] == "new.jpg"
+    assert not state.is_marked_for_deletion("old.jpg")
+    assert state.is_marked_for_deletion("new.jpg")
+    assert state.focused_image_path == "new.jpg"
+    assert state.easy_delete_results is None
+    assert state.fix_rotation_results == {"new.jpg": 90}
+    assert state.pick_best_results == {}
+    assert state.pick_best_winners_by_path == {}
 
     state.remove_data_for_path("new.jpg")
     assert state.get_file_data_by_path("new.jpg") is None
+    assert not state.is_marked_for_deletion("new.jpg")
+    assert state.focused_image_path is None
+    assert state.easy_delete_results is None
+    assert state.fix_rotation_results == {}
+    assert state.pick_best_results == {}
+    assert state.pick_best_winners_by_path == {}
     assert state.media_summary() == MediaSummary()
+
+
+def test_batch_removal_preserves_unaffected_workflow_reviews():
+    state = _state()
+    state.image_files_data = [
+        {"path": f"{index}.jpg", "media_type": "image", "file_size": index}
+        for index in range(10)
+    ]
+    state.easy_delete_results = {
+        "0.jpg": {"pair_path": "1.jpg"},
+        "keep.jpg": {"pair_path": "9.jpg"},
+    }
+    state.easy_delete_pair_assessments = {
+        ("0.jpg", "1.jpg"): {"assessment_decision": "subject_changed"},
+        ("8.jpg", "9.jpg"): {"assessment_decision": "uncertain"},
+    }
+    state.pick_best_results = {
+        1: {"all_paths": ["0.jpg", "1.jpg"], "winner_path": "0.jpg"},
+        2: {"all_paths": ["8.jpg", "9.jpg"], "winner_path": "8.jpg"},
+    }
+    state.pick_best_winners_by_path = {"0.jpg": True, "8.jpg": True}
+    with patch.object(
+        state, "_rebuild_media_index", wraps=state._rebuild_media_index
+    ) as rebuild:
+        removed = state.remove_data_for_paths(
+            ["0.jpg", "1.jpg"],
+            clear_disk_caches=False,
+        )
+
+    assert removed == 2
+    rebuild.assert_called_once_with()
+    assert state.get_file_data_by_path("0.jpg") is None
+    assert state.get_file_data_by_path("2.jpg") is not None
+    assert state.easy_delete_results == {
+        "keep.jpg": {"pair_path": "9.jpg"},
+    }
+    assert state.easy_delete_pair_assessments == {
+        ("8.jpg", "9.jpg"): {"assessment_decision": "uncertain"},
+    }
+    assert state.pick_best_results == {
+        2: {"all_paths": ["8.jpg", "9.jpg"], "winner_path": "8.jpg"},
+    }
+    assert state.pick_best_winners_by_path == {"8.jpg": True}
+    state.rating_disk_cache.delete.assert_not_called()
+    state.exif_disk_cache.delete.assert_not_called()
+
+
+def test_batch_path_update_scans_shared_results_once_without_disk_io():
+    state = _state()
+    state.image_files_data = [
+        {"path": "a.jpg", "media_type": "image", "file_size": 1},
+        {"path": "b.jpg", "media_type": "image", "file_size": 2},
+    ]
+    state.easy_delete_results = {
+        "a.jpg": {"pair_path": "b.jpg"},
+        "unpaired.jpg": {"pair_path": None},
+    }
+    state.pick_best_results = {
+        1: {
+            "winner_path": "a.jpg",
+            "all_paths": ["a.jpg", "b.jpg"],
+            "unsupported_paths": ["b.jpg"],
+            "ranked": [{"path": "a.jpg"}],
+            "failed": [{"path": "b.jpg"}],
+            "_mark_state": {"a.jpg": True, "b.jpg": False},
+        }
+    }
+
+    updated = state.update_paths(
+        {"a.jpg": "new-a.jpg", "b.jpg": "new-b.jpg"},
+        migrate_disk_caches=False,
+    )
+
+    assert updated == 2
+    assert [item["path"] for item in state.image_files_data] == [
+        "new-a.jpg",
+        "new-b.jpg",
+    ]
+    assert state.easy_delete_results is None
+    assert state.pick_best_results == {}
+    state.rating_disk_cache.get.assert_not_called()
+    state.exif_disk_cache.get.assert_not_called()

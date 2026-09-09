@@ -51,10 +51,23 @@ def test_clear_application_caches_clears_every_cache(monkeypatch):
         staticmethod(fake_clear_embedding_cache),
     )
 
+    # Must be stubbed: the real implementation deletes directories under the
+    # user's actual model cache, which a unit test must never touch.
+    def fake_clear_models(cache_dir=None):
+        calls.append("model_cache_clear")
+        return ()
+
+    monkeypatch.setattr(
+        "core.model_provisioning.clear_model_caches",
+        fake_clear_models,
+    )
+
     AppController.clear_application_caches()
 
     assert "analysis_clear_all" in calls
     assert "similarity_clear_embeddings" in calls
+    # Clearing caches must not delete models: that would force a re-download.
+    assert "model_cache_clear" not in calls
 
     for cache_name in ("thumbnail", "preview", "exif", "rating"):
         assert f"{cache_name}_clear" in calls

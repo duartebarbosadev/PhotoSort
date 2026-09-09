@@ -9,6 +9,7 @@ DevicePreference = Literal["auto", "cpu", "mps", "cuda"]
 class SelectorConfig:
     blur_threshold: float = 110.0
     blur_penalty_weight: float = 0.35
+    relative_sharpness_floor: float = 0.60
     eye_closed_threshold: float = 0.21
     eye_penalty_weight: float = 0.30
     thumbnail_size: int = 384

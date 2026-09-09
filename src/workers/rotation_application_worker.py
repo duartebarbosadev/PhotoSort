@@ -137,7 +137,11 @@ class RotationApplicationWorker(QObject):
         Args:
             approved_rotations: Dict mapping file_path -> rotation_degrees
         """
-        self._is_running = True
+        if not self._is_running:
+            logger.info(
+                "Rotation application skipped because cancellation was already requested"
+            )
+            return
         self._completed_count = 0  # Reset counter
         total_rotations = len(approved_rotations)
         successful_rotations = 0

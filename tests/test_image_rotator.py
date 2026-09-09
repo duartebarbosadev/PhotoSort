@@ -4,6 +4,9 @@ import sys
 import tempfile
 import shutil
 import logging
+import hashlib
+
+from PIL import Image
 
 # Add the project root to Python path so we can import src modules
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -156,15 +159,25 @@ class TestImageRotator:
             assert os.path.getsize(temp_image) > 0
 
     def test_metadata_only_rotation(self):
-        """Test metadata-only rotation (no pixel changes)."""
+        """Test metadata-only rotation changes orientation, not decoded pixels."""
         if not self.sample_images:
             pytest.skip("No sample images available")
 
-        source_image = self.sample_images[0]
+        source_image = os.path.join(self.test_folder, "jpg_sample.jpg")
+        if not os.path.exists(source_image):
+            pytest.skip("JPEG sample image is unavailable")
         temp_image = self._create_temp_copy(source_image)
 
-        # Get original file size
-        original_size = os.path.getsize(temp_image)
+        original_orientation = self.rotator._get_current_orientation(temp_image)
+        expected_orientation = self.rotator._calculate_new_orientation(
+            original_orientation, "clockwise"
+        )
+        with Image.open(temp_image) as image:
+            original_pixels = (
+                image.mode,
+                image.size,
+                hashlib.sha256(image.tobytes()).digest(),
+            )
 
         # Perform metadata-only rotation
         success, message = self.rotator.rotate_image(
@@ -172,11 +185,16 @@ class TestImageRotator:
         )
         logging.info(f"Metadata-only rotation: {success}, {message}")
 
-        # File should still exist with same or very similar size
+        assert success
         assert os.path.exists(temp_image)
-        new_size = os.path.getsize(temp_image)
-        # Allow small size difference due to metadata changes
-        assert abs(new_size - original_size) < 1024  # Less than 1KB difference
+        assert self.rotator._get_current_orientation(temp_image) == expected_orientation
+        with Image.open(temp_image) as image:
+            rotated_pixels = (
+                image.mode,
+                image.size,
+                hashlib.sha256(image.tobytes()).digest(),
+            )
+        assert rotated_pixels == original_pixels
 
     def test_rotation_error_handling_nonexistent_file(self):
         """Test error handling for non-existent file."""

@@ -4,6 +4,7 @@ from typing import Any
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.grouping import (
+    GroupingAnalysisCancelled,
     GroupingMode,
     augment_grouping_plan_with_filesystem_paths,
     build_grouping_output_root,
@@ -11,6 +12,7 @@ from core.grouping import (
     execute_grouping_plan,
 )
 from core.image_pipeline import ImagePipeline
+from core.caching.path_cache_ops import migrate_cached_paths
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,9 @@ class GroupingPreviewWorker(QObject):
         source_root: str | None = None,
         location_depth: int = 3,
         image_pipeline: ImagePipeline | None = None,
+        analysis_cache=None,
+        folder_path: str | None = None,
+        allow_model_download: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -36,23 +41,44 @@ class GroupingPreviewWorker(QObject):
         self.source_root = source_root
         self.location_depth = location_depth
         self.image_pipeline = image_pipeline
+        self.analysis_cache = analysis_cache
+        self.folder_path = folder_path
+        self.allow_model_download = allow_model_download
         self._should_stop = False
+        self._similarity_engine = None
 
     def stop(self):
         self._should_stop = True
+        if self._similarity_engine is not None:
+            self._similarity_engine.stop()
 
     def run(self):
         try:
             if self._should_stop:
                 return
             self.progress_update.emit(10, "Preparing grouping preview...")
+            mode = GroupingMode(self.mode)
+            if mode in {GroupingMode.SIMILARITY, GroupingMode.MIXED}:
+                from core.similarity_engine import SimilarityEngine
+
+                self._similarity_engine = SimilarityEngine(
+                    image_pipeline=self.image_pipeline,
+                    allow_model_download=self.allow_model_download,
+                )
+                if self._should_stop:
+                    self._similarity_engine.stop()
+                    return
             plan = build_grouping_plan(
                 self.items,
-                GroupingMode(self.mode),
+                mode,
                 progress_callback=self.progress_update.emit,
                 source_root=self.source_root,
                 location_depth=self.location_depth,
                 image_pipeline=self.image_pipeline,
+                should_continue=lambda: not self._should_stop,
+                similarity_engine=self._similarity_engine,
+                analysis_cache=self.analysis_cache,
+                folder_path=self.folder_path,
             )
             plan = augment_grouping_plan_with_filesystem_paths(
                 plan,
@@ -62,6 +88,8 @@ class GroupingPreviewWorker(QObject):
                 return
             self.progress_update.emit(100, "Grouping preview ready.")
             self.preview_ready.emit(plan)
+        except GroupingAnalysisCancelled:
+            logger.info("Grouping preview cancelled.")
         except Exception as exc:
             logger.error("Grouping preview failed: %s", exc, exc_info=True)
             self.error.emit(str(exc))
@@ -86,6 +114,10 @@ class GroupingWorkflowWorker(QObject):
         location_depth: int = 3,
         move_companions: bool = False,
         image_pipeline: ImagePipeline | None = None,
+        rating_cache=None,
+        exif_cache=None,
+        analysis_cache=None,
+        allow_model_download: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -98,10 +130,17 @@ class GroupingWorkflowWorker(QObject):
         self.location_depth = location_depth
         self.move_companions = move_companions
         self.image_pipeline = image_pipeline
+        self.rating_cache = rating_cache
+        self.exif_cache = exif_cache
+        self.analysis_cache = analysis_cache
+        self.allow_model_download = allow_model_download
         self._should_stop = False
+        self._similarity_engine = None
 
     def stop(self):
         self._should_stop = True
+        if self._similarity_engine is not None:
+            self._similarity_engine.stop()
 
     def run(self):
         try:
@@ -111,13 +150,24 @@ class GroupingWorkflowWorker(QObject):
             if self.prepared_plan is not None:
                 plan = self.prepared_plan
             else:
+                mode = GroupingMode(self.mode)
+                if mode in {GroupingMode.SIMILARITY, GroupingMode.MIXED}:
+                    from core.similarity_engine import SimilarityEngine
+
+                    self._similarity_engine = SimilarityEngine(
+                        image_pipeline=self.image_pipeline,
+                        allow_model_download=self.allow_model_download,
+                    )
                 plan = build_grouping_plan(
                     self.items,
-                    GroupingMode(self.mode),
+                    mode,
                     progress_callback=self.progress_update.emit,
                     source_root=self.source_root,
                     location_depth=self.location_depth,
                     image_pipeline=self.image_pipeline,
+                    similarity_engine=self._similarity_engine,
+                    analysis_cache=self.analysis_cache,
+                    folder_path=self.source_root,
                 )
             plan = augment_grouping_plan_with_filesystem_paths(
                 plan,
@@ -135,6 +185,22 @@ class GroupingWorkflowWorker(QObject):
                 progress_callback=self.progress_update.emit,
                 move_companions=self.move_companions,
             )
+            path_updates = {
+                entry.original_path: entry.new_path
+                for entry in summary.entries
+                if entry.new_path
+            }
+            migrate_cached_paths(
+                path_updates,
+                rating_cache=self.rating_cache,
+                exif_cache=self.exif_cache,
+            )
+            if self.analysis_cache is not None:
+                self.analysis_cache.migrate_folder_paths(
+                    self.source_root,
+                    self.output_root,
+                    path_updates,
+                )
             if self._should_stop:
                 return
             self.progress_update.emit(100, "Grouping complete.")

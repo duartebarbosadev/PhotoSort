@@ -123,3 +123,122 @@ def test_similarity_clustering_eps_setting_clamps_and_validates(monkeypatch):
 
     with pytest.raises(ValueError):
         app_settings.set_similarity_clustering_eps(0.5)
+
+
+def test_cull_strictness_defaults_to_conservative_and_is_independent(monkeypatch):
+    app_settings = _reload_module("core.app_settings")
+
+    class FakeSettings:
+        def __init__(self):
+            self.values = {app_settings.SIMILARITY_CLUSTERING_EPS_KEY: 0.2}
+
+        def value(self, key, default=None, type=None):
+            value = self.values.get(key, default)
+            return type(value) if type is not None else value
+
+        def setValue(self, key, value):
+            self.values[key] = value
+
+    settings = FakeSettings()
+    monkeypatch.setattr(app_settings, "_get_settings", lambda: settings)
+
+    assert app_settings.get_cull_grouping_strictness() is (
+        app_settings.CullGroupingStrictness.CONSERVATIVE
+    )
+    app_settings.set_cull_grouping_strictness(app_settings.CullGroupingStrictness.BROAD)
+    assert app_settings.get_cull_grouping_strictness() is (
+        app_settings.CullGroupingStrictness.BROAD
+    )
+    assert app_settings.get_similarity_clustering_eps() == 0.2
+
+
+def test_easy_delete_duplicate_distance_migrates_old_default_only(monkeypatch):
+    app_settings = _reload_module("core.app_settings")
+
+    class FakeSettings:
+        def __init__(self, value=None):
+            self.values = {}
+            if value is not None:
+                self.values[app_settings.EASY_DELETE_DUPLICATE_DISTANCE_KEY] = value
+
+        def value(self, key, default=None, type=None):
+            value = self.values.get(key, default)
+            return type(value) if type is not None else value
+
+        def setValue(self, key, value):
+            self.values[key] = value
+
+    fresh = FakeSettings()
+    monkeypatch.setattr(app_settings, "_get_settings", lambda: fresh)
+    assert app_settings.get_easy_delete_duplicate_distance() == 0.005
+
+    old_default = FakeSettings(0.01)
+    monkeypatch.setattr(app_settings, "_get_settings", lambda: old_default)
+    assert app_settings.get_easy_delete_duplicate_distance() == 0.005
+    assert old_default.values[app_settings.EASY_DELETE_DUPLICATE_DISTANCE_KEY] == 0.005
+
+    customized = FakeSettings(0.007)
+    monkeypatch.setattr(app_settings, "_get_settings", lambda: customized)
+    assert app_settings.get_easy_delete_duplicate_distance() == 0.007
+
+
+def test_workflow_shortcuts_visibility_defaults_on_and_persists(monkeypatch):
+    app_settings = _reload_module("core.app_settings")
+
+    class FakeSettings:
+        def __init__(self):
+            self.values = {}
+
+        def value(self, key, default=None, type=None):
+            value = self.values.get(key, default)
+            return type(value) if type is not None else value
+
+        def setValue(self, key, value):
+            self.values[key] = value
+
+    fake_settings = FakeSettings()
+    monkeypatch.setattr(app_settings, "_get_settings", lambda: fake_settings)
+
+    assert app_settings.get_show_workflow_shortcuts() is True
+
+    app_settings.set_show_workflow_shortcuts(False)
+
+    assert app_settings.get_show_workflow_shortcuts() is False
+
+
+def test_workflow_step_visibility_defaults_on_and_keeps_endpoints(monkeypatch):
+    app_settings = _reload_module("core.app_settings")
+
+    class FakeSettings:
+        def __init__(self):
+            self.values = {}
+
+        def value(self, key, default=None, type=None):
+            value = self.values.get(key, default)
+            return type(value) if type is not None else value
+
+        def setValue(self, key, value):
+            self.values[key] = value
+
+    fake_settings = FakeSettings()
+    monkeypatch.setattr(app_settings, "_get_settings", lambda: fake_settings)
+
+    assert all(app_settings.get_workflow_step_visibility().values())
+
+    app_settings.set_workflow_step_visibility(
+        {
+            "organize": False,
+            "easy_delete": False,
+            "fix_rotation": False,
+            "pick_best": False,
+            "cull": False,
+        }
+    )
+
+    assert app_settings.get_workflow_step_visibility() == {
+        "organize": True,
+        "easy_delete": False,
+        "fix_rotation": False,
+        "pick_best": False,
+        "cull": True,
+    }

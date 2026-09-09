@@ -1,4 +1,5 @@
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import Mock, call, patch
 
 from src.ui.app_controller import AppController
 
@@ -22,14 +23,8 @@ class _DummyStatusBar:
 class _DummyMenuManager:
     def __init__(self):
         self.open_folder_action = _DummyAction()
-        self.analyze_best_shots_action = _DummyAction()
         self.analyze_similarity_action = _DummyAction()
-        self.analyze_best_shots_selected_action = _DummyAction()
-        self.stop_best_shots_action = _DummyAction()
-        self.detect_blur_action = _DummyAction()
-        self.auto_rotate_action = _DummyAction()
         self.group_by_similarity_action = _DummyAction()
-        self.ai_rate_images_action = _DummyAction()
 
 
 class _DummyMainWindow:
@@ -42,6 +37,11 @@ class _DummyMainWindow:
         self.overlay_hidden = False
         self.schedule_visible_thumbnail_load = Mock()
         self.start_thumbnail_warming = Mock()
+        self.start_thumbnail_warming.return_value = "folder-assets"
+        self.set_exif_progress = Mock()
+        self.hide_exif_progress = Mock()
+        self.reset_thumbnail_requests = Mock()
+        self.dialog_manager = Mock()
 
     def update_loading_text(self, text):
         self._loading_updates.append(text)
@@ -66,11 +66,9 @@ class _DummyWorkerManager:
     def __init__(self):
         self.start_thumbnail_preload = Mock()
         self.start_rating_load = Mock()
+        self.request_stop_rating_load = Mock()
         self.start_rating_writer = Mock()
-        self.start_best_shot_analysis = Mock()
-
-    def is_best_shot_worker_running(self):
-        return False
+        self.resolve_thumbnail_capacity_request = Mock(return_value=True)
 
 
 class _DummyAppState:
@@ -79,9 +77,9 @@ class _DummyAppState:
         self.rating_disk_cache = Mock()
         self.exif_disk_cache = Mock()
         self.cluster_results = {}
-        self.best_shot_rankings = {}
         self.current_folder_path = None
         self.analysis_cache = Mock()
+        self.clear_all_file_specific_data = Mock()
 
 
 def _make_controller(image_files_data):
@@ -113,7 +111,21 @@ def test_handle_scan_finished_preloads_thumbnails_and_metadata_for_videos_too():
     loaded_data = args[0]
     assert len(loaded_data) == 2
     assert {entry["media_type"] for entry in loaded_data} == {"image", "video"}
+    assert not main_window.overlay_hidden
+
+    controller.handle_review_asset_finished("folder-assets", 2, 0)
     assert main_window.overlay_hidden
+
+
+def test_scan_finished_does_not_inspect_source_dimensions_on_ui_thread():
+    controller, main_window, _, _ = _make_controller(
+        [{"path": "/tmp/a.jpg", "media_type": "image", "is_blurred": None}]
+    )
+    main_window.image_pipeline = Mock()
+
+    controller.handle_scan_finished()
+
+    main_window.image_pipeline.estimate_active_review_cache_bytes.assert_not_called()
 
 
 def test_rating_completion_does_not_trigger_global_preview_preload():
@@ -126,6 +138,50 @@ def test_rating_completion_does_not_trigger_global_preview_preload():
 
     worker_manager.start_preview_preload.assert_not_called()
     assert main_window.overlay_hidden
+    main_window.hide_exif_progress.assert_called_once_with()
+
+
+def test_rating_progress_updates_the_exif_footer_progress():
+    controller, main_window, _, _ = _make_controller([])
+
+    controller.handle_rating_load_progress(0, 4_482, "")
+    controller.handle_rating_load_progress(250, 4_482, "photo.arw")
+
+    assert main_window.set_exif_progress.call_args_list == [
+        call(0, 4_482),
+        call(250, 4_482),
+    ]
+
+
+def test_actual_cache_overrun_pauses_then_resumes_with_raised_live_limit(tmp_path):
+    controller, main_window, _, worker_manager = _make_controller([])
+    current_limit = 1024**3
+    required = current_limit + 1
+    preview_cache = Mock(
+        _cache_dir=str(tmp_path),
+        size_limit_bytes=current_limit,
+        volume=Mock(return_value=0),
+    )
+    main_window.image_pipeline = Mock(preview_cache=preview_cache)
+    main_window.dialog_manager.confirm_preview_cache_capacity_increase.return_value = (
+        True
+    )
+    controller._folder_asset_session_id = "folder-assets"
+
+    with (
+        patch("src.ui.app_controller.set_preview_cache_size_gb") as set_limit,
+        patch(
+            "src.ui.app_controller.shutil.disk_usage",
+            return_value=SimpleNamespace(free=8 * 1024**3),
+        ),
+    ):
+        controller.handle_review_asset_capacity_required("folder-assets", required)
+
+    set_limit.assert_called_once_with(1.25)
+    preview_cache.increase_size_limit.assert_called_once_with(int(1.25 * 1024**3))
+    worker_manager.resolve_thumbnail_capacity_request.assert_called_once_with(
+        "folder-assets", True
+    )
 
 
 def test_apply_rating_to_selection_skips_videos_and_writes_images_only():
@@ -154,19 +210,18 @@ def test_apply_rating_to_selection_video_only_does_not_start_writer():
     )
 
 
-def test_start_best_shot_analysis_excludes_video_paths_from_cluster_map():
-    controller, _, app_state, worker_manager = _make_controller(
-        [
-            {"path": "/tmp/a.jpg", "media_type": "image", "is_blurred": None},
-            {"path": "/tmp/b.mp4", "media_type": "video", "is_blurred": None},
-        ]
-    )
-    app_state.cluster_results = {"/tmp/a.jpg": 1, "/tmp/b.mp4": 1}
-    app_state.best_shot_rankings = {}
-    app_state.analysis_cache = Mock()
-
-    controller.start_best_shot_analysis()
-
-    worker_manager.start_best_shot_analysis.assert_called_once()
-    cluster_map = worker_manager.start_best_shot_analysis.call_args.args[0]
-    assert cluster_map == {1: ["/tmp/a.jpg"]}
+def test_capacity_cancel_invalidates_metadata_before_clearing_folder():
+    controller, window, state, workers = _make_controller([{"path": "/old.jpg"}])
+    events = []
+    workers.request_stop_rating_load.side_effect = lambda: events.append("cancel")
+    state.clear_all_file_specific_data.side_effect = lambda: events.append("clear")
+    controller._folder_asset_session_id = "old-session"
+    controller._pending_exif_cache_capacity_warning = (2, 1, 100)
+    controller._cancel_folder_for_review_capacity()
+    assert events == ["cancel", "clear"]
+    assert controller._folder_asset_session_id is None
+    assert controller._pending_exif_cache_capacity_warning is None
+    assert state.current_folder_path is None
+    window.hide_exif_progress.assert_called_once()
+    controller.handle_review_asset_finished("old-session", 1, 0)
+    assert window.rebuild_count == 0

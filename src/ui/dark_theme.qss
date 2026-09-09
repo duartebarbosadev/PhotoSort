@@ -31,6 +31,35 @@ QWidget#workflowNav {
     border-radius: 12px;
 }
 
+QWidget#workflowNavHost {
+    background: transparent;
+    border: none;
+}
+
+QWidget#workflowFooterRight,
+QWidget#workflowFooterRight QWidget,
+QWidget#thumbnailProgressContainer,
+QWidget#thumbnailProgressContainer QLabel,
+QWidget#thumbnailProgressContainer QProgressBar,
+QWidget#exifProgressContainer,
+QWidget#exifProgressContainer QLabel,
+QWidget#exifProgressContainer QProgressBar,
+QWidget#cullProgressContainer,
+QWidget#cullProgressContainer QLabel,
+QWidget#cullProgressContainer QProgressBar,
+QStackedWidget#workflowShortcutStack {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#workflowStatusLabel {
+    background: transparent;
+    color: #8FA4B2;
+    font-size: 8.5pt;
+    padding-left: 4px;
+}
+
 QPushButton#workflowStepButton {
     background-color: transparent;
     color: #A9B7C6;
@@ -196,11 +225,6 @@ QListView[viewMode="IconMode"]::item {
     margin: 4px;
     text-align: center;
 }
-
-QTreeView::branch {
-    background: transparent;
-}
-
 
 /* --- Center Pane (Image and its Controls) --- */
 QWidget#center_pane_container {
@@ -491,34 +515,6 @@ QHeaderView::section {
     border: 1px solid #515151;
 }
 
-/* --- Loading Overlay --- */
-LoadingOverlay { /* Target the class name */
-    /* The overlay itself is transparent, its child bg_widget provides the visible background */
-}
-
-LoadingOverlay > QWidget {
-    background-color: rgba(43, 43, 43, 0.90);
-    border-radius: 10px;
-}
-
-LoadingOverlay QLabel#loading_text_label {
-    color: #BBBBBB;
-    font-size: 15pt;
-    font-weight: bold;
-    background-color: transparent;
-    padding: 25px;
-    border: none;
-    border-radius: 0px;
-}
-
-/* Optional: Style for an animation label if you add one */
-/*
-LoadingOverlay QLabel#loading_animation_label {
-    background-color: transparent;
-    padding-bottom: 10px;
-}
-*/
-
 /* --- Cache Management Dialog --- */
 QDialog#cacheManagementDialog {
     background: #2B2B2B;
@@ -529,6 +525,82 @@ QDialog#cacheManagementDialog {
 /* ============================== */
 /* Shared Dialog Components       */
 /* ============================== */
+
+/* Shared workflow progress page */
+QFrame#workflowProgressPage {
+    background-color: #202326;
+    border: none;
+}
+
+QFrame#workflowProgressCard {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+}
+
+QLabel#workflowProgressTitle {
+    color: #D6DCE1;
+    font-size: 15pt;
+    font-weight: 650;
+    background: transparent;
+}
+
+QLabel#workflowProgressMessage {
+    color: #AAB4BC;
+    font-size: 9pt;
+    background: transparent;
+    padding-bottom: 2px;
+}
+
+QProgressBar#workflowProgressBar {
+    min-height: 7px;
+    max-height: 7px;
+    background-color: #1E2326;
+    border: 1px solid #3A4147;
+    border-radius: 4px;
+    padding: 0;
+}
+
+QProgressBar#workflowProgressBar::chunk {
+    border-radius: 3px;
+    background-color: #214283;
+}
+
+QLabel#workflowProgressPercent {
+    min-width: 38px;
+    color: #B9C2C9;
+    font-size: 9pt;
+    font-weight: 650;
+    background: transparent;
+}
+
+QFrame#workflowProgressMetrics {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+}
+
+QLabel#workflowProgressMetricCaption {
+    color: #7F8B94;
+    font-size: 8pt;
+    font-weight: 500;
+    background: transparent;
+}
+
+QLabel#workflowProgressMetricValue {
+    color: #B9C2C9;
+    font-size: 8pt;
+    font-weight: 600;
+    background: transparent;
+}
+
+QFrame#workflowProgressPage[state="error"] QLabel#workflowProgressPercent {
+    color: #FF7B86;
+}
+
+QFrame#workflowProgressPage[state="error"] QProgressBar#workflowProgressBar::chunk {
+    background: #C8505D;
+}
 
 /* Dialog Header Bar */
 QFrame#dialogHeader,
@@ -578,6 +650,90 @@ QFrame#dialogCard {
     border: 1px solid #3C3F41;
     border-radius: 8px;
     padding: 4px;
+}
+
+/* Confirm-or-reset review guard */
+QDialog#confirmOrResetDialog {
+    background: #272A2D;
+    border: 1px solid #4A5158;
+    border-radius: 14px;
+}
+
+QLabel#confirmOrResetEyebrow {
+    background: transparent;
+    color: #73A7E8;
+    font-size: 8.5pt;
+    font-weight: bold;
+    letter-spacing: 1.5px;
+}
+
+QLabel#confirmOrResetTitle {
+    background: transparent;
+    color: #F2F5F7;
+    font-size: 18pt;
+    font-weight: bold;
+}
+
+QLabel#confirmOrResetMessage {
+    background: transparent;
+    color: #C5CFD8;
+    font-size: 11pt;
+    padding-bottom: 2px;
+}
+
+QFrame#confirmOrResetExplanation {
+    background: #202326;
+    border: 1px solid #3E454B;
+    border-radius: 9px;
+}
+
+QLabel#confirmOrResetOption {
+    background: transparent;
+    color: #B8C3CC;
+    font-size: 10pt;
+}
+
+QLabel#confirmOrResetHint {
+    background: transparent;
+    color: #8D9AA5;
+    font-size: 9pt;
+}
+
+QPushButton#confirmOrResetResetButton {
+    background: #353A3E;
+    color: #D1D8DE;
+    border: 1px solid #515A61;
+    border-radius: 8px;
+    padding: 10px 18px;
+    min-width: 145px;
+    font-weight: 600;
+}
+
+QPushButton#confirmOrResetResetButton:hover {
+    background: #41474C;
+    border-color: #69747C;
+    color: #FFFFFF;
+}
+
+QPushButton#confirmOrResetConfirmButton {
+    background: #3569B8;
+    color: #FFFFFF;
+    border: 1px solid #4A7BC5;
+    border-radius: 8px;
+    padding: 10px 20px;
+    min-width: 145px;
+    font-weight: bold;
+}
+
+QPushButton#confirmOrResetConfirmButton:hover {
+    background: #4177C7;
+    border-color: #6090D3;
+}
+
+QPushButton#confirmOrResetConfirmButton:pressed,
+QPushButton#confirmOrResetResetButton:pressed {
+    padding-top: 11px;
+    padding-bottom: 9px;
 }
 
 /* Card Section Title */
@@ -1488,6 +1644,208 @@ QDialog#lossyRotationDialog {
 }
 
 /* --- Delete Confirmation Dialog --- */
+QDialog#workflowTransitionDialog {
+    background: #2B2B2B;
+    border: 1px solid #3C3F41;
+    border-radius: 12px;
+}
+
+QDialog#workflowTransitionDialog[hasTrash="true"] {
+    border-color: #5C3335;
+}
+
+QScrollArea#workflowTransitionScroll,
+QScrollArea#workflowTransitionScroll > QWidget > QWidget,
+QFrame#workflowTransitionContent {
+    background: transparent;
+    border: none;
+}
+
+QLabel#workflowTransitionIntro {
+    background: transparent;
+    color: #A9B7C6;
+    font-size: 10.5pt;
+    padding: 0 0 8px 0;
+}
+
+QLabel#workflowTransitionSectionTitle,
+QLabel#workflowTransitionTrashTitle {
+    background: transparent;
+    color: #D5DEE7;
+    font-size: 12pt;
+    font-weight: bold;
+    padding: 0;
+}
+
+QLabel#workflowTransitionDescription {
+    background: transparent;
+    color: #92A0AD;
+    font-size: 9.5pt;
+    padding: 0 0 4px 0;
+}
+
+QRadioButton#workflowTransitionChoice {
+    background: transparent;
+    color: #C2CCD5;
+    border: 1px solid #454A4E;
+    border-radius: 8px;
+    padding: 10px 12px;
+    spacing: 10px;
+    min-height: 22px;
+}
+
+QRadioButton#workflowTransitionChoice:hover {
+    background: #373A3D;
+    border-color: #5A6268;
+    color: #FFFFFF;
+}
+
+QRadioButton#workflowTransitionChoice:checked {
+    background: #263B57;
+    border-color: #4B6EAF;
+    color: #FFFFFF;
+}
+
+QRadioButton#workflowTransitionChoice::indicator {
+    width: 18px;
+    height: 18px;
+}
+
+QPlainTextEdit#workflowTransitionActionList {
+    background: #1E1F22;
+    color: #A9B7C6;
+    border: 1px solid #3C3F41;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 8.5pt;
+}
+
+QListWidget#workflowTransitionTrashList,
+QListWidget#workflowTransitionRotationList {
+    background: #252627;
+    border: 1px solid #3C3F41;
+    border-radius: 8px;
+    padding: 14px;
+    outline: none;
+}
+
+QListWidget#workflowTransitionTrashList::item,
+QListWidget#workflowTransitionRotationList::item {
+    background: transparent;
+    color: #C6D0DA;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 8px;
+}
+
+QListWidget#workflowTransitionTrashList::item:hover,
+QListWidget#workflowTransitionTrashList::item:selected,
+QListWidget#workflowTransitionRotationList::item:hover,
+QListWidget#workflowTransitionRotationList::item:selected {
+    background: #303336;
+    border-color: #484D51;
+}
+
+QFrame#workflowTransitionRotationComparison {
+    background: #292B2D;
+    border: 1px solid #414447;
+    border-radius: 8px;
+}
+
+QLabel#workflowTransitionRotationFilename {
+    color: #E6EDF3;
+    font-size: 9pt;
+    font-weight: bold;
+}
+
+QLabel#workflowTransitionRotationCaption {
+    color: #89939D;
+    font-size: 8pt;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QLabel#workflowTransitionRotationPreview {
+    background: #1E1F22;
+    border: 1px solid #3C3F41;
+    border-radius: 5px;
+}
+
+QLabel#workflowTransitionRotationArrow {
+    color: #73A7E8;
+    font-size: 18pt;
+    font-weight: bold;
+}
+
+QLabel#workflowTransitionRotationDetail {
+    color: #A9B7C6;
+    font-size: 8.5pt;
+}
+
+QPushButton#workflowTransitionStayButton,
+QPushButton#workflowTransitionClearButton,
+QPushButton#workflowTransitionRotationDiscardButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #3C3F41, stop: 1 #353739);
+    color: #A9B7C6;
+    border: 1px solid #4A4D50;
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-size: 9.5pt;
+}
+
+QPushButton#workflowTransitionStayButton:hover,
+QPushButton#workflowTransitionClearButton:hover,
+QPushButton#workflowTransitionRotationDiscardButton:hover {
+    background: #45494A;
+    color: #FFFFFF;
+    border-color: #646A6E;
+}
+
+QPushButton#workflowTransitionResolveButton,
+QPushButton#workflowTransitionRotationApplyButton {
+    background: #4B6EAF;
+    color: #FFFFFF;
+    border: 1px solid #5A7DB8;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-size: 9.5pt;
+    font-weight: bold;
+}
+
+QPushButton#workflowTransitionResolveButton:hover,
+QPushButton#workflowTransitionRotationApplyButton:hover {
+    background: #587DB8;
+    border-color: #6B8FC7;
+}
+
+QPushButton#workflowTransitionTrashButton {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #B93648, stop: 1 #9F2638);
+    color: #FFFFFF;
+    border: 1px solid #C13D4F;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-size: 9.5pt;
+    font-weight: bold;
+}
+
+QPushButton#workflowTransitionTrashButton:hover {
+    background: #C94355;
+    border-color: #D35364;
+}
+
+QPushButton#workflowTransitionResolveButton:disabled,
+QPushButton#workflowTransitionClearButton:disabled,
+QPushButton#workflowTransitionTrashButton:disabled,
+QPushButton#workflowTransitionRotationDiscardButton:disabled,
+QPushButton#workflowTransitionRotationApplyButton:disabled {
+    background: #343638;
+    color: #69737C;
+    border-color: #414447;
+}
+
 QDialog#deleteConfirmationDialog {
     background: #2B2B2B;
     border: 1px solid #5C3335;
@@ -1944,6 +2302,43 @@ QLabel#statusLabel {
     background-color: transparent;
 }
 
+/* --- First-Run Intro Video Dialog --- */
+QDialog#introVideoDialog {
+    background: transparent;
+}
+
+QFrame#introVideoCard {
+    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
+        stop: 0 #1B1D1F, stop: 1 #101112);
+    border: 1px solid #4B6EAF;
+    border-radius: 18px;
+}
+
+QGraphicsView#introVideoView {
+    background: #000000;
+    border: none;
+}
+
+QPushButton#introSkipButton {
+    background: rgba(20, 22, 24, 0.7);
+    color: #F2F5F8;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 15px;
+    padding: 6px 16px;
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+QPushButton#introSkipButton:hover {
+    background: rgba(75, 110, 175, 0.9);
+    border-color: #5580BB;
+    color: #FFFFFF;
+}
+
+QPushButton#introSkipButton:pressed {
+    background: rgba(61, 90, 138, 0.95);
+}
+
 /* --- Default Message Boxes --- */
 QMessageBox {
     background: #2B2B2B;
@@ -2079,56 +2474,68 @@ QWidget#workflowReviewPage {
     background-color: #202326;
 }
 
-QFrame#workflowReviewHeader {
-    background-color: #292D31;
+QFrame#workflowReviewListPanel {
+    background-color: transparent;
     border: none;
-    border-bottom: 1px solid #3B4248;
+    border-radius: 0;
 }
 
-QLabel#workflowStepPill {
-    background-color: #183B68;
-    color: #8FC5FF;
-    border: 1px solid #285789;
-    border-radius: 7px;
-    padding: 3px 8px;
-    font-size: 7.5pt;
-    font-weight: 800;
-    letter-spacing: 1px;
+QWidget#workflowReviewListHeader,
+QWidget#workflowReviewListFooter {
+    background-color: transparent;
+    border: none;
 }
 
-QLabel#workflowReviewTitle {
-    color: #F2F5F7;
-    font-size: 14pt;
-    font-weight: 750;
-    background: transparent;
-}
-
-QLabel#workflowReviewDescription {
-    color: #83919C;
-    font-size: 8.5pt;
-    background: transparent;
-}
-
-QLabel#workflowReviewSummary {
-    color: #B7C2CB;
-    background-color: #22272B;
-    border: 1px solid #3B4248;
-    border-radius: 8px;
-    padding: 4px 10px;
-    font-size: 8.5pt;
+QLabel#workflowReviewListTitle {
+    color: #D6DCE1;
+    font-size: 9pt;
     font-weight: 650;
+    background: transparent;
 }
 
-QLabel#workflowReviewSummary[tone="danger"] {
-    color: #FF9AA3;
-    background-color: #3A2429;
-    border-color: #6E343D;
+QLabel#workflowReviewListCount {
+    color: #8D99A3;
+    font-size: 8pt;
+    background: transparent;
 }
 
-QLabel#workflowReviewSummary[tone="warning"] {
-    color: #F2C96D;
-    background-color: #352F20;
-    border-color: #66552B;
+QWidget#workflowReviewListFilters {
+    background-color: transparent;
+    border: none;
+}
+
+QCheckBox#workflowReviewFilter {
+    color: #AAB4BC;
+    font-size: 8pt;
+    spacing: 4px;
+}
+
+QListWidget#workflowReviewList {
+    color: #B9C2C9;
+    background-color: transparent;
+    border: none;
+    outline: none;
+    padding: 2px;
+}
+
+QListWidget#workflowReviewList::item {
+    background-color: transparent;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    margin: 1px 0;
+    font-size: 8.5pt;
+}
+
+QListWidget#workflowReviewList::item:selected {
+    color: #FFFFFF;
+    background-color: #214283;
+    border: 1px solid #214283;
+}
+
+QListWidget#workflowReviewList::item:hover:!selected {
+    color: #FFFFFF;
+    background-color: #353739;
 }
 
 QFrame#workflowShortcutStrip {
@@ -2137,29 +2544,28 @@ QFrame#workflowShortcutStrip {
     border-radius: 8px;
 }
 
-QLabel#workflowShortcutHeading {
-    color: #66737E;
-    font-size: 7pt;
-    font-weight: 800;
-    letter-spacing: 1px;
+QWidget#workflowShortcutItems,
+QWidget#workflowShortcutItem {
     background: transparent;
+    background-color: transparent;
+    border: none;
 }
 
 QLabel#workflowKeycap {
     background-color: #343A40;
-    color: #E3E8EC;
+    color: #F4F7F9;
     border: 1px solid #505960;
     border-bottom: 2px solid #202428;
     border-radius: 5px;
-    padding: 1px 5px;
+    padding: 2px 6px;
     min-width: 12px;
-    font-size: 7.5pt;
+    font-size: 8.5pt;
     font-weight: 700;
 }
 
 QLabel#workflowShortcutLabel {
-    color: #7E8A94;
-    font-size: 7.5pt;
+    color: #B5C0C8;
+    font-size: 8.5pt;
     background: transparent;
 }
 
@@ -2332,11 +2738,6 @@ QLabel#workflowCompareName {
     color: #F1F4F6;
     font-size: 9pt;
     font-weight: 650;
-}
-
-QLabel#workflowCompareScore {
-    color: #9CA8B2;
-    font-size: 8.25pt;
 }
 
 QLabel#workflowCompareMetaKey {
@@ -2518,6 +2919,26 @@ QPushButton#groupingSecondaryButton:pressed {
     background-color: #2D3033;
 }
 
+QPushButton#groupingPreviewTrashButton {
+    min-width: 34px;
+    min-height: 28px;
+    background-color: #3A2927;
+    color: #FFB366;
+    border: 1px solid #765048;
+    border-radius: 7px;
+}
+
+QPushButton#groupingPreviewTrashButton:hover {
+    background-color: #55332E;
+    border-color: #D47A65;
+}
+
+QPushButton#groupingPreviewTrashButton:disabled {
+    background-color: #2D3033;
+    color: #777C80;
+    border-color: #3D4245;
+}
+
 /* Separator lines */
 QFrame#groupingBarSep {
     background-color: #333A3E;
@@ -2557,8 +2978,9 @@ QFrame#groupingPreviewPanel QLabel#groupingTreeHeader {
 }
 
 QLabel#groupingPreviewHint {
-    color: #3D4B54;
-    font-size: 9pt;
+    color: #A9B7C6;
+    font-size: 10pt;
+    font-weight: 600;
     background: transparent;
 }
 
@@ -2591,6 +3013,31 @@ QLabel#groupingTreeDesc {
     color: #5F7280;
     font-size: 8pt;
     background: transparent;
+}
+
+QPushButton#groupingTreeControlButton {
+    background-color: transparent;
+    color: #8FA4B2;
+    border: 1px solid #3D474D;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 8pt;
+    font-weight: 600;
+}
+
+QPushButton#groupingTreeControlButton:hover {
+    background-color: #30373B;
+    border-color: #58666E;
+    color: #D9E3EA;
+}
+
+QPushButton#groupingTreeControlButton:pressed {
+    background-color: #252B2E;
+}
+
+QPushButton#groupingTreeControlButton:disabled {
+    color: #4A565D;
+    border-color: #30373B;
 }
 
 /* The before panel header gets an amber left accent */
@@ -2633,10 +3080,6 @@ QTreeWidget#groupingTree::item:selected {
 QTreeWidget#groupingTree::item:hover:!selected {
     background-color: #2C3438;
     color: #D8E4EC;
-}
-
-QTreeWidget#groupingTree::branch {
-    background: transparent;
 }
 
 /* Bottom status bar */
@@ -2736,4 +3179,203 @@ QPushButton#groupingEmptyCTA:hover {
 
 QPushButton#groupingEmptyCTA:pressed {
     background: #1C3A60;
+}
+
+/* Missing model warning and button containers */
+QWidget#missingModelWidget {
+    background: transparent;
+}
+
+QLabel#errorSummaryLabel {
+    font-size: 13px;
+    color: #dddddd;
+}
+
+QLabel#modelPathLabel {
+    background-color: #232729;
+    color: #f28b82;
+    border: 1px solid #3c3f41;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-family: monospace;
+    font-size: 11px;
+    margin-top: 4px;
+    margin-bottom: 12px;
+}
+
+QLabel#instructionsLabel {
+    font-size: 12px;
+    color: #bbbbbb;
+}
+
+QPushButton#downloadModelBtn,
+QPushButton#openModelsBtn {
+    background-color: #363B3F;
+    color: #C8D4DE;
+    border: 1px solid #4A5257;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-weight: bold;
+    font-size: 12px;
+    min-width: 150px;
+}
+
+QPushButton#downloadModelBtn:hover,
+QPushButton#openModelsBtn:hover {
+    background-color: #3E464C;
+    border-color: #627079;
+    color: #FFFFFF;
+}
+
+QPushButton#downloadModelBtn:pressed,
+QPushButton#openModelsBtn:pressed {
+    background-color: #2D3338;
+}
+
+QPushButton#retryBtn {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #178B4A, stop: 1 #0F6D39);
+    color: #FFFFFF;
+    border: 1px solid #0D5E32;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-weight: bold;
+    font-size: 12px;
+    min-width: 150px;
+}
+
+QPushButton#retryBtn:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #1C9A53, stop: 1 #147B42);
+    border-color: #116B39;
+}
+
+QPushButton#retryBtn:pressed {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #0F6D39, stop: 1 #0B582E);
+}
+
+/* --- Model consent dialogs (download / CPU) --- */
+QDialog#modelDownloadDialog,
+QDialog#modelConsentDialog {
+    background: #272A2D;
+    border: 1px solid #4A5158;
+    border-radius: 14px;
+}
+
+QLabel#modelConsentHeadline {
+    background: transparent;
+    color: #F2F5F7;
+    font-size: 14pt;
+    font-weight: bold;
+}
+
+QLabel#modelConsentSummary {
+    background: transparent;
+    color: #C5CFD8;
+    font-size: 10.5pt;
+}
+
+QFrame#modelConsentCard {
+    background: #202326;
+    border: 1px solid #3E454B;
+    border-radius: 9px;
+}
+
+QLabel#modelConsentModelName {
+    background: transparent;
+    color: #E4EAEF;
+    font-size: 10.5pt;
+    font-weight: 600;
+}
+
+QLabel#modelConsentModelMeta {
+    background: transparent;
+    color: #8FA3B5;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 9pt;
+}
+
+QLabel#modelConsentFootnote {
+    background: transparent;
+    color: #8D9AA5;
+    font-size: 9pt;
+}
+
+QPushButton#modelConsentCancelButton {
+    background: #353A3E;
+    color: #D1D8DE;
+    border: 1px solid #515A61;
+    border-radius: 8px;
+    padding: 9px 18px;
+    min-width: 110px;
+    font-weight: 600;
+}
+
+QPushButton#modelConsentCancelButton:hover {
+    background: #41474C;
+    border-color: #69747C;
+    color: #FFFFFF;
+}
+
+QPushButton#modelConsentAcceptButton {
+    background: #3569B8;
+    color: #FFFFFF;
+    border: 1px solid #4A7BC5;
+    border-radius: 8px;
+    padding: 9px 20px;
+    min-width: 110px;
+    font-weight: bold;
+}
+
+QPushButton#modelConsentAcceptButton:hover {
+    background: #4177C7;
+    border-color: #6090D3;
+}
+
+QPushButton#modelConsentAcceptButton:pressed,
+QPushButton#modelConsentCancelButton:pressed {
+    padding-top: 10px;
+    padding-bottom: 8px;
+}
+
+/* --- Workflow progress actions (retry / dismiss / cancel) --- */
+QPushButton#workflowProgressRetryButton {
+    background: #3569B8;
+    color: #FFFFFF;
+    border: 1px solid #4A7BC5;
+    border-radius: 8px;
+    padding: 8px 18px;
+    min-width: 130px;
+    font-weight: bold;
+}
+
+QPushButton#workflowProgressRetryButton:hover {
+    background: #4177C7;
+    border-color: #6090D3;
+}
+
+QPushButton#workflowProgressDismissButton,
+QPushButton#workflowProgressCancelButton {
+    background: #2E3336;
+    color: #C3CCD3;
+    border: 1px solid #454C52;
+    border-radius: 8px;
+    padding: 8px 16px;
+    min-width: 130px;
+    font-weight: 600;
+}
+
+QPushButton#workflowProgressDismissButton:hover,
+QPushButton#workflowProgressCancelButton:hover {
+    background: #3A4045;
+    border-color: #5C666D;
+    color: #FFFFFF;
+}
+
+QPushButton#workflowProgressRetryButton:pressed,
+QPushButton#workflowProgressDismissButton:pressed,
+QPushButton#workflowProgressCancelButton:pressed {
+    padding-top: 9px;
+    padding-bottom: 7px;
 }

@@ -1,12 +1,31 @@
+from __future__ import annotations
+
 import logging
+import copy
 import os
+import sys
 import time
-import subprocess
 from contextlib import suppress
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import override
 
-from PyQt6.QtCore import QPoint, QSize, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import (
+    QAbstractListModel,
+    QEvent,
+    QModelIndex,
+    QObject,
+    QItemSelectionModel,
+    QPointF,
+    QPoint,
+    QProcess,
+    QRunnable,
+    QSize,
+    Qt,
+    QThreadPool,
+    QTimer,
+    QUrl,
+    pyqtSignal,
+)
 from PyQt6.QtGui import (
     QAction,
     QBrush,
@@ -17,7 +36,11 @@ from PyQt6.QtGui import (
     QDragMoveEvent,
     QDropEvent,
     QIcon,
-    QPixmap,
+    QKeyEvent,
+    QPainter,
+    QPalette,
+    QPen,
+    QPolygonF,
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -30,48 +53,45 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QListView,
-    QListWidget,
-    QListWidgetItem,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QProgressBar,
+    QProxyStyle,
     QPushButton,
     QSplitter,
     QStackedWidget,
     QStyle,
+    QStyleOption,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from core.image_file_ops import ImageFileOperations
 from core.grouping import (
     GroupingGroup,
     GroupingPlan,
     augment_grouping_plan_with_filesystem_paths,
     find_directory_rename_candidates,
 )
-from core.media_utils import SUPPORTED_MEDIA_EXTENSIONS
+from core.media_utils import is_image_extension, is_video_extension
 from core.app_settings import (
     get_location_grouping_depth,
     set_location_grouping_depth,
     get_companion_files_preference,
     set_companion_files_preference,
     DISPLAY_MAX_RESOLUTION,
+    LARGE_FOLDER_THRESHOLD,
     THUMBNAIL_PRELOAD_BATCH_SIZE,
     THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
+    UI_POPULATION_CHUNK_SIZE,
 )
-from ui.advanced_image_viewer import ZoomableImageView
-from ui.dialog_components import (
-    build_dialog_footer,
-    build_dialog_header,
-    make_dialog_draggable,
-)
+from ui.helpers.ui_yield import cooperative_ui_yield
+from ui.helpers.ui_dispatch import bulk_ui_update
+from ui.advanced_image_viewer import SynchronizedImageViewer
+from ui.controllers.image_inspection_controller import InspectionImageSpec
 from ui.workflow_review_components import (
     ORGANIZE_SHORTCUTS,
-    WorkflowShortcutStrip,
     install_workflow_shortcuts,
 )
 
@@ -107,12 +127,84 @@ PREVIEW_PAGE_FOLDER = 2
 
 ROOT_LEVEL_GROUP_LABEL = "Root files"
 SELECTED_PREVIEW_DISPLAY_SIZE = DISPLAY_MAX_RESOLUTION
-MAX_FOLDER_PREVIEW_ITEMS = 200
 
 _DROP_TARGET_KINDS = {ITEM_GROUP, ITEM_DIRECTORY, ITEM_ROOT, ITEM_UNASSIGNED}
 _DRAGGABLE_KINDS = {ITEM_FILE, ITEM_GROUP}
 
 logger = logging.getLogger(__name__)
+
+
+def validate_directory_inventory(
+    directory_path: str, represented_paths: Iterable[str]
+) -> tuple[bool, str]:
+    """Reject folder deletion when any descendant entry is not represented."""
+    represented = {
+        os.path.normcase(os.path.normpath(path)) for path in represented_paths
+    }
+    discovered: set[str] = set()
+    try:
+        for current_root, dirnames, filenames in os.walk(
+            directory_path, followlinks=False
+        ):
+            for dirname in dirnames:
+                candidate = os.path.join(current_root, dirname)
+                if os.path.islink(candidate):
+                    discovered.add(os.path.normcase(os.path.normpath(candidate)))
+            for filename in filenames:
+                candidate = os.path.join(current_root, filename)
+                discovered.add(os.path.normcase(os.path.normpath(candidate)))
+    except OSError as exc:
+        return False, f"Folder safety check failed: {exc}"
+
+    missing_from_preview = discovered - represented
+    stale_preview = represented - discovered
+    if missing_from_preview or stale_preview:
+        details = []
+        if missing_from_preview:
+            details.append(f"{len(missing_from_preview)} unshown item(s)")
+        if stale_preview:
+            details.append(f"{len(stale_preview)} stale preview item(s)")
+        return (
+            False,
+            "Folder was not marked or trashed because it contains "
+            + " and ".join(details)
+            + ".",
+        )
+    return True, ""
+
+
+class _DirectoryInventorySignals(QObject):
+    completed = pyqtSignal(int, str, str, object, bool, str)
+
+
+class _DirectoryInventoryTask(QRunnable):
+    def __init__(
+        self,
+        request_id: int,
+        operation: str,
+        directory_path: str,
+        represented_paths: list[str],
+    ) -> None:
+        super().__init__()
+        self.request_id = request_id
+        self.operation = operation
+        self.directory_path = directory_path
+        self.represented_paths = represented_paths
+        self.signals = _DirectoryInventorySignals()
+
+    @override
+    def run(self) -> None:
+        safe, reason = validate_directory_inventory(
+            self.directory_path, self.represented_paths
+        )
+        self.signals.completed.emit(
+            self.request_id,
+            self.operation,
+            self.directory_path,
+            self.represented_paths,
+            safe,
+            reason,
+        )
 
 
 class DroppableGroupingTree(QTreeWidget):
@@ -355,12 +447,169 @@ class DroppableGroupingTree(QTreeWidget):
         return normalized_candidate.startswith(normalized_ancestor + os.sep)
 
 
+class GroupingTreeBranchStyle(QProxyStyle):
+    """Draw an unmistakable disclosure chevron for expandable tree rows."""
+
+    @override
+    def drawPrimitive(
+        self,
+        element: QStyle.PrimitiveElement,
+        option: QStyleOption,
+        painter: QPainter,
+        widget: QWidget | None = None,
+    ) -> None:
+        if element != QStyle.PrimitiveElement.PE_IndicatorBranch:
+            super().drawPrimitive(element, option, painter, widget)
+            return
+        if not option.state & QStyle.StateFlag.State_Children:
+            return
+
+        rect = option.rect
+        center_x = rect.center().x()
+        center_y = rect.center().y()
+        radius = max(3.0, min(4.5, min(rect.width(), rect.height()) / 3.0))
+        if option.state & QStyle.StateFlag.State_Open:
+            points = QPolygonF(
+                [
+                    QPointF(center_x - radius, center_y - radius / 2),
+                    QPointF(center_x, center_y + radius / 2),
+                    QPointF(center_x + radius, center_y - radius / 2),
+                ]
+            )
+        else:
+            points = QPolygonF(
+                [
+                    QPointF(center_x - radius / 2, center_y - radius),
+                    QPointF(center_x + radius / 2, center_y),
+                    QPointF(center_x - radius / 2, center_y + radius),
+                ]
+            )
+
+        color_role = (
+            QPalette.ColorRole.HighlightedText
+            if option.state & QStyle.StateFlag.State_Selected
+            else QPalette.ColorRole.Text
+        )
+        color = option.palette.color(color_role)
+        color.setAlpha(230)
+        pen = QPen(color, 1.8)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPolyline(points)
+        painter.restore()
+
+
+class FolderPreviewListModel(QAbstractListModel):
+    """Virtualized folder contents backed by the shared thumbnail cache."""
+
+    def __init__(self, owner: GroupingStepWidget):
+        super().__init__(owner)
+        self._owner = owner
+        self._paths: list[str] = []
+        self._row_by_path: dict[str, int] = {}
+
+    @override
+    def rowCount(self, parent: QModelIndex | None = None) -> int:
+        return 0 if parent is not None and parent.isValid() else len(self._paths)
+
+    @override
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not 0 <= index.row() < len(self._paths):
+            return None
+        source_path = self._paths[index.row()]
+        if role == Qt.ItemDataRole.DisplayRole:
+            return self._owner._preview_deletion_display_name(source_path)
+        if role == Qt.ItemDataRole.UserRole:
+            return source_path
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return self._owner._relative_path_for_source(source_path)
+        if role == Qt.ItemDataRole.DecorationRole:
+            return (
+                self._owner._cached_thumbnail_icon_for_path(source_path)
+                or self._owner._file_icon
+            )
+        if role == Qt.ItemDataRole.ForegroundRole and self._owner._is_marked_func(
+            source_path
+        ):
+            return QBrush(QColor("#FFB366"))
+        return None
+
+    def set_paths(self, paths: Iterable[str]) -> None:
+        unique_paths = list(dict.fromkeys(str(path) for path in paths if path))
+        self.beginResetModel()
+        self._paths = unique_paths
+        self._row_by_path = {
+            source_path: row for row, source_path in enumerate(unique_paths)
+        }
+        self.endResetModel()
+
+    def path_at(self, index: QModelIndex) -> str | None:
+        if not index.isValid() or not 0 <= index.row() < len(self._paths):
+            return None
+        return self._paths[index.row()]
+
+    def paths_slice(self, start: int, count: int) -> list[str]:
+        start = max(0, start)
+        return self._paths[start : start + max(0, count)]
+
+    def refresh_deletion_state(self) -> None:
+        if not self._paths:
+            return
+        self.dataChanged.emit(
+            self.index(0, 0),
+            self.index(len(self._paths) - 1, 0),
+            [
+                int(Qt.ItemDataRole.DisplayRole),
+                int(Qt.ItemDataRole.ForegroundRole),
+            ],
+        )
+
+    def refresh_thumbnail_paths(self, image_paths: set[str] | None = None) -> None:
+        if not self._paths:
+            return
+        if image_paths is None:
+            row_ranges = [(0, len(self._paths) - 1)]
+        else:
+            rows = sorted(
+                self._row_by_path[path]
+                for path in image_paths
+                if path in self._row_by_path
+            )
+            if not rows:
+                return
+            row_ranges: list[tuple[int, int]] = []
+            range_start = range_end = rows[0]
+            for row in rows[1:]:
+                if row == range_end + 1:
+                    range_end = row
+                    continue
+                row_ranges.append((range_start, range_end))
+                range_start = range_end = row
+            row_ranges.append((range_start, range_end))
+
+        for start, end in row_ranges:
+            self.dataChanged.emit(
+                self.index(start, 0),
+                self.index(end, 0),
+                [int(Qt.ItemDataRole.DecorationRole)],
+            )
+
+
 class GroupingStepWidget(QWidget):
+    active_image_changed = pyqtSignal(str)
     mode_changed = pyqtSignal(str)
-    create_requested = pyqtSignal(str, dict, object)
+    apply_requested = pyqtSignal()
     back_requested = pyqtSignal()
-    skip_requested = pyqtSignal()
     select_folder_requested = pyqtSignal()
+    toggle_deletion_marks_requested = pyqtSignal(list)
+    commit_deletion_marks_requested = pyqtSignal()
+    clear_deletion_marks_requested = pyqtSignal()
+    trash_requested = pyqtSignal(str, list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -371,7 +620,6 @@ class GroupingStepWidget(QWidget):
         self._editable_groups: list[GroupingGroup] = []
         self._editable_unassigned: list[str] = []
         self._editable_skipped: list[str] = []
-        self._editable_deleted: list[str] = []
         self._file_name_overrides: dict[str, str] = {}
         self._original_group_labels_by_path: dict[str, str] = {}
         self._original_group_labels_by_group_id: dict[str, str] = {}
@@ -381,8 +629,14 @@ class GroupingStepWidget(QWidget):
         self._supported_items: int = 0
         self._ignore_preview_item_change = False
         self._syncing_tree_selection = False
+        self._syncing_active_image = False
         self._drag_in_progress = False
         self._current_preview_source_path: str | None = None
+        self._is_marked_func: Callable[[str], bool] = lambda _path: False
+        self._has_any_marked_func: Callable[[], bool] = lambda: False
+        self._folder_validation_request_id = 0
+        self._folder_validation_pool = QThreadPool.globalInstance()
+        self._busy = False
 
         self._before_root_item: QTreeWidgetItem | None = None
         self._after_root_item: QTreeWidgetItem | None = None
@@ -410,7 +664,9 @@ class GroupingStepWidget(QWidget):
                 "modes:Alt+5": lambda: self._shortcut_set_mode("location"),
                 "rename": self._shortcut_rename,
                 "new_folder": self._shortcut_new_folder,
-                "stage_remove": self._shortcut_stage_remove,
+                "toggle_delete": self._shortcut_toggle_delete,
+                "trash_now": self._shortcut_trash_now,
+                "clear_deletions": self.clear_deletion_marks_requested.emit,
                 "apply": self._shortcut_apply,
             },
         )
@@ -480,18 +736,11 @@ class GroupingStepWidget(QWidget):
         self._depth_debounce = QTimer(self)
         self._depth_debounce.setSingleShot(True)
 
-        self.stats_label = QLabel()
-        self.stats_label.setObjectName("groupingSummaryBadge")
-        self.stats_label.setVisible(False)
-
-        self.skip_button = QPushButton("Continue without organizing")
-        self.skip_button.setObjectName("groupingGhostButton")
-        self.skip_button.setEnabled(False)
-
         self.primary_button = QPushButton("Review, then Apply")
         self.primary_button.setObjectName("groupingPrimaryButton")
         self.primary_button.setMinimumHeight(34)
         self.primary_button.setEnabled(False)
+        self.primary_button.setVisible(False)
 
         self.empty_state_frame = QFrame()
         self.empty_state_frame.setObjectName("groupingEmptyState")
@@ -522,14 +771,26 @@ class GroupingStepWidget(QWidget):
         self.before_tree.setColumnCount(1)
         self.before_tree.setHeaderHidden(True)
         self.before_tree.setRootIsDecorated(True)
+        self.before_tree.setItemsExpandable(True)
         self.before_tree.setAlternatingRowColors(False)
-        self.before_tree.setIndentation(14)
+        self.before_tree.setIndentation(20)
         self.before_tree.setUniformRowHeights(True)
         self.before_tree.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self.before_tree.setIconSize(QSize(22, 22))
         self.before_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._before_tree_branch_style = GroupingTreeBranchStyle()
+        self._before_tree_branch_style.setParent(self.before_tree)
+        self.before_tree.setStyle(self._before_tree_branch_style)
+        self.before_expand_all_button = QPushButton("Expand all")
+        self.before_expand_all_button.setObjectName("groupingTreeControlButton")
+        self.before_expand_all_button.setToolTip("Expand all folders in Before")
+        self.before_expand_all_button.setEnabled(False)
+        self.before_collapse_all_button = QPushButton("Collapse all")
+        self.before_collapse_all_button.setObjectName("groupingTreeControlButton")
+        self.before_collapse_all_button.setToolTip("Collapse all folders in Before")
+        self.before_collapse_all_button.setEnabled(False)
 
         self.after_panel = QFrame()
         self.after_panel.setObjectName("groupingAfterPanel")
@@ -542,29 +803,59 @@ class GroupingStepWidget(QWidget):
         self.preview_tree.setColumnCount(1)
         self.preview_tree.setHeaderHidden(True)
         self.preview_tree.setRootIsDecorated(True)
+        self.preview_tree.setItemsExpandable(True)
         self.preview_tree.setAlternatingRowColors(False)
-        self.preview_tree.setIndentation(14)
+        self.preview_tree.setIndentation(20)
         self.preview_tree.setUniformRowHeights(True)
         self.preview_tree.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.preview_tree.setIconSize(QSize(22, 22))
         self.preview_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._after_tree_branch_style = GroupingTreeBranchStyle()
+        self._after_tree_branch_style.setParent(self.preview_tree)
+        self.preview_tree.setStyle(self._after_tree_branch_style)
+        self.after_expand_all_button = QPushButton("Expand all")
+        self.after_expand_all_button.setObjectName("groupingTreeControlButton")
+        self.after_expand_all_button.setToolTip("Expand all folders in After")
+        self.after_expand_all_button.setEnabled(False)
+        self.after_collapse_all_button = QPushButton("Collapse all")
+        self.after_collapse_all_button.setObjectName("groupingTreeControlButton")
+        self.after_collapse_all_button.setToolTip("Collapse all folders in After")
+        self.after_collapse_all_button.setEnabled(False)
+
+        self._tree_expansion_timers: dict[QTreeWidget, QTimer] = {}
+        self._tree_expansion_stacks: dict[QTreeWidget, list[QTreeWidgetItem]] = {}
+        self._tree_expansion_targets: dict[QTreeWidget, bool] = {}
+        for tree in (self.before_tree, self.preview_tree):
+            timer = QTimer(self)
+            timer.setInterval(0)
+            timer.timeout.connect(
+                lambda tree=tree: self._process_tree_expansion_batch(tree)
+            )
+            self._tree_expansion_timers[tree] = timer
 
         self.preview_panel = QFrame()
         self.preview_panel.setObjectName("groupingPreviewPanel")
         self.preview_panel_header = QLabel("Preview")
         self.preview_panel_header.setObjectName("groupingTreeHeader")
         self.preview_pane_stack = QStackedWidget()
-        self.preview_hint_label = QLabel("Select a photo or folder to preview")
+        self.preview_hint_label = QLabel("Select a photo, video, or folder to preview")
         self.preview_hint_label.setObjectName("groupingPreviewHint")
         self.preview_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.large_preview_view = ZoomableImageView()
+        self.large_preview_view = SynchronizedImageViewer()
+        self.large_preview_view.configure_toolbar(show_view_modes=False)
         self.large_preview_view.setObjectName("groupingLargePreview")
         self.large_preview_name = QLabel()
         self.large_preview_name.setObjectName("groupingSelectionName")
         self.large_preview_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.large_preview_name.setWordWrap(True)
+        self.preview_trash_button = QPushButton("🗑️")
+        self.preview_trash_button.setObjectName("groupingPreviewTrashButton")
+        self.preview_trash_button.setToolTip(
+            "Move the current image to Trash now (Delete / Backspace)"
+        )
+        self.preview_trash_button.setEnabled(False)
         self.folder_preview_page = QWidget()
         self.folder_preview_title = QLabel()
         self.folder_preview_title.setObjectName("groupingSelectionName")
@@ -572,19 +863,24 @@ class GroupingStepWidget(QWidget):
         self.folder_preview_meta = QLabel()
         self.folder_preview_meta.setObjectName("groupingPathValue")
         self.folder_preview_meta.setWordWrap(True)
-        self.folder_preview_grid = QListWidget()
+        self.folder_preview_grid = QListView()
         self.folder_preview_grid.setObjectName("groupingFolderPreviewGrid")
         self.folder_preview_grid.setViewMode(QListView.ViewMode.IconMode)
         self.folder_preview_grid.setResizeMode(QListView.ResizeMode.Adjust)
+        self.folder_preview_grid.setLayoutMode(QListView.LayoutMode.Batched)
+        self.folder_preview_grid.setBatchSize(UI_POPULATION_CHUNK_SIZE)
         self.folder_preview_grid.setMovement(QListView.Movement.Static)
         self.folder_preview_grid.setWrapping(True)
         self.folder_preview_grid.setSpacing(10)
         self.folder_preview_grid.setIconSize(QSize(120, 120))
+        self.folder_preview_grid.setGridSize(QSize(150, 165))
         self.folder_preview_grid.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
-        self.folder_preview_grid.setUniformItemSizes(False)
+        self.folder_preview_grid.setUniformItemSizes(True)
         self.folder_preview_grid.setWordWrap(True)
+        self._folder_preview_model = FolderPreviewListModel(self)
+        self.folder_preview_grid.setModel(self._folder_preview_model)
 
         self.stacked = QStackedWidget()
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -622,12 +918,9 @@ class GroupingStepWidget(QWidget):
         self.open_preview_button.setEnabled(False)
         self.open_preview_button.setVisible(False)
 
-        self.shortcut_strip = WorkflowShortcutStrip(ORGANIZE_SHORTCUTS)
-
         self.output_root_label = QLabel()
         self.output_root_label.setVisible(False)
         self.preview_label = self.loading_label
-        self.preview_stats_label = self.stats_label
         self.preview_image_label = self.large_preview_view
 
     def _create_layout(self) -> None:
@@ -636,7 +929,7 @@ class GroupingStepWidget(QWidget):
         root.setSpacing(0)
 
         tb = QHBoxLayout(self.top_bar)
-        tb.setContentsMargins(16, 10, 16, 10)
+        tb.setContentsMargins(16, 8, 16, 8)
         tb.setSpacing(6)
         tb.addWidget(self.back_button)
         tb.addWidget(self.folder_button)
@@ -649,12 +942,7 @@ class GroupingStepWidget(QWidget):
             tb.addWidget(self._mode_buttons[value])
         tb.addWidget(self._location_depth_widget)
         tb.addSpacing(10)
-        tb.addWidget(self.stats_label)
         tb.addStretch(1)
-        tb.addWidget(self.skip_button)
-        tb.addSpacing(6)
-        tb.addWidget(self.primary_button)
-
         root.addWidget(self.top_bar)
         self._add_hsep(root, "groupingBarSep")
 
@@ -681,6 +969,8 @@ class GroupingStepWidget(QWidget):
         bh.addWidget(self.before_header)
         bh.addWidget(self.before_desc)
         bh.addStretch(1)
+        bh.addWidget(self.before_expand_all_button)
+        bh.addWidget(self.before_collapse_all_button)
         bl.addLayout(bh)
         self._add_hsep(bl, "groupingPanelSep")
         bl.addWidget(self.before_tree, 1)
@@ -694,6 +984,8 @@ class GroupingStepWidget(QWidget):
         ah.addWidget(self.after_header)
         ah.addWidget(self.after_desc)
         ah.addStretch(1)
+        ah.addWidget(self.after_expand_all_button)
+        ah.addWidget(self.after_collapse_all_button)
         al.addLayout(ah)
         self._add_hsep(al, "groupingPanelSep")
         al.addWidget(self.preview_tree, 1)
@@ -714,7 +1006,10 @@ class GroupingStepWidget(QWidget):
         img_layout.setContentsMargins(12, 12, 12, 10)
         img_layout.setSpacing(8)
         img_layout.addWidget(self.large_preview_view, 1)
-        img_layout.addWidget(self.large_preview_name)
+        preview_caption = QHBoxLayout()
+        preview_caption.addWidget(self.large_preview_name, 1)
+        preview_caption.addWidget(self.preview_trash_button)
+        img_layout.addLayout(preview_caption)
         folder_layout = QVBoxLayout(self.folder_preview_page)
         folder_layout.setContentsMargins(12, 12, 12, 10)
         folder_layout.setSpacing(8)
@@ -749,12 +1044,12 @@ class GroupingStepWidget(QWidget):
         info_col.addWidget(self.preview_selection_meta)
         bb.addLayout(info_col)
         bb.addStretch(1)
-        bb.addWidget(self.shortcut_strip)
         loading_col = QVBoxLayout()
         loading_col.setSpacing(4)
         loading_col.addWidget(self.loading_label)
         loading_col.addWidget(self.loading_bar)
         bb.addLayout(loading_col)
+        bb.addWidget(self.primary_button)
 
         root.addWidget(self.bottom_bar)
 
@@ -767,9 +1062,8 @@ class GroupingStepWidget(QWidget):
 
     def _connect_signals(self) -> None:
         self._mode_button_group.buttonClicked.connect(self._emit_mode_changed)
-        self.primary_button.clicked.connect(self._emit_create_requested)
+        self.primary_button.clicked.connect(self._emit_apply_requested)
         self.back_button.clicked.connect(self.back_requested.emit)
-        self.skip_button.clicked.connect(self.skip_requested.emit)
         self.folder_button.clicked.connect(self.select_folder_requested.emit)
         self._empty_cta.clicked.connect(self.select_folder_requested.emit)
         self.preview_tree.currentItemChanged.connect(self._handle_after_item_changed)
@@ -782,25 +1076,43 @@ class GroupingStepWidget(QWidget):
         self.preview_tree.customContextMenuRequested.connect(
             self._show_after_context_menu
         )
-        self.folder_preview_grid.itemActivated.connect(
+        self.folder_preview_grid.activated.connect(
             self._handle_folder_preview_item_activated
         )
-        self.folder_preview_grid.itemClicked.connect(
+        self.folder_preview_grid.clicked.connect(
             self._handle_folder_preview_item_activated
+        )
+        self.folder_preview_grid.verticalScrollBar().valueChanged.connect(
+            self._schedule_folder_preview_thumbnails
+        )
+        self.preview_trash_button.clicked.connect(self._trash_current_preview)
+        self.before_expand_all_button.clicked.connect(
+            lambda: self._set_all_tree_folders_expanded(self.before_tree, True)
+        )
+        self.before_collapse_all_button.clicked.connect(
+            lambda: self._set_all_tree_folders_expanded(self.before_tree, False)
+        )
+        self.after_expand_all_button.clicked.connect(
+            lambda: self._set_all_tree_folders_expanded(self.preview_tree, True)
+        )
+        self.after_collapse_all_button.clicked.connect(
+            lambda: self._set_all_tree_folders_expanded(self.preview_tree, False)
         )
         self._location_depth_group.buttonClicked.connect(
             self._on_location_depth_changed
         )
         self._depth_debounce.timeout.connect(self._fire_depth_change)
+        self.before_tree.installEventFilter(self)
+        self.preview_tree.installEventFilter(self)
 
     def _shortcut_item(self) -> QTreeWidgetItem | None:
         focus = QApplication.focusWidget()
-        if focus is None or not (
-            focus is self.preview_tree or self.preview_tree.isAncestorOf(focus)
-        ):
+        if focus is None or not (focus is self or self.isAncestorOf(focus)):
             return None
         if self.preview_tree.state() == QAbstractItemView.State.EditingState:
             return None
+        if focus is self.before_tree or self.before_tree.isAncestorOf(focus):
+            return self.before_tree.currentItem()
         return self.preview_tree.currentItem()
 
     def _shortcut_set_mode(self, mode: str) -> None:
@@ -825,14 +1137,19 @@ class GroupingStepWidget(QWidget):
         if item is not None:
             self._create_subgroup_from_item(item)
 
-    def _shortcut_stage_remove(self) -> None:
+    def _shortcut_toggle_delete(self) -> None:
         item = self._shortcut_item()
         if item is not None:
-            self._delete_item(item)
+            self._toggle_item_deletion_marks(item)
+
+    def _shortcut_trash_now(self) -> None:
+        item = self._shortcut_item()
+        if item is not None:
+            self._request_trash_for_item(item)
 
     def _shortcut_apply(self) -> None:
         if self.primary_button.isEnabled():
-            self._emit_create_requested()
+            self._emit_apply_requested()
 
     def _on_location_depth_changed(self) -> None:
         self._depth_debounce.start(600)
@@ -853,21 +1170,15 @@ class GroupingStepWidget(QWidget):
                 return val
         return 3
 
-    def _emit_create_requested(self) -> None:
-        effective_plan = self.get_effective_plan()
-        if not self._confirm_grouping_actions(effective_plan):
-            return
-        all_source_paths = [
-            p
-            for g in (effective_plan.groups if effective_plan else [])
-            for p in g.source_paths
-        ] + (effective_plan.unassigned_paths if effective_plan else [])
-        self._check_and_handle_companion_preference(all_source_paths)
-        self.create_requested.emit(
-            self.current_mode(),
-            self.get_group_name_overrides(),
-            effective_plan,
-        )
+    def _emit_apply_requested(self) -> None:
+        self.apply_requested.emit()
+
+    def prepare_plan_for_apply(self, plan: GroupingPlan) -> None:
+        """Resolve companion-file handling before a shared workflow apply."""
+        source_paths = [
+            path for group in plan.groups for path in group.source_paths
+        ] + list(plan.unassigned_paths)
+        self._check_and_handle_companion_preference(source_paths)
 
     def _check_and_handle_companion_preference(self, source_paths) -> None:
         """Show dialog if companion files (.xmp / same-stem images) exist and preference not set."""
@@ -956,12 +1267,12 @@ class GroupingStepWidget(QWidget):
             self.after_desc.setText(text)
 
     def set_busy(self, busy: bool) -> None:
-        self.primary_button.setEnabled(not busy and self._current_plan is not None)
+        self._busy = busy
+        self._update_primary_action_state()
         for btn in self._mode_buttons.values():
             btn.setEnabled(not busy and self.has_source_folder())
         for btn in self._location_depth_buttons.values():
             btn.setEnabled(not busy and self.has_source_folder())
-        self.skip_button.setEnabled(not busy and self.has_source_folder())
         self.folder_button.setEnabled(not busy)
         self.back_button.setEnabled(not busy)
         self.primary_button.setText("Applying…" if busy else "Review, then Apply")
@@ -969,7 +1280,76 @@ class GroupingStepWidget(QWidget):
     def set_back_visible(self, visible: bool) -> None:
         self.back_button.setVisible(visible)
 
+    def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
+        """Use the application-wide deletion state as Organize's source of truth."""
+        self._is_marked_func = func
+        self.refresh_deletion_state()
+
+    def set_has_any_marked_func(self, func: Callable[[], bool]) -> None:
+        """Use shared deletion state to expose Organize's Apply action."""
+        self._has_any_marked_func = func
+        self._update_primary_action_state()
+
+    def refresh_deletion_state(self) -> None:
+        """Refresh mark presentation without rebuilding either tree or its icons."""
+        if self._current_plan is not None:
+            self._update_stats()
+        for path, item in self._before_file_items_by_path.items():
+            self._apply_deletion_presentation(item, path, editable=False)
+        for path, item in self._after_file_items_by_path.items():
+            self._apply_deletion_presentation(item, path, editable=True)
+        self._folder_preview_model.refresh_deletion_state()
+        current = self._current_preview_source_path
+        if current:
+            display_name = self._preview_deletion_display_name(current)
+            self.large_preview_name.setText(display_name)
+            self.preview_selection_label.setText(display_name)
+            self._apply_preview_deletion_style(current)
+
+    def remove_deleted_paths(self, paths: Iterable[str]) -> None:
+        """Remove paths only after the application confirms they reached Trash."""
+        self._remove_deleted_paths_from_state(paths)
+
+    def _deletion_display_name(self, path: str) -> str:
+        name = self._display_name_for_source(path)
+        return f"{name} (DELETED)" if self._is_marked_func(path) else name
+
+    def _preview_deletion_display_name(self, path: str) -> str:
+        name = os.path.basename(path)
+        return f"{name} (DELETED)" if self._is_marked_func(path) else name
+
+    def _apply_preview_deletion_style(self, path: str) -> None:
+        color = "#FFB366" if self._is_marked_func(path) else ""
+        style = f"color: {color};" if color else ""
+        self.large_preview_name.setStyleSheet(style)
+        self.preview_selection_label.setStyleSheet(style)
+
+    def _apply_deletion_presentation(
+        self, item: QTreeWidgetItem, path: str, *, editable: bool
+    ) -> None:
+        was_ignoring = self._ignore_preview_item_change
+        self._ignore_preview_item_change = True
+        try:
+            if editable:
+                item.setData(
+                    0,
+                    Qt.ItemDataRole.EditRole,
+                    self._display_name_for_source(path),
+                )
+            item.setText(0, self._deletion_display_name(path))
+            item.setForeground(
+                0,
+                QBrush(
+                    QColor("#FFB366")
+                    if self._is_marked_func(path)
+                    else QApplication.palette().text().color()
+                ),
+            )
+        finally:
+            self._ignore_preview_item_change = was_ignoring
+
     def set_source_folder(self, folder_path: str | None) -> None:
+        self._folder_validation_request_id += 1
         self._source_root = folder_path
         has_folder = bool(folder_path)
         if has_folder:
@@ -987,26 +1367,26 @@ class GroupingStepWidget(QWidget):
 
         for btn in self._mode_buttons.values():
             btn.setEnabled(has_folder)
-        self.skip_button.setEnabled(has_folder)
-        self.primary_button.setEnabled(has_folder and self._current_plan is not None)
         if not has_folder:
+            self._cancel_all_tree_expansion_operations()
             self._current_preview_source_path = None
             self.before_tree.clear()
             self.preview_tree.clear()
+            self._update_tree_control_buttons(self.before_tree)
+            self._update_tree_control_buttons(self.preview_tree)
             self._current_plan = None
             self._current_output_root = ""
             self._editable_groups = []
             self._editable_unassigned = []
             self._editable_skipped = []
-            self._editable_deleted = []
             self._file_name_overrides = {}
             self._original_group_labels_by_path = {}
             self._original_group_labels_by_group_id = {}
             self._sticky_empty_group_ids.clear()
-            self.stats_label.setVisible(False)
             self.loading_label.setText("Select a folder to start.")
             self.loading_bar.setVisible(False)
             self._clear_selected_preview()
+        self._update_primary_action_state()
 
     def has_source_folder(self) -> bool:
         return self.folder_path_label.text() != "No folder selected"
@@ -1045,7 +1425,6 @@ class GroupingStepWidget(QWidget):
         ]
         self._editable_unassigned = list(getattr(plan, "unassigned_paths", []))
         self._editable_skipped = list(getattr(plan, "skipped_paths", []))
-        self._editable_deleted = list(getattr(plan, "deleted_paths", []) or [])
         self._file_name_overrides = dict(getattr(plan, "file_name_overrides", {}) or {})
         self._sticky_empty_group_ids.clear()
         self._group_id_counter = self._compute_group_id_counter()
@@ -1094,10 +1473,27 @@ class GroupingStepWidget(QWidget):
             skipped_paths=list(self._editable_skipped),
             output_root=self._current_output_root,
             file_name_overrides=dict(self._file_name_overrides),
-            deleted_paths=list(self._editable_deleted),
+            deleted_paths=[],
             filesystem_inventory_complete=True,
             source_root=self._source_root or "",
+            filesystem_paths=set(
+                getattr(self._current_plan, "filesystem_paths", set())
+                if self._current_plan is not None
+                else set()
+            ),
+            filesystem_directories=set(
+                getattr(self._current_plan, "filesystem_directories", set())
+                if self._current_plan is not None
+                else set()
+            ),
         )
+
+    def known_directory_paths(self) -> set[str]:
+        """Return the worker-inventoried directories without touching the filesystem."""
+
+        if self._current_plan is None:
+            return set()
+        return set(getattr(self._current_plan, "filesystem_directories", set()))
 
     def has_unsaved_grouping_edits(self) -> bool:
         if self._current_plan is None:
@@ -1107,8 +1503,40 @@ class GroupingStepWidget(QWidget):
             self._current_plan
         )
 
+    def discard_unsaved_grouping_edits(self) -> None:
+        """Restore the editable preview to the worker-produced baseline plan."""
+        if self._current_plan is None:
+            return
+        baseline = copy.deepcopy(self._current_plan)
+        self.set_preview_plan(baseline, self._current_output_root)
+
     def pending_grouping_action_lines(self) -> list[str]:
         return self._build_action_lines(self.get_effective_plan())
+
+    def pending_grouping_deletion_paths(
+        self, action_lines: Iterable[str] | None = None
+    ) -> tuple[list[str], list[str]]:
+        """Return explicit deletion targets and folders removed after file moves."""
+        delete_paths: list[str] = []
+        removed_folders: list[str] = []
+        prefixes = (
+            ("Delete folder ", delete_paths),
+            ("Delete file ", delete_paths),
+            ("Remove empty folder ", removed_folders),
+        )
+        for line in action_lines or self.pending_grouping_action_lines():
+            for prefix, destination in prefixes:
+                if not line.startswith(prefix):
+                    continue
+                displayed_path = line[len(prefix) :].strip()
+                path = (
+                    displayed_path
+                    if os.path.isabs(displayed_path)
+                    else os.path.join(self._source_root or "", displayed_path)
+                )
+                destination.append(os.path.normpath(path))
+                break
+        return list(dict.fromkeys(delete_paths)), list(dict.fromkeys(removed_folders))
 
     def set_loading_state(
         self, message: str, busy: bool, progress: int | None = None
@@ -1162,18 +1590,37 @@ class GroupingStepWidget(QWidget):
             ),
         )
 
+    @bulk_ui_update()
     def _refresh_preview_trees(self, preserve_selection: bool = True) -> None:
         start_time = time.perf_counter()
+        self._cancel_all_tree_expansion_operations()
+        source_path_count = len(self._all_source_paths())
+        self._tree_population_processed = 0
+        self._tree_population_total = source_path_count * 2
         logger.info(
             "Organize tree refresh start: preserve_selection=%s editable_groups=%d all_source_paths=%d",
             preserve_selection,
             len(self._editable_groups),
-            len(self._all_source_paths()),
+            source_path_count,
         )
         selection_state = (
             self._capture_selection_state() if preserve_selection else None
         )
         self._update_stats()
+        # These indexes exist only for this render. Editing remains authoritative
+        # in the groups/buckets; a later refresh always builds a fresh snapshot.
+        self._tree_groups_by_path = {}
+        self._tree_groups_by_label = {}
+        self._tree_buckets_by_path = dict.fromkeys(self._editable_skipped, ITEM_SKIPPED)
+        self._tree_buckets_by_path.update(
+            dict.fromkeys(self._editable_unassigned, ITEM_UNASSIGNED)
+        )
+        for group in self._editable_groups:
+            self._tree_groups_by_label.setdefault(
+                self._normalize_relative_path(group.group_label), group
+            )
+            for path in group.source_paths:
+                self._tree_groups_by_path.setdefault(path, group)
         self.before_tree.setUpdatesEnabled(False)
         self.preview_tree.setUpdatesEnabled(False)
         try:
@@ -1184,10 +1631,15 @@ class GroupingStepWidget(QWidget):
             self._render_after_tree(selection_state)
             after_duration = time.perf_counter() - after_start
         finally:
+            self._tree_groups_by_path = None
+            self._tree_groups_by_label = None
+            self._tree_buckets_by_path = None
             self.before_tree.setUpdatesEnabled(True)
             self.preview_tree.setUpdatesEnabled(True)
             self.before_tree.viewport().update()
             self.preview_tree.viewport().update()
+            self._tree_population_processed = 0
+            self._tree_population_total = 0
         logger.info(
             "Organize tree refresh complete in %.3fs (before=%.3fs after=%.3fs)",
             time.perf_counter() - start_time,
@@ -1196,18 +1648,54 @@ class GroupingStepWidget(QWidget):
         )
 
     def _update_stats(self) -> None:
-        group_count = len(self._editable_groups)
-        group_label = "folder" if group_count == 1 else "folders"
-        removal_count = len(self._editable_deleted)
-        removal_label = "removal" if removal_count == 1 else "removals"
-        self.stats_label.setText(
-            f"{group_count} {group_label}  ·  {removal_count} staged {removal_label}"
-        )
-        self.stats_label.setVisible(True)
         self.loading_label.clear()
         self.loading_bar.setVisible(False)
-        self.primary_button.setEnabled(
-            self.has_source_folder() and self._current_plan is not None
+        self._update_primary_action_state()
+
+    def _update_primary_action_state(self) -> None:
+        has_actions = self._has_pending_grouping_actions()
+        self.primary_button.setVisible(self._busy or has_actions)
+        self.primary_button.setEnabled(not self._busy and has_actions)
+
+    def _has_pending_grouping_actions(self) -> bool:
+        """Return whether applying the effective plan would mutate the filesystem."""
+        if self._has_any_marked_func():
+            return True
+        if self._current_plan is None or not self.has_source_folder():
+            return False
+
+        plan = self.get_effective_plan()
+        if plan.deleted_paths:
+            return True
+
+        output_root = self._current_output_root or self._source_root or ""
+        for group in plan.groups:
+            destination_dir = os.path.join(
+                output_root,
+                self._normalize_relative_path(group.group_label),
+            )
+            for source_path in group.source_paths:
+                destination_path = os.path.join(
+                    destination_dir,
+                    plan.filename_for_path(source_path),
+                )
+                if os.path.normcase(os.path.normpath(source_path)) != os.path.normcase(
+                    os.path.normpath(destination_path)
+                ):
+                    return True
+
+        unassigned_dir = os.path.join(output_root, "Unassigned")
+        return any(
+            os.path.normcase(os.path.normpath(source_path))
+            != os.path.normcase(
+                os.path.normpath(
+                    os.path.join(
+                        unassigned_dir,
+                        plan.filename_for_path(source_path),
+                    )
+                )
+            )
+            for source_path in plan.unassigned_paths
         )
 
     def _capture_selection_state(self) -> dict[str, object]:
@@ -1453,6 +1941,8 @@ class GroupingStepWidget(QWidget):
                 self._set_tree_item_icon(file_item, source_path)
                 group_item.addChild(file_item)
                 self._after_file_items_by_path[source_path] = file_item
+                self._apply_deletion_presentation(file_item, source_path, editable=True)
+                self._note_tree_item_populated()
 
         self._add_bucket_item(
             root_item,
@@ -1471,7 +1961,11 @@ class GroupingStepWidget(QWidget):
             self._source_root or self._current_output_root,
         )
 
-        self.preview_tree.expandAll()
+        if len(self._after_file_items_by_path) > LARGE_FOLDER_THRESHOLD:
+            root_item.setExpanded(True)
+        else:
+            self.preview_tree.expandAll()
+        self._update_tree_control_buttons(self.preview_tree)
         self._ignore_preview_item_change = False
         self._restore_selection_state(selection_state)
         logger.info(
@@ -1532,6 +2026,21 @@ class GroupingStepWidget(QWidget):
             self._set_tree_item_icon(file_item, source_path)
             bucket_item.addChild(file_item)
             self._after_file_items_by_path[source_path] = file_item
+            self._apply_deletion_presentation(file_item, source_path, editable=True)
+            self._note_tree_item_populated()
+
+    def _note_tree_item_populated(self) -> None:
+        self._tree_population_processed = (
+            getattr(self, "_tree_population_processed", 0) + 1
+        )
+        total = getattr(self, "_tree_population_total", 0)
+        cooperative_ui_yield(
+            self._tree_population_processed,
+            total,
+            progress_callback=lambda processed, count: self.loading_label.setText(
+                f"Building folder preview: {processed}/{count}..."
+            ),
+        )
 
     def _render_before_tree(self) -> None:
         start_time = time.perf_counter()
@@ -1626,8 +2135,14 @@ class GroupingStepWidget(QWidget):
             self._set_tree_item_icon(file_item, source_path)
             parent_item.addChild(file_item)
             self._before_file_items_by_path[source_path] = file_item
+            self._apply_deletion_presentation(file_item, source_path, editable=False)
+            self._note_tree_item_populated()
 
-        self.before_tree.expandAll()
+        if len(self._before_file_items_by_path) > LARGE_FOLDER_THRESHOLD:
+            root_item.setExpanded(True)
+        else:
+            self.before_tree.expandAll()
+        self._update_tree_control_buttons(self.before_tree)
         logger.info(
             "Organize before tree built in %.3fs (files=%d dirs=%d)",
             time.perf_counter() - start_time,
@@ -1658,7 +2173,10 @@ class GroupingStepWidget(QWidget):
             source_path = self._item_source_path(item)
             if not source_path:
                 return
-            new_filename = self._normalize_filename(item.text(0), source_path)
+            edited_text = item.text(0)
+            if self._is_marked_func(source_path) and edited_text.endswith(" (DELETED)"):
+                edited_text = edited_text[: -len(" (DELETED)")]
+            new_filename = self._normalize_filename(edited_text, source_path)
             if new_filename == os.path.basename(source_path):
                 self._file_name_overrides.pop(source_path, None)
             else:
@@ -1759,6 +2277,10 @@ class GroupingStepWidget(QWidget):
         return self._common_relative_directory_for_paths(group.source_paths)
 
     def _match_relative_path_for_after_directory(self, relative_path: str) -> str:
+        groups = getattr(self, "_tree_groups_by_label", None)
+        if groups is not None:
+            group = groups.get(relative_path)
+            return self._match_relative_path_for_group(group) if group else ""
         for group in self._editable_groups:
             normalized_label = self._normalize_relative_path(group.group_label)
             if normalized_label == relative_path:
@@ -1827,12 +2349,19 @@ class GroupingStepWidget(QWidget):
         return os.path.join(output_root, normalized) if normalized else output_root
 
     def _group_id_for_path(self, source_path: str) -> str | None:
+        groups = getattr(self, "_tree_groups_by_path", None)
+        if groups is not None:
+            group = groups.get(source_path)
+            return str(group.group_id) if group else None
         for group in self._editable_groups:
             if source_path in group.source_paths:
                 return str(group.group_id)
         return None
 
     def _bucket_for_path(self, source_path: str) -> str | None:
+        buckets = getattr(self, "_tree_buckets_by_path", None)
+        if buckets is not None:
+            return buckets.get(source_path)
         if source_path in self._editable_unassigned:
             return ITEM_UNASSIGNED
         if source_path in self._editable_skipped:
@@ -1841,6 +2370,20 @@ class GroupingStepWidget(QWidget):
 
     def _projected_path_for_source(self, source_path: str) -> str:
         filename = self._display_name_for_source(source_path)
+        groups = getattr(self, "_tree_groups_by_path", None)
+        if groups is not None:
+            group = groups.get(source_path)
+            if group is not None:
+                return os.path.join(
+                    self._projected_directory_path(group.group_label), filename
+                )
+            if self._bucket_for_path(source_path) == ITEM_UNASSIGNED:
+                return os.path.join(
+                    self._current_output_root or self._source_root or "",
+                    "Unassigned",
+                    filename,
+                )
+            return source_path
         for group in self._editable_groups:
             if source_path in group.source_paths:
                 return os.path.join(
@@ -1872,6 +2415,10 @@ class GroupingStepWidget(QWidget):
                 icon = get_icon(source_path)
         item.setIcon(0, icon or self._file_icon)
 
+    @staticmethod
+    def _is_previewable_media_path(source_path: str) -> bool:
+        return is_image_extension(source_path) or is_video_extension(source_path)
+
     def visible_thumbnail_paths(
         self,
         limit: int = THUMBNAIL_PRELOAD_BATCH_SIZE
@@ -1897,7 +2444,7 @@ class GroupingStepWidget(QWidget):
             max_inspected = max(limit * 4, limit)
             while item is not None and len(paths) < limit and inspected < max_inspected:
                 source_path = self._item_source_path(item)
-                if source_path:
+                if source_path and self._is_previewable_media_path(source_path):
                     paths.append(source_path)
                 item = tree.itemBelow(item)
                 inspected += 1
@@ -1907,28 +2454,36 @@ class GroupingStepWidget(QWidget):
             if self.preview_pane_stack.currentIndex() != PREVIEW_PAGE_FOLDER:
                 return []
             grid = self.folder_preview_grid
-            viewport_rect = grid.viewport().rect()
-            margin = max(0, viewport_rect.height())
-            preload_rect = viewport_rect.adjusted(0, -margin, 0, margin)
-            visible_paths: list[str] = []
-            fallback_paths: list[str] = []
-            for index in range(grid.count()):
-                item = grid.item(index)
-                if item is None:
-                    continue
-                source_path = item.data(Qt.ItemDataRole.UserRole)
-                if not source_path:
-                    continue
-                source_path = str(source_path)
-                if len(fallback_paths) < limit:
-                    fallback_paths.append(source_path)
-                if grid.visualItemRect(item).intersects(preload_rect):
-                    visible_paths.append(source_path)
-                    if len(visible_paths) >= limit:
-                        break
-            # A newly populated/offscreen widget may not have valid visual rects
-            # until the next layout pass; its first page is still the right work.
-            return visible_paths or fallback_paths
+            row_count = self._folder_preview_model.rowCount()
+            if row_count <= 0:
+                return []
+
+            viewport = grid.viewport().rect()
+            sample_points = (
+                QPoint(grid.spacing() + 1, grid.spacing() + 1),
+                QPoint(max(1, viewport.center().x()), grid.spacing() + 1),
+                QPoint(grid.spacing() + 1, max(1, viewport.center().y())),
+            )
+            visible_rows = [
+                index.row()
+                for point in sample_points
+                if (index := grid.indexAt(point)).isValid()
+            ]
+            if visible_rows:
+                first_row = min(visible_rows)
+            else:
+                scroll_bar = grid.verticalScrollBar()
+                maximum = scroll_bar.maximum()
+                ratio = scroll_bar.value() / maximum if maximum > 0 else 0.0
+                first_row = int(ratio * max(0, row_count - 1))
+            start_row = max(0, first_row - THUMBNAIL_PRELOAD_VISIBLE_MARGIN)
+            return [
+                path
+                for path in self._folder_preview_model.paths_slice(
+                    start_row, row_count - start_row
+                )
+                if self._is_previewable_media_path(path)
+            ][:limit]
 
         combined = (
             paths_for_folder_preview()
@@ -1978,6 +2533,11 @@ class GroupingStepWidget(QWidget):
         if source_path:
             self._update_selected_preview(source_path)
             self._sync_selection_to_other_tree(current, from_after=True)
+            if (
+                self._is_previewable_media_path(source_path)
+                and not self._syncing_active_image
+            ):
+                self.active_image_changed.emit(source_path)
         elif current is not None:
             self._update_folder_preview(current)
             self._sync_selection_to_other_tree(current, from_after=True)
@@ -1991,6 +2551,11 @@ class GroupingStepWidget(QWidget):
         if source_path:
             self._update_selected_preview(source_path)
             self._sync_selection_to_other_tree(current, from_after=False)
+            if (
+                self._is_previewable_media_path(source_path)
+                and not self._syncing_active_image
+            ):
+                self.active_image_changed.emit(source_path)
         elif current is not None:
             self._update_folder_preview(current)
             self._sync_selection_to_other_tree(current, from_after=False)
@@ -2007,19 +2572,51 @@ class GroupingStepWidget(QWidget):
 
     def _clear_selected_preview(self) -> None:
         self._current_preview_source_path = None
+        clear_inspection = getattr(self._parent_window, "clear_image_inspection", None)
+        if callable(clear_inspection):
+            clear_inspection(self.large_preview_view)
         self.large_preview_view.clear()
         self.large_preview_name.clear()
+        self.preview_hint_label.setText("Select a photo, video, or folder to preview")
         self.folder_preview_title.clear()
         self.folder_preview_meta.clear()
-        self.folder_preview_grid.clear()
+        self._folder_preview_model.set_paths([])
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_HINT)
+        self.preview_trash_button.setEnabled(False)
+        self.large_preview_name.setStyleSheet("")
+        self.preview_selection_label.setStyleSheet("")
         self.preview_selection_label.setVisible(False)
         self.preview_selection_meta.setVisible(False)
         self.thumb_label.clear()
         self.thumb_label.setVisible(False)
 
+    def _show_unavailable_file_preview(self, source_path: str) -> None:
+        self._current_preview_source_path = source_path
+        clear_inspection = getattr(self._parent_window, "clear_image_inspection", None)
+        if callable(clear_inspection):
+            clear_inspection(self.large_preview_view)
+        self.large_preview_view.clear()
+        self.large_preview_name.clear()
+        self.preview_hint_label.setText("Preview unavailable for this file type")
+        self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_HINT)
+        self.preview_trash_button.setEnabled(os.path.isfile(source_path))
+        display_name = self._preview_deletion_display_name(source_path)
+        self.preview_selection_label.setText(display_name)
+        self.preview_selection_label.setVisible(True)
+        self.preview_selection_meta.setText(source_path)
+        self.preview_selection_meta.setVisible(True)
+        self._apply_preview_deletion_style(source_path)
+
     def _update_selected_preview(self, source_path: str) -> None:
         start_time = time.perf_counter()
+        if not self._is_previewable_media_path(source_path):
+            self._show_unavailable_file_preview(source_path)
+            logger.debug(
+                "Organize skipped unsupported preview in %.3fs (path=%s)",
+                time.perf_counter() - start_time,
+                source_path,
+            )
+            return
         current_preview_path = self._current_preview_source_path
         self._current_preview_source_path = source_path
         existing_pixmap = self.large_preview_view.current_pixmap()
@@ -2028,9 +2625,12 @@ class GroupingStepWidget(QWidget):
             and existing_pixmap is not None
             and not existing_pixmap.isNull()
         ):
-            self.large_preview_name.setText(os.path.basename(source_path))
+            display_name = self._preview_deletion_display_name(source_path)
+            self.large_preview_name.setText(display_name)
             self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
-            self.preview_selection_label.setText(os.path.basename(source_path))
+            self.preview_trash_button.setEnabled(os.path.isfile(source_path))
+            self._apply_preview_deletion_style(source_path)
+            self.preview_selection_label.setText(display_name)
             self.preview_selection_label.setVisible(True)
             self.preview_selection_meta.setText(source_path)
             self.preview_selection_meta.setVisible(True)
@@ -2040,52 +2640,59 @@ class GroupingStepWidget(QWidget):
                 source_path,
             )
             return
-        ext = os.path.splitext(source_path)[1].lower()
-        image_pipeline = getattr(self._parent_window, "image_pipeline", None)
-        pixmap: QPixmap | None = None
-        preview_is_cached = False
-        if image_pipeline and ext in SUPPORTED_MEDIA_EXTENSIONS:
-            pixmap = image_pipeline.get_cached_preview_qpixmap(
-                source_path,
-                display_max_size=SELECTED_PREVIEW_DISPLAY_SIZE,
-                memory_only=True,
+        activate = getattr(self._parent_window, "activate_image_inspection", None)
+        if callable(activate):
+            activate(
+                self.large_preview_view,
+                [
+                    InspectionImageSpec(
+                        path=source_path,
+                        media_type="video"
+                        if is_video_extension(source_path)
+                        else "image",
+                    )
+                ],
             )
-            preview_is_cached = bool(pixmap and not pixmap.isNull())
-            if pixmap is None or pixmap.isNull():
-                pixmap = image_pipeline.get_cached_thumbnail_qpixmap(
-                    source_path,
-                    memory_only=True,
-                )
-        if pixmap and not pixmap.isNull():
-            self.large_preview_view.set_image(pixmap)
         else:
-            self.large_preview_view.setText("Loading preview…")
-        self.large_preview_name.setText(os.path.basename(source_path))
+            image_pipeline = getattr(self._parent_window, "image_pipeline", None)
+            pixmap = None
+            preview_is_cached = False
+            if image_pipeline:
+                pixmap, preview_is_cached = image_pipeline.get_immediate_review_qpixmap(
+                    source_path
+                )
+            self.large_preview_view.set_images_data(
+                [{"path": source_path, "pixmap": pixmap, "rating": 0}]
+            )
+            if not preview_is_cached:
+                request_preview = getattr(
+                    self._parent_window, "request_interactive_preview", None
+                )
+                if callable(request_preview):
+                    request_preview(source_path)
+        display_name = self._preview_deletion_display_name(source_path)
+        self.large_preview_name.setText(display_name)
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
-        self.preview_selection_label.setText(os.path.basename(source_path))
+        self.preview_trash_button.setEnabled(os.path.isfile(source_path))
+        self._apply_preview_deletion_style(source_path)
+        self.preview_selection_label.setText(display_name)
         self.preview_selection_label.setVisible(True)
         self.preview_selection_meta.setText(source_path)
         self.preview_selection_meta.setVisible(True)
-        if not preview_is_cached and self._parent_window is not None:
-            request_preview = getattr(
-                self._parent_window,
-                "request_interactive_preview",
-                None,
-            )
-            if callable(request_preview):
-                request_preview(source_path)
         logger.debug(
-            "Organize selected preview updated in %.3fs (path=%s cached_preview=%s pixmap=%s queued=%s)",
+            "Organize selected preview updated in %.3fs (path=%s)",
             time.perf_counter() - start_time,
             source_path,
-            preview_is_cached,
-            bool(pixmap and not pixmap.isNull()),
-            not preview_is_cached,
         )
 
     def handle_preview_ready(self, source_path: str) -> None:
-        """Upgrade the selected placeholder only if this result is still current."""
-        if source_path != self._current_preview_source_path:
+        """Compatibility hook; shared inspection owns preview upgrades."""
+        if (
+            source_path != self._current_preview_source_path
+            or not self._is_previewable_media_path(source_path)
+        ):
+            return
+        if callable(getattr(self._parent_window, "activate_image_inspection", None)):
             return
         image_pipeline = getattr(self._parent_window, "image_pipeline", None)
         if image_pipeline is None:
@@ -2096,10 +2703,15 @@ class GroupingStepWidget(QWidget):
             memory_only=True,
         )
         if pixmap is not None and not pixmap.isNull():
-            self.large_preview_view.set_image(pixmap)
+            self.large_preview_view.update_image_pixmap(
+                source_path, pixmap, preserve_view=True
+            )
 
     def handle_preview_failed(self, source_path: str) -> None:
-        if source_path != self._current_preview_source_path:
+        if (
+            source_path != self._current_preview_source_path
+            or not self._is_previewable_media_path(source_path)
+        ):
             return
         if not self.large_preview_view.has_image():
             self.large_preview_view.setText("Preview unavailable")
@@ -2107,6 +2719,9 @@ class GroupingStepWidget(QWidget):
     def _update_folder_preview(self, item: QTreeWidgetItem) -> None:
         start_time = time.perf_counter()
         self._current_preview_source_path = None
+        clear_inspection = getattr(self._parent_window, "clear_image_inspection", None)
+        if callable(clear_inspection):
+            clear_inspection(self.large_preview_view)
         preview_paths = self._folder_preview_paths_for_item(item)
         if not preview_paths:
             self._clear_selected_preview()
@@ -2117,47 +2732,26 @@ class GroupingStepWidget(QWidget):
             return
 
         total_preview_paths = len(preview_paths)
-        visible_preview_paths = preview_paths[:MAX_FOLDER_PREVIEW_ITEMS]
-        self.folder_preview_grid.clear()
-        for source_path in visible_preview_paths:
-            list_item = QListWidgetItem(os.path.basename(source_path))
-            list_item.setData(Qt.ItemDataRole.UserRole, source_path)
-            list_item.setToolTip(self._relative_path_for_source(source_path))
-            icon = self._cached_thumbnail_icon_for_path(source_path)
-            if icon is not None:
-                list_item.setIcon(icon)
-            else:
-                list_item.setIcon(self._file_icon)
-            self.folder_preview_grid.addItem(list_item)
+        self._folder_preview_model.set_paths(preview_paths)
 
         item_label = self._display_label_for_item(item)
         self.folder_preview_title.setText(item_label)
-        if total_preview_paths > MAX_FOLDER_PREVIEW_ITEMS:
-            meta_count = f"{total_preview_paths} item(s) · showing first {MAX_FOLDER_PREVIEW_ITEMS}"
-        else:
-            meta_count = f"{total_preview_paths} item(s)"
+        meta_count = f"{total_preview_paths} item(s)"
         self.folder_preview_meta.setText(
             f"{meta_count}\n{self._display_path_for_item(item)}"
         )
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_FOLDER)
+        self.preview_trash_button.setEnabled(False)
         self.preview_selection_label.setText(item_label)
         self.preview_selection_label.setVisible(True)
         self.preview_selection_meta.setText(meta_count)
         self.preview_selection_meta.setVisible(True)
-        if self._parent_window is not None:
-            schedule_thumbnails = getattr(
-                self._parent_window,
-                "schedule_visible_thumbnail_load",
-                None,
-            )
-            if callable(schedule_thumbnails):
-                schedule_thumbnails()
+        self._schedule_folder_preview_thumbnails()
         logger.debug(
-            "Organize folder preview updated in %.3fs (item=%s total_paths=%d visible_paths=%d)",
+            "Organize folder preview updated in %.3fs (item=%s total_paths=%d)",
             time.perf_counter() - start_time,
             item_label,
             total_preview_paths,
-            len(visible_preview_paths),
         )
 
     def _folder_preview_paths_for_item(self, item: QTreeWidgetItem | None) -> list[str]:
@@ -2187,12 +2781,17 @@ class GroupingStepWidget(QWidget):
     def _collect_descendant_source_paths(
         self, item: QTreeWidgetItem, collected_paths: list[str]
     ) -> None:
-        source_path = self._item_source_path(item)
-        if source_path:
-            collected_paths.append(source_path)
-            return
-        for index in range(item.childCount()):
-            self._collect_descendant_source_paths(item.child(index), collected_paths)
+        stack = [item]
+        while stack:
+            current = stack.pop()
+            source_path = self._item_source_path(current)
+            if source_path:
+                collected_paths.append(source_path)
+                continue
+            stack.extend(
+                current.child(index)
+                for index in range(current.childCount() - 1, -1, -1)
+            )
 
     def _cached_thumbnail_icon_for_path(self, source_path: str) -> QIcon | None:
         if self._parent_window is not None:
@@ -2253,7 +2852,9 @@ class GroupingStepWidget(QWidget):
         )
         if pixmap is None or pixmap.isNull():
             return
-        self.large_preview_view.set_image(pixmap)
+        self.large_preview_view.update_image_pixmap(
+            current_path, pixmap, preserve_view=True
+        )
         self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
 
     def _refresh_all_tree_icons_from_cache(self) -> None:
@@ -2281,18 +2882,16 @@ class GroupingStepWidget(QWidget):
     def _refresh_folder_preview_icons_from_cache(
         self, image_paths: set[str] | None = None
     ) -> None:
-        for index in range(self.folder_preview_grid.count()):
-            item = self.folder_preview_grid.item(index)
-            if item is None:
-                continue
-            source_path = item.data(Qt.ItemDataRole.UserRole)
-            if not source_path:
-                continue
-            if image_paths is not None and str(source_path) not in image_paths:
-                continue
-            icon = self._cached_thumbnail_icon_for_path(str(source_path))
-            if icon is not None:
-                item.setIcon(icon)
+        self._folder_preview_model.refresh_thumbnail_paths(image_paths)
+
+    def _schedule_folder_preview_thumbnails(self, *_args) -> None:
+        schedule_thumbnails = getattr(
+            self._parent_window,
+            "schedule_visible_thumbnail_load",
+            None,
+        )
+        if callable(schedule_thumbnails):
+            schedule_thumbnails()
 
     def _display_label_for_item(self, item: QTreeWidgetItem) -> str:
         text = item.text(0).strip()
@@ -2313,14 +2912,10 @@ class GroupingStepWidget(QWidget):
             return relative_path
         return self._source_root or ""
 
-    def _handle_folder_preview_item_activated(
-        self, item: QListWidgetItem | None
-    ) -> None:
-        if item is None:
-            return
-        source_path = item.data(Qt.ItemDataRole.UserRole)
+    def _handle_folder_preview_item_activated(self, index: QModelIndex) -> None:
+        source_path = self._folder_preview_model.path_at(index)
         if source_path:
-            self._focus_path_in_trees(str(source_path))
+            self._focus_path_in_trees(source_path)
 
     def _focus_path_in_trees(self, source_path: str) -> None:
         after_item = self._after_file_items_by_path.get(source_path)
@@ -2334,6 +2929,42 @@ class GroupingStepWidget(QWidget):
             self.before_tree.setCurrentItem(before_item)
             before_item.setSelected(True)
             self.before_tree.scrollToItem(before_item)
+
+    def focus_image(self, source_path: str) -> bool:
+        """Focus and highlight a file without clearing other selected files."""
+
+        after_item = self._after_file_items_by_path.get(source_path)
+        before_item = self._before_file_items_by_path.get(source_path)
+        if after_item is None and before_item is None:
+            return False
+
+        self._syncing_active_image = True
+        self.before_tree.blockSignals(True)
+        self.preview_tree.blockSignals(True)
+        try:
+            if after_item is not None:
+                self.preview_tree.setCurrentItem(
+                    after_item,
+                    0,
+                    QItemSelectionModel.SelectionFlag.NoUpdate,
+                )
+                after_item.setSelected(True)
+                self.preview_tree.scrollToItem(after_item)
+            if before_item is not None:
+                self.before_tree.setCurrentItem(
+                    before_item,
+                    0,
+                    QItemSelectionModel.SelectionFlag.NoUpdate,
+                )
+                before_item.setSelected(True)
+                self.before_tree.scrollToItem(before_item)
+            self._update_selected_preview(source_path)
+            self.large_preview_view.fit_in_view()
+        finally:
+            self.preview_tree.blockSignals(False)
+            self.before_tree.blockSignals(False)
+            self._syncing_active_image = False
+        return True
 
     def _show_before_context_menu(self, position: QPoint) -> None:
         item = self.before_tree.itemAt(position)
@@ -2423,15 +3054,23 @@ class GroupingStepWidget(QWidget):
         delete_actions: list[QAction] = []
         if is_after:
             delete_target_path = self._deletable_path_for_item(item)
-            if delete_target_path:
-                label = (
-                    "Delete folder"
-                    if os.path.isdir(delete_target_path)
-                    else "Delete file"
+            candidate_paths = self._preview_paths_for_item(item)
+            if candidate_paths:
+                all_marked = all(self._is_marked_func(path) for path in candidate_paths)
+                mark_action = QAction(
+                    "Unmark from Trash" if all_marked else "Mark for Trash", self
                 )
-                delete_action = QAction(label, self)
-                delete_action.triggered.connect(lambda: self._delete_item(item))
-                delete_actions.append(delete_action)
+                mark_action.triggered.connect(
+                    lambda: self._toggle_item_deletion_marks(item)
+                )
+                delete_actions.append(mark_action)
+            if delete_target_path:
+                noun = "folder" if os.path.isdir(delete_target_path) else "file"
+                trash_action = QAction(f"Move {noun} to Trash now…", self)
+                trash_action.triggered.connect(
+                    lambda: self._request_trash_for_item(item)
+                )
+                delete_actions.append(trash_action)
         if delete_actions:
             sections.append(delete_actions)
 
@@ -2667,20 +3306,20 @@ class GroupingStepWidget(QWidget):
         normalized = os.path.normpath(path)
         try:
             if os.name == "nt":
-                subprocess.run(["explorer", "/select,", normalized], check=False)
+                QProcess.startDetached("explorer", ["/select,", normalized])
             elif os.name == "posix":
                 if os.uname().sysname == "Darwin":
                     if os.path.isdir(normalized):
-                        subprocess.run(["open", normalized], check=False)
+                        QProcess.startDetached("open", [normalized])
                     else:
-                        subprocess.run(["open", "-R", normalized], check=False)
+                        QProcess.startDetached("open", ["-R", normalized])
                 else:
                     target = (
                         normalized
                         if os.path.isdir(normalized)
                         else os.path.dirname(normalized)
                     )
-                    subprocess.run(["xdg-open", target], check=False)
+                    QProcess.startDetached("xdg-open", [target])
         except Exception:
             self._show_status_message(f"Failed to reveal {path}.", 3000)
 
@@ -2690,13 +3329,13 @@ class GroupingStepWidget(QWidget):
         target = path if os.path.isdir(path) else os.path.dirname(path)
         try:
             if os.name == "posix" and os.uname().sysname == "Darwin":
-                subprocess.run(["open", "-a", "Terminal", target], check=False)
+                QProcess.startDetached("open", ["-a", "Terminal", target])
             elif os.name == "posix":
-                subprocess.run(["xdg-open", target], check=False)
+                QProcess.startDetached("xdg-open", [target])
             elif os.name == "nt":
-                subprocess.run(
-                    ["cmd", "/c", "start", "cmd.exe", "/K", f"cd /d {target}"],
-                    check=False,
+                QProcess.startDetached(
+                    "cmd",
+                    ["/c", "start", "cmd.exe", "/K", f"cd /d {target}"],
                 )
         except Exception:
             self._show_status_message(f"Failed to open terminal for {target}.", 3000)
@@ -2706,6 +3345,91 @@ class GroupingStepWidget(QWidget):
             self._parent_window.statusBar().showMessage(message, timeout)
 
     _AFTER_DESC_DEFAULT = "Drag items to move \u00b7 Double-click to rename"
+
+    def _tree_control_buttons(
+        self, tree: QTreeWidget
+    ) -> tuple[QPushButton, QPushButton]:
+        if tree is self.before_tree:
+            return self.before_expand_all_button, self.before_collapse_all_button
+        return self.after_expand_all_button, self.after_collapse_all_button
+
+    def _update_tree_control_buttons(self, tree: QTreeWidget) -> None:
+        enabled = tree.topLevelItemCount() > 0
+        for button in self._tree_control_buttons(tree):
+            button.setEnabled(enabled)
+
+    def _cancel_tree_expansion_operation(self, tree: QTreeWidget) -> None:
+        timer = self._tree_expansion_timers.get(tree)
+        if timer is not None:
+            timer.stop()
+        self._tree_expansion_stacks.pop(tree, None)
+        self._tree_expansion_targets.pop(tree, None)
+
+    def _cancel_all_tree_expansion_operations(self) -> None:
+        for tree in (self.before_tree, self.preview_tree):
+            self._cancel_tree_expansion_operation(tree)
+
+    def _tree_file_count(self, tree: QTreeWidget) -> int:
+        if tree is self.before_tree:
+            return len(self._before_file_items_by_path)
+        return len(self._after_file_items_by_path)
+
+    def _set_all_tree_folders_expanded(self, tree: QTreeWidget, expanded: bool) -> None:
+        """Expand or collapse one complete tree without freezing large folders."""
+
+        self._cancel_tree_expansion_operation(tree)
+        if tree.topLevelItemCount() <= 0:
+            self._update_tree_control_buttons(tree)
+            return
+
+        if self._tree_file_count(tree) <= LARGE_FOLDER_THRESHOLD:
+            tree.setUpdatesEnabled(False)
+            try:
+                if expanded:
+                    tree.expandAll()
+                else:
+                    tree.collapseAll()
+            finally:
+                tree.setUpdatesEnabled(True)
+                tree.viewport().update()
+            return
+
+        self._tree_expansion_stacks[tree] = [
+            tree.topLevelItem(index)
+            for index in range(tree.topLevelItemCount() - 1, -1, -1)
+            if tree.topLevelItem(index) is not None
+        ]
+        self._tree_expansion_targets[tree] = expanded
+        self._tree_expansion_timers[tree].start()
+        self._process_tree_expansion_batch(tree)
+
+    def _process_tree_expansion_batch(self, tree: QTreeWidget) -> None:
+        stack = self._tree_expansion_stacks.get(tree)
+        if stack is None:
+            self._cancel_tree_expansion_operation(tree)
+            return
+
+        expanded = self._tree_expansion_targets.get(tree, False)
+        processed = 0
+        tree.setUpdatesEnabled(False)
+        try:
+            while stack and processed < UI_POPULATION_CHUNK_SIZE:
+                item = stack.pop()
+                children = [item.child(index) for index in range(item.childCount())]
+                stack.extend(reversed(children))
+                if children:
+                    item.setExpanded(expanded)
+                processed += 1
+        except RuntimeError:
+            # A refresh can invalidate QTreeWidgetItem wrappers between timer ticks.
+            self._cancel_tree_expansion_operation(tree)
+            return
+        finally:
+            tree.setUpdatesEnabled(True)
+            tree.viewport().update()
+
+        if not stack:
+            self._cancel_tree_expansion_operation(tree)
 
     def _set_subtree_expanded(
         self, tree: QTreeWidget, item: QTreeWidgetItem, expanded: bool
@@ -3115,114 +3839,92 @@ class GroupingStepWidget(QWidget):
         self._prune_empty_groups()
         self._refresh_preview_trees()
 
-    def _delete_directory_for_item(self, item: QTreeWidgetItem) -> None:
-        directory_path = self._directory_path_for_item(item)
-        if not directory_path or not os.path.isdir(directory_path):
-            return
-        self._delete_existing_path(
-            directory_path,
-            tracked_paths=self._tracked_paths_for_directory(directory_path),
-            is_directory=True,
-        )
-
     def _delete_item(self, item: QTreeWidgetItem | None) -> None:
+        """Compatibility wrapper for the former staged-removal action."""
+        if item is not None:
+            self._toggle_item_deletion_marks(item)
+
+    def _toggle_item_deletion_marks(self, item: QTreeWidgetItem) -> None:
+        selected_paths = self._selected_preview_file_paths()
+        paths = selected_paths or self._preview_paths_for_item(item)
+        paths = list(dict.fromkeys(path for path in paths if path))
+        if not paths:
+            self._show_status_message("No files are available to mark.", 3000)
+            return
+        directory_path = self._deletable_path_for_item(item)
+        if not selected_paths and directory_path and os.path.isdir(directory_path):
+            self._start_directory_validation("mark", directory_path, paths)
+            return
+        self.toggle_deletion_marks_requested.emit(paths)
+
+    def _trash_current_preview(self) -> None:
+        path = self._current_preview_source_path
+        if path and os.path.isfile(path):
+            self.trash_requested.emit(path, [path])
+
+    def _request_trash_for_item(self, item: QTreeWidgetItem) -> None:
+        selected_paths = self._selected_preview_file_paths()
+        if selected_paths:
+            paths = list(dict.fromkeys(path for path in selected_paths if path))
+            if paths:
+                self.trash_requested.emit("", paths)
+            return
+
         target_path = self._deletable_path_for_item(item)
         if not target_path:
-            return
-
-        is_directory = os.path.isdir(target_path)
-        target_label = self._relative_display_path(target_path)
-        noun = "folder" if is_directory else "file"
-        prompt = (
-            f"Remove '{target_label}' and all of its contents from the preview? "
-            "It will be moved to trash when you apply changes."
-            if is_directory
-            else f"Remove '{target_label}' from the preview? "
-            "It will be moved to trash when you apply changes."
-        )
-        choice = QMessageBox.question(
-            self,
-            f"Delete {noun.title()}",
-            prompt,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if choice != QMessageBox.StandardButton.Yes:
-            return
-
-        self._mark_path_for_deletion(target_path, is_directory=is_directory)
-        self._show_status_message(f"Marked {target_label} for deletion.", 3000)
-
-    def _delete_existing_path(
-        self, target_path: str, *, tracked_paths: list[str], is_directory: bool
-    ) -> None:
-        target_label = self._relative_display_path(target_path)
-        noun = "Folder" if is_directory else "File"
-        prompt = (
-            f"Move '{target_label}' and all of its contents to the trash?"
-            if is_directory
-            else f"Move '{target_label}' to the trash?"
-        )
-        if tracked_paths:
-            suffix = "item" if len(tracked_paths) == 1 else "items"
-            prompt += (
-                f"\n\nThis will remove {len(tracked_paths)} tracked {suffix} "
-                "from the grouping plan."
-            )
-
-        choice = QMessageBox.question(
-            self,
-            f"Delete {noun}",
-            prompt,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if choice != QMessageBox.StandardButton.Yes:
-            return
-
-        success, message = ImageFileOperations.move_to_trash(target_path)
-        if not success:
-            QMessageBox.warning(
-                self,
-                f"Delete {noun}",
-                message or f"Failed to delete {target_path}.",
+            self._show_status_message(
+                "This preview item cannot be moved to Trash.", 3000
             )
             return
-
-        if tracked_paths:
-            self._remove_deleted_paths_from_state(tracked_paths)
-        else:
-            self._refresh_preview_trees()
-        self._show_status_message(f"Moved {target_label} to trash.", 3000)
-
-    def _mark_path_for_deletion(self, target_path: str, *, is_directory: bool) -> None:
         tracked_paths = (
             self._tracked_paths_for_directory(target_path)
-            if is_directory
+            if os.path.isdir(target_path)
             else self._tracked_paths_for_file(target_path)
         )
-        normalized_target = os.path.normcase(os.path.normpath(target_path))
-        retained_deleted: list[str] = []
-        for existing_path in self._editable_deleted:
-            normalized_existing = os.path.normcase(os.path.normpath(existing_path))
-            if normalized_existing == normalized_target:
-                continue
-            try:
-                if (
-                    os.path.commonpath([normalized_existing, normalized_target])
-                    == normalized_target
-                ):
-                    continue
-            except Exception:
-                pass
-            retained_deleted.append(existing_path)
-        retained_deleted.append(target_path)
-        self._editable_deleted = retained_deleted
+        if os.path.isdir(target_path):
+            self._start_directory_validation("trash", target_path, tracked_paths)
+            return
+        self.trash_requested.emit(target_path, tracked_paths)
 
-        if tracked_paths:
-            self._remove_deleted_paths_from_state(tracked_paths)
-        else:
-            self._refresh_preview_trees()
+    def _start_directory_validation(
+        self, operation: str, directory_path: str, represented_paths: list[str]
+    ) -> None:
+        self._folder_validation_request_id += 1
+        task = _DirectoryInventoryTask(
+            self._folder_validation_request_id,
+            operation,
+            directory_path,
+            represented_paths,
+        )
+        task.signals.completed.connect(self._handle_directory_validation)
+        self._show_status_message("Checking folder contents…", 2000)
+        self._folder_validation_pool.start(task)
+
+    def _handle_directory_validation(
+        self,
+        request_id: int,
+        operation: str,
+        directory_path: str,
+        represented_paths: object,
+        safe: bool,
+        reason: str,
+    ) -> None:
+        if request_id != self._folder_validation_request_id:
+            return
+        paths = (
+            [str(path) for path in represented_paths]
+            if isinstance(represented_paths, list)
+            else []
+        )
+        if not safe:
+            self._show_status_message(reason, 5000)
+            return
+        if operation == "mark":
+            self.toggle_deletion_marks_requested.emit(
+                list(dict.fromkeys([directory_path, *paths]))
+            )
+        elif operation == "trash":
+            self.trash_requested.emit(directory_path, paths)
 
     def _restore_paths_to_original_location(self, paths: Iterable[str]) -> None:
         path_list = [
@@ -3308,76 +4010,6 @@ class GroupingStepWidget(QWidget):
             preview,
         )
 
-    def _confirm_grouping_actions(self, plan: GroupingPlan) -> bool:
-        action_lines = self._build_action_lines(plan)
-        if not action_lines:
-            QMessageBox.information(
-                self,
-                "No Changes To Apply",
-                "There are no changes to apply in the current grouping plan.",
-            )
-            return False
-
-        move_count = sum(1 for ln in action_lines if ln.startswith("Move "))
-        rename_count = sum(1 for ln in action_lines if ln.startswith("Rename folder "))
-        delete_count = sum(1 for ln in action_lines if ln.startswith("Delete "))
-        remove_count = sum(
-            1 for ln in action_lines if ln.startswith("Remove empty folder ")
-        )
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Confirm Grouping Actions")
-        dialog.setObjectName("groupingConfirmDialog")
-        dialog.setModal(True)
-        dialog.setMinimumSize(620, 420)
-        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        make_dialog_draggable(dialog)
-
-        outer = QVBoxLayout(dialog)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        build_dialog_header("Confirm Changes", "📁", outer)
-
-        body = QVBoxLayout()
-        body.setContentsMargins(22, 16, 22, 10)
-        body.setSpacing(12)
-
-        parts: list[str] = []
-        if move_count:
-            parts.append(f"{move_count} file move(s)")
-        if rename_count:
-            parts.append(f"{rename_count} folder rename(s)")
-        if delete_count:
-            parts.append(f"{delete_count} deletion(s)")
-        if remove_count:
-            parts.append(f"{remove_count} empty folder removal(s)")
-        summary_text = "This will apply " + ", ".join(parts) + "."
-
-        summary = QLabel(summary_text)
-        summary.setObjectName("groupingConfirmMessage")
-        summary.setWordWrap(True)
-        body.addWidget(summary)
-
-        action_list = QPlainTextEdit()
-        action_list.setObjectName("groupingConfirmActionList")
-        action_list.setReadOnly(True)
-        action_list.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        action_list.setPlainText("\n".join(action_lines))
-        body.addWidget(action_list, 1)
-
-        outer.addLayout(body)
-
-        build_dialog_footer(
-            outer,
-            [
-                ("Cancel", "groupingConfirmCancelButton", dialog.reject, False),
-                ("Apply Changes", "groupingConfirmApplyButton", dialog.accept, True),
-            ],
-        )
-
-        return dialog.exec() == int(QDialog.DialogCode.Accepted)
-
     def _build_action_lines(self, plan: GroupingPlan) -> list[str]:
         lines: list[str] = []
         moving_paths: list[str] = []
@@ -3435,8 +4067,12 @@ class GroupingStepWidget(QWidget):
                 f"{os.path.relpath(destination_path, self._current_output_root or self._source_root or os.path.dirname(destination_path))}"
             )
         deleted_file_paths: list[str] = []
+        known_directories = {
+            os.path.normcase(os.path.normpath(path))
+            for path in getattr(plan, "filesystem_directories", set())
+        }
         for deleted_path in getattr(plan, "deleted_paths", []) or []:
-            if os.path.isdir(deleted_path):
+            if os.path.normcase(os.path.normpath(deleted_path)) in known_directories:
                 lines.append(
                     f"Delete folder {self._relative_display_path(deleted_path)}"
                 )
@@ -3452,18 +4088,16 @@ class GroupingStepWidget(QWidget):
         return lines
 
     def _occupied_paths_for_action_preview(self) -> set[str]:
-        root = self._current_output_root or self._source_root or ""
-        if not root or not os.path.isdir(root):
-            return set()
-        occupied: set[str] = set()
-        for current_root, _dirnames, filenames in os.walk(root):
-            for filename in filenames:
-                occupied.add(
-                    os.path.normcase(
-                        os.path.normpath(os.path.join(current_root, filename))
-                    )
-                )
-        return occupied
+        """Use the worker-prepared inventory; never walk the tree from the UI."""
+
+        prepared_paths = (
+            getattr(self._current_plan, "filesystem_paths", set())
+            if self._current_plan is not None
+            else set()
+        )
+        paths = set(prepared_paths)
+        paths.update(self._all_source_paths())
+        return {os.path.normcase(os.path.normpath(path)) for path in paths if path}
 
     def _preview_destination_path(
         self,
@@ -3492,28 +4126,102 @@ class GroupingStepWidget(QWidget):
 
     def _empty_directories_after_move(self, moving_paths: Iterable[str]) -> list[str]:
         source_root = self._source_root or ""
-        if not source_root or not os.path.isdir(source_root):
+        if not source_root:
             return []
-        moving_set = set()
+        normalized_source_root = os.path.normcase(os.path.normpath(source_root))
+        prepared_paths = (
+            set(getattr(self._current_plan, "filesystem_paths", set()))
+            if self._current_plan is not None
+            else set()
+        )
+        inventory_is_complete = bool(
+            self._current_plan is not None
+            and getattr(self._current_plan, "filesystem_inventory_complete", False)
+        )
+        if not prepared_paths and not inventory_is_complete:
+            prepared_paths = set(self._all_source_paths())
+        known_paths = {
+            os.path.normcase(os.path.normpath(path)) for path in prepared_paths if path
+        }
+        moving_set = {
+            os.path.normcase(os.path.normpath(path))
+            for path in moving_paths
+            if path
+            and (
+                not inventory_is_complete
+                or os.path.normcase(os.path.normpath(path)) in known_paths
+            )
+        }
+        if not moving_set:
+            return []
+        candidate_dirs: dict[str, str] = {}
         for path in moving_paths:
-            if path and os.path.exists(path):
-                moving_set.add(os.path.normcase(os.path.normpath(path)))
+            if not path or os.path.normcase(os.path.normpath(path)) not in moving_set:
+                continue
+            current_dir = os.path.dirname(os.path.normpath(path))
+            while current_dir:
+                normalized_dir = os.path.normcase(os.path.normpath(current_dir))
+                if normalized_dir == normalized_source_root:
+                    break
+                try:
+                    within_source = (
+                        os.path.normcase(
+                            os.path.normpath(
+                                os.path.commonpath([source_root, current_dir])
+                            )
+                        )
+                        == normalized_source_root
+                    )
+                except ValueError:
+                    within_source = False
+                if not within_source:
+                    break
+                candidate_dirs[normalized_dir] = current_dir
+                parent_dir = os.path.dirname(current_dir)
+                if parent_dir == current_dir:
+                    break
+                current_dir = parent_dir
+
+        if not candidate_dirs:
+            return []
+
+        remaining_files_by_dir: dict[str, int] = {}
+        for path in prepared_paths:
+            normalized_path = os.path.normcase(os.path.normpath(path))
+            if normalized_path in moving_set:
+                continue
+            parent_key = os.path.normcase(os.path.normpath(os.path.dirname(path)))
+            remaining_files_by_dir[parent_key] = (
+                remaining_files_by_dir.get(parent_key, 0) + 1
+            )
+
+        prepared_directories = (
+            set(getattr(self._current_plan, "filesystem_directories", set()))
+            if self._current_plan is not None
+            else set()
+        )
+        if not prepared_directories:
+            prepared_directories = {
+                os.path.dirname(path) for path in prepared_paths if path
+            }
+        child_dirs_by_parent: dict[str, set[str]] = {}
+        for directory in prepared_directories:
+            directory_key = os.path.normcase(os.path.normpath(directory))
+            parent_key = os.path.normcase(os.path.normpath(os.path.dirname(directory)))
+            child_dirs_by_parent.setdefault(parent_key, set()).add(directory_key)
+
         removable_dirs: set[str] = set()
         removable_dirs_by_key: dict[str, str] = {}
-        normalized_source_root = os.path.normcase(os.path.normpath(source_root))
-        for current_root, dirnames, filenames in os.walk(source_root, topdown=False):
-            normalized_current = os.path.normcase(os.path.normpath(current_root))
-            if normalized_current == normalized_source_root:
-                continue
-            remaining_files = any(
-                os.path.normcase(os.path.normpath(os.path.join(current_root, filename)))
-                not in moving_set
-                for filename in filenames
-            )
+        ordered_candidates = sorted(
+            candidate_dirs.items(),
+            key=lambda item: item[1].count(os.sep),
+            reverse=True,
+        )
+        for normalized_current, current_root in ordered_candidates:
+            remaining_files = bool(remaining_files_by_dir.get(normalized_current))
             remaining_children = any(
-                os.path.normcase(os.path.normpath(os.path.join(current_root, dirname)))
-                not in removable_dirs
-                for dirname in dirnames
+                child not in removable_dirs
+                for child in child_dirs_by_parent.get(normalized_current, set())
             )
             if not remaining_files and not remaining_children:
                 removable_dirs.add(normalized_current)
@@ -3533,3 +4241,86 @@ class GroupingStepWidget(QWidget):
         except Exception:
             pass
         return path
+
+    def _navigate_tree_left(self, tree: QTreeWidget) -> bool:
+        """Apply file-browser Left behavior: parent first, then collapse."""
+
+        current_item = tree.currentItem()
+        if current_item is None:
+            return False
+        if current_item.childCount() > 0 and current_item.isExpanded():
+            current_item.setExpanded(False)
+            return True
+
+        parent_item = current_item.parent()
+        if parent_item is not None:
+            tree.setCurrentItem(
+                parent_item,
+                0,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+            tree.scrollToItem(
+                parent_item,
+                QAbstractItemView.ScrollHint.EnsureVisible,
+            )
+            return True
+
+        # Keep the current root selected instead of allowing focus to drift.
+        return True
+
+    @override
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.KeyPress:
+            if obj in (self.before_tree, self.preview_tree):
+                key_event: QKeyEvent = event
+                key = key_event.key()
+                modifiers = key_event.modifiers()
+                tree: QTreeWidget = obj
+                is_unmodified = modifiers in (
+                    Qt.KeyboardModifier.NoModifier,
+                    Qt.KeyboardModifier.KeypadModifier,
+                )
+                if (
+                    key == Qt.Key.Key_Left
+                    and is_unmodified
+                    and tree.state() != QAbstractItemView.State.EditingState
+                ):
+                    return self._navigate_tree_left(tree)
+                is_up = key == Qt.Key.Key_Up
+                is_down = key == Qt.Key.Key_Down
+                if is_up or is_down:
+                    has_shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+                    has_alt = bool(modifiers & Qt.KeyboardModifier.AltModifier)
+                    if not has_shift and not has_alt:
+                        has_special = (
+                            bool(modifiers & Qt.KeyboardModifier.MetaModifier)
+                            if sys.platform == "darwin"
+                            else bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+                        )
+                        skip_deleted = not has_special
+                        current_item = tree.currentItem()
+                        if current_item is not None:
+                            candidate = current_item
+                            while True:
+                                candidate = (
+                                    tree.itemAbove(candidate)
+                                    if is_up
+                                    else tree.itemBelow(candidate)
+                                )
+                                if candidate is None:
+                                    break
+                                # If skipping is enabled, check if the candidate is marked for deletion
+                                if skip_deleted:
+                                    source_path = self._item_source_path(candidate)
+                                    if source_path and self._is_marked_func(
+                                        source_path
+                                    ):
+                                        continue
+                                # Found a valid item!
+                                tree.setCurrentItem(candidate)
+                                return True
+                            # If we reached the end of the tree and found no valid item,
+                            # consume the event to prevent selecting an invalid item.
+                            return True
+        return super().eventFilter(obj, event)

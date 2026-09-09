@@ -1,7 +1,7 @@
 import webbrowser
 import os
 import logging
-import time
+import contextlib
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -14,20 +14,19 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QComboBox,
-    QSizePolicy,
     QScrollArea,
     QListWidget,
     QListWidgetItem,
     QStyle,
     QRadioButton,
     QSlider,
-    QLineEdit,
     QPlainTextEdit,
-    QSpinBox,
     QDoubleSpinBox,
+    QButtonGroup,
+    QWidget,
 )
 from PyQt6.QtCore import Qt, QSize, QUrl
-from PyQt6.QtGui import QIcon, QDesktopServices
+from PyQt6.QtGui import QIcon, QDesktopServices, QTransform
 
 from core.app_settings import (
     get_easy_delete_blur_threshold,
@@ -35,15 +34,22 @@ from core.app_settings import (
     get_easy_delete_duplicate_distance,
     get_easy_delete_white_threshold,
     get_rotation_confirm_lossy,
+    get_show_workflow_shortcuts,
+    get_workflow_step_visibility,
     get_preview_cache_size_gb,
     get_exif_cache_size_mb,
+    MAX_EXIF_CACHE_SIZE_MB,
     set_easy_delete_blur_threshold,
     set_easy_delete_dark_threshold,
     set_easy_delete_duplicate_distance,
     set_easy_delete_white_threshold,
+    set_show_workflow_shortcuts,
+    set_workflow_step_visibility,
+    ROTATION_MODEL_DOWNLOAD_URL,
 )
 from core.runtime_paths import get_app_cache_root, get_app_log_dir, get_app_models_dir
 from core.image_processing.raw_image_processor import is_raw_file
+from core.media_utils import is_image_extension, is_video_extension
 from core.image_features.model_rotation_detector import (
     ModelRotationDetector,
     ModelNotFoundError,
@@ -54,6 +60,7 @@ from ui.dialog_components import (
     build_dialog_header,
     make_dialog_draggable,
 )
+from ui.workflow_transition import WorkflowPendingState
 
 logger = logging.getLogger(__name__)
 
@@ -90,23 +97,578 @@ class DialogManager:
         # Instance-level placeholder for non-blocking About dialog reference
         self._about_dialog_ref = None
 
+    def show_workflow_transition_dialog(
+        self,
+        source_label: str,
+        destination_label: str,
+        pending: WorkflowPendingState,
+        *,
+        switching: bool = True,
+    ) -> dict[str, str] | None:
+        """Resolve every pending category, optionally before switching workflow."""
+        deletion_entries = self._build_deletion_preview_entries(pending)
+        rotation_changes = getattr(pending, "rotation_changes", {}) or {}
+        direct_rotation_actions = bool(
+            pending.rotation_count
+            and not pending.organize_actions
+            and not deletion_entries
+        )
+        dialog = QDialog(self.parent)
+        dialog.setWindowTitle("Resolve Pending Work")
+        dialog.setObjectName("workflowTransitionDialog")
+        dialog.setProperty("hasTrash", bool(deletion_entries))
+        dialog.setModal(True)
+        dialog.setMinimumSize(760, 520)
+        if deletion_entries or rotation_changes:
+            dialog.resize(960, 720)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        make_dialog_draggable(dialog)
+
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        build_dialog_header("Review Pending Changes", "⚠", outer)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("workflowTransitionScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QFrame()
+        content.setObjectName("workflowTransitionContent")
+        scroll.setWidget(content)
+        body = QVBoxLayout(content)
+        body.setContentsMargins(28, 22, 28, 20)
+        body.setSpacing(12)
+        if switching:
+            intro_text = (
+                f"Before switching from {source_label} to {destination_label}, review "
+                "the pending work below. Nothing will change until you confirm."
+            )
+        else:
+            intro_text = (
+                f"Review the pending work from {source_label} below. "
+                "Nothing will change until you confirm."
+            )
+        intro = QLabel(intro_text)
+        intro.setObjectName("workflowTransitionIntro")
+        intro.setWordWrap(True)
+        body.addWidget(intro)
+
+        choices: dict[str, QButtonGroup] = {}
+        accepted_resolutions: dict[str, str] = {}
+        action_buttons: list[QPushButton] = []
+
+        def add_choice_card(
+            key: str,
+            title: str,
+            summary: str,
+            options: tuple[tuple[str, str], ...],
+            details: str = "",
+        ) -> None:
+            card, layout = build_card("dialogCard")
+            heading = QLabel(title)
+            heading.setObjectName("workflowTransitionSectionTitle")
+            layout.addWidget(heading)
+            description = QLabel(summary)
+            description.setObjectName("workflowTransitionDescription")
+            description.setWordWrap(True)
+            layout.addWidget(description)
+            if details:
+                preview = QPlainTextEdit()
+                preview.setObjectName("workflowTransitionActionList")
+                preview.setReadOnly(True)
+                preview.setMaximumHeight(110)
+                preview.setPlainText(details)
+                layout.addWidget(preview)
+            group = QButtonGroup(dialog)
+            group.setExclusive(True)
+            for value, label in options:
+                button = QRadioButton(label)
+                button.setObjectName("workflowTransitionChoice")
+                button.setProperty("resolution", value)
+                group.addButton(button)
+                layout.addWidget(button)
+                button.toggled.connect(update_action_buttons)
+            choices[key] = group
+            body.addWidget(card)
+
+        def selected_local_resolutions() -> dict[str, str] | None:
+            result: dict[str, str] = {}
+            for key, group in choices.items():
+                button = group.checkedButton()
+                if button is None:
+                    return None
+                result[key] = str(button.property("resolution"))
+            return result
+
+        def update_action_buttons(*_args) -> None:
+            enabled = selected_local_resolutions() is not None
+            for button in action_buttons:
+                button.setEnabled(enabled)
+
+        def accept_resolutions(trash_resolution: str | None = None) -> None:
+            resolutions = selected_local_resolutions()
+            if resolutions is None:
+                return
+            accepted_resolutions.clear()
+            accepted_resolutions.update(resolutions)
+            if trash_resolution:
+                accepted_resolutions["trash"] = trash_resolution
+            dialog.accept()
+
+        def accept_direct_resolution(key: str, value: str) -> None:
+            accepted_resolutions.clear()
+            accepted_resolutions[key] = value
+            dialog.accept()
+
+        if pending.organize_actions:
+            preview_lines = pending.organize_actions[:12]
+            if len(pending.organize_actions) > len(preview_lines):
+                preview_lines.append(
+                    f"… and {len(pending.organize_actions) - len(preview_lines)} more"
+                )
+            add_choice_card(
+                "organize",
+                "Organize changes",
+                f"{len(pending.organize_actions)} unapplied filesystem change(s).",
+                (("apply", "Apply changes"), ("discard", "Discard edits")),
+                "\n".join(preview_lines),
+            )
+        if pending.rotation_count:
+            if direct_rotation_actions:
+                rotation_heading = QLabel(
+                    f"{pending.rotation_count} confirmed rotation(s)"
+                )
+                rotation_heading.setObjectName("workflowTransitionRotationTitle")
+                body.addWidget(rotation_heading)
+                rotation_description = QLabel(
+                    "Review the photos below, then apply the rotations or discard "
+                    "the confirmed queue."
+                )
+                rotation_description.setObjectName("workflowTransitionDescription")
+                rotation_description.setWordWrap(True)
+                body.addWidget(rotation_description)
+
+                if rotation_changes:
+                    rotation_list = QListWidget()
+                    rotation_list.setObjectName("workflowTransitionRotationList")
+                    rotation_list.setIconSize(QSize(180, 130))
+                    rotation_list.setViewMode(QListWidget.ViewMode.IconMode)
+                    rotation_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+                    rotation_list.setMovement(QListWidget.Movement.Static)
+                    rotation_list.setWordWrap(True)
+                    rotation_list.setSpacing(14)
+                    rotation_list.setMinimumHeight(260)
+                    for file_path, angle in rotation_changes.items():
+                        item = QListWidgetItem()
+                        item.setSizeHint(QSize(430, 210))
+                        item.setToolTip(file_path)
+                        rotation_list.addItem(item)
+                        rotation_list.setItemWidget(
+                            item,
+                            self._rotation_comparison_widget(file_path, angle),
+                        )
+                    body.addWidget(rotation_list, 1)
+            else:
+                add_choice_card(
+                    "rotation",
+                    "Queued rotations",
+                    f"{pending.rotation_count} photo rotation(s) are queued but unapplied.",
+                    (("apply", "Apply rotations"), ("discard", "Discard queue")),
+                )
+        if deletion_entries:
+            trash_heading = QLabel(f"{len(deletion_entries)} item(s) will be removed")
+            trash_heading.setObjectName("workflowTransitionTrashTitle")
+            body.addWidget(trash_heading)
+            trash_description = QLabel(
+                "Every target is shown below. Folders include all descendants."
+            )
+            trash_description.setObjectName("workflowTransitionDescription")
+            trash_description.setWordWrap(True)
+            body.addWidget(trash_description)
+
+            list_widget = QListWidget()
+            list_widget.setObjectName("workflowTransitionTrashList")
+            list_widget.setIconSize(QSize(180, 130))
+            list_widget.setViewMode(QListWidget.ViewMode.IconMode)
+            list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
+            list_widget.setMovement(QListWidget.Movement.Static)
+            list_widget.setWordWrap(True)
+            list_widget.setSpacing(14)
+            list_widget.setMinimumHeight(260)
+            missing_thumbnail_items: dict[str, QListWidgetItem] = {}
+            for file_path, display_name, detail, is_directory in deletion_entries:
+                cached_icon = None
+                is_media = not is_directory and (
+                    is_image_extension(file_path) or is_video_extension(file_path)
+                )
+                if is_media:
+                    cached_icon = self._cached_media_icon(file_path)
+                if cached_icon is not None:
+                    icon = cached_icon
+                elif is_media:
+                    icon = self.parent.style().standardIcon(
+                        QStyle.StandardPixmap.SP_FileIcon
+                    )
+                else:
+                    icon = self._deletion_preview_icon(file_path, is_directory)
+                item = QListWidgetItem(icon, f"{display_name}\n{detail}")
+                item.setSizeHint(QSize(205, 180))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setToolTip(file_path)
+                list_widget.addItem(item)
+                if is_media and cached_icon is None:
+                    missing_thumbnail_items[file_path] = item
+            body.addWidget(list_widget, 1)
+            self._load_dialog_thumbnails(dialog, missing_thumbnail_items)
+
+        body.addStretch()
+        outer.addWidget(scroll, 1)
+
+        footer = QFrame()
+        footer.setObjectName("dialogFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(22, 10, 22, 14)
+        footer_layout.addStretch()
+        stay_button = QPushButton("Stay Here" if switching else "Keep Reviewing")
+        stay_button.setObjectName("workflowTransitionStayButton")
+        stay_button.setDefault(True)
+        stay_button.clicked.connect(dialog.reject)
+        footer_layout.addWidget(stay_button)
+        if direct_rotation_actions:
+            discard_button = QPushButton(
+                "Discard Rotations and Switch" if switching else "Discard Rotations"
+            )
+            discard_button.setObjectName("workflowTransitionRotationDiscardButton")
+            discard_button.clicked.connect(
+                lambda: accept_direct_resolution("rotation", "discard")
+            )
+            footer_layout.addWidget(discard_button)
+            apply_button = QPushButton(
+                "Apply Rotations and Switch" if switching else "Apply Rotations"
+            )
+            apply_button.setObjectName("workflowTransitionRotationApplyButton")
+            apply_button.clicked.connect(
+                lambda: accept_direct_resolution("rotation", "apply")
+            )
+            footer_layout.addWidget(apply_button)
+        elif pending.trash_paths:
+            clear_button = QPushButton(
+                "Clear Marks and Switch" if switching else "Clear Marks"
+            )
+            clear_button.setObjectName("workflowTransitionClearButton")
+            clear_button.clicked.connect(lambda: accept_resolutions("clear"))
+            footer_layout.addWidget(clear_button)
+            action_buttons.append(clear_button)
+            trash_button = QPushButton(
+                "Move to Trash and Switch" if switching else "Move to Trash"
+            )
+            trash_button.setObjectName("workflowTransitionTrashButton")
+            trash_button.clicked.connect(lambda: accept_resolutions("commit"))
+            footer_layout.addWidget(trash_button)
+            action_buttons.append(trash_button)
+        else:
+            resolve_button = QPushButton(
+                "Apply Choice and Switch" if switching else "Apply Choice"
+            )
+            resolve_button.setObjectName("workflowTransitionResolveButton")
+            resolve_button.clicked.connect(lambda: accept_resolutions())
+            footer_layout.addWidget(resolve_button)
+            action_buttons.append(resolve_button)
+        update_action_buttons()
+        outer.addWidget(footer)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dict(accepted_resolutions)
+
     def _should_apply_raw_processing(self, file_path: str) -> bool:
         """Determine if RAW processing should be applied to the given file."""
         return is_raw_file(file_path)
 
+    def _cached_thumbnail_pixmap(self, file_path: str):
+        """Read a thumbnail only from shared memory caches."""
+        try:
+            pixmap = self.parent.image_pipeline.get_cached_thumbnail_qpixmap(
+                file_path,
+                apply_orientation=True,
+                memory_only=True,
+            )
+        except Exception:
+            pixmap = None
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        return None
+
+    def _cached_review_pixmap(self, file_path: str):
+        """Use the same cache priority as workflow review previews."""
+        try:
+            pixmap = self.parent.image_pipeline.get_cached_review_qpixmap(file_path)
+        except Exception:
+            pixmap = None
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        return None
+
     def _cached_thumbnail_icon(self, file_path: str) -> QIcon:
         """Build a dialog icon without decoding media on the UI thread."""
-        pixmap = self.parent.image_pipeline.get_cached_thumbnail_qpixmap(
-            file_path,
-            memory_only=True,
-        )
-        if pixmap is not None and not pixmap.isNull():
-            return QIcon(pixmap)
+        icon = self._cached_media_icon(file_path)
+        if icon is not None:
+            return icon
         return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+    def _cached_media_icon(self, file_path: str) -> QIcon | None:
+        """Return the best memory-cached media image using workflow cache priority."""
+        icon_getter = getattr(self.parent, "get_cached_thumbnail_icon", None)
+        if callable(icon_getter):
+            icon = icon_getter(file_path)
+            if icon is not None and not icon.isNull():
+                return icon
+
+        review_getter = getattr(
+            self.parent.image_pipeline, "get_cached_review_qpixmap", None
+        )
+        if callable(review_getter):
+            pixmap = self._cached_review_pixmap(file_path)
+        else:
+            # Compatibility for lightweight contexts that only expose thumbnails.
+            pixmap = self._cached_thumbnail_pixmap(file_path)
+        if pixmap is None:
+            return None
+        return QIcon(pixmap)
+
+    def _load_dialog_thumbnails(
+        self,
+        dialog: QDialog,
+        items_by_path: dict[str, QListWidgetItem],
+    ) -> None:
+        """Load missing dialog thumbnails through the shared background pipeline."""
+        if not items_by_path:
+            return
+        loader = getattr(self.parent, "thumbnail_loader", None)
+        request_paths = getattr(loader, "request_paths", None)
+        worker_manager = getattr(self.parent, "worker_manager", None)
+        batch_ready = getattr(worker_manager, "thumbnail_session_batch_ready", None)
+        if not callable(request_paths) or batch_ready is None:
+            return
+
+        pending = dict(items_by_path)
+
+        def update_items(_session_id: str, ready_paths) -> None:
+            if not dialog.isVisible():
+                return
+            for path in ready_paths or []:
+                item = pending.get(path)
+                if item is None:
+                    continue
+                icon = self._cached_media_icon(path)
+                if icon is None:
+                    continue
+                item.setIcon(icon)
+                pending.pop(path, None)
+
+        def disconnect_loader(*_args) -> None:
+            with contextlib.suppress(TypeError, RuntimeError):
+                batch_ready.disconnect(update_items)
+
+        batch_ready.connect(update_items)
+        dialog.finished.connect(disconnect_loader)
+        request_paths(list(pending))
+
+    def _populate_media_thumbnail_gallery(
+        self,
+        dialog: QDialog,
+        list_widget: QListWidget,
+        file_paths: list[str],
+    ) -> None:
+        """Populate a complete media gallery and asynchronously fill cache misses."""
+        missing_thumbnail_items: dict[str, QListWidgetItem] = {}
+        for file_path in file_paths:
+            cached_icon = self._cached_media_icon(file_path)
+            item = QListWidgetItem(
+                cached_icon
+                or self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon),
+                os.path.basename(file_path),
+            )
+            item.setSizeHint(QSize(148, 168))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            list_widget.addItem(item)
+            if cached_icon is None and (
+                is_image_extension(file_path) or is_video_extension(file_path)
+            ):
+                missing_thumbnail_items[file_path] = item
+
+        self._load_dialog_thumbnails(dialog, missing_thumbnail_items)
+
+    def _rotation_comparison_widget(self, file_path: str, angle: int) -> QWidget:
+        """Build a cache-only before/after rotation comparison card."""
+        card = QFrame()
+        card.setObjectName("workflowTransitionRotationComparison")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(5)
+
+        filename = QLabel(os.path.basename(file_path))
+        filename.setObjectName("workflowTransitionRotationFilename")
+        filename.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(filename)
+
+        comparison = QHBoxLayout()
+        comparison.setSpacing(8)
+        source = self._cached_review_pixmap(file_path)
+        if source is None:
+            source = (
+                self.parent.style()
+                .standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+                .pixmap(96, 96)
+            )
+        rotated = source.transformed(
+            QTransform().rotate(angle),
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+        def add_preview(caption: str, pixmap) -> None:
+            column = QVBoxLayout()
+            column.setSpacing(3)
+            heading = QLabel(caption)
+            heading.setObjectName("workflowTransitionRotationCaption")
+            heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image = QLabel()
+            image.setObjectName("workflowTransitionRotationPreview")
+            image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image.setFixedSize(170, 120)
+            image.setPixmap(
+                pixmap.scaled(
+                    image.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            column.addWidget(heading)
+            column.addWidget(image)
+            comparison.addLayout(column)
+
+        add_preview("BEFORE", source)
+        arrow = QLabel("→")
+        arrow.setObjectName("workflowTransitionRotationArrow")
+        arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        comparison.addWidget(arrow)
+        add_preview("AFTER", rotated)
+        layout.addLayout(comparison)
+
+        angle_text = {
+            90: "90° clockwise",
+            180: "180°",
+            -90: "90° counterclockwise",
+        }.get(angle, f"{angle}°")
+        detail = QLabel(f"Rotate {angle_text}")
+        detail.setObjectName("workflowTransitionRotationDetail")
+        detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(detail)
+        return card
+
+    def _deletion_preview_icon(self, path: str, is_directory: bool) -> QIcon:
+        if is_directory:
+            return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        if is_image_extension(path) or is_video_extension(path):
+            return self._cached_thumbnail_icon(path)
+        return self.parent.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+    def _build_deletion_preview_entries(
+        self, pending: WorkflowPendingState
+    ) -> list[tuple[str, str, str, bool]]:
+        """Build the complete target list without walking marked directories."""
+        entries: list[tuple[str, str, str, bool]] = []
+        seen: set[str] = set()
+        directory_paths = {
+            os.path.normcase(os.path.normpath(path))
+            for path in pending.directory_paths
+            if path
+        }
+
+        def is_known_directory(path: str) -> bool:
+            return os.path.normcase(os.path.normpath(path)) in directory_paths
+
+        def add(path: str, display_name: str, detail: str, is_directory: bool) -> None:
+            normalized = os.path.normcase(os.path.normpath(path))
+            if normalized in seen:
+                return
+            seen.add(normalized)
+            entries.append((path, display_name, detail, is_directory))
+
+        def add_target(path: str, detail: str, expand_directory: bool) -> None:
+            is_directory = is_known_directory(path)
+            name = os.path.basename(os.path.normpath(path)) or path
+            if is_directory and expand_directory:
+                detail = f"{detail} (folder and all contents)"
+            add(path, name, detail, is_directory)
+
+        def canonical_targets(paths: list[str]) -> list[str]:
+            directories = [path for path in paths if is_known_directory(path)]
+            retained = []
+            for path in paths:
+                covered = False
+                for directory in directories:
+                    if path == directory:
+                        continue
+                    try:
+                        covered = os.path.normcase(
+                            os.path.commonpath([path, directory])
+                        ) == os.path.normcase(os.path.normpath(directory))
+                    except ValueError, OSError:
+                        covered = False
+                    if covered:
+                        break
+                if not covered:
+                    retained.append(path)
+            return sorted(
+                dict.fromkeys(retained),
+                key=lambda path: (not is_known_directory(path), path.casefold()),
+            )
+
+        for path in canonical_targets(pending.trash_paths):
+            add_target(path, "Marked for Trash", expand_directory=True)
+        for path in canonical_targets(pending.organize_delete_paths):
+            add_target(path, "Deleted by Organize", expand_directory=True)
+        for path in pending.organize_removed_folders:
+            add_target(
+                path,
+                "Empty folder removed after organizing",
+                expand_directory=False,
+            )
+        return entries
 
     def _has_raw_images(self, file_paths: list[str]) -> bool:
         """Check if any of the provided file paths are RAW image files."""
         return any(self._should_apply_raw_processing(path) for path in file_paths)
+
+    def show_intro_video_dialog(self, block: bool = True):
+        """Replay the first-run intro video on demand (e.g. from the Help menu).
+
+        Args:
+            block: If True (default) runs dialog.exec() modally. If False, uses
+                   dialog.show() and returns immediately (useful for tests).
+        """
+        from core.runtime_paths import resolve_intro_video_path
+        from ui.intro_video_dialog import IntroVideoDialog
+
+        video_path = resolve_intro_video_path()
+        if not video_path:
+            logger.warning("Intro video requested but not found; showing notice.")
+            QMessageBox.information(
+                self.parent,
+                "Intro Video Unavailable",
+                "The PhotoSort intro video could not be found.",
+            )
+            return
+
+        logger.info("Showing intro video on demand")
+        dialog = IntroVideoDialog(video_path, parent=self.parent)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        if block:
+            dialog.exec()
+        else:
+            dialog.show()
 
     def show_about_dialog(self, block: bool = True):
         """Show the 'About' dialog.
@@ -242,11 +804,15 @@ class DialogManager:
             ],
         )
 
-        # Start CUDA detection worker
+        # Resolve the execution device through the shared model environment probe.
         worker_manager = self.parent.app_controller.worker_manager
         if embeddings_label_ref:
 
-            def update_embeddings_label(device_name: str):
+            def update_embeddings_label(_missing_models: tuple, device_name: str):
+                with contextlib.suppress(TypeError):
+                    worker_manager.model_environment_ready.disconnect(
+                        update_embeddings_label
+                    )
                 device_key = (device_name or "cpu").lower()
                 friendly = {
                     "cuda": "GPU (CUDA)",
@@ -262,8 +828,8 @@ class DialogManager:
                 except RuntimeError:
                     pass
 
-            worker_manager.cuda_detection_finished.connect(update_embeddings_label)
-            worker_manager.start_cuda_detection()
+            worker_manager.model_environment_ready.connect(update_embeddings_label)
+            worker_manager.start_model_environment_probe([])
 
         if block:
             dialog.exec()
@@ -392,33 +958,15 @@ class DialogManager:
         """Show the application preferences dialog."""
         from core.app_settings import (
             PerformanceMode,
+            CullGroupingStrictness,
             get_available_cpu_count,
             get_performance_mode,
             set_performance_mode,
             get_custom_thread_count,
             set_custom_thread_count,
-            get_best_shot_batch_size,
-            set_best_shot_batch_size,
-            get_openai_config,
-            set_openai_config,
-            DEFAULT_OPENAI_API_KEY,
-            DEFAULT_OPENAI_MODEL,
-            DEFAULT_OPENAI_BASE_URL,
-            DEFAULT_OPENAI_MAX_TOKENS,
-            DEFAULT_OPENAI_TIMEOUT,
-            DEFAULT_OPENAI_MAX_WORKERS,
-            SUPPORTED_SIMILARITY_EMBEDDING_MODELS,
-            DEFAULT_SIMILARITY_CLUSTERING_EPS,
-            MAX_SIMILARITY_CLUSTERING_EPS,
-            MIN_SIMILARITY_CLUSTERING_EPS,
             get_similarity_clustering_eps,
-            get_similarity_embedding_model_name,
-            set_similarity_clustering_eps,
-            set_similarity_embedding_model_name,
-        )
-        from core.ai.best_shot_pipeline import (
-            DEFAULT_BEST_SHOT_PROMPT,
-            DEFAULT_RATING_PROMPT,
+            get_cull_grouping_strictness,
+            set_cull_grouping_strictness,
         )
 
         logger.info("Showing preferences dialog")
@@ -451,6 +999,67 @@ class DialogManager:
         content_layout.setSpacing(12)
         content_layout.setContentsMargins(20, 14, 20, 14)
         scroll_area.setWidget(content_frame)
+
+        # --- Interface Card ---
+        interface_card, interface_layout = build_card("dialogCard")
+        interface_title = QLabel("Interface")
+        interface_title.setObjectName("cardSectionTitle")
+        interface_layout.addWidget(interface_title)
+
+        interface_separator = QFrame()
+        interface_separator.setObjectName("cardSeparator")
+        interface_separator.setFrameShape(QFrame.Shape.HLine)
+        interface_separator.setFixedHeight(1)
+        interface_layout.addWidget(interface_separator)
+
+        show_shortcuts_checkbox = QCheckBox("Show shortcuts in the footer")
+        show_shortcuts_checkbox.setObjectName("showWorkflowShortcutsCheckbox")
+        show_shortcuts_checkbox.setChecked(get_show_workflow_shortcuts())
+        show_shortcuts_checkbox.setToolTip(
+            "Show context-sensitive keyboard shortcuts beside the workflow navigation."
+        )
+        interface_layout.addWidget(show_shortcuts_checkbox)
+
+        workflow_steps_title = QLabel("Workflow steps")
+        workflow_steps_title.setObjectName("cardSectionTitle")
+        interface_layout.addWidget(workflow_steps_title)
+        workflow_steps_description = QLabel(
+            "Choose which review steps appear between Organize and Cull."
+        )
+        workflow_steps_description.setObjectName("cardDescription")
+        workflow_steps_description.setWordWrap(True)
+        interface_layout.addWidget(workflow_steps_description)
+
+        workflow_visibility = get_workflow_step_visibility()
+        workflow_step_checkboxes: dict[str, QCheckBox] = {}
+        workflow_step_labels = {
+            "organize": "Organize (required)",
+            "easy_delete": "Easy Delete",
+            "fix_rotation": "Fix Rotation",
+            "pick_best": "Pick Best",
+            "cull": "Cull (required)",
+        }
+        workflow_steps_widget = QWidget()
+        workflow_steps_layout = QGridLayout(workflow_steps_widget)
+        workflow_steps_layout.setContentsMargins(0, 0, 0, 0)
+        workflow_steps_layout.setHorizontalSpacing(18)
+        workflow_steps_layout.setVerticalSpacing(4)
+        for index, (step, label) in enumerate(workflow_step_labels.items()):
+            checkbox = QCheckBox(label)
+            checkbox.setObjectName(
+                f"show{''.join(part.title() for part in step.split('_'))}StepCheckbox"
+            )
+            checkbox.setChecked(workflow_visibility.get(step, True))
+            if step in {"organize", "cull"}:
+                checkbox.setEnabled(False)
+                checkbox.setToolTip(
+                    "Organize and Cull remain visible so the workflow has a start and finish."
+                )
+            workflow_step_checkboxes[step] = checkbox
+            workflow_steps_layout.addWidget(checkbox, index // 2, index % 2)
+        interface_layout.addWidget(workflow_steps_widget)
+
+        content_layout.addWidget(interface_card)
 
         # --- Performance Mode Card ---
         perf_card, perf_layout = build_card("dialogCard")
@@ -559,34 +1168,34 @@ class DialogManager:
         similarity_form = QGridLayout()
         similarity_form.setHorizontalSpacing(12)
         similarity_form.setVerticalSpacing(12)
-        similarity_model_label = QLabel("Model")
-        similarity_model_combo = QComboBox()
-        similarity_model_combo.setObjectName("similarityModelCombo")
-        similarity_model_combo.addItems(list(SUPPORTED_SIMILARITY_EMBEDDING_MODELS))
-        similarity_model_combo.setCurrentText(get_similarity_embedding_model_name())
-        similarity_form.addWidget(similarity_model_label, 0, 0)
-        similarity_form.addWidget(similarity_model_combo, 0, 1)
-
-        similarity_threshold_label = QLabel("Grouping Threshold")
-        similarity_threshold_spin = QDoubleSpinBox()
-        similarity_threshold_spin.setObjectName("similarityThresholdSpin")
-        similarity_threshold_spin.setRange(
-            MIN_SIMILARITY_CLUSTERING_EPS, MAX_SIMILARITY_CLUSTERING_EPS
+        cull_strictness_label = QLabel("Cull & Pick Best same-subject strictness")
+        cull_strictness_combo = QComboBox()
+        cull_strictness_combo.setObjectName("cullGroupingStrictnessCombo")
+        strictness_labels = {
+            "Conservative": CullGroupingStrictness.CONSERVATIVE,
+            "Standard": CullGroupingStrictness.STANDARD,
+            "Broad": CullGroupingStrictness.BROAD,
+        }
+        cull_strictness_combo.addItems(list(strictness_labels))
+        current_strictness = get_cull_grouping_strictness()
+        cull_strictness_combo.setCurrentText(
+            next(
+                label
+                for label, strictness in strictness_labels.items()
+                if strictness is current_strictness
+            )
         )
-        similarity_threshold_spin.setDecimals(3)
-        similarity_threshold_spin.setSingleStep(0.005)
-        similarity_threshold_spin.setValue(get_similarity_clustering_eps())
-        similarity_threshold_spin.setToolTip(
-            "Higher values create looser similarity groups. Default: "
-            f"{DEFAULT_SIMILARITY_CLUSTERING_EPS:.3f}."
+        cull_strictness_combo.setToolTip(
+            "Conservative splits uncertain photos and prevents similarity chaining."
         )
-        similarity_form.addWidget(similarity_threshold_label, 1, 0)
-        similarity_form.addWidget(similarity_threshold_spin, 1, 1)
+        similarity_form.addWidget(cull_strictness_label, 1, 0)
+        similarity_form.addWidget(cull_strictness_combo, 1, 1)
         similarity_layout.addLayout(similarity_form)
 
         similarity_note = QLabel(
-            "Changing the model starts a new embedding cache and may require a one-time download. "
-            "Higher grouping thresholds find broader visual matches; lower thresholds only group near-duplicates."
+            "Changing a model starts a versioned local cache and may require a one-time download. "
+            "Cull and Pick Best share complete physical subject-set groups; Easy Delete keeps its "
+            "separate near-duplicate analysis."
         )
         similarity_note.setObjectName("cardNote")
         similarity_note.setWordWrap(True)
@@ -625,13 +1234,12 @@ class DialogManager:
         blur_threshold_spin.setSingleStep(10.0)
         blur_threshold_spin.setValue(get_easy_delete_blur_threshold())
         blur_threshold_spin.setToolTip(
-            "Lower = stricter (more images flagged as blurry); this is the minimum "
-            "acceptable peak local sharpness."
+            "Lower values flag more blurs. Higher values flag only severe blurs."
         )
         easy_delete_form.addWidget(blur_threshold_label, 0, 0)
         easy_delete_form.addWidget(blur_threshold_spin, 0, 1)
 
-        dark_threshold_label = QLabel("Near-black brightness threshold")
+        dark_threshold_label = QLabel("Near-black mean ceiling")
         dark_threshold_spin = QDoubleSpinBox()
         dark_threshold_spin.setObjectName("easyDeleteDarkThresholdSpin")
         dark_threshold_spin.setRange(0.0, 128.0)
@@ -639,7 +1247,7 @@ class DialogManager:
         dark_threshold_spin.setSingleStep(1.0)
         dark_threshold_spin.setValue(get_easy_delete_dark_threshold())
         dark_threshold_spin.setToolTip(
-            "Images with mean brightness below this value (0-255) are flagged near-black."
+            "Max brightness to flag dark shots while keeping night photos."
         )
         easy_delete_form.addWidget(dark_threshold_label, 1, 0)
         easy_delete_form.addWidget(dark_threshold_spin, 1, 1)
@@ -651,9 +1259,7 @@ class DialogManager:
         white_threshold_spin.setDecimals(1)
         white_threshold_spin.setSingleStep(1.0)
         white_threshold_spin.setValue(get_easy_delete_white_threshold())
-        white_threshold_spin.setToolTip(
-            "Images with mean brightness above this value (0-255) are flagged overexposed."
-        )
+        white_threshold_spin.setToolTip("Brightness limit to flag overexposed photos.")
         easy_delete_form.addWidget(white_threshold_label, 2, 0)
         easy_delete_form.addWidget(white_threshold_spin, 2, 1)
 
@@ -665,7 +1271,7 @@ class DialogManager:
         duplicate_distance_spin.setSingleStep(0.005)
         duplicate_distance_spin.setValue(get_easy_delete_duplicate_distance())
         duplicate_distance_spin.setToolTip(
-            "Cosine distance; higher catches looser duplicates, lower only near-identical."
+            "Similarity limit to detect identical or near-duplicate photos."
         )
         easy_delete_form.addWidget(duplicate_distance_label, 3, 0)
         easy_delete_form.addWidget(duplicate_distance_spin, 3, 1)
@@ -673,359 +1279,15 @@ class DialogManager:
 
         easy_delete_note = QLabel(
             "These settings apply to future Easy Delete analysis runs; lower blur and "
-            "duplicate thresholds are more conservative."
+            "duplicate thresholds are more conservative. Near-identical framing is "
+            "checked separately so moved subjects remain in Pick Best. Dark photos are "
+            "suggested only when the preview is effectively black, not merely a night scene."
         )
         easy_delete_note.setObjectName("cardNote")
         easy_delete_note.setWordWrap(True)
         easy_delete_layout.addWidget(easy_delete_note)
 
         content_layout.addWidget(easy_delete_card)
-
-        # --- AI Engine Card ---
-        ai_card, ai_layout = build_card("dialogCard")
-        ai_title = QLabel("AI Rating Engine")
-        ai_title.setObjectName("cardSectionTitle")
-        ai_layout.addWidget(ai_title)
-
-        sep2 = QFrame()
-        sep2.setObjectName("cardSeparator")
-        sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setFixedHeight(1)
-        ai_layout.addWidget(sep2)
-
-        ai_desc_label = QLabel(
-            "Configure the OpenAI-compatible vision model used for best-shot analysis and AI star ratings."
-        )
-        ai_desc_label.setObjectName("cardDescription")
-        ai_desc_label.setWordWrap(True)
-        ai_layout.addWidget(ai_desc_label)
-
-        openai_config = get_openai_config()
-        api_key_value = openai_config.get("api_key") or DEFAULT_OPENAI_API_KEY
-        model_value = openai_config.get("model") or DEFAULT_OPENAI_MODEL
-        base_url_value = openai_config.get("base_url") or DEFAULT_OPENAI_BASE_URL
-        try:
-            max_tokens_value = int(
-                openai_config.get("max_tokens") or DEFAULT_OPENAI_MAX_TOKENS
-            )
-        except TypeError, ValueError:
-            max_tokens_value = DEFAULT_OPENAI_MAX_TOKENS
-        try:
-            timeout_value = int(openai_config.get("timeout") or DEFAULT_OPENAI_TIMEOUT)
-        except TypeError, ValueError:
-            timeout_value = DEFAULT_OPENAI_TIMEOUT
-        try:
-            max_workers_value = int(
-                openai_config.get("max_workers") or DEFAULT_OPENAI_MAX_WORKERS
-            )
-        except TypeError, ValueError:
-            max_workers_value = DEFAULT_OPENAI_MAX_WORKERS
-        best_prompt_value = (
-            openai_config.get("best_shot_prompt") or DEFAULT_BEST_SHOT_PROMPT
-        )
-        rating_prompt_value = (
-            openai_config.get("rating_prompt") or DEFAULT_RATING_PROMPT
-        )
-
-        openai_form = QGridLayout()
-        openai_form.setHorizontalSpacing(12)
-        openai_form.setVerticalSpacing(12)
-
-        api_key_label = QLabel("API Key")
-        api_key_input = QLineEdit()
-        api_key_input.setObjectName("openAIKeyInput")
-        api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        api_key_input.setPlaceholderText("sk-...")
-        api_key_input.setClearButtonEnabled(True)
-        api_key_input.setText(api_key_value)
-        openai_form.addWidget(api_key_label, 0, 0)
-        openai_form.addWidget(api_key_input, 0, 1)
-
-        model_label = QLabel("Model")
-        model_combo = QComboBox()
-        model_combo.setObjectName("openAIModelCombo")
-        model_combo.setEditable(True)
-        model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        model_combo.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        if model_value:
-            model_combo.addItem(model_value)
-            model_combo.setCurrentText(model_value)
-        else:
-            model_combo.setCurrentText(DEFAULT_OPENAI_MODEL)
-
-        fetch_models_button = QPushButton("Fetch Models")
-        fetch_models_button.setObjectName("openAIFetchModelsButton")
-
-        model_row = QHBoxLayout()
-        model_row.setContentsMargins(0, 0, 0, 0)
-        model_row.setSpacing(6)
-        model_row.addWidget(model_combo)
-        model_row.addWidget(fetch_models_button)
-
-        openai_form.addWidget(model_label, 1, 0)
-        openai_form.addLayout(model_row, 1, 1)
-
-        base_url_label = QLabel("Base URL")
-        base_url_input = QLineEdit()
-        base_url_input.setObjectName("openAIBaseUrlInput")
-        base_url_input.setPlaceholderText(DEFAULT_OPENAI_BASE_URL)
-        base_url_input.setClearButtonEnabled(True)
-        base_url_input.setText(base_url_value)
-        openai_form.addWidget(base_url_label, 2, 0)
-        openai_form.addWidget(base_url_input, 2, 1)
-
-        max_tokens_label = QLabel("Max Tokens")
-        max_tokens_spin = QSpinBox()
-        max_tokens_spin.setObjectName("openAIMaxTokensSpin")
-        max_tokens_spin.setRange(64, 32768)
-        max_tokens_spin.setSingleStep(64)
-        max_tokens_spin.setValue(max_tokens_value)
-        openai_form.addWidget(max_tokens_label, 3, 0)
-        openai_form.addWidget(max_tokens_spin, 3, 1)
-
-        timeout_label = QLabel("Timeout (s)")
-        timeout_spin = QSpinBox()
-        timeout_spin.setObjectName("openAITimeoutSpin")
-        timeout_spin.setRange(10, 600)
-        timeout_spin.setSingleStep(5)
-        timeout_spin.setValue(timeout_value)
-        openai_form.addWidget(timeout_label, 4, 0)
-        openai_form.addWidget(timeout_spin, 4, 1)
-
-        max_workers_label = QLabel("Concurrent Workers")
-        max_workers_spin = QSpinBox()
-        max_workers_spin.setObjectName("openAIMaxWorkersSpin")
-        max_workers_spin.setRange(1, 16)
-        max_workers_spin.setValue(max_workers_value)
-        openai_form.addWidget(max_workers_label, 5, 0)
-        openai_form.addWidget(max_workers_spin, 5, 1)
-
-        best_shot_batch_label = QLabel("Best-shot Batch Size")
-        best_shot_batch_spin = QSpinBox()
-        best_shot_batch_spin.setObjectName("bestShotBatchSpin")
-        best_shot_batch_spin.setRange(2, 12)
-        best_shot_batch_spin.setValue(get_best_shot_batch_size())
-        openai_form.addWidget(best_shot_batch_label, 6, 0)
-        openai_form.addWidget(best_shot_batch_spin, 6, 1)
-
-        best_prompt_label = QLabel("Best Shot Prompt")
-        best_prompt_edit = QPlainTextEdit()
-        best_prompt_edit.setObjectName("openAIBestPromptEdit")
-        best_prompt_edit.setPlaceholderText(
-            "Leave blank to use the default best-shot prompt."
-        )
-        best_prompt_edit.setPlainText(best_prompt_value)
-        best_prompt_edit.setMinimumHeight(80)
-        openai_form.addWidget(best_prompt_label, 7, 0, Qt.AlignmentFlag.AlignTop)
-        openai_form.addWidget(best_prompt_edit, 7, 1)
-
-        rating_prompt_label = QLabel("Rating Prompt")
-        rating_prompt_edit = QPlainTextEdit()
-        rating_prompt_edit.setObjectName("openAIRatingPromptEdit")
-        rating_prompt_edit.setPlaceholderText(
-            "Leave blank to use the default rating prompt."
-        )
-        rating_prompt_edit.setPlainText(rating_prompt_value)
-        rating_prompt_edit.setMinimumHeight(80)
-        openai_form.addWidget(rating_prompt_label, 8, 0, Qt.AlignmentFlag.AlignTop)
-        openai_form.addWidget(rating_prompt_edit, 8, 1)
-
-        test_connection_button = QPushButton("Test Connection")
-        test_connection_button.setObjectName("openAITestConnectionButton")
-
-        def _resolve_or_default(value: str, default_value: str) -> str:
-            stripped = value.strip()
-            return stripped or default_value
-
-        def _create_openai_client():
-            try:
-                from openai import OpenAI  # type: ignore
-            except ImportError:
-                QMessageBox.warning(
-                    dialog,
-                    "OpenAI Package Missing",
-                    "Install the 'openai' package to test the connection.",
-                )
-                return None
-
-            try:
-                return OpenAI(
-                    api_key=_resolve_or_default(
-                        api_key_input.text(), DEFAULT_OPENAI_API_KEY
-                    ),
-                    base_url=_resolve_or_default(
-                        base_url_input.text(), DEFAULT_OPENAI_BASE_URL
-                    ),
-                    timeout=timeout_spin.value(),
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                QMessageBox.critical(
-                    dialog,
-                    "Client Creation Failed",
-                    f"Unable to create OpenAI client:\n{exc}",
-                )
-                return None
-
-        def _extract_model_ids(response) -> set[str]:
-            model_ids: set[str] = set()
-            data = getattr(response, "data", None)
-            if data is None and isinstance(response, dict):
-                data = response.get("data")
-            if not data:
-                return model_ids
-            for entry in data:
-                if isinstance(entry, dict):
-                    identifier = entry.get("id") or entry.get("name")
-                else:
-                    identifier = getattr(entry, "id", None) or getattr(
-                        entry, "name", None
-                    )
-                if identifier:
-                    model_ids.add(str(identifier))
-            return model_ids
-
-        def handle_test_connection():
-            client = _create_openai_client()
-            if client is None:
-                return
-            test_connection_button.setEnabled(False)
-            fetch_models_button.setEnabled(False)
-            try:
-                probe_timeout = min(timeout_spin.value(), 30)
-                probe_client = (
-                    client.with_options(timeout=probe_timeout)
-                    if hasattr(client, "with_options")
-                    else client
-                )
-
-                models_start = time.perf_counter()
-                response = probe_client.models.list()
-                models_duration = time.perf_counter() - models_start
-                model_ids = _extract_model_ids(response)
-                test_model = _resolve_or_default(
-                    model_combo.currentText(), DEFAULT_OPENAI_MODEL
-                )
-                completion_duration: float | None = None
-                completion_error: Exception | None = None
-                try:
-                    completion_client = (
-                        client.with_options(timeout=probe_timeout)
-                        if hasattr(client, "with_options")
-                        else client
-                    )
-                    completion_start = time.perf_counter()
-                    completion_client.chat.completions.create(
-                        model=test_model,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": "PhotoSort connectivity check.",
-                            }
-                        ],
-                        max_tokens=8,
-                    )
-                    completion_duration = time.perf_counter() - completion_start
-                except Exception as exc:  # pragma: no cover - network dependent
-                    completion_error = exc
-
-                if completion_error is None:
-                    QMessageBox.information(
-                        dialog,
-                        "Connection Successful",
-                        (
-                            f"Models endpoint responded in {models_duration:.2f}s ("
-                            f"{len(model_ids)} models).\n"
-                            f"Chat completion succeeded in {completion_duration:.2f}s using '{test_model}'."
-                        ),
-                    )
-                else:
-                    QMessageBox.warning(
-                        dialog,
-                        "Partial Success",
-                        (
-                            f"Models endpoint responded in {models_duration:.2f}s ("
-                            f"{len(model_ids)} models).\n"
-                            f"Chat completion failed for '{test_model}':\n{completion_error}"
-                        ),
-                    )
-            except Exception as exc:  # pragma: no cover - network dependent
-                QMessageBox.critical(
-                    dialog,
-                    "Connection Failed",
-                    f"Connection test failed:\n{exc}",
-                )
-            finally:
-                test_connection_button.setEnabled(True)
-                fetch_models_button.setEnabled(True)
-
-        def handle_fetch_models():
-            client = _create_openai_client()
-            if client is None:
-                return
-            test_connection_button.setEnabled(False)
-            fetch_models_button.setEnabled(False)
-            start = time.perf_counter()
-            try:
-                probe_client = (
-                    client.with_options(timeout=min(timeout_spin.value(), 30))
-                    if hasattr(client, "with_options")
-                    else client
-                )
-                response = probe_client.models.list()
-                duration = time.perf_counter() - start
-                model_ids = _extract_model_ids(response)
-                if not model_ids:
-                    QMessageBox.information(
-                        dialog,
-                        "No Models Found",
-                        "The endpoint is reachable but returned no models.",
-                    )
-                else:
-                    existing_text = model_combo.currentText().strip()
-                    sorted_ids = sorted(model_ids)
-                    model_combo.blockSignals(True)
-                    model_combo.clear()
-                    for identifier in sorted_ids:
-                        model_combo.addItem(identifier)
-                    if existing_text and existing_text in model_ids:
-                        model_combo.setCurrentText(existing_text)
-                    else:
-                        model_combo.setCurrentText(sorted_ids[0])
-                        if existing_text and existing_text not in model_ids:
-                            model_combo.insertItem(0, existing_text)
-                            model_combo.setCurrentIndex(0)
-                    model_combo.blockSignals(False)
-                    QMessageBox.information(
-                        dialog,
-                        "Models Retrieved",
-                        (
-                            f"Loaded {len(model_ids)} models in {duration:.2f}s.\n"
-                            "You can pick one from the dropdown."
-                        ),
-                    )
-            except Exception as exc:  # pragma: no cover - network dependent
-                QMessageBox.critical(
-                    dialog,
-                    "Fetch Models Failed",
-                    f"Failed to fetch models:\n{exc}",
-                )
-            finally:
-                fetch_models_button.setEnabled(True)
-                test_connection_button.setEnabled(True)
-
-        fetch_models_button.clicked.connect(handle_fetch_models)
-        test_connection_button.clicked.connect(handle_test_connection)
-
-        ai_layout.addLayout(openai_form)
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.setSpacing(6)
-        btn_row.addWidget(test_connection_button)
-        btn_row.addStretch()
-        ai_layout.addLayout(btn_row)
-        content_layout.addWidget(ai_card)
 
         content_layout.addStretch()
 
@@ -1038,68 +1300,72 @@ class DialogManager:
                 set_performance_mode(PerformanceMode.CUSTOM)
                 set_custom_thread_count(thread_count_slider.value())
 
-            api_key_text = api_key_input.text().strip()
-            base_url_text = base_url_input.text().strip()
-            model_text = model_combo.currentText().strip()
-            max_tokens_value = max_tokens_spin.value()
-            timeout_value = timeout_spin.value()
-            max_workers_value = max_workers_spin.value()
-            best_shot_batch_value = best_shot_batch_spin.value()
-            best_prompt_text = best_prompt_edit.toPlainText()
-            rating_prompt_text = rating_prompt_edit.toPlainText()
-
-            def _value_or_none(value: str, default_value: str) -> str | None:
-                trimmed = value.strip()
-                if not trimmed or trimmed == default_value:
-                    return ""
-                return trimmed
-
-            set_openai_config(
-                api_key=_value_or_none(api_key_text, DEFAULT_OPENAI_API_KEY),
-                model=_value_or_none(model_text, DEFAULT_OPENAI_MODEL),
-                base_url=_value_or_none(base_url_text, DEFAULT_OPENAI_BASE_URL),
-                max_tokens=None
-                if max_tokens_value == DEFAULT_OPENAI_MAX_TOKENS
-                else max_tokens_value,
-                timeout=None
-                if timeout_value == DEFAULT_OPENAI_TIMEOUT
-                else timeout_value,
-                max_workers=None
-                if max_workers_value == DEFAULT_OPENAI_MAX_WORKERS
-                else max_workers_value,
-                best_shot_prompt=None
-                if best_prompt_text.strip() == DEFAULT_BEST_SHOT_PROMPT.strip()
-                else best_prompt_text.strip() or None,
-                rating_prompt=None
-                if rating_prompt_text.strip() == DEFAULT_RATING_PROMPT.strip()
-                else rating_prompt_text.strip() or None,
-            )
-
-            if best_shot_batch_value != get_best_shot_batch_size():
-                set_best_shot_batch_size(best_shot_batch_value)
-
-            set_similarity_embedding_model_name(
-                similarity_model_combo.currentText().strip()
-            )
-            set_similarity_clustering_eps(similarity_threshold_spin.value())
+            selected_cull_strictness = strictness_labels[
+                cull_strictness_combo.currentText()
+            ]
+            set_cull_grouping_strictness(selected_cull_strictness)
             set_easy_delete_blur_threshold(blur_threshold_spin.value())
             set_easy_delete_dark_threshold(dark_threshold_spin.value())
             set_easy_delete_white_threshold(white_threshold_spin.value())
             set_easy_delete_duplicate_distance(duplicate_distance_spin.value())
+            show_workflow_shortcuts = show_shortcuts_checkbox.isChecked()
+            set_show_workflow_shortcuts(show_workflow_shortcuts)
+            apply_shortcut_visibility = getattr(
+                self.parent, "set_workflow_shortcuts_visible", None
+            )
+            if callable(apply_shortcut_visibility):
+                apply_shortcut_visibility(show_workflow_shortcuts)
+            selected_workflow_visibility = {
+                step: checkbox.isChecked()
+                for step, checkbox in workflow_step_checkboxes.items()
+            }
+            set_workflow_step_visibility(selected_workflow_visibility)
+            if selected_cull_strictness is not current_strictness:
+                app_state = getattr(self.parent, "app_state", None)
+                if app_state is not None:
+                    app_state.cull_cluster_results.clear()
+                    app_state.cull_grouping_error = None
+                mark_cull_dirty = getattr(self.parent, "mark_cull_model_dirty", None)
+                if callable(mark_cull_dirty):
+                    mark_cull_dirty()
+                worker_manager = getattr(self.parent, "worker_manager", None)
+                stop_grouping = getattr(
+                    worker_manager, "stop_cull_subject_grouping", None
+                )
+                if callable(stop_grouping):
+                    stop_grouping()
+                app_controller = getattr(self.parent, "app_controller", None)
+                restart_grouping = getattr(
+                    app_controller, "_start_cull_subject_grouping_background", None
+                )
+                if callable(restart_grouping):
+                    restart_grouping()
+            apply_step_visibility = getattr(
+                self.parent, "apply_workflow_step_visibility", None
+            )
+            if callable(apply_step_visibility):
+                apply_step_visibility(selected_workflow_visibility)
 
             logger.info(
-                "Preferences saved: mode=%s, custom_threads=%s, similarity_model=%s, "
-                "similarity_eps=%.3f, easy_delete_blur=%.1f, "
+                "Preferences saved: mode=%s, custom_threads=%s, "
+                "similarity_eps=%.3f, cull_strictness=%s, easy_delete_blur=%.1f, "
                 "easy_delete_dark=%.1f, easy_delete_white=%.1f, "
-                "easy_delete_duplicate=%.3f",
+                "easy_delete_duplicate=%.3f, show_workflow_shortcuts=%s, "
+                "workflow_steps=%s",
                 get_performance_mode().value,
                 get_custom_thread_count(),
-                get_similarity_embedding_model_name(),
                 get_similarity_clustering_eps(),
+                get_cull_grouping_strictness().value,
                 get_easy_delete_blur_threshold(),
                 get_easy_delete_dark_threshold(),
                 get_easy_delete_white_threshold(),
                 get_easy_delete_duplicate_distance(),
+                get_show_workflow_shortcuts(),
+                [
+                    step
+                    for step, visible in get_workflow_step_visibility().items()
+                    if visible
+                ],
             )
             dialog.accept()
 
@@ -1292,9 +1558,20 @@ class DialogManager:
 
         self.parent.exif_cache_size_combo = QComboBox()
         self.parent.exif_cache_size_combo.setObjectName("exifCacheSizeCombo")
-        self.parent.exif_cache_size_options_mb = [64, 128, 256, 512, 1024]
+        self.parent.exif_cache_size_options_mb = [
+            256,
+            512,
+            1024,
+            2048,
+            3072,
+            4096,
+            MAX_EXIF_CACHE_SIZE_MB,
+        ]
         self.parent.exif_cache_size_combo.addItems(
-            [f"{size} MB" for size in self.parent.exif_cache_size_options_mb]
+            [
+                f"{size // 1024} GB" if size % 1024 == 0 else f"{size} MB"
+                for size in self.parent.exif_cache_size_options_mb
+            ]
         )
         current_exif_conf_mb = get_exif_cache_size_mb()
         try:
@@ -1337,6 +1614,26 @@ class DialogManager:
             self.parent._clear_analysis_cache_action
         )
         analysis_card_layout.addWidget(clear_analysis_cache_button)
+
+        # --- AI Models Card ---
+        models_card_layout = self._build_cache_card("AI Models", "🤖", main_layout)
+        self.parent.model_cache_usage_label = QLabel()
+        self._build_cache_row(
+            "Disk Usage", self.parent.model_cache_usage_label, models_card_layout
+        )
+
+        def _confirm_and_delete_models():
+            if self.confirm_model_cache_deletion():
+                self.parent._clear_downloaded_models_action()
+
+        delete_models_button = QPushButton("Delete All Models")
+        delete_models_button.setObjectName("deleteDownloadedModelsButton")
+        delete_models_button.setToolTip(
+            "Delete every downloaded model. They will be downloaded again when "
+            "next needed."
+        )
+        delete_models_button.clicked.connect(_confirm_and_delete_models)
+        models_card_layout.addWidget(delete_models_button)
 
         main_layout.addStretch()
 
@@ -1420,14 +1717,11 @@ class DialogManager:
         list_widget.setWordWrap(True)
         list_widget.setSpacing(10)
 
-        for file_path in files:
-            item = QListWidgetItem(
-                self._cached_thumbnail_icon(file_path),
-                os.path.basename(file_path),
-            )
-            item.setSizeHint(QSize(148, 168))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            list_widget.addItem(item)
+        self._populate_media_thumbnail_gallery(
+            dialog,
+            list_widget,
+            files,
+        )
 
         body.addWidget(list_widget)
         outer.addLayout(body)
@@ -1477,6 +1771,21 @@ class DialogManager:
         )
         return result
 
+    def show_confirm_trash_target_dialog(
+        self, target_path: str, represented_paths: list[str]
+    ) -> bool:
+        """Confirm an Organize folder deletion after its inventory was validated."""
+        name = os.path.basename(os.path.normpath(target_path)) or target_path
+        count = len(represented_paths)
+        return self._show_delete_confirmation_dialog(
+            files=represented_paths,
+            title_text="Confirm Folder Delete",
+            message_text=(
+                f"Move the folder '{name}' and its {count} displayed item(s) "
+                "to the trash?"
+            ),
+        )
+
     def show_potential_cache_overflow_warning(
         self,
         estimated_preview_data_needed_for_folder_bytes: int,
@@ -1519,6 +1828,76 @@ class DialogManager:
         )
         warn_box.exec()
         logger.info("Closed potential cache overflow warning dialog")
+
+    def confirm_preview_cache_capacity_increase(
+        self, required_bytes: int, current_limit_bytes: int
+    ) -> bool:
+        required_gb = required_bytes / (1024**3)
+        current_gb = current_limit_bytes / (1024**3)
+        dialog = QMessageBox(self.parent)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("More Preview Cache Required")
+        dialog.setText(
+            "PhotoSort prepares every review image before opening the folder so "
+            "scrolling remains fast and RAW images keep one consistent appearance.\n\n"
+            f"This folder requires up to {required_gb:.2f} GB; the current limit is "
+            f"{current_gb:.2f} GB."
+        )
+        increase_button = dialog.addButton(
+            "Increase Cache and Continue", QMessageBox.ButtonRole.AcceptRole
+        )
+        dialog.addButton("Cancel Folder Load", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(increase_button)
+        dialog.exec()
+        return dialog.clickedButton() is increase_button
+
+    def show_preview_cache_disk_space_error(
+        self, required_bytes: int, available_bytes: int
+    ) -> None:
+        QMessageBox.critical(
+            self.parent,
+            "Not Enough Disk Space",
+            "PhotoSort cannot prepare this folder without breaking the fast-review "
+            "guarantee.\n\n"
+            f"Required: {required_bytes / (1024**3):.2f} GB\n"
+            f"Available: {available_bytes / (1024**3):.2f} GB\n\n"
+            "Free disk space or choose a smaller folder.",
+        )
+
+    def show_exif_cache_capacity_warning(
+        self,
+        dataset_entries: int,
+        resident_entries: int,
+        cache_limit_bytes: int,
+    ) -> None:
+        """Warn when metadata for the current folder cannot remain cached."""
+        evicted_entries = max(0, dataset_entries - resident_entries)
+        cache_limit_gb = cache_limit_bytes / (1024 * 1024 * 1024)
+        warning_msg = (
+            f"The EXIF metadata for this folder does not fit in the configured "
+            f"{cache_limit_gb:.2f} GB cache.\n\n"
+            f"{evicted_entries:,} of {dataset_entries:,} entries were evicted while "
+            "the folder was loading. Those files will require metadata extraction "
+            "again the next time this folder is opened.\n\n"
+            "Increase the EXIF Metadata limit in Settings > Manage Cache."
+        )
+
+        logger.warning(
+            "Showing EXIF cache capacity warning: resident=%d total=%d limit=%.2f GB",
+            resident_entries,
+            dataset_entries,
+            cache_limit_gb,
+        )
+        warn_box = QMessageBox(self.parent)
+        warn_box.setIcon(QMessageBox.Icon.Warning)
+        warn_box.setWindowTitle("EXIF Cache Too Small")
+        warn_box.setText(warning_msg)
+        warn_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        warn_box.setDefaultButton(QMessageBox.StandardButton.Ok)
+        warn_box.setWindowFlags(
+            warn_box.windowFlags() | Qt.WindowType.FramelessWindowHint
+        )
+        warn_box.exec()
 
     def show_commit_deletions_dialog(self, marked_files: list[str]) -> bool:
         """
@@ -1608,14 +1987,11 @@ class DialogManager:
         list_widget.setWordWrap(True)
         list_widget.setSpacing(10)
 
-        for file_path in marked_files:
-            item = QListWidgetItem(
-                self._cached_thumbnail_icon(file_path),
-                os.path.basename(file_path),
-            )
-            item.setSizeHint(QSize(148, 168))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            list_widget.addItem(item)
+        self._populate_media_thumbnail_gallery(
+            dialog,
+            list_widget,
+            marked_files,
+        )
 
         body.addWidget(list_widget)
         outer.addLayout(body)
@@ -1767,6 +2143,51 @@ class DialogManager:
             return "close"
         return "cancel"
 
+    def confirm_interrupt_for_folder_change(self, folder_path: str) -> bool:
+        """Ask before cancelling work, including analysis on a hidden page."""
+        return self._confirm_interrupt_background_work(
+            headline=f"Stop working in this folder and open {folder_path}?",
+            accept_text="Stop and Open Folder",
+            object_name="folderInterruptDialog",
+        )
+
+    def confirm_interrupt_for_workflow_change(
+        self, source: str, destination: str
+    ) -> bool:
+        return self._confirm_interrupt_background_work(
+            headline=f"Stop unfinished {source} analysis and switch to {destination}?",
+            accept_text="Stop and Switch",
+        )
+
+    def _confirm_interrupt_background_work(
+        self,
+        *,
+        headline: str,
+        accept_text: str,
+        object_name: str = "backgroundInterruptDialog",
+    ) -> bool:
+        dialog, _body = self._build_consent_dialog(
+            object_name=object_name,
+            window_title="Interrupt Background Work?",
+            header_icon="⚠",
+            header_title="Background work is still running",
+            headline=headline,
+            summary=(
+                "Unfinished work affected by this action will be interrupted, including "
+                "analysis and model downloads. Completed cached work will remain available."
+            ),
+            accept_text=accept_text,
+            accept_object_name="modelConsentAcceptButton",
+            cancel_text="Keep Working",
+        )
+        stop_button = dialog.findChild(QPushButton, "modelConsentAcceptButton")
+        stop_button.setAutoDefault(False)
+        stop_button.setDefault(False)
+        stay_button = dialog.findChild(QPushButton, "modelConsentCancelButton")
+        stay_button.setDefault(True)
+        stay_button.setFocus()
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
     def show_folder_change_confirmation_dialog(self, marked_files: list[str]) -> str:
         """
         Shows a confirmation dialog when changing folders with marked files.
@@ -1829,9 +2250,7 @@ class DialogManager:
 
         if download_button:
             download_button.clicked.connect(
-                lambda: webbrowser.open(
-                    "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"
-                )
+                lambda: webbrowser.open(ROTATION_MODEL_DOWNLOAD_URL)
             )
         if open_models_button:
             open_models_button.clicked.connect(self._open_models_folder)
@@ -1839,25 +2258,193 @@ class DialogManager:
         dialog.exec()
         logger.info("Closed model not found dialog")
 
-    def confirm_similarity_model_download(self, model_name: str) -> bool:
-        """Ask whether PhotoSort may download the selected similarity model."""
-        dialog = QMessageBox(self.parent)
-        dialog.setWindowTitle("Download Similarity Model?")
-        dialog.setIcon(QMessageBox.Icon.Question)
+    def _build_consent_dialog(
+        self,
+        *,
+        object_name: str,
+        window_title: str,
+        header_icon: str,
+        header_title: str,
+        headline: str,
+        summary: str,
+        accept_text: str,
+        accept_object_name: str,
+        cancel_text: str = "Cancel",
+    ):
+        """Create the shared frameless shell for consent dialogs."""
+
+        dialog = QDialog(self.parent)
+        dialog.setObjectName(object_name)
+        dialog.setWindowTitle(window_title)
+        dialog.setModal(True)
+        dialog.setMinimumWidth(520)
+        dialog.setMaximumWidth(620)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
-        dialog.setText("Download similarity model?")
+        make_dialog_draggable(dialog)
+
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        build_dialog_header(header_title, header_icon, outer)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(22, 18, 22, 14)
+        body.setSpacing(12)
+
+        headline_label = QLabel(headline)
+        headline_label.setObjectName("modelConsentHeadline")
+        headline_label.setWordWrap(True)
+        body.addWidget(headline_label)
+
+        summary_label = QLabel(summary)
+        summary_label.setObjectName("modelConsentSummary")
+        summary_label.setWordWrap(True)
+        body.addWidget(summary_label)
+
+        outer.addLayout(body)
+        build_dialog_footer(
+            outer,
+            [
+                (cancel_text, "modelConsentCancelButton", dialog.reject, False),
+                (accept_text, accept_object_name, dialog.accept, True),
+            ],
+        )
+        return dialog, body
+
+    def confirm_model_download(
+        self, model_keys: list[str], *, feature: str, fallback: str = ""
+    ) -> bool:
+        """Ask once before downloading the local models a feature needs.
+
+        Every workflow asks the same question, so the wording is shared and only
+        the feature name and the consequence of cancelling vary. Each model is
+        named by its published repository so the user can see exactly what is
+        fetched and from where.
+        """
+
+        from core.model_provisioning import MODEL_REGISTRY
+
+        models = [MODEL_REGISTRY[key] for key in model_keys if key in MODEL_REGISTRY]
+        unknown = [key for key in model_keys if key not in MODEL_REGISTRY]
+        total_mb = sum(model.approx_download_mb for model in models)
+        single = len(model_keys) == 1
+        noun = "model" if single else "models"
+        if single:
+            summary = f"PhotoSort needs this model to run {feature}."
+        else:
+            summary = (
+                f"PhotoSort needs these {len(model_keys)} models to run {feature}."
+            )
+            if total_mb:
+                summary += f" About {total_mb} MB in total."
+
+        dialog, body = self._build_consent_dialog(
+            object_name="modelDownloadDialog",
+            window_title="Download Model?",
+            header_icon="⬇",
+            header_title="One-time model download",
+            headline=f"Download the {noun} needed for {feature}?",
+            summary=summary,
+            accept_text="Download",
+            accept_object_name="modelConsentAcceptButton",
+        )
+
+        for model in models:
+            card, card_layout = build_card("modelConsentCard")
+            card_layout.setSpacing(4)
+
+            name = QLabel(model.label)
+            name.setObjectName("modelConsentModelName")
+            name.setWordWrap(True)
+            card_layout.addWidget(name)
+
+            meta = QLabel(
+                f"{model.repo_id}"
+                + (
+                    f"  ·  about {model.approx_download_mb} MB"
+                    if model.approx_download_mb
+                    else ""
+                )
+            )
+            meta.setObjectName("modelConsentModelMeta")
+            meta.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            meta.setWordWrap(True)
+            card_layout.addWidget(meta)
+            body.addWidget(card)
+
+        for key in unknown:
+            orphan = QLabel(key)
+            orphan.setObjectName("modelConsentModelName")
+            orphan.setWordWrap(True)
+            body.addWidget(orphan)
+
+        footnote_text = (
+            "Downloaded once, then loaded from the local PhotoSort cache. "
+            "PhotoSort works offline afterwards."
+        )
+        if fallback:
+            footnote_text += f"\n{fallback}"
+        footnote = QLabel(footnote_text)
+        footnote.setObjectName("modelConsentFootnote")
+        footnote.setWordWrap(True)
+        body.addWidget(footnote)
+
+        approved = dialog.exec() == QDialog.DialogCode.Accepted
+        logger.info(
+            "Model download %s for %s (%s).",
+            "approved" if approved else "declined",
+            feature,
+            ", ".join(model.repo_id for model in models) or "unknown model",
+        )
+        return approved
+
+    def confirm_slow_cpu_processing(self, feature: str) -> bool:
+        """Warn before running a torch workflow without hardware acceleration."""
+
+        dialog, body = self._build_consent_dialog(
+            object_name="modelConsentDialog",
+            window_title="Run on CPU?",
+            header_icon="⚠",
+            header_title="Hardware acceleration unavailable",
+            headline=f"Run {feature} on the CPU?",
+            summary=f"Running {feature} can take considerably longer without a GPU.",
+            accept_text="Run on CPU",
+            accept_object_name="modelConsentAcceptButton",
+        )
+        footnote = QLabel(
+            "It runs in the background and can be cancelled safely at any time."
+        )
+        footnote.setObjectName("modelConsentFootnote")
+        footnote.setWordWrap(True)
+        body.addWidget(footnote)
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
+    def confirm_model_cache_deletion(self) -> bool:
+        """Confirm before deleting models, since they must be downloaded again."""
+
+        from core.model_provisioning import model_cache_usage_bytes
+
+        try:
+            usage_mb = model_cache_usage_bytes() / (1024 * 1024)
+            usage_text = f" ({usage_mb:.0f} MB)"
+        except Exception:
+            logger.exception("Failed to read model cache usage.")
+            usage_text = ""
+
+        dialog = QMessageBox(self.parent)
+        dialog.setWindowTitle("Delete Downloaded Models?")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        dialog.setText(f"Delete every downloaded AI model{usage_text}?")
         dialog.setInformativeText(
-            "PhotoSort needs the visual similarity model before it can group similar photos.\n\n"
-            f"Model: {model_name}\n\n"
-            "This is a one-time download. After it is installed, similarity analysis loads it from the local PhotoSort cache and can run offline."
+            "Similarity grouping, same-subject grouping and Pick Best will "
+            "download their models again the next time you use them, which "
+            "needs an internet connection.\n\nYour photos are not affected."
         )
-        download_button = dialog.addButton(
-            "Download", QMessageBox.ButtonRole.AcceptRole
+        delete_button = dialog.addButton(
+            "Delete", QMessageBox.ButtonRole.DestructiveRole
         )
-        cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        dialog.setDefaultButton(download_button)
+        keep_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(keep_button)
         dialog.exec()
-        return (
-            dialog.clickedButton() == download_button
-            and dialog.clickedButton() != cancel_button
-        )
+        return dialog.clickedButton() == delete_button

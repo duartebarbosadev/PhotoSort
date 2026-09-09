@@ -1,16 +1,15 @@
 import logging
 import os
-import subprocess
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QPoint, Qt, QSignalBlocker
+from PyQt6.QtCore import QPoint, QProcess, Qt, QSignalBlocker
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PyQt6.QtWidgets import QMenu, QStyle
 
 from core.image_processing.image_rotator import ImageRotator
 from core.app_settings import get_recent_folders
 from core.media_utils import is_image_extension
-from ui.helpers.cluster_utils import ClusterUtils
+from core.similarity_cache import parse_cluster_id
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +38,7 @@ class MenuManager:
         self.toggle_folder_view_action: QAction
         self.group_by_similarity_action: QAction
         self.back_to_grouping_action: QAction
-        self.toggle_thumbnails_action: QAction
         self.analyze_similarity_action: QAction
-        self.analyze_best_shots_action: QAction
-        self.analyze_best_shots_selected_action: QAction
-        self.stop_best_shots_action: QAction
-        self.ai_rate_images_action: QAction
-        self.detect_blur_action: QAction
-        self.auto_rotate_action: QAction
         self.toggle_metadata_sidebar_action: QAction
         self.skip_singleton_nav_action: QAction
         self.rating_navigation_menu: QMenu
@@ -57,7 +49,6 @@ class MenuManager:
         self.view_list_action: QAction
         self.view_icons_action: QAction
         self.view_grid_action: QAction
-        self.view_rotation_action: QAction
 
         # Filter Menu state
         self.rating_filter_actions: dict[str, QAction] = {}
@@ -207,13 +198,6 @@ class MenuManager:
         self.view_grid_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         main_win.addAction(self.view_grid_action)
 
-        self.view_rotation_action = QAction("Rotation View", main_win)
-        self.view_rotation_action.setShortcut(QKeySequence("Alt+4"))
-        self.view_rotation_action.setShortcutContext(
-            Qt.ShortcutContext.ApplicationShortcut
-        )
-        main_win.addAction(self.view_rotation_action)
-
         # Deletion marking actions
         self.mark_for_delete_action = QAction("Mark for Deletion", main_win)
         self.mark_for_delete_action.setShortcut(QKeySequence("D"))
@@ -226,7 +210,12 @@ class MenuManager:
         main_win.addAction(self.unmark_for_delete_action)
 
         self.commit_deletions_action = QAction("Commit All Marked Deletions", main_win)
-        self.commit_deletions_action.setShortcut(QKeySequence("Shift+D"))
+        self.commit_deletions_action.setShortcuts(
+            [
+                QKeySequence("Shift+Return"),
+                QKeySequence("Shift+Enter"),
+            ]
+        )
         main_win.addAction(self.commit_deletions_action)
 
         self.clear_marked_deletions_action = QAction(
@@ -243,6 +232,10 @@ class MenuManager:
         # Check for updates action
         self.check_updates_action = QAction("Check for &Updates...", main_win)
         main_win.addAction(self.check_updates_action)
+
+        # Replay intro video action
+        self.show_intro_video_action = QAction("Show &Intro Video...", main_win)
+        main_win.addAction(self.show_intro_video_action)
 
         logger.debug("Actions created.")
 
@@ -281,14 +274,7 @@ class MenuManager:
         view_menu.addAction(self.group_by_similarity_action)
 
         self.back_to_grouping_action = QAction("Back to Grouping", main_win)
-        self.back_to_grouping_action.setShortcut(QKeySequence("Ctrl+1"))
         view_menu.addAction(self.back_to_grouping_action)
-
-        self.toggle_thumbnails_action = QAction("Show Thumbnails", main_win)
-        self.toggle_thumbnails_action.setCheckable(True)
-        self.toggle_thumbnails_action.setChecked(True)
-        self.toggle_thumbnails_action.setShortcut(QKeySequence("T"))
-        view_menu.addAction(self.toggle_thumbnails_action)
 
         view_menu.addSeparator()
 
@@ -296,7 +282,6 @@ class MenuManager:
         view_menu.addAction(self.view_list_action)
         view_menu.addAction(self.view_icons_action)
         view_menu.addAction(self.view_grid_action)
-        view_menu.addAction(self.view_rotation_action)
 
         view_menu.addSeparator()
 
@@ -307,52 +292,6 @@ class MenuManager:
         self.analyze_similarity_action.setEnabled(False)
         self.analyze_similarity_action.setShortcut(QKeySequence("Ctrl+S"))
         view_menu.addAction(self.analyze_similarity_action)
-
-        self.analyze_best_shots_action = QAction("Analyze Best Shots", main_win)
-        self.analyze_best_shots_action.setToolTip(
-            "Run the multi-model quality ranking inside each similarity cluster"
-        )
-        self.analyze_best_shots_action.setEnabled(False)
-        self.analyze_best_shots_action.setShortcut(QKeySequence("Ctrl+B"))
-        view_menu.addAction(self.analyze_best_shots_action)
-
-        self.analyze_best_shots_selected_action = QAction(
-            "Analyze Best Shots (Selected)", main_win
-        )
-        self.analyze_best_shots_selected_action.setToolTip(
-            "Run quality ranking on currently selected images only"
-        )
-        self.analyze_best_shots_selected_action.setEnabled(False)
-        self.analyze_best_shots_selected_action.setShortcut(QKeySequence("Alt+B"))
-        view_menu.addAction(self.analyze_best_shots_selected_action)
-
-        self.stop_best_shots_action = QAction("Stop Best Shot Analysis", main_win)
-        self.stop_best_shots_action.setEnabled(False)
-        view_menu.addAction(self.stop_best_shots_action)
-
-        self.ai_rate_images_action = QAction("AI Rate Images", main_win)
-        self.ai_rate_images_action.setToolTip(
-            "Ask the configured AI engine to rate every visible image individually"
-        )
-        self.ai_rate_images_action.setEnabled(False)
-        self.ai_rate_images_action.setShortcut(QKeySequence("Ctrl+A"))
-        view_menu.addAction(self.ai_rate_images_action)
-
-        self.detect_blur_action = QAction("Detect Blurriness", main_win)
-        self.detect_blur_action.setToolTip(
-            "Analyze images for blurriness (can be slow for many images)"
-        )
-        self.detect_blur_action.setEnabled(False)
-        self.detect_blur_action.setShortcut(QKeySequence("B"))
-        view_menu.addAction(self.detect_blur_action)
-
-        self.auto_rotate_action = QAction("Auto Rotate Images", main_win)
-        self.auto_rotate_action.setToolTip(
-            "Automatically detect and suggest rotations for poorly oriented images"
-        )
-        self.auto_rotate_action.setEnabled(False)
-        self.auto_rotate_action.setShortcut(QKeySequence("Ctrl+R"))
-        view_menu.addAction(self.auto_rotate_action)
 
         view_menu.addSeparator()
 
@@ -607,6 +546,8 @@ class MenuManager:
         help_menu = menu_bar.addMenu("&Help")
         help_menu.addAction(self.check_updates_action)
         help_menu.addSeparator()
+        help_menu.addAction(self.show_intro_video_action)
+        help_menu.addSeparator()
         help_menu.addAction(self.about_action)
 
     def connect_signals(self):
@@ -627,27 +568,8 @@ class MenuManager:
         self.back_to_grouping_action.triggered.connect(
             main_win._return_to_grouping_source
         )
-        self.toggle_thumbnails_action.toggled.connect(main_win._toggle_thumbnail_view)
         self.analyze_similarity_action.triggered.connect(
             main_win.app_controller.start_similarity_analysis
-        )
-        self.analyze_best_shots_action.triggered.connect(
-            main_win.app_controller.start_best_shot_analysis
-        )
-        self.analyze_best_shots_selected_action.triggered.connect(
-            main_win.app_controller.start_best_shot_analysis_for_selected
-        )
-        self.stop_best_shots_action.triggered.connect(
-            main_win.app_controller.stop_best_shot_analysis
-        )
-        self.ai_rate_images_action.triggered.connect(
-            main_win.app_controller.start_ai_rating_all
-        )
-        self.detect_blur_action.triggered.connect(
-            main_win.app_controller.start_blur_detection_analysis
-        )
-        self.auto_rotate_action.triggered.connect(
-            main_win.app_controller.start_auto_rotation_analysis
         )
         self.toggle_metadata_sidebar_action.toggled.connect(
             main_win._toggle_metadata_sidebar
@@ -667,24 +589,6 @@ class MenuManager:
             main_win.left_panel.set_view_mode_icons
         )
         self.view_grid_action.triggered.connect(main_win.left_panel.set_view_mode_grid)
-
-        # Guard Rotation View (Alt+4): only allow when there are rotation suggestions
-        def _guarded_show_rotation_view():
-            try:
-                suggestions = getattr(main_win, "rotation_suggestions", None)
-                if not suggestions or len(suggestions) == 0:
-                    # No-op if there are no rotation suggestions
-                    main_win.statusBar().showMessage(
-                        "No rotation suggestions to display.", 3000
-                    )
-                    return
-                # Proceed to show rotation view
-                main_win.left_panel.set_view_mode_rotation()
-            except Exception:
-                # Hard guard: never raise on shortcut
-                logger.error("Failed to switch to Rotation View.", exc_info=True)
-
-        self.view_rotation_action.triggered.connect(_guarded_show_rotation_view)
 
         # Image Menu
         self.rotate_clockwise_action.triggered.connect(
@@ -737,6 +641,9 @@ class MenuManager:
         for action in self.image_focus_actions.values():
             action.triggered.connect(main_win._handle_image_focus_shortcut)
         self.about_action.triggered.connect(self.dialog_manager.show_about_dialog)
+        self.show_intro_video_action.triggered.connect(
+            self.dialog_manager.show_intro_video_dialog
+        )
         self.check_updates_action.triggered.connect(
             main_win.app_controller.manual_check_for_updates
         )
@@ -833,7 +740,12 @@ class MenuManager:
         menu.addAction(show_in_explorer)
 
         # Cluster Management (only in similarity mode)
-        if main_win.group_by_similarity_mode and self.app_state.cluster_results:
+        active_clusters = (
+            self.app_state.cluster_results_for_workflow()
+            if hasattr(self.app_state, "cluster_results_for_workflow")
+            else self.app_state.cluster_results
+        )
+        if main_win.group_by_similarity_mode and active_clusters:
             menu.addSeparator()
             selected_paths = [
                 path
@@ -857,22 +769,18 @@ class MenuManager:
         try:
             normalized_path = os.path.normpath(file_path)
             if os.name == "nt":
-                subprocess.run(["explorer", "/select,", normalized_path], check=False)
+                QProcess.startDetached("explorer", ["/select,", normalized_path])
             elif os.name == "posix":
                 if os.uname().sysname == "Darwin":
-                    subprocess.run(["open", "-R", normalized_path], check=False)
+                    QProcess.startDetached("open", ["-R", normalized_path])
                 else:
-                    subprocess.run(
-                        ["xdg-open", os.path.dirname(normalized_path)], check=False
+                    QProcess.startDetached(
+                        "xdg-open", [os.path.dirname(normalized_path)]
                     )
         except Exception as e:
             logger.error(
                 f"Failed to open '{file_path}' in file explorer: {e}", exc_info=True
             )
-
-    def _parse_cluster_id(self, value) -> int | None:
-        """Delegate to the shared parser used elsewhere in the UI."""
-        return ClusterUtils.parse_cluster_id(value)
 
     def _move_selection_to_new_cluster(self):
         """Move selected images to a new cluster."""
@@ -885,10 +793,11 @@ class MenuManager:
         if not selected_paths:
             return
 
+        cluster_results = self.app_state.cluster_results_for_workflow()
         # Generate new cluster ID by finding max of existing IDs
         existing_ids = set()
-        for value in self.app_state.cluster_results.values():
-            parsed_id = self._parse_cluster_id(value)
+        for value in cluster_results.values():
+            parsed_id = parse_cluster_id(value)
             if parsed_id is not None:
                 existing_ids.add(parsed_id)
         new_cluster_id = max(existing_ids, default=0) + 1
@@ -896,7 +805,7 @@ class MenuManager:
         # Update cluster assignments
         overrides_to_save = {}
         for path in selected_paths:
-            self.app_state.cluster_results[path] = new_cluster_id
+            cluster_results[path] = new_cluster_id
             overrides_to_save[path] = new_cluster_id
 
         # Persist to cache
@@ -904,12 +813,13 @@ class MenuManager:
             self.app_state.analysis_cache.save_manual_cluster_overrides(
                 self.app_state.current_folder_path,
                 overrides_to_save,
+                namespace=self.app_state.manual_override_namespace_for_workflow(),
             )
 
         # Update UI - extract cluster IDs for display
         cluster_ids = set()
-        for value in self.app_state.cluster_results.values():
-            parsed_id = self._parse_cluster_id(value)
+        for value in cluster_results.values():
+            parsed_id = parse_cluster_id(value)
             if parsed_id is not None:
                 cluster_ids.add(parsed_id)
         sorted_cluster_ids = sorted(cluster_ids)

@@ -3,7 +3,7 @@ import os
 from collections.abc import Callable, Iterable
 from PyQt6.QtGui import QStandardItem, QColor
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QModelIndex, Qt
 
 from ui.helpers.deletion_utils import build_presentation
 
@@ -36,15 +36,9 @@ class DeletionMarkController:
 
         basename = os.path.basename(file_path) or item.text() or file_path
 
-        winner_check = getattr(self.app_state, "is_best_shot_winner", None)
-        if callable(winner_check):
-            is_best = winner_check(file_path)
-        else:
-            winners = getattr(self.app_state, "best_shot_winners", {})
-            is_best = any(
-                isinstance(winner, dict) and winner.get("image_path") == file_path
-                for winner in winners.values()
-            )
+        is_best = bool(
+            getattr(self.app_state, "pick_best_winners_by_path", {}).get(file_path)
+        )
 
         pres = build_presentation(
             basename=basename,
@@ -131,18 +125,13 @@ class DeletionMarkController:
         file_system_model,
         proxy_model,
     ) -> int:
-        count = 0
-        for p in paths:
-            if self._is_marked_func(p):
-                self.app_state.unmark_for_deletion(p)
-            else:
-                self.app_state.mark_for_deletion(p)
-            item, is_blurred = self._resolve_item(
-                p, find_proxy_index, file_system_model, proxy_model
-            )
-            self._update_item_presentation(item, p, is_blurred)
-            count += 1
-        return count
+        unique_paths = list(dict.fromkeys(path for path in paths if path))
+        self.set_paths_marked(
+            {path: not self._is_marked_func(path) for path in unique_paths},
+            file_system_model,
+            proxy_model,
+        )
+        return len(unique_paths)
 
     def mark_paths(
         self,
@@ -151,16 +140,14 @@ class DeletionMarkController:
         file_system_model,
         proxy_model,
     ) -> int:
-        count = 0
-        for p in paths:
-            if not self._is_marked_func(p):
-                self.app_state.mark_for_deletion(p)
-                count += 1
-            item, is_blurred = self._resolve_item(
-                p, find_proxy_index, file_system_model, proxy_model
-            )
-            self._update_item_presentation(item, p, is_blurred)
-        return count
+        unique_paths = list(dict.fromkeys(path for path in paths if path))
+        changed = sum(not self._is_marked_func(path) for path in unique_paths)
+        self.set_paths_marked(
+            dict.fromkeys(unique_paths, True),
+            file_system_model,
+            proxy_model,
+        )
+        return changed
 
     def unmark_paths(
         self,
@@ -169,16 +156,77 @@ class DeletionMarkController:
         file_system_model,
         proxy_model,
     ) -> int:
-        count = 0
-        for p in paths:
-            if self._is_marked_func(p):
-                self.app_state.unmark_for_deletion(p)
-                count += 1
-            item, is_blurred = self._resolve_item(
-                p, find_proxy_index, file_system_model, proxy_model
+        unique_paths = list(dict.fromkeys(path for path in paths if path))
+        changed = sum(self._is_marked_func(path) for path in unique_paths)
+        self.set_paths_marked(
+            dict.fromkeys(unique_paths, False),
+            file_system_model,
+            proxy_model,
+        )
+        return changed
+
+    def set_paths_marked(
+        self,
+        mark_state: dict[str, bool],
+        file_system_model,
+        proxy_model,
+    ) -> int:
+        """Apply a complete mark map with one model traversal.
+
+        Bulk review actions can touch hundreds of photos. Looking up every path
+        by independently walking the proxy model makes that work quadratic and
+        blocks the UI. Update application state first, then refresh matching
+        model items during one breadth-first pass.
+        """
+
+        normalized = {
+            path: bool(marked)
+            for path, marked in mark_state.items()
+            if isinstance(path, str) and path
+        }
+        bulk_setter = getattr(self.app_state, "set_deletion_marks", None)
+        if callable(bulk_setter):
+            changed = bulk_setter(normalized)
+        else:
+            changed = 0
+            for path, marked in normalized.items():
+                if marked == self._is_marked_func(path):
+                    continue
+                if marked:
+                    self.app_state.mark_for_deletion(path)
+                else:
+                    self.app_state.unmark_for_deletion(path)
+                changed += 1
+
+        if not normalized:
+            return changed
+
+        queue = [
+            proxy_model.index(row, 0, QModelIndex())
+            for row in range(proxy_model.rowCount(QModelIndex()))
+        ]
+        head = 0
+        while head < len(queue):
+            proxy_index = queue[head]
+            head += 1
+            if not proxy_index.isValid():
+                continue
+            source_index = proxy_model.mapToSource(proxy_index)
+            item = file_system_model.itemFromIndex(source_index)
+            if item is not None:
+                data = item.data(Qt.ItemDataRole.UserRole)
+                path = data.get("path") if isinstance(data, dict) else None
+                if path in normalized:
+                    self._update_item_presentation(
+                        item,
+                        path,
+                        data.get("is_blurred"),
+                    )
+            queue.extend(
+                proxy_model.index(row, 0, proxy_index)
+                for row in range(proxy_model.rowCount(proxy_index))
             )
-            self._update_item_presentation(item, p, is_blurred)
-        return count
+        return changed
 
     def mark_others_in_collection(
         self,
@@ -188,18 +236,16 @@ class DeletionMarkController:
         file_system_model,
         proxy_model,
     ) -> int:
-        count = 0
-        for p in collection_paths:
-            if p == keep_path:
-                continue
-            if not self._is_marked_func(p):
-                self.app_state.mark_for_deletion(p)
-                count += 1
-            item, is_blurred = self._resolve_item(
-                p, find_proxy_index, file_system_model, proxy_model
-            )
-            self._update_item_presentation(item, p, is_blurred)
-        return count
+        paths = list(
+            dict.fromkeys(path for path in collection_paths if path != keep_path)
+        )
+        changed = sum(not self._is_marked_func(path) for path in paths)
+        self.set_paths_marked(
+            dict.fromkeys(paths, True),
+            file_system_model,
+            proxy_model,
+        )
+        return changed
 
     def unmark_others_in_collection(
         self,
@@ -209,18 +255,16 @@ class DeletionMarkController:
         file_system_model,
         proxy_model,
     ) -> int:
-        count = 0
-        for p in collection_paths:
-            if p == keep_path:
-                continue
-            if self._is_marked_func(p):
-                self.app_state.unmark_for_deletion(p)
-                count += 1
-            item, is_blurred = self._resolve_item(
-                p, find_proxy_index, file_system_model, proxy_model
-            )
-            self._update_item_presentation(item, p, is_blurred)
-        return count
+        paths = list(
+            dict.fromkeys(path for path in collection_paths if path != keep_path)
+        )
+        changed = sum(self._is_marked_func(path) for path in paths)
+        self.set_paths_marked(
+            dict.fromkeys(paths, False),
+            file_system_model,
+            proxy_model,
+        )
+        return changed
 
     def clear_all_and_update(
         self,
@@ -231,12 +275,11 @@ class DeletionMarkController:
         marked_files = list(self.app_state.get_marked_files())
         if not marked_files:
             return 0
-        self.app_state.clear_all_deletion_marks()
-        for p in marked_files:
-            item, is_blurred = self._resolve_item(
-                p, find_proxy_index, file_system_model, proxy_model
-            )
-            self._update_item_presentation(item, p, is_blurred)
+        self.set_paths_marked(
+            dict.fromkeys(marked_files, False),
+            file_system_model,
+            proxy_model,
+        )
         return len(marked_files)
 
     def update_blur_status(

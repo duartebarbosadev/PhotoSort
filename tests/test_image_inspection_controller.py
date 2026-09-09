@@ -1,0 +1,294 @@
+from PIL import Image
+import pytest
+from PyQt6.QtCore import QCoreApplication, QEvent, QObject, pyqtSignal
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
+
+from core.app_settings import (
+    INSPECTION_DETAIL_DWELL_MS,
+    INSPECTION_DETAIL_TRANSITION_MS,
+)
+from ui.advanced_image_viewer import SynchronizedImageViewer
+from ui.controllers.image_inspection_controller import (
+    ImageInspectionController,
+    InspectionImageSpec,
+    InspectionQuality,
+)
+
+_app = QApplication.instance() or QApplication([])
+_test_resources = []
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_inspection_resources():
+    """Do not leave delayed viewer fits queued for unrelated Qt tests."""
+    yield
+    while _test_resources:
+        controller, viewer = _test_resources.pop()
+        controller.clear()
+        viewer._layout_fit_timer.stop()
+        for image_viewer in viewer.image_viewers:
+            image_viewer.image_view._resize_timer.stop()
+        viewer.close()
+        viewer.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+class _Loader(QObject):
+    preview_ready = pyqtSignal(str)
+    preview_failed = pyqtSignal(str)
+    detail_ready = pyqtSignal(str, object)
+    detail_failed = pyqtSignal(str)
+    detail_batch_finished = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.preview_requests = []
+        self.detail_requests = []
+        self.cancel_count = 0
+        self.cancel_details_count = 0
+
+    def request(self, paths, **options):
+        self.preview_requests.append((tuple(paths), options))
+
+    def request_details(self, paths):
+        self.detail_requests.append(tuple(paths))
+
+    def cancel(self):
+        self.cancel_count += 1
+
+    def cancel_details(self):
+        self.cancel_details_count += 1
+
+    def reset(self):
+        self.cancel_details()
+
+
+class _Pipeline:
+    def __init__(self):
+        self.immediate_calls = []
+        self.preview = self._pixmap(1920, 1200)
+
+    @staticmethod
+    def _pixmap(width, height):
+        pixmap = QPixmap(width, height)
+        pixmap.fill()
+        return pixmap
+
+    def get_immediate_review_qpixmap(self, path):
+        self.immediate_calls.append(path)
+        return self._pixmap(160, 100), False
+
+    def get_cached_preview_qpixmap(self, _path, **_options):
+        return self.preview
+
+    def qpixmap_from_pil(self, image):
+        return self._pixmap(image.width, image.height)
+
+
+def _make_controller():
+    pipeline = _Pipeline()
+    loader = _Loader()
+    controller = ImageInspectionController(pipeline, loader)
+    viewer = SynchronizedImageViewer()
+    viewer.configure_toolbar(show_view_modes=False)
+    _test_resources.append((controller, viewer))
+    return controller, loader, pipeline, viewer
+
+
+def test_dwell_requests_unique_non_video_paths_once():
+    controller, loader, pipeline, viewer = _make_controller()
+    controller.activate(
+        viewer,
+        [
+            InspectionImageSpec("same.jpg"),
+            InspectionImageSpec("same.jpg", rotation_degrees=90),
+            InspectionImageSpec("clip.mp4", media_type="video"),
+        ],
+    )
+
+    assert pipeline.immediate_calls == ["same.jpg"]
+    assert loader.preview_requests[-1][0] == ("same.jpg",)
+    assert controller._timer.interval() == 250
+    assert INSPECTION_DETAIL_DWELL_MS == 250
+    controller._timer.timeout.emit()
+    controller._timer.timeout.emit()
+    assert loader.detail_requests == [("same.jpg",)]
+
+
+def test_navigation_cancels_dwell_and_stale_results():
+    controller, loader, _pipeline, viewer = _make_controller()
+    controller.activate(viewer, [InspectionImageSpec("old.jpg")])
+    controller.activate(viewer, [InspectionImageSpec("new.jpg")])
+
+    loader.detail_ready.emit("old.jpg", Image.new("RGB", (4000, 3000)))
+    assert not viewer.displays_path("old.jpg")
+    assert controller.active_paths == ("new.jpg",)
+    controller._timer.timeout.emit()
+    assert loader.detail_requests == [("new.jpg",)]
+
+
+def test_clear_allows_same_image_to_be_activated_again():
+    controller, loader, pipeline, viewer = _make_controller()
+    specs = [InspectionImageSpec("photo.jpg")]
+    controller.activate(viewer, specs)
+
+    controller.clear(viewer)
+    viewer.clear()
+    controller.activate(viewer, specs)
+
+    assert pipeline.immediate_calls == ["photo.jpg", "photo.jpg"]
+    assert [request[0] for request in loader.preview_requests] == [
+        ("photo.jpg",),
+        ("photo.jpg",),
+    ]
+
+
+def test_source_change_refreshes_same_path_and_preserves_inspection_session():
+    controller, loader, pipeline, viewer = _make_controller()
+    controller.activate(viewer, [InspectionImageSpec("photo.jpg")])
+    loader.preview_ready.emit("photo.jpg")
+    loader.detail_ready.emit("photo.jpg", Image.new("RGB", (4000, 3000)))
+    loader.detail_batch_finished.emit()
+    original_viewer = controller._viewer
+
+    refreshed = controller.refresh_paths(["other.jpg", "photo.jpg", "photo.jpg"])
+
+    assert refreshed == ("photo.jpg",)
+    assert controller._viewer is original_viewer
+    assert controller.active_paths == ("photo.jpg",)
+    assert pipeline.immediate_calls == ["photo.jpg", "photo.jpg"]
+    assert loader.preview_requests[-1] == (("photo.jpg",), {})
+    assert loader.cancel_count == 1
+    assert loader.cancel_details_count == 2
+    assert controller._quality["photo.jpg"] == InspectionQuality.PLACEHOLDER
+
+    loader.preview_ready.emit("photo.jpg")
+    assert controller._quality["photo.jpg"] == InspectionQuality.PREVIEW
+
+
+def test_source_change_reloads_detail_only_for_changed_active_path():
+    controller, loader, _pipeline, viewer = _make_controller()
+    controller.activate(
+        viewer,
+        [InspectionImageSpec("left.jpg"), InspectionImageSpec("right.jpg")],
+    )
+    for path in ("left.jpg", "right.jpg"):
+        loader.detail_ready.emit(path, Image.new("RGB", (4000, 3000)))
+    loader.detail_batch_finished.emit()
+
+    controller.refresh_paths(["right.jpg"])
+    controller._timer.timeout.emit()
+
+    assert loader.detail_requests == [("right.jpg",)]
+
+
+def test_zoom_and_actual_size_deduplicate_and_defer_one_to_one():
+    controller, loader, _pipeline, viewer = _make_controller()
+    viewer.show()
+    QApplication.processEvents()
+    controller.activate(viewer, [InspectionImageSpec("photo.jpg")])
+    primary = viewer.get_primary_viewer()
+    assert primary is not None
+
+    viewer.detail_requested.emit("zoom")
+    viewer.detail_requested.emit("actual_size")
+    assert loader.detail_requests == [("photo.jpg",)]
+
+    loader.detail_ready.emit("photo.jpg", Image.new("RGB", (4000, 3000)))
+    loader.detail_batch_finished.emit()
+    assert primary.image_view.get_zoom_factor() == 1.0
+
+
+def test_detail_is_monotonic_and_must_add_pixels():
+    controller, loader, pipeline, viewer = _make_controller()
+    controller.activate(viewer, [InspectionImageSpec("photo.jpg")])
+    loader.preview_ready.emit("photo.jpg")
+    assert controller._quality["photo.jpg"] == InspectionQuality.PREVIEW
+
+    loader.detail_ready.emit("photo.jpg", Image.new("RGB", (640, 480)))
+    assert controller._quality["photo.jpg"] == InspectionQuality.PREVIEW
+
+    loader.detail_ready.emit("photo.jpg", Image.new("RGB", (4000, 3000)))
+    assert controller._quality["photo.jpg"] == InspectionQuality.PREVIEW
+    loader.detail_batch_finished.emit()
+    assert controller._quality["photo.jpg"] == InspectionQuality.DETAIL
+    detail_size = viewer.current_pixmap().size()
+    primary = viewer.get_primary_viewer()
+    assert primary is not None
+    assert primary.image_view._transition_animation is not None
+    QTest.qWait(INSPECTION_DETAIL_TRANSITION_MS + 30)
+    assert primary.image_view._transition_animation is None
+    assert primary.image_view._transition_item is None
+
+    pipeline.preview = pipeline._pixmap(1920, 1200)
+    loader.preview_ready.emit("photo.jpg")
+    assert viewer.current_pixmap().size() == detail_size
+
+
+def test_duplicate_source_slots_keep_independent_rotation_on_upgrade():
+    controller, loader, _pipeline, viewer = _make_controller()
+    controller.activate(
+        viewer,
+        [
+            InspectionImageSpec("photo.jpg"),
+            InspectionImageSpec("photo.jpg", rotation_degrees=90),
+        ],
+    )
+    loader.detail_ready.emit("photo.jpg", Image.new("RGB", (4000, 3000)))
+    loader.detail_batch_finished.emit()
+
+    left = viewer.image_viewers[0].get_current_pixmap()
+    right = viewer.image_viewers[1].get_current_pixmap()
+    assert (left.width(), left.height()) == (4000, 3000)
+    assert (right.width(), right.height()) == (3000, 4000)
+
+
+def test_comparison_detail_images_are_revealed_as_one_batch():
+    controller, loader, _pipeline, viewer = _make_controller()
+    controller.activate(
+        viewer,
+        [
+            InspectionImageSpec("left.jpg"),
+            InspectionImageSpec("right.jpg"),
+        ],
+    )
+    left_viewer, right_viewer = viewer.image_viewers[:2]
+    initial_left = left_viewer.get_current_pixmap().size()
+    initial_right = right_viewer.get_current_pixmap().size()
+
+    loader.detail_ready.emit("left.jpg", Image.new("RGB", (4000, 3000)))
+    assert left_viewer.get_current_pixmap().size() == initial_left
+    assert right_viewer.get_current_pixmap().size() == initial_right
+
+    loader.detail_ready.emit("right.jpg", Image.new("RGB", (3600, 2400)))
+    assert left_viewer.get_current_pixmap().size() == initial_left
+    assert right_viewer.get_current_pixmap().size() == initial_right
+
+    loader.detail_batch_finished.emit()
+
+    assert left_viewer.get_current_pixmap().size().width() == 4000
+    assert right_viewer.get_current_pixmap().size().width() == 3600
+    assert left_viewer.image_view._transition_animation is not None
+    assert right_viewer.image_view._transition_animation is not None
+
+
+def test_navigation_discards_a_partially_decoded_comparison_batch():
+    controller, loader, _pipeline, viewer = _make_controller()
+    controller.activate(
+        viewer,
+        [
+            InspectionImageSpec("old-left.jpg"),
+            InspectionImageSpec("old-right.jpg"),
+        ],
+    )
+    loader.detail_ready.emit("old-left.jpg", Image.new("RGB", (4000, 3000)))
+    assert set(controller._pending_detail_images) == {"old-left.jpg"}
+
+    controller.activate(viewer, [InspectionImageSpec("new.jpg")])
+    loader.detail_batch_finished.emit()
+
+    assert controller._pending_detail_images == {}
+    assert viewer.displays_path("new.jpg")
+    assert not viewer.displays_path("old-left.jpg")

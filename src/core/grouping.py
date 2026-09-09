@@ -1,19 +1,24 @@
-import json
 import logging
 import os
 import re
 from functools import lru_cache
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 import numpy as np
 from PIL import Image
 
+from core.app_settings import (
+    FACE_GROUPING_DBSCAN_EPS,
+    FACE_GROUPING_DBSCAN_MIN_SAMPLES,
+)
 from core.image_file_ops import ImageFileOperations
 from core.media_utils import is_video_extension
+from core.similarity_cache import parse_cluster_id
+from core.similarity_clustering import cluster_paths_with_cache
 from core.metadata_processor import (
     DATE_TAGS_PREFERENCE,
     MetadataProcessor,
@@ -34,6 +39,17 @@ class GroupingMode(StrEnum):
     FACE = "face"
     LOCATION = "location"
     MIXED = "mixed"
+
+
+class GroupingAnalysisCancelled(Exception):
+    """Raised when grouping preview analysis is cancelled."""
+
+
+def _raise_if_grouping_cancelled(
+    should_continue: Callable[[], bool] | None,
+) -> None:
+    if should_continue is not None and not should_continue():
+        raise GroupingAnalysisCancelled
 
 
 @dataclass(slots=True)
@@ -71,6 +87,8 @@ class GroupingPlan:
     # worker has already included non-media files that need to move with it.
     filesystem_inventory_complete: bool = False
     source_root: str = ""
+    filesystem_paths: set[str] = field(default_factory=set)
+    filesystem_directories: set[str] = field(default_factory=set)
 
     def to_preview(self) -> GroupingPreview:
         return GroupingPreview(
@@ -182,16 +200,37 @@ def augment_grouping_plan_with_filesystem_paths(
                 continue
         return False
 
-    discovered_paths: list[str] = []
-    for walk_root in walk_roots:
-        for current_root, _dirnames, filenames in os.walk(walk_root):
-            for filename in filenames:
-                # XMP files follow the separate companion-file preference.
-                if os.path.splitext(filename)[1].lower() == ".xmp":
-                    continue
-                path = os.path.join(current_root, filename)
-                if not is_pending_deletion(path):
-                    discovered_paths.append(path)
+    inventory_paths: set[str] = set()
+    inventory_directories: set[str] = {root}
+    for current_root, dirnames, filenames in os.walk(root):
+        inventory_directories.update(
+            os.path.join(current_root, dirname) for dirname in dirnames
+        )
+        inventory_paths.update(
+            os.path.join(current_root, filename) for filename in filenames
+        )
+    plan.filesystem_paths = inventory_paths
+    plan.filesystem_directories = inventory_directories
+
+    normalized_walk_roots = [
+        os.path.normcase(os.path.normpath(value)) for value in walk_roots
+    ]
+
+    def is_in_walk_roots(path: str) -> bool:
+        normalized_path = os.path.normcase(os.path.normpath(path))
+        return any(
+            normalized_path == walk_root
+            or normalized_path.startswith(walk_root + os.sep)
+            for walk_root in normalized_walk_roots
+        )
+
+    discovered_paths = [
+        path
+        for path in inventory_paths
+        if is_in_walk_roots(path)
+        and os.path.splitext(path)[1].lower() != ".xmp"
+        and not is_pending_deletion(path)
+    ]
 
     normalized_planned = {
         os.path.normcase(os.path.normpath(path)) for path in planned_paths
@@ -241,7 +280,7 @@ def augment_grouping_plan_with_filesystem_paths(
 
 
 @dataclass(slots=True)
-class GroupingManifestEntry:
+class GroupingRunEntry:
     original_path: str
     new_path: str | None
     group_id: str | None
@@ -255,13 +294,12 @@ class GroupingRunSummary:
     mode: str
     source_root: str
     output_root: str
-    manifest_path: str
     moved_count: int
     deleted_count: int
     unassigned_count: int
     skipped_count: int
     groups: list[GroupingGroup]
-    entries: list[GroupingManifestEntry]
+    entries: list[GroupingRunEntry]
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,26 +311,6 @@ class GroupingDirectoryRename:
 
 def build_grouping_output_root(source_root: str, mode: str) -> str:
     return source_root
-
-
-def write_grouping_manifest(summary: GroupingRunSummary) -> str:
-    manifest_path = os.path.join(summary.output_root, "grouping-manifest.json")
-    payload = {
-        "mode": summary.mode,
-        "source_root": summary.source_root,
-        "output_root": summary.output_root,
-        "moved_count": summary.moved_count,
-        "deleted_count": summary.deleted_count,
-        "unassigned_count": summary.unassigned_count,
-        "skipped_count": summary.skipped_count,
-        "generated_at": datetime.now().isoformat(),
-        "groups": [asdict(group) for group in summary.groups],
-        "entries": [asdict(entry) for entry in summary.entries],
-    }
-    os.makedirs(summary.output_root, exist_ok=True)
-    with open(manifest_path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2, ensure_ascii=True)
-    return manifest_path
 
 
 def _sanitize_folder_component(value: str) -> str:
@@ -444,7 +462,7 @@ def _iter_parent_directories(path: str, *, stop_at: str) -> Iterable[str]:
 
 
 def _empty_directory_candidates_from_entries(
-    entries: Sequence[GroupingManifestEntry],
+    entries: Sequence[GroupingRunEntry],
     *,
     source_root: str,
 ) -> list[str]:
@@ -847,26 +865,22 @@ def _build_groups_from_assignments(
     ]
 
 
-def _parse_cluster_id(value: Any) -> int | None:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        try:
-            return int(value.split(" - ")[0])
-        except Exception:
-            try:
-                return int(value)
-            except Exception:
-                return None
-    return None
-
-
 def _run_ml_similarity_pipeline(
     image_paths: Sequence[str],
     progress_callback=None,
     shared_engine: SimilarityEngine | None = None,
     image_pipeline: ImagePipeline | None = None,
+    should_continue: Callable[[], bool] | None = None,
+    analysis_cache=None,
+    folder_path: str | None = None,
 ) -> dict[str, int]:
+    """Cluster ``image_paths``, sharing the warm cache with the similarity view.
+
+    The cache entry describes one exact set of paths, so callers that analyse a
+    subset (such as date buckets in mixed mode) deliberately pass no cache.
+    """
+
+    _raise_if_grouping_cancelled(should_continue)
     if not image_paths:
         return {}
     if shared_engine is None:
@@ -875,13 +889,17 @@ def _run_ml_similarity_pipeline(
         engine = SimilarityEngine(image_pipeline=image_pipeline)
     else:
         engine = shared_engine
-    _embeddings, cluster_results = engine.run_analysis_sync(
+    cluster_results = cluster_paths_with_cache(
+        engine,
         list(image_paths),
+        analysis_cache=analysis_cache,
+        folder_path=folder_path,
         progress_callback=progress_callback,
-    )
+    ).clusters
+    _raise_if_grouping_cancelled(should_continue)
     assignments: dict[str, int] = {}
     for path, raw_cluster in cluster_results.items():
-        cluster_id = _parse_cluster_id(raw_cluster)
+        cluster_id = parse_cluster_id(raw_cluster)
         if cluster_id is not None:
             assignments[path] = cluster_id
     return assignments
@@ -894,29 +912,36 @@ def build_grouping_plan(
     source_root: str | None = None,
     location_depth: int = 3,
     image_pipeline: ImagePipeline | None = None,
+    should_continue: Callable[[], bool] | None = None,
+    similarity_engine: SimilarityEngine | None = None,
+    analysis_cache=None,
+    folder_path: str | None = None,
 ) -> GroupingPlan:
+    _raise_if_grouping_cancelled(should_continue)
     mode_value = GroupingMode(mode)
     valid_items = [
         item for item in items if isinstance(item, dict) and item.get("path")
     ]
     total_items = len(valid_items)
-    image_paths = [
-        item["path"] for item in valid_items if not is_video_extension(item["path"])
-    ]
-    skipped_paths = [
-        item["path"] for item in valid_items if is_video_extension(item["path"])
-    ]
+    media_paths = [item["path"] for item in valid_items]
 
     if mode_value == GroupingMode.CURRENT:
         return _build_current_structure_plan(
             total_items,
-            image_paths,
-            skipped_paths,
+            media_paths,
             source_root=source_root,
         )
+
+    image_paths = [path for path in media_paths if not is_video_extension(path)]
+    skipped_paths = [path for path in media_paths if is_video_extension(path)]
+
     if mode_value == GroupingMode.LOCATION:
         return _build_location_plan(
-            total_items, image_paths, skipped_paths, location_depth
+            total_items,
+            image_paths,
+            skipped_paths,
+            location_depth,
+            should_continue=should_continue,
         )
     if mode_value == GroupingMode.FACE:
         return _build_face_plan(
@@ -924,6 +949,7 @@ def build_grouping_plan(
             image_paths,
             skipped_paths,
             image_pipeline=image_pipeline,
+            should_continue=should_continue,
         )
     if mode_value == GroupingMode.MIXED:
         return _build_mixed_plan(
@@ -932,6 +958,8 @@ def build_grouping_plan(
             skipped_paths,
             progress_callback=progress_callback,
             image_pipeline=image_pipeline,
+            should_continue=should_continue,
+            similarity_engine=similarity_engine,
         )
     return _build_similarity_plan(
         total_items,
@@ -939,13 +967,16 @@ def build_grouping_plan(
         skipped_paths,
         progress_callback=progress_callback,
         image_pipeline=image_pipeline,
+        should_continue=should_continue,
+        similarity_engine=similarity_engine,
+        analysis_cache=analysis_cache,
+        folder_path=folder_path,
     )
 
 
 def _build_current_structure_plan(
     total_items: int,
-    image_paths: Sequence[str],
-    skipped_paths: Sequence[str],
+    media_paths: Sequence[str],
     *,
     source_root: str | None = None,
 ) -> GroupingPlan:
@@ -953,9 +984,9 @@ def _build_current_structure_plan(
     resolved_source_root = (
         os.path.normpath(source_root)
         if source_root
-        else (os.path.commonpath(list(image_paths)) if image_paths else "")
+        else (os.path.commonpath(list(media_paths)) if media_paths else "")
     )
-    for path in image_paths:
+    for path in media_paths:
         parent_dir = os.path.dirname(path)
         if resolved_source_root:
             try:
@@ -980,10 +1011,10 @@ def _build_current_structure_plan(
     return GroupingPlan(
         mode=GroupingMode.CURRENT.value,
         total_items=total_items,
-        supported_items=len(image_paths),
+        supported_items=len(media_paths),
         groups=groups,
         unassigned_paths=[],
-        skipped_paths=list(skipped_paths),
+        skipped_paths=[],
     )
 
 
@@ -993,12 +1024,21 @@ def _build_similarity_plan(
     skipped_paths: Sequence[str],
     progress_callback=None,
     image_pipeline: ImagePipeline | None = None,
+    should_continue: Callable[[], bool] | None = None,
+    similarity_engine: SimilarityEngine | None = None,
+    analysis_cache=None,
+    folder_path: str | None = None,
 ) -> GroupingPlan:
-    assignments = _run_ml_similarity_pipeline(
-        image_paths,
-        progress_callback=progress_callback,
-        image_pipeline=image_pipeline,
-    )
+    pipeline_kwargs = {
+        "progress_callback": progress_callback,
+        "shared_engine": similarity_engine,
+        "image_pipeline": image_pipeline,
+        "analysis_cache": analysis_cache,
+        "folder_path": folder_path,
+    }
+    if should_continue is not None:
+        pipeline_kwargs["should_continue"] = should_continue
+    assignments = _run_ml_similarity_pipeline(image_paths, **pipeline_kwargs)
     grouped_paths = set(assignments.keys())
     unassigned = sorted([path for path in image_paths if path not in grouped_paths])
     groups = _build_groups_from_assignments(
@@ -1019,10 +1059,12 @@ def _build_face_plan(
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
     image_pipeline: ImagePipeline | None = None,
+    should_continue: Callable[[], bool] | None = None,
 ) -> GroupingPlan:
     vectors: dict[str, np.ndarray] = {}
     unassigned: list[str] = []
     for path in image_paths:
+        _raise_if_grouping_cancelled(should_continue)
         vector, has_face_like_signal = _compute_face_vector(
             path,
             image_pipeline=image_pipeline,
@@ -1031,7 +1073,11 @@ def _build_face_plan(
             unassigned.append(path)
             continue
         vectors[path] = vector
-    assignments = _cluster_vectors(vectors, eps=0.16, min_samples=1)
+    assignments = _cluster_vectors(
+        vectors,
+        eps=FACE_GROUPING_DBSCAN_EPS,
+        min_samples=FACE_GROUPING_DBSCAN_MIN_SAMPLES,
+    )
     assigned_paths = set(assignments)
     unassigned.extend(path for path in vectors if path not in assigned_paths)
     groups = _build_groups_from_assignments(
@@ -1052,10 +1098,12 @@ def _build_location_plan(
     image_paths: Sequence[str],
     skipped_paths: Sequence[str],
     location_depth: int = 3,
+    should_continue: Callable[[], bool] | None = None,
 ) -> GroupingPlan:
     buckets: dict[str, list[str]] = {}
     unassigned: list[str] = []
     for path in image_paths:
+        _raise_if_grouping_cancelled(should_continue)
         metadata = _load_comprehensive_metadata(path)
         label = _location_label_from_metadata(metadata, depth=location_depth)
         if not label:
@@ -1107,10 +1155,13 @@ def _build_mixed_plan(
     skipped_paths: Sequence[str],
     progress_callback=None,
     image_pipeline: ImagePipeline | None = None,
+    should_continue: Callable[[], bool] | None = None,
+    similarity_engine: SimilarityEngine | None = None,
 ) -> GroupingPlan:
     date_buckets: dict[str, list[str]] = {}
     undated: list[str] = []
     for path in image_paths:
+        _raise_if_grouping_cancelled(should_continue)
         label = _extract_date_label(path)
         if not label:
             undated.append(path)
@@ -1120,6 +1171,7 @@ def _build_mixed_plan(
     groups: list[GroupingGroup] = []
     group_counter = 1
     for date_label in sorted(date_buckets.keys()):
+        _raise_if_grouping_cancelled(should_continue)
         bucket_paths = date_buckets[date_label]
 
         def _bucket_progress(
@@ -1128,10 +1180,16 @@ def _build_mixed_plan(
             if progress_callback:
                 progress_callback(percent, f"{bucket_label}: {message}")
 
+        pipeline_kwargs = {
+            "progress_callback": (_bucket_progress if progress_callback else None),
+            "shared_engine": similarity_engine,
+            "image_pipeline": image_pipeline,
+        }
+        if should_continue is not None:
+            pipeline_kwargs["should_continue"] = should_continue
         assignments = _run_ml_similarity_pipeline(
             bucket_paths,
-            progress_callback=_bucket_progress if progress_callback else None,
-            image_pipeline=image_pipeline,
+            **pipeline_kwargs,
         )
         grouped_by_cluster: dict[int, list[str]] = {}
         for path, cluster_id in assignments.items():
@@ -1194,7 +1252,7 @@ def execute_grouping_plan(
     move_companions: bool = False,
 ) -> GroupingRunSummary:
     os.makedirs(output_root, exist_ok=True)
-    entries: list[GroupingManifestEntry] = []
+    entries: list[GroupingRunEntry] = []
     directory_renames = find_directory_rename_candidates(
         plan,
         source_root=source_root,
@@ -1240,7 +1298,7 @@ def execute_grouping_plan(
                 destination_path = os.path.join(destination_dir, basename)
                 moved_count += 1
                 entries.append(
-                    GroupingManifestEntry(
+                    GroupingRunEntry(
                         original_path=source_path,
                         new_path=destination_path,
                         group_id=group.group_id,
@@ -1255,7 +1313,7 @@ def execute_grouping_plan(
                         skipped_path, directory_rename.source_dir
                     )
                     entries.append(
-                        GroupingManifestEntry(
+                        GroupingRunEntry(
                             original_path=skipped_path,
                             new_path=os.path.join(destination_dir, skipped_rel_path),
                             group_id=None,
@@ -1272,7 +1330,7 @@ def execute_grouping_plan(
                 os.path.normpath(desired_destination_path)
             ):
                 entries.append(
-                    GroupingManifestEntry(
+                    GroupingRunEntry(
                         original_path=source_path,
                         new_path=source_path,
                         group_id=group.group_id,
@@ -1294,7 +1352,7 @@ def execute_grouping_plan(
                 _move_companion_files_if_present(source_path, destination_dir)
             moved_count += 1
             entries.append(
-                GroupingManifestEntry(
+                GroupingRunEntry(
                     original_path=source_path,
                     new_path=destination_path,
                     group_id=group.group_id,
@@ -1320,7 +1378,7 @@ def execute_grouping_plan(
                 _move_companion_files_if_present(source_path, unassigned_dir)
             moved_count += 1
             entries.append(
-                GroupingManifestEntry(
+                GroupingRunEntry(
                     original_path=source_path,
                     new_path=destination_path,
                     group_id=None,
@@ -1337,7 +1395,7 @@ def execute_grouping_plan(
             raise RuntimeError(message or f"Failed to delete {target_path}.")
         deleted_count += 1
         entries.append(
-            GroupingManifestEntry(
+            GroupingRunEntry(
                 original_path=target_path,
                 new_path=None,
                 group_id=None,
@@ -1356,7 +1414,7 @@ def execute_grouping_plan(
         if source_path in renamed_skipped_paths:
             continue
         entries.append(
-            GroupingManifestEntry(
+            GroupingRunEntry(
                 original_path=source_path,
                 new_path=None,
                 group_id=None,
@@ -1378,7 +1436,6 @@ def execute_grouping_plan(
         mode=plan.mode,
         source_root=source_root,
         output_root=output_root,
-        manifest_path="",
         moved_count=moved_count,
         deleted_count=deleted_count,
         unassigned_count=len(plan.unassigned_paths),
@@ -1386,7 +1443,6 @@ def execute_grouping_plan(
         groups=plan.groups,
         entries=entries,
     )
-    summary.manifest_path = write_grouping_manifest(summary)
     return summary
 
 

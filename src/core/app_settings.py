@@ -6,7 +6,7 @@ Manages persistent application settings using QSettings.
 import ctypes
 import os
 import sys
-from dataclasses import dataclass
+from collections.abc import Mapping
 from enum import Enum
 from PyQt6.QtCore import QSettings
 from core.runtime_paths import resolve_user_cache_dir
@@ -44,12 +44,21 @@ SETTINGS_APPLICATION = "PhotoSort"
 PREVIEW_CACHE_SIZE_GB_KEY = "Cache/PreviewCacheSizeGB"
 EXIF_CACHE_SIZE_MB_KEY = "Cache/ExifCacheSizeMB"  # For EXIF metadata cache
 ROTATION_CONFIRM_LOSSY_KEY = "UI/RotationConfirmLossy"  # Ask before lossy rotation
+SHOW_WORKFLOW_SHORTCUTS_KEY = "UI/ShowWorkflowShortcuts"
+WORKFLOW_STEP_VISIBILITY_KEYS = {
+    "organize": "Workflow/ShowOrganize",
+    "easy_delete": "Workflow/ShowEasyDelete",
+    "fix_rotation": "Workflow/ShowFixRotation",
+    "pick_best": "Workflow/ShowPickBest",
+    "cull": "Workflow/ShowCull",
+}
 RECENT_FOLDERS_KEY = "UI/RecentFolders"  # Key for recent folders list
+INTRO_VIDEO_SHOWN_KEY = "UI/IntroVideoShown"  # Whether the first-run intro video played
 ORIENTATION_MODEL_NAME_KEY = (
     "Models/OrientationModelName"  # Key for the orientation model file name
 )
-SIMILARITY_EMBEDDING_MODEL_KEY = "Models/SimilarityEmbeddingModel"
 SIMILARITY_CLUSTERING_EPS_KEY = "Models/SimilarityClusteringEps"
+CULL_GROUPING_STRICTNESS_KEY = "Models/CullGroupingStrictness"
 UPDATE_CHECK_ENABLED_KEY = "Updates/CheckEnabled"  # Enable automatic update checks
 UPDATE_LAST_CHECK_KEY = "Updates/LastCheckTime"  # Last time updates were checked
 PERFORMANCE_MODE_KEY = (
@@ -58,21 +67,15 @@ PERFORMANCE_MODE_KEY = (
 CUSTOM_THREAD_COUNT_KEY = (
     "Performance/CustomThreadCount"  # User-defined thread count for custom mode
 )
-OPENAI_API_KEY_KEY = "AI/OpenAIKey"
-OPENAI_MODEL_KEY = "AI/OpenAIModel"
-OPENAI_BASE_URL_KEY = "AI/OpenAIBaseUrl"
-OPENAI_MAX_TOKENS_KEY = "AI/OpenAIMaxTokens"
-OPENAI_TIMEOUT_KEY = "AI/OpenAITimeout"
-OPENAI_MAX_WORKERS_KEY = "AI/OpenAIMaxWorkers"
-OPENAI_BEST_SHOT_PROMPT_KEY = "AI/BestShotPrompt"
-OPENAI_RATING_PROMPT_KEY = "AI/RatingPrompt"
-BEST_SHOT_BATCH_SIZE_KEY = "AI/BestShotBatchSize"
 LOCATION_GROUPING_DEPTH_KEY = "Grouping/LocationDepth"
 COMPANION_FILES_PREFERENCE_KEY = "Grouping/CompanionFilesPreference"
 EASY_DELETE_BLUR_THRESHOLD_KEY = "EasyDelete/BlurThreshold"
 EASY_DELETE_DARK_THRESHOLD_KEY = "EasyDelete/DarkThreshold"
 EASY_DELETE_WHITE_THRESHOLD_KEY = "EasyDelete/WhiteThreshold"
 EASY_DELETE_DUPLICATE_DISTANCE_KEY = "EasyDelete/DuplicateCosineDistance"
+EASY_DELETE_DUPLICATE_DISTANCE_V2_MIGRATED_KEY = (
+    "EasyDelete/DuplicateCosineDistanceV2Migrated"
+)
 
 
 # Cache directories
@@ -83,29 +86,26 @@ def get_huggingface_cache_dir() -> str:
 
 # Default values
 DEFAULT_PREVIEW_CACHE_SIZE_GB = 2.0  # Default to 2 GB for preview cache
-DEFAULT_EXIF_CACHE_SIZE_MB = 256  # Default to 256 MB for EXIF cache
+DEFAULT_EXIF_CACHE_SIZE_MB = 2048  # Default to 2 GB for EXIF cache
+MAX_EXIF_CACHE_SIZE_MB = 5120  # Largest selectable EXIF cache limit (5 GB)
 DEFAULT_ROTATION_CONFIRM_LOSSY = True  # Default to asking before lossy rotation
+DEFAULT_SHOW_WORKFLOW_SHORTCUTS = True
+DEFAULT_WORKFLOW_STEP_VISIBILITY = dict.fromkeys(WORKFLOW_STEP_VISIBILITY_KEYS, True)
 MAX_RECENT_FOLDERS = 10  # Max number of recent folders to store
 DEFAULT_ORIENTATION_MODEL_NAME = None  # Default to None, so we can auto-detect
+ROTATION_MODEL_DOWNLOAD_URL = (
+    "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases"
+)
 DEFAULT_UPDATE_CHECK_ENABLED = True  # Default to enable automatic update checks
 DEFAULT_PERFORMANCE_MODE = PerformanceMode.BALANCED  # Default to balanced mode
 DEFAULT_CUSTOM_THREAD_COUNT = 4  # Default custom thread count
-DEFAULT_OPENAI_API_KEY = ""
-DEFAULT_OPENAI_MODEL = "Qwen3-VL-30B-A3B-Instruct-MLX-4bit"
-DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:8000/v1"
-DEFAULT_OPENAI_MAX_TOKENS = 200
-DEFAULT_OPENAI_TIMEOUT = 600
-DEFAULT_OPENAI_MAX_WORKERS = 4
-DEFAULT_BEST_SHOT_BATCH_SIZE = 3
 
+# Image inspection quality progression. Originals stay memory-only and are
+# bounded across the complete visible comparison set.
+INSPECTION_DETAIL_DWELL_MS = 250
+INSPECTION_DETAIL_TRANSITION_MS = 180
+INSPECTION_DETAIL_BUDGET_BYTES = 512 * 1024 * 1024
 
-@dataclass(frozen=True, slots=True)
-class LocalBestShotConstants:
-    model_stride: int = 32
-    tensor_cache_key: str = "_photosort_pyiqa_tensor"
-
-
-_LOCAL_BEST_SHOT_CONSTANTS = LocalBestShotConstants()
 
 # --- UI Constants ---
 # Grid view settings
@@ -120,16 +120,13 @@ CENTER_PANEL_STRETCH = 3  # Center panel stretch factor
 RIGHT_PANEL_STRETCH = 1  # Right panel stretch factor
 
 # --- Processing Constants ---
-# Blur detection
-DEFAULT_BLUR_DETECTION_THRESHOLD = 100.0  # Default threshold for blur detection
-
 # Easy Delete step detection thresholds
 EASY_DELETE_BLUR_THRESHOLD = (
     100.0  # min acceptable peak local tile sharpness; below = blurry
 )
 EASY_DELETE_BLUR_TILE_GRID = 4  # NxN grid; blur score = max per-tile Laplacian variance
 EASY_DELETE_DARK_CLIP_FRACTION = (
-    0.85  # fraction of pixels below dark cutoff; above = near-black
+    0.98  # only almost-entirely black previews are safe automatic suggestions
 )
 EASY_DELETE_DARK_CLIP_VALUE = 10  # 0-255; pixels at/below this count as "dark"
 EASY_DELETE_WHITE_CLIP_FRACTION = (
@@ -138,7 +135,16 @@ EASY_DELETE_WHITE_CLIP_FRACTION = (
 EASY_DELETE_WHITE_CLIP_VALUE = 245  # 0-255; pixels at/above this count as "white"
 EASY_DELETE_DARK_MEAN_THRESHOLD = 15.0  # 0-255 mean brightness; below = near-black
 EASY_DELETE_WHITE_MEAN_THRESHOLD = 248.0  # 0-255 mean brightness; above = overexposed
-EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01  # cosine distance; below = near-identical
+EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.005  # lower = stricter near-identical match
+# A second, stricter spatial check catches burst frames whose embeddings are slightly
+# farther apart because of exposure/noise, without admitting repositioned subjects.
+EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY = 0.97
+EASY_DELETE_SAME_FRAME_SIMILARITY = 0.98
+# A strong difference concentrated in a small area indicates subject movement even
+# when the unchanged background makes the complete frame look nearly identical.
+EASY_DELETE_LOCALIZED_CHANGE_RATIO = 10.0
+EASY_DELETE_LOCALIZED_CHANGE_MIN_P99 = 8.0
+_OLD_EASY_DELETE_DUPLICATE_COSINE_DISTANCE = 0.01
 
 # Fix Rotation step
 FIX_ROTATION_MIN_CONFIDENCE = 0.70  # model confidence; below = skip suggestion
@@ -181,6 +187,10 @@ DBSCAN_EPS = (
 )
 DBSCAN_MIN_SAMPLES = 2  # Minimum number of images to form a dense region (cluster)
 DEFAULT_SIMILARITY_BATCH_SIZE = 16  # Default batch size for similarity processing
+# Face grouping compares face-region descriptors rather than whole images, so it
+# tolerates a wider cosine distance than whole-image similarity clustering.
+FACE_GROUPING_DBSCAN_EPS = 0.16
+FACE_GROUPING_DBSCAN_MIN_SAMPLES = 1
 MIN_SIMILARITY_CLUSTERING_EPS = 0.02
 MAX_SIMILARITY_CLUSTERING_EPS = 0.20
 DEFAULT_SIMILARITY_CLUSTERING_EPS = DBSCAN_EPS
@@ -195,11 +205,19 @@ RAW_AUTO_EDIT_BRIGHTNESS_ENHANCED = (
 
 # Model settings
 ROTATION_MODEL_IMAGE_SIZE = 384  # Image size for rotation detection model
-SUPPORTED_SIMILARITY_EMBEDDING_MODELS = (
-    "facebook/dinov2-small",
-    "facebook/dinov2-base",
-)
-DEFAULT_SIMILARITY_EMBEDDING_MODEL = "facebook/dinov2-small"
+# The embedding model itself is declared once in core.model_provisioning; it is
+# deliberately not user-selectable so every workflow shares one download.
+
+
+class CullGroupingStrictness(Enum):
+    """User-facing precision policy for Cull same-subject grouping."""
+
+    CONSERVATIVE = "conservative"
+    STANDARD = "standard"
+    BROAD = "broad"
+
+
+DEFAULT_CULL_GROUPING_STRICTNESS = CullGroupingStrictness.CONSERVATIVE
 
 # --- Cache Constants ---
 # Thumbnail cache
@@ -292,6 +310,45 @@ def set_rotation_confirm_lossy(confirm: bool):
     settings.setValue(ROTATION_CONFIRM_LOSSY_KEY, confirm)
 
 
+def get_show_workflow_shortcuts() -> bool:
+    """Return whether the shared workflow shortcut footer is visible."""
+    settings = _get_settings()
+    return settings.value(
+        SHOW_WORKFLOW_SHORTCUTS_KEY, DEFAULT_SHOW_WORKFLOW_SHORTCUTS, type=bool
+    )
+
+
+def set_show_workflow_shortcuts(visible: bool) -> None:
+    """Persist whether the shared workflow shortcut footer is visible."""
+    settings = _get_settings()
+    settings.setValue(SHOW_WORKFLOW_SHORTCUTS_KEY, bool(visible))
+
+
+def get_workflow_step_visibility() -> dict[str, bool]:
+    """Return persisted workflow navigation visibility for every step."""
+
+    settings = _get_settings()
+    visibility = {
+        step: settings.value(key, DEFAULT_WORKFLOW_STEP_VISIBILITY[step], type=bool)
+        for step, key in WORKFLOW_STEP_VISIBILITY_KEYS.items()
+    }
+    # These endpoints keep the application usable before and after review.
+    visibility["organize"] = True
+    visibility["cull"] = True
+    return visibility
+
+
+def set_workflow_step_visibility(visibility: Mapping[str, bool]) -> None:
+    """Persist optional workflow steps while keeping endpoints available."""
+
+    settings = _get_settings()
+    for step, key in WORKFLOW_STEP_VISIBILITY_KEYS.items():
+        value = visibility.get(step, DEFAULT_WORKFLOW_STEP_VISIBILITY[step])
+        if step in {"organize", "cull"}:
+            value = True
+        settings.setValue(key, bool(value))
+
+
 # --- Easy Delete Detection Thresholds ---
 def get_easy_delete_blur_threshold() -> float:
     """Min acceptable peak local tile sharpness; below this an image is flagged blurry."""
@@ -338,17 +395,42 @@ def set_easy_delete_white_threshold(value: float):
 def get_easy_delete_duplicate_distance() -> float:
     """Cosine-distance cutoff; pairs closer than this are flagged near-duplicates."""
     settings = _get_settings()
-    return settings.value(
+    value = settings.value(
         EASY_DELETE_DUPLICATE_DISTANCE_KEY,
         EASY_DELETE_DUPLICATE_COSINE_DISTANCE,
         type=float,
     )
+    migrated = settings.value(
+        EASY_DELETE_DUPLICATE_DISTANCE_V2_MIGRATED_KEY,
+        False,
+        type=bool,
+    )
+    if not migrated:
+        if value == _OLD_EASY_DELETE_DUPLICATE_COSINE_DISTANCE:
+            value = EASY_DELETE_DUPLICATE_COSINE_DISTANCE
+            settings.setValue(EASY_DELETE_DUPLICATE_DISTANCE_KEY, value)
+        settings.setValue(EASY_DELETE_DUPLICATE_DISTANCE_V2_MIGRATED_KEY, True)
+    return value
 
 
 def set_easy_delete_duplicate_distance(value: float):
     """Set the Easy Delete near-duplicate cosine-distance threshold."""
     settings = _get_settings()
     settings.setValue(EASY_DELETE_DUPLICATE_DISTANCE_KEY, float(value))
+    settings.setValue(EASY_DELETE_DUPLICATE_DISTANCE_V2_MIGRATED_KEY, True)
+
+
+# --- First-Run Intro Video ---
+def get_intro_video_shown() -> bool:
+    """Whether the first-run intro video has already been shown to this user."""
+    settings = _get_settings()
+    return settings.value(INTRO_VIDEO_SHOWN_KEY, False, type=bool)
+
+
+def set_intro_video_shown(value: bool):
+    """Record that the first-run intro video has been shown (or reset it)."""
+    settings = _get_settings()
+    settings.setValue(INTRO_VIDEO_SHOWN_KEY, bool(value))
 
 
 # --- Recent Folders ---
@@ -457,27 +539,6 @@ def set_orientation_model_name(model_name: str):
     settings.setValue(ORIENTATION_MODEL_NAME_KEY, model_name)
 
 
-def get_similarity_embedding_model_name() -> str:
-    """Gets the configured visual embedding model for similarity analysis."""
-    settings = _get_settings()
-    model_name = settings.value(
-        SIMILARITY_EMBEDDING_MODEL_KEY,
-        DEFAULT_SIMILARITY_EMBEDDING_MODEL,
-        type=str,
-    )
-    if model_name not in SUPPORTED_SIMILARITY_EMBEDDING_MODELS:
-        return DEFAULT_SIMILARITY_EMBEDDING_MODEL
-    return model_name
-
-
-def set_similarity_embedding_model_name(model_name: str):
-    """Sets the visual embedding model for similarity analysis."""
-    if model_name not in SUPPORTED_SIMILARITY_EMBEDDING_MODELS:
-        raise ValueError(f"Unsupported similarity embedding model: {model_name}")
-    settings = _get_settings()
-    settings.setValue(SIMILARITY_EMBEDDING_MODEL_KEY, model_name)
-
-
 def get_similarity_clustering_eps() -> float:
     """Gets the DBSCAN cosine-distance threshold used for similarity clustering."""
     settings = _get_settings()
@@ -507,6 +568,33 @@ def set_similarity_clustering_eps(eps: float):
         )
     settings = _get_settings()
     settings.setValue(SIMILARITY_CLUSTERING_EPS_KEY, eps)
+
+
+def get_cull_grouping_strictness() -> CullGroupingStrictness:
+    """Return the high-precision Cull grouping policy."""
+
+    value = _get_settings().value(
+        CULL_GROUPING_STRICTNESS_KEY,
+        DEFAULT_CULL_GROUPING_STRICTNESS.value,
+        type=str,
+    )
+    try:
+        return CullGroupingStrictness(str(value))
+    except ValueError:
+        return DEFAULT_CULL_GROUPING_STRICTNESS
+
+
+def set_cull_grouping_strictness(
+    strictness: CullGroupingStrictness | str,
+) -> None:
+    """Persist the high-precision Cull grouping policy."""
+
+    resolved = (
+        strictness
+        if isinstance(strictness, CullGroupingStrictness)
+        else CullGroupingStrictness(str(strictness))
+    )
+    _get_settings().setValue(CULL_GROUPING_STRICTNESS_KEY, resolved.value)
 
 
 # --- Update Check Settings ---
@@ -715,94 +803,6 @@ def calculate_high_memory_decode_workers() -> int:
     if mode == PerformanceMode.BALANCED:
         memory_slots = max(1, memory_slots // 2)
     return max(1, min(cpu_budget, memory_slots))
-
-
-def get_best_shot_batch_size() -> int:
-    settings = _get_settings()
-    value = settings.value(
-        BEST_SHOT_BATCH_SIZE_KEY, DEFAULT_BEST_SHOT_BATCH_SIZE, type=int
-    )
-    return max(2, int(value))
-
-
-def set_best_shot_batch_size(batch_size: int) -> None:
-    settings = _get_settings()
-    settings.setValue(BEST_SHOT_BATCH_SIZE_KEY, max(2, int(batch_size)))
-
-
-def get_local_best_shot_constants() -> LocalBestShotConstants:
-    """Return immutable constants for the local best-shot pipeline."""
-    return _LOCAL_BEST_SHOT_CONSTANTS
-
-
-def get_openai_config() -> dict:
-    settings = _get_settings()
-
-    api_key = settings.value(OPENAI_API_KEY_KEY, DEFAULT_OPENAI_API_KEY, type=str)
-    model = settings.value(OPENAI_MODEL_KEY, DEFAULT_OPENAI_MODEL, type=str)
-    base_url = settings.value(OPENAI_BASE_URL_KEY, DEFAULT_OPENAI_BASE_URL, type=str)
-    max_tokens = settings.value(
-        OPENAI_MAX_TOKENS_KEY, DEFAULT_OPENAI_MAX_TOKENS, type=int
-    )
-    timeout = settings.value(OPENAI_TIMEOUT_KEY, DEFAULT_OPENAI_TIMEOUT, type=int)
-    max_workers = settings.value(
-        OPENAI_MAX_WORKERS_KEY, DEFAULT_OPENAI_MAX_WORKERS, type=int
-    )
-
-    best_shot_prompt = settings.value(OPENAI_BEST_SHOT_PROMPT_KEY, None, type=str)
-    rating_prompt = settings.value(OPENAI_RATING_PROMPT_KEY, None, type=str)
-
-    config = {
-        "api_key": api_key,
-        "model": model,
-        "base_url": base_url,
-        "max_tokens": max_tokens,
-        "timeout": timeout,
-        "max_workers": max_workers,
-        "best_shot_prompt": best_shot_prompt,
-        "rating_prompt": rating_prompt,
-    }
-    # Remove optional None entries for prompts/base_url so dataclass defaults apply
-    return {k: v for k, v in config.items() if v is not None or k == "api_key"}
-
-
-def set_openai_config(
-    *,
-    api_key: str | None = None,
-    model: str | None = None,
-    base_url: str | None = None,
-    max_tokens: int | None = None,
-    timeout: int | None = None,
-    max_workers: int | None = None,
-    best_shot_prompt: str | None = None,
-    rating_prompt: str | None = None,
-) -> None:
-    settings = _get_settings()
-
-    def _set_or_clear(key: str, value):
-        if isinstance(value, str):
-            value = value.strip()
-        if value is None or value == "":
-            settings.remove(key)
-        else:
-            settings.setValue(key, value)
-
-    if api_key is not None:
-        _set_or_clear(OPENAI_API_KEY_KEY, api_key)
-    if model is not None:
-        _set_or_clear(OPENAI_MODEL_KEY, model)
-    if base_url is not None:
-        _set_or_clear(OPENAI_BASE_URL_KEY, base_url)
-    if max_tokens is not None:
-        _set_or_clear(OPENAI_MAX_TOKENS_KEY, max_tokens)
-    if timeout is not None:
-        _set_or_clear(OPENAI_TIMEOUT_KEY, timeout)
-    if max_workers is not None:
-        _set_or_clear(OPENAI_MAX_WORKERS_KEY, max_workers)
-    if best_shot_prompt is not None:
-        _set_or_clear(OPENAI_BEST_SHOT_PROMPT_KEY, best_shot_prompt)
-    if rating_prompt is not None:
-        _set_or_clear(OPENAI_RATING_PROMPT_KEY, rating_prompt)
 
 
 def get_location_grouping_depth() -> int:

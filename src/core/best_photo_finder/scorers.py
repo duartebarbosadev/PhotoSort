@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from math import dist
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from core.best_photo_finder.config import SelectorConfig
@@ -12,10 +12,14 @@ from core.best_photo_finder.errors import (
     SelectionError,
 )
 from core.best_photo_finder.models import TechnicalMetrics
-from core.app_settings import get_huggingface_cache_dir
-from core.huggingface_progress import build_hf_tqdm_class
+from core.model_provisioning import AESTHETIC_MODEL, resolve_snapshot
+from core.image_features.face_analysis import FaceAnalysisService
 from core.runtime_paths import resolve_face_landmarker_model_path
 import contextlib
+import sys
+
+if TYPE_CHECKING:
+    from transformers import BeitImageProcessor
 
 LEFT_EYE_INDICES = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_INDICES = (362, 385, 387, 263, 373, 380)
@@ -81,14 +85,29 @@ class MediaPipeTasksFaceLandmarker:
         try:
             tasks = mediapipe.tasks
             vision = tasks.vision
+            # MediaPipe 1.0.1 aborts on macOS CPU graphs (upstream #6356).
+            # Metal requires four-channel pixel buffers, including for RGB input.
+            self._use_metal = sys.platform == "darwin"
+            base_options = tasks.BaseOptions(
+                model_asset_path=str(model_path),
+                delegate=(
+                    tasks.BaseOptions.Delegate.GPU
+                    if self._use_metal
+                    else tasks.BaseOptions.Delegate.CPU
+                ),
+            )
             options = vision.FaceLandmarkerOptions(
-                base_options=tasks.BaseOptions(model_asset_path=str(model_path)),
+                base_options=base_options,
                 running_mode=vision.RunningMode.IMAGE,
                 num_faces=10,
             )
             self._landmarker = vision.FaceLandmarker.create_from_options(options)
             self._image_type = mediapipe.Image
-            self._image_format = mediapipe.ImageFormat.SRGB
+            self._image_format = (
+                mediapipe.ImageFormat.SRGBA
+                if self._use_metal
+                else mediapipe.ImageFormat.SRGB
+            )
         except (AttributeError, ValueError, RuntimeError) as exc:
             version = getattr(mediapipe, "__version__", "unknown")
             raise MissingDependencyError(
@@ -103,10 +122,13 @@ class MediaPipeTasksFaceLandmarker:
             raise MissingDependencyError(
                 "Missing optional dependency 'numpy'. Install the required extras before running the selector."
             ) from exc
-        image = self._image_type(
-            image_format=self._image_format,
-            data=np.ascontiguousarray(rgb_image),
-        )
+        if self._use_metal:
+            pixels = np.empty((*rgb_image.shape[:2], 4), dtype=np.uint8)
+            pixels[..., :3] = rgb_image
+            pixels[..., 3] = 255
+        else:
+            pixels = np.ascontiguousarray(rgb_image)
+        image = self._image_type(image_format=self._image_format, data=pixels)
         return self._landmarker.detect(image).face_landmarks
 
     def close(self) -> None:
@@ -159,14 +181,19 @@ class OpenCvMediapipeTechnicalScorer:
     _face_landmarker: FaceLandmarkerBackend | None = field(
         default=None, init=False, repr=False
     )
+    _face_analysis_service: FaceAnalysisService | None = field(
+        default=None, init=False, repr=False
+    )
 
     def _get_face_landmarker(self) -> FaceLandmarkerBackend:
         if self._face_landmarker is not None:
             return self._face_landmarker
         try:
-            self._face_landmarker = self.face_landmarker_factory(
-                resolve_face_landmarker_model_path()
+            self._face_analysis_service = FaceAnalysisService(
+                backend_factory=self.face_landmarker_factory,
+                model_path_resolver=resolve_face_landmarker_model_path,
             )
+            self._face_landmarker = self._face_analysis_service.get_backend()
         except (
             FileNotFoundError,
             MissingDependencyError,
@@ -181,8 +208,12 @@ class OpenCvMediapipeTechnicalScorer:
 
     def close(self) -> None:
         landmarker = self._face_landmarker
+        service = self._face_analysis_service
         self._face_landmarker = None
-        if landmarker is not None:
+        self._face_analysis_service = None
+        if service is not None:
+            service.close()
+        elif landmarker is not None:
             with contextlib.suppress(RuntimeError):
                 landmarker.close()
 
@@ -270,9 +301,16 @@ class OpenCvMediapipeTechnicalScorer:
 
 @dataclass(slots=True)
 class HuggingFaceAestheticScorer:
-    model_name: str = "cafeai/cafe_aesthetic"
+    model_name: str = AESTHETIC_MODEL.repo_id
     progress_callback: Callable[[int, str], None] | None = None
+    # Downloads happen only after the user consents, exactly like every other
+    # managed model.
+    allow_download: bool = False
+    should_cancel: Callable[[], bool] | None = None
     _model: object | None = field(default=None, init=False, repr=False)
+    _image_processor: BeitImageProcessor | None = field(
+        default=None, init=False, repr=False
+    )
     _aesthetic_label_index: int | None = field(default=None, init=False, repr=False)
     _resolved_device: ResolvedDevice | None = field(
         default=None, init=False, repr=False
@@ -298,11 +336,23 @@ class HuggingFaceAestheticScorer:
         image.thumbnail((size, size), Image.Resampling.LANCZOS)
         return image
 
+    def _resolve_model_snapshot(self) -> str:
+        """Resolve the aesthetic weights through the shared model service."""
+
+        model_path = resolve_snapshot(
+            AESTHETIC_MODEL,
+            allow_download=self.allow_download,
+            progress_callback=self.progress_callback,
+            should_cancel=self.should_cancel,
+        )
+        if self.progress_callback:
+            self.progress_callback(-1, f"Loading {AESTHETIC_MODEL.label}")
+        return model_path
+
     def _build_model(self, config: SelectorConfig):
         self._resolved_device = resolve_device(config.device)
         try:
             import torch
-            from huggingface_hub import snapshot_download
             from transformers import AutoModelForImageClassification
         except ImportError as exc:
             raise MissingDependencyError(
@@ -316,16 +366,7 @@ class HuggingFaceAestheticScorer:
                 torch, self._resolved_device.torch_dtype_name
             )
 
-        model_path = snapshot_download(
-            self.model_name,
-            cache_dir=get_huggingface_cache_dir(),
-            tqdm_class=build_hf_tqdm_class(
-                self.progress_callback,
-                label=f"Downloading {self.model_name}",
-            ),
-        )
-        if self.progress_callback:
-            self.progress_callback(-1, f"Loading {self.model_name}")
+        model_path = self._resolve_model_snapshot()
         model = AutoModelForImageClassification.from_pretrained(
             model_path, local_files_only=True, **model_kwargs
         )
@@ -380,33 +421,30 @@ class HuggingFaceAestheticScorer:
             return buffer.dtype
         return torch.float32
 
-    def _preprocess_for_model(self, image):
-        try:
-            import numpy as np
-            import torch
-            from PIL import Image
-        except ImportError as exc:
-            raise MissingDependencyError(
-                "Missing optional dependency required for aesthetic scoring. "
-                "Install the aesthetic extras before running the selector."
-            ) from exc
+    def _preprocess_batch(self, images):
+        from PIL import Image
+        from transformers import BeitImageProcessor
 
-        image_size = config_size = 384
-        if self._model is not None:
-            model_config = getattr(self._model, "config", None)
-            image_size = int(
-                getattr(model_config, "image_size", config_size) or config_size
+        model_config = getattr(self._model, "config", None)
+        image_size = int(getattr(model_config, "image_size", 384) or 384)
+        if self._image_processor is None:
+            # Keep the existing PIL bicubic resize: Torchvision's resize produces
+            # different pixels. Batch only tensor conversion and normalization.
+            self._image_processor = BeitImageProcessor(
+                do_resize=False,
+                do_center_crop=False,
+                image_mean=(0.5, 0.5, 0.5),
+                image_std=(0.5, 0.5, 0.5),
             )
-
-        if image.size != (image_size, image_size):
-            image = image.resize((image_size, image_size), Image.Resampling.BICUBIC)
-
-        pixels = np.asarray(image, dtype="float32") / 255.0
-        mean = np.array((0.5, 0.5, 0.5), dtype="float32")
-        std = np.array((0.5, 0.5, 0.5), dtype="float32")
-        pixels = (pixels - mean) / std
-        tensor = torch.from_numpy(pixels).permute(2, 0, 1)
-        return tensor
+        resized = [
+            image.resize((image_size, image_size), Image.Resampling.BICUBIC)
+            if image.size != (image_size, image_size)
+            else image
+            for image in images
+        ]
+        return self._image_processor(images=resized, return_tensors="pt")[
+            "pixel_values"
+        ]
 
     def _extract_aesthetic_score(
         self, predictions: Iterable[dict[str, float]]
@@ -455,9 +493,7 @@ class HuggingFaceAestheticScorer:
         for start in range(0, len(items), batch_size):
             batch_items = items[start : start + batch_size]
             input_dtype = self._model_input_dtype(model)
-            pixel_values = torch.stack(
-                [self._preprocess_for_model(image) for _, image in batch_items]
-            )
+            pixel_values = self._preprocess_batch([image for _, image in batch_items])
             if device == "cuda":
                 pixel_values = pixel_values.to(device="cuda", dtype=input_dtype)
             elif device == "mps":
@@ -465,16 +501,20 @@ class HuggingFaceAestheticScorer:
             else:
                 pixel_values = pixel_values.to(dtype=input_dtype)
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 logits = model(pixel_values=pixel_values).logits
-                probabilities = torch.softmax(logits, dim=-1)[:, aesthetic_label_index]
+                # Transfer the batch once instead of synchronizing the accelerator
+                # separately for every image score.
+                probabilities = (
+                    torch.softmax(logits, dim=-1)[:, aesthetic_label_index]
+                    .cpu()
+                    .tolist()
+                )
 
             for (path, _image), probability in zip(
                 batch_items, probabilities, strict=True
             ):
-                scores[path] = _clamp(
-                    float(probability.detach().cpu().item()), 0.0, 1.0
-                )
+                scores[path] = _clamp(probability, 0.0, 1.0)
         return scores
 
     def score_batch(

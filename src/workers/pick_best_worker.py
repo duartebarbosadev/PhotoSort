@@ -24,6 +24,7 @@ from core.image_processing.raw_image_processor import is_raw_extension
 from core.image_processing.standard_image_processor import SUPPORTED_STANDARD_EXTENSIONS
 from core.image_pipeline import ANALYSIS_CACHE_RESOLUTION
 from core.media_utils import is_video_extension
+from core.model_download import ModelDownloadCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +67,13 @@ class PickBestWorker(QObject):
         self,
         cluster_map: dict[int, list[str]],
         image_pipeline=None,
+        allow_model_download: bool = False,
         parent: QObject | None = None,
     ):
         super().__init__(parent)
         self.cluster_map = cluster_map
         self.image_pipeline = image_pipeline
+        self.allow_model_download = allow_model_download
         self._should_stop = False
 
     def stop(self) -> None:
@@ -79,10 +82,14 @@ class PickBestWorker(QObject):
     def run(self) -> None:
         try:
             self._run()
+        except ModelDownloadCancelled:
+            logger.info("Pick Best cancelled during model download.")
         finally:
             self.finished.emit()
 
     def _run(self) -> None:
+        if self._should_stop:
+            return
         # Only process clusters with 2+ images
         scorable_clusters = {
             cid: paths for cid, paths in self.cluster_map.items() if len(paths) >= 2
@@ -100,7 +107,9 @@ class PickBestWorker(QObject):
         selector = PhotoSelector(
             technical_scorer=OpenCvMediapipeTechnicalScorer(),
             aesthetic_scorer=HuggingFaceAestheticScorer(
-                progress_callback=self._handle_model_progress
+                progress_callback=self._handle_model_progress,
+                allow_download=self.allow_model_download,
+                should_cancel=lambda: self._should_stop,
             ),
             preview_loader=self._load_preview_image,
         )
@@ -156,6 +165,8 @@ class PickBestWorker(QObject):
                                 len(cluster_result["failed"]),
                                 _summarize_failed_images(cluster_result["failed"]),
                             )
+                    except ModelDownloadCancelled:
+                        raise
                     except FaceLandmarkerError as exc:
                         message = (
                             "Pick Best stopped because required face landmark analysis "

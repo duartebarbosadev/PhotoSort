@@ -1,7 +1,6 @@
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
-    QLabel,
     QTreeView,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -17,12 +16,14 @@ from PyQt6.QtGui import (
     QStandardItem,
 )
 import os
+import re
 from typing import override
 
 from core.image_pipeline import ImagePipeline
-from core.caching.exif_cache import ExifCache
 from core.image_processing.raw_image_processor import is_raw_extension
 from core.media_utils import is_image_extension
+from core.similarity_cache import parse_cluster_id
+from ui.workflow_review_components import WorkflowProgressView
 import logging
 
 logger = logging.getLogger(__name__)
@@ -36,12 +37,12 @@ class DroppableTreeView(QTreeView):
 
     Architecture for keyboard shortcuts in PhotoSort:
 
-    1. Single-letter QAction shortcuts (D, R, A, I, S, T, F, B):
+    1. Single-letter QAction shortcuts (D, R, A, I, S, F):
        - Defined in MenuManager with ApplicationShortcut context
        - This class ignores them in keyPressEvent() to prevent type-ahead search
        - Qt's QAction system then processes them normally
 
-    2. Navigation keys (arrows, HJKL):
+    2. Navigation keys (arrows):
        - Handled by MainWindow.eventFilter() -> HotkeyController
 
     3. Modified shortcuts (Ctrl+S, Alt+1, Shift+R, etc.):
@@ -80,13 +81,11 @@ class DroppableTreeView(QTreeView):
         # Modified shortcuts (Ctrl+S, Alt+1, etc.) are already handled correctly by Qt
         shortcut_keys = {
             Qt.Key.Key_A,  # Actual size zoom
-            Qt.Key.Key_B,  # Detect blur
             Qt.Key.Key_D,  # Mark for deletion
             Qt.Key.Key_F,  # Toggle folder view
             Qt.Key.Key_I,  # Toggle metadata sidebar
             Qt.Key.Key_R,  # Rotate clockwise
             Qt.Key.Key_S,  # Group by similarity
-            Qt.Key.Key_T,  # Toggle thumbnails
         }
 
         # If it's an unmodified single-letter shortcut, ignore it
@@ -103,7 +102,13 @@ class DroppableTreeView(QTreeView):
         if not self.main_window.group_by_similarity_mode:
             return False
 
-        if not self.main_window.app_state.cluster_results:
+        app_state = self.main_window.app_state
+        cluster_results = (
+            app_state.cluster_results_for_workflow()
+            if hasattr(app_state, "cluster_results_for_workflow")
+            else app_state.cluster_results
+        )
+        if not cluster_results:
             return False
 
         pos = event.position().toPoint()
@@ -140,12 +145,6 @@ class DroppableTreeView(QTreeView):
                 return None
         return None
 
-    def _parse_cluster_id(self, value) -> int | None:
-        """Delegate to the shared parser used elsewhere in the UI."""
-        from ui.helpers.cluster_utils import ClusterUtils
-
-        return ClusterUtils.parse_cluster_id(value)
-
     def _move_dragged_items_to_cluster(self, target_cluster_id: int):
         """Move currently selected items to the target cluster."""
         selected_paths = [
@@ -158,22 +157,25 @@ class DroppableTreeView(QTreeView):
 
         app_state = self.main_window.app_state
         folder_path = app_state.current_folder_path
+        cluster_results = app_state.cluster_results_for_workflow()
 
         overrides_to_save = {}
         for path in selected_paths:
-            app_state.cluster_results[path] = target_cluster_id
+            cluster_results[path] = target_cluster_id
             overrides_to_save[path] = target_cluster_id
 
         # Persist to cache
         if folder_path:
             app_state.analysis_cache.save_manual_cluster_overrides(
-                folder_path, overrides_to_save
+                folder_path,
+                overrides_to_save,
+                namespace=app_state.manual_override_namespace_for_workflow(),
             )
 
         # Update UI - extract cluster IDs for display
         cluster_ids = set()
-        for value in app_state.cluster_results.values():
-            parsed_id = self._parse_cluster_id(value)
+        for value in cluster_results.values():
+            parsed_id = parse_cluster_id(value)
             if parsed_id is not None:
                 cluster_ids.add(parsed_id)
         sorted_cluster_ids = sorted(cluster_ids)
@@ -371,31 +373,20 @@ class LoadingOverlay(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        self.bg_widget = QWidget(self)
-        # Fallback inline style ensures visibility before external stylesheet loads.
-        # External stylesheet (dark_theme.qss) will override this when applied.
-        self.bg_widget.setStyleSheet("background-color: rgba(32, 32, 32, 0.85);")
-        main_layout.addWidget(self.bg_widget)
-
-        content_layout = QVBoxLayout(self.bg_widget)
-        content_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        content_layout.setContentsMargins(20, 20, 20, 20)
-
-        self.text_label = QLabel("Loading...", self)
-        self.text_label.setObjectName("loading_text_label")  # For styling
-        self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Fallback inline style for text visibility before external stylesheet loads
-        self.text_label.setStyleSheet(
-            "color: #E5E5E5; font-size: 15pt; font-weight: bold; "
-            "background-color: transparent; padding: 25px;"
+        self.progress_view = WorkflowProgressView(
+            "Working on your library",
+            default_message="Loading…",
+            parent=self,
         )
-
-        content_layout.addWidget(self.text_label)
+        self.bg_widget = self.progress_view
+        self.text_label = self.progress_view.message_label
+        main_layout.addWidget(self.progress_view)
         self.hide()
 
     def setText(self, text):
-        self.text_label.setText(text)
-        self.text_label.adjustSize()
+        match = re.search(r"\((\d+)%\)", text)
+        percent = int(match.group(1)) if match else -1
+        self.progress_view.update_progress(text, percent)
 
     @override
     def showEvent(self, event):
@@ -405,6 +396,7 @@ class LoadingOverlay(QWidget):
 
     @override
     def hideEvent(self, event):
+        self.progress_view.mark_finished()
         super().hideEvent(event)
 
     def update_position(self):
@@ -434,133 +426,13 @@ class LoadingOverlay(QWidget):
             self.show()
 
 
-# --- Blur Detection Worker ---
-class BlurDetectionWorker(QObject):
-    progress_update = pyqtSignal(int, int, str)  # current, total, basename
-    blur_status_updated = pyqtSignal(str, bool)  # image_path, is_blurred
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-
-    def __init__(
-        self,
-        image_paths: list[str],
-        blur_threshold: float,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self._image_paths = image_paths  # Changed from image_data_list
-        self._blur_threshold = blur_threshold
-        self._is_running = True
-
-    def stop(self):
-        self._is_running = False
-
-    def _should_continue(self) -> bool:
-        return self._is_running
-
-    def run_detection(self):
-        self._is_running = True
-        try:
-            from core.image_features.blur_detector import BlurDetector
-
-            BlurDetector.detect_blur_in_batch(
-                image_paths=self._image_paths,
-                threshold=self._blur_threshold,
-                status_update_callback=self.blur_status_updated.emit,  # Pass signal emitter directly
-                progress_callback=self.progress_update.emit,  # Pass signal emitter directly
-                should_continue_callback=self._should_continue,
-            )
-        except Exception as e:
-            err_msg = f"Error during batch blur detection: {e}"
-            logger.error(err_msg, exc_info=True)
-            self.error.emit(err_msg)
-        finally:
-            if (
-                not self._is_running and not self.signalsBlocked()
-            ):  # If stopped, error might have been emitted by batch
-                pass  # Avoid double emitting error if already cancelled and handled by batch
-            elif (
-                self.signalsBlocked()
-            ):  # If signals were blocked (e.g. due to deletion)
-                pass
-            else:  # Normal finish
-                self.finished.emit()
-
-
-# --- Rotation Detection Worker ---
-class RotationDetectionWorker(QObject):
-    """Worker thread for detecting rotation suggestions in images."""
-
-    progress_update = pyqtSignal(int, int, str)  # current, total, basename
-    rotation_detected = pyqtSignal(str, int)  # image_path, suggested_rotation
-    model_not_found = pyqtSignal(str)  # model_path
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-
-    def __init__(
-        self,
-        image_paths: list[str],
-        image_pipeline: ImagePipeline,
-        exif_cache: ExifCache,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self.image_paths = image_paths
-        self.image_pipeline = image_pipeline
-        self.exif_cache = exif_cache
-        self._should_stop = False
-
-    def stop(self):
-        """Request the worker to stop."""
-        self._should_stop = True
-
-    def run(self):
-        """Run the rotation detection process."""
-        try:
-            from core.image_features.rotation_detector import RotationDetector
-            from core.image_features.model_rotation_detector import (
-                ModelNotFoundError,
-            )
-
-            def result_callback(image_path: str, suggested_rotation: int):
-                if not self._should_stop:
-                    self.rotation_detected.emit(image_path, suggested_rotation)
-
-            def progress_callback(current: int, total: int, basename: str):
-                if not self._should_stop:
-                    self.progress_update.emit(current, total, basename)
-
-            def should_continue_callback() -> bool:
-                return not self._should_stop
-
-            # Pass the image pipeline instance to the detector
-            detector = RotationDetector(self.image_pipeline, self.exif_cache)
-            detector.detect_rotation_in_batch(
-                image_paths=self.image_paths,
-                result_callback=result_callback,
-                progress_callback=progress_callback,
-                should_continue_callback=should_continue_callback,
-            )
-
-            if not self._should_stop:
-                self.finished.emit()
-
-        except ModelNotFoundError as e:
-            logger.error(f"Rotation model not found during worker execution: {e}")
-            if not self._should_stop:
-                self.model_not_found.emit(str(e))  # Emit the model path
-        except Exception as e:
-            logger.error(f"Error in rotation detection worker: {e}")
-            if not self._should_stop:
-                self.error.emit(str(e))
-
-
 # --- Similarity Engine Worker ---
 class SimilarityWorker(QObject):
     """Worker for running similarity analysis in the background."""
 
     progress_update = pyqtSignal(int, str)
     embeddings_generated = pyqtSignal(object)  # Using object to pass dict
+    regional_embeddings_generated = pyqtSignal(object)
     clustering_complete = pyqtSignal(object)  # Using object to pass dict
     error = pyqtSignal(str)
     finished = pyqtSignal()
@@ -570,6 +442,9 @@ class SimilarityWorker(QObject):
         file_paths: list[str],
         allow_model_download: bool = False,
         image_pipeline: ImagePipeline | None = None,
+        folder_path: str | None = None,
+        analysis_cache=None,
+        fingerprints: dict[str, tuple[int, int]] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -578,6 +453,10 @@ class SimilarityWorker(QObject):
         self._is_running = True
         self.similarity_engine = None
         self.image_pipeline = image_pipeline
+        self.folder_path = folder_path
+        self.analysis_cache = analysis_cache
+        self.fingerprints = fingerprints or {}
+        self._similarity_signature = ""
 
     def _has_raw_images(self) -> bool:
         """Check if any of the file paths are RAW image files."""
@@ -596,14 +475,38 @@ class SimilarityWorker(QObject):
 
     def run(self):
         """The main method that will be executed in the new thread."""
-        self._is_running = True
+        if not self._is_running:
+            self.finished.emit()
+            return
         try:
             from core.similarity_engine import SimilarityEngine
+            from core.similarity_cache import (
+                SimilarityClusteringResult,
+                normalize_fingerprints,
+            )
+            from core.similarity_clustering import build_signature, load_cached_clusters
 
             # 1. Instantiate the engine inside the worker thread
             self.similarity_engine = SimilarityEngine(
                 allow_model_download=self.allow_model_download,
                 image_pipeline=self.image_pipeline,
+            )
+            if not self._is_running:
+                self.similarity_engine.stop()
+                self.finished.emit()
+                return
+
+            normalized_fingerprints = normalize_fingerprints(
+                self.file_paths, self.fingerprints
+            )
+            self._similarity_signature = build_signature(
+                self.similarity_engine, self.file_paths, normalized_fingerprints
+            )
+            cached_clusters = load_cached_clusters(
+                self.analysis_cache,
+                self.folder_path,
+                signature=self._similarity_signature,
+                expected_paths=set(self.file_paths),
             )
 
             # 2. Connect its signals to this worker's signals
@@ -611,15 +514,36 @@ class SimilarityWorker(QObject):
             self.similarity_engine.embeddings_generated.connect(
                 self.embeddings_generated
             )
-            self.similarity_engine.clustering_complete.connect(self.clustering_complete)
+            self.similarity_engine.regional_embeddings_generated.connect(
+                self.regional_embeddings_generated
+            )
+            self.similarity_engine.clustering_complete.connect(
+                self._handle_clustering_complete
+            )
             self.similarity_engine.error.connect(self.error)
 
-            # 3. Connect the final signal to this worker's finished signal
-            self.similarity_engine.clustering_complete.connect(self.finished)
+            # 3. Connect the final error signal to this worker's finished signal
             self.similarity_engine.error.connect(self.finished)
 
             # 4. Start the process
-            self.similarity_engine.generate_embeddings_for_files(self.file_paths)
+            self.similarity_engine.generate_embeddings_for_files(
+                self.file_paths,
+                fingerprints=normalized_fingerprints,
+                perform_clustering=cached_clusters is None,
+            )
+            if cached_clusters is not None and self._is_running:
+                logger.info(
+                    "Reusing %d cached similarity cluster assignments.",
+                    len(cached_clusters),
+                )
+                self.clustering_complete.emit(
+                    SimilarityClusteringResult(
+                        clusters=cached_clusters,
+                        signature=self._similarity_signature,
+                        reused=True,
+                    )
+                )
+                self.finished.emit()
 
         except Exception as e:
             logger.error(
@@ -628,17 +552,27 @@ class SimilarityWorker(QObject):
             self.error.emit(str(e))
             self.finished.emit()
 
+    def _handle_clustering_complete(self, cluster_results: dict[str, int]) -> None:
+        """Apply and persist analysis-cache state before returning to the UI."""
 
-# --- CUDA Detection Worker ---
-class CudaDetectionWorker(QObject):
-    finished = pyqtSignal(str)  # torch_device
+        if not self._is_running:
+            self.finished.emit()
+            return
 
-    def run(self):
-        from core.app_settings import get_preferred_torch_device
+        from core.similarity_cache import SimilarityClusteringResult
+        from core.similarity_clustering import persist_clusters
 
-        try:
-            device = get_preferred_torch_device()
-        except Exception as e:
-            logger.error(f"Error during torch device detection: {e}", exc_info=True)
-            device = "cpu"
-        self.finished.emit(device)
+        results = persist_clusters(
+            self.analysis_cache,
+            self.folder_path,
+            cluster_results,
+            signature=self._similarity_signature,
+        )
+        self.clustering_complete.emit(
+            SimilarityClusteringResult(
+                clusters=results,
+                signature=self._similarity_signature,
+                reused=False,
+            )
+        )
+        self.finished.emit()

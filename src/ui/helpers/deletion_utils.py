@@ -22,7 +22,7 @@ def build_item_text(
 
     Rules (mirrors legacy inline logic):
     - Append (DELETED) when marked.
-    - Append (Best) when flagged as best-shot winner.
+    - Append (Best) when flagged as the Pick Best winner.
     - Append (Blurred) when blurred.
     - Order: filename (DELETED) (Best) (Blurred)
     """

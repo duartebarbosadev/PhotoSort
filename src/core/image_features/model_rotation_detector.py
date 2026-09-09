@@ -221,7 +221,7 @@ class ModelRotationDetector(RotationDetectorProtocol):
             base_dirs.append(os.path.join(resolve_runtime_root(), MODEL_SAVE_DIR))
 
         project_root = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..")
+            os.path.join(os.path.dirname(__file__), "..", "..", "..")
         )
         base_dirs.append(os.path.join(project_root, MODEL_SAVE_DIR))
         base_dirs = list(dict.fromkeys(os.path.abspath(path) for path in base_dirs))
@@ -259,6 +259,8 @@ class ModelRotationDetector(RotationDetectorProtocol):
     def _build_expected_model_path(self) -> str:
         """Best-effort path hint for the dialog when the model is missing."""
         model_name = get_orientation_model_name() or "orientation_model.onnx"
+        if not is_frozen_runtime():
+            return os.path.join(".", "models", model_name)
         return os.path.join(get_app_models_dir(), model_name)
 
     def _load_image(self, path: str):

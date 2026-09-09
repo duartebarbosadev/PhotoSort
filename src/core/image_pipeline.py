@@ -3,6 +3,7 @@ import time
 import logging
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from PIL import Image, ImageDraw
 
 try:  # Optional; some minimal Pillow builds may omit ImageQt
@@ -20,7 +21,7 @@ from .image_processing.standard_image_processor import (
 )
 from .image_processing.image_orientation_handler import ImageOrientationHandler
 from .caching.thumbnail_cache import ThumbnailCache
-from .caching.preview_cache import PreviewCache
+from .caching.preview_cache import PreviewCache, PreviewCacheCapacityError
 from .media_utils import is_video_extension
 
 logger = logging.getLogger(__name__)
@@ -45,10 +46,24 @@ def _record_preview_generation_log(duration: float, basename: str) -> None:
 
 # Default sizes and resolutions (can be made configurable or passed in)
 THUMBNAIL_MAX_SIZE: tuple[int, int] = (256, 256)
-PRELOAD_MAX_RESOLUTION: tuple[int, int] = (1920, 1200)
+REVIEW_PROXY_MAX_RESOLUTION: tuple[int, int] = (2560, 2560)
 ANALYSIS_CACHE_RESOLUTION: tuple[int, int] = (1024, 1024)
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 # DISPLAY_MAX_RESOLUTION might be different, e.g., based on UI element size
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewAssetResult:
+    path: str
+    preview_ready: bool
+    thumbnail_ready: bool
+    cache_hit: bool
+    encoded_bytes: int = 0
+    error: str | None = None
+
+    @property
+    def success(self) -> bool:
+        return self.thumbnail_ready and self.preview_ready
 
 
 class ImagePipeline:
@@ -133,7 +148,7 @@ class ImagePipeline:
     def thumbnail_cache_key(
         self,
         image_path: str,
-        apply_orientation: bool = False,
+        apply_orientation: bool = True,
         *,
         file_size: int | None = None,
         mtime_ns: int | None = None,
@@ -152,6 +167,7 @@ class ImagePipeline:
             int(mtime_ns),
             apply_auto_edits,
             apply_orientation,
+            RawImageProcessor.DISPLAY_RECIPE_VERSION if apply_auto_edits else 0,
         )
 
     def preview_cache_key(self, image_path: str, resolution: tuple[int, int]) -> tuple:
@@ -168,6 +184,7 @@ class ImagePipeline:
             mtime_ns,
             tuple(resolution),
             apply_auto_edits,
+            RawImageProcessor.DISPLAY_RECIPE_VERSION if apply_auto_edits else 0,
         )
 
     def analysis_cache_key(
@@ -196,6 +213,132 @@ class ImagePipeline:
         """Create a pixmap that owns its storage independently of Pillow."""
         qt_image = ImageQt(image).copy()
         return QPixmap.fromImage(qt_image).copy()
+
+    def qpixmap_from_pil(self, image: Image.Image) -> QPixmap:
+        """Convert a worker-produced PIL image on the UI thread."""
+        return self._qpixmap_from_pil(image)
+
+    def get_source_dimensions(self, image_path: str) -> tuple[int, int] | None:
+        """Read source dimensions without performing a full image decode."""
+        normalized_path = os.path.normpath(image_path)
+        ext = os.path.splitext(normalized_path)[1].lower()
+        try:
+            if is_raw_extension(ext):
+                import rawpy
+
+                with rawpy.imread(normalized_path) as raw:
+                    return int(raw.sizes.width), int(raw.sizes.height)
+            with Image.open(normalized_path) as image:
+                width, height = image.size
+                orientation = image.getexif().get(274, 1)
+                if orientation in {5, 6, 7, 8}:
+                    width, height = height, width
+                return int(width), int(height)
+        except Exception:
+            logger.error(
+                "Could not inspect source dimensions for %s",
+                os.path.basename(normalized_path),
+                exc_info=True,
+            )
+            return None
+
+    def begin_active_review_working_set(self, image_paths) -> None:
+        # Video-only folders also own prepared thumbnails even though they do
+        # not write review proxies into the preview cache.
+        self.preview_cache.begin_working_set(
+            os.path.normpath(path) for path in image_paths if path
+        )
+
+    def end_active_review_working_set(self) -> None:
+        self.preview_cache.end_working_set()
+
+    def estimate_active_review_cache_bytes(
+        self,
+        image_paths,
+        *,
+        should_continue_callback: Callable[[], bool] | None = None,
+    ) -> int | None:
+        """Return a conservative upper bound for the active folder's proxies."""
+        total = 0
+        for path in dict.fromkeys(path for path in image_paths if path):
+            if should_continue_callback and not should_continue_callback():
+                return None
+            normalized_path = os.path.normpath(path)
+            if is_video_extension(normalized_path):
+                continue
+            key = self.preview_cache_key(normalized_path, REVIEW_PROXY_MAX_RESOLUTION)
+            existing_size = self.preview_cache.payload_size(key)
+            if existing_size:
+                total += existing_size + 65536
+                continue
+            dimensions = self.get_source_dimensions(normalized_path)
+            if dimensions is None:
+                continue
+            width, height = dimensions
+            scale = min(
+                1.0,
+                REVIEW_PROXY_MAX_RESOLUTION[0] / max(1, width),
+                REVIEW_PROXY_MAX_RESOLUTION[1] / max(1, height),
+            )
+            target_pixels = max(1, int(width * scale)) * max(1, int(height * scale))
+            # Four bytes per target pixel plus cache metadata is deliberately
+            # conservative for a quality-92 JPEG and avoids a mid-load eviction.
+            total += (target_pixels * 4) + 65536
+        return total
+
+    def render_display_image(
+        self,
+        image_path: str,
+        target_size: tuple[int, int] | None = None,
+    ) -> Image.Image | None:
+        """Decode the authoritative display appearance and optionally bound it."""
+        normalized_path = os.path.normpath(image_path)
+        ext = os.path.splitext(normalized_path)[1].lower()
+        decode_gate = (
+            self._high_memory_decode_gate
+            if is_raw_extension(ext) or ext in {".heic", ".heif"}
+            else None
+        )
+        if decode_gate:
+            decode_gate.acquire()
+        try:
+            if is_raw_extension(ext):
+                image = RawImageProcessor.render_display(
+                    normalized_path,
+                    "RGBA",
+                    target_size=target_size,
+                )
+            elif ext in SUPPORTED_STANDARD_EXTENSIONS:
+                image = StandardImageProcessor.load_as_pil(
+                    normalized_path,
+                    target_mode="RGBA",
+                    apply_exif_transpose=True,
+                    target_size=target_size,
+                )
+            else:
+                return None
+        finally:
+            if decode_gate:
+                decode_gate.release()
+
+        if image is None:
+            return None
+        if target_size and (
+            image.width > target_size[0] or image.height > target_size[1]
+        ):
+            image.thumbnail(target_size, Image.Resampling.LANCZOS)
+        return image
+
+    def load_detail_image(
+        self,
+        image_path: str,
+        target_size: tuple[int, int] | None = None,
+    ) -> Image.Image | None:
+        """Decode an oriented detail image with the canonical display recipe.
+
+        Details remain memory-only and are owned by the active inspection session.
+        """
+        return self.render_display_image(image_path, target_size)
 
     def _memory_get(self, key: tuple) -> Image.Image | None:
         with self._memory_cache_lock:
@@ -229,17 +372,168 @@ class ImagePipeline:
             self._memory_set(key, image)
         return image
 
-    def _cache_set(self, cache: object, key: tuple, image: Image.Image) -> None:
-        self._memory_set(key, image)
-        cache.set(key, image)
+    def _cache_set(self, cache: object, key: tuple, image: Image.Image) -> int:
+        encoded_bytes = cache.set(key, image)
+        if isinstance(encoded_bytes, int | float) and encoded_bytes > 0:
+            self._memory_set(key, image)
+        return int(encoded_bytes) if isinstance(encoded_bytes, int | float) else 0
 
     def _generation_lock(self, key: tuple) -> threading.Lock:
         return self._generation_locks[hash(key) % len(self._generation_locks)]
 
+    def ensure_review_assets_cached(
+        self,
+        image_path: str,
+        *,
+        promote_to_memory: bool = False,
+    ) -> ReviewAssetResult:
+        """Prepare the canonical proxy and its derived thumbnail exactly once."""
+        normalized_path = os.path.normpath(image_path)
+        if not os.path.isfile(normalized_path):
+            return ReviewAssetResult(
+                normalized_path, False, False, False, error="File does not exist"
+            )
+
+        ext = os.path.splitext(normalized_path)[1].lower()
+        thumbnail_key = self.thumbnail_cache_key(normalized_path, True)
+        if is_video_extension(ext):
+            thumbnail_hit = thumbnail_key in self.thumbnail_cache
+            thumbnail = self._get_pil_thumbnail(
+                normalized_path,
+                promote_to_memory=promote_to_memory,
+            )
+            thumbnail_ready = (
+                thumbnail is not None and thumbnail_key in self.thumbnail_cache
+            )
+            return ReviewAssetResult(
+                normalized_path,
+                True,
+                thumbnail_ready,
+                thumbnail_hit,
+                error=(
+                    None
+                    if thumbnail_ready
+                    else (
+                        "Video thumbnail cache write failed"
+                        if thumbnail is not None
+                        else "Video thumbnail failed"
+                    )
+                ),
+            )
+
+        if not (is_raw_extension(ext) or ext in SUPPORTED_STANDARD_EXTENSIONS):
+            return ReviewAssetResult(
+                normalized_path,
+                False,
+                False,
+                False,
+                error=f"Unsupported image extension: {ext}",
+            )
+
+        preview_key = self.preview_cache_key(
+            normalized_path, REVIEW_PROXY_MAX_RESOLUTION
+        )
+        preview_hit = preview_key in self.preview_cache
+        thumbnail_hit = thumbnail_key in self.thumbnail_cache
+        if preview_hit and thumbnail_hit:
+            if promote_to_memory:
+                self._cache_get(self.preview_cache, preview_key)
+                self._cache_get(self.thumbnail_cache, thumbnail_key)
+            return ReviewAssetResult(normalized_path, True, True, True)
+
+        asset_key = (
+            normalized_path,
+            "review-assets",
+            CACHE_SCHEMA_VERSION,
+            *self._file_fingerprint(normalized_path),
+        )
+        with self._generation_lock(asset_key):
+            preview_hit = preview_key in self.preview_cache
+            thumbnail_hit = thumbnail_key in self.thumbnail_cache
+            if preview_hit and thumbnail_hit:
+                if promote_to_memory:
+                    self._cache_get(self.preview_cache, preview_key)
+                    self._cache_get(self.thumbnail_cache, thumbnail_key)
+                return ReviewAssetResult(normalized_path, True, True, True)
+
+            preview = (
+                self._cache_get(self.preview_cache, preview_key)
+                if promote_to_memory
+                else self.preview_cache.get(preview_key)
+            )
+            encoded_bytes = 0
+            if preview is None:
+                preview = self.render_display_image(
+                    normalized_path, REVIEW_PROXY_MAX_RESOLUTION
+                )
+                if preview is None:
+                    return ReviewAssetResult(
+                        normalized_path,
+                        False,
+                        thumbnail_hit,
+                        False,
+                        error="Canonical preview decode failed",
+                    )
+                if promote_to_memory:
+                    preview_bytes = self._cache_set(
+                        self.preview_cache, preview_key, preview
+                    )
+                else:
+                    preview_bytes = int(
+                        self.preview_cache.set(preview_key, preview) or 0
+                    )
+                if preview_bytes <= 0:
+                    return ReviewAssetResult(
+                        normalized_path,
+                        False,
+                        thumbnail_hit,
+                        False,
+                        error="Preview cache write failed",
+                    )
+                encoded_bytes += preview_bytes
+
+            thumbnail = (
+                self._cache_get(self.thumbnail_cache, thumbnail_key)
+                if promote_to_memory
+                else self.thumbnail_cache.get(thumbnail_key)
+            )
+            if thumbnail is None:
+                thumbnail = preview.copy()
+                thumbnail.thumbnail(THUMBNAIL_MAX_SIZE, Image.Resampling.LANCZOS)
+                if thumbnail.mode != "RGBA":
+                    thumbnail = thumbnail.convert("RGBA")
+                if promote_to_memory:
+                    thumbnail_bytes = self._cache_set(
+                        self.thumbnail_cache, thumbnail_key, thumbnail
+                    )
+                else:
+                    thumbnail_bytes = int(
+                        self.thumbnail_cache.set(thumbnail_key, thumbnail) or 0
+                    )
+                if thumbnail_bytes <= 0:
+                    return ReviewAssetResult(
+                        normalized_path,
+                        True,
+                        False,
+                        False,
+                        encoded_bytes=encoded_bytes,
+                        error="Thumbnail cache write failed",
+                    )
+                encoded_bytes += thumbnail_bytes
+
+            return ReviewAssetResult(
+                normalized_path,
+                True,
+                thumbnail is not None,
+                preview_hit and thumbnail_hit,
+                encoded_bytes=encoded_bytes,
+                error=None if thumbnail is not None else "Thumbnail generation failed",
+            )
+
     def _get_pil_thumbnail(
         self,
         image_path: str,
-        apply_orientation: bool = False,
+        apply_orientation: bool = True,
         *,
         promote_to_memory: bool = True,
     ) -> Image.Image | None:
@@ -250,6 +544,20 @@ class ImagePipeline:
         """
         normalized_path = os.path.normpath(image_path)
         ext = os.path.splitext(normalized_path)[1].lower()
+
+        if not is_video_extension(ext):
+            result = self.ensure_review_assets_cached(
+                normalized_path,
+                promote_to_memory=promote_to_memory,
+            )
+            if not result.thumbnail_ready:
+                return None
+            thumbnail_key = self.thumbnail_cache_key(normalized_path, True)
+            return (
+                self._cache_get(self.thumbnail_cache, thumbnail_key)
+                if promote_to_memory
+                else self.thumbnail_cache.get(thumbnail_key)
+            )
 
         # Automatically determine if auto-edits should be applied based on file type
         apply_auto_edits = is_raw_extension(ext)
@@ -323,7 +631,7 @@ class ImagePipeline:
         """
         if not promote_to_memory:
             normalized_path = os.path.normpath(image_path)
-            cache_key = self.thumbnail_cache_key(normalized_path, False)
+            cache_key = self.thumbnail_cache_key(normalized_path, True)
             if self._memory_get(cache_key) is not None:
                 return True
             # Membership avoids decoding a disk hit into the shared memory LRU.
@@ -340,7 +648,7 @@ class ImagePipeline:
     def get_cached_thumbnail_qpixmap(
         self,
         image_path: str,
-        apply_orientation: bool = False,
+        apply_orientation: bool = True,
         *,
         file_size: int | None = None,
         mtime_ns: int | None = None,
@@ -472,7 +780,7 @@ class ImagePipeline:
     def get_thumbnail_qpixmap(
         self,
         image_path: str,
-        apply_orientation: bool = False,
+        apply_orientation: bool = True,
     ) -> QPixmap | None:
         """
         Gets a QPixmap thumbnail for the given image path.
@@ -501,59 +809,22 @@ class ImagePipeline:
         self,
         image_path: str,
         display_max_size: tuple[int, int] | None,
-        force_default_brightness: bool = False,
     ) -> Image.Image | None:
         """
         Generates a PIL image sized for display, without using preload cache.
         This is the authoritative decode path when no suitable cached image exists.
         Automatically applies auto-edits for RAW files.
         """
-        normalized_path = os.path.normpath(image_path)
-        pil_img: Image.Image | None = None
-        ext = os.path.splitext(normalized_path)[1].lower()
-
-        # Automatically determine if auto-edits should be applied based on file type
-        apply_auto_edits = is_raw_extension(ext)
-
-        # Determine resolution for on-demand generation
-        # If display_max_size is None, it means full available resolution (up to a reasonable limit)
-        # For now, let's assume PRELOAD_MAX_RESOLUTION is also a good upper bound for on-demand full previews.
-        # A more sophisticated system might have different limits.
-        target_resolution = (
-            display_max_size if display_max_size else PRELOAD_MAX_RESOLUTION
+        return self.render_display_image(
+            image_path,
+            display_max_size or REVIEW_PROXY_MAX_RESOLUTION,
         )
-
-        if is_raw_extension(ext):
-            # Use the same bounded preview path as background prefetch. It
-            # prefers the camera's embedded JPEG and falls back to half-size
-            # demosaicing, avoiding a full-resolution RAW decode for display.
-            pil_img = RawImageProcessor.process_raw_for_preview(
-                normalized_path,
-                apply_auto_edits,
-                target_resolution,
-                force_default_brightness=force_default_brightness,
-            )
-
-        elif ext in SUPPORTED_STANDARD_EXTENSIONS:
-            pil_img = StandardImageProcessor.process_for_preview(
-                normalized_path,
-                target_resolution,
-            )
-        else:
-            logger.warning(
-                f"Unsupported extension for display preview: {ext} for '{os.path.basename(normalized_path)}'"
-            )
-            return None
-
-        # Orientation should be handled by the processors.
-        return pil_img
 
     def get_preview_image(
         self,
         image_path: str,
         display_max_size: tuple[int, int] | None = None,
         force_regenerate: bool = False,
-        force_default_brightness: bool = False,
     ) -> Image.Image | None:
         """Return a PIL image suitable for analysis/display, leveraging preview cache."""
         normalized_path = os.path.normpath(image_path)
@@ -562,7 +833,9 @@ class ImagePipeline:
             return None
 
         key_display_size = (
-            display_max_size if display_max_size is not None else PRELOAD_MAX_RESOLUTION
+            display_max_size
+            if display_max_size is not None
+            else REVIEW_PROXY_MAX_RESOLUTION
         )
         display_cache_key = self.preview_cache_key(normalized_path, key_display_size)
 
@@ -577,7 +850,7 @@ class ImagePipeline:
                 return result_image
 
         preload_cache_key = self.preview_cache_key(
-            normalized_path, PRELOAD_MAX_RESOLUTION
+            normalized_path, REVIEW_PROXY_MAX_RESOLUTION
         )
         cached_high_res_pil = self._cache_get(self.preview_cache, preload_cache_key)
         if cached_high_res_pil:
@@ -609,7 +882,6 @@ class ImagePipeline:
                 generated_display_pil = self._generate_pil_preview_for_display(
                     normalized_path,
                     display_max_size,
-                    force_default_brightness,
                 )
         if generated_display_pil:
             self._cache_set(
@@ -647,7 +919,9 @@ class ImagePipeline:
             return None
 
         key_display_size = (
-            display_max_size if display_max_size is not None else PRELOAD_MAX_RESOLUTION
+            display_max_size
+            if display_max_size is not None
+            else REVIEW_PROXY_MAX_RESOLUTION
         )
         display_cache_key = self.preview_cache_key(normalized_path, key_display_size)
 
@@ -668,7 +942,7 @@ class ImagePipeline:
                 return None
 
         preload_cache_key = self.preview_cache_key(
-            normalized_path, PRELOAD_MAX_RESOLUTION
+            normalized_path, REVIEW_PROXY_MAX_RESOLUTION
         )
         cached_high_res_pil = (
             self._memory_get(preload_cache_key)
@@ -706,7 +980,6 @@ class ImagePipeline:
         display_max_size: tuple[int, int]
         | None,  # Max size for the QPixmap to be displayed
         force_regenerate: bool = False,
-        force_default_brightness: bool = False,
     ) -> QPixmap | None:
         """
         Gets a QPixmap preview for the image path, scaled to display_max_size.
@@ -724,7 +997,9 @@ class ImagePipeline:
         # Cache key for the final display-sized PIL image
         # Ensure display_max_size is a tuple for the cache key, even if None was passed
         key_display_size = (
-            display_max_size if display_max_size is not None else PRELOAD_MAX_RESOLUTION
+            display_max_size
+            if display_max_size is not None
+            else REVIEW_PROXY_MAX_RESOLUTION
         )
         display_cache_key = self.preview_cache_key(normalized_path, key_display_size)
 
@@ -738,10 +1013,9 @@ class ImagePipeline:
                     f"Display cache MISS: {os.path.basename(normalized_path)} (Size: {key_display_size})"
                 )
 
-        # 2. Check if a high-resolution PRELOADED version is cached
-        # Key for preloaded high-res version (uses PRELOAD_MAX_RESOLUTION)
+        # 2. Check if the canonical review proxy is cached.
         preload_cache_key = self.preview_cache_key(
-            normalized_path, PRELOAD_MAX_RESOLUTION
+            normalized_path, REVIEW_PROXY_MAX_RESOLUTION
         )
         cached_high_res_pil = self._cache_get(self.preview_cache, preload_cache_key)
 
@@ -770,7 +1044,6 @@ class ImagePipeline:
                 generated_display_pil = self._generate_pil_preview_for_display(
                     normalized_path,
                     display_max_size,
-                    force_default_brightness,
                 )
         if generated_display_pil:
             self._cache_set(
@@ -788,85 +1061,21 @@ class ImagePipeline:
         """Worker function for preload_thumbnails."""
         self.ensure_thumbnail_cached(image_path)
 
-    def ensure_preview_cached(
-        self,
-        image_path: str,
-        *,
-        force_default_brightness: bool = False,
-    ) -> bool:
+    def ensure_preview_cached(self, image_path: str) -> bool:
         """
         Generate and cache one navigation-sized preview when it is missing.
 
         This method is safe to call from a background worker. It deliberately
-        stores a bounded PRELOAD_MAX_RESOLUTION image instead of decoding at the
-        larger display size, which keeps navigation prefetch memory predictable.
-        Automatically applies auto-edits for RAW files.
+        stores the canonical bounded review proxy and its derived thumbnail.
         Returns True if successful or already cached, False on error.
         """
-        normalized_path = os.path.normpath(image_path)
-
-        # Automatically determine if auto-edits should be applied based on file type
-        ext = os.path.splitext(normalized_path)[1].lower()
-        apply_auto_edits = is_raw_extension(ext)
-
-        preload_cache_key = self.preview_cache_key(
-            normalized_path, PRELOAD_MAX_RESOLUTION
-        )
-
-        if (
-            not force_default_brightness
-            and self._cache_get(self.preview_cache, preload_cache_key) is not None
-        ):
-            return True
-
-        with self._generation_lock(preload_cache_key):
-            if (
-                not force_default_brightness
-                and self._cache_get(self.preview_cache, preload_cache_key) is not None
-            ):
-                return True
-
-            pil_img: Image.Image | None = None
-            ext = os.path.splitext(normalized_path)[1].lower()
-            start_time = time.time()
-            high_memory_format = is_raw_extension(ext) or ext in {".heic", ".heif"}
-            decode_gate = self._high_memory_decode_gate if high_memory_format else None
-            if decode_gate:
-                decode_gate.acquire()
-            try:
-                if is_raw_extension(ext):
-                    pil_img = RawImageProcessor.process_raw_for_preview(
-                        normalized_path,
-                        apply_auto_edits,
-                        PRELOAD_MAX_RESOLUTION,
-                        force_default_brightness=force_default_brightness,
-                    )
-                elif ext in SUPPORTED_STANDARD_EXTENSIONS:
-                    pil_img = StandardImageProcessor.process_for_preview(
-                        normalized_path, PRELOAD_MAX_RESOLUTION
-                    )
-                else:
-                    logger.warning(
-                        f"Unsupported extension for preview preload: {ext} for '{os.path.basename(normalized_path)}'"
-                    )
-                    return False
-            finally:
-                if decode_gate:
-                    decode_gate.release()
-
-            if pil_img:
-                self._cache_set(self.preview_cache, preload_cache_key, pil_img)
-                duration = time.time() - start_time
-                _record_preview_generation_log(
-                    duration, os.path.basename(normalized_path)
-                )
-                return True
-
-            logger.error(
-                f"Failed to generate preview for {os.path.basename(normalized_path)}",
-                exc_info=True,
+        start_time = time.time()
+        result = self.ensure_review_assets_cached(image_path, promote_to_memory=True)
+        if result.success:
+            _record_preview_generation_log(
+                time.time() - start_time, os.path.basename(image_path)
             )
-            return False
+        return result.success
 
     def preload_previews(
         self,
@@ -874,8 +1083,7 @@ class ImagePipeline:
         progress_callback: Callable[[int, int], None] | None = None,
         should_continue_callback: Callable[[], bool] | None = None,
     ) -> None:
-        """Preloads preview PIL images (at PRELOAD_MAX_RESOLUTION) in parallel.
-        Automatically applies auto-edits for RAW files."""
+        """Prepare canonical proxies and thumbnails in parallel."""
         total_files = len(image_paths)
         processed_count = 0
 
@@ -883,38 +1091,47 @@ class ImagePipeline:
             f"Preloading previews for {total_files} files (workers: {self._num_workers})..."
         )
 
+        path_iterator = iter(image_paths)
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._num_workers
         ) as executor:
             futures_map: dict[concurrent.futures.Future, str] = {}
-            for image_path in image_paths:
-                if should_continue_callback and not should_continue_callback():
-                    logger.info(
-                        "Preview preload cancelled by request. Halting new tasks."
-                    )
-                    break
-                future = executor.submit(
-                    self.ensure_preview_cached,
-                    image_path,
+
+            def submit_until_full() -> None:
+                while len(futures_map) < self._num_workers:
+                    if should_continue_callback and not should_continue_callback():
+                        return
+                    try:
+                        image_path = next(path_iterator)
+                    except StopIteration:
+                        return
+                    future = executor.submit(self.ensure_preview_cached, image_path)
+                    futures_map[future] = image_path
+
+            submit_until_full()
+            while futures_map:
+                done, _ = concurrent.futures.wait(
+                    futures_map,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
                 )
-                futures_map[future] = image_path
+                for future in done:
+                    futures_map.pop(future, None)
+                    try:
+                        future.result()
+                    except Exception:
+                        logger.error(
+                            "Error during preview preloading task", exc_info=True
+                        )
+                    processed_count += 1
+                    if progress_callback:
+                        progress_callback(processed_count, total_files)
 
-            for future in concurrent.futures.as_completed(futures_map):
-                _ = futures_map[future]  # path
-                try:
-                    future.result()  # Check for exceptions
-                except Exception:
-                    logger.error("Error during preview preloading task", exc_info=True)
-
-                processed_count += 1
-                if progress_callback:
-                    progress_callback(processed_count, total_files)
                 if should_continue_callback and not should_continue_callback():
-                    for f_cancel in futures_map:
-                        if not f_cancel.done():
-                            f_cancel.cancel()
+                    for pending in futures_map:
+                        pending.cancel()
                     logger.info("Preview preload cancelled during processing.")
                     break
+                submit_until_full()
         logger.info(
             f"Preview preloading finished. Processed {processed_count}/{total_files}."
         )
@@ -941,7 +1158,7 @@ class ImagePipeline:
         if use_preloaded_preview_if_available:
             # Check for preloaded high-res version
             preload_key = self.preview_cache_key(
-                normalized_path, PRELOAD_MAX_RESOLUTION
+                normalized_path, REVIEW_PROXY_MAX_RESOLUTION
             )
             cached_preview = self._cache_get(self.preview_cache, preload_key)
             if cached_preview:
@@ -1053,11 +1270,17 @@ class ImagePipeline:
                 if cached_image is not None:
                     if cached_image.mode != "RGB":
                         cached_image = cached_image.convert("RGB")
-                    self._cache_set(
-                        self.preview_cache,
-                        cache_key,
-                        cached_image.copy(),
-                    )
+                    try:
+                        self._cache_set(
+                            self.preview_cache,
+                            cache_key,
+                            cached_image.copy(),
+                        )
+                    except PreviewCacheCapacityError:
+                        # Analysis must remain usable when review proxies fill
+                        # the approved disk budget. Reuse the decoded input in
+                        # the bounded memory cache until eviction/invalidation.
+                        self._memory_set(cache_key, cached_image)
 
         if cached_image is None:
             return None
@@ -1105,15 +1328,83 @@ class ImagePipeline:
             )
             return None
 
-    def clear_all_image_caches(self):
-        """Clears both thumbnail and preview caches."""
-        logger.warning("Clearing all image caches (thumbnails and previews)...")
-        with self._memory_cache_lock:
-            self._memory_cache.clear()
-            self._memory_cache_bytes = 0
-        self.thumbnail_cache.clear()
-        self.preview_cache.clear()
-        logger.info("All image caches have been cleared.")
+    def get_cached_review_qpixmap(
+        self,
+        image_path: str,
+        *,
+        thumbnail_apply_orientation: bool = True,
+        memory_only: bool = True,
+    ) -> QPixmap | None:
+        """Return the best cached review image without generating or decoding work."""
+        pixmap = self.get_cached_preview_qpixmap(
+            image_path,
+            memory_only=memory_only,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        pixmap = self.get_cached_thumbnail_qpixmap(
+            image_path,
+            apply_orientation=thumbnail_apply_orientation,
+            memory_only=memory_only,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        return None
+
+    def get_immediate_review_qpixmap(
+        self,
+        image_path: str,
+        display_max_size: tuple[int, int] | None = None,
+        *,
+        thumbnail_apply_orientation: bool = True,
+    ) -> tuple[QPixmap | None, bool]:
+        """Return an instant review frame and whether it is full preview quality.
+
+        Latency-sensitive UI paths first use memory only.  If the high-quality
+        preview is not resident, a previously prepared disk thumbnail is allowed
+        as the final fallback: reading that small payload is quick and prevents
+        an empty/loading frame while the preview is promoted in the background.
+        No source image is decoded by this method.
+        """
+        pixmap = self.get_cached_preview_qpixmap(
+            image_path,
+            display_max_size=display_max_size,
+            memory_only=True,
+        )
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap, True
+
+        pixmap = self.get_cached_thumbnail_qpixmap(
+            image_path,
+            apply_orientation=thumbnail_apply_orientation,
+            memory_only=True,
+        )
+        if pixmap is None or pixmap.isNull():
+            pixmap = self.get_cached_thumbnail_qpixmap(
+                image_path,
+                apply_orientation=thumbnail_apply_orientation,
+                memory_only=False,
+            )
+        if pixmap is not None and pixmap.isNull():
+            pixmap = None
+        return pixmap, False
+
+    def clear_thumbnail_cache(self) -> bool:
+        """Keep thumbnails belonging to the active review working set intact."""
+        return self.preview_cache.run_when_inactive(self.thumbnail_cache.clear)
+
+    def clear_all_image_caches(self) -> bool:
+        """Clear image caches only after the active review folder is released."""
+
+        def clear_caches() -> None:
+            with self._memory_cache_lock:
+                self._memory_cache.clear()
+                self._memory_cache_bytes = 0
+            self.thumbnail_cache.clear()
+            self.preview_cache.clear()
+            logger.info("All image caches have been cleared.")
+
+        return self.preview_cache.run_when_inactive(clear_caches)
 
     def invalidate_path(self, file_path: str) -> None:
         """Remove all memory and disk cache variants for one source file."""
@@ -1126,6 +1417,6 @@ class ImagePipeline:
         self.thumbnail_cache.delete_all_for_path(normalized_path)
         self.preview_cache.delete_all_for_path(normalized_path)
 
-    def reinitialize_preview_cache_from_settings(self):
-        """Reinitializes the preview cache using current application settings."""
-        self.preview_cache.reinitialize_from_settings()
+    def reinitialize_preview_cache_from_settings(self) -> bool:
+        """Apply preview settings without replacing the live cache."""
+        return self.preview_cache.reinitialize_from_settings()

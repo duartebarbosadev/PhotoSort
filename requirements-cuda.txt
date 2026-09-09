@@ -1,2 +1,2 @@
 -r requirements-common.txt
-onnxruntime-gpu==1.24.4
+onnxruntime-gpu==1.29.0

@@ -5,14 +5,11 @@ from ui.thumbnail_load_coordinator import ViewportThumbnailLoader
 
 
 def _context(item_count=100):
-    action = Mock()
-    action.isChecked.return_value = True
     worker_manager = Mock()
     worker_manager.is_thumbnail_preload_running.return_value = False
     worker_manager.start_thumbnail_session.return_value = True
     worker_manager.prioritize_thumbnail_paths.return_value = True
     return SimpleNamespace(
-        menu_manager=SimpleNamespace(toggle_thumbnails_action=action),
         worker_manager=worker_manager,
         app_state=SimpleNamespace(
             image_files_data=[
@@ -40,7 +37,29 @@ def test_folder_session_prioritizes_visible_and_warms_every_path_once():
     args = context.worker_manager.start_thumbnail_session.call_args.args
     assert args[1] == ["image-0.jpg", "image-1.jpg", "image-2.jpg"]
     assert args[2] == ["image-2.jpg"]
+    assert context.worker_manager.start_thumbnail_session.call_args.kwargs == {
+        "prepare_folder_working_set": True
+    }
     context.set_thumbnail_progress.assert_called_once_with(0, 3, 0, False)
+
+
+def test_replacing_folder_session_cancels_without_waiting_and_retries():
+    context = _context(item_count=2)
+    context.worker_manager.is_thumbnail_preload_running.return_value = True
+    loader = ViewportThumbnailLoader(context)
+    loader._visible_paths = Mock(return_value=["image-1.jpg"])
+
+    loader.start_folder(["image-0.jpg", "image-1.jpg"])
+
+    context.worker_manager.request_stop_thumbnail_preload.assert_called_once_with()
+    context.worker_manager.stop_thumbnail_preload.assert_not_called()
+    context.worker_manager.start_thumbnail_session.assert_not_called()
+    assert loader._folder_start_timer.isActive()
+
+    context.worker_manager.is_thumbnail_preload_running.return_value = False
+    loader._start_folder_session()
+
+    context.worker_manager.start_thumbnail_session.assert_called_once()
 
 
 def test_scroll_request_is_reprioritized_while_session_is_active():
@@ -56,6 +75,34 @@ def test_scroll_request_is_reprioritized_while_session_is_active():
     context.worker_manager.prioritize_thumbnail_paths.assert_called_once_with(
         "folder-session", ["image-1.jpg"]
     )
+
+
+def test_explicit_dialog_request_reuses_active_thumbnail_session():
+    context = _context(item_count=2)
+    loader = ViewportThumbnailLoader(context)
+    loader._session_id = "folder-session"
+
+    loader.request_paths(["image-1.jpg", "image-1.jpg"])
+
+    context.worker_manager.prioritize_thumbnail_paths.assert_called_once_with(
+        "folder-session", ["image-1.jpg"]
+    )
+    context.worker_manager.start_thumbnail_session.assert_not_called()
+
+
+def test_explicit_dialog_request_starts_bounded_foreground_session_when_idle():
+    context = _context(item_count=2)
+    loader = ViewportThumbnailLoader(context)
+
+    loader.request_paths(["image-0.jpg", "image-1.jpg"])
+
+    session_id, all_paths, foreground_paths = (
+        context.worker_manager.start_thumbnail_session.call_args.args
+    )
+    assert session_id.startswith("dialog:")
+    assert all_paths == ["image-0.jpg", "image-1.jpg"]
+    assert foreground_paths == all_paths
+    assert session_id in loader._foreground_session_ids
 
 
 def test_visible_inventory_files_outside_media_session_are_not_requested():

@@ -75,6 +75,24 @@ def test_selection_controller_returns_selected_paths(tmp_path):
     assert set(result) == {paths[0], paths[2]}
 
 
+def test_selection_controller_does_not_stat_selected_paths(monkeypatch):
+    QApplication.instance() or QApplication([])
+    path = "/slow-volume/image.jpg"
+    model = build_model_with_files([path])
+    ctx = DummyCtx(model)
+    controller = SelectionController(ctx)
+    ctx.get_active_view().selectionModel().select(
+        model.index(0, 0),
+        ctx.get_active_view().selectionModel().SelectionFlag.Select,
+    )
+    monkeypatch.setattr(
+        "os.path.isfile",
+        lambda _path: (_ for _ in ()).throw(AssertionError("unexpected stat")),
+    )
+
+    assert controller.get_selected_file_paths() == [path]
+
+
 def test_selection_controller_empty_when_no_view():
     QApplication.instance() or QApplication([])
     model = build_model_with_files([])

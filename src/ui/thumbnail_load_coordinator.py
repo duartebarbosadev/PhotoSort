@@ -26,6 +26,15 @@ class ViewportThumbnailLoader(QObject):
         self._materialized_paths: set[str] = set()
         self._warm_complete = False
         self._foreground_session_ids: set[str] = set()
+        self._requested_paths: dict[str, None] = {}
+        self._request_timer = QTimer(self)
+        self._request_timer.setSingleShot(True)
+        self._request_timer.setInterval(50)
+        self._request_timer.timeout.connect(self._load_requested_paths)
+        self._folder_start_timer = QTimer(self)
+        self._folder_start_timer.setSingleShot(True)
+        self._folder_start_timer.setInterval(50)
+        self._folder_start_timer.timeout.connect(self._start_folder_session)
         self._load_timer = QTimer(self)
         self._load_timer.setSingleShot(True)
         self._load_timer.setInterval(THUMBNAIL_SCROLL_IDLE_MS)
@@ -41,49 +50,55 @@ class ViewportThumbnailLoader(QObject):
         manager.thumbnail_session_finished.connect(self._handle_finished)
         manager.thumbnail_session_error.connect(self._handle_error)
 
-    def start_folder(self, image_paths: Iterable[str]) -> None:
-        """Begin one non-blocking warming session for the active folder."""
+    def start_folder(self, image_paths: Iterable[str]) -> str:
+        """Begin one review-asset preparation session for the active folder."""
         self.reset(stop_worker=True)
         self._all_paths = list(dict.fromkeys(path for path in image_paths if path))
         self._all_path_set = set(self._all_paths)
-        if not self._all_paths or not self._enabled():
-            return
+        if not self._all_paths:
+            return ""
         self._session_id = uuid4().hex
+        self.context.set_thumbnail_progress(0, len(self._all_paths), 0, False)
+        self._start_folder_session()
+        return self._session_id
+
+    def _start_folder_session(self) -> None:
+        """Start the current folder session once the previous worker has exited."""
+
+        if not self._session_id or not self._all_paths:
+            return
+        manager = self.context.worker_manager
+        if manager.is_thumbnail_preload_running():
+            self._folder_start_timer.start()
+            return
         visible = [
             path
             for path in dict.fromkeys(self._visible_paths())
             if path in self._all_path_set
         ]
-        self.context.set_thumbnail_progress(0, len(self._all_paths), 0, False)
-        self.context.worker_manager.start_thumbnail_session(
+        if not manager.start_thumbnail_session(
             self._session_id,
             self._all_paths,
             visible,
-        )
+            prepare_folder_working_set=True,
+        ):
+            self._folder_start_timer.start()
 
     def reset(self, *, stop_worker: bool = False) -> None:
+        self._folder_start_timer.stop()
         self._load_timer.stop()
         self._layout_retry_timer.stop()
+        self._request_timer.stop()
         if stop_worker and self.context.worker_manager.is_thumbnail_preload_running():
-            self.context.worker_manager.stop_thumbnail_preload()
+            self.context.worker_manager.request_stop_thumbnail_preload()
         self._session_id = ""
         self._all_paths = []
         self._all_path_set.clear()
         self._materialized_paths.clear()
         self._foreground_session_ids.clear()
+        self._requested_paths.clear()
         self._warm_complete = False
         self.context.hide_thumbnail_progress()
-
-    def set_enabled(self, enabled: bool) -> None:
-        if not enabled:
-            self.reset(stop_worker=True)
-            return
-        paths = [
-            item.get("path")
-            for item in self.context.app_state.image_files_data
-            if item.get("path")
-        ]
-        self.start_folder(paths)
 
     def invalidate_paths(self, image_paths) -> None:
         paths = [path for path in dict.fromkeys(image_paths) if path]
@@ -100,6 +115,35 @@ class ViewportThumbnailLoader(QObject):
         if self._session_id:
             self._load_timer.start()
 
+    def request_paths(self, image_paths: Iterable[str]) -> None:
+        """Prioritize explicit UI requests through the shared thumbnail worker."""
+        for path in image_paths:
+            if path:
+                self._requested_paths.setdefault(path, None)
+        self._load_requested_paths()
+
+    def _load_requested_paths(self) -> None:
+        if not self._requested_paths:
+            return
+        paths = list(self._requested_paths)
+        manager = self.context.worker_manager
+        if self._session_id and manager.prioritize_thumbnail_paths(
+            self._session_id, paths
+        ):
+            for path in paths:
+                self._requested_paths.pop(path, None)
+            return
+        if manager.is_thumbnail_preload_running():
+            self._request_timer.start()
+            return
+        session_id = f"dialog:{uuid4().hex}"
+        if manager.start_thumbnail_session(session_id, paths, paths):
+            self._foreground_session_ids.add(session_id)
+            for path in paths:
+                self._requested_paths.pop(path, None)
+            return
+        self._request_timer.start()
+
     def model_rebuilt(self) -> None:
         """Request icons for new item objects without restarting folder warming."""
         self._materialized_paths.clear()
@@ -107,9 +151,6 @@ class ViewportThumbnailLoader(QObject):
         # QTreeWidget geometry is not reliable until its first layout pass. A
         # second request applies the initial viewport without requiring a scroll.
         self._layout_retry_timer.start()
-
-    def _enabled(self) -> bool:
-        return self.context.menu_manager.toggle_thumbnails_action.isChecked()
 
     def _visible_paths(self) -> list[str]:
         workflow_provider = getattr(
@@ -158,7 +199,7 @@ class ViewportThumbnailLoader(QObject):
         return paths
 
     def _load_visible_batch(self) -> None:
-        if not self._enabled() or not self._session_id:
+        if not self._session_id:
             return
         visible = [
             path
@@ -230,11 +271,15 @@ class ViewportThumbnailLoader(QObject):
     def _handle_finished(self, session_id: str, attempted: int, failures: int) -> None:
         if session_id in self._foreground_session_ids:
             self._foreground_session_ids.discard(session_id)
+            if self._requested_paths:
+                self._request_timer.start()
             return
         if session_id != self._session_id:
             return
         self._warm_complete = True
         self.context.hide_thumbnail_progress()
+        if self._requested_paths:
+            self._request_timer.start()
         self.schedule()
 
     def _handle_error(self, session_id: str, message: str) -> None:

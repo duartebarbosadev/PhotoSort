@@ -35,8 +35,8 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          # Base GL/GLib plus EGL for headless PyQt6 usage
-          sudo apt-get install -y libgl1 libglib2.0-0 libegl1
+          # GL/EGL for PyQt6 and GLES for MediaPipe's native runtime
+          sudo apt-get install -y libgl1 libglib2.0-0 libegl1 libgles2
           # QtMultimedia runtime deps used by PyQt6 on Linux runners
           sudo apt-get install -y libpulse0 libpulse-mainloop-glib0
           # JPEG tools for lossless JPEG rotation
@@ -54,7 +54,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
-          pip install openai
           
 
       - name: Ruff Lint
@@ -62,7 +61,7 @@ jobs:
           ruff check .
           ruff check --select G004 \
             src/core/best_photo_finder \
-            src/core/embedding_cache.py \
+            src/core/similarity_cache.py \
             src/core/image_file_ops.py \
             src/core/media_utils.py \
             src/core/metadata_io.py \
@@ -79,7 +78,7 @@ jobs:
         run: |
           mypy \
             src/core/best_photo_finder \
-            src/core/embedding_cache.py \
+            src/core/similarity_cache.py \
             src/core/image_file_ops.py \
             src/core/media_utils.py \
             src/core/metadata_io.py \
@@ -150,7 +149,12 @@ jobs:
           pip install -r requirements.txt
       - name: pip-audit
         run: |
-          pip-audit -r requirements.txt -f json -o pip-audit.json
+          # DiskCache has no patched release.
+          pip-audit \
+            -r requirements.txt \
+            --ignore-vuln PYSEC-2026-2447 \
+            -f json \
+            -o pip-audit.json
       - name: Upload pip-audit report
         uses: actions/upload-artifact@v7
         with:

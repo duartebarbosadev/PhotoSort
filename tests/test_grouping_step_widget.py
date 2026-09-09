@@ -1,15 +1,24 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtGui import QIcon, QPixmap
-from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox
+from PyQt6.QtCore import QRect, Qt
+from PyQt6.QtGui import QIcon, QPainter, QPalette, QPixmap
+from PyQt6.QtWidgets import QApplication, QListView, QMenu, QStyle, QStyleOption
 
-from src.core.grouping import GroupingGroup, GroupingPlan
+import src.ui.grouping_step_widget as grouping_step_widget_module
+from src.core.grouping import (
+    GroupingGroup,
+    GroupingMode,
+    GroupingPlan,
+    build_grouping_plan,
+)
 from src.ui.grouping_step_widget import (
     DroppableGroupingTree,
+    GroupingTreeBranchStyle,
     GroupingStepWidget,
     ITEM_GROUP,
     ROLE_KIND,
@@ -17,6 +26,19 @@ from src.ui.grouping_step_widget import (
 
 
 _app = QApplication.instance() or QApplication([])
+
+
+def _expandable_tree_items(tree):
+    stack = [
+        tree.topLevelItem(index)
+        for index in range(tree.topLevelItemCount() - 1, -1, -1)
+    ]
+    while stack:
+        item = stack.pop()
+        children = [item.child(index) for index in range(item.childCount())]
+        stack.extend(reversed(children))
+        if children:
+            yield item
 
 
 class _CacheOnlyPipeline:
@@ -28,6 +50,12 @@ class _CacheOnlyPipeline:
     ):
         self.get_cached_thumbnail_qpixmap = Mock(return_value=cached_thumbnail)
         self.get_cached_preview_qpixmap = Mock(return_value=cached_preview)
+        self.get_immediate_review_qpixmap = Mock(
+            return_value=(
+                cached_preview if cached_preview is not None else cached_thumbnail,
+                cached_preview is not None,
+            )
+        )
         self.get_thumbnail_qpixmap = Mock(return_value=None)
         self.get_preview_qpixmap = Mock(return_value=cached_preview)
 
@@ -74,6 +102,198 @@ def test_grouping_step_widget_tracks_mode_and_busy_state():
     assert all(btn.isEnabled() for btn in widget._mode_buttons.values())
 
 
+def test_grouping_preview_hint_has_readable_theme_contrast():
+    widget = GroupingStepWidget()
+    widget.setStyleSheet(Path("src/ui/dark_theme.qss").read_text(encoding="utf-8"))
+    widget.show()
+    _app.processEvents()
+
+    hint_color = widget.preview_hint_label.palette().color(
+        QPalette.ColorRole.WindowText
+    )
+    assert hint_color.name() == "#a9b7c6"
+    assert widget.preview_hint_label.font().pointSizeF() >= 10
+    assert widget.preview_hint_label.font().weight() >= 600
+
+
+def test_current_video_only_folder_is_not_rendered_as_skipped(tmp_path):
+    source_root = tmp_path / "demo"
+    video_dir = source_root / "Clips"
+    video_dir.mkdir(parents=True)
+    video_path = video_dir / "clip.mp4"
+    video_path.write_bytes(b"video")
+    plan = build_grouping_plan(
+        [{"path": str(video_path), "media_type": "video"}],
+        GroupingMode.CURRENT,
+        source_root=str(source_root),
+    )
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget._update_selected_preview = Mock()
+    widget.set_preview_plan(plan, str(source_root))
+
+    assert widget._editable_skipped == []
+    assert str(video_path) in widget._after_file_items_by_path
+    assert (
+        widget.preview_tree.findItems(
+            "Skipped",
+            Qt.MatchFlag.MatchExactly | Qt.MatchFlag.MatchRecursive,
+            0,
+        )
+        == []
+    )
+
+
+def test_organize_tree_headers_expand_and_collapse_each_tree(tmp_path):
+    source_root = tmp_path / "demo"
+    nested = source_root / "Parent" / "Child"
+    nested.mkdir(parents=True)
+    first = str(nested / "a.jpg")
+    nested.joinpath("a.jpg").write_bytes(b"preview")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Parent/Child",
+                    source_paths=[first],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    assert widget.before_expand_all_button.isEnabled()
+    assert widget.before_collapse_all_button.isEnabled()
+    assert widget.after_expand_all_button.isEnabled()
+    assert widget.after_collapse_all_button.isEnabled()
+    assert all(item.isExpanded() for item in _expandable_tree_items(widget.before_tree))
+    assert all(
+        item.isExpanded() for item in _expandable_tree_items(widget.preview_tree)
+    )
+
+    widget.before_collapse_all_button.click()
+
+    assert not any(
+        item.isExpanded() for item in _expandable_tree_items(widget.before_tree)
+    )
+    assert all(
+        item.isExpanded() for item in _expandable_tree_items(widget.preview_tree)
+    )
+
+    widget.after_collapse_all_button.click()
+    assert not any(
+        item.isExpanded() for item in _expandable_tree_items(widget.preview_tree)
+    )
+
+    widget.before_expand_all_button.click()
+    widget.after_expand_all_button.click()
+
+    assert all(item.isExpanded() for item in _expandable_tree_items(widget.before_tree))
+    assert all(
+        item.isExpanded() for item in _expandable_tree_items(widget.preview_tree)
+    )
+
+
+def test_organize_tree_branch_style_distinguishes_folder_states_from_leaves():
+    style = GroupingTreeBranchStyle()
+
+    def rendered_pixels(state: QStyle.StateFlag) -> set[tuple[int, int]]:
+        pixmap = QPixmap(20, 20)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        option = QStyleOption()
+        option.rect = QRect(0, 0, 20, 20)
+        option.state = state
+        painter = QPainter(pixmap)
+        style.drawPrimitive(
+            QStyle.PrimitiveElement.PE_IndicatorBranch,
+            option,
+            painter,
+        )
+        painter.end()
+        image = pixmap.toImage()
+        return {
+            (x, y)
+            for y in range(image.height())
+            for x in range(image.width())
+            if image.pixelColor(x, y).alpha() > 0
+        }
+
+    enabled = QStyle.StateFlag.State_Enabled
+    leaf_pixels = rendered_pixels(enabled)
+    collapsed_pixels = rendered_pixels(enabled | QStyle.StateFlag.State_Children)
+    expanded_pixels = rendered_pixels(
+        enabled | QStyle.StateFlag.State_Children | QStyle.StateFlag.State_Open
+    )
+
+    assert leaf_pixels == set()
+    assert collapsed_pixels
+    assert expanded_pixels
+    assert collapsed_pixels != expanded_pixels
+
+
+def test_large_organize_tree_expansion_is_batched_and_cancelled_on_refresh(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(grouping_step_widget_module, "LARGE_FOLDER_THRESHOLD", 1)
+    monkeypatch.setattr(grouping_step_widget_module, "UI_POPULATION_CHUNK_SIZE", 1)
+    source_root = tmp_path / "demo"
+    nested = source_root / "Parent" / "Child"
+    nested.mkdir(parents=True)
+    first = str(nested / "a.jpg")
+    second = str(nested / "b.jpg")
+    nested.joinpath("a.jpg").write_bytes(b"preview")
+    nested.joinpath("b.jpg").write_bytes(b"preview")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=2,
+            supported_items=2,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Parent/Child",
+                    source_paths=[first, second],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    widget.after_expand_all_button.click()
+
+    timer = widget._tree_expansion_timers[widget.preview_tree]
+    assert timer.isActive()
+    assert widget.preview_tree in widget._tree_expansion_stacks
+
+    widget._refresh_preview_trees()
+
+    assert not timer.isActive()
+    assert widget.preview_tree not in widget._tree_expansion_stacks
+
+    widget.after_expand_all_button.click()
+    while timer.isActive():
+        widget._process_tree_expansion_batch(widget.preview_tree)
+
+    assert all(
+        item.isExpanded() for item in _expandable_tree_items(widget.preview_tree)
+    )
+
+
 def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
     source_root = tmp_path / "demo"
     source_root.mkdir()
@@ -105,6 +325,63 @@ def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
     assert widget.pending_grouping_action_lines() == [
         "Move Beach/a.jpg -> Beach/renamed.jpg"
     ]
+
+
+def test_grouping_apply_button_is_hidden_until_plan_has_real_changes(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    (beach_dir / "a.jpg").write_bytes(b"preview")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    assert widget.primary_button.isHidden()
+    assert not widget.primary_button.isEnabled()
+
+    marks = {first}
+    apply_requests: list[bool] = []
+    widget.apply_requested.connect(lambda: apply_requests.append(True))
+    widget.set_has_any_marked_func(lambda: bool(marks))
+
+    assert not widget.primary_button.isHidden()
+    assert widget.primary_button.isEnabled()
+    widget.primary_button.click()
+    assert apply_requests == [True]
+
+    marks.clear()
+    widget.refresh_deletion_state()
+
+    assert widget.primary_button.isHidden()
+    assert not widget.primary_button.isEnabled()
+
+    after_item = widget._after_file_items_by_path[first]
+    after_item.setText(0, "renamed.jpg")
+    widget._handle_preview_item_changed(after_item, 0)
+
+    assert not widget.primary_button.isHidden()
+    assert widget.primary_button.isEnabled()
+
+    restored_item = widget._after_file_items_by_path[first]
+    restored_item.setText(0, "a.jpg")
+    widget._handle_preview_item_changed(restored_item, 0)
+
+    assert widget.primary_button.isHidden()
+    assert not widget.primary_button.isEnabled()
 
 
 def test_unchanged_grouping_edit_check_does_not_build_filesystem_action_preview(
@@ -269,7 +546,7 @@ def test_grouping_step_widget_selected_preview_uses_cached_preview_immediately(
 
     widget._update_selected_preview(first)
 
-    assert pipeline.get_cached_preview_qpixmap.call_count == 1
+    assert pipeline.get_immediate_review_qpixmap.call_count == 1
     assert pipeline.get_preview_qpixmap.call_count == 0
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     request_preview.assert_not_called()
@@ -299,12 +576,71 @@ def test_grouping_step_widget_selected_preview_queues_upgrade_from_cached_thumbn
 
     widget._update_selected_preview(first)
 
-    assert pipeline.get_cached_preview_qpixmap.call_count == 1
-    assert pipeline.get_cached_thumbnail_qpixmap.call_count == 1
+    assert pipeline.get_immediate_review_qpixmap.call_count == 1
     assert pipeline.get_preview_qpixmap.call_count == 0
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     request_preview.assert_called_once_with(first)
     assert widget.large_preview_view.has_image()
+
+
+def test_grouping_step_widget_does_not_preview_or_publish_unmanaged_files(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    image_path = str(beach_dir / "a.jpg")
+    xml_path = str(beach_dir / "metadata.xml")
+    beach_dir.joinpath("a.jpg").write_bytes(b"preview")
+    beach_dir.joinpath("metadata.xml").write_text("<metadata />", encoding="utf-8")
+
+    clear_inspection = Mock()
+    activate_inspection = Mock()
+    widget = GroupingStepWidget()
+    widget._parent_window = SimpleNamespace(
+        clear_image_inspection=clear_inspection,
+        activate_image_inspection=activate_inspection,
+    )
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[image_path],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    clear_inspection.reset_mock()
+    published_paths = []
+    widget.active_image_changed.connect(published_paths.append)
+
+    widget._update_selected_preview(image_path)
+    activate_inspection.assert_called_once()
+    activate_inspection.reset_mock()
+
+    xml_item = widget._after_file_items_by_path[xml_path]
+    widget._handle_after_item_changed(xml_item, None)
+
+    clear_inspection.assert_called_once_with(widget.large_preview_view)
+    activate_inspection.assert_not_called()
+    assert published_paths == []
+    assert widget._current_preview_source_path == xml_path
+    assert widget.preview_pane_stack.currentWidget() is widget.preview_hint_label
+    assert widget.preview_hint_label.text() == "Preview unavailable for this file type"
+    assert widget.preview_selection_label.text() == "metadata.xml"
+    assert widget.preview_selection_meta.text() == xml_path
+
+    widget._update_folder_preview(widget._after_group_items_by_id["1"])
+    visible_thumbnail_paths = widget.visible_thumbnail_paths()
+    assert image_path in visible_thumbnail_paths
+    assert xml_path not in visible_thumbnail_paths
 
 
 def test_grouping_step_widget_applies_only_current_background_preview(tmp_path):
@@ -367,7 +703,10 @@ def test_grouping_step_widget_folder_preview_uses_cached_thumbnails_only(tmp_pat
     pipeline.get_cached_thumbnail_qpixmap.reset_mock()
     widget._update_folder_preview(widget._after_group_items_by_id["1"])
 
-    assert widget.folder_preview_grid.count() == 2
+    model = widget._folder_preview_model
+    assert model.rowCount() == 2
+    for row in range(model.rowCount()):
+        model.data(model.index(row, 0), Qt.ItemDataRole.DecorationRole)
     assert pipeline.get_thumbnail_qpixmap.call_count == 0
     assert pipeline.get_preview_qpixmap.call_count == 0
     assert pipeline.get_cached_thumbnail_qpixmap.call_count == 2
@@ -409,7 +748,8 @@ def test_grouping_step_widget_hides_leaf_only_context_actions(tmp_path):
     assert "Expand all children" not in action_texts
     assert "Collapse all children" not in action_texts
     assert "Preview this file" not in action_texts
-    assert "Delete file" in action_texts
+    assert "Mark for Trash" in action_texts
+    assert "Move file to Trash now…" in action_texts
     assert "Move files now" not in action_texts
     assert "Send to Unassigned" not in action_texts
 
@@ -600,7 +940,7 @@ def test_grouping_step_widget_can_create_parent_directory(tmp_path, monkeypatch)
     assert widget.get_effective_plan().groups[0].group_label == "Trips/Beach"
 
 
-def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path, monkeypatch):
+def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
@@ -623,18 +963,57 @@ def test_grouping_step_widget_can_mark_directory_for_deletion(tmp_path, monkeypa
         str(source_root),
     )
 
-    monkeypatch.setattr(
-        "src.ui.grouping_step_widget.QMessageBox.question",
-        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    marks: set[str] = set()
+    widget.set_is_marked_func(marks.__contains__)
+    widget.set_has_any_marked_func(lambda: bool(marks))
+    widget._folder_validation_pool = SimpleNamespace(start=lambda task: task.run())
+    widget.toggle_deletion_marks_requested.connect(marks.update)
+    widget._delete_item(widget._after_group_items_by_id["1"])
+    widget.refresh_deletion_state()
+
+    assert widget.get_effective_plan().groups[0].source_paths == [first]
+    assert widget.get_effective_plan().deleted_paths == []
+    assert marks == {str(beach_dir), first}
+    assert not widget.primary_button.isHidden()
+    assert widget.primary_button.isEnabled()
+    assert widget._after_file_items_by_path[first].text(0).endswith("(DELETED)")
+    assert widget.pending_grouping_action_lines() == []
+
+
+def test_grouping_step_widget_rejects_folder_mark_when_unshown_file_exists(tmp_path):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    first = str(beach_dir / "a.jpg")
+    (beach_dir / "a.jpg").write_bytes(b"preview")
+    (beach_dir / ".hidden.xmp").write_text("sidecar", encoding="utf-8")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=[first])
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+            filesystem_inventory_complete=True,
+        ),
+        str(source_root),
     )
+
+    requested: list[list[str]] = []
+    widget._folder_validation_pool = SimpleNamespace(start=lambda task: task.run())
+    widget.toggle_deletion_marks_requested.connect(requested.append)
     widget._delete_item(widget._after_group_items_by_id["1"])
 
-    assert widget.get_effective_plan().groups == []
-    assert widget.get_effective_plan().deleted_paths == [str(beach_dir)]
-    assert widget.pending_grouping_action_lines() == ["Delete folder Beach"]
+    assert requested == []
 
 
-def test_grouping_step_widget_can_delete_file_from_context(tmp_path, monkeypatch):
+def test_grouping_step_widget_can_mark_or_trash_file_from_context(tmp_path):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"
     beach_dir.mkdir(parents=True)
@@ -666,25 +1045,24 @@ def test_grouping_step_widget_can_delete_file_from_context(tmp_path, monkeypatch
         action.text(): action for action in menu.actions() if action.text()
     }
 
-    deleted_paths = []
-    monkeypatch.setattr(
-        "src.ui.grouping_step_widget.QMessageBox.question",
-        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
-    )
-    monkeypatch.setattr(
-        "src.ui.grouping_step_widget.ImageFileOperations.move_to_trash",
-        lambda path: (deleted_paths.append(path) or True, "Moved to trash."),
+    marks: set[str] = set()
+    trash_requests: list[tuple[str, list[str]]] = []
+    widget.set_is_marked_func(marks.__contains__)
+    widget.toggle_deletion_marks_requested.connect(marks.update)
+    widget.trash_requested.connect(
+        lambda target, paths: trash_requests.append((target, paths))
     )
 
-    actions_by_text["Delete file"].trigger()
+    actions_by_text["Mark for Trash"].trigger()
 
-    assert deleted_paths == []
-    assert widget.get_effective_plan().groups == []
-    assert widget.get_effective_plan().deleted_paths == [first]
-    assert widget.pending_grouping_action_lines() == [
-        "Delete file Beach/a.jpg",
-        "Remove empty folder Beach",
-    ]
+    assert marks == {first}
+    assert widget.get_effective_plan().groups[0].source_paths == [first]
+    assert widget.get_effective_plan().deleted_paths == []
+    assert trash_requests == []
+
+    actions_by_text["Move file to Trash now…"].trigger()
+
+    assert trash_requests == [(first, [first])]
 
 
 def test_grouping_step_widget_can_match_before_and_after_items(tmp_path):
@@ -774,6 +1152,45 @@ def test_grouping_step_widget_syncs_selection_between_trees(tmp_path):
     widget._handle_before_item_changed(before_item, None)
     assert widget.preview_tree.currentItem() is after_item
     assert after_item.isSelected()
+
+
+def test_grouping_active_focus_highlights_item_and_preserves_multiselection(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+    second = str(source_root / "Beach" / "b.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=2,
+            supported_items=2,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[first, second],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    first_item = widget._after_file_items_by_path[first]
+    second_item = widget._after_file_items_by_path[second]
+    widget.preview_tree.clearSelection()
+    first_item.setSelected(True)
+    widget.large_preview_view.fit_in_view = Mock()
+
+    assert widget.focus_image(second)
+
+    assert widget.preview_tree.currentItem() is second_item
+    assert first_item.isSelected()
+    assert second_item.isSelected()
+    widget.large_preview_view.fit_in_view.assert_called_once_with()
 
 
 def test_grouping_step_widget_syncs_folder_selection_between_trees(tmp_path):
@@ -870,9 +1287,71 @@ def test_grouping_step_widget_shows_folder_preview_grid(tmp_path):
     widget._handle_before_item_changed(before_dir, None)
 
     assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
-    assert widget.folder_preview_grid.count() == 2
+    assert widget._folder_preview_model.rowCount() == 2
     assert widget.folder_preview_title.text() == "Beach"
     assert widget.visible_thumbnail_paths()[:2] == [first, second]
+
+
+def test_grouping_folder_preview_exposes_every_item_with_batched_layout(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    paths = [str(source_root / "Beach" / f"{index:04}.jpg") for index in range(275)]
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=len(paths),
+            supported_items=len(paths),
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=paths,
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+            filesystem_inventory_complete=True,
+            source_root=str(source_root),
+            filesystem_paths=set(paths),
+            filesystem_directories={str(source_root / "Beach")},
+        ),
+        str(source_root),
+    )
+
+    widget._update_folder_preview(widget._after_group_items_by_id["1"])
+
+    model = widget._folder_preview_model
+    assert model.rowCount() == len(paths)
+    assert (
+        model.data(model.index(len(paths) - 1, 0), Qt.ItemDataRole.UserRole)
+        == paths[-1]
+    )
+    assert widget.folder_preview_meta.text().startswith(f"{len(paths)} item(s)\n")
+    assert "showing first" not in widget.folder_preview_meta.text()
+    assert widget.folder_preview_grid.layoutMode() == QListView.LayoutMode.Batched
+    assert widget.folder_preview_grid.batchSize() > 0
+
+
+def test_grouping_folder_preview_discards_thumbnail_updates_from_prior_folder():
+    widget = GroupingStepWidget()
+    model = widget._folder_preview_model
+    old_path = "/photos/old/a.jpg"
+    current_path = "/photos/current/b.jpg"
+    changed_ranges: list[tuple[int, int]] = []
+    model.dataChanged.connect(
+        lambda start, end, _roles: changed_ranges.append((start.row(), end.row()))
+    )
+
+    model.set_paths([old_path])
+    model.set_paths([current_path])
+    changed_ranges.clear()
+    model.refresh_thumbnail_paths({old_path})
+
+    assert changed_ranges == []
+    assert model.data(model.index(0, 0), Qt.ItemDataRole.UserRole) == current_path
 
 
 def test_grouping_folder_preview_requests_thumbnail_loading(tmp_path):
@@ -971,9 +1450,10 @@ def test_grouping_step_widget_folder_preview_includes_unmanaged_files(tmp_path):
     before_dir = widget._before_dir_items_by_relative_path["Beach"]
     widget._handle_before_item_changed(before_dir, None)
 
+    model = widget._folder_preview_model
     names = {
-        widget.folder_preview_grid.item(index).text()
-        for index in range(widget.folder_preview_grid.count())
+        model.data(model.index(index, 0), Qt.ItemDataRole.DisplayRole)
+        for index in range(model.rowCount())
     }
 
     assert names == {"a.jpg", "a.json"}
@@ -1089,6 +1569,7 @@ def test_grouping_step_widget_builds_collision_aware_action_list(tmp_path):
     second_dir = source_root / "B"
     first_dir.mkdir(parents=True)
     second_dir.mkdir(parents=True)
+    (source_root / "Untouched empty folder").mkdir()
     first = str(first_dir / "same.jpg")
     second = str(second_dir / "same.jpg")
     (first_dir / "same.jpg").write_bytes(b"a")
@@ -1124,6 +1605,40 @@ def test_grouping_step_widget_builds_collision_aware_action_list(tmp_path):
         "Remove empty folder A",
         "Remove empty folder B",
     }
+
+
+def test_grouping_apply_ignores_preexisting_empty_folders_without_changes(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    untouched_empty_folder = source_root / "Folder"
+    untouched_empty_folder.mkdir()
+    photo = source_root / "photo.jpg"
+    photo.write_bytes(b"photo")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="",
+                    source_paths=[str(photo)],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    action_lines = widget._build_action_lines(widget.get_effective_plan())
+
+    assert action_lines == []
+    assert untouched_empty_folder.is_dir()
 
 
 def test_grouping_step_widget_selects_original_items_for_renamed_entries(tmp_path):
@@ -1230,7 +1745,7 @@ def test_grouping_step_widget_keeps_folder_preview_visible_after_rename(tmp_path
 
     assert widget.preview_tree.currentItem() is widget._after_group_items_by_id["1"]
     assert widget.preview_pane_stack.currentWidget() is widget.folder_preview_page
-    assert widget.folder_preview_grid.count() == 1
+    assert widget._folder_preview_model.rowCount() == 1
 
 
 def test_grouping_step_widget_restores_selected_file_when_current_item_is_lost(
@@ -1549,3 +2064,193 @@ def test_group_items_have_drag_flag(tmp_path):
     assert group_item.flags() & Qt.ItemFlag.ItemIsDragEnabled
     assert file_item.flags() & Qt.ItemFlag.ItemIsDragEnabled
     assert group_item.data(0, ROLE_KIND) == ITEM_GROUP
+
+
+def test_grouping_step_widget_keyboard_navigation_skips_deleted(tmp_path):
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtGui import QKeyEvent
+    import sys
+
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+    second = str(source_root / "Beach" / "b.jpg")
+    third = str(source_root / "Beach" / "c.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=3,
+            supported_items=3,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Beach",
+                    source_paths=[first, second, third],
+                ),
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    # Mark the second file for deletion
+    marks = {second}
+    widget.set_is_marked_func(marks.__contains__)
+
+    first_item = widget._after_file_items_by_path[first]
+    second_item = widget._after_file_items_by_path[second]
+    third_item = widget._after_file_items_by_path[third]
+
+    # Focus on first item
+    widget.preview_tree.setCurrentItem(first_item)
+
+    # 1. Press Down without override modifier -> should skip second and select third
+    event_down = QKeyEvent(
+        QEvent.Type.KeyPress, Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier
+    )
+    handled = widget.eventFilter(widget.preview_tree, event_down)
+    assert handled is True
+    assert widget.preview_tree.currentItem() is third_item
+
+    # 2. Press Up without override modifier -> should skip second and select first
+    event_up = QKeyEvent(
+        QEvent.Type.KeyPress, Qt.Key.Key_Up, Qt.KeyboardModifier.NoModifier
+    )
+    handled = widget.eventFilter(widget.preview_tree, event_up)
+    assert handled is True
+    assert widget.preview_tree.currentItem() is first_item
+
+    # 3. Press Down with override modifier (Ctrl on Win/Linux, Cmd on macOS)
+    modifier = (
+        Qt.KeyboardModifier.MetaModifier
+        if sys.platform == "darwin"
+        else Qt.KeyboardModifier.ControlModifier
+    )
+    event_down_override = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Down, modifier)
+    handled_override = widget.eventFilter(widget.preview_tree, event_down_override)
+    assert handled_override is True
+    assert widget.preview_tree.currentItem() is second_item
+
+
+def test_organize_left_arrow_moves_to_parent_then_collapses_folder(tmp_path):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QKeyEvent
+
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Parent" / "Child" / "a.jpg")
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="location",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Parent/Child",
+                    source_paths=[first],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    left = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_Left,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    for tree, file_item in (
+        (widget.before_tree, widget._before_file_items_by_path[first]),
+        (widget.preview_tree, widget._after_file_items_by_path[first]),
+    ):
+        folder_item = file_item.parent()
+        assert folder_item is not None
+        assert folder_item.isExpanded()
+        tree.setCurrentItem(file_item)
+
+        assert widget.eventFilter(tree, left) is True
+        assert tree.currentItem() is folder_item
+        assert folder_item.isExpanded()
+
+        assert widget.eventFilter(tree, left) is True
+        assert tree.currentItem() is folder_item
+        assert not folder_item.isExpanded()
+
+
+def test_organize_left_arrow_keeps_collapsed_root_selected(tmp_path):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QKeyEvent
+
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "a.jpg")
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=1,
+            supported_items=1,
+            groups=[
+                GroupingGroup(
+                    group_id="1",
+                    group_label="Root files",
+                    source_paths=[first],
+                )
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    root_item = widget.preview_tree.topLevelItem(0)
+    root_item.setExpanded(False)
+    widget.preview_tree.setCurrentItem(root_item)
+    left = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_Left,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    assert widget.eventFilter(widget.preview_tree, left) is True
+    assert widget.preview_tree.currentItem() is root_item
+    assert not root_item.isExpanded()
+
+
+def test_large_tree_render_indexes_groups_once_and_rebuilds_after_edits():
+    class CountedPaths(list):
+        membership_checks = 0
+
+        def __contains__(self, path):
+            self.membership_checks += 1
+            return super().__contains__(path)
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder("/photos")
+    paths = [CountedPaths([f"/photos/group-{i}/photo.jpg"]) for i in range(600)]
+    widget._editable_groups = [
+        GroupingGroup(group_id=str(i), group_label=f"group-{i}", source_paths=members)
+        for i, members in enumerate(paths)
+    ]
+    widget._current_output_root = "/photos"
+    widget._refresh_preview_trees(preserve_selection=False)
+    # Rendering both trees must not search every group's source list per file.
+    assert sum(members.membership_checks for members in paths) == 0
+    assert len(widget._before_file_items_by_path) == 600
+    assert len(widget._after_file_items_by_path) == 600
+    first = paths[0][0]
+    assert widget._group_id_for_path(first) == "0"
+    widget._editable_groups[0].group_label = "renamed"
+    widget._refresh_preview_trees(preserve_selection=False)
+    assert widget._projected_path_for_source(first) == "/photos/renamed/photo.jpg"
+    assert widget._tree_groups_by_path is None
+    widget.close()

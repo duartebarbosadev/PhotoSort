@@ -19,11 +19,9 @@ BATCH_LOG_INTERVAL = 10
 
 
 class MetadataState(Protocol):
-    """Application-state fields the metadata worker is allowed to update."""
+    """Read-only application dependencies used by the metadata worker."""
 
     exif_disk_cache: Any
-    rating_cache: dict[str, int]
-    date_cache: dict[str, Any]
 
 
 class RatingLoaderWorker(QObject):
@@ -39,6 +37,8 @@ class RatingLoaderWorker(QObject):
     )  # List of tuples: [(image_path, metadata_dict), ...]
     finished = pyqtSignal()
     error = pyqtSignal(str)
+    cache_capacity_warning = pyqtSignal(int, int, object)
+    # unique dataset entries, resident entries, configured limit bytes
 
     def __init__(
         self,
@@ -66,7 +66,11 @@ class RatingLoaderWorker(QObject):
             signal.emit(*args)
 
     def run_load(self):
-        self._is_running = True
+        if not self._is_running:
+            logger.info(
+                "Metadata load skipped because cancellation was already requested."
+            )
+            return
         image_paths_to_process = [
             fd["path"]
             for fd in self._image_data_list
@@ -96,6 +100,7 @@ class RatingLoaderWorker(QObject):
 
         total_load_start_time = time.perf_counter()
         logger.info(f"Starting metadata load for {total_files} files.")
+        self._emit(self.progress_update, 0, total_files, "")
 
         try:
             # Single batch call to the refactored MetadataHandler
@@ -105,9 +110,21 @@ class RatingLoaderWorker(QObject):
                 self._app_state.exif_disk_cache,
             )
 
+            resident_entries, dataset_entries = (
+                self._app_state.exif_disk_cache.dataset_residency(
+                    image_paths_to_process
+                )
+            )
+            cache_limit_bytes = (
+                self._app_state.exif_disk_cache.get_current_size_limit_bytes()
+            )
+            dataset_exceeds_cache = (
+                resident_entries < dataset_entries
+                and self._app_state.exif_disk_cache.is_near_capacity()
+            )
+
             metadata_batch_to_emit = []
             emitted_batch_count = 0
-
             for i, image_path_norm in enumerate(image_paths_to_process):
                 if not self._is_running:
                     logger.info(f"Processing stopped by request at index {i}.")
@@ -119,14 +136,8 @@ class RatingLoaderWorker(QObject):
 
                 current_metadata_tuple = None
                 if metadata:
-                    # Update AppState's in-memory caches directly here
-                    self._app_state.rating_cache[image_path_norm] = metadata.get(
-                        "rating", 0
-                    )
-                    if metadata.get("date"):
-                        self._app_state.date_cache[image_path_norm] = metadata["date"]
-                    else:
-                        self._app_state.date_cache.pop(image_path_norm, None)
+                    # Shared state is updated on the UI thread only after the
+                    # manager verifies that this load still owns the folder.
                     current_metadata_tuple = (image_path_norm, metadata)
                 else:
                     logger.warning(
@@ -192,6 +203,21 @@ class RatingLoaderWorker(QObject):
                 )
                 self._emit(self.metadata_batch_loaded, list(metadata_batch_to_emit))
                 metadata_batch_to_emit.clear()
+
+            if dataset_exceeds_cache:
+                logger.warning(
+                    "Current dataset does not fit in the EXIF cache: "
+                    "resident=%d total=%d limit=%.2f GB",
+                    resident_entries,
+                    dataset_entries,
+                    cache_limit_bytes / (1024 * 1024 * 1024),
+                )
+                self._emit(
+                    self.cache_capacity_warning,
+                    dataset_entries,
+                    resident_entries,
+                    cache_limit_bytes,
+                )
 
         except Exception as e:
             error_msg = f"An error occurred during metadata loading: {e}"
