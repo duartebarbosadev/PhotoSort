@@ -1,6 +1,16 @@
-# PhotoSort
+<h1 align="center">PhotoSort</h1>
 
-**Choose which photos to keep before you start editing.**
+<p align="center">
+  <strong>Choose which photos to keep before you start editing.</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.14-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.14"></a>
+  <a href="https://www.riverbankcomputing.com/software/pyqt/"><img src="https://img.shields.io/badge/PyQt-6-41CD52?style=flat-square&amp;logo=qt&amp;logoColor=white" alt="PyQt 6"></a>
+  <a href="https://github.com/duartebarbosadev/PhotoSort/releases"><img src="https://img.shields.io/github/v/release/duartebarbosadev/PhotoSort?style=flat-square&amp;label=release" alt="Latest release"></a>
+  <a href="https://github.com/duartebarbosadev/PhotoSort/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/duartebarbosadev/PhotoSort/ci.yml?branch=main&amp;style=flat-square&amp;label=build" alt="Build status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square" alt="License: Apache 2.0"></a>
+</p>
 
 PhotoSort helps you go through your photos, compare similar shots, and decide
 what to keep. You can give your favorites a star rating, sort photos into
@@ -9,11 +19,14 @@ folders, and mark the ones you don't want.
 It saves previews as you browse, including for RAW files, so going back to a
 photo doesn't mean loading it from scratch again.
 
-![PhotoSort showing a night photograph in Cull](assets/main-window-screenshot.png)
+[![PhotoSort showing a night photograph in Cull](assets/main-window-screenshot.webp)](assets/main-window-screenshot.png)
 
-[Download PhotoSort](https://github.com/duartebarbosadev/PhotoSort/releases) ·
-[Get started](#your-first-cull) · [The five steps](#choose-your-workflow) ·
-[Can I undo it?](#can-i-undo-it)
+<p align="center">
+  <a href="https://github.com/duartebarbosadev/PhotoSort/releases">Download PhotoSort</a> ·
+  <a href="#your-first-cull">Get started</a> ·
+  <a href="#choose-your-workflow">The five steps</a> ·
+  <a href="#can-i-undo-it">Can I undo it?</a>
+</p>
 
 ## Is it for me?
 
@@ -120,7 +133,7 @@ matching files together. This can include RAW/JPEG files with the same name
 and XMP sidecars. Check the files and destinations before applying. Other
 photo actions don't necessarily include the matching RAW or JPEG.
 
-![Organize previewing USA, Porto, and Australia folders](assets/organize-screenshot.png)
+[![Organize previewing USA, Porto, and Australia folders](assets/organize-screenshot.webp)](assets/organize-screenshot.png)
 
 ### Easy Delete
 
@@ -128,14 +141,14 @@ PhotoSort points out possible rejects for you to check. Choose **Keep** or
 **Trash** for each photo, then confirm. Here, a softer photo is being compared
 with a sharper version.
 
-![Easy Delete comparing a softer photo with a sharper version](assets/easy-delete-screenshot.png)
+[![Easy Delete comparing a softer photo with a sharper version](assets/easy-delete-screenshot.webp)](assets/easy-delete-screenshot.png)
 
 ### Fix Rotation
 
 See the original next to the suggested rotation. You can change the rotation
 if it doesn't look right, then confirm it before applying.
 
-![Fix Rotation showing the original and suggested correction](assets/fix-rotation-screenshot.png)
+[![Fix Rotation showing the original and suggested correction](assets/fix-rotation-screenshot.webp)](assets/fix-rotation-screenshot.png)
 
 ### Pick Best
 
@@ -143,7 +156,7 @@ Compare the photos in each group and choose the ones you like. PhotoSort gives
 you a suggestion based on its local scoring, but you're free to keep any of
 them. This example compares three similar photos with different sharpness.
 
-![Pick Best comparing similar photos](assets/pick-best-screenshot.png)
+[![Pick Best comparing similar photos](assets/pick-best-screenshot.webp)](assets/pick-best-screenshot.png)
 
 ### Useful shortcuts
 
