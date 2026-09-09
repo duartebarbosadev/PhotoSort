@@ -25,7 +25,6 @@ class _DummyMenuManager:
         self.open_folder_action = _DummyAction()
         self.analyze_similarity_action = _DummyAction()
         self.group_by_similarity_action = _DummyAction()
-        self.ai_rate_images_action = _DummyAction()
 
 
 class _DummyMainWindow:

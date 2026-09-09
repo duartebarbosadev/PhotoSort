@@ -2652,7 +2652,6 @@ def test_cull_footer_documents_all_registered_review_shortcuts():
         "F",
         "S",
         "Ctrl+F",
-        "Ctrl+A",
         "Ctrl+Shift+L",
         *(f"Ctrl+Alt+{step}" for step in range(1, 6)),
     }

@@ -21,21 +21,17 @@ PhotoSort is a fast, powerful desktop application for managing large photo libra
   * **Optimized Image Handling**: Supports a wide range of formats, including various RAW types, with efficient caching.
   * **Video Browsing Support**: Scan and browse common video formats with playback and first-frame thumbnails (analysis and ratings remain image-only).
   * **Intelligent Image Rotation**: Smart rotation system that automatically tries lossless metadata rotation first, with optional fallback to pixel rotation when needed.
-  * **AI Best-Shot Ranking**: Send stacks to an OpenAI-compatible vision model (e.g. Qwen3-VL) to pick the keeper frame automatically.
-  * **AI Star Ratings**: Ask the configured AI engine to score individual photos with 1–5 stars.
 - **Performance Modes**: Configurable threading system (Settings → Preferences, `F10`) to balance between system responsiveness (Balanced) and maximum processing speed (Performance).
 - **Metadata Display**: Shows EXIF information (camera model, exposure settings, etc.).
 
 ## AI Models Used
 
-PhotoSort uses a mix of local models and configurable external AI endpoints:
+PhotoSort uses local models for image analysis:
 
 - **Similarity analysis**: [`facebook/dinov2-small`](https://huggingface.co/facebook/dinov2-small) by default, with `facebook/dinov2-base` and a configurable grouping threshold available in Preferences, for visual image embeddings and crop-aware similarity clustering.
 - **Pick Best local aesthetic scoring**: [`cafeai/cafe_aesthetic`](https://huggingface.co/cafeai/cafe_aesthetic) via `transformers`.
 - **Pick Best local technical scoring**: OpenCV face/eye cascades plus MediaPipe Face Mesh for blur / eye-state / face-quality heuristics.
 - **Fix Rotation**: the local ONNX orientation classifier from [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection), a fine-tuned EfficientNetV2 model that predicts whether an image should stay at `0°` or be corrected by `90°`, `180°`, or `270°`. PhotoSort loads `orientation_model*.onnx` files from the project `models/` directory.
-- **AI star ratings**: any **OpenAI-compatible vision model** you configure in Preferences.
-  Default example in app settings: `Qwen3-VL-30B-A3B-Instruct-MLX-4bit` at `http://127.0.0.1:8000/v1`.
 
 ## Getting Started
 
@@ -136,26 +132,6 @@ The following local models are downloaded or installed on first use:
 - `cafeai/cafe_aesthetic` for Pick Best local aesthetic scoring.
 
 If you are running offline, warm these models once while online first so they are present in your local Hugging Face cache.
-
-#### AI Ratings
-
-PhotoSort uses an OpenAI-compatible vision model to request AI star ratings. Configure the endpoint under
-**Preferences → AI Rating Engine** (`F10`) by providing the API key (optional for
-local deployments), base URL, model name, prompt templates, max tokens, timeout,
-and concurrency. Any server that implements the OpenAI Chat Completions API with
-vision support will work.
-
-The app default is configured for a local OpenAI-compatible server using:
-
-- Model: `Qwen3-VL-30B-A3B-Instruct-MLX-4bit`
-- Base URL: `http://127.0.0.1:8000/v1`
-
-**Using the results**  
-- **Pick Best**: Use the **Pick Best** workflow step to score similar-image clusters locally using cached previews plus aesthetic and technical analysis.
-- **AI star ratings**: To score every visible image, run **View → AI Rate Images**
-  (`Ctrl+A`). The ratings are stored in your XMP sidecars/metadata cache so
-  they survive reloads, and you can filter the library using the standard rating
-  controls.
 
 ### Exporting Logs
 

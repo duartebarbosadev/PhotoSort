@@ -32,7 +32,6 @@ _WORKER_SLOTS = (
     ("rotation_application_thread", "rotation_application_worker"),
     ("thumbnail_preload_thread", "thumbnail_preload_worker"),
     ("update_check_thread", "update_check_worker"),
-    ("ai_rating_thread", "ai_rating_worker"),
     ("grouping_preview_thread", "grouping_preview_worker"),
     ("grouping_workflow_thread", "grouping_workflow_worker"),
     ("file_deletion_thread", "file_deletion_worker"),
@@ -45,7 +44,6 @@ if TYPE_CHECKING:
     from ui.ui_components import (
         SimilarityWorker,
     )
-    from workers.ai_rating_worker import AiRatingWorker
     from workers.easy_delete_worker import EasyDeleteWorker
     from workers.cull_subject_grouping_worker import CullSubjectGroupingWorker
     from workers.model_environment_probe_worker import ModelEnvironmentProbeWorker
@@ -129,12 +127,6 @@ class WorkerManager(QObject):
     thumbnail_session_capacity_required = pyqtSignal(str, object)
     thumbnail_session_metrics = pyqtSignal(str, object)
 
-    # AI Rating Signals
-    ai_rating_progress = pyqtSignal(int, str)
-    ai_rating_complete = pyqtSignal(object)
-    ai_rating_error = pyqtSignal(str)
-    ai_rating_warning = pyqtSignal(str)
-
     # Grouping workflow signals
     grouping_preview_progress = pyqtSignal(int, str)
     grouping_preview_ready = pyqtSignal(object)
@@ -193,8 +185,6 @@ class WorkerManager(QObject):
 
         self.thumbnail_preload_thread: QThread | None = None
         self.thumbnail_preload_worker: ThumbnailPreloadWorker | None = None
-        self.ai_rating_thread: QThread | None = None
-        self.ai_rating_worker: AiRatingWorker | None = None
         self.grouping_preview_thread: QThread | None = None
         self.grouping_preview_worker: GroupingPreviewWorker | None = None
         self.grouping_workflow_thread: QThread | None = None
@@ -896,7 +886,6 @@ class WorkerManager(QObject):
         self.stop_rotation_application()
         self.stop_thumbnail_preload()
         self.stop_update_check()
-        self.stop_ai_rating()
         self.stop_grouping_preview()
         self.stop_grouping_workflow()
         self.stop_file_deletion()
@@ -913,7 +902,6 @@ class WorkerManager(QObject):
             "thumbnail_session",
             "rating_load",
             "file_scan",
-            "ai_rating",
             "update_check",
             "similarity",
             "cull_grouping",
@@ -948,9 +936,6 @@ class WorkerManager(QObject):
 
     def is_rating_loader_running(self) -> bool:
         return self.rating_loader_thread is not None
-
-    def is_ai_rating_running(self) -> bool:
-        return self.ai_rating_thread is not None
 
     def is_grouping_preview_running(self) -> bool:
         return self.grouping_preview_thread is not None
@@ -1032,7 +1017,6 @@ class WorkerManager(QObject):
             or self.is_grouping_preview_running()
             or self.is_grouping_workflow_running()
             or self.is_file_deletion_running()
-            or self.is_ai_rating_running()
             or self.is_pick_best_running()
             or self.is_easy_delete_running()
             or self.is_fix_rotation_running()
@@ -1052,7 +1036,6 @@ class WorkerManager(QObject):
             self.is_similarity_worker_running()
             or self.is_cull_grouping_running()
             or self.is_rotation_application_running()
-            or self.is_ai_rating_running()
             or self.is_pick_best_running()
             or self.is_easy_delete_running()
             or self.is_fix_rotation_running()
@@ -1303,9 +1286,6 @@ class WorkerManager(QObject):
             "thumbnail_preload_thread", "thumbnail_preload_worker"
         )
 
-    def _cleanup_ai_rating_worker(self):
-        self._cleanup_worker_refs("ai_rating_thread", "ai_rating_worker", "AI rating")
-
     def start_pick_best_analysis(
         self,
         cluster_map: dict[int, list[str]],
@@ -1530,55 +1510,3 @@ class WorkerManager(QObject):
             "fix_rotation_detect_worker",
             "Fix rotation detection",
         )
-
-    def start_ai_rating(
-        self,
-        image_paths: list[str],
-    ) -> None:
-        """Start AI-driven rating for the provided images."""
-        from workers.ai_rating_worker import AiRatingWorker
-
-        self.stop_ai_rating()
-        generation = self._advance_worker_generation("ai_rating")
-        if not image_paths:
-            self.ai_rating_complete.emit({})
-            return
-
-        self.ai_rating_thread = QThread()
-        self.ai_rating_worker = AiRatingWorker(
-            image_paths=image_paths,
-            image_pipeline=self.image_pipeline,
-        )
-        self.ai_rating_worker.moveToThread(self.ai_rating_thread)
-
-        self.ai_rating_worker.progress_update.connect(
-            lambda percent, message: self._emit_if_current(
-                "ai_rating", generation, self.ai_rating_progress, percent, message
-            )
-        )
-        self.ai_rating_worker.completed.connect(
-            lambda results: self._emit_if_current(
-                "ai_rating", generation, self.ai_rating_complete, results
-            )
-        )
-        self.ai_rating_worker.error.connect(
-            lambda message: self._emit_if_current(
-                "ai_rating", generation, self.ai_rating_error, message
-            )
-        )
-        self.ai_rating_worker.warning.connect(
-            lambda message: self._emit_if_current(
-                "ai_rating", generation, self.ai_rating_warning, message
-            )
-        )
-        self.ai_rating_worker.finished.connect(self.ai_rating_thread.quit)
-        self.ai_rating_worker.finished.connect(self.ai_rating_worker.deleteLater)
-        self.ai_rating_thread.finished.connect(self._cleanup_ai_rating_worker)
-        self.ai_rating_thread.started.connect(self.ai_rating_worker.run)
-
-        self.ai_rating_thread.start()
-        logger.info("AI rating thread started.")
-
-    def stop_ai_rating(self) -> None:
-        self._advance_worker_generation("ai_rating")
-        self._stop_worker("ai_rating_thread", "ai_rating_worker")

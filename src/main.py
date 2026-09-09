@@ -404,13 +404,11 @@ def main():
     logging.getLogger("PIL.TiffImagePlugin").setLevel(logging.INFO)
     logging.getLogger("PIL.Image").setLevel(logging.INFO)
 
-    # Suppress verbose HTTP logging from OpenAI client and httpcore
+    # Suppress verbose HTTP logging from HTTP clients
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
     logging.getLogger("httpcore.connection").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("openai").setLevel(logging.INFO)
-    logging.getLogger("openai._base_client").setLevel(logging.WARNING)
     # --- End Suppress verbose third-party loggers ---
 
     # --- Setup Global Exception Hook ---

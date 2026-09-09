@@ -43,7 +43,7 @@ PhotoSort is a PyQt6 desktop photo culling application following MVC architectur
   - `worker_manager.py`: Background thread orchestration
   - `controllers/`: Specialized sub-controllers (navigation, hotkeys, similarity, deletion, etc.)
 
-- **`src/workers/`**: Background worker threads (rating loader, rotation, AI rating)
+- **`src/workers/`**: Background worker threads (metadata loading, manual rating writes, rotation, local image analysis)
 
 ### Key Patterns
 

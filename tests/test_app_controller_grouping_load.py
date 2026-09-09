@@ -170,7 +170,6 @@ def test_scan_finished_defers_hidden_cull_model_until_cull_is_shown():
             "open_folder_action",
             "analyze_similarity_action",
             "group_by_similarity_action",
-            "ai_rate_images_action",
         )
     }
     rebuild_model = Mock()
@@ -204,7 +203,6 @@ def test_scan_finished_defers_hidden_cull_model_until_cull_is_shown():
         _get_media_file_data=lambda: [],
         _restore_analysis_state=Mock(),
         refresh_grouping_preview=refresh_grouping_preview,
-        _rating_load_complete=False,
     )
     controller._supports_grouping_workflow_ui = lambda: (
         AppController._supports_grouping_workflow_ui(controller)

@@ -67,13 +67,6 @@ PERFORMANCE_MODE_KEY = (
 CUSTOM_THREAD_COUNT_KEY = (
     "Performance/CustomThreadCount"  # User-defined thread count for custom mode
 )
-OPENAI_API_KEY_KEY = "AI/OpenAIKey"
-OPENAI_MODEL_KEY = "AI/OpenAIModel"
-OPENAI_BASE_URL_KEY = "AI/OpenAIBaseUrl"
-OPENAI_MAX_TOKENS_KEY = "AI/OpenAIMaxTokens"
-OPENAI_TIMEOUT_KEY = "AI/OpenAITimeout"
-OPENAI_MAX_WORKERS_KEY = "AI/OpenAIMaxWorkers"
-OPENAI_RATING_PROMPT_KEY = "AI/RatingPrompt"
 LOCATION_GROUPING_DEPTH_KEY = "Grouping/LocationDepth"
 COMPANION_FILES_PREFERENCE_KEY = "Grouping/CompanionFilesPreference"
 EASY_DELETE_BLUR_THRESHOLD_KEY = "EasyDelete/BlurThreshold"
@@ -106,12 +99,6 @@ ROTATION_MODEL_DOWNLOAD_URL = (
 DEFAULT_UPDATE_CHECK_ENABLED = True  # Default to enable automatic update checks
 DEFAULT_PERFORMANCE_MODE = PerformanceMode.BALANCED  # Default to balanced mode
 DEFAULT_CUSTOM_THREAD_COUNT = 4  # Default custom thread count
-DEFAULT_OPENAI_API_KEY = ""
-DEFAULT_OPENAI_MODEL = "Qwen3-VL-30B-A3B-Instruct-MLX-4bit"
-DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:8000/v1"
-DEFAULT_OPENAI_MAX_TOKENS = 200
-DEFAULT_OPENAI_TIMEOUT = 600
-DEFAULT_OPENAI_MAX_WORKERS = 4
 
 # Image inspection quality progression. Originals stay memory-only and are
 # bounded across the complete visible comparison set.
@@ -816,71 +803,6 @@ def calculate_high_memory_decode_workers() -> int:
     if mode == PerformanceMode.BALANCED:
         memory_slots = max(1, memory_slots // 2)
     return max(1, min(cpu_budget, memory_slots))
-
-
-def get_openai_config() -> dict:
-    settings = _get_settings()
-
-    api_key = settings.value(OPENAI_API_KEY_KEY, DEFAULT_OPENAI_API_KEY, type=str)
-    model = settings.value(OPENAI_MODEL_KEY, DEFAULT_OPENAI_MODEL, type=str)
-    base_url = settings.value(OPENAI_BASE_URL_KEY, DEFAULT_OPENAI_BASE_URL, type=str)
-    max_tokens = settings.value(
-        OPENAI_MAX_TOKENS_KEY, DEFAULT_OPENAI_MAX_TOKENS, type=int
-    )
-    timeout = settings.value(OPENAI_TIMEOUT_KEY, DEFAULT_OPENAI_TIMEOUT, type=int)
-    max_workers = settings.value(
-        OPENAI_MAX_WORKERS_KEY, DEFAULT_OPENAI_MAX_WORKERS, type=int
-    )
-
-    rating_prompt = settings.value(OPENAI_RATING_PROMPT_KEY, None, type=str)
-
-    config = {
-        "api_key": api_key,
-        "model": model,
-        "base_url": base_url,
-        "max_tokens": max_tokens,
-        "timeout": timeout,
-        "max_workers": max_workers,
-        "rating_prompt": rating_prompt,
-    }
-    # Remove optional None entries for prompts/base_url so dataclass defaults apply
-    return {k: v for k, v in config.items() if v is not None or k == "api_key"}
-
-
-def set_openai_config(
-    *,
-    api_key: str | None = None,
-    model: str | None = None,
-    base_url: str | None = None,
-    max_tokens: int | None = None,
-    timeout: int | None = None,
-    max_workers: int | None = None,
-    rating_prompt: str | None = None,
-) -> None:
-    settings = _get_settings()
-
-    def _set_or_clear(key: str, value):
-        if isinstance(value, str):
-            value = value.strip()
-        if value is None or value == "":
-            settings.remove(key)
-        else:
-            settings.setValue(key, value)
-
-    if api_key is not None:
-        _set_or_clear(OPENAI_API_KEY_KEY, api_key)
-    if model is not None:
-        _set_or_clear(OPENAI_MODEL_KEY, model)
-    if base_url is not None:
-        _set_or_clear(OPENAI_BASE_URL_KEY, base_url)
-    if max_tokens is not None:
-        _set_or_clear(OPENAI_MAX_TOKENS_KEY, max_tokens)
-    if timeout is not None:
-        _set_or_clear(OPENAI_TIMEOUT_KEY, timeout)
-    if max_workers is not None:
-        _set_or_clear(OPENAI_MAX_WORKERS_KEY, max_workers)
-    if rating_prompt is not None:
-        _set_or_clear(OPENAI_RATING_PROMPT_KEY, rating_prompt)
 
 
 def get_location_grouping_depth() -> int:
