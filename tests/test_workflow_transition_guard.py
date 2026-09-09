@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
+import pytest
+
 from src.ui.app_controller import AppController
 from src.ui.main_window import MainWindow
 from src.ui.worker_manager import WorkerManager
@@ -458,15 +460,27 @@ def test_cancelled_workflow_discards_late_analysis_results():
     worker.request_stop_similarity_analysis.assert_called_once()
 
 
-def test_worker_generation_drops_callback_from_replaced_run():
+@pytest.mark.parametrize("deferred", [False, True])
+def test_worker_generation_drops_callback_from_replaced_run(monkeypatch, deferred):
     signal = SimpleNamespace(emit=Mock())
     manager = WorkerManager(Mock())
-    manager._worker_generations["easy_delete"] = 3
+    # This test owns the delivery boundary; modal behavior is covered by
+    # test_modal_worker_results, independently of other tests' Qt windows.
+    blocked = Mock(return_value=deferred)
+    monkeypatch.setattr(manager._ui_results, "_blocked", blocked)
+    manager._worker_generations["easy_delete"] = 2 if deferred else 3
 
     WorkerManager._emit_if_current(manager, "easy_delete", 2, signal, {"stale": True})
+    manager._worker_generations["easy_delete"] = 3
     WorkerManager._emit_if_current(manager, "easy_delete", 3, signal, {"current": True})
 
+    if deferred:
+        signal.emit.assert_not_called()
+        blocked.return_value = False
+        manager._ui_results._drain()
+
     signal.emit.assert_called_once_with({"current": True})
+    assert not manager.has_pending_ui_results()
 
 
 def test_transition_dialog_shows_marked_photo_gallery_and_direct_actions():
