@@ -7,6 +7,26 @@ import pytest
 from ui.worker_manager import WorkerManager
 
 
+@pytest.mark.parametrize("required_bytes", [2 * 1024**3, 3 * 1024**3, 5 * 1024**3])
+def test_thumbnail_capacity_preserves_large_byte_counts(monkeypatch, required_bytes):
+    from PyQt6.QtCore import QThread
+
+    monkeypatch.setattr(QThread, "start", lambda self: None)
+    manager = WorkerManager(Mock())
+    requests = []
+    manager.thumbnail_session_capacity_required.connect(
+        lambda session, size: requests.append((session, size))
+    )
+    assert manager.start_thumbnail_session("folder", ["photo.jpg"])
+    try:
+        manager.thumbnail_preload_worker.session_capacity_required.emit(
+            "folder", required_bytes
+        )
+        assert requests == [("folder", required_bytes)]
+    finally:
+        manager._cleanup_thumbnail_preload_worker()
+
+
 @pytest.mark.parametrize(
     "thread_attribute",
     [

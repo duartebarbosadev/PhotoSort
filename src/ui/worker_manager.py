@@ -126,7 +126,7 @@ class WorkerManager(QObject):
     thumbnail_session_progress = pyqtSignal(str, int, int, int, bool)
     thumbnail_session_finished = pyqtSignal(str, int, int)
     thumbnail_session_error = pyqtSignal(str, str)
-    thumbnail_session_capacity_required = pyqtSignal(str, int)
+    thumbnail_session_capacity_required = pyqtSignal(str, object)
     thumbnail_session_metrics = pyqtSignal(str, object)
 
     # AI Rating Signals

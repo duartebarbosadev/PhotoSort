@@ -435,3 +435,36 @@ def test_similarity_grouping_reuses_the_shared_pipeline():
 
     engine_cls.assert_called_once_with(image_pipeline=shared_pipeline)
     assert result == {"source.jpg": 2}
+
+
+def test_analysis_reuses_memory_when_review_proxies_fill_disk_cache(tmp_path):
+    source = str(tmp_path / "source.jpg")
+    Image.new("RGB", (320, 200), "teal").save(source)
+    pipeline = ImagePipeline(
+        thumbnail_cache_dir=str(tmp_path / "thumb"),
+        preview_cache_dir=str(tmp_path / "preview"),
+    )
+    assert pipeline.ensure_review_assets_cached(source).success
+    cache = pipeline.preview_cache
+    proxy_bytes = cache.logical_payload_bytes()
+    assert cache.set_size_limit(proxy_bytes)
+    pipeline.begin_active_review_working_set([source])
+    preview_key = pipeline.preview_cache_key(source, REVIEW_PROXY_MAX_RESOLUTION)
+
+    with patch.object(
+        StandardImageProcessor,
+        "load_for_blur_detection",
+        wraps=StandardImageProcessor.load_for_blur_detection,
+    ) as decode:
+        first = pipeline.get_analysis_image(source, (128, 128))
+        second = pipeline.get_analysis_image(source, (64, 64))
+        assert first is not None and first.size == (128, 80)
+        assert second is not None and second.size == (64, 40)
+        assert decode.call_count == 1
+        assert preview_key in cache
+        assert cache.logical_payload_bytes() == proxy_bytes
+        assert pipeline.analysis_cache_key(source, (1024, 1024)) not in cache
+
+        pipeline.invalidate_path(source)
+        assert pipeline.get_analysis_image(source, (128, 128)) is not None
+        assert decode.call_count == 2

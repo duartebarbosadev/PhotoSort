@@ -24,7 +24,7 @@ class ThumbnailPreloadWorker(QObject):
     session_progress = pyqtSignal(str, int, int, int, bool)
     session_finished = pyqtSignal(str, int, int)
     session_error = pyqtSignal(str, str)
-    session_capacity_required = pyqtSignal(str, int)
+    session_capacity_required = pyqtSignal(str, object)
     session_metrics = pyqtSignal(str, object)
 
     def __init__(

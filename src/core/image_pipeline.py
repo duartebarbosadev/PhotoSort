@@ -21,7 +21,7 @@ from .image_processing.standard_image_processor import (
 )
 from .image_processing.image_orientation_handler import ImageOrientationHandler
 from .caching.thumbnail_cache import ThumbnailCache
-from .caching.preview_cache import PreviewCache
+from .caching.preview_cache import PreviewCache, PreviewCacheCapacityError
 from .media_utils import is_video_extension
 
 logger = logging.getLogger(__name__)
@@ -1270,11 +1270,17 @@ class ImagePipeline:
                 if cached_image is not None:
                     if cached_image.mode != "RGB":
                         cached_image = cached_image.convert("RGB")
-                    self._cache_set(
-                        self.preview_cache,
-                        cache_key,
-                        cached_image.copy(),
-                    )
+                    try:
+                        self._cache_set(
+                            self.preview_cache,
+                            cache_key,
+                            cached_image.copy(),
+                        )
+                    except PreviewCacheCapacityError:
+                        # Analysis must remain usable when review proxies fill
+                        # the approved disk budget. Reuse the decoded input in
+                        # the bounded memory cache until eviction/invalidation.
+                        self._memory_set(cache_key, cached_image)
 
         if cached_image is None:
             return None
