@@ -1,7 +1,7 @@
 import logging
 import time
 from dataclasses import dataclass
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import numpy as np
@@ -108,6 +108,7 @@ def resolve_similarity_model_snapshot(
     *,
     allow_download: bool = False,
     progress_callback: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> str:
     """Return a local snapshot path for the shared embedding model.
 
@@ -120,6 +121,7 @@ def resolve_similarity_model_snapshot(
         EMBEDDING_MODEL,
         allow_download=allow_download,
         progress_callback=progress_callback,
+        should_cancel=should_cancel,
     )
 
 
@@ -137,10 +139,12 @@ class SimilarityEmbeddingModel:
         *,
         allow_download: bool = False,
         progress_callback: ProgressCallback | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ):
         self.spec = SimilarityModelSpec(normalize_similarity_model_name(model_name))
         self.allow_download = allow_download
         self.progress_callback = progress_callback
+        self.should_cancel = should_cancel
         self.snapshot_path: str | None = None
         self.processor: Any | None = None
         self.model: Any | None = None
@@ -181,6 +185,7 @@ class SimilarityEmbeddingModel:
             self.model_name,
             allow_download=self.allow_download,
             progress_callback=self.progress_callback,
+            should_cancel=self.should_cancel,
         )
         self.device = get_preferred_torch_device()
         logger.info(

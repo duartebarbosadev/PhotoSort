@@ -2,7 +2,7 @@ import logging
 import os
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from concurrent.futures import ThreadPoolExecutor, Future
 from typing import TYPE_CHECKING
 from collections.abc import Sequence
 
@@ -18,6 +18,7 @@ from core.ai.ai_rating_pipeline import (
 )
 from core.app_settings import calculate_max_workers
 from core.utils.time_utils import format_eta
+from core.utils.futures import completed_until_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,6 @@ class AiRatingWorker(QObject):
     def stop(self) -> None:
         self._should_stop = True
         self._stop_event.set()
-        self._shutdown_executor(cancel=True)
         if self._strategy is not None:
             try:
                 self._strategy.request_cancel()
@@ -96,11 +96,6 @@ class AiRatingWorker(QObject):
                 self._max_workers = min(
                     self._max_workers, max(1, self._strategy.max_workers)
                 )
-        try:
-            self._strategy.validate_connection()
-        except Exception as exc:
-            logger.error("AI rating strategy validation failed: %s", exc, exc_info=True)
-            raise
 
     def _rate_single(self, image_path: str) -> dict[str, object] | None:
         if self._should_stop:
@@ -129,6 +124,9 @@ class AiRatingWorker(QObject):
         return None
 
     def run(self) -> None:
+        if self._should_stop:
+            self.finished.emit()
+            return
         try:
             self._ensure_strategy()
         except Exception as exc:
@@ -156,14 +154,39 @@ class AiRatingWorker(QObject):
                 self._futures = {}
             start_time = time.perf_counter()
             try:
+                # Connection probes have network timeouts too. Keep them in the
+                # same executor so cancellation does not wait for the endpoint.
+                validation = executor.submit(self._strategy.validate_connection)
+                with self._executor_lock:
+                    self._futures[validation] = "connection validation"
+                ready = next(
+                    completed_until_cancelled([validation], lambda: self._should_stop),
+                    None,
+                )
+                if ready is None:
+                    return
+                try:
+                    ready.result()
+                except Exception as exc:
+                    logger.error(
+                        "AI rating strategy validation failed: %s", exc, exc_info=True
+                    )
+                    self.error.emit(str(exc))
+                    return
+                with self._executor_lock:
+                    self._futures.pop(validation, None)
                 for path in self.image_paths:
+                    if self._should_stop:
+                        break
                     future = executor.submit(self._rate_single, path)
                     with self._executor_lock:
                         futures[future] = path
                         self._futures[future] = path
 
                 processed = 0
-                for future in as_completed(futures):
+                for future in completed_until_cancelled(
+                    futures, lambda: self._should_stop
+                ):
                     if self._should_stop:
                         logger.info(
                             "AI rating stop requested; skipping remaining results."

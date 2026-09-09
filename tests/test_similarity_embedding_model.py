@@ -16,6 +16,9 @@ from core.similarity_embedding_model import (
 )
 
 
+pytestmark = pytest.mark.usefixtures("inline_model_download")
+
+
 def _install_downloader(monkeypatch, downloader) -> None:
     monkeypatch.setattr(
         "core.model_provisioning._snapshot_download", lambda: downloader
