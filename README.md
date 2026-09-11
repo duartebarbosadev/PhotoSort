@@ -77,6 +77,14 @@ Choose your favorites, or keep them all.
 
 [![Pick Best comparing similar photos](assets/pick-best-screenshot.webp)](assets/pick-best-screenshot.webp)
 
+### Cull
+
+Go through your photos at your own pace. Compare shots side by side, give your
+favorites a star rating, and mark the ones you don't want. Review your marks
+before sending anything to Trash.
+
+[![Cull showing a night photograph for review](assets/main-window-screenshot.webp)](assets/main-window-screenshot.webp)
+
 ### Useful shortcuts
 
 See the [complete keyboard guide](docs/keyboard-shortcuts.md) for separate maps
