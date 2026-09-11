@@ -23,7 +23,8 @@ as you go, then review them before moving anything to Trash.
   <a href="https://github.com/duartebarbosadev/PhotoSort/releases">Download</a> ·
   <a href="#supported-files">Supported files</a> ·
   <a href="#choose-your-workflow">Workflows</a> ·
-  <a href="#useful-shortcuts">Shortcuts</a>
+  <a href="#useful-shortcuts">Shortcuts</a> ·
+  <a href="#ai-usage">AI Usage</a>
 </p>
 
 ## Download
@@ -32,9 +33,10 @@ Download PhotoSort from the [Releases page](https://github.com/duartebarbosadev/
 
 ## Supported files
 
-PhotoSort opens JPEG, PNG, TIFF, WebP, and many camera RAW formats. You can also
-browse and play common video formats, but ratings and analysis only work with
-photos.
+PhotoSort opens JPEG, PNG, TIFF, WebP, and many camera RAW formats. Star ratings
+and rotations are saved directly to EXIF and XMP metadata so they carry over to
+other photo editors. You can also browse and play common video formats, but
+ratings and analysis only work with photos.
 
 ## Choose your workflow
 
@@ -90,78 +92,43 @@ before sending anything to Trash.
 See the [complete keyboard guide](docs/keyboard-shortcuts.md) for separate maps
 and shortcut tables for all five workflows.
 
-These shortcuts are for **Cull**. Each step has its own controls. To show them,
-turn on **Settings → Preferences → Show shortcuts in the footer**.
-On macOS, use **⌘** instead of Ctrl and **⌥** instead of Alt.
+Here are the most important shortcuts you should know:
 
 | What you want to do | Shortcut |
 | --- | --- |
-| Browse photos | Up / Down |
+| Browse photos | Up / Down arrows |
+| Split view with multiple photos | Shift + Up / Down arrows |
+| Highlight a photo to quickly compare (when multiple are selected) | 1, 2, 3... |
 | Mark or unmark a photo for deletion | D |
-| Clear deletion marks | Alt+D |
+| Unmark all photos | Alt+D |
 | Review and apply your changes | Shift+Enter |
-| Send selected photos to Trash, after confirming | Delete / Backspace |
+| Send selected photos to Trash | Delete / Backspace |
 | Give a star rating, or clear it with 0 | Ctrl+0 to Ctrl+5 |
 | Show photo details | I |
 | Fit the photo / show actual size | 0 / A |
 | Show one photo / compare side by side | F1 / F2 |
 | Open Preferences | F10 |
 
-Pressing **1 to 9** focuses a specific photo in a comparison.
+## AI Usage
 
-## What happens to my files?
+PhotoSort runs all AI models **100% locally on your computer**. No photos, data,
+or embeddings are ever sent to external servers or cloud APIs, and no accounts or
+API keys are required. You can also browse, organize, and cull photos manually
+without using any AI features.
 
-**Some choices can be changed before you apply them, but there isn't an Undo
-button for everything.**
+### Where AI is used
 
-| What you do | What happens |
-| --- | --- |
-| Browse, compare, or run analysis | PhotoSort makes previews and suggestions. It doesn't replace your originals. |
-| Mark a photo for deletion | Nothing is deleted yet. Unmark it or clear the marks to change your mind. |
-| Edit a folder layout in Organize | The changes wait for you to apply them. You can still change the plan. |
-| Confirm deletion | Files go to the system Trash or Recycle Bin. Restore them there if needed. PhotoSort doesn't have its own restore button. |
-| Apply changes in Organize | Files are moved or renamed and folders are created. There isn't a button to undo the whole operation. |
-| Give a star rating | The rating is saved to the photo's metadata where supported, without waiting for Apply. Choose another rating or 0 to change it. |
-| Apply a rotation or rotate manually | PhotoSort changes orientation metadata where possible. Some formats need the image pixels rotated instead, so rotating back may not fully restore the original. |
+- **Subject & similarity grouping (Cull & Pick Best):** Uses Meta's **DINOv2** (`facebook/dinov2-small`) vision transformer to cluster bursts and similar scenes based on visual content. You can also select `facebook/dinov2-base` in Preferences.
+- **Aesthetic quality scoring (Pick Best):** Uses **BeIT Aesthetic** (`cafeai/cafe_aesthetic`) to evaluate composition and lighting, alongside **MediaPipe / OpenCV** for face and open-eye detection.
+- **Orientation correction (Fix Rotation):** Uses an ONNX neural network ([deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection)) to detect upside-down or sideways photos.
+- *(Note: Duplicate detection and blur analysis in Easy Delete use fast, traditional image processing algorithms rather than neural networks).*
 
-Keep backups, especially before moving files or applying rotations.
+### Models & offline use
 
-PhotoSort writes ratings to XMP metadata where supported. Editors that read
-those ratings can use them too. Try a few photos with your editor first, since
-support varies by format and the editor may need to reload the metadata.
-
-## Do I need to set up AI?
-
-PhotoSort downloads some models the first time you use an analysis feature.
-Your photos stay on your computer. You can browse and sort photos without
-setting up the analysis features.
-
-| Feature | What you need |
-| --- | --- |
-| Group similar photos | PhotoSort asks to download a model the first time, then reuses it. |
-| Pick Best | Uses local quality checks and a model that may need downloading the first time. |
-| Fix Rotation | Needs an `orientation_model*.onnx` file. The app explains what to do if it's missing. |
-
-To install the rotation model yourself, download an `orientation_model*.onnx`
-file from [the model's releases page](https://github.com/duartebarbosadev/deep-image-orientation-detection/releases).
-In PhotoSort, open **Help → About → Models Folder** and put the file there.
-You don't need to rename it.
-
-Download any models you need before working offline. The first scan or analysis
-of a large folder can take a while. Previews also use disk space. You can adjust
-cache and performance settings in **Settings → Preferences**.
-
-<details>
-<summary>Which models does PhotoSort use?</summary>
-
-- Similarity: `facebook/dinov2-small` by default. You can choose
-  `facebook/dinov2-base` in Preferences.
-- Pick Best aesthetic scoring: `cafeai/cafe_aesthetic`.
-- Pick Best face and eye checks: OpenCV and MediaPipe.
-- Rotation: the ONNX model from
-  [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection).
-
-</details>
+- **Automatic download:** Models are downloaded automatically on first use and cached locally for future runs.
+- **Offline ready:** Once downloaded, all models run completely offline. If you plan to work without internet, run the features once beforehand to cache the models.
+- **Hardware acceleration:** Neural networks automatically leverage Apple Silicon (MPS) or NVIDIA (CUDA) when available, falling back to CPU.
+- **Manual rotation model setup:** The rotation model can also be installed manually by downloading `orientation_model*.onnx` from [the model's releases page](https://github.com/duartebarbosadev/deep-image-orientation-detection/releases) and placing it in **Help → About → Models Folder**.
 
 ## Questions or feedback?
 
