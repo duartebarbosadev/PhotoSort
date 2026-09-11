@@ -12,44 +12,29 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square" alt="License: Apache 2.0"></a>
 </p>
 
-PhotoSort is a fast, powerful desktop application for managing large photo
-libraries, making it easier than ever to sort, cull, and organize your photos.
-Instead of inspecting thousands of shots one by one, specialized workflows speed
-up your triage: quickly weed out blurry photos and duplicates in Easy Delete,
-pick the sharpest frame from bursts in Pick Best, and fly through the rest in
-Cull with instant previews and keyboard-first controls.
+PhotoSort helps you sort through a folder of photos and decide which ones to
+keep. You can find blurry shots and duplicates, compare similar photos side by
+side, and organize your favorites into folders. Mark the photos you don’t want
+as you go, then review them before moving anything to Trash.
 
 [![PhotoSort showing a night photograph in Cull](assets/main-window-screenshot.webp)](assets/main-window-screenshot.webp)
 
 <p align="center">
   <a href="https://github.com/duartebarbosadev/PhotoSort/releases">Download</a> ·
-  <a href="#what-photosort-is-for">What it's for</a> ·
+  <a href="#supported-files">Supported files</a> ·
   <a href="#choose-your-workflow">Workflows</a> ·
   <a href="#useful-shortcuts">Shortcuts</a>
 </p>
 
-## What PhotoSort is for
-
-If you've come home with hundreds of photos and want to pick the good ones
-before editing, that's what PhotoSort is for:
-
-- **Five dedicated workflows:** Organize, Easy Delete, Fix Rotation, Pick Best, and Cull.
-- **Quick navigation & smart shortcuts:** Designed to flip through images instantly for effortless comparison, with shortcuts like pressing **D** to mark an image for deletion without deleting anything until the end when you're sure there's no better photo.
-- **Local AI assistance:** Automated suggestions for blur, duplicates, rotation, and top picks without sending any data to the cloud.
-- **Side-by-side comparison:** Inspect similar shots side by side with synchronized zoom and pan to check critical focus, sharpness, and subtle expressions.
-- **Broad format & video support:** Works out of the box with common formats (JPEG, PNG, WebP, TIFF), camera RAWs (Sony, Canon, Nikon, DNG), and video browsing.
-
-PhotoSort isn't a photo editor or a full library catalog. It opens common image
-formats and many RAW formats. You can also browse and play common video formats,
-but ratings and analysis only work with photos.
-
-**You don't need a subscription, API key, or local LLM.** The AI features run on
-your computer. Some need a model download the first time you use them, but you
-can browse, compare, rate, and cull photos without setting any of that up.
-
 ## Download
 
 Download PhotoSort from the [Releases page](https://github.com/duartebarbosadev/PhotoSort/releases).
+
+## Supported files
+
+PhotoSort opens JPEG, PNG, TIFF, WebP, and many camera RAW formats. You can also
+browse and play common video formats, but ratings and analysis only work with
+photos.
 
 ## Choose your workflow
 
@@ -58,33 +43,37 @@ need. You don't have to go through them all or follow a particular order.
 
 | Step | What it's for |
 | --- | --- |
-| **Organize** | Sort photos into folders. See the current layout in **Before** and your changes in **After** before moving anything. |
-| **Easy Delete** | Look through suggestions for duplicates, blur, and photos that are very dark or bright. |
-| **Fix Rotation** | Find sideways or upside down photos and check the suggested correction. |
-| **Pick Best** | Compare similar shots and choose which ones to keep. You can keep more than one, or all of them. |
-| **Cull** | Browse your photos, compare them, add ratings, and mark rejects yourself. |
+| **Organize** | Arrange photos into folders. |
+| **Easy Delete** | Find duplicates, blurry shots, and exposure problems. |
+| **Fix Rotation** | Correct sideways or upside-down photos. |
+| **Pick Best** | Choose favorites from similar shots. |
+| **Cull** | Review photos manually and choose what to keep. |
 
 ### Organize
 
-Stage changes in the **After** tree and create new folders before moving files. When moving shots, companion files (RAW+JPEG pairs and XMP sidecars) can be moved together.
+Arrange photos into folders and check the result before moving anything.
+RAW+JPEG pairs and XMP sidecars can move together.
 
 [![Organize previewing USA, Porto, and Australia folders](assets/organize-screenshot.webp)](assets/organize-screenshot.webp)
 
 ### Easy Delete
 
-Review automated suggestions for duplicates, blurry shots, and extreme exposures side by side, then confirm what to trash.
+PhotoSort flags duplicates, blurry shots, and photos that may be too dark or
+bright. Compare them and decide which ones to keep.
 
 [![Easy Delete comparing a softer photo with a sharper version](assets/easy-delete-screenshot.webp)](assets/easy-delete-screenshot.webp)
 
 ### Fix Rotation
 
-Detect sideways or upside-down images with side-by-side original vs. suggested rotation, and override angles as needed.
+Check the suggested rotation next to the original. Adjust it if needed, then
+apply the changes.
 
 [![Fix Rotation showing the original and suggested correction](assets/fix-rotation-screenshot.webp)](assets/fix-rotation-screenshot.webp)
 
 ### Pick Best
 
-Group similar compositions and inspect them side by side, using local quality and face scoring to select the best shots.
+Compare similar photos with suggestions based on image quality and faces.
+Choose your favorites, or keep them all.
 
 [![Pick Best comparing similar photos](assets/pick-best-screenshot.webp)](assets/pick-best-screenshot.webp)
 
@@ -112,7 +101,7 @@ On macOS, use **⌘** instead of Ctrl and **⌥** instead of Alt.
 
 Pressing **1 to 9** focuses a specific photo in a comparison.
 
-## Can I undo it?
+## What happens to my files?
 
 **Some choices can be changed before you apply them, but there isn't an Undo
 button for everything.**
@@ -135,8 +124,9 @@ support varies by format and the editor may need to reload the metadata.
 
 ## Do I need to set up AI?
 
-Only if you want to use the analysis features. They run locally on your
-computer, and you don't need to send photos to a vision API.
+PhotoSort downloads some models the first time you use an analysis feature.
+Your photos stay on your computer. You can browse and sort photos without
+setting up the analysis features.
 
 | Feature | What you need |
 | --- | --- |
