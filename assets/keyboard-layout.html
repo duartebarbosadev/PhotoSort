@@ -528,7 +528,13 @@ ol{
   border-bottom: 0.6rem solid #81868a;
   -webkit-box-shadow: 0.25rem 0.25rem 1rem 0rem rgba(23, 38, 53, 0.5), inset -1px -1px 5px 0 #94a4ad;
           box-shadow: 0.25rem 0.25rem 1rem 0rem rgba(23, 38, 53, 0.5), inset -1px -1px 5px 0 #94a4ad;
-}</style></head><header><h1 id="top">Keyboard Shortcut Map Maker</h1><h2 id="loadedFileHeader" class="editable">PhotoSort-keyboard-shortcuts.html</h2><div style=" padding-top: 1px;"></div></header><body><div style=" margin-top: 30px;" class="top-padding-50px"></div><div class="bodyStyle"><ol id="KeyboardTable"><li>
+}</style><style>
+/* Room for modifier labels in standalone keyboard exports. */
+.keyboard .key { height: 6.5rem; }
+.keyboard .key--vert.key--5 { height: 13.25rem; }
+.keyboard .userText { font-size: 10px; line-height: 1.25; overflow-wrap: anywhere; }
+#KeyboardTable > li { padding-top: 12px; }
+</style></head><header><h1 id="top">Keyboard Shortcut Map Maker</h1><h2 id="loadedFileHeader" class="editable">PhotoSort-keyboard-shortcuts.html</h2><div style=" padding-top: 1px;"></div></header><body><div style=" margin-top: 30px;" class="top-padding-50px"></div><div class="bodyStyle"><ol id="KeyboardTable"><li>
       <span class="up hidden"></span>
       <span class="down hidden"></span>
       <h3 style="float: left;" class="editable">Shared controls — available in every workflow step</h3>
@@ -557,7 +563,7 @@ ol{
             <div data-key="F9" class="key key--colour--green" style="margin-left: 32px;">F9<span class="userText">Manage cache</span></div>
             <div data-key="F10" class="key key--colour--green">F10<span class="userText">Preferences</span></div>
             <div data-key="F11" class="key">F11<span class="userText"></span></div>
-            <div data-key="F12" class="key key--colour--green">F12<span class="userText">Help</span></div>
+            <div data-key="F12" class="key key--colour--green">F12<span class="userText">About</span></div>
           </div>
 
           <!-- SPACER DIV FOR 10keyless  -->
@@ -587,7 +593,7 @@ ol{
 
           <div class="keyboard__row keyboard__row--lg">
             <div data-key="Tab" class="key key--3">TAB<span class="userText"></span></div>
-            <div data-key="KeyQ" class="key">Q<span class="userText"></span></div>
+            <div data-key="KeyQ" class="key key--colour--blue">Q<span class="userText">Cmd/Ctrl · Quit*</span></div>
             <div data-key="KeyW" class="key">W<span class="userText"></span></div>
             <div data-key="KeyE" class="key">E<span class="userText"></span></div>
             <div data-key="KeyR" class="key">R<span class="userText"></span></div>
@@ -605,14 +611,14 @@ ol{
           <div class="keyboard__row keyboard__row--lg">
             <div data-key="CapsLock" class="key key--4">CAPSLOCK<span class="userText"></span></div>
             <div data-key="KeyA" class="key">A<span class="userText"></span></div>
-            <div data-key="KeyS" class="key">S<span class="userText"></span></div>
+            <div data-key="KeyS" class="key key--colour--navy">S<span class="userText">Cmd/Ctrl · Analyze similarity*</span></div>
             <div data-key="KeyD" class="key">D<span class="userText"></span></div>
-            <div data-key="KeyF" class="key key--colour--blue">F<span class="userText">Cmd/Ctrl · Find</span></div>
+            <div data-key="KeyF" class="key">F<span class="userText"></span></div>
             <div data-key="KeyG" class="key">G<span class="userText"></span></div>
             <div data-key="KeyH" class="key">H<span class="userText"></span></div>
             <div data-key="KeyJ" class="key">J<span class="userText"></span></div>
             <div data-key="KeyK" class="key">K<span class="userText"></span></div>
-            <div data-key="KeyL" class="key key--colour--orange">L<span class="userText">Cmd/Ctrl+Shift · Hide left panel</span></div>
+            <div data-key="KeyL" class="key key--colour--orange">L<span class="userText">Cmd/Ctrl+Shift · Toggle left panel</span></div>
             <div data-key="Semicolon" class="key">; :<span class="userText"></span></div>
             <div data-key="Quote" class="key">' "<span class="userText"></span></div>
             <div data-key="Enter" class="key text-end key--6">ENTER<span class="userText"></span></div>
@@ -673,8 +679,8 @@ ol{
             <div data-key="Home" class="key key--vert">HOME<span class="userText"></span></div>
             <div data-key="End" class="key key--vert">END<span class="userText"></span></div>
             <div data-key="HIDDEN" class="key key--vert hidden"><span class="userText"></span></div>
-            <div data-key="Numpad3" class="key key--vert">△<span class="userText"></span></div>
-            <div data-key="ArrowUp" class="key key--vert">▽<span class="userText"></span></div>
+            <div data-key="ArrowUp" class="key key--vert">△<span class="userText"></span></div>
+            <div data-key="ArrowDown" class="key key--vert">▽<span class="userText"></span></div>
           </div>
 
           <div class="keyboard__row keyboard__row--vertical" style="padding-right: 3px;">
@@ -689,6 +695,7 @@ ol{
         </div>
 
       </div> <!-- End of keyboard. -->
+      <p style="margin: 0 0 20px; line-height: 1.5;">Cmd on macOS; Ctrl elsewhere. Option = Alt. * Analyze similarity requires loaded images and an enabled action. Quit uses the platform-standard binding (for example, Cmd+Q on macOS).</p>
     </li><li>
       <span class="up hidden"></span>
       <span class="down hidden"></span>
@@ -707,7 +714,7 @@ ol{
             <div data-key="Escape" class="key">ESC<span class="userText"></span></div>
             <div data-key="HIDDEN" class="key hidden"><span class="userText"></span></div>
             <div data-key="F1" class="key">F1<span class="userText"></span></div>
-            <div data-key="F2" class="key key--colour--green">F2<span class="userText">2 · Rename</span></div>
+            <div data-key="F2" class="key key--colour--green">F2<span class="userText">Rename</span></div>
             <div data-key="F3" class="key">F3<span class="userText"></span></div>
             <div data-key="F4" class="key" style="margin-right: 31px;">F4<span class="userText"></span>
             </div>
@@ -729,11 +736,11 @@ ol{
             <div data-key="Escape" class="key keyboard-short-only">ESC<span class="userText"></span></div>
             <div data-key="Backquote" class="key key--primary keyboard-long-only">`<span class="userText"></span>
             </div>
-            <div data-key="Digit1" class="key key--colour--blue">1<span class="userText">1 · Alt/Option mode: Current</span></div>
-            <div data-key="Digit2" class="key key--colour--blue">2<span class="userText">1 · Alt/Option mode: Mixed</span></div>
-            <div data-key="Digit3" class="key key--colour--blue">3<span class="userText">1 · Alt/Option mode: Similarity</span></div>
-            <div data-key="Digit4" class="key key--colour--blue">4<span class="userText">1 · Alt/Option mode: Face</span></div>
-            <div data-key="Digit5" class="key key--colour--blue">5<span class="userText">1 · Alt/Option mode: Location</span></div>
+            <div data-key="Digit1" class="key key--colour--blue">1<span class="userText">Alt/Option mode: Current</span></div>
+            <div data-key="Digit2" class="key key--colour--blue">2<span class="userText">Alt/Option mode: Mixed</span></div>
+            <div data-key="Digit3" class="key key--colour--blue">3<span class="userText">Alt/Option mode: Similarity</span></div>
+            <div data-key="Digit4" class="key key--colour--blue">4<span class="userText">Alt/Option mode: Face</span></div>
+            <div data-key="Digit5" class="key key--colour--blue">5<span class="userText">Alt/Option mode: Location</span></div>
             <div data-key="Digit6" class="key">6<span class="userText"></span></div>
             <div data-key="Digit7" class="key">7<span class="userText"></span></div>
             <div data-key="Digit8" class="key">8<span class="userText"></span>
@@ -742,7 +749,7 @@ ol{
             <div data-key="Digit0" class="key">0<span class="userText"></span></div>
             <div data-key="Minus" class="key">-<span class="userText"></span></div>
             <div data-key="Equal" class="key">=<span class="userText"></span></div>
-            <div data-key="Backspace" class="key text-end key--5 key--colour--orange">BACKSPACE<span class="userText">3 · Trash now</span>
+            <div data-key="Backspace" class="key text-end key--5 key--colour--orange">BACKSPACE<span class="userText">Trash now</span>
             </div>
           </div>
 
@@ -767,7 +774,7 @@ ol{
             <div data-key="CapsLock" class="key key--4">CAPSLOCK<span class="userText"></span></div>
             <div data-key="KeyA" class="key">A<span class="userText"></span></div>
             <div data-key="KeyS" class="key">S<span class="userText"></span></div>
-            <div data-key="KeyD" class="key key--colour--orange">D<span class="userText">3 · Mark · Alt clear</span></div>
+            <div data-key="KeyD" class="key key--colour--orange">D<span class="userText">Mark · Alt/Option clear</span></div>
             <div data-key="KeyF" class="key">F<span class="userText"></span></div>
             <div data-key="KeyG" class="key">G<span class="userText"></span></div>
             <div data-key="KeyH" class="key">H<span class="userText"></span></div>
@@ -776,17 +783,17 @@ ol{
             <div data-key="KeyL" class="key">L<span class="userText"></span></div>
             <div data-key="Semicolon" class="key">; :<span class="userText"></span></div>
             <div data-key="Quote" class="key">' "<span class="userText"></span></div>
-            <div data-key="Enter" class="key text-end key--6 key--colour--coral">ENTER<span class="userText">Shift+Enter · Apply</span></div>
+            <div data-key="Enter" class="key text-end key--6 key--colour--coral">ENTER<span class="userText">Shift+Enter · Apply · Cmd/Ctrl+Enter also</span></div>
           </div>
 
           <div class="keyboard__row keyboard__row--lg">
-            <div data-key="ShiftLeft" class="key key--6 key--colour--coral">SHIFT<span class="userText">Shift+Enter · Apply</span></div>
+            <div data-key="ShiftLeft" class="key key--6 key--colour--coral">SHIFT<span class="userText">Shift+Enter · Apply · Cmd/Ctrl+Enter also</span></div>
             <div data-key="KeyZ" class="key">Z<span class="userText"></span></div>
             <div data-key="KeyX" class="key">X<span class="userText"></span></div>
             <div data-key="KeyC" class="key">C<span class="userText"></span></div>
             <div data-key="KeyV" class="key">V<span class="userText"></span></div>
             <div data-key="KeyB" class="key">B<span class="userText"></span></div>
-            <div data-key="KeyN" class="key key--colour--green">N<span class="userText">2 · Cmd/Ctrl+Shift · New folder</span></div>
+            <div data-key="KeyN" class="key key--colour--green">N<span class="userText">Cmd/Ctrl+Shift · New folder</span></div>
             <div data-key="KeyM" class="key">M<span class="userText"></span></div>
             <div data-key="Comma" class="key">, &lt;<span class="userText"></span></div>
             <div data-key="Period" class="key">. &gt;<span class="userText"></span></div>
@@ -822,7 +829,7 @@ ol{
             <div data-key="PrintScreen" class="key key--vert" style="margin-bottom: 12px;">
               PRTSC<span class="userText"></span></div>
             <div data-key="Insert" class="key key--vert">INS<span class="userText"></span></div>
-            <div data-key="Delete" class="key key--vert key--colour--orange">DEL<span class="userText">3 · Trash now</span></div>
+            <div data-key="Delete" class="key key--vert key--colour--orange">DEL<span class="userText">Trash now</span></div>
             <div data-key="HIDDEN" class="key vert-center key--vert key--5 hidden"><span class="userText"></span>
             </div>
             <div data-key="ArrowLeft" class="key key--vert">◁<span class="userText"></span></div>
@@ -834,8 +841,8 @@ ol{
             <div data-key="Home" class="key key--vert">HOME<span class="userText"></span></div>
             <div data-key="End" class="key key--vert">END<span class="userText"></span></div>
             <div data-key="HIDDEN" class="key key--vert hidden"><span class="userText"></span></div>
-            <div data-key="Numpad3" class="key key--vert">△<span class="userText"></span></div>
-            <div data-key="ArrowUp" class="key key--vert">▽<span class="userText"></span></div>
+            <div data-key="ArrowUp" class="key key--vert">△<span class="userText"></span></div>
+            <div data-key="ArrowDown" class="key key--vert">▽<span class="userText"></span></div>
           </div>
 
           <div class="keyboard__row keyboard__row--vertical" style="padding-right: 3px;">
@@ -926,7 +933,7 @@ ol{
 
           <div class="keyboard__row keyboard__row--lg">
             <div data-key="CapsLock" class="key key--4">CAPSLOCK<span class="userText"></span></div>
-            <div data-key="KeyA" class="key key--colour--green">A<span class="userText">Confirm visible suggestions</span></div>
+            <div data-key="KeyA" class="key key--colour--green">A<span class="userText">Confirm all filtered suggestions</span></div>
             <div data-key="KeyS" class="key">S<span class="userText"></span></div>
             <div data-key="KeyD" class="key">D<span class="userText"></span></div>
             <div data-key="KeyF" class="key">F<span class="userText"></span></div>
@@ -937,7 +944,7 @@ ol{
             <div data-key="KeyL" class="key">L<span class="userText"></span></div>
             <div data-key="Semicolon" class="key">; :<span class="userText"></span></div>
             <div data-key="Quote" class="key">' "<span class="userText"></span></div>
-            <div data-key="Enter" class="key text-end key--6 key--colour--coral">ENTER<span class="userText">2 · Enter Confirm / Shift+Enter Apply</span></div>
+            <div data-key="Enter" class="key text-end key--6 key--colour--coral">ENTER<span class="userText">Confirm / cancel · Shift+Enter Apply</span></div>
           </div>
 
           <div class="keyboard__row keyboard__row--lg">
@@ -995,8 +1002,8 @@ ol{
             <div data-key="Home" class="key key--vert">HOME<span class="userText"></span></div>
             <div data-key="End" class="key key--vert">END<span class="userText"></span></div>
             <div data-key="HIDDEN" class="key key--vert hidden"><span class="userText"></span></div>
-            <div data-key="Numpad3" class="key key--vert key--colour--blue">△<span class="userText">Previous pair</span></div>
-            <div data-key="ArrowUp" class="key key--vert key--colour--blue">▽<span class="userText">Next pair</span></div>
+            <div data-key="ArrowUp" class="key key--vert key--colour--blue">△<span class="userText">Previous pair</span></div>
+            <div data-key="ArrowDown" class="key key--vert key--colour--blue">▽<span class="userText">Next pair</span></div>
           </div>
 
           <div class="keyboard__row keyboard__row--vertical" style="padding-right: 3px;">
@@ -1098,7 +1105,7 @@ ol{
             <div data-key="KeyL" class="key">L<span class="userText"></span></div>
             <div data-key="Semicolon" class="key">; :<span class="userText"></span></div>
             <div data-key="Quote" class="key">' "<span class="userText"></span></div>
-            <div data-key="Enter" class="key text-end key--6 key--colour--coral">ENTER<span class="userText">Enter Confirm / Shift+Enter Apply</span></div>
+            <div data-key="Enter" class="key text-end key--6 key--colour--coral">ENTER<span class="userText">Confirm / cancel · Shift+Enter Apply</span></div>
           </div>
 
           <div class="keyboard__row keyboard__row--lg">
@@ -1156,8 +1163,8 @@ ol{
             <div data-key="Home" class="key key--vert">HOME<span class="userText"></span></div>
             <div data-key="End" class="key key--vert">END<span class="userText"></span></div>
             <div data-key="HIDDEN" class="key key--vert hidden"><span class="userText"></span></div>
-            <div data-key="Numpad3" class="key key--vert key--colour--blue">△<span class="userText">Previous image</span></div>
-            <div data-key="ArrowUp" class="key key--vert key--colour--blue">▽<span class="userText">Next image</span></div>
+            <div data-key="ArrowUp" class="key key--vert key--colour--blue">△<span class="userText">Previous image</span></div>
+            <div data-key="ArrowDown" class="key key--vert key--colour--blue">▽<span class="userText">Next image</span></div>
           </div>
 
           <div class="keyboard__row keyboard__row--vertical" style="padding-right: 3px;">
@@ -1255,7 +1262,7 @@ ol{
             <div data-key="KeyG" class="key">G<span class="userText"></span></div>
             <div data-key="KeyH" class="key">H<span class="userText"></span></div>
             <div data-key="KeyJ" class="key">J<span class="userText"></span></div>
-            <div data-key="KeyK" class="key key--colour--green">K<span class="userText">Keep all images</span></div>
+            <div data-key="KeyK" class="key key--colour--green">K<span class="userText">Keep all in comparison + confirm</span></div>
             <div data-key="KeyL" class="key">L<span class="userText"></span></div>
             <div data-key="Semicolon" class="key">; :<span class="userText"></span></div>
             <div data-key="Quote" class="key">' "<span class="userText"></span></div>
@@ -1317,8 +1324,8 @@ ol{
             <div data-key="Home" class="key key--vert">HOME<span class="userText"></span></div>
             <div data-key="End" class="key key--vert">END<span class="userText"></span></div>
             <div data-key="HIDDEN" class="key key--vert hidden"><span class="userText"></span></div>
-            <div data-key="Numpad3" class="key key--vert key--colour--blue">△<span class="userText">Previous comparison / cluster</span></div>
-            <div data-key="ArrowUp" class="key key--vert key--colour--blue">▽<span class="userText">Next comparison / cluster</span></div>
+            <div data-key="ArrowUp" class="key key--vert key--colour--blue">△<span class="userText">Previous comparison / cluster</span></div>
+            <div data-key="ArrowDown" class="key key--vert key--colour--blue">▽<span class="userText">Next comparison / cluster</span></div>
           </div>
 
           <div class="keyboard__row keyboard__row--vertical" style="padding-right: 3px;">
@@ -1348,7 +1355,7 @@ ol{
         <div class="keyboard__section">
 
           <div class="keyboard__row keyboard__row--lg keyboard-long-only">
-            <div data-key="Escape" class="key">ESC<span class="userText"></span></div>
+            <div data-key="Escape" class="key key--colour--blue">ESC<span class="userText">Leave search</span></div>
             <div data-key="HIDDEN" class="key hidden"><span class="userText"></span></div>
             <div data-key="F1" class="key key--colour--green">F1<span class="userText">Single view</span></div>
             <div data-key="F2" class="key key--colour--green">F2<span class="userText">Side-by-side view</span></div>
@@ -1385,7 +1392,7 @@ ol{
             <div data-key="Digit9" class="key key--colour--blue">9<span class="userText">Focus image 9</span></div>
             <div data-key="Digit0" class="key key--colour--green">0<span class="userText">Fit to view · Cmd/Ctrl rate 0★</span></div>
             <div data-key="Minus" class="key key--colour--green">-<span class="userText">Zoom out · Cmd/Ctrl also</span></div>
-            <div data-key="Equal" class="key key--colour--green">=<span class="userText">Zoom in · Cmd/Ctrl also</span></div>
+            <div data-key="Equal" class="key key--colour--green">=<span class="userText">+ / = Zoom in · Cmd/Ctrl+plus also</span></div>
             <div data-key="Backspace" class="key text-end key--5 key--colour--orange">BACKSPACE<span class="userText">Trash now</span>
             </div>
           </div>
@@ -1410,9 +1417,9 @@ ol{
           <div class="keyboard__row keyboard__row--lg">
             <div data-key="CapsLock" class="key key--4">CAPSLOCK<span class="userText"></span></div>
             <div data-key="KeyA" class="key key--colour--green">A<span class="userText">Actual size</span></div>
-            <div data-key="KeyS" class="key key--colour--navy">S<span class="userText">Group · Cmd/Ctrl analyze similarity</span></div>
+            <div data-key="KeyS" class="key key--colour--navy">S<span class="userText">Group by similarity</span></div>
             <div data-key="KeyD" class="key key--colour--orange">D<span class="userText">Mark · Alt/Option clear marks</span></div>
-            <div data-key="KeyF" class="key key--colour--navy">F<span class="userText">Toggle folder view</span></div>
+            <div data-key="KeyF" class="key key--colour--navy">F<span class="userText">Folder view · Cmd/Ctrl Find</span></div>
             <div data-key="KeyG" class="key">G<span class="userText"></span></div>
             <div data-key="KeyH" class="key">H<span class="userText"></span></div>
             <div data-key="KeyJ" class="key">J<span class="userText"></span></div>
@@ -1478,8 +1485,8 @@ ol{
             <div data-key="Home" class="key key--vert">HOME<span class="userText"></span></div>
             <div data-key="End" class="key key--vert">END<span class="userText"></span></div>
             <div data-key="HIDDEN" class="key key--vert hidden"><span class="userText"></span></div>
-            <div data-key="Numpad3" class="key key--vert key--colour--blue">△<span class="userText">Browse up · Cmd/Ctrl includes marked</span></div>
-            <div data-key="ArrowUp" class="key key--vert key--colour--blue">▽<span class="userText">Browse down · Cmd/Ctrl includes marked</span></div>
+            <div data-key="ArrowUp" class="key key--vert key--colour--blue">△<span class="userText">Browse up · Cmd/Ctrl includes marked</span></div>
+            <div data-key="ArrowDown" class="key key--vert key--colour--blue">▽<span class="userText">Browse down · Cmd/Ctrl includes marked</span></div>
           </div>
 
           <div class="keyboard__row keyboard__row--vertical" style="padding-right: 3px;">

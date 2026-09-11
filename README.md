@@ -14,18 +14,18 @@
 
 PhotoSort is a fast, powerful desktop application for managing large photo
 libraries, making it easier than ever to sort, cull, and organize your photos.
-It helps you go through your shots, compare similar photos, and decide what to
-keep. You can give your favorites a star rating, sort photos into folders, and
-mark the ones you don't want for deletion. Delete them whenever you're ready, or
-simply keep them if you change your mind.
+Instead of inspecting thousands of shots one by one, specialized workflows speed
+up your triage: quickly weed out blurry photos and duplicates in Easy Delete,
+pick the sharpest frame from bursts in Pick Best, and fly through the rest in
+Cull with instant previews and keyboard-first controls.
 
 [![PhotoSort showing a night photograph in Cull](assets/main-window-screenshot.webp)](assets/main-window-screenshot.webp)
 
 <p align="center">
-  <a href="https://github.com/duartebarbosadev/PhotoSort/releases">Download PhotoSort</a> ·
+  <a href="https://github.com/duartebarbosadev/PhotoSort/releases">Download</a> ·
   <a href="#what-photosort-is-for">What it's for</a> ·
-  <a href="#choose-your-workflow">The five steps</a> ·
-  <a href="#can-i-undo-it">Can I undo it?</a>
+  <a href="#choose-your-workflow">Workflows</a> ·
+  <a href="#useful-shortcuts">Shortcuts</a>
 </p>
 
 ## What PhotoSort is for
@@ -89,6 +89,9 @@ Group similar compositions and inspect them side by side, using local quality an
 [![Pick Best comparing similar photos](assets/pick-best-screenshot.webp)](assets/pick-best-screenshot.webp)
 
 ### Useful shortcuts
+
+See the [complete keyboard guide](docs/keyboard-shortcuts.md) for separate maps
+and shortcut tables for all five workflows.
 
 These shortcuts are for **Cull**. Each step has its own controls. To show them,
 turn on **Settings → Preferences → Show shortcuts in the footer**.
