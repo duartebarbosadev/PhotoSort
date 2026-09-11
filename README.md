@@ -16,27 +16,28 @@ PhotoSort is a fast, powerful desktop application for managing large photo
 libraries, making it easier than ever to sort, cull, and organize your photos.
 It helps you go through your shots, compare similar photos, and decide what to
 keep. You can give your favorites a star rating, sort photos into folders, and
-mark the ones you don't want for deletion—delete them whenever you're ready, or
+mark the ones you don't want for deletion. Delete them whenever you're ready, or
 simply keep them if you change your mind.
 
-[![PhotoSort showing a night photograph in Cull](assets/main-window-screenshot.webp)](assets/main-window-screenshot.png)
+[![PhotoSort showing a night photograph in Cull](assets/main-window-screenshot.webp)](assets/main-window-screenshot.webp)
 
 <p align="center">
   <a href="https://github.com/duartebarbosadev/PhotoSort/releases">Download PhotoSort</a> ·
-  <a href="#your-first-cull">Get started</a> ·
+  <a href="#what-photosort-is-for">What it's for</a> ·
   <a href="#choose-your-workflow">The five steps</a> ·
   <a href="#can-i-undo-it">Can I undo it?</a>
 </p>
 
-## Is it for me?
+## What PhotoSort is for
 
 If you've come home with hundreds of photos and want to pick the good ones
-before editing, that's what PhotoSort is for. You can:
+before editing, that's what PhotoSort is for:
 
-- Browse with the keyboard and quickly mark photos you don't want.
-- Compare similar shots side by side to check focus or expressions.
-- Get help finding duplicates, blurry photos, and photos that need rotating.
-- Give photos star ratings and organize them into folders.
+- **Five dedicated workflows:** Organize, Easy Delete, Fix Rotation, Pick Best, and Cull.
+- **Quick navigation & smart shortcuts:** Designed to flip through images instantly for effortless comparison, with shortcuts like pressing **D** to mark an image for deletion without deleting anything until the end when you're sure there's no better photo.
+- **Local AI assistance:** Automated suggestions for blur, duplicates, rotation, and top picks without sending any data to the cloud.
+- **Side-by-side comparison:** Inspect similar shots side by side with synchronized zoom and pan to check critical focus, sharpness, and subtle expressions.
+- **Broad format & video support:** Works out of the box with common formats (JPEG, PNG, WebP, TIFF), camera RAWs (Sony, Canon, Nikon, DNG), and video browsing.
 
 PhotoSort isn't a photo editor or a full library catalog. It opens common image
 formats and many RAW formats. You can also browse and play common video formats,
@@ -50,38 +51,10 @@ can browse, compare, rate, and cull photos without setting any of that up.
 
 Download PhotoSort from the [Releases page](https://github.com/duartebarbosadev/PhotoSort/releases).
 
-## Your first cull
-
-Try a copy of a small folder first so you can get a feel for the app. Keep
-backups of your originals.
-
-1. Open PhotoSort and choose **File → Open Folder**.
-2. Click **Cull** at the bottom. You can start here and skip the other steps.
-3. Use **Up/Down** to browse. Press **D** to mark a photo for deletion. Press it
-   again to unmark it. The file stays where it is until you confirm deletion.
-4. Give your favorites **5 stars** with the stars below the photo, or press
-   **Ctrl+5** (**⌘5** on macOS). You can then filter by rating to find them again.
-5. When you're ready, press **Shift+Enter**. Check the list of changes and
-   confirm which photos you want to send to the Trash or Recycle Bin.
-
-Changed your mind? **Alt+D** (**⌥D** on macOS) clears the deletion marks.
-
-**Delete/Backspace works differently from D.** It asks to send the selected
-photos to the Trash straight away, instead of marking them for later.
-
-### Compare similar shots
-
-Select a few photos in the browser to see them side by side. Click **Compare**
-above the photo, then **Sync** to zoom and move around them together. This is
-useful for checking focus or small differences between shots. Click **Single**
-to go back to one photo.
-
 ## Choose your workflow
 
 There are five steps along the bottom of the window. Use whichever ones you
-need. You don't have to go through them all or follow a particular order. If
-you leave a step with changes you haven't applied, PhotoSort asks what you want
-to do with them.
+need. You don't have to go through them all or follow a particular order.
 
 | Step | What it's for |
 | --- | --- |
@@ -115,7 +88,7 @@ matching files together. This can include RAW/JPEG files with the same name
 and XMP sidecars. Check the files and destinations before applying. Other
 photo actions don't necessarily include the matching RAW or JPEG.
 
-[![Organize previewing USA, Porto, and Australia folders](assets/organize-screenshot.webp)](assets/organize-screenshot.png)
+[![Organize previewing USA, Porto, and Australia folders](assets/organize-screenshot.webp)](assets/organize-screenshot.webp)
 
 ### Easy Delete
 
@@ -123,14 +96,14 @@ PhotoSort points out possible rejects for you to check. Choose **Keep** or
 **Trash** for each photo, then confirm. Here, a softer photo is being compared
 with a sharper version.
 
-[![Easy Delete comparing a softer photo with a sharper version](assets/easy-delete-screenshot.webp)](assets/easy-delete-screenshot.png)
+[![Easy Delete comparing a softer photo with a sharper version](assets/easy-delete-screenshot.webp)](assets/easy-delete-screenshot.webp)
 
 ### Fix Rotation
 
 See the original next to the suggested rotation. You can change the rotation
 if it doesn't look right, then confirm it before applying.
 
-[![Fix Rotation showing the original and suggested correction](assets/fix-rotation-screenshot.webp)](assets/fix-rotation-screenshot.png)
+[![Fix Rotation showing the original and suggested correction](assets/fix-rotation-screenshot.webp)](assets/fix-rotation-screenshot.webp)
 
 ### Pick Best
 
@@ -138,7 +111,7 @@ Compare the photos in each group and choose the ones you like. PhotoSort gives
 you a suggestion based on its local scoring, but you're free to keep any of
 them. This example compares three similar photos with different sharpness.
 
-[![Pick Best comparing similar photos](assets/pick-best-screenshot.webp)](assets/pick-best-screenshot.png)
+[![Pick Best comparing similar photos](assets/pick-best-screenshot.webp)](assets/pick-best-screenshot.webp)
 
 ### Useful shortcuts
 
