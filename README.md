@@ -64,52 +64,27 @@ need. You don't have to go through them all or follow a particular order.
 | **Pick Best** | Compare similar shots and choose which ones to keep. You can keep more than one, or all of them. |
 | **Cull** | Browse your photos, compare them, add ratings, and mark rejects yourself. |
 
-You make the final choice. A suggestion might not be right for intentional blur,
-a silhouette, or a photo you simply like.
+### Organize
 
-### Organize your favorites and keepers
-
-One simple way to work is to give favorites **5 stars**, leave other keepers
-unmarked, and press **D** for photos you don't want. Stars don't move files.
-
-If you'd rather have a `Favorites` or `Keep` folder:
-
-1. Open **Organize** and select **Current**.
-2. Right click in the **After** tree and choose **Create folder**. Give it a
-   name, such as `Favorites` or `Keep`.
-3. Drag photos into that folder in the After tree.
-4. Check the layout, then apply and confirm the changes.
-
-There isn't a single shortcut that sends a photo to Favorites. You do that
-through Organize.
-
-If you shoot RAW+JPEG, choose **Yes, move companions** when asked to move
-matching files together. This can include RAW/JPEG files with the same name
-and XMP sidecars. Check the files and destinations before applying. Other
-photo actions don't necessarily include the matching RAW or JPEG.
+Stage changes in the **After** tree and create new folders before moving files. When moving shots, companion files (RAW+JPEG pairs and XMP sidecars) can be moved together.
 
 [![Organize previewing USA, Porto, and Australia folders](assets/organize-screenshot.webp)](assets/organize-screenshot.webp)
 
 ### Easy Delete
 
-PhotoSort points out possible rejects for you to check. Choose **Keep** or
-**Trash** for each photo, then confirm. Here, a softer photo is being compared
-with a sharper version.
+Review automated suggestions for duplicates, blurry shots, and extreme exposures side by side, then confirm what to trash.
 
 [![Easy Delete comparing a softer photo with a sharper version](assets/easy-delete-screenshot.webp)](assets/easy-delete-screenshot.webp)
 
 ### Fix Rotation
 
-See the original next to the suggested rotation. You can change the rotation
-if it doesn't look right, then confirm it before applying.
+Detect sideways or upside-down images with side-by-side original vs. suggested rotation, and override angles as needed.
 
 [![Fix Rotation showing the original and suggested correction](assets/fix-rotation-screenshot.webp)](assets/fix-rotation-screenshot.webp)
 
 ### Pick Best
 
-Compare the photos in each group and choose the ones you like. PhotoSort gives
-you a suggestion based on its local scoring, but you're free to keep any of
-them. This example compares three similar photos with different sharpness.
+Group similar compositions and inspect them side by side, using local quality and face scoring to select the best shots.
 
 [![Pick Best comparing similar photos](assets/pick-best-screenshot.webp)](assets/pick-best-screenshot.webp)
 
@@ -132,8 +107,7 @@ On macOS, use **⌘** instead of Ctrl and **⌥** instead of Alt.
 | Show one photo / compare side by side | F1 / F2 |
 | Open Preferences | F10 |
 
-Pressing **1 to 9** on its own focuses a photo in a comparison. It doesn't give
-it a star rating.
+Pressing **1 to 9** focuses a specific photo in a comparison.
 
 ## Can I undo it?
 
@@ -158,9 +132,8 @@ support varies by format and the editor may need to reload the metadata.
 
 ## Do I need to set up AI?
 
-Only if you want to use the analysis features. They run on your computer, and
-you don't need to send photos to a vision API. The older LLM setup has been
-removed.
+Only if you want to use the analysis features. They run locally on your
+computer, and you don't need to send photos to a vision API.
 
 | Feature | What you need |
 | --- | --- |
@@ -195,9 +168,6 @@ cache and performance settings in **Settings → Preferences**.
 isn't working, a step is confusing, or you'd like a feature. For bugs, include
 your PhotoSort version, operating system, file formats, and what you did before
 the problem happened. A small sample photo helps if you can share one.
-
-The screenshots here were taken on macOS with the project's test images.
-Older releases may look different.
 
 ## Running from source
 
