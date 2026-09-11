@@ -46,27 +46,9 @@ but ratings and analysis only work with photos.
 your computer. Some need a model download the first time you use them, but you
 can browse, compare, rate, and cull photos without setting any of that up.
 
-## Download and open
+## Download
 
 Download PhotoSort from the [Releases page](https://github.com/duartebarbosadev/PhotoSort/releases).
-You don't need to install Python or run any commands.
-
-| Your computer | Download | How to open it |
-| --- | --- | --- |
-| Windows | `PhotoSort-Windows-x64.zip` | Extract the ZIP and run `PhotoSort.exe` from the extracted folder. |
-| Windows with an NVIDIA GPU | `PhotoSort-Windows-x64-CUDA.zip` | Extract the ZIP and run `PhotoSort.exe`. |
-| Apple Silicon Mac | `PhotoSort-macOS-AppleSilicon.dmg` | Open the DMG and drag PhotoSort to Applications. |
-
-If you're not sure which Windows download to choose, **use the regular one**.
-The CUDA version can make some analysis faster on compatible NVIDIA GPUs.
-Both versions have the same features. Check the release notes for requirements
-and download names. On Linux, you can [run from source](#running-from-source).
-
-The downloads aren't signed yet, so your computer may show a warning when you
-open them. Use the official release page linked above. If you'd like to check a
-download with VirusTotal, scan the file you downloaded. Not every release has
-been scanned. Some releases also include a `.sha256` file to check that the
-download is complete and matches the published file. That isn't a malware scan.
 
 ## Your first cull
 
