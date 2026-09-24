@@ -29,6 +29,8 @@ from PyQt6.QtGui import (
     QTransform,
 )
 from PyQt6.QtWidgets import (
+    QAbstractScrollArea,
+    QApplication,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -445,6 +447,19 @@ class ZoomableImageView(QGraphicsView):
             )  # Call super to ensure event propagation if not handled
             return
 
+        delta = event.angleDelta()
+        pixel_delta = event.pixelDelta()
+        horizontal = abs(delta.x()) or abs(pixel_delta.x())
+        vertical = abs(delta.y()) or abs(pixel_delta.y())
+        if horizontal > vertical or vertical == 0:
+            # Sideways trackpad swipes belong to the enclosing comparison
+            # scroll area; zooming here would swallow them.
+            if horizontal and self._scroll_enclosing_area(event):
+                event.accept()
+            else:
+                event.ignore()
+            return
+
         # Get the mouse position in scene coordinates
         mouse_pos = self.mapToScene(event.position().toPoint())
 
@@ -454,6 +469,24 @@ class ZoomableImageView(QGraphicsView):
             self.zoom_in(mouse_pos)
         else:
             self.zoom_out(mouse_pos)
+
+    def _scroll_enclosing_area(self, event: QWheelEvent) -> bool:
+        """Apply a sideways wheel delta to the nearest horizontally scrollable parent.
+
+        Qt does not reliably propagate trackpad gestures past a graphics view
+        once it has received the scroll phase, so forward the event directly.
+        """
+        widget = self.parentWidget()
+        while widget is not None:
+            if isinstance(widget, QAbstractScrollArea):
+                scroll_bar = widget.horizontalScrollBar()
+                if scroll_bar is not None and scroll_bar.maximum() > 0:
+                    # Match QAbstractScrollArea: the scroll bar applies the
+                    # platform's direction and natural-scrolling conventions.
+                    QApplication.sendEvent(scroll_bar, event)
+                    return True
+            widget = widget.parentWidget()
+        return False
 
     @override
     def mousePressEvent(self, event: QMouseEvent | None):

@@ -301,3 +301,51 @@ def test_side_by_side_fills_width_without_scrolling_when_slots_fit():
     assert not viewer.scroll_to_path("missing.jpg")
 
     viewer.deleteLater()
+
+
+def _send_wheel(target, angle_delta, pixel_delta=None):
+    from PyQt6.QtCore import QPoint, QPointF
+    from PyQt6.QtGui import QWheelEvent
+
+    center = QPointF(target.width() / 2, target.height() / 2)
+    event = QWheelEvent(
+        center,
+        QPointF(target.mapToGlobal(center.toPoint())),
+        pixel_delta or QPoint(0, 0),
+        angle_delta,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    QApplication.sendEvent(target, event)
+
+
+def test_horizontal_trackpad_swipe_over_image_scrolls_comparison():
+    from PyQt6.QtCore import QPoint
+
+    viewer = SynchronizedImageViewer()
+    viewer.resize(700, 500)
+    viewer.show()
+    _app.processEvents()
+    viewer.set_images_data([_make_image(f"img_{idx}.jpg", size=64) for idx in range(9)])
+    _app.processEvents()
+    scroll_bar = viewer.viewer_scroll_area.horizontalScrollBar()
+    assert scroll_bar.maximum() > 0
+    image_view = viewer.image_viewers[0].image_view
+    zoom_before = image_view.transform().m11()
+
+    _send_wheel(image_view.viewport(), QPoint(-120, 0), QPoint(-60, 0))
+    _app.processEvents()
+
+    assert scroll_bar.value() > 0
+    assert image_view.transform().m11() == zoom_before
+
+    # Vertical wheel over an image still zooms instead of scrolling.
+    scrolled_to = scroll_bar.value()
+    _send_wheel(image_view.viewport(), QPoint(0, 120))
+    _app.processEvents()
+    assert scroll_bar.value() == scrolled_to
+    assert image_view.transform().m11() != zoom_before
+
+    viewer.deleteLater()
