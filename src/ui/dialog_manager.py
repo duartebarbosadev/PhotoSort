@@ -231,7 +231,7 @@ class DialogManager:
                 "organize",
                 "Organize changes",
                 f"{len(pending.organize_actions)} unapplied filesystem change(s).",
-                (("apply", "Apply changes"), ("discard", "Discard edits")),
+                (("apply", "Apply changes"), ("discard", "Discard changes")),
                 "\n".join(preview_lines),
             )
         if pending.rotation_count:

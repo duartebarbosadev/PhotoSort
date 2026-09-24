@@ -327,6 +327,69 @@ def test_grouping_step_widget_detects_unsaved_grouping_edits(tmp_path):
     ]
 
 
+def _single_group_plan(mode, label, path):
+    return GroupingPlan(
+        mode=mode,
+        total_items=1,
+        supported_items=1,
+        groups=[GroupingGroup(group_id="1", group_label=label, source_paths=[path])],
+        unassigned_paths=[],
+        skipped_paths=[],
+    )
+
+
+def test_generated_regrouping_counts_as_pending_change_without_edits(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_current_mode("mixed")
+    widget.set_preview_plan(
+        _single_group_plan("mixed", "Mixed 1", first), str(source_root)
+    )
+
+    assert not widget.has_unsaved_grouping_edits()
+    assert widget.has_pending_grouping_changes()
+    assert widget.pending_grouping_action_lines()
+
+
+def test_current_structure_plan_has_no_pending_changes(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        _single_group_plan("current", "Beach", first), str(source_root)
+    )
+
+    assert not widget.has_pending_grouping_changes()
+    assert not widget.discard_pending_grouping_changes()
+    assert widget._current_plan is not None
+
+
+def test_discarding_generated_regrouping_falls_back_to_current_mode(tmp_path):
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    first = str(source_root / "Beach" / "a.jpg")
+
+    widget = GroupingStepWidget()
+    widget.set_source_folder(str(source_root))
+    widget.set_current_mode("mixed")
+    widget.set_preview_plan(
+        _single_group_plan("mixed", "Mixed 1", first), str(source_root)
+    )
+
+    assert widget.discard_pending_grouping_changes()
+    assert widget.current_mode() == "current"
+    assert widget._current_plan is None
+    assert not widget.has_pending_grouping_changes()
+    assert widget.preview_tree.topLevelItemCount() == 0
+
+
 def test_grouping_apply_button_is_hidden_until_plan_has_real_changes(tmp_path):
     source_root = tmp_path / "demo"
     beach_dir = source_root / "Beach"

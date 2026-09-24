@@ -1393,24 +1393,37 @@ class GroupingStepWidget(QWidget):
         for btn in self._mode_buttons.values():
             btn.setEnabled(has_folder)
         if not has_folder:
-            self._cancel_all_tree_expansion_operations()
-            self._current_preview_source_path = None
-            self.before_tree.clear()
-            self.preview_tree.clear()
-            self._update_tree_control_buttons(self.before_tree)
-            self._update_tree_control_buttons(self.preview_tree)
-            self._current_plan = None
-            self._current_output_root = ""
-            self._editable_groups = []
-            self._editable_unassigned = []
-            self._editable_skipped = []
-            self._file_name_overrides = {}
-            self._original_group_labels_by_path = {}
-            self._original_group_labels_by_group_id = {}
-            self._sticky_empty_group_ids.clear()
+            self._clear_preview_plan()
             self.loading_label.setText("Select a folder to start.")
             self.loading_bar.setVisible(False)
-            self._clear_selected_preview()
+        self._update_primary_action_state()
+
+    def _clear_preview_plan(self) -> None:
+        self._cancel_all_tree_expansion_operations()
+        self._current_preview_source_path = None
+        self.before_tree.clear()
+        self.preview_tree.clear()
+        self._before_root_item = None
+        self._after_root_item = None
+        self._before_file_items_by_path = {}
+        self._before_dir_items_by_relative_path = {}
+        self._after_file_items_by_path = {}
+        self._after_dir_items_by_relative_path = {}
+        self._after_group_items_by_id = {}
+        self._after_group_items_by_label = {}
+        self._after_items_by_match_relative_path = {}
+        self._update_tree_control_buttons(self.before_tree)
+        self._update_tree_control_buttons(self.preview_tree)
+        self._current_plan = None
+        self._current_output_root = ""
+        self._editable_groups = []
+        self._editable_unassigned = []
+        self._editable_skipped = []
+        self._file_name_overrides = {}
+        self._original_group_labels_by_path = {}
+        self._original_group_labels_by_group_id = {}
+        self._sticky_empty_group_ids.clear()
+        self._clear_selected_preview()
         self._update_primary_action_state()
 
     def has_source_folder(self) -> bool:
@@ -1527,6 +1540,33 @@ class GroupingStepWidget(QWidget):
         return self._plan_signature(effective_plan) != self._plan_signature(
             self._current_plan
         )
+
+    def has_pending_grouping_changes(self) -> bool:
+        """Return whether leaving Organize would abandon unapplied changes.
+
+        This covers manual edits and also a freshly generated plan (for
+        example after switching to Mixed or Face) that would move files even
+        though the user has not edited it.
+        """
+        if self._current_plan is None:
+            return False
+        return self.has_unsaved_grouping_edits() or self._plan_mutates_filesystem()
+
+    def discard_pending_grouping_changes(self) -> bool:
+        """Drop edits and any generated reorganization.
+
+        Returns True when the previewed plan itself would have moved files, in
+        which case the widget falls back to the Current structure and the
+        caller must regenerate that preview.
+        """
+        if self._current_plan is None:
+            return False
+        self.discard_unsaved_grouping_edits()
+        if not self._plan_mutates_filesystem():
+            return False
+        self.set_current_mode("current")
+        self._clear_preview_plan()
+        return True
 
     def discard_unsaved_grouping_edits(self) -> None:
         """Restore the editable preview to the worker-produced baseline plan."""
@@ -1686,6 +1726,10 @@ class GroupingStepWidget(QWidget):
         """Return whether applying the effective plan would mutate the filesystem."""
         if self._has_any_marked_func():
             return True
+        return self._plan_mutates_filesystem()
+
+    def _plan_mutates_filesystem(self) -> bool:
+        """Return whether the effective plan deletes, moves, or renames files."""
         if self._current_plan is None or not self.has_source_folder():
             return False
 

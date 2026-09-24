@@ -922,7 +922,7 @@ class MainWindow(QMainWindow):
         organize_removed_folders: list[str] = []
         if (
             source == "organize"
-            and self.grouping_step_widget.has_unsaved_grouping_edits()
+            and self.grouping_step_widget.has_pending_grouping_changes()
         ):
             organize_actions = self.grouping_step_widget.pending_grouping_action_lines()
             (
@@ -1022,7 +1022,7 @@ class MainWindow(QMainWindow):
         )
 
         if request.organize_resolution == "discard":
-            self.grouping_step_widget.discard_unsaved_grouping_edits()
+            self._discard_organize_changes()
         if request.rotation_resolution == "discard" and self.fix_rotation_step_widget:
             self.fix_rotation_step_widget.discard_pending_rotations()
 
@@ -1041,6 +1041,13 @@ class MainWindow(QMainWindow):
             self.fix_rotation_step_widget.apply_pending_rotations()
             return
         self._finish_workflow_transition(request)
+
+    def _discard_organize_changes(self) -> None:
+        if self.grouping_step_widget.discard_pending_grouping_changes():
+            # The discarded plan came from a regrouping mode; rebuild the
+            # Current structure so returning to Organize shows no pending moves.
+            self.app_state.selected_grouping_mode = "current"
+            self.app_controller.refresh_grouping_preview()
 
     def _request_workflow_resolution(self) -> None:
         """Resolve pending work without leaving the current workflow."""
@@ -2647,7 +2654,7 @@ class MainWindow(QMainWindow):
 
         # Compare the in-memory signature before building the worker-inventoried
         # action preview. No source-tree walk occurs on the UI thread.
-        has_grouping_edits = self.grouping_step_widget.has_unsaved_grouping_edits()
+        has_grouping_edits = self.grouping_step_widget.has_pending_grouping_changes()
         grouping_action_lines = (
             self.grouping_step_widget.pending_grouping_action_lines()
             if has_grouping_edits
