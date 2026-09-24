@@ -2582,8 +2582,10 @@ class GroupingStepWidget(QWidget):
             self._show_multi_selection_preview(selected_paths)
             self._mirror_selection_to_other_tree(tree, from_after=from_after)
             source_path = self._item_source_path(current)
-            if source_path in selected_paths and not self._syncing_active_image:
-                self.active_image_changed.emit(source_path)
+            if source_path in selected_paths:
+                self.large_preview_view.scroll_to_path(source_path)
+                if not self._syncing_active_image:
+                    self.active_image_changed.emit(source_path)
             return
 
         source_path = self._item_source_path(current)

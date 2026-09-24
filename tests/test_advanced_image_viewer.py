@@ -253,3 +253,51 @@ def test_individual_viewer_context_menu_includes_show_in_explorer(monkeypatch):
     assert "Show in Explorer" in captured_actions
 
     viewer.deleteLater()
+
+
+def test_side_by_side_scrolls_horizontally_when_slots_do_not_fit():
+    viewer = SynchronizedImageViewer()
+    viewer.resize(700, 500)
+    viewer.show()
+    _app.processEvents()
+
+    viewer.set_images_data([_make_image(f"img_{idx}.jpg") for idx in range(9)])
+    _app.processEvents()
+
+    scroll_bar = viewer.viewer_scroll_area.horizontalScrollBar()
+    assert scroll_bar.maximum() > 0
+    assert all(not slot.isHidden() for slot in viewer.image_viewers)
+    assert all(size > 0 for size in viewer.viewer_splitter.sizes())
+
+    assert viewer.scroll_to_path("img_8.jpg")
+    _app.processEvents()
+    last_slot = viewer.image_viewers[8]
+    visible_left = scroll_bar.value()
+    visible_right = visible_left + viewer.viewer_scroll_area.viewport().width()
+    assert last_slot.x() >= visible_left
+    assert last_slot.x() + last_slot.width() <= visible_right
+
+    # A different comparison starts again from its first image.
+    viewer.set_images_data([_make_image(f"other_{idx}.jpg") for idx in range(9)])
+    _app.processEvents()
+    assert scroll_bar.value() == 0
+
+    viewer.deleteLater()
+
+
+def test_side_by_side_fills_width_without_scrolling_when_slots_fit():
+    viewer = SynchronizedImageViewer()
+    viewer.resize(1600, 500)
+    viewer.show()
+    _app.processEvents()
+
+    viewer.set_images_data([_make_image(f"img_{idx}.jpg") for idx in range(2)])
+    _app.processEvents()
+
+    assert viewer.viewer_scroll_area.horizontalScrollBar().maximum() == 0
+    assert (
+        viewer.viewer_splitter.width() == viewer.viewer_scroll_area.viewport().width()
+    )
+    assert not viewer.scroll_to_path("missing.jpg")
+
+    viewer.deleteLater()
