@@ -48,6 +48,8 @@ macOS); the `Q` key on the map is shorthand, not a universal Ctrl+Q guarantee.
 | Shift+Enter or Ctrl+Enter | Review and apply changes |
 
 The folder tree also supports its usual arrow-key navigation and expansion.
+Shift- or Ctrl/Cmd-click several photos in either tree to compare them side by
+side in the preview.
 
 ## Easy Delete
 

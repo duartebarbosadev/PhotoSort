@@ -105,6 +105,9 @@ DEFAULT_CUSTOM_THREAD_COUNT = 4  # Default custom thread count
 INSPECTION_DETAIL_DWELL_MS = 250
 INSPECTION_DETAIL_TRANSITION_MS = 180
 INSPECTION_DETAIL_BUDGET_BYTES = 512 * 1024 * 1024
+# Organize can select entire folders at once; bound the side-by-side comparison
+# so a select-all never builds hundreds of viewer slots on the UI thread.
+ORGANIZE_MAX_COMPARISON_IMAGES = 12
 
 
 # --- UI Constants ---

@@ -82,6 +82,7 @@ from core.app_settings import (
     set_companion_files_preference,
     DISPLAY_MAX_RESOLUTION,
     LARGE_FOLDER_THRESHOLD,
+    ORGANIZE_MAX_COMPARISON_IMAGES,
     THUMBNAIL_PRELOAD_BATCH_SIZE,
     THUMBNAIL_PRELOAD_VISIBLE_MARGIN,
     UI_POPULATION_CHUNK_SIZE,
@@ -124,6 +125,9 @@ ITEM_SKIPPED = "skipped"
 PREVIEW_PAGE_HINT = 0
 PREVIEW_PAGE_IMAGE = 1
 PREVIEW_PAGE_FOLDER = 2
+
+SINGLE_TRASH_TOOLTIP = "Move the current image to Trash now (Delete / Backspace)"
+MULTI_TRASH_TOOLTIP = "Move the selected files to Trash now (Delete / Backspace)"
 
 ROOT_LEVEL_GROUP_LABEL = "Root files"
 SELECTED_PREVIEW_DISPLAY_SIZE = DISPLAY_MAX_RESOLUTION
@@ -632,6 +636,15 @@ class GroupingStepWidget(QWidget):
         self._syncing_active_image = False
         self._drag_in_progress = False
         self._current_preview_source_path: str | None = None
+        self._multi_preview_paths: tuple[str, ...] = ()
+        self._multi_preview_total = 0
+        self._pending_selection_preview_tree: QTreeWidget | None = None
+        self._selection_preview_timer = QTimer(self)
+        self._selection_preview_timer.setSingleShot(True)
+        self._selection_preview_timer.setInterval(0)
+        self._selection_preview_timer.timeout.connect(
+            self._apply_pending_selection_preview
+        )
         self._is_marked_func: Callable[[str], bool] = lambda _path: False
         self._has_any_marked_func: Callable[[], bool] = lambda: False
         self._folder_validation_request_id = 0
@@ -776,7 +789,7 @@ class GroupingStepWidget(QWidget):
         self.before_tree.setIndentation(20)
         self.before_tree.setUniformRowHeights(True)
         self.before_tree.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
+            QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.before_tree.setIconSize(QSize(22, 22))
         self.before_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -852,9 +865,7 @@ class GroupingStepWidget(QWidget):
         self.large_preview_name.setWordWrap(True)
         self.preview_trash_button = QPushButton("🗑️")
         self.preview_trash_button.setObjectName("groupingPreviewTrashButton")
-        self.preview_trash_button.setToolTip(
-            "Move the current image to Trash now (Delete / Backspace)"
-        )
+        self.preview_trash_button.setToolTip(SINGLE_TRASH_TOOLTIP)
         self.preview_trash_button.setEnabled(False)
         self.folder_preview_page = QWidget()
         self.folder_preview_title = QLabel()
@@ -1066,8 +1077,19 @@ class GroupingStepWidget(QWidget):
         self.back_button.clicked.connect(self.back_requested.emit)
         self.folder_button.clicked.connect(self.select_folder_requested.emit)
         self._empty_cta.clicked.connect(self.select_folder_requested.emit)
-        self.preview_tree.currentItemChanged.connect(self._handle_after_item_changed)
-        self.before_tree.currentItemChanged.connect(self._handle_before_item_changed)
+        self.preview_tree.currentItemChanged.connect(
+            lambda *_args: self._schedule_selection_preview(self.preview_tree)
+        )
+        self.before_tree.currentItemChanged.connect(
+            lambda *_args: self._schedule_selection_preview(self.before_tree)
+        )
+        self.preview_tree.itemSelectionChanged.connect(
+            lambda: self._schedule_selection_preview(self.preview_tree)
+        )
+        self.before_tree.itemSelectionChanged.connect(
+            lambda: self._schedule_selection_preview(self.before_tree)
+        )
+        self.large_preview_view.imageClicked.connect(self._on_preview_image_clicked)
         self.preview_tree.itemDoubleClicked.connect(self._handle_tree_double_click)
         self.preview_tree.itemChanged.connect(self._handle_preview_item_changed)
         self.before_tree.customContextMenuRequested.connect(
@@ -1299,6 +1321,9 @@ class GroupingStepWidget(QWidget):
         for path, item in self._after_file_items_by_path.items():
             self._apply_deletion_presentation(item, path, editable=True)
         self._folder_preview_model.refresh_deletion_state()
+        if self._multi_preview_paths:
+            self._apply_multi_preview_captions()
+            return
         current = self._current_preview_source_path
         if current:
             display_name = self._preview_deletion_display_name(current)
@@ -1779,10 +1804,19 @@ class GroupingStepWidget(QWidget):
                 target_item = self._after_items_by_match_relative_path.get(
                     str(selected_match_relative_paths[0])
                 )
-        self.preview_tree.setCurrentItem(target_item)
+        if target_item is not None and self.preview_tree.selectedItems():
+            self.preview_tree.setCurrentItem(
+                target_item, 0, QItemSelectionModel.SelectionFlag.NoUpdate
+            )
+        else:
+            self.preview_tree.setCurrentItem(target_item)
         self.preview_tree.blockSignals(False)
         current_path = self._item_source_path(target_item)
-        if current_path:
+        multi_paths = self._selected_previewable_paths(self.preview_tree)
+        if len(multi_paths) >= 2:
+            self._show_multi_selection_preview(multi_paths)
+            self._mirror_selection_to_other_tree(self.preview_tree, from_after=True)
+        elif current_path:
             self._update_selected_preview(current_path)
         elif target_item is not None:
             self._update_folder_preview(target_item)
@@ -2529,28 +2563,33 @@ class GroupingStepWidget(QWidget):
     def _handle_after_item_changed(
         self, current: QTreeWidgetItem | None, _prev: QTreeWidgetItem | None
     ) -> None:
-        source_path = self._item_source_path(current)
-        if source_path:
-            self._update_selected_preview(source_path)
-            self._sync_selection_to_other_tree(current, from_after=True)
-            if (
-                self._is_previewable_media_path(source_path)
-                and not self._syncing_active_image
-            ):
-                self.active_image_changed.emit(source_path)
-        elif current is not None:
-            self._update_folder_preview(current)
-            self._sync_selection_to_other_tree(current, from_after=True)
-        else:
-            self._clear_selected_preview()
+        self._handle_tree_item_changed(self.preview_tree, current, from_after=True)
 
     def _handle_before_item_changed(
         self, current: QTreeWidgetItem | None, _prev: QTreeWidgetItem | None
     ) -> None:
+        self._handle_tree_item_changed(self.before_tree, current, from_after=False)
+
+    def _handle_tree_item_changed(
+        self,
+        tree: QTreeWidget,
+        current: QTreeWidgetItem | None,
+        *,
+        from_after: bool,
+    ) -> None:
+        selected_paths = self._selected_previewable_paths(tree)
+        if len(selected_paths) >= 2:
+            self._show_multi_selection_preview(selected_paths)
+            self._mirror_selection_to_other_tree(tree, from_after=from_after)
+            source_path = self._item_source_path(current)
+            if source_path in selected_paths and not self._syncing_active_image:
+                self.active_image_changed.emit(source_path)
+            return
+
         source_path = self._item_source_path(current)
         if source_path:
             self._update_selected_preview(source_path)
-            self._sync_selection_to_other_tree(current, from_after=False)
+            self._sync_selection_to_other_tree(current, from_after=from_after)
             if (
                 self._is_previewable_media_path(source_path)
                 and not self._syncing_active_image
@@ -2558,10 +2597,239 @@ class GroupingStepWidget(QWidget):
                 self.active_image_changed.emit(source_path)
         elif current is not None:
             self._update_folder_preview(current)
-            self._sync_selection_to_other_tree(current, from_after=False)
+            self._sync_selection_to_other_tree(current, from_after=from_after)
         else:
             self._clear_selected_preview()
-            self._sync_selection_to_other_tree(current, from_after=False)
+
+    def _schedule_selection_preview(self, tree: QTreeWidget) -> None:
+        """Coalesce current/selection signals into one preview update.
+
+        Qt reports a mouse or keyboard selection gesture as separate current and
+        selection changes, in an order that depends on the input device. Acting
+        on each one would briefly show a stale single preview and start redundant
+        inspection loads before the final comparison is known.
+        """
+        if self._syncing_tree_selection:
+            return
+        self._pending_selection_preview_tree = tree
+        self._selection_preview_timer.start()
+
+    def _apply_pending_selection_preview(self) -> None:
+        tree = self._pending_selection_preview_tree
+        self._pending_selection_preview_tree = None
+        if tree is None:
+            return
+        try:
+            current = tree.currentItem()
+        except RuntimeError:
+            return
+        self._handle_tree_item_changed(
+            tree, current, from_after=tree is self.preview_tree
+        )
+
+    def _selected_previewable_paths(self, tree: QTreeWidget) -> list[str]:
+        """Return selected photo/video paths in the tree's visual order."""
+        try:
+            selected_items = tree.selectedItems()
+        except RuntimeError:
+            return []
+        if len(selected_items) < 2:
+            return []
+        file_items = []
+        for item in selected_items:
+            try:
+                source_path = self._item_source_path(item)
+                if (
+                    self._item_kind(item) == ITEM_FILE
+                    and source_path
+                    and self._is_previewable_media_path(source_path)
+                ):
+                    file_items.append((self._tree_order_key(tree, item), source_path))
+            except RuntimeError:
+                continue
+        file_items.sort(key=lambda entry: entry[0])
+        return list(dict.fromkeys(path for _key, path in file_items))
+
+    @staticmethod
+    def _tree_order_key(tree: QTreeWidget, item: QTreeWidgetItem) -> tuple[int, ...]:
+        indices: list[int] = []
+        node: QTreeWidgetItem | None = item
+        while node is not None:
+            parent = node.parent()
+            indices.append(
+                parent.indexOfChild(node)
+                if parent is not None
+                else tree.indexOfTopLevelItem(node)
+            )
+            node = parent
+        return tuple(reversed(indices))
+
+    def _mirror_selection_to_other_tree(
+        self, source_tree: QTreeWidget, *, from_after: bool
+    ) -> None:
+        """Mirror a multi-file selection so both trees and all actions agree."""
+        if self._syncing_tree_selection:
+            return
+        target_tree = self.before_tree if from_after else self.preview_tree
+        target_items: list[QTreeWidgetItem] = []
+        for item in source_tree.selectedItems():
+            if self._item_kind(item) != ITEM_FILE:
+                continue
+            target_item = self._find_matching_item(item, is_after=from_after)
+            if target_item is not None:
+                target_items.append(target_item)
+        current = source_tree.currentItem()
+        target_current = (
+            self._find_matching_item(current, is_after=from_after)
+            if current is not None and self._item_kind(current) == ITEM_FILE
+            else None
+        )
+
+        self._syncing_tree_selection = True
+        target_tree.blockSignals(True)
+        try:
+            target_tree.clearSelection()
+            for target_item in target_items:
+                target_item.setSelected(True)
+            if target_current is not None:
+                target_tree.setCurrentItem(
+                    target_current,
+                    0,
+                    QItemSelectionModel.SelectionFlag.NoUpdate,
+                )
+                target_tree.scrollToItem(target_current)
+        finally:
+            target_tree.blockSignals(False)
+            self._syncing_tree_selection = False
+
+    def _show_multi_selection_preview(self, selected_paths: list[str]) -> None:
+        start_time = time.perf_counter()
+        total = len(selected_paths)
+        shown_paths = tuple(selected_paths[:ORGANIZE_MAX_COMPARISON_IMAGES])
+        already_shown = (
+            not self._current_preview_source_path
+            and self._multi_preview_paths == shown_paths
+            and all(self.large_preview_view.displays_path(p) for p in shown_paths)
+        )
+        self._current_preview_source_path = None
+        self._multi_preview_paths = shown_paths
+        self._multi_preview_total = total
+        if not already_shown:
+            activate = getattr(self._parent_window, "activate_image_inspection", None)
+            if callable(activate):
+                activate(
+                    self.large_preview_view,
+                    [
+                        InspectionImageSpec(
+                            path=path,
+                            media_type="video" if is_video_extension(path) else "image",
+                        )
+                        for path in shown_paths
+                    ],
+                )
+            else:
+                self._set_fallback_comparison_images(shown_paths)
+        self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
+        self.preview_trash_button.setEnabled(
+            any(os.path.isfile(path) for path in self._selected_trash_paths())
+        )
+        self._apply_multi_preview_captions()
+        logger.debug(
+            "Organize comparison preview %s in %.3fs (shown=%d selected=%d)",
+            "reused" if already_shown else "updated",
+            time.perf_counter() - start_time,
+            len(shown_paths),
+            total,
+        )
+
+    def _set_fallback_comparison_images(self, paths: tuple[str, ...]) -> None:
+        """Compatibility path for embedding the widget without the app window."""
+        image_pipeline = getattr(self._parent_window, "image_pipeline", None)
+        images_data = []
+        missing_preview_paths = []
+        for path in paths:
+            if is_video_extension(path):
+                images_data.append({"path": path, "media_type": "video", "rating": 0})
+                continue
+            pixmap = None
+            cached = False
+            if image_pipeline is not None:
+                try:
+                    pixmap, cached = image_pipeline.get_immediate_review_qpixmap(path)
+                except Exception:
+                    logger.debug(
+                        "Comparison frame unavailable: %s", path, exc_info=True
+                    )
+            if not cached:
+                missing_preview_paths.append(path)
+            images_data.append({"path": path, "pixmap": pixmap, "rating": 0})
+        self.large_preview_view.set_images_data(images_data)
+        request_previews = getattr(
+            self._parent_window, "request_interactive_previews", None
+        )
+        if missing_preview_paths and callable(request_previews):
+            request_previews(missing_preview_paths)
+
+    def _apply_multi_preview_captions(self) -> None:
+        shown = len(self._multi_preview_paths)
+        total = self._multi_preview_total
+        marked = sum(
+            1 for path in self._multi_preview_paths if self._is_marked_func(path)
+        )
+        caption = f"{total} items selected"
+        if shown < total:
+            caption += f" · showing first {shown}"
+        if marked:
+            caption += f" · {marked} marked for deletion"
+        names = [os.path.basename(path) for path in self._multi_preview_paths[:3]]
+        meta = ", ".join(names)
+        if total > len(names):
+            meta += f", +{total - len(names)} more"
+        self.large_preview_name.setText(caption)
+        self.large_preview_name.setStyleSheet("")
+        self.preview_selection_label.setText(caption)
+        self.preview_selection_label.setStyleSheet("")
+        self.preview_selection_label.setVisible(True)
+        self.preview_selection_meta.setText(meta)
+        self.preview_selection_meta.setVisible(True)
+        self.preview_trash_button.setToolTip(MULTI_TRASH_TOOLTIP)
+
+    def _leave_multi_preview(self) -> None:
+        if not self._multi_preview_paths:
+            return
+        self._multi_preview_paths = ()
+        self._multi_preview_total = 0
+        self.preview_trash_button.setToolTip(SINGLE_TRASH_TOOLTIP)
+
+    def _selected_trash_paths(self) -> list[str]:
+        paths = self._selected_preview_file_paths()
+        return paths or list(self._multi_preview_paths)
+
+    def _on_preview_image_clicked(self, _slot: int, path: str) -> None:
+        """Make a clicked comparison image current without dropping the others."""
+        if path not in self._multi_preview_paths:
+            return
+        self._syncing_tree_selection = True
+        try:
+            for tree, items in (
+                (self.preview_tree, self._after_file_items_by_path),
+                (self.before_tree, self._before_file_items_by_path),
+            ):
+                item = items.get(path)
+                if item is None:
+                    continue
+                tree.blockSignals(True)
+                try:
+                    tree.setCurrentItem(
+                        item, 0, QItemSelectionModel.SelectionFlag.NoUpdate
+                    )
+                    tree.scrollToItem(item)
+                finally:
+                    tree.blockSignals(False)
+        finally:
+            self._syncing_tree_selection = False
+        if not self._syncing_active_image:
+            self.active_image_changed.emit(path)
 
     def _handle_tree_double_click(self, item: QTreeWidgetItem, column: int) -> None:
         if (
@@ -2572,6 +2840,7 @@ class GroupingStepWidget(QWidget):
 
     def _clear_selected_preview(self) -> None:
         self._current_preview_source_path = None
+        self._leave_multi_preview()
         clear_inspection = getattr(self._parent_window, "clear_image_inspection", None)
         if callable(clear_inspection):
             clear_inspection(self.large_preview_view)
@@ -2592,6 +2861,7 @@ class GroupingStepWidget(QWidget):
 
     def _show_unavailable_file_preview(self, source_path: str) -> None:
         self._current_preview_source_path = source_path
+        self._leave_multi_preview()
         clear_inspection = getattr(self._parent_window, "clear_image_inspection", None)
         if callable(clear_inspection):
             clear_inspection(self.large_preview_view)
@@ -2619,6 +2889,7 @@ class GroupingStepWidget(QWidget):
             return
         current_preview_path = self._current_preview_source_path
         self._current_preview_source_path = source_path
+        self._leave_multi_preview()
         existing_pixmap = self.large_preview_view.current_pixmap()
         if (
             current_preview_path == source_path
@@ -2685,11 +2956,16 @@ class GroupingStepWidget(QWidget):
             source_path,
         )
 
+    def _displayed_preview_paths(self) -> tuple[str, ...]:
+        if self._multi_preview_paths:
+            return self._multi_preview_paths
+        current = self._current_preview_source_path
+        return (current,) if current else ()
+
     def handle_preview_ready(self, source_path: str) -> None:
         """Compatibility hook; shared inspection owns preview upgrades."""
-        if (
-            source_path != self._current_preview_source_path
-            or not self._is_previewable_media_path(source_path)
+        if source_path not in self._displayed_preview_paths() or (
+            not self._is_previewable_media_path(source_path)
         ):
             return
         if callable(getattr(self._parent_window, "activate_image_inspection", None)):
@@ -2708,10 +2984,12 @@ class GroupingStepWidget(QWidget):
             )
 
     def handle_preview_failed(self, source_path: str) -> None:
-        if (
-            source_path != self._current_preview_source_path
-            or not self._is_previewable_media_path(source_path)
+        if source_path not in self._displayed_preview_paths() or (
+            not self._is_previewable_media_path(source_path)
         ):
+            return
+        if self._multi_preview_paths:
+            # Keep any immediate frame; a failed upgrade must never blank it.
             return
         if not self.large_preview_view.has_image():
             self.large_preview_view.setText("Preview unavailable")
@@ -2719,6 +2997,7 @@ class GroupingStepWidget(QWidget):
     def _update_folder_preview(self, item: QTreeWidgetItem) -> None:
         start_time = time.perf_counter()
         self._current_preview_source_path = None
+        self._leave_multi_preview()
         clear_inspection = getattr(self._parent_window, "clear_image_inspection", None)
         if callable(clear_inspection):
             clear_inspection(self.large_preview_view)
@@ -2839,23 +3118,27 @@ class GroupingStepWidget(QWidget):
     def refresh_cached_previews(self) -> None:
         logger.debug("Refreshing organize preview state from cache")
         self.refresh_cached_thumbnails()
-        current_path = self._current_preview_source_path
-        if not current_path:
+        displayed_paths = self._displayed_preview_paths()
+        if not displayed_paths:
             return
         image_pipeline = getattr(self._parent_window, "image_pipeline", None)
         if image_pipeline is None:
             return
-        pixmap = image_pipeline.get_cached_preview_qpixmap(
-            current_path,
-            display_max_size=SELECTED_PREVIEW_DISPLAY_SIZE,
-            memory_only=True,
-        )
-        if pixmap is None or pixmap.isNull():
-            return
-        self.large_preview_view.update_image_pixmap(
-            current_path, pixmap, preserve_view=True
-        )
-        self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
+        updated = False
+        for current_path in displayed_paths:
+            pixmap = image_pipeline.get_cached_preview_qpixmap(
+                current_path,
+                display_max_size=SELECTED_PREVIEW_DISPLAY_SIZE,
+                memory_only=True,
+            )
+            if pixmap is None or pixmap.isNull():
+                continue
+            self.large_preview_view.update_image_pixmap(
+                current_path, pixmap, preserve_view=True
+            )
+            updated = True
+        if updated:
+            self.preview_pane_stack.setCurrentIndex(PREVIEW_PAGE_IMAGE)
 
     def _refresh_all_tree_icons_from_cache(self) -> None:
         try:
@@ -2958,7 +3241,15 @@ class GroupingStepWidget(QWidget):
                 )
                 before_item.setSelected(True)
                 self.before_tree.scrollToItem(before_item)
-            self._update_selected_preview(source_path)
+            comparison_paths = (
+                self._selected_previewable_paths(self.preview_tree)
+                if source_path in self._multi_preview_paths
+                else []
+            )
+            if len(comparison_paths) >= 2:
+                self._show_multi_selection_preview(comparison_paths)
+            else:
+                self._update_selected_preview(source_path)
             self.large_preview_view.fit_in_view()
         finally:
             self.preview_tree.blockSignals(False)
@@ -2966,11 +3257,19 @@ class GroupingStepWidget(QWidget):
             self._syncing_active_image = False
         return True
 
+    @staticmethod
+    def _make_context_item_current(tree: QTreeWidget, item: QTreeWidgetItem) -> None:
+        """Target the clicked row while keeping a multi-selection it belongs to."""
+        if not item.isSelected():
+            tree.clearSelection()
+            item.setSelected(True)
+        tree.setCurrentItem(item, 0, QItemSelectionModel.SelectionFlag.NoUpdate)
+
     def _show_before_context_menu(self, position: QPoint) -> None:
         item = self.before_tree.itemAt(position)
         if item is None:
             return
-        self.before_tree.setCurrentItem(item)
+        self._make_context_item_current(self.before_tree, item)
         menu = QMenu(self)
         self._populate_common_context_actions(
             menu, item, self.before_tree, is_after=False
@@ -2981,10 +3280,7 @@ class GroupingStepWidget(QWidget):
         item = self.preview_tree.itemAt(position)
         if item is None:
             return
-        if not item.isSelected():
-            self.preview_tree.clearSelection()
-            item.setSelected(True)
-        self.preview_tree.setCurrentItem(item)
+        self._make_context_item_current(self.preview_tree, item)
         menu = QMenu(self)
         common_added = self._populate_common_context_actions(
             menu, item, self.preview_tree, is_after=True
@@ -3511,9 +3807,12 @@ class GroupingStepWidget(QWidget):
         try:
             target_tree.blockSignals(True)
             current_target = target_tree.currentItem()
-            if current_target is not target_item:
-                if target_tree is self.preview_tree:
-                    target_tree.clearSelection()
+            if current_target is not target_item or target_tree.selectedItems() != [
+                target_item
+            ]:
+                # Both trees allow multi-selection; a single-item selection in
+                # one must not leave a previous comparison selected in the other.
+                target_tree.clearSelection()
                 target_tree.setCurrentItem(target_item)
             if not target_item.isSelected():
                 target_item.setSelected(True)
@@ -3858,6 +4157,11 @@ class GroupingStepWidget(QWidget):
         self.toggle_deletion_marks_requested.emit(paths)
 
     def _trash_current_preview(self) -> None:
+        if self._multi_preview_paths:
+            paths = [path for path in self._selected_trash_paths() if path]
+            if paths:
+                self.trash_requested.emit("", paths)
+            return
         path = self._current_preview_source_path
         if path and os.path.isfile(path):
             self.trash_requested.emit(path, [path])

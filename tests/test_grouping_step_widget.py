@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QRect, Qt
+from PyQt6.QtCore import QItemSelectionModel, QRect, Qt
 from PyQt6.QtGui import QIcon, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import QApplication, QListView, QMenu, QStyle, QStyleOption
 
@@ -2254,3 +2254,283 @@ def test_large_tree_render_indexes_groups_once_and_rebuilds_after_edits():
     assert widget._projected_path_for_source(first) == "/photos/renamed/photo.jpg"
     assert widget._tree_groups_by_path is None
     widget.close()
+
+
+def _multi_selection_widget(tmp_path, count=3, parent_window=None):
+    source_root = tmp_path / "demo"
+    beach_dir = source_root / "Beach"
+    beach_dir.mkdir(parents=True)
+    paths = []
+    for index in range(count):
+        file_path = beach_dir / f"img_{index:02d}.jpg"
+        file_path.write_bytes(b"preview")
+        paths.append(str(file_path))
+
+    widget = GroupingStepWidget()
+    if parent_window is not None:
+        widget._parent_window = parent_window
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=count,
+            supported_items=count,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Beach", source_paths=paths)
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+    _app.processEvents()
+    return widget, paths
+
+
+def _inspection_window():
+    return SimpleNamespace(
+        activate_image_inspection=Mock(),
+        clear_image_inspection=Mock(),
+    )
+
+
+def _activated_paths(activate_mock):
+    _viewer, specs = activate_mock.call_args.args
+    return [spec.path for spec in specs]
+
+
+def test_organize_multi_selection_shows_side_by_side_comparison(tmp_path):
+    window = _inspection_window()
+    widget, paths = _multi_selection_widget(tmp_path, parent_window=window)
+    window.activate_image_inspection.reset_mock()
+
+    # Select in reverse order; the comparison follows the tree order.
+    widget.preview_tree.clearSelection()
+    widget._after_file_items_by_path[paths[2]].setSelected(True)
+    widget._after_file_items_by_path[paths[0]].setSelected(True)
+    _app.processEvents()
+
+    window.activate_image_inspection.assert_called_once()
+    viewer, _specs = window.activate_image_inspection.call_args.args
+    assert viewer is widget.large_preview_view
+    assert _activated_paths(window.activate_image_inspection) == [paths[0], paths[2]]
+    assert widget.preview_pane_stack.currentIndex() == 1
+    assert widget.large_preview_name.text() == "2 items selected"
+    assert widget.preview_selection_label.text() == "2 items selected"
+    assert widget.preview_trash_button.isEnabled()
+    assert {
+        widget._item_source_path(item) for item in widget.before_tree.selectedItems()
+    } == {paths[0], paths[2]}
+
+
+def test_organize_ctrl_click_activates_comparison_once(tmp_path):
+    from PyQt6.QtTest import QTest
+
+    window = _inspection_window()
+    widget, paths = _multi_selection_widget(tmp_path, parent_window=window)
+    widget._after_group_items_by_id["1"].setExpanded(True)
+    widget.resize(1200, 800)
+    widget.show()
+    _app.processEvents()
+    tree = widget.preview_tree
+    first_rect = tree.visualItemRect(widget._after_file_items_by_path[paths[0]])
+    second_rect = tree.visualItemRect(widget._after_file_items_by_path[paths[1]])
+
+    QTest.mouseClick(
+        tree.viewport(), Qt.MouseButton.LeftButton, pos=first_rect.center()
+    )
+    _app.processEvents()
+    assert _activated_paths(window.activate_image_inspection) == [paths[0]]
+    window.activate_image_inspection.reset_mock()
+
+    QTest.mouseClick(
+        tree.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.ControlModifier,
+        second_rect.center(),
+    )
+    _app.processEvents()
+
+    # Qt reports the current-item change before the selection change; the
+    # widget must not start a stale single-image inspection in between.
+    window.activate_image_inspection.assert_called_once()
+    assert _activated_paths(window.activate_image_inspection) == paths[:2]
+
+    # Release the synthetic Control modifier so later selection commands are
+    # not interpreted as toggles.
+    QTest.mouseClick(
+        tree.viewport(), Qt.MouseButton.LeftButton, pos=first_rect.center()
+    )
+    _app.processEvents()
+    widget.hide()
+
+
+def test_organize_before_tree_multi_selection_mirrors_to_after_tree(tmp_path):
+    window = _inspection_window()
+    widget, paths = _multi_selection_widget(tmp_path, parent_window=window)
+    trash_requests = []
+    widget.trash_requested.connect(
+        lambda target, requested: trash_requests.append((target, requested))
+    )
+
+    widget.before_tree.clearSelection()
+    widget._before_file_items_by_path[paths[0]].setSelected(True)
+    widget._before_file_items_by_path[paths[1]].setSelected(True)
+    _app.processEvents()
+
+    assert _activated_paths(window.activate_image_inspection) == paths[:2]
+    assert set(widget._selected_preview_file_paths()) == set(paths[:2])
+
+    widget.preview_trash_button.click()
+    assert len(trash_requests) == 1
+    assert trash_requests[0][0] == ""
+    assert set(trash_requests[0][1]) == set(paths[:2])
+
+
+def test_organize_returns_to_single_preview_when_selection_collapses(tmp_path):
+    window = _inspection_window()
+    widget, paths = _multi_selection_widget(tmp_path, parent_window=window)
+    widget.preview_tree.clearSelection()
+    for path in paths:
+        widget._after_file_items_by_path[path].setSelected(True)
+    _app.processEvents()
+    assert len(_activated_paths(window.activate_image_inspection)) == 3
+
+    widget.preview_tree.setCurrentItem(
+        widget._after_file_items_by_path[paths[1]],
+        0,
+        QItemSelectionModel.SelectionFlag.ClearAndSelect,
+    )
+    _app.processEvents()
+
+    assert _activated_paths(window.activate_image_inspection) == [paths[1]]
+    assert widget._multi_preview_paths == ()
+    assert widget.large_preview_name.text() == os.path.basename(paths[1])
+    assert [
+        widget._item_source_path(item) for item in widget.before_tree.selectedItems()
+    ] == [paths[1]]
+
+
+def test_organize_comparison_is_bounded_for_large_selections(tmp_path):
+    from src.core.app_settings import ORGANIZE_MAX_COMPARISON_IMAGES
+
+    window = _inspection_window()
+    count = ORGANIZE_MAX_COMPARISON_IMAGES + 3
+    widget, paths = _multi_selection_widget(tmp_path, count=count, parent_window=window)
+
+    widget.preview_tree.selectAll()
+    _app.processEvents()
+
+    assert (
+        _activated_paths(window.activate_image_inspection)
+        == paths[:ORGANIZE_MAX_COMPARISON_IMAGES]
+    )
+    assert widget.large_preview_name.text() == (
+        f"{count} items selected · showing first {ORGANIZE_MAX_COMPARISON_IMAGES}"
+    )
+
+
+def test_organize_comparison_reports_marked_files(tmp_path):
+    window = _inspection_window()
+    widget, paths = _multi_selection_widget(tmp_path, parent_window=window)
+    widget.preview_tree.clearSelection()
+    widget._after_file_items_by_path[paths[0]].setSelected(True)
+    widget._after_file_items_by_path[paths[1]].setSelected(True)
+    _app.processEvents()
+
+    marks = {paths[1]}
+    widget.set_is_marked_func(marks.__contains__)
+    widget.refresh_deletion_state()
+
+    assert widget.large_preview_name.text() == (
+        "2 items selected · 1 marked for deletion"
+    )
+
+
+def test_organize_context_menu_keeps_multi_selection(tmp_path):
+    widget, paths = _multi_selection_widget(tmp_path)
+    first = widget._after_file_items_by_path[paths[0]]
+    second = widget._after_file_items_by_path[paths[1]]
+    third = widget._after_file_items_by_path[paths[2]]
+    widget.preview_tree.clearSelection()
+    first.setSelected(True)
+    second.setSelected(True)
+
+    widget._make_context_item_current(widget.preview_tree, second)
+    assert widget.preview_tree.currentItem() is second
+    assert first.isSelected() and second.isSelected()
+
+    widget._make_context_item_current(widget.preview_tree, third)
+    assert widget.preview_tree.selectedItems() == [third]
+
+
+def test_organize_comparison_click_focuses_image_without_dropping_selection(
+    tmp_path,
+):
+    window = _inspection_window()
+    widget, paths = _multi_selection_widget(tmp_path, parent_window=window)
+    published = []
+    widget.active_image_changed.connect(published.append)
+    widget.preview_tree.clearSelection()
+    widget._after_file_items_by_path[paths[0]].setSelected(True)
+    widget._after_file_items_by_path[paths[2]].setSelected(True)
+    _app.processEvents()
+    window.activate_image_inspection.reset_mock()
+    published.clear()
+
+    widget._on_preview_image_clicked(1, paths[2])
+    _app.processEvents()
+
+    assert published == [paths[2]]
+    assert (
+        widget.preview_tree.currentItem() is widget._after_file_items_by_path[paths[2]]
+    )
+    assert len(widget.preview_tree.selectedItems()) == 2
+    window.activate_image_inspection.assert_not_called()
+
+
+def test_organize_comparison_fallback_uses_cached_frames(tmp_path):
+    thumbnail = QPixmap(12, 12)
+    thumbnail.fill()
+    pipeline = _CacheOnlyPipeline(cached_thumbnail=thumbnail)
+    request_previews = Mock()
+    widget, paths = _multi_selection_widget(
+        tmp_path,
+        parent_window=SimpleNamespace(
+            image_pipeline=pipeline,
+            request_interactive_previews=request_previews,
+        ),
+    )
+    pipeline.get_immediate_review_qpixmap.reset_mock()
+    widget.preview_tree.clearSelection()
+    widget._after_file_items_by_path[paths[0]].setSelected(True)
+    widget._after_file_items_by_path[paths[1]].setSelected(True)
+    _app.processEvents()
+
+    assert pipeline.get_immediate_review_qpixmap.call_count == 2
+    assert pipeline.get_preview_qpixmap.call_count == 0
+    request_previews.assert_called_once_with(paths[:2])
+    assert widget.large_preview_view.displays_path(paths[0])
+    assert widget.large_preview_view.displays_path(paths[1])
+
+    # Re-evaluating an unchanged comparison must not decode or request again.
+    widget._schedule_selection_preview(widget.preview_tree)
+    _app.processEvents()
+    assert pipeline.get_immediate_review_qpixmap.call_count == 2
+    request_previews.assert_called_once()
+
+
+def test_organize_tree_refresh_preserves_comparison_selection(tmp_path):
+    window = _inspection_window()
+    widget, paths = _multi_selection_widget(tmp_path, parent_window=window)
+    widget.preview_tree.clearSelection()
+    widget._after_file_items_by_path[paths[0]].setSelected(True)
+    widget._after_file_items_by_path[paths[2]].setSelected(True)
+    _app.processEvents()
+
+    widget._refresh_preview_trees()
+    _app.processEvents()
+
+    assert set(widget._selected_preview_file_paths()) == {paths[0], paths[2]}
+    assert _activated_paths(window.activate_image_inspection) == [paths[0], paths[2]]
+    assert widget.large_preview_name.text() == "2 items selected"
