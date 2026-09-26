@@ -2597,3 +2597,50 @@ def test_organize_tree_refresh_preserves_comparison_selection(tmp_path):
     assert set(widget._selected_preview_file_paths()) == {paths[0], paths[2]}
     assert _activated_paths(window.activate_image_inspection) == [paths[0], paths[2]]
     assert widget.large_preview_name.text() == "2 items selected"
+
+
+def test_organize_trees_list_files_in_capture_order_within_folders(tmp_path):
+    from datetime import datetime
+
+    source_root = tmp_path / "demo"
+    source_root.mkdir()
+    late = str(source_root / "Beach" / "a.jpg")
+    early = str(source_root / "Beach" / "b.jpg")
+    other = str(source_root / "Alps" / "z.jpg")
+    dates = {
+        late: datetime(2023, 1, 1),
+        early: datetime(2020, 1, 1),
+        other: datetime(2025, 1, 1),
+    }
+
+    widget = GroupingStepWidget()
+    widget.set_capture_order_key(lambda path: (0, dates[path].timestamp(), path))
+    widget.set_source_folder(str(source_root))
+    widget.set_preview_plan(
+        GroupingPlan(
+            mode="current",
+            total_items=3,
+            supported_items=3,
+            groups=[
+                GroupingGroup(group_id="1", group_label="Alps", source_paths=[other]),
+                GroupingGroup(
+                    group_id="2", group_label="Beach", source_paths=[late, early]
+                ),
+            ],
+            unassigned_paths=[],
+            skipped_paths=[],
+        ),
+        str(source_root),
+    )
+
+    def children(item):
+        return [item.child(index).text(0) for index in range(item.childCount())]
+
+    before_root = widget._before_root_item
+    assert children(before_root) == ["Alps", "Beach"]
+    assert children(widget._before_dir_items_by_relative_path["Beach"]) == [
+        "b.jpg",
+        "a.jpg",
+    ]
+    after_beach = widget._after_file_items_by_path[early].parent()
+    assert children(after_beach) == ["b.jpg", "a.jpg"]

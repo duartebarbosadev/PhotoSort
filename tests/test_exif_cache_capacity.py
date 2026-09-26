@@ -72,6 +72,7 @@ def test_capacity_dialog_is_deferred_until_metadata_load_finishes(monkeypatch):
         statusBar=lambda: status_bar,
         hide_loading_overlay=Mock(),
         hide_exif_progress=Mock(),
+        refresh_capture_order=Mock(),
     )
     controller = AppController(main_window, Mock(), Mock())
     monkeypatch.setattr(

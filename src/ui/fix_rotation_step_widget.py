@@ -1,5 +1,6 @@
 import logging
 import os
+from collections.abc import Callable
 
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtGui import QColor, QPixmap, QDesktopServices
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from core.capture_order import CaptureOrderKey, filename_order_key
 from core.runtime_paths import get_app_models_dir, is_frozen_runtime
 from core.app_settings import ROTATION_MODEL_DOWNLOAD_URL
 from ui.advanced_image_viewer import SynchronizedImageViewer
@@ -67,6 +69,7 @@ class FixRotationStepWidget(QWidget):
         self._marked: dict[str, bool] = {}  # path -> currently selected choice
         self._confirmed: set[str] = set()
         self._ordered_paths: list[str] = []
+        self._capture_order_key: Callable[[str], CaptureOrderKey] = filename_order_key
         self._current_index: int = -1
         self._syncing_active_image = False
         self._image_pipeline = None
@@ -93,6 +96,10 @@ class FixRotationStepWidget(QWidget):
 
     def set_image_pipeline(self, pipeline) -> None:
         self._image_pipeline = pipeline
+
+    def set_capture_order_key(self, key: Callable[[str], CaptureOrderKey]) -> None:
+        """Order media chronologically using the application's shared dates."""
+        self._capture_order_key = key
 
     def pending_rotations(self) -> dict[str, int]:
         """Return the currently queued, unapplied rotation changes."""
@@ -229,7 +236,7 @@ class FixRotationStepWidget(QWidget):
         # Preview the suggested choice, but require confirmation before queueing it.
         self._marked = dict.fromkeys(suggestions, True)
         self._confirmed.clear()
-        self._ordered_paths = sorted(suggestions.keys(), key=os.path.basename)
+        self._ordered_paths = sorted(suggestions.keys(), key=self._capture_order_key)
         self._current_index = -1
         self._applying = False
         self._submitted_paths.clear()

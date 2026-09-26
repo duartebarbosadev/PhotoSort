@@ -17,6 +17,10 @@ from core.caching.exif_cache import ExifCache
 from core.image_processing.image_rotator import ImageRotator, RotationDirection
 from core.app_settings import METADATA_PROCESSING_CHUNK_SIZE
 from core.media_utils import is_video_extension
+from core.video_metadata import (
+    QUICKTIME_CREATION_DATE_KEY,
+    read_quicktime_creation_date,
+)
 
 logger = logging.getLogger(__name__)
 DETAIL_LOG_INTERVAL = 250
@@ -207,12 +211,16 @@ def _build_basic_video_metadata(file_path: str) -> dict[str, Any]:
     ext = os.path.splitext(file_path)[1].lower().lstrip(".")
     mime_type = f"video/{ext}" if ext else "video/unknown"
 
-    return {
+    metadata: dict[str, Any] = {
         "file_path": file_path,
         "file_size": size,
         "mime_type": mime_type,
         "media_type": "video",
     }
+    created = read_quicktime_creation_date(file_path)
+    if created is not None:
+        metadata[QUICKTIME_CREATION_DATE_KEY] = created.strftime("%Y:%m:%d %H:%M:%S")
+    return metadata
 
 
 class MetadataProcessor:
@@ -542,7 +550,7 @@ class MetadataProcessor:
                 rating_raw_val = raw_metadata.get("Xmp.xmp.Rating")
                 parsed_rating = _parse_rating(rating_raw_val)
                 # Date
-                for date_tag in DATE_TAGS_PREFERENCE:
+                for date_tag in (*DATE_TAGS_PREFERENCE, QUICKTIME_CREATION_DATE_KEY):
                     date_string = raw_metadata.get(date_tag)
                     if date_string:
                         dt_obj_val = _parse_exif_date(str(date_string))

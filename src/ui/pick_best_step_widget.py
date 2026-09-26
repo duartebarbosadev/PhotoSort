@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 
 from core.best_photo_finder.payloads import PickBestClusterResult, PickBestResults
 from core.app_settings import EASY_DELETE_SAME_FRAME_MIN_COSINE_SIMILARITY
+from core.capture_order import CaptureOrderKey, filename_order_key
 from core.similarity_utils import cosine_similarity, order_paths_by_anchor_similarity
 from ui.advanced_image_viewer import SynchronizedImageViewer
 from ui.controllers.image_inspection_controller import InspectionImageSpec
@@ -250,6 +251,7 @@ class PickBestStepWidget(QWidget):
         self._is_marked_func: Callable[[str], bool] | None = None
         self._has_any_marked_func: Callable[[], bool] | None = None
         self._similarity_embeddings_provider: Callable[[], dict] = lambda: {}
+        self._capture_order_key: Callable[[str], CaptureOrderKey] = filename_order_key
         self._create_widgets()
         self._connect_signals()
         self._create_shortcuts()
@@ -333,6 +335,10 @@ class PickBestStepWidget(QWidget):
             for key, payload in results.items()
             if payload.get("winner_path")
         ]
+        # Review groups in the order their photos were taken.
+        cluster_entries.sort(
+            key=lambda entry: self._cluster_capture_order_key(entry[1])
+        )
         self._cluster_keys = [key for key, _payload in cluster_entries]
         self._clusters = [payload for _key, payload in cluster_entries]
         self._tournaments = [
@@ -425,6 +431,10 @@ class PickBestStepWidget(QWidget):
         if callable(clear_inspection):
             clear_inspection(self._sync_viewer)
         self._sync_viewer.clear()
+
+    def set_capture_order_key(self, key: Callable[[str], CaptureOrderKey]) -> None:
+        """Order media chronologically using the application's shared dates."""
+        self._capture_order_key = key
 
     def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
         self._is_marked_func = func
@@ -695,6 +705,12 @@ class PickBestStepWidget(QWidget):
         if len(kept_paths) > 1 and challenger_path in kept_paths:
             return challenger_path
         return ai_pick
+
+    def _cluster_capture_order_key(
+        self, payload: PickBestClusterResult
+    ) -> CaptureOrderKey:
+        paths = payload.get("all_paths") or [payload.get("winner_path") or ""]
+        return min(self._capture_order_key(path) for path in paths)
 
     def _build_tournament(
         self, cluster_key: object, payload: PickBestClusterResult

@@ -68,6 +68,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.capture_order import CaptureOrderKey, filename_order_key
 from core.grouping import (
     GroupingGroup,
     GroupingPlan,
@@ -646,6 +647,7 @@ class GroupingStepWidget(QWidget):
             self._apply_pending_selection_preview
         )
         self._is_marked_func: Callable[[str], bool] = lambda _path: False
+        self._capture_order_key: Callable[[str], CaptureOrderKey] = filename_order_key
         self._has_any_marked_func: Callable[[], bool] = lambda: False
         self._folder_validation_request_id = 0
         self._folder_validation_pool = QThreadPool.globalInstance()
@@ -1301,6 +1303,10 @@ class GroupingStepWidget(QWidget):
 
     def set_back_visible(self, visible: bool) -> None:
         self.back_button.setVisible(visible)
+
+    def set_capture_order_key(self, key: Callable[[str], CaptureOrderKey]) -> None:
+        """Order media chronologically using the application's shared dates."""
+        self._capture_order_key = key
 
     def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
         """Use the application-wide deletion state as Organize's source of truth."""
@@ -1992,7 +1998,7 @@ class GroupingStepWidget(QWidget):
                 self._after_items_by_match_relative_path[match_relative_path] = (
                     group_item
                 )
-            for source_path in sorted(group.source_paths):
+            for source_path in sorted(group.source_paths, key=self._capture_order_key):
                 file_item = QTreeWidgetItem(
                     [self._display_name_for_source(source_path)]
                 )
@@ -2080,7 +2086,7 @@ class GroupingStepWidget(QWidget):
         )
         bucket_item.setFlags(bucket_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         root_item.addChild(bucket_item)
-        for source_path in sorted(paths):
+        for source_path in sorted(paths, key=self._capture_order_key):
             file_item = QTreeWidgetItem([self._display_name_for_source(source_path)])
             self._set_item_metadata(
                 file_item,
@@ -2191,11 +2197,17 @@ class GroupingStepWidget(QWidget):
             self._before_dir_items_by_relative_path[normalized] = item
             return item
 
-        for source_path in sorted(all_paths):
+        def relative_dir_for(source_path: str) -> str:
+            rel_dir = os.path.dirname(self._relative_path_for_source(source_path))
+            return "" if rel_dir == "." else rel_dir
+
+        # Folders keep their alphabetical order; files inside each folder are
+        # listed in the order they were taken.
+        for rel_dir in sorted({relative_dir_for(path) for path in all_paths}):
+            ensure_dir(rel_dir)
+        for source_path in sorted(all_paths, key=self._capture_order_key):
             rel_file = self._relative_path_for_source(source_path)
-            rel_dir = os.path.dirname(rel_file)
-            if rel_dir == ".":
-                rel_dir = ""
+            rel_dir = relative_dir_for(source_path)
             parent_item = ensure_dir(rel_dir)
             file_item = QTreeWidgetItem([os.path.basename(source_path)])
             self._set_item_metadata(

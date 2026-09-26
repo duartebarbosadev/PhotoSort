@@ -105,6 +105,9 @@ class FileScanner(QObject):
                             "file_size": stat_result.st_size,
                             "mtime_ns": stat_result.st_mtime_ns,
                         }
+                        birthtime = getattr(stat_result, "st_birthtime", None)
+                        if birthtime:
+                            file_info["birthtime_ns"] = int(birthtime * 1_000_000_000)
                         all_file_data.append(file_info)
                         discovery_batch.append(dict(file_info))
                         if len(discovery_batch) >= FILE_SCAN_EMIT_BATCH_SIZE:

@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.capture_order import CaptureOrderKey, filename_order_key
 from ui.workflow_review_components import (
     EASY_DELETE_SHORTCUTS,
     WorkflowDecisionCard,
@@ -83,6 +84,7 @@ class EasyDeleteStepWidget(QWidget):
         self._list_row_by_path: dict[str, int] = {}
         self._updating_category_toggles = False
         self._is_marked_func: Callable[[str], bool] | None = None
+        self._capture_order_key: Callable[[str], CaptureOrderKey] = filename_order_key
         self._has_any_marked_func: Callable[[], bool] | None = None
         self._pending_keep_by_review: dict[str, dict[str, bool]] = {}
         self._confirmed_reviews: set[str] = set()
@@ -114,6 +116,10 @@ class EasyDeleteStepWidget(QWidget):
                 "skip": self._on_skip,
             },
         )
+
+    def set_capture_order_key(self, key: Callable[[str], CaptureOrderKey]) -> None:
+        """Order media chronologically using the application's shared dates."""
+        self._capture_order_key = key
 
     def set_is_marked_func(self, fn: Callable[[str], bool]) -> None:
         self._is_marked_func = fn
@@ -361,6 +367,7 @@ class EasyDeleteStepWidget(QWidget):
                 for path, entry in results.items()
                 if self._entry_category(entry) == category and entry["suggest_delete"]
             ]
+            category_entries.sort(key=lambda item: self._capture_order_key(item[0]))
             for path, entry in category_entries:
                 if path in seen:
                     continue
