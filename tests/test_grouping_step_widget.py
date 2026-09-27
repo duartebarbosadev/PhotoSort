@@ -2492,6 +2492,11 @@ def test_organize_comparison_is_bounded_for_large_selections(tmp_path):
         f"{count} items selected · showing first {ORGANIZE_MAX_COMPARISON_IMAGES}"
     )
 
+    # Marks beyond the display cap still count, as trash applies to them too.
+    widget.set_is_marked_func({paths[-1]}.__contains__)
+    widget.refresh_deletion_state()
+    assert widget.large_preview_name.text().endswith("· 1 marked for deletion")
+
 
 def test_organize_comparison_reports_marked_files(tmp_path):
     window = _inspection_window()
@@ -2644,3 +2649,12 @@ def test_organize_trees_list_files_in_capture_order_within_folders(tmp_path):
     ]
     after_beach = widget._after_file_items_by_path[early].parent()
     assert children(after_beach) == ["b.jpg", "a.jpg"]
+
+    # Metadata later dates a.jpg earlier; the trees re-sort and keep selection.
+    widget._after_file_items_by_path[early].setSelected(True)
+    dates[late] = datetime(2019, 1, 1)
+    widget.refresh_capture_order()
+
+    after_beach = widget._after_file_items_by_path[early].parent()
+    assert children(after_beach) == ["a.jpg", "b.jpg"]
+    assert widget._selected_preview_file_paths() == [early]

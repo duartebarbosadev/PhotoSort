@@ -201,6 +201,16 @@ def _parse_rating(value: Any) -> int:
         return 0
 
 
+# Bump when _build_basic_video_metadata gains fields so cached payloads written
+# by older releases are rebuilt instead of silently lacking them.
+VIDEO_METADATA_VERSION_KEY = "video_metadata_version"
+VIDEO_METADATA_VERSION = 1
+
+
+def _is_current_video_metadata(metadata: dict[str, Any]) -> bool:
+    return metadata.get(VIDEO_METADATA_VERSION_KEY) == VIDEO_METADATA_VERSION
+
+
 def _build_basic_video_metadata(file_path: str) -> dict[str, Any]:
     """Return a lightweight metadata payload for video files."""
     try:
@@ -216,6 +226,7 @@ def _build_basic_video_metadata(file_path: str) -> dict[str, Any]:
         "file_size": size,
         "mime_type": mime_type,
         "media_type": "video",
+        VIDEO_METADATA_VERSION_KEY: VIDEO_METADATA_VERSION,
     }
     created = read_quicktime_creation_date(file_path)
     if created is not None:
@@ -335,6 +346,12 @@ class MetadataProcessor:
             cached_metadata: dict[str, Any] | None = None
             if exif_disk_cache:
                 cached_metadata = exif_disk_cache.get(cache_key_path)
+                if (
+                    cached_metadata
+                    and is_video_file
+                    and not _is_current_video_metadata(cached_metadata)
+                ):
+                    cached_metadata = None
 
             if cached_metadata:
                 cache_hits += 1

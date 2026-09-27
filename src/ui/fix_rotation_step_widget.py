@@ -101,6 +101,28 @@ class FixRotationStepWidget(QWidget):
         """Order media chronologically using the application's shared dates."""
         self._capture_order_key = key
 
+    def refresh_capture_order(self) -> None:
+        """Re-sort the queue after capture dates change, keeping the current photo."""
+        if self._applying or not self._ordered_paths:
+            return
+        reordered = sorted(self._ordered_paths, key=self._capture_order_key)
+        if reordered == self._ordered_paths:
+            return
+        current_path = (
+            self._ordered_paths[self._current_index]
+            if 0 <= self._current_index < len(self._ordered_paths)
+            else None
+        )
+        self._ordered_paths = reordered
+        self._populate_list()
+        if current_path is None:
+            return
+        self._current_index = reordered.index(current_path)
+        self._items_list.blockSignals(True)
+        self._items_list.setCurrentRow(self._current_index)
+        self._items_list.blockSignals(False)
+        self._refresh_controls()
+
     def pending_rotations(self) -> dict[str, int]:
         """Return the currently queued, unapplied rotation changes."""
         if self._applying:

@@ -638,7 +638,8 @@ class GroupingStepWidget(QWidget):
         self._drag_in_progress = False
         self._current_preview_source_path: str | None = None
         self._multi_preview_paths: tuple[str, ...] = ()
-        self._multi_preview_total = 0
+        # The full selection; only the first ORGANIZE_MAX_COMPARISON_IMAGES are shown.
+        self._multi_preview_selection: tuple[str, ...] = ()
         self._pending_selection_preview_tree: QTreeWidget | None = None
         self._selection_preview_timer = QTimer(self)
         self._selection_preview_timer.setSingleShot(True)
@@ -1307,6 +1308,12 @@ class GroupingStepWidget(QWidget):
     def set_capture_order_key(self, key: Callable[[str], CaptureOrderKey]) -> None:
         """Order media chronologically using the application's shared dates."""
         self._capture_order_key = key
+
+    def refresh_capture_order(self) -> None:
+        """Re-render the trees after capture dates change, keeping edits and selection."""
+        if self._current_plan is None:
+            return
+        self._refresh_preview_trees(preserve_selection=True)
 
     def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
         """Use the application-wide deletion state as Organize's source of truth."""
@@ -2771,7 +2778,7 @@ class GroupingStepWidget(QWidget):
         )
         self._current_preview_source_path = None
         self._multi_preview_paths = shown_paths
-        self._multi_preview_total = total
+        self._multi_preview_selection = tuple(selected_paths)
         if not already_shown:
             activate = getattr(self._parent_window, "activate_image_inspection", None)
             if callable(activate):
@@ -2830,9 +2837,9 @@ class GroupingStepWidget(QWidget):
 
     def _apply_multi_preview_captions(self) -> None:
         shown = len(self._multi_preview_paths)
-        total = self._multi_preview_total
+        total = len(self._multi_preview_selection)
         marked = sum(
-            1 for path in self._multi_preview_paths if self._is_marked_func(path)
+            1 for path in self._multi_preview_selection if self._is_marked_func(path)
         )
         caption = f"{total} items selected"
         if shown < total:
@@ -2856,7 +2863,7 @@ class GroupingStepWidget(QWidget):
         if not self._multi_preview_paths:
             return
         self._multi_preview_paths = ()
-        self._multi_preview_total = 0
+        self._multi_preview_selection = ()
         self.preview_trash_button.setToolTip(SINGLE_TRASH_TOOLTIP)
 
     def _selected_trash_paths(self) -> list[str]:

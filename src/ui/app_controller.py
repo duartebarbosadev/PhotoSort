@@ -925,6 +925,10 @@ class AppController(QObject):
             allow_model_download=request[4],
         )
 
+    def invalidate_grouping_preview(self) -> None:
+        """Forget any deferred preview so opening Organize rebuilds it."""
+        self._pending_grouping_preview = None
+
     def activate_grouping_preview(self) -> None:
         pending = self._pending_grouping_preview
         self._pending_grouping_preview = None

@@ -1026,7 +1026,7 @@ class MainWindow(QMainWindow):
         )
 
         if request.organize_resolution == "discard":
-            self._discard_organize_changes()
+            self._discard_organize_changes(regenerate_preview=destination is None)
         if request.rotation_resolution == "discard" and self.fix_rotation_step_widget:
             self.fix_rotation_step_widget.discard_pending_rotations()
 
@@ -1046,12 +1046,18 @@ class MainWindow(QMainWindow):
             return
         self._finish_workflow_transition(request)
 
-    def _discard_organize_changes(self) -> None:
-        if self.grouping_step_widget.discard_pending_grouping_changes():
-            # The discarded plan came from a regrouping mode; rebuild the
-            # Current structure so returning to Organize shows no pending moves.
-            self.app_state.selected_grouping_mode = "current"
+    def _discard_organize_changes(self, *, regenerate_preview: bool = True) -> None:
+        if not self.grouping_step_widget.discard_pending_grouping_changes():
+            return
+        # The discarded plan came from a regrouping mode, so Organize must show
+        # the Current structure again. When leaving Organize, only drop the stale
+        # preview: opening Organize regenerates it, and starting a worker now
+        # would keep expensive grouping work running in the background.
+        self.app_state.selected_grouping_mode = "current"
+        if regenerate_preview:
             self.app_controller.refresh_grouping_preview()
+        else:
+            self.app_controller.invalidate_grouping_preview()
 
     def _request_workflow_resolution(self) -> None:
         """Resolve pending work without leaving the current workflow."""
@@ -1296,23 +1302,40 @@ class MainWindow(QMainWindow):
     def _active_cluster_results(self) -> dict[str, int]:
         return self.app_state.cluster_results_for_workflow()
 
-    def _current_capture_order(self) -> tuple[str, ...]:
+    def _current_capture_order(self) -> tuple:
+        """Signature of the chronological order, including each file's date.
+
+        Keys carry the resolved timestamp, so a metadata date change is
+        detected even when it leaves the relative order untouched (for
+        example, it moves a photo to another month in the Date view).
+        """
         return tuple(
-            self.app_state.sort_paths_by_capture_date(
-                record["path"] for record in self.app_state.image_files_data
+            sorted(
+                self.app_state.capture_order_key(record["path"])
+                for record in self.app_state.image_files_data
             )
         )
 
     def refresh_capture_order(self) -> None:
-        """Re-sort the media list once metadata capture dates are known.
+        """Re-sort every workflow once metadata capture dates are known.
 
-        The list is first populated with file timestamps from the scan; EXIF
+        Views are first populated with file timestamps from the scan; EXIF
         and video creation dates arrive later from the background metadata
         load and can change the chronological order.
         """
-        if self._current_capture_order() == getattr(
-            self, "_populated_capture_order", None
+        signature = self._current_capture_order()
+        if signature == getattr(self, "_capture_order_signature", None):
+            return
+        self._capture_order_signature = signature
+        for widget in (
+            self.grouping_step_widget,
+            self.easy_delete_step_widget,
+            self.fix_rotation_step_widget,
+            self.pick_best_step_widget,
         ):
+            if widget is not None:
+                widget.refresh_capture_order()
+        if signature == getattr(self, "_populated_capture_order", None):
             return
         self.mark_cull_model_dirty()
         if self.app_state.workflow_step == "cull":

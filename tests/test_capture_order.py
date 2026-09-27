@@ -1,3 +1,6 @@
+import pyexiv2  # noqa: F401  # Must be imported first to avoid Windows crashes
+
+
 import os
 import shutil
 import struct
@@ -71,6 +74,16 @@ def test_photos_and_videos_are_ordered_by_capture_date(tmp_path):
     ordered = [os.path.basename(p) for p in state.sort_paths_by_capture_date(paths)]
     assert ordered == ["AAA_clip.mp4", *SAMPLES_BY_CAPTURE_DATE]
 
+    # Video payloads cached by older releases lack the recording date and are
+    # rebuilt rather than reused.
+    legacy = {"file_path": str(clip), "media_type": "video", "file_size": 1}
+    exif_cache = Mock(get=Mock(return_value=legacy))
+    metadata = MetadataProcessor.get_batch_display_metadata(
+        [str(clip)], rating_disk_cache=None, exif_disk_cache=exif_cache
+    )
+    assert metadata[str(clip)]["date"].year == 2020
+    exif_cache.set.assert_called_once()
+
 
 def test_file_times_are_used_until_metadata_dates_are_known():
     def ns(year: int) -> int:
@@ -98,7 +111,7 @@ def test_file_times_are_used_until_metadata_dates_are_known():
     ]
 
 
-def test_every_review_workflow_uses_the_shared_capture_order():
+def test_every_review_workflow_uses_and_refreshes_the_shared_capture_order():
     state = AppState()
     state.date_cache.update(
         {
@@ -135,6 +148,22 @@ def test_every_review_workflow_uses_the_shared_capture_order():
     )
     assert pick_best._cluster_keys == [2, 1]
 
+    # Metadata later reveals the "late" photos were taken first. Every workflow
+    # re-sorts while keeping the reviewer on the same photo or cluster.
+    easy_delete._navigate_to(1)
+    rotation._navigate_to(1)
+    pick_best._load_cluster(1)
+    state.date_cache["/p/late-a.jpg"] = datetime(2019, 1, 1)
+    for widget in (rotation, easy_delete, pick_best):
+        widget.refresh_capture_order()
+
+    assert rotation._ordered_paths == ["/p/late-a.jpg", "/p/early-a.jpg"]
+    assert rotation._ordered_paths[rotation._current_index] == "/p/late-a.jpg"
+    assert easy_delete._flagged_paths == ["/p/late-a.jpg", "/p/early-a.jpg"]
+    assert easy_delete._flagged_paths[easy_delete._current_index] == "/p/late-a.jpg"
+    assert pick_best._cluster_keys == [1, 2]
+    assert pick_best._cluster_keys[pick_best._cluster_index] == 1
+
 
 def test_cull_list_is_built_and_resorted_in_capture_order():
     state = AppState()
@@ -151,6 +180,10 @@ def test_cull_list_is_built_and_resorted_in_capture_order():
         _note_model_item_populated=lambda: None,
         _create_standard_item=lambda record: QStandardItem(record["path"]),
         _ensure_cull_model_ready=Mock(),
+        grouping_step_widget=Mock(),
+        easy_delete_step_widget=None,
+        fix_rotation_step_widget=None,
+        pick_best_step_widget=None,
     )
     window._capture_order_key_for_record = lambda record: (
         MainWindow._capture_order_key_for_record(window, record)
@@ -163,10 +196,19 @@ def test_cull_list_is_built_and_resorted_in_capture_order():
     assert [root.child(row).text() for row in range(2)] == ["/p/b.jpg", "/p/a.jpg"]
 
     window._populated_capture_order = window._current_capture_order()
+    window._capture_order_signature = window._populated_capture_order
     MainWindow.refresh_capture_order(window)
     window._ensure_cull_model_ready.assert_not_called()
+    window.grouping_step_widget.refresh_capture_order.assert_not_called()
 
-    # A metadata date arriving later changes the order, so the list is rebuilt.
-    state.date_cache["/p/a.jpg"] = datetime(2020, 1, 1)
+    # A date change that keeps the order still regroups the Date view.
+    state.date_cache["/p/b.jpg"] = datetime(2020, 1, 1)
     MainWindow.refresh_capture_order(window)
     window._ensure_cull_model_ready.assert_called_once()
+    window.grouping_step_widget.refresh_capture_order.assert_called_once()
+
+    # A metadata date arriving later changes the order, so the list is rebuilt.
+    window._populated_capture_order = window._current_capture_order()
+    state.date_cache["/p/a.jpg"] = datetime(2019, 1, 1)
+    MainWindow.refresh_capture_order(window)
+    assert window._ensure_cull_model_ready.call_count == 2

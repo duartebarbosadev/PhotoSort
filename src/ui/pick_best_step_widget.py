@@ -436,6 +436,24 @@ class PickBestStepWidget(QWidget):
         """Order media chronologically using the application's shared dates."""
         self._capture_order_key = key
 
+    def refresh_capture_order(self) -> None:
+        """Re-sort clusters after capture dates change, keeping tournament state."""
+        if len(self._tournaments) < 2:
+            return
+        order = sorted(
+            range(len(self._tournaments)),
+            key=lambda index: self._cluster_capture_order_key(self._clusters[index]),
+        )
+        if order == list(range(len(order))):
+            return
+        self._cluster_keys = [self._cluster_keys[index] for index in order]
+        self._clusters = [self._clusters[index] for index in order]
+        self._tournaments = [self._tournaments[index] for index in order]
+        self._cluster_index = order.index(self._cluster_index)
+        if self._stack.currentWidget() is self._page_review:
+            self._refresh_photo_list()
+            self._update_tournament_controls()
+
     def set_is_marked_func(self, func: Callable[[str], bool]) -> None:
         self._is_marked_func = func
         self._sync_viewer.set_is_marked_for_deletion_func(lambda _path: False)
