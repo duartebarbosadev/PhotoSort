@@ -83,6 +83,8 @@ excluded_transformer_models = [
 ]
 
 hiddenimports = [
+    # pywin32 loads its timezone support from native code.
+    *(["win32timezone"] if sys.platform == "win32" else []),
     "compression.zstd",
     # Torchvision 0.29 uses stable-ABI extensions, loaded indirectly at runtime.
     # The upstream PyInstaller hooks still collect the pre-0.29 names.

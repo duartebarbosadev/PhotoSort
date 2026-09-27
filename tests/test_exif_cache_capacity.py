@@ -19,7 +19,7 @@ def test_dataset_residency_uses_unique_canonical_paths():
     cache = ExifCache.__new__(ExifCache)
     decomposed = "photos/Cafe\N{COMBINING ACUTE ACCENT}.ARW"
     canonical = unicodedata.normalize("NFC", decomposed)
-    cache._cache = {canonical: {"rating": 0}}
+    cache._cache = {cache._path_key(canonical): {"rating": 0}}
 
     assert cache.dataset_residency([decomposed, canonical, "missing.ARW"]) == (1, 2)
 

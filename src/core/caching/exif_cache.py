@@ -1,5 +1,7 @@
 import diskcache
 import os
+import stat
+import sys
 import logging
 import time
 import threading
@@ -7,6 +9,7 @@ import unicodedata
 from collections.abc import Iterable
 from typing import Any
 from core.runtime_paths import resolve_user_cache_dir
+from core.windows_file_identity import windows_file_identity
 
 # Import the settings functions to get the cache size limit
 from core.app_settings import (
@@ -17,13 +20,60 @@ from core.app_settings import (
 
 logger = logging.getLogger(__name__)
 ARW_CACHE_LOG_INTERVAL = 250
+_ENTRY_VERSION = 2
+_IS_WINDOWS = sys.platform == "win32"
+FileIdentity = tuple[int, int, int, int, int]
 
 
 class ExifCache:
     """
     Manages a disk-based cache for image EXIF metadata (dictionaries).
     The cache size is configurable via app_settings.
+
+    Entries use normalized absolute paths and a file-version identity. Legacy
+    entries without identity information are misses and refresh on the next read.
     """
+
+    @staticmethod
+    def _path_key(path: str) -> str:
+        return unicodedata.normalize("NFC", os.path.abspath(path))
+
+    @staticmethod
+    def file_identity(path: str) -> FileIdentity | None:
+        """Identify a file version without reading image contents.
+
+        Try Unicode path forms consistently with MetadataProcessor, including on
+        filesystems which store decomposed names. Fail closed for inaccessible files.
+        """
+        path = os.path.abspath(path)
+        for candidate in dict.fromkeys(
+            (
+                path,
+                unicodedata.normalize("NFC", path),
+                unicodedata.normalize("NFD", path),
+            )
+        ):
+            if _IS_WINDOWS:
+                identity = windows_file_identity(candidate)
+                if identity is not None:
+                    return identity
+                continue
+            try:
+                info = os.stat(candidate)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return None
+            if not stat.S_ISREG(info.st_mode):
+                return None
+            return (
+                info.st_size,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+                info.st_dev,
+                info.st_ino,
+            )
+        return None
 
     def __init__(self, cache_dir: str | None = None):
         if cache_dir is None:
@@ -66,23 +116,27 @@ class ExifCache:
     def get(self, key: str) -> dict[str, Any] | None:
         """
         Retrieves an item (metadata dictionary) from the cache.
-        The key is typically the normalized file path.
+        The path is normalized to an absolute key and its current identity checked.
 
         Args:
             key (str): The cache key (file path).
 
         Returns:
-            Optional[Dict[str, Any]]: The cached metadata dictionary, or None if not found or not a dict.
+            The metadata dictionary, or None for a missing, stale or legacy entry.
         """
         try:
-            cached_item = self._cache.get(key)
-            if isinstance(cached_item, dict):
-                return cached_item
-            elif cached_item is not None:
-                logger.warning(
-                    f"Invalid item type in EXIF cache for key '{key}': {type(cached_item)}"
-                )
-                # self.delete(key) # Optionally delete malformed entry
+            cached_item = self._cache.get(self._path_key(key))
+            # Legacy dictionaries have no source identity and must be extracted
+            # again. Keep the envelope private so callers still receive metadata.
+            if (
+                isinstance(cached_item, tuple)
+                and len(cached_item) == 3
+                and cached_item[0] == _ENTRY_VERSION
+                and isinstance(cached_item[2], dict)
+            ):
+                identity = self.file_identity(key)
+                if identity is not None and cached_item[1] == identity:
+                    return cached_item[2]
             return None
         except Exception as e:
             logger.error(
@@ -90,7 +144,13 @@ class ExifCache:
             )
             return None
 
-    def set(self, key: str, value: dict[str, Any]) -> None:
+    def set(
+        self,
+        key: str,
+        value: dict[str, Any],
+        *,
+        source_identity: FileIdentity | None = None,
+    ) -> None:
         """
         Adds or updates an item (metadata dictionary) in the cache.
         The key is typically the normalized file path.
@@ -98,6 +158,8 @@ class ExifCache:
         Args:
             key (str): The cache key (file path).
             value (Dict[str, Any]): The metadata dictionary to cache.
+            source_identity: Identity captured before extraction. Reject the write
+                if the file changed during extraction or while results were queued.
         """
         if not isinstance(value, dict):
             logger.error(
@@ -105,6 +167,11 @@ class ExifCache:
             )
             return
         try:
+            identity = self.file_identity(key)
+            if identity is None or (
+                source_identity is not None and identity != source_identity
+            ):
+                return
             file_ext = os.path.splitext(key)[1].lower()
             if file_ext == ".arw":
                 with self._arw_cache_write_lock:
@@ -117,7 +184,7 @@ class ExifCache:
                         os.path.basename(key),
                         len(value),
                     )
-            self._cache.set(key, value)
+            self._cache.set(self._path_key(key), (_ENTRY_VERSION, identity, value))
         except Exception as e:
             logger.error(
                 f"Error writing to EXIF cache for key '{os.path.basename(key)}': {e}",
@@ -132,6 +199,7 @@ class ExifCache:
             key (str): The cache key to delete.
         """
         try:
+            key = self._path_key(key)
             if key in self._cache:
                 del self._cache[key]
         except Exception as e:
@@ -161,9 +229,7 @@ class ExifCache:
 
     def dataset_residency(self, keys: Iterable[str]) -> tuple[int, int]:
         """Return how many unique dataset keys are still present in the cache."""
-        canonical_keys = {
-            unicodedata.normalize("NFC", os.path.normpath(key)) for key in keys if key
-        }
+        canonical_keys = {self._path_key(key) for key in keys if key}
         try:
             resident_count = sum(key in self._cache for key in canonical_keys)
             return resident_count, len(canonical_keys)
@@ -214,7 +280,7 @@ class ExifCache:
             logger.error("Error closing EXIF cache.", exc_info=True)
 
     def __contains__(self, key: str) -> bool:
-        return key in self._cache
+        return self.get(key) is not None
 
     def __del__(self):
         self.close()

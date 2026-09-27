@@ -8,6 +8,7 @@ Pillow==12.3.0
 Pillow-heif==1.7.0
 pyexiv2==2.16.0
 PyQt6==6.11.0
+pywin32==312; sys_platform == "win32"
 rawpy==0.27.1
 reverse-geocode==1.6.6
 scikit-learn==1.9.0
