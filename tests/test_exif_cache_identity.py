@@ -80,11 +80,43 @@ def test_same_size_edit_with_restored_mtime_is_a_miss(cache, photo):
 
 
 def test_legacy_or_unknown_entry_requires_refresh(cache, photo):
-    for entry in ({"rating": 5}, (99, cache.file_identity(str(photo)), {"rating": 5})):
+    identity = cache.file_identity(str(photo))
+    for entry in (
+        {"rating": 5},
+        (1, identity, {"rating": 5}),
+        (99, identity, {"rating": 5}),
+    ):
         cache._cache.set(str(photo), entry)
         assert cache.get(str(photo)) is None
     cache.set(str(photo), {"rating": 2})
     assert cache.get(str(photo)) == {"rating": 2}
+
+
+def test_windows_change_time_invalidates_shared_metadata(cache, photo, monkeypatch):
+    monkeypatch.setattr("core.caching.exif_cache._IS_WINDOWS", True)
+    identity = Mock(return_value=(8, 100, 200, 1, 42))
+    monkeypatch.setattr("core.caching.exif_cache.windows_file_identity", identity)
+    extract = Mock(side_effect=[{"rating": 1}, {"rating": 5}])
+    monkeypatch.setattr(
+        "core.metadata_processor.PyExiv2Operations.get_comprehensive_metadata", extract
+    )
+    assert MetadataProcessor.get_detailed_metadata(str(photo), cache) == {"rating": 1}
+    assert MetadataProcessor.get_detailed_metadata(str(photo), cache) == {"rating": 1}
+    assert extract.call_count == 1
+    identity.return_value = (8, 100, 201, 1, 42)
+    assert MetadataProcessor.get_detailed_metadata(str(photo), cache) == {"rating": 5}
+    assert MetadataProcessor.get_detailed_metadata(str(photo), cache) == {"rating": 5}
+    assert extract.call_count == 2
+
+
+def test_windows_identity_failure_never_falls_back_to_stat(cache, photo, monkeypatch):
+    cache.set(str(photo), {"rating": 1})
+    monkeypatch.setattr("core.caching.exif_cache._IS_WINDOWS", True)
+    monkeypatch.setattr("core.caching.exif_cache.windows_file_identity", lambda _: None)
+    assert cache.get(str(photo)) is None
+    cache.delete(str(photo))
+    cache.set(str(photo), {"rating": 5})
+    assert str(photo) not in cache._cache
 
 
 def test_missing_file_is_not_cached(cache, photo):

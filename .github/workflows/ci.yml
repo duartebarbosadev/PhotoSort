@@ -126,6 +126,23 @@ jobs:
           retention-days: 5
 
 
+  windows-file-identity:
+    name: Windows file identity
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - run: python -m pip install pytest
+      # Isolate the native filesystem tests from the Qt/pyexiv2 test fixtures.
+      - run: python -m pytest -q --confcutdir=tests/platform -o addopts= tests/platform/test_windows_file_identity.py
+
   security:
     name: Basic Security Scan
     runs-on: ubuntu-latest

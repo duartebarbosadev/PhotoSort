@@ -1,6 +1,7 @@
 import diskcache
 import os
 import stat
+import sys
 import logging
 import time
 import threading
@@ -8,6 +9,7 @@ import unicodedata
 from collections.abc import Iterable
 from typing import Any
 from core.runtime_paths import resolve_user_cache_dir
+from core.windows_file_identity import windows_file_identity
 
 # Import the settings functions to get the cache size limit
 from core.app_settings import (
@@ -18,7 +20,8 @@ from core.app_settings import (
 
 logger = logging.getLogger(__name__)
 ARW_CACHE_LOG_INTERVAL = 250
-_ENTRY_VERSION = 1
+_ENTRY_VERSION = 2
+_IS_WINDOWS = sys.platform == "win32"
 FileIdentity = tuple[int, int, int, int, int]
 
 
@@ -50,6 +53,11 @@ class ExifCache:
                 unicodedata.normalize("NFD", path),
             )
         ):
+            if _IS_WINDOWS:
+                identity = windows_file_identity(candidate)
+                if identity is not None:
+                    return identity
+                continue
             try:
                 info = os.stat(candidate)
             except FileNotFoundError:
