@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from core.metadata_processor import MetadataProcessor
 from core.caching.rating_cache import RatingCache
 from core.caching.exif_cache import ExifCache
+from core.folder_view_store import bookmark_file_identity
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ class RatingWriterWorker(QObject):
     # Signals
     progress = pyqtSignal(int, int, str)  # current, total, filename
     rating_written = pyqtSignal(str, int, bool)  # path, rating, success
+    source_file_updated = pyqtSignal(str, object)
     finished = pyqtSignal(int, int)  # successful_count, failed_count
     error = pyqtSignal(str)
 
@@ -78,6 +80,11 @@ class RatingWriterWorker(QObject):
                     )
 
                     if success:
+                        try:
+                            identity = bookmark_file_identity(os.stat(file_path))
+                        except OSError:
+                            identity = None
+                        self.source_file_updated.emit(file_path, identity)
                         successful_count += 1
                         logger.debug(f"Successfully set rating {rating} for {filename}")
                     else:

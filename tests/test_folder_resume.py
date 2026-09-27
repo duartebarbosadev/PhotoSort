@@ -1,5 +1,7 @@
 """Bookmarks cross folders/workflows without replaying file decisions or work."""
 
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crashes
+
 import json
 import threading
 import time
@@ -34,7 +36,9 @@ class Context(QObject):
     def __init__(self):
         super().__init__()
         self.app_state = SimpleNamespace(
-            workflow_step="organize", focused_image_path=None
+            workflow_step="organize",
+            focused_image_path=None,
+            get_file_data_by_path=lambda _path: {"bookmark_identity": [1, 2, 3, 4, 5]},
         )
         self.worker_manager = WorkerManager(Mock(), self)
         self.grouping_step_widget = SimpleNamespace(_mode_buttons={"current": None})
@@ -54,7 +58,12 @@ class Context(QObject):
 
 
 @pytest.fixture
-def context(tmp_path):
+def context(tmp_path, monkeypatch):
+    # Controller tests use synthetic paths. Real filesystem identities are
+    # exercised separately at the shared store/scanner boundary.
+    monkeypatch.setattr(
+        FolderViewStore, "_file_identity", lambda _self, _path: [1, 2, 3, 4, 5]
+    )
     ctx = Context()
     ctx.folder_resume_controller = FolderResumeController(
         ctx, FolderViewStore(str(tmp_path))
@@ -76,7 +85,13 @@ def open_folder(ctx, folder):
 
 def test_store_multiple_folders_and_corruption(tmp_path):
     store = FolderViewStore(str(tmp_path))
-    first = {"workflow": "cull", "views": {"cull": {"selected": ["a.jpg", "b.jpg"]}}}
+    photos = [tmp_path / "a.jpg", tmp_path / "b.jpg"]
+    for photo in photos:
+        photo.touch()
+    first = {
+        "workflow": "cull",
+        "views": {"cull": {"selected": [str(p) for p in photos]}},
+    }
     second = {"workflow": "organize", "views": {}}
     store.save("/photos/one", first)
     store.save("/photos/two", second)
@@ -159,9 +174,9 @@ def test_unchanged_bookmark_does_not_rewrite_and_io_is_off_ui_thread(context):
     threads = []
     original = resume.store.save
 
-    def save(*args):
+    def save(*args, **kwargs):
         threads.append(threading.get_ident())
-        original(*args)
+        original(*args, **kwargs)
 
     resume.store.save = save
     resume.data_ready("organize")
@@ -252,6 +267,10 @@ def window(tmp_path, monkeypatch):
     from ui.main_window import MainWindow
     from core import app_settings
     from PyQt6.QtCore import QSettings
+
+    monkeypatch.setattr(
+        FolderViewStore, "_file_identity", lambda _self, _path: [1, 2, 3, 4, 5]
+    )
 
     monkeypatch.setenv("PHOTOSORT_CACHE_ROOT", str(tmp_path / "cache"))
     monkeypatch.setenv("PHOTOSORT_DATA_ROOT", str(tmp_path / "data"))
@@ -423,9 +442,26 @@ def test_close_during_unfinished_restore_preserves_saved_bookmark(context):
     saved = {"workflow": "easy_delete", "views": {"easy_delete": {"path": "/late.jpg"}}}
     resume.store.save("/photos", saved)
     open_folder(context, "/photos")
+    context.app_state.get_file_data_by_path = lambda _path: None
     resume.prepare_close()
     drain_until(lambda: not context.worker_manager.has_pending_folder_view_io())
     assert resume.store.load("/photos") == saved
+
+
+def test_checkpoint_uses_scan_identity_without_filesystem_io(context):
+    resume = open_folder(context, "/photos")
+    identity = [9, 8, 7, 6, 5]
+    context.app_state.get_file_data_by_path = lambda _path: {
+        "bookmark_identity": identity
+    }
+    resume.store._file_identity = Mock(side_effect=AssertionError("No autosave stat"))
+    resume.data_ready("organize")
+    resume.checkpoint()
+    identity[0] = 123  # A queued save must hold its own immutable snapshot.
+    drain_until(lambda: not context.worker_manager.has_pending_folder_view_io())
+    document = json.loads(resume.store._path("/photos").read_text())
+    assert document["identities"] == {"organize.jpg": [9, 8, 7, 6, 5]}
+    resume.store._file_identity.assert_not_called()
 
 
 def test_grouped_cull_waits_for_clusters_before_restoring_filter_and_selection(window):

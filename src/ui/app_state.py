@@ -13,6 +13,7 @@ from core.caching.analysis_cache import (
 )
 from core.best_photo_finder.payloads import PickBestResults
 from core.capture_order import CaptureOrderKey, capture_order_key
+from core.folder_view_store import bookmark_file_identity
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +227,7 @@ class AppState:
                 else:
                     record["file_size"] = stat_result.st_size
                     record["mtime_ns"] = stat_result.st_mtime_ns
+                    record["bookmark_identity"] = bookmark_file_identity(stat_result)
 
         self.cluster_results.clear()
         self.cull_cluster_results.clear()

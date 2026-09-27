@@ -7,7 +7,12 @@ import logging
 from PyQt6.QtCore import QObject, QTimer
 from PyQt6.QtWidgets import QApplication
 
-from core.folder_view_store import FolderViewStore, WORKFLOWS, folder_key
+from core.folder_view_store import (
+    FolderViewStore,
+    WORKFLOWS,
+    bookmark_paths,
+    folder_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +25,8 @@ class FolderResumeController(QObject):
         self.folder = None
         self.bookmark = {"workflow": "organize", "views": {}}
         self._last_saved = None
+        self._last_saved_identities = None
+        self._loaded_identities = {}
         self._generation = 0
         self._loaded = False
         self._active = False
@@ -40,6 +47,8 @@ class FolderResumeController(QObject):
         self.folder = folder_key(folder)
         self.bookmark = {"workflow": "organize", "views": {}}
         self._last_saved = None
+        self._last_saved_identities = None
+        self._loaded_identities = {}
         self._loaded = self._active = False
         self._ready.clear()
         self._pending.clear()
@@ -50,8 +59,10 @@ class FolderResumeController(QObject):
             if generation != self._generation:
                 return
             if bookmark:
+                self._loaded_identities = bookmark.pop("identities", {})
                 self.bookmark = bookmark
             self._last_saved = deepcopy(self.bookmark)
+            self._last_saved_identities = deepcopy(self._loaded_identities)
             self._loaded = True
             self._pending = set(self.bookmark["views"])
             callback, self._activation = self._activation, None
@@ -59,7 +70,13 @@ class FolderResumeController(QObject):
                 callback()
 
         self.context.worker_manager.submit_folder_view_io(
-            partial(self.store.load, self.folder), loaded
+            partial(
+                self.store.load,
+                self.folder,
+                include_identities=True,
+                should_continue=lambda: generation == self._generation,
+            ),
+            loaded,
         )
 
     def wait_for_bookmark(self, callback) -> bool:
@@ -180,12 +197,26 @@ class FolderResumeController(QObject):
             state = adapter.capture_view_bookmark() if adapter else None
             if state is not None:
                 self.bookmark["views"][step] = state
-        if self.bookmark == self._last_saved:
+        # Snapshot identities from the scan, not from the current filesystem: an
+        # external replacement must not inherit an old selection during autosave.
+        identities = {}
+        for path in bookmark_paths(self.bookmark):
+            record = self.context.app_state.get_file_data_by_path(path)
+            identity = self._loaded_identities.get(path)
+            if record is not None:
+                identity = record.get("bookmark_identity")
+            if isinstance(identity, list):
+                identities[path] = identity.copy()
+        if (
+            self.bookmark == self._last_saved
+            and identities == self._last_saved_identities
+        ):
             return
         snapshot = deepcopy(self.bookmark)
         self._last_saved = snapshot
+        self._last_saved_identities = identities
         self.context.worker_manager.submit_folder_view_io(
-            partial(self.store.save, self.folder, snapshot)
+            partial(self.store.save, self.folder, snapshot, identities=identities)
         )
 
     def prepare_close(self) -> None:
