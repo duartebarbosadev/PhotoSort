@@ -13,7 +13,7 @@ import sys
 import threading
 
 from core.caching.rating_cache import RatingCache
-from core.caching.exif_cache import ExifCache
+from core.caching.exif_cache import ExifCache, FileIdentity
 from core.image_processing.image_rotator import ImageRotator, RotationDirection
 from core.app_settings import METADATA_PROCESSING_CHUNK_SIZE
 from core.media_utils import is_video_extension
@@ -299,6 +299,7 @@ class MetadataProcessor:
         results: dict[str, dict[str, Any]] = {}
         # Stores operational_path -> cache_key_path mapping for files needing extraction
         operational_to_cache_key_map: dict[str, str] = {}
+        source_identities: dict[str, FileIdentity | None] = {}
         paths_for_pyexiv2_extraction: list[str] = []  # Stores operational paths
 
         start_time = time.perf_counter()
@@ -358,6 +359,7 @@ class MetadataProcessor:
                 results[cache_key_path]["raw_metadata"] = cached_metadata
             elif is_video_file:
                 video_count += 1
+                source_identity = ExifCache.file_identity(operational_path)
                 video_metadata = _build_basic_video_metadata(operational_path)
                 if isinstance(video_metadata, dict):
                     if (
@@ -369,8 +371,10 @@ class MetadataProcessor:
                         )
                     video_metadata["file_path"] = cache_key_path
                 results[cache_key_path]["raw_metadata"] = video_metadata
-                if exif_disk_cache:
-                    exif_disk_cache.set(cache_key_path, video_metadata)
+                if exif_disk_cache and source_identity is not None:
+                    exif_disk_cache.set(
+                        cache_key_path, video_metadata, source_identity=source_identity
+                    )
             else:
                 cache_misses += 1
                 paths_for_pyexiv2_extraction.append(operational_path)
@@ -438,6 +442,7 @@ class MetadataProcessor:
                     continue
                 try:
                     # Use the new pyexiv2 wrapper for safe operations
+                    source_identities[op_path] = ExifCache.file_identity(op_path)
                     combined_metadata = PyExiv2Operations.get_comprehensive_metadata(
                         op_path
                     )
@@ -540,8 +545,13 @@ class MetadataProcessor:
                     )
                     if current_cache_key:
                         results[current_cache_key]["raw_metadata"] = metadata_dict
-                        if exif_disk_cache:
-                            exif_disk_cache.set(current_cache_key, metadata_dict)
+                        source_identity = source_identities.get(op_path_processed)
+                        if exif_disk_cache and source_identity is not None:
+                            exif_disk_cache.set(
+                                current_cache_key,
+                                metadata_dict,
+                                source_identity=source_identity,
+                            )
                     else:
                         logger.error(
                             f"Could not find cache key for operational path: {op_path_processed}",
@@ -724,12 +734,15 @@ class MetadataProcessor:
                 exif_disk_cache.set(cache_key_path, minimal_result)
             return minimal_result
 
+        source_identity = ExifCache.file_identity(operational_path)
         try:
             # RAW files are processed normally; no special skip under pytest on Windows
             # Use the new pyexiv2 wrapper for safe operations
             metadata = PyExiv2Operations.get_comprehensive_metadata(operational_path)
-            if exif_disk_cache:
-                exif_disk_cache.set(cache_key_path, metadata)
+            if exif_disk_cache and source_identity is not None:
+                exif_disk_cache.set(
+                    cache_key_path, metadata, source_identity=source_identity
+                )
             return metadata
         except Exception as e:
             if _is_file_missing_error(e, operational_path):
@@ -746,8 +759,10 @@ class MetadataProcessor:
                 "file_size": "Unknown",
                 "error": str(e),
             }
-            if exif_disk_cache:
-                exif_disk_cache.set(cache_key_path, minimal_result)  # Cache error state
+            if exif_disk_cache and source_identity is not None:
+                exif_disk_cache.set(
+                    cache_key_path, minimal_result, source_identity=source_identity
+                )
             return minimal_result
 
     @staticmethod

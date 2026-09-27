@@ -192,6 +192,11 @@ python -m src.main --clear-cache
 build them again when needed. `--clear-models` deletes downloaded models, so
 you will need to download them again to use those features.
 
+Metadata cache entries use the full absolute path and validate file size,
+modification/change times, and filesystem identity before reuse. Replaced or
+modified files are read again. Older entries without identity information are
+refreshed once when those files are next opened; no manual cache clearing is needed.
+
 ### Debug logs
 
 Set `PHOTOSORT_ENABLE_FILE_LOGGING=true` and `PHOTOSORT_LOG_LEVEL=DEBUG` before
