@@ -12,6 +12,7 @@ from core.runtime_paths import resolve_face_landmarker_model_path
 
 
 REQUIRED_PACKAGED_MODULES = (
+    *(("win32file", "pywintypes", "win32timezone") if sys.platform == "win32" else ()),
     "PIL.Image",
     "compression.zstd",
     "cv2",

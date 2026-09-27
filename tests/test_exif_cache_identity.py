@@ -1,6 +1,7 @@
 import pyexiv2  # noqa: F401  # Must be first to avoid Windows crashes
 
 import os
+import time
 import unicodedata
 from unittest.mock import Mock
 
@@ -74,6 +75,8 @@ def test_changed_file_is_a_miss(cache, photo, change):
 def test_same_size_edit_with_restored_mtime_is_a_miss(cache, photo):
     cache.set(str(photo), {"rating": 1})
     original = photo.stat()
+    if os.name == "nt":
+        time.sleep(0.02)  # pywin32 reports change time at millisecond precision.
     photo.write_bytes(b"modified")
     os.utime(photo, ns=(original.st_atime_ns, original.st_mtime_ns))
     assert cache.get(str(photo)) is None
