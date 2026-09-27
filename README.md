@@ -43,6 +43,11 @@ ratings and analysis only work with photos.
 There are five steps along the bottom of the window. Use whichever ones you
 need. You don't have to go through them all or follow a particular order.
 
+Reopening a folder returns to its last workflow, view settings, scroll position,
+and selected photos. PhotoSort remembers each folder and each workflow separately.
+Your usual Apply/Discard choices still control file changes; discarded choices
+are not restored. Bookmarks stay on this computer, outside your photo folders.
+
 | Step | What it's for |
 | --- | --- |
 | **Organize** | Arrange photos into folders. |

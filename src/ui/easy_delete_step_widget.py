@@ -149,6 +149,55 @@ class EasyDeleteStepWidget(QWidget):
     def set_has_any_marked_func(self, fn: Callable[[], bool]) -> None:
         self._has_any_marked_func = fn
 
+    def capture_view_bookmark(self) -> dict | None:
+        from ui.helpers.view_bookmarks import scroll_state
+
+        if self._shown_results is None:
+            return None
+        return {
+            "path": self._focused_path,
+            "review": (
+                self._flagged_paths[self._current_index]
+                if 0 <= self._current_index < len(self._flagged_paths)
+                else None
+            ),
+            "categories": dict(self._enabled_categories),
+            "info": self._info_visible,
+            "scroll": scroll_state(self._items_list),
+        }
+
+    def restore_view_bookmark(self, state: dict) -> bool:
+        from ui.helpers.view_bookmarks import restore_scroll
+
+        if self._shown_results is None:
+            return False
+        categories = state.get("categories", {})
+        if isinstance(categories, dict):
+            for key, checkbox in self._category_checkboxes.items():
+                value = categories.get(key)
+                if type(value) is bool:
+                    self._enabled_categories[key] = value
+                    checkbox.blockSignals(True)
+                    checkbox.setChecked(value)
+                    checkbox.blockSignals(False)
+            self._apply_category_filter()
+        if type(state.get("info")) is bool and self._info_visible != state["info"]:
+            self._toggle_info()
+        path = state.get("path")
+        review = state.get("review")
+        if isinstance(review, str) and review in self._flagged_paths:
+            self._syncing_active_image = True
+            try:
+                if isinstance(path, str):
+                    self._focused_path = path
+                self._navigate_to(self._flagged_paths.index(review))
+            finally:
+                self._syncing_active_image = False
+        elif isinstance(path, str):
+            self.focus_image(path)
+        restore_scroll(self._items_list, state.get("scroll"))
+        return True
+
     def set_image_pipeline(self, pipeline) -> None:
         self._image_pipeline = pipeline
 

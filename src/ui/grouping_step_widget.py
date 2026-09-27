@@ -3278,6 +3278,59 @@ class GroupingStepWidget(QWidget):
             before_item.setSelected(True)
             self.before_tree.scrollToItem(before_item)
 
+    def capture_view_bookmark(self) -> dict | None:
+        from ui.helpers.view_bookmarks import scroll_state
+
+        if self._current_plan is None:
+            return None
+        return {
+            "mode": self.current_mode(),
+            "path": (
+                self._current_preview_source_path
+                or self._item_source_path(self.preview_tree.currentItem())
+                or self._item_source_path(self.before_tree.currentItem())
+            ),
+            "before": [
+                self._item_source_path(item)
+                for item in self.before_tree.selectedItems()
+                if self._item_source_path(item)
+            ],
+            "after": [
+                self._item_source_path(item)
+                for item in self.preview_tree.selectedItems()
+                if self._item_source_path(item)
+            ],
+            "before_scroll": scroll_state(self.before_tree),
+            "after_scroll": scroll_state(self.preview_tree),
+        }
+
+    def restore_view_bookmark(self, state: dict) -> bool:
+        from ui.helpers.view_bookmarks import restore_scroll, restore_tree_selection
+
+        if self._current_plan is None:
+            return False
+        path = state.get("path")
+        # Tree construction can have queued a preview for its default row.
+        # Restore the final selection first and activate only that preview.
+        self._selection_preview_timer.stop()
+        self._pending_selection_preview_tree = None
+        restore_tree_selection(
+            self.before_tree, self._before_file_items_by_path, state.get("before"), path
+        )
+        restore_tree_selection(
+            self.preview_tree, self._after_file_items_by_path, state.get("after"), path
+        )
+        comparison_paths = self._selected_previewable_paths(self.preview_tree)
+        if len(comparison_paths) >= 2:
+            self._show_multi_selection_preview(comparison_paths)
+            if path in comparison_paths:
+                self.large_preview_view.scroll_to_path(path)
+        elif isinstance(path, str):
+            self.focus_image(path)
+        restore_scroll(self.before_tree, state.get("before_scroll"))
+        restore_scroll(self.preview_tree, state.get("after_scroll"))
+        return True
+
     def focus_image(self, source_path: str) -> bool:
         """Focus and highlight a file without clearing other selected files."""
 

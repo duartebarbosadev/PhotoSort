@@ -267,6 +267,9 @@ class AppController(QObject):
         self._easy_delete_pending_after_similarity = False
 
     def _sync_active_image(self, workflow_step: str) -> None:
+        resume = getattr(self.main_window, "folder_resume_controller", None)
+        if resume is not None:
+            resume.data_ready(workflow_step)
         controller = getattr(self.main_window, "active_image_controller", None)
         if controller is not None:
             controller.sync_workflow(workflow_step)
@@ -548,6 +551,9 @@ class AppController(QObject):
             QTimer.singleShot(25, self._finish_folder_load_after_workers)
             return
 
+        resume = getattr(self.main_window, "folder_resume_controller", None)
+        if resume is not None:
+            resume.begin_folder(folder_path)
         add_recent_folder(folder_path)
         self.main_window.menu_manager.update_recent_folders_menu()
 
@@ -813,6 +819,9 @@ class AppController(QObject):
         if not self.app_state.image_files_data:
             self.main_window.update_grouping_preview("No files loaded for grouping.")
             return
+        resume = getattr(self.main_window, "folder_resume_controller", None)
+        if resume is not None:
+            resume.data_loading("organize")
         mode = self.app_state.selected_grouping_mode or "current"
         source_root = (
             self.app_state.grouping_source_root or self.app_state.current_folder_path
@@ -1227,6 +1236,11 @@ class AppController(QObject):
 
     def _activate_loaded_folder(self, *, asset_failures: int) -> None:
         """Expose workflows only after every review asset has been attempted."""
+        resume = getattr(self.main_window, "folder_resume_controller", None)
+        if resume is not None and resume.wait_for_bookmark(
+            lambda: self._activate_loaded_folder(asset_failures=asset_failures)
+        ):
+            return
         has_images = bool(self._get_image_file_data())
         self.main_window.menu_manager.open_folder_action.setEnabled(True)
         self.main_window.menu_manager.analyze_similarity_action.setEnabled(has_images)
@@ -1239,7 +1253,13 @@ class AppController(QObject):
             skip_grouping_step_once = getattr(
                 self.app_state, "skip_grouping_step_once", False
             )
-            if skip_grouping_step_once:
+            if resume is not None:
+                destination = resume.activate(
+                    use_saved_workflow=not skip_grouping_step_once
+                )
+                self.app_state.skip_grouping_step_once = False
+                self.main_window._show_workflow_destination(destination)
+            elif skip_grouping_step_once:
                 self.app_state.skip_grouping_step_once = False
                 self.main_window.show_cull_step()
             else:
@@ -2020,6 +2040,7 @@ class AppController(QObject):
         self.main_window.revert_group_by_similarity()
         if self.app_state.workflow_step == "cull":
             self.main_window._ensure_cull_model_ready()
+            AppController._sync_active_image(self, "cull")
         self.main_window.fail_cull_grouping_progress(reason)
         self.main_window.statusBar().showMessage(status_message, 6000)
         if self._pick_best_pending_after_subject_grouping:
@@ -2163,7 +2184,11 @@ class AppController(QObject):
         self.main_window.menu_manager.update_cluster_filter_menu(cluster_ids)
         self.main_window.mark_cull_model_dirty()
         if self.app_state.workflow_step == "cull":
+            resume = getattr(self.main_window, "folder_resume_controller", None)
+            if resume is not None:
+                resume.prepare_workflow("cull")
             self.main_window._ensure_cull_model_ready()
+            AppController._sync_active_image(self, "cull")
         self.main_window.finish_cull_grouping_progress()
         self.main_window.statusBar().showMessage(
             f"Cull same-subject grouping ready: "
