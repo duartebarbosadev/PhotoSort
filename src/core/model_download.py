@@ -61,6 +61,7 @@ def download_snapshot(
         target=_download_child, args=(send, repo_id, options, label), daemon=True
     )
     started = False
+    transfer_finished = False
     try:
         process.start()
         started = True
@@ -76,8 +77,10 @@ def download_snapshot(
                         "Model download process exited without a result."
                     ) from exc
                 if message[0] == "result":
+                    transfer_finished = True
                     return message[1]
                 if message[0] == "error":
+                    transfer_finished = True
                     raise OSError(message[1])
                 if progress_callback:
                     progress_callback(message[1], message[2])
@@ -85,6 +88,11 @@ def download_snapshot(
                 raise OSError("Model download process exited without a result.")
     finally:
         if started:
+            # A terminal message can arrive before the child's finalizers run.
+            # Let completed/failed transfers exit normally; stalled transfers
+            # still cancel immediately, with a bounded fallback for cleanup.
+            if transfer_finished:
+                process.join(timeout=1)
             # No QThread termination: this process owns only a model transfer.
             if process.is_alive():
                 process.terminate()

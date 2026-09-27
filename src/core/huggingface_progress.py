@@ -1,4 +1,5 @@
 import io
+import threading
 import time
 from collections.abc import Callable
 
@@ -78,4 +79,8 @@ def build_hf_tqdm_class(
 
             callback(percent, message)
 
+    # Downloads report from threads within one process. tqdm's default process
+    # lock creates a named semaphore that cannot be cleaned up if a stalled
+    # transfer is terminated on cancellation.
+    AppProgressTqdm.set_lock(threading.RLock())
     return AppProgressTqdm

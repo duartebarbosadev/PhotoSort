@@ -3,6 +3,10 @@
 import pyexiv2  # noqa: F401  # Must be first to avoid Windows crashes
 
 import multiprocessing
+import os
+from pathlib import Path
+import subprocess
+import sys
 import threading
 import time
 from unittest.mock import Mock
@@ -11,6 +15,21 @@ import pytest
 
 from core import model_download, model_provisioning
 from core.model_download import ModelDownloadCancelled
+
+
+@pytest.mark.parametrize("mode", ["success", "error", "cancel"])
+def test_download_shutdown_releases_resources_and_allows_cleanup(tmp_path, mode):
+    script = Path(__file__).parent / "fixtures" / "model_download_shutdown.py"
+    result = subprocess.run(
+        [sys.executable, str(script), mode, str(tmp_path / "cleanup.txt")],
+        env={**os.environ, "PYTHONPATH": str(Path(model_download.__file__).parents[1])},
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "resource_tracker" not in result.stderr
+    assert "leaked semaphore" not in result.stderr
 
 
 def _stalled_transfer(connection, repo_id, options, label):
