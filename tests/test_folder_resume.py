@@ -1,5 +1,7 @@
 """Bookmarks cross folders/workflows without replaying file decisions or work."""
 
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crashes
+
 import json
 import threading
 import time

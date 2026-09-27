@@ -1,5 +1,7 @@
 """Real-file regressions for the shared bookmark identity boundary."""
 
+import pyexiv2  # noqa: F401  # Must be first to avoid Windows crashes
+
 import json
 import os
 from copy import deepcopy
