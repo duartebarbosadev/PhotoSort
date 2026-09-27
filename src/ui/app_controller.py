@@ -344,6 +344,9 @@ class AppController(QObject):
             self.handle_rating_write_progress
         )
         self.worker_manager.rating_written.connect(self.handle_rating_written)
+        self.worker_manager.rating_source_file_updated.connect(
+            self.handle_rating_source_file_updated
+        )
         self.worker_manager.rating_write_finished.connect(
             self.handle_rating_write_finished
         )
@@ -2451,6 +2454,12 @@ class AppController(QObject):
             self.main_window.statusBar().showMessage(
                 f"Setting rating {current}/{total}: {filename}", 500
             )
+
+    def handle_rating_source_file_updated(self, file_path: str, identity) -> None:
+        """Keep bookmarks valid after our own metadata writes without UI-thread I/O."""
+        record = self.app_state.get_file_data_by_path(file_path)
+        if record is not None:
+            record["bookmark_identity"] = identity
 
     def handle_rating_written(self, file_path: str, rating: int, success: bool):
         """Handle completion of a single rating write."""

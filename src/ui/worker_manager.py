@@ -106,6 +106,7 @@ class WorkerManager(QObject):
     # Rating Writer Signals
     rating_write_progress = pyqtSignal(int, int, str)  # current, total, filename
     rating_written = pyqtSignal(str, int, bool)  # path, rating, success
+    rating_source_file_updated = pyqtSignal(str, object)
     rating_write_finished = pyqtSignal(int, int)  # successful_count, failed_count
     rating_write_error = pyqtSignal(str)
 
@@ -1107,6 +1108,9 @@ class WorkerManager(QObject):
         # Connect signals
         self.rating_writer_worker.progress.connect(self.rating_write_progress.emit)
         self.rating_writer_worker.rating_written.connect(self.rating_written.emit)
+        self.rating_writer_worker.source_file_updated.connect(
+            self.rating_source_file_updated.emit
+        )
         self.rating_writer_worker.finished.connect(self.rating_write_finished.emit)
         self.rating_writer_worker.error.connect(self.rating_write_error.emit)
         self.rating_writer_worker.finished.connect(self.rating_writer_thread.quit)

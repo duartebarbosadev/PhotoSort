@@ -4,6 +4,7 @@ import time
 from typing import Any
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from .image_pipeline import ImagePipeline
+from .folder_view_store import bookmark_file_identity
 from .media_utils import (
     SUPPORTED_MEDIA_EXTENSIONS,
     is_video_extension,
@@ -104,6 +105,7 @@ class FileScanner(QObject):
                             "media_type": media_type,
                             "file_size": stat_result.st_size,
                             "mtime_ns": stat_result.st_mtime_ns,
+                            "bookmark_identity": bookmark_file_identity(stat_result),
                         }
                         birthtime = getattr(stat_result, "st_birthtime", None)
                         if birthtime:
