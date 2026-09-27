@@ -29,6 +29,8 @@ from PyQt6.QtGui import (
     QTransform,
 )
 from PyQt6.QtWidgets import (
+    QAbstractScrollArea,
+    QApplication,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -39,6 +41,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QSlider,
+    QScrollArea,
     QSplitter,
     QButtonGroup,
     QStackedWidget,
@@ -444,6 +447,19 @@ class ZoomableImageView(QGraphicsView):
             )  # Call super to ensure event propagation if not handled
             return
 
+        delta = event.angleDelta()
+        pixel_delta = event.pixelDelta()
+        horizontal = abs(delta.x()) or abs(pixel_delta.x())
+        vertical = abs(delta.y()) or abs(pixel_delta.y())
+        if horizontal > vertical or vertical == 0:
+            # Sideways trackpad swipes belong to the enclosing comparison
+            # scroll area; zooming here would swallow them.
+            if horizontal and self._scroll_enclosing_area(event):
+                event.accept()
+            else:
+                event.ignore()
+            return
+
         # Get the mouse position in scene coordinates
         mouse_pos = self.mapToScene(event.position().toPoint())
 
@@ -453,6 +469,24 @@ class ZoomableImageView(QGraphicsView):
             self.zoom_in(mouse_pos)
         else:
             self.zoom_out(mouse_pos)
+
+    def _scroll_enclosing_area(self, event: QWheelEvent) -> bool:
+        """Apply a sideways wheel delta to the nearest horizontally scrollable parent.
+
+        Qt does not reliably propagate trackpad gestures past a graphics view
+        once it has received the scroll phase, so forward the event directly.
+        """
+        widget = self.parentWidget()
+        while widget is not None:
+            if isinstance(widget, QAbstractScrollArea):
+                scroll_bar = widget.horizontalScrollBar()
+                if scroll_bar is not None and scroll_bar.maximum() > 0:
+                    # Match QAbstractScrollArea: the scroll bar applies the
+                    # platform's direction and natural-scrolling conventions.
+                    QApplication.sendEvent(scroll_bar, event)
+                    return True
+            widget = widget.parentWidget()
+        return False
 
     @override
     def mousePressEvent(self, event: QMouseEvent | None):
@@ -1212,6 +1246,12 @@ class SynchronizedImageViewer(QWidget):
             self._fit_visible_images_after_layout_change
         )
 
+        self._pending_scroll_path: str | None = None
+        self._scroll_to_path_timer = QTimer(self)
+        self._scroll_to_path_timer.setSingleShot(True)
+        self._scroll_to_path_timer.setInterval(0)
+        self._scroll_to_path_timer.timeout.connect(self._apply_pending_scroll)
+
         self._setup_ui()
         self.setFocusPolicy(
             Qt.FocusPolicy.StrongFocus
@@ -1384,7 +1424,20 @@ class SynchronizedImageViewer(QWidget):
         self.viewer_splitter.setObjectName("advancedViewerSplitter")
         self.viewer_splitter.setHandleWidth(2)
         self.viewer_splitter.splitterMoved.connect(self._on_splitter_moved)
-        layout.addWidget(self.viewer_splitter, 1)
+        # Comparisons can hold more images than fit side by side; scroll
+        # horizontally instead of clipping slots beyond the visible width.
+        self.viewer_scroll_area = QScrollArea()
+        self.viewer_scroll_area.setObjectName("advancedViewerScrollArea")
+        self.viewer_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.viewer_scroll_area.setWidgetResizable(True)
+        self.viewer_scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.viewer_scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.viewer_scroll_area.setWidget(self.viewer_splitter)
+        layout.addWidget(self.viewer_scroll_area, 1)
 
         self._create_viewer()
         self._update_controls_visibility()
@@ -1736,6 +1789,28 @@ class SynchronizedImageViewer(QWidget):
             updated = True
         return updated
 
+    def scroll_to_path(self, file_path: str) -> bool:
+        """Scroll a side-by-side comparison so the slot for a path is visible.
+
+        Slot geometry settles only after the pending layout pass, so the scroll
+        is applied once the event loop has laid out a freshly populated pool.
+        """
+        if not any(
+            viewer.get_file_path() == file_path for viewer in self.image_viewers
+        ):
+            return False
+        self._pending_scroll_path = file_path
+        self._scroll_to_path_timer.start()
+        return True
+
+    def _apply_pending_scroll(self) -> None:
+        file_path = self._pending_scroll_path
+        self._pending_scroll_path = None
+        for viewer in self.image_viewers:
+            if viewer.isVisible() and viewer.get_file_path() == file_path:
+                self.viewer_scroll_area.ensureWidgetVisible(viewer, 0, 0)
+                return
+
     def displays_path(self, file_path: str) -> bool:
         return any(viewer.get_file_path() == file_path for viewer in self.image_viewers)
 
@@ -1760,7 +1835,10 @@ class SynchronizedImageViewer(QWidget):
             self.set_image_data(images_data[0], 0)
             return
 
+        previous_paths = [viewer.get_file_path() for viewer in self.image_viewers]
         self._resize_viewer_pool(num_images)
+        if previous_paths[:num_images] != [data.get("path") for data in images_data]:
+            self.viewer_scroll_area.horizontalScrollBar().setValue(0)
 
         # Update all viewers, then hide unused ones
         for i, viewer in enumerate(self.image_viewers):

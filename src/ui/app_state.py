@@ -12,6 +12,7 @@ from core.caching.analysis_cache import (
     MANUAL_OVERRIDE_NAMESPACE_SIMILARITY,
 )
 from core.best_photo_finder.payloads import PickBestResults
+from core.capture_order import CaptureOrderKey, capture_order_key
 
 logger = logging.getLogger(__name__)
 
@@ -504,6 +505,16 @@ class AppState:
 
     def get_file_data_by_path(self, file_path: str) -> dict[str, Any] | None:
         return self._file_data_by_path.get(file_path)
+
+    def capture_order_key(self, file_path: str) -> CaptureOrderKey:
+        """Sort key that lists media in the order it was taken."""
+
+        return capture_order_key(
+            file_path, self.date_cache, self._file_data_by_path.get(file_path)
+        )
+
+    def sort_paths_by_capture_date(self, paths: Iterable[str]) -> list[str]:
+        return sorted(paths, key=self.capture_order_key)
 
     def mark_for_deletion(self, file_path: str):
         """Marks a file for deletion."""

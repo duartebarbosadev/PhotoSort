@@ -40,6 +40,7 @@ class _DummyMainWindow:
         self.start_thumbnail_warming.return_value = "folder-assets"
         self.set_exif_progress = Mock()
         self.hide_exif_progress = Mock()
+        self.refresh_capture_order = Mock()
         self.reset_thumbnail_requests = Mock()
         self.dialog_manager = Mock()
 

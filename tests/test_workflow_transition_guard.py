@@ -199,7 +199,9 @@ def test_apply_resolves_pending_work_without_switching_workflow():
 
 
 def test_combined_discard_and_clear_resolves_every_category_before_switch():
-    grouping = SimpleNamespace(discard_unsaved_grouping_edits=Mock())
+    grouping = SimpleNamespace(
+        discard_pending_grouping_changes=Mock(return_value=False)
+    )
     window = SimpleNamespace(
         app_state=SimpleNamespace(workflow_step="organize"),
         worker_manager=_worker_manager(),
@@ -221,10 +223,13 @@ def test_combined_discard_and_clear_resolves_every_category_before_switch():
         ),
         _finish_workflow_transition=Mock(return_value=True),
     )
+    window._discard_organize_changes = lambda **kwargs: (
+        MainWindow._discard_organize_changes(window, **kwargs)
+    )
 
     MainWindow._request_workflow_transition(window, "easy_delete")
 
-    grouping.discard_unsaved_grouping_edits.assert_called_once()
+    grouping.discard_pending_grouping_changes.assert_called_once()
     request = window._finish_workflow_transition.call_args.args[0]
     assert request.destination == "easy_delete"
     assert request.organize_resolution == "discard"
@@ -928,3 +933,45 @@ def test_deferred_close_waits_for_deletion_thread_shutdown(monkeypatch):
     worker_manager.is_file_deletion_running = lambda: False
     callbacks.pop()()
     window.close.assert_called_once_with()
+
+
+def test_discarding_generated_regrouping_resets_mode_and_rebuilds_current_plan():
+    grouping = SimpleNamespace(discard_pending_grouping_changes=Mock(return_value=True))
+    window = SimpleNamespace(
+        app_state=SimpleNamespace(selected_grouping_mode="mixed"),
+        app_controller=SimpleNamespace(
+            refresh_grouping_preview=Mock(), invalidate_grouping_preview=Mock()
+        ),
+        grouping_step_widget=grouping,
+    )
+
+    MainWindow._discard_organize_changes(window)
+
+    assert window.app_state.selected_grouping_mode == "current"
+    window.app_controller.refresh_grouping_preview.assert_called_once()
+
+    # Leaving Organize defers the rebuild until Organize is opened again, so
+    # no grouping worker keeps running behind the next workflow.
+    window.app_state.selected_grouping_mode = "mixed"
+    window.app_controller.refresh_grouping_preview.reset_mock()
+    MainWindow._discard_organize_changes(window, regenerate_preview=False)
+
+    assert window.app_state.selected_grouping_mode == "current"
+    window.app_controller.refresh_grouping_preview.assert_not_called()
+    window.app_controller.invalidate_grouping_preview.assert_called_once()
+
+
+def test_discarding_manual_edits_keeps_mode_without_rebuilding_plan():
+    grouping = SimpleNamespace(
+        discard_pending_grouping_changes=Mock(return_value=False)
+    )
+    window = SimpleNamespace(
+        app_state=SimpleNamespace(selected_grouping_mode="current"),
+        app_controller=SimpleNamespace(refresh_grouping_preview=Mock()),
+        grouping_step_widget=grouping,
+    )
+
+    MainWindow._discard_organize_changes(window)
+
+    assert window.app_state.selected_grouping_mode == "current"
+    window.app_controller.refresh_grouping_preview.assert_not_called()

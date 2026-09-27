@@ -4,6 +4,7 @@ from datetime import datetime as datetime_obj
 from typing import Any
 
 import numpy as np
+from core.capture_order import capture_datetime
 from core.similarity_cache import parse_cluster_id
 
 logger = logging.getLogger(__name__)
@@ -48,32 +49,12 @@ class ClusterUtils:
 
         Priority:
           1. Existing metadata date cache entry (typically EXIF/XMP creation date).
-          2. Scanner-provided modification timestamp.
+          2. Scanner-provided creation or modification timestamp.
 
         This helper runs during model sorting on the UI thread, so it must not
         issue one filesystem stat call per image.
         """
-        cached = date_cache.get(path)
-        if cached is not None:
-            return cached
-
-        timestamp: float | None = None
-        if isinstance(file_data, dict):
-            mtime_ns = file_data.get("mtime_ns")
-            mtime = file_data.get("mtime")
-            try:
-                if mtime_ns:
-                    timestamp = float(mtime_ns) / 1_000_000_000
-                elif mtime:
-                    timestamp = float(mtime)
-            except TypeError, ValueError:
-                timestamp = None
-        if not timestamp:
-            return None
-
-        resolved = datetime_obj.fromtimestamp(timestamp)
-        date_cache[path] = resolved
-        return resolved
+        return capture_datetime(path, date_cache, file_data)
 
     @staticmethod
     def get_cluster_timestamps(

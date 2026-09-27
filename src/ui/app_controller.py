@@ -925,6 +925,10 @@ class AppController(QObject):
             allow_model_download=request[4],
         )
 
+    def invalidate_grouping_preview(self) -> None:
+        """Forget any deferred preview so opening Organize rebuilds it."""
+        self._pending_grouping_preview = None
+
     def activate_grouping_preview(self) -> None:
         pending = self._pending_grouping_preview
         self._pending_grouping_preview = None
@@ -1804,6 +1808,7 @@ class AppController(QObject):
         if self._folder_asset_session_id is None:
             self.main_window.hide_loading_overlay()
         self.main_window.hide_exif_progress()
+        self.main_window.refresh_capture_order()
         warning = self._pending_exif_cache_capacity_warning
         self._pending_exif_cache_capacity_warning = None
         if warning is not None:

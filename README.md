@@ -54,7 +54,8 @@ need. You don't have to go through them all or follow a particular order.
 ### Organize
 
 Arrange photos into folders and check the result before moving anything.
-RAW+JPEG pairs and XMP sidecars can move together.
+RAW+JPEG pairs and XMP sidecars can move together. Select several photos in
+either tree to compare them side by side.
 
 [![Organize previewing USA, Porto, and Australia folders](assets/organize-screenshot.webp)](assets/organize-screenshot.webp)
 

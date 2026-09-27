@@ -35,3 +35,36 @@ def inline_model_download(monkeypatch):
         )
 
     monkeypatch.setattr(model_provisioning, "download_snapshot", download)
+
+
+@pytest.fixture(autouse=True)
+def _dispose_test_top_level_widgets():
+    """Destroy top-level widgets a test leaves behind.
+
+    Unowned widgets otherwise stay alive until the cyclic garbage collector
+    reclaims them, which can happen mid-paint in a later test and abort Qt.
+    Widgets that existed before the test (module-level or broader-scoped
+    fixtures) are left untouched.
+    """
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    existing = list(app.topLevelWidgets()) if app is not None else []
+    yield
+    app = QApplication.instance()
+    if app is None:
+        return
+
+    leftovers = [w for w in app.topLevelWidgets() if not any(w is e for e in existing)]
+    if not leftovers:
+        return
+
+    import gc
+
+    from PyQt6.QtCore import QCoreApplication, QEvent
+
+    for widget in leftovers:
+        widget.close()
+        widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+    gc.collect()

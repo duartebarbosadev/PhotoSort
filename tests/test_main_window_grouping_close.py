@@ -33,7 +33,7 @@ def test_close_event_blocks_while_grouping_workflow_is_running():
         ),
         grouping_step_widget=SimpleNamespace(
             pending_grouping_action_lines=lambda: [],
-            has_unsaved_grouping_edits=lambda: False,
+            has_pending_grouping_changes=lambda: False,
         ),
         statusBar=lambda: status_bar,
     )
@@ -65,7 +65,7 @@ def test_close_without_grouping_edits_skips_expensive_action_preview():
         worker_manager=worker_manager,
         grouping_step_widget=SimpleNamespace(
             pending_grouping_action_lines=pending_actions,
-            has_unsaved_grouping_edits=lambda: False,
+            has_pending_grouping_changes=lambda: False,
         ),
         app_state=SimpleNamespace(get_marked_files=lambda: []),
         preview_load_controller=preview_controller,
@@ -96,7 +96,7 @@ def test_close_requests_worker_stop_without_waiting(monkeypatch):
         dialog_manager=SimpleNamespace(confirm_interrupt_for_close=Mock()),
         grouping_step_widget=SimpleNamespace(
             pending_grouping_action_lines=lambda: [],
-            has_unsaved_grouping_edits=lambda: False,
+            has_pending_grouping_changes=lambda: False,
         ),
         app_state=SimpleNamespace(get_marked_files=lambda: []),
         preview_load_controller=preview_controller,

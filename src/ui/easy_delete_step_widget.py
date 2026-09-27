@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.capture_order import CaptureOrderKey, filename_order_key
 from ui.workflow_review_components import (
     EASY_DELETE_SHORTCUTS,
     WorkflowDecisionCard,
@@ -83,6 +84,7 @@ class EasyDeleteStepWidget(QWidget):
         self._list_row_by_path: dict[str, int] = {}
         self._updating_category_toggles = False
         self._is_marked_func: Callable[[str], bool] | None = None
+        self._capture_order_key: Callable[[str], CaptureOrderKey] = filename_order_key
         self._has_any_marked_func: Callable[[], bool] | None = None
         self._pending_keep_by_review: dict[str, dict[str, bool]] = {}
         self._confirmed_reviews: set[str] = set()
@@ -114,6 +116,32 @@ class EasyDeleteStepWidget(QWidget):
                 "skip": self._on_skip,
             },
         )
+
+    def set_capture_order_key(self, key: Callable[[str], CaptureOrderKey]) -> None:
+        """Order media chronologically using the application's shared dates."""
+        self._capture_order_key = key
+
+    def refresh_capture_order(self) -> None:
+        """Re-sort each category after capture dates change, keeping decisions."""
+        if not self._flagged_paths:
+            return
+        reordered = self._build_ordered_paths(self._results)
+        if reordered == self._flagged_paths:
+            return
+        current_path = (
+            self._flagged_paths[self._current_index]
+            if 0 <= self._current_index < len(self._flagged_paths)
+            else None
+        )
+        self._flagged_paths = reordered
+        self._populate_list()
+        if current_path not in self._list_row_by_path:
+            return
+        self._current_index = reordered.index(current_path)
+        self._items_list.blockSignals(True)
+        self._items_list.setCurrentRow(self._list_row_by_path[current_path])
+        self._items_list.blockSignals(False)
+        self._refresh_controls()
 
     def set_is_marked_func(self, fn: Callable[[str], bool]) -> None:
         self._is_marked_func = fn
@@ -356,18 +384,24 @@ class EasyDeleteStepWidget(QWidget):
         ordered: list[str] = []
         seen: set = set()
         for category in categories:
-            category_entries = [
-                (path, entry)
-                for path, entry in results.items()
-                if self._entry_category(entry) == category and entry["suggest_delete"]
-            ]
-            for path, entry in category_entries:
+            # Choose each pair's review row in the stable analysis order so a
+            # later capture-date change reorders rows without re-keying the
+            # reviewer's pending decisions to the other side of the pair.
+            category_paths: list[str] = []
+            for path, entry in results.items():
+                if (
+                    self._entry_category(entry) != category
+                    or not entry["suggest_delete"]
+                ):
+                    continue
                 if path in seen:
                     continue
-                ordered.append(path)
+                category_paths.append(path)
                 seen.add(path)
                 if entry.get("pair_path"):
                     seen.add(entry["pair_path"])
+            category_paths.sort(key=self._capture_order_key)
+            ordered.extend(category_paths)
         return ordered
 
     def _build_category_counts(self, results: dict) -> dict[str, int]:

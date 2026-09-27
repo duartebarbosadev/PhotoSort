@@ -58,6 +58,7 @@ from ui.controllers.image_inspection_controller import (
     InspectionImageSpec,
 )
 from core.metadata_processor import MetadataProcessor  # New metadata processor
+from core.capture_order import capture_datetime
 from core.media_utils import is_video_extension
 from core.similarity_utils import cosine_similarity
 from core.app_settings import (
@@ -225,6 +226,9 @@ class MainWindow(QMainWindow):
         self._refresh_cull_shortcut_visibility([])
         self.grouping_step_widget.set_is_marked_func(
             self.app_state.is_marked_for_deletion
+        )
+        self.grouping_step_widget.set_capture_order_key(
+            self.app_state.capture_order_key
         )
         self.grouping_step_widget.set_has_any_marked_func(
             lambda: bool(self.app_state.marked_for_deletion)
@@ -922,7 +926,7 @@ class MainWindow(QMainWindow):
         organize_removed_folders: list[str] = []
         if (
             source == "organize"
-            and self.grouping_step_widget.has_unsaved_grouping_edits()
+            and self.grouping_step_widget.has_pending_grouping_changes()
         ):
             organize_actions = self.grouping_step_widget.pending_grouping_action_lines()
             (
@@ -1022,7 +1026,7 @@ class MainWindow(QMainWindow):
         )
 
         if request.organize_resolution == "discard":
-            self.grouping_step_widget.discard_unsaved_grouping_edits()
+            self._discard_organize_changes(regenerate_preview=destination is None)
         if request.rotation_resolution == "discard" and self.fix_rotation_step_widget:
             self.fix_rotation_step_widget.discard_pending_rotations()
 
@@ -1041,6 +1045,19 @@ class MainWindow(QMainWindow):
             self.fix_rotation_step_widget.apply_pending_rotations()
             return
         self._finish_workflow_transition(request)
+
+    def _discard_organize_changes(self, *, regenerate_preview: bool = True) -> None:
+        if not self.grouping_step_widget.discard_pending_grouping_changes():
+            return
+        # The discarded plan came from a regrouping mode, so Organize must show
+        # the Current structure again. When leaving Organize, only drop the stale
+        # preview: opening Organize regenerates it, and starting a worker now
+        # would keep expensive grouping work running in the background.
+        self.app_state.selected_grouping_mode = "current"
+        if regenerate_preview:
+            self.app_controller.refresh_grouping_preview()
+        else:
+            self.app_controller.invalidate_grouping_preview()
 
     def _request_workflow_resolution(self) -> None:
         """Resolve pending work without leaving the current workflow."""
@@ -1285,6 +1302,45 @@ class MainWindow(QMainWindow):
     def _active_cluster_results(self) -> dict[str, int]:
         return self.app_state.cluster_results_for_workflow()
 
+    def _current_capture_order(self) -> tuple:
+        """Signature of the chronological order, including each file's date.
+
+        Keys carry the resolved timestamp, so a metadata date change is
+        detected even when it leaves the relative order untouched (for
+        example, it moves a photo to another month in the Date view).
+        """
+        return tuple(
+            sorted(
+                self.app_state.capture_order_key(record["path"])
+                for record in self.app_state.image_files_data
+            )
+        )
+
+    def refresh_capture_order(self) -> None:
+        """Re-sort every workflow once metadata capture dates are known.
+
+        Views are first populated with file timestamps from the scan; EXIF
+        and video creation dates arrive later from the background metadata
+        load and can change the chronological order.
+        """
+        signature = self._current_capture_order()
+        if signature == getattr(self, "_capture_order_signature", None):
+            return
+        self._capture_order_signature = signature
+        for widget in (
+            self.grouping_step_widget,
+            self.easy_delete_step_widget,
+            self.fix_rotation_step_widget,
+            self.pick_best_step_widget,
+        ):
+            if widget is not None:
+                widget.refresh_capture_order()
+        if signature == getattr(self, "_populated_capture_order", None):
+            return
+        self.mark_cull_model_dirty()
+        if self.app_state.workflow_step == "cull":
+            self._ensure_cull_model_ready()
+
     def _ensure_cull_model_ready(self) -> None:
         if self._cull_model_dirty and self.app_state.image_files_data:
             self._rebuild_model_view()
@@ -1351,16 +1407,17 @@ class MainWindow(QMainWindow):
                 no_cluster_item.setEditable(False)
                 root_item.appendRow(no_cluster_item)
 
+            undated_key = (1, float("inf"), "", "")
+
             def earliest_date_for_files(files):
-                earliest = datetime_obj.max
-                for fd in files:
-                    path = fd.get("path") if isinstance(fd, dict) else None
-                    if not path:
-                        continue
-                    date_val = self.app_state.date_cache.get(path)
-                    if date_val and date_val < earliest:
-                        earliest = date_val
-                return earliest
+                return min(
+                    (
+                        self.app_state.capture_order_key(fd["path"])
+                        for fd in files
+                        if isinstance(fd, dict) and fd.get("path")
+                    ),
+                    default=undated_key,
+                )
 
             def build_cluster_item(cluster_id: int):
                 cluster_item = QStandardItem(f"Group {cluster_id}")
@@ -1517,6 +1574,7 @@ class MainWindow(QMainWindow):
                         active_view.expand(idx_to_expand)
 
         self._cull_model_dirty = False
+        self._populated_capture_order = self._current_capture_order()
         self._model_population_processed = 0
         self._model_population_total = 0
         thumbnail_loader = getattr(self, "thumbnail_loader", None)
@@ -1727,6 +1785,7 @@ class MainWindow(QMainWindow):
             from ui.easy_delete_step_widget import EasyDeleteStepWidget
 
             widget = EasyDeleteStepWidget(self)
+            widget.set_capture_order_key(self.app_state.capture_order_key)
             widget.set_is_marked_func(self.app_state.is_marked_for_deletion)
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
@@ -1758,6 +1817,7 @@ class MainWindow(QMainWindow):
             from ui.fix_rotation_step_widget import FixRotationStepWidget
 
             widget = FixRotationStepWidget(self)
+            widget.set_capture_order_key(self.app_state.capture_order_key)
             widget.proceed_requested.connect(
                 lambda: self._request_next_visible_workflow_transition("fix_rotation")
             )
@@ -1781,6 +1841,7 @@ class MainWindow(QMainWindow):
             from ui.pick_best_step_widget import PickBestStepWidget
 
             widget = PickBestStepWidget(self)
+            widget.set_capture_order_key(self.app_state.capture_order_key)
             widget.set_is_marked_func(self.app_state.is_marked_for_deletion)
             widget.set_has_any_marked_func(
                 lambda: bool(self.app_state.marked_for_deletion)
@@ -2236,39 +2297,21 @@ class MainWindow(QMainWindow):
                 parent_item.appendRow(folder_item)
 
                 for file_data in sorted(
-                    files_by_folder[folder_path],
-                    key=lambda fd: os.path.basename(fd["path"]),
+                    files_by_folder[folder_path], key=self._capture_order_key_for_record
                 ):
                     image_item = self._create_standard_item(file_data)
                     folder_item.appendRow(image_item)
                     self._note_model_item_populated()
         else:  # Not showing folders, or grouping by similarity (which creates its own top-level groups)
-
-            def image_sort_key_func(fd):
-                return os.path.basename(fd["path"])
-
-            parent_data = parent_item.data(Qt.ItemDataRole.UserRole)
-            is_cluster_header = isinstance(parent_data, str) and parent_data.startswith(
-                "cluster_header_"
-            )
-
-            if self.group_by_similarity_mode and is_cluster_header:
-                current_cluster_sort_method = self.cluster_sort_combo.currentText()
-                if (
-                    current_cluster_sort_method == "Time"
-                    or current_cluster_sort_method == "Similarity then Time"
-                ):
-
-                    def image_sort_key_func(fd):
-                        return (
-                            self.app_state.date_cache.get(fd["path"], datetime_obj.max),
-                            os.path.basename(fd["path"]),
-                        )
-
-            for file_data in sorted(image_data_list, key=image_sort_key_func):
+            for file_data in sorted(
+                image_data_list, key=self._capture_order_key_for_record
+            ):
                 image_item = self._create_standard_item(file_data)
                 parent_item.appendRow(image_item)
                 self._note_model_item_populated()
+
+    def _capture_order_key_for_record(self, file_data: dict[str, Any]):
+        return self.app_state.capture_order_key(file_data["path"])
 
     def _apply_rating(self, file_path: str, rating: int):
         """Handle a viewer rating request through the shared background worker."""
@@ -2647,7 +2690,7 @@ class MainWindow(QMainWindow):
 
         # Compare the in-memory signature before building the worker-inventoried
         # action preview. No source-tree walk occurs on the UI thread.
-        has_grouping_edits = self.grouping_step_widget.has_unsaved_grouping_edits()
+        has_grouping_edits = self.grouping_step_widget.has_pending_grouping_changes()
         grouping_action_lines = (
             self.grouping_step_widget.pending_grouping_action_lines()
             if has_grouping_edits
@@ -3931,7 +3974,9 @@ class MainWindow(QMainWindow):
 
         for file_data in image_data_list:
             file_path = file_data["path"]
-            img_date: datetime_obj | None = self.app_state.date_cache.get(file_path)
+            img_date: datetime_obj | None = capture_datetime(
+                file_path, self.app_state.date_cache, file_data
+            )
             year = img_date.year if img_date else unknown_date_key
             month = (
                 img_date.month if img_date else 1
@@ -3974,10 +4019,7 @@ class MainWindow(QMainWindow):
 
                 files_in_group_data = sorted(
                     images_by_year_month[year_val][month_val],
-                    key=lambda fd: (
-                        self.app_state.date_cache.get(fd["path"]) or datetime_obj.min,
-                        os.path.basename(fd["path"]),
-                    ),
+                    key=self._capture_order_key_for_record,
                 )
                 for file_data in files_in_group_data:
                     image_item = self._create_standard_item(file_data)
@@ -4157,16 +4199,10 @@ class MainWindow(QMainWindow):
         if not images_to_consider_paths:
             return False
 
-        # Sort the paths to match display order
-        def sort_key(path):
-            date = self.app_state.date_cache.get(path, datetime_obj.max)
-            basename = os.path.basename(path)
-            sort_mode = self.cluster_sort_combo.currentText()
-            if sort_mode == "Time" or sort_mode == "Similarity then Time":
-                return (date, basename)
-            return basename
-
-        sorted_paths = sorted(images_to_consider_paths, key=sort_key)
+        # Match the display order of the group.
+        sorted_paths = self.app_state.sort_paths_by_capture_date(
+            images_to_consider_paths
+        )
 
         if 0 <= target_index < len(sorted_paths):
             target_path = sorted_paths[target_index]
