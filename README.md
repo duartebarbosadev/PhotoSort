@@ -43,6 +43,9 @@ ratings and analysis only work with photos.
 There are five steps along the bottom of the window. Use whichever ones you
 need. You don't have to go through them all or follow a particular order.
 
+Reopen a folder to restore its last workflow, view settings, scroll position,
+and selected photos. Each folder and workflow is remembered separately.
+
 | Step | What it's for |
 | --- | --- |
 | **Organize** | Arrange photos into folders. |

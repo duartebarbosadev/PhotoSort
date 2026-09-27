@@ -94,6 +94,29 @@ class FixRotationStepWidget(QWidget):
             },
         )
 
+    def capture_view_bookmark(self) -> dict | None:
+        from ui.helpers.view_bookmarks import scroll_state
+
+        if self._shown_suggestions is None:
+            return None
+        path = (
+            self._ordered_paths[self._current_index]
+            if 0 <= self._current_index < len(self._ordered_paths)
+            else None
+        )
+        return {"path": path, "scroll": scroll_state(self._items_list)}
+
+    def restore_view_bookmark(self, state: dict) -> bool:
+        from ui.helpers.view_bookmarks import restore_scroll
+
+        if self._shown_suggestions is None:
+            return False
+        path = state.get("path")
+        if isinstance(path, str):
+            self.focus_image(path)
+        restore_scroll(self._items_list, state.get("scroll"))
+        return True
+
     def set_image_pipeline(self, pipeline) -> None:
         self._image_pipeline = pipeline
 

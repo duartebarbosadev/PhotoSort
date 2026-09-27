@@ -14,6 +14,22 @@ def _state() -> AppState:
         return AppState()
 
 
+def test_source_mutation_refreshes_bookmark_identity(tmp_path):
+    from core.folder_view_store import bookmark_file_identity
+
+    photo = tmp_path / "rotate.jpg"
+    photo.write_bytes(b"before")
+    state = _state()
+    state.image_files_data = [
+        {"path": str(photo), "bookmark_identity": bookmark_file_identity(photo.stat())}
+    ]
+    photo.write_bytes(b"after rotation")
+    state.invalidate_similarity_for_paths([str(photo)], invalidate_disk_cache=False)
+    assert state.get_file_data_by_path(str(photo))[
+        "bookmark_identity"
+    ] == bookmark_file_identity(photo.stat())
+
+
 def test_scan_batches_maintain_media_summary_and_path_index():
     state = _state()
     state.extend_file_data(

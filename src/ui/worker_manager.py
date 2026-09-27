@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
-from PyQt6.QtCore import QObject, pyqtSignal, QThread
+from PyQt6.QtCore import QObject, pyqtSignal, QThread, QTimer
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, TYPE_CHECKING
 from collections.abc import Callable, Sequence
 
@@ -105,6 +106,7 @@ class WorkerManager(QObject):
     # Rating Writer Signals
     rating_write_progress = pyqtSignal(int, int, str)  # current, total, filename
     rating_written = pyqtSignal(str, int, bool)  # path, rating, success
+    rating_source_file_updated = pyqtSignal(str, object)
     rating_write_finished = pyqtSignal(int, int)  # successful_count, failed_count
     rating_write_error = pyqtSignal(str)
 
@@ -205,6 +207,44 @@ class WorkerManager(QObject):
         self.update_check_worker: UpdateCheckWorker | None = None
         self._worker_generations: dict[str, int] = {}
         self._ui_results = UiResultDispatcher(self)
+        self._folder_view_executor = None
+        self._folder_view_jobs = []
+        self._folder_view_timer = QTimer(self)
+        self._folder_view_timer.setInterval(25)
+        self._folder_view_timer.timeout.connect(self._deliver_folder_view_jobs)
+
+    def submit_folder_view_io(self, operation, callback=None) -> None:
+        """Serialize small bookmark reads/writes outside the UI thread.
+
+        Writes finish even when analysis is cancelled. They participate in the
+        existing asynchronous close drain, without counting as active analysis.
+        """
+        if self._folder_view_executor is None:
+            self._folder_view_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="folder-view"
+            )
+        future = self._folder_view_executor.submit(operation)
+        self._folder_view_jobs.append((future, callback))
+        self._folder_view_timer.start()
+
+    def _deliver_folder_view_jobs(self) -> None:
+        while self._folder_view_jobs and self._folder_view_jobs[0][0].done():
+            future, callback = self._folder_view_jobs.pop(0)
+            try:
+                result = future.result()
+            except Exception:
+                logger.exception("Folder view persistence failed")
+                result = {}
+            if callback is not None:
+                self._ui_results.dispatch(lambda cb=callback, value=result: cb(value))
+        if not self._folder_view_jobs:
+            self._folder_view_timer.stop()
+            executor, self._folder_view_executor = self._folder_view_executor, None
+            if executor is not None:
+                executor.shutdown(wait=False)
+
+    def has_pending_folder_view_io(self) -> bool:
+        return bool(self._folder_view_jobs)
 
     def has_pending_ui_results(self) -> bool:
         return self._ui_results.has_pending()
@@ -1068,6 +1108,9 @@ class WorkerManager(QObject):
         # Connect signals
         self.rating_writer_worker.progress.connect(self.rating_write_progress.emit)
         self.rating_writer_worker.rating_written.connect(self.rating_written.emit)
+        self.rating_writer_worker.source_file_updated.connect(
+            self.rating_source_file_updated.emit
+        )
         self.rating_writer_worker.finished.connect(self.rating_write_finished.emit)
         self.rating_writer_worker.error.connect(self.rating_write_error.emit)
         self.rating_writer_worker.finished.connect(self.rating_writer_thread.quit)

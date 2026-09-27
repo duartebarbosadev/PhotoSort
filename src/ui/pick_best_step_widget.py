@@ -256,6 +256,79 @@ class PickBestStepWidget(QWidget):
         self._connect_signals()
         self._create_shortcuts()
 
+    def capture_view_bookmark(self) -> dict | None:
+        from ui.helpers.view_bookmarks import scroll_state
+
+        if self._shown_results is None:
+            return None
+        path = (
+            self._subset_paths[self._focused_slot_index]
+            if 0 <= self._focused_slot_index < len(self._subset_paths)
+            else None
+        )
+        return {
+            "path": path,
+            "comparison": list(self._subset_paths),
+            "info": self._info_visible,
+            "focus": self._focus_mode,
+            "scroll": scroll_state(self._items_list),
+        }
+
+    def restore_view_bookmark(self, state: dict) -> bool:
+        from ui.helpers.view_bookmarks import restore_scroll, string_paths
+
+        if self._shown_results is None:
+            return False
+        path = state.get("path")
+        if isinstance(path, str):
+            self.focus_image(path)
+        comparison = string_paths(state.get("comparison"))
+        if self._tournaments and len(comparison) == 2:
+            tournament = self._current_tournament()
+            if all(p in tournament.ordered_paths for p in comparison):
+                match = next(
+                    (
+                        i
+                        for i, round_ in enumerate(tournament.rounds)
+                        if set(round_.groups[0].paths) == set(comparison)
+                    ),
+                    None,
+                )
+                if match is not None:
+                    tournament.current_round = match
+                    tournament.current_group = 0
+                    self._show_current_group()
+                elif not any(
+                    group.confirmed
+                    for round_ in tournament.rounds
+                    for group in round_.groups
+                ):
+                    # Reopen the displayed pair as a fresh review. No saved Keep/Trash
+                    # choices or confirmations are replayed after Apply/Discard.
+                    tournament.ordered_paths = comparison + [
+                        p for p in tournament.ordered_paths if p not in comparison
+                    ]
+                    tournament.rounds = [
+                        self._make_round(comparison, tournament.payload)
+                    ]
+                    tournament.current_round = tournament.current_group = 0
+                    tournament.next_path_index = 2
+                    tournament.finalized = False
+                    self._load_cluster(self._cluster_index)
+                if path in self._subset_paths:
+                    self._focused_slot_index = self._subset_paths.index(path)
+                    self._update_focus_state()
+        if type(state.get("info")) is bool and self._info_visible != state["info"]:
+            self._toggle_info()
+        if (
+            self._subset_paths
+            and type(state.get("focus")) is bool
+            and self._focus_mode != state["focus"]
+        ):
+            self._toggle_focus_mode()
+        restore_scroll(self._items_list, state.get("scroll"))
+        return True
+
     def has_unconfirmed_changes(self) -> bool:
         if not self._tournaments:
             return False

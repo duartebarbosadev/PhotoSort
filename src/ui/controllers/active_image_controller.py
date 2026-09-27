@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from typing import Protocol
 
 
@@ -28,6 +29,16 @@ class ActiveImageController:
         self._context = context
         self._syncing = False
 
+    @contextmanager
+    def restoring_view(self):
+        """Suppress intermediate selections while a saved view is being rebuilt."""
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            yield
+        finally:
+            self._syncing = was_syncing
+
     @property
     def active_path(self) -> str | None:
         return getattr(self._context.app_state, "focused_image_path", None)
@@ -38,6 +49,14 @@ class ActiveImageController:
         if self._syncing:
             return False
         active_workflow = getattr(self._context.app_state, "workflow_step", None)
+        resume = getattr(self._context, "folder_resume_controller", None)
+        if (
+            source in self.WORKFLOW_STEPS
+            and source != active_workflow
+            and resume is not None
+            and resume.remembers(active_workflow)
+        ):
+            return False
         if source != active_workflow:
             adapter = self._context.get_active_image_adapter(active_workflow)
             has_changes = getattr(adapter, "has_unconfirmed_changes", None)
@@ -60,12 +79,22 @@ class ActiveImageController:
         self._syncing = True
         try:
             for workflow_step in self.WORKFLOW_STEPS:
+                resume = getattr(self._context, "folder_resume_controller", None)
+                if (
+                    resume is not None
+                    and resume.remembers(workflow_step)
+                    and workflow_step != self._context.app_state.workflow_step
+                ):
+                    continue
                 if workflow_step != exclude:
                     self._sync_adapter(workflow_step, path)
         finally:
             self._syncing = False
 
     def sync_workflow(self, workflow_step: str) -> bool:
+        resume = getattr(self._context, "folder_resume_controller", None)
+        if resume is not None and resume.restore_workflow(workflow_step):
+            return True
         path = self.active_path
         if not path or self._syncing:
             return False

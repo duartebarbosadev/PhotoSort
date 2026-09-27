@@ -259,6 +259,10 @@ class MainWindow(QMainWindow):
             f"MainWindow initialization complete in {time.perf_counter() - init_start_time:.2f}s."
         )
 
+        from ui.controllers.folder_resume_controller import FolderResumeController
+
+        self.folder_resume_controller = FolderResumeController(self)
+
         # Load initial folder if provided
         if self.initial_folder and os.path.isdir(self.initial_folder):
             QTimer.singleShot(
@@ -1608,6 +1612,115 @@ class MainWindow(QMainWindow):
             return self
         return None
 
+    def capture_view_bookmark(self) -> dict:
+        """Cull presentation only; file decisions belong to the existing guards."""
+        from ui.helpers.view_bookmarks import scroll_state
+
+        view = self._get_active_file_view()
+        current = view.currentIndex().data(Qt.ItemDataRole.UserRole)
+        path = current.get("path") if isinstance(current, dict) else None
+        selected = self._get_selected_file_paths_from_view()
+        if self.app_state.focused_image_path in selected:
+            path = self.app_state.focused_image_path
+        return {
+            "path": path,
+            "selected": selected,
+            "scroll": scroll_state(view),
+            "mode": self.left_panel.current_view_mode,
+            "rating": self.filter_combo.currentText(),
+            "cluster": self.cluster_filter_combo.currentText(),
+            "sort": self.cluster_sort_combo.currentText(),
+            "search": self.left_panel.search_input.text(),
+            "folders": self.show_folders_mode,
+            "similarity": self.group_by_similarity_mode,
+            "viewer": self.advanced_image_viewer._view_mode,
+        }
+
+    def prepare_view_bookmark(self, state: dict) -> None:
+        for combo, key in (
+            (self.filter_combo, "rating"),
+            (self.cluster_filter_combo, "cluster"),
+            (self.cluster_sort_combo, "sort"),
+        ):
+            value = state.get(key)
+            if isinstance(value, str) and combo.findText(value) >= 0:
+                combo.blockSignals(True)
+                combo.setCurrentText(value)
+                combo.blockSignals(False)
+        search = state.get("search")
+        if isinstance(search, str):
+            self.left_panel.search_input.setText(search)
+        for key, attribute in (
+            ("folders", "show_folders_mode"),
+            ("similarity", "group_by_similarity_mode"),
+        ):
+            if type(state.get(key)) is bool:
+                setattr(self, attribute, state[key])
+        for action, checked in (
+            (self.menu_manager.toggle_folder_view_action, self.show_folders_mode),
+            (
+                self.menu_manager.group_by_similarity_action,
+                self.group_by_similarity_mode,
+            ),
+        ):
+            action.blockSignals(True)
+            action.setChecked(checked)
+            action.blockSignals(False)
+        self.menu_manager.sync_rating_menu_selection(self.filter_combo.currentText())
+        self.menu_manager.sync_cluster_filter_selection(
+            self.cluster_filter_combo.currentText()
+        )
+        self.menu_manager.sync_cluster_sort_selection(
+            self.cluster_sort_combo.currentText()
+        )
+        self.menu_manager.set_cluster_sort_menu_visible(self.group_by_similarity_mode)
+        self.menu_manager.set_cluster_sort_menu_enabled(self.group_by_similarity_mode)
+        self.cluster_sort_combo.setEnabled(self.group_by_similarity_mode)
+        mode = state.get("mode", "list")
+        if mode not in ("list", "icons", "grid", "date"):
+            mode = "list"
+        getattr(self.left_panel, "set_view_mode_" + mode)()
+
+    def restore_view_bookmark(self, state: dict) -> bool:
+        from ui.helpers.view_bookmarks import restore_scroll, string_paths
+
+        selected = string_paths(state.get("selected"))
+        path = state.get("path")
+        indices = self._find_proxy_indices_for_paths(
+            selected + ([path] if isinstance(path, str) else [])
+        )
+        view = self._get_active_file_view()
+        selection = QItemSelection()
+        for selected_path in selected:
+            index = indices.get(selected_path, QModelIndex())
+            if index.isValid():
+                selection.select(index, index)
+                parent = index.parent()
+                while parent.isValid() and isinstance(view, QTreeView):
+                    view.expand(parent)
+                    parent = parent.parent()
+        if not selection.isEmpty():
+            model = view.selectionModel()
+            model.select(selection, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+            index = indices.get(path, selection.indexes()[0])
+            model.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
+            self._handle_file_selection_changed()
+        elif isinstance(path, str):
+            self.focus_image(path)
+        viewer_mode = state.get("viewer")
+        if viewer_mode in ("single", "side_by_side", "focused"):
+            focused_index = next(
+                (
+                    i
+                    for i, viewer in enumerate(self.advanced_image_viewer.image_viewers)
+                    if viewer.get_file_path() == path
+                ),
+                -1,
+            )
+            self.advanced_image_viewer._set_view_mode(viewer_mode, focused_index)
+        restore_scroll(view, state.get("scroll"))
+        return True
+
     def focus_image(self, file_path: str) -> bool:
         """Focus a Cull row without replacing an existing local multi-selection."""
 
@@ -1652,6 +1765,9 @@ class MainWindow(QMainWindow):
     def _set_workflow_step(self, workflow_step: str) -> None:
         """Update the shared workflow state and log real view transitions once."""
         previous_step = getattr(self.app_state, "workflow_step", "")
+        resume = getattr(self, "folder_resume_controller", None)
+        if resume is not None and previous_step != workflow_step:
+            resume.before_workflow_change(workflow_step)
         self.app_state.workflow_step = workflow_step
         shortcut_strip = getattr(self, "workflow_shortcut_strips", {}).get(
             workflow_step
@@ -1764,12 +1880,17 @@ class MainWindow(QMainWindow):
         for action in self.menu_manager.image_focus_actions.values():
             action.setEnabled(True)
         self.workflow_stack.setCurrentWidget(self.cull_page)
+        resume = getattr(self, "folder_resume_controller", None)
+        if resume is not None:
+            resume.prepare_workflow("cull")
         self._ensure_cull_model_ready()
         if (
             self.group_by_similarity_mode
             and not self.app_state.cull_cluster_results
             and not self.app_controller.is_cull_grouping_declined()
         ):
+            if resume is not None:
+                resume.data_loading("cull")
             self.app_controller.start_cull_similarity_workflow()
         elif not (
             self.worker_manager.is_cull_grouping_running()
@@ -1778,6 +1899,13 @@ class MainWindow(QMainWindow):
             self.show_cull_content_without_grouping()
         self.schedule_visible_thumbnail_load()
         self.update_workflow_navigation()
+        resume = getattr(self, "folder_resume_controller", None)
+        if resume is not None and (
+            not self.group_by_similarity_mode
+            or self.app_state.cull_cluster_results
+            or self.app_controller.is_cull_grouping_declined()
+        ):
+            resume.data_ready("cull")
         self.active_image_controller.sync_workflow("cull")
 
     def _ensure_easy_delete_widget(self):
@@ -2629,7 +2757,7 @@ class MainWindow(QMainWindow):
 
         return QModelIndex()  # No visible image item found in this subtree
 
-    def _has_active_background_work(self) -> bool:
+    def _has_active_background_work(self, *, include_bookmarks: bool = False) -> bool:
         """Keep owners alive until both managed workers and preview pools drain."""
         workers_active = getattr(
             self.worker_manager,
@@ -2644,6 +2772,12 @@ class MainWindow(QMainWindow):
             workers_active()
             or getattr(previews, "is_active", lambda: False)()
             or pending_results()
+            or (
+                include_bookmarks
+                and getattr(
+                    self.worker_manager, "has_pending_folder_view_io", lambda: False
+                )()
+            )
         )
 
     @override
@@ -2651,7 +2785,7 @@ class MainWindow(QMainWindow):
         close_start = time.perf_counter()
         logger.info("Application close requested.")
         if getattr(self, "_shutdown_in_progress", False):
-            if MainWindow._has_active_background_work(self):
+            if MainWindow._has_active_background_work(self, include_bookmarks=True):
                 event.ignore()
                 return
             self._shutdown_in_progress = False
@@ -2744,6 +2878,9 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
+        resume = getattr(self, "folder_resume_controller", None)
+        if resume is not None:
+            resume.prepare_close()
         self._close_after_grouping_save = False
         logger.info(
             "Requesting all workers stop on application close (preflight %.3fs).",
@@ -2759,7 +2896,7 @@ class MainWindow(QMainWindow):
             reset_thumbnails()
         self.preview_load_controller.shutdown()
         self.worker_manager.request_stop_all_workers()
-        if MainWindow._has_active_background_work(self):
+        if MainWindow._has_active_background_work(self, include_bookmarks=True):
             self._shutdown_in_progress = True
             self.statusBar().showMessage("Stopping background work…", 0)
             QTimer.singleShot(25, self._finish_close_after_workers)
@@ -2772,7 +2909,7 @@ class MainWindow(QMainWindow):
     def _finish_close_after_workers(self) -> None:
         """Retry closing through Qt's event loop once worker threads have exited."""
 
-        if MainWindow._has_active_background_work(self):
+        if MainWindow._has_active_background_work(self, include_bookmarks=True):
             QTimer.singleShot(25, self._finish_close_after_workers)
             return
         self.close()
