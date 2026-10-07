@@ -103,7 +103,7 @@ impl PhotoSortApp {
         if let Some(plan) = self.plan.take() {
             self.runtime.cancel_analysis();
             self.analysis_run = None;
-            let Some(root) = self.root.clone() else {
+            let Some(_) = &self.root else {
                 self.set_review_plan(Some(plan));
                 self.error = Some("Open a library before applying a file plan".into());
                 return;
@@ -116,10 +116,14 @@ impl PhotoSortApp {
                     views.capture_catalog_fingerprints(catalog, &self.index);
                 }
             }
-            let context = crate::core::operations::recovery::Context::capture(
-                root,
+            let Some(catalog) = &self.catalog else {
+                self.set_review_plan(Some(plan));
+                self.error = Some("Wait for library discovery before applying changes".into());
+                return;
+            };
+            let context = crate::core::operations::recovery::Context::capture_catalog(
                 self.rotation_plan,
-                &self.media,
+                catalog,
                 &self.index,
                 self.session_intent(),
                 views.clone(),

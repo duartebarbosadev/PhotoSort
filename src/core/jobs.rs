@@ -570,7 +570,7 @@ impl Runtime {
                                     |batch| io_pub.send(epoch, Event::Batch(batch)),
                                 )?;
                                 let mut session = Session::load(&catalog.root)?;
-                                session.reconcile(&catalog.media);
+                                session.reconcile_catalog(&catalog);
                                 let mut views = super::views::Saved::load(&catalog.root)
                                     .unwrap_or_else(|e| {
                                         io_pub.send(

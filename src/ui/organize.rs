@@ -11,6 +11,7 @@ pub(super) struct Editor {
     desktop_enabled: bool,
     desktop_pending: Option<crate::core::desktop::Request>,
     reset_request: Option<Selection>,
+    trash_request: Option<(Vec<MediaId>, bool)>,
     reset_enabled: bool,
     names: HashMap<MediaId, String>,
     renaming: Option<(MediaId, String)>,
@@ -71,6 +72,33 @@ fn folder_title(path: &str) -> &str {
     }
 }
 impl Editor {
+    fn trash_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        selection: Selection,
+        decisions: &HashMap<MediaId, Decision>,
+    ) {
+        let Ok(files) = self.draft.selection_files(&selection) else {
+            return;
+        };
+        let all_marked = !files.is_empty()
+            && files
+                .iter()
+                .all(|id| decisions.get(id).is_some_and(|d| d.rejected));
+        let label = if all_marked {
+            "Unmark from Trash"
+        } else {
+            "Mark for Trash"
+        };
+        if ui.add_enabled(!files.is_empty(), egui::Button::new(label))
+            .on_hover_text("Mark the represented files, including files in subfolders. Marks are shared across steps. Close this editor and use Review changes to apply them.")
+            .clicked() {
+            let mut files: Vec<_> = files.into_iter().collect();
+            files.sort_by_key(|id| id.0);
+            self.trash_request = Some((files, !all_marked));
+            ui.close();
+        }
+    }
     fn file_locations(&self, row: &PhotoRow) -> desktop::Locations {
         let name = self
             .names
@@ -396,16 +424,26 @@ impl Editor {
         }
         command
     }
-    fn photos(&mut self, ui: &mut egui::Ui, height: f32) -> Option<Command> {
+    fn photos(
+        &mut self,
+        ui: &mut egui::Ui,
+        height: f32,
+        decisions: &HashMap<MediaId, Decision>,
+    ) -> Option<Command> {
         // Rendered once per frame, either in a column or the compact tab.
         // Global scope preserves egui state when that parent changes.
         ui.scope_builder(
             egui::UiBuilder::new().id(("organize_file_panel", &self.catalog.root)),
-            |ui| self.photo_contents(ui, height),
+            |ui| self.photo_contents(ui, height, decisions),
         )
         .inner
     }
-    fn photo_contents(&mut self, ui: &mut egui::Ui, height: f32) -> Option<Command> {
+    fn photo_contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        height: f32,
+        decisions: &HashMap<MediaId, Decision>,
+    ) -> Option<Command> {
         let mut command = None;
         ui.strong("Files · before / after");
         ui.horizontal(|ui| {
@@ -447,7 +485,9 @@ impl Editor {
                     let after = self.rows[i].after.clone();
                     let mut selected = self.selected.contains(&id);
                     ui.push_id(id.0, |ui| {
-                        let response = ui.checkbox(&mut selected, &name);
+                        let marked = decisions.get(&id).is_some_and(|d| d.rejected);
+                        let title = if marked { RichText::new(format!("{name} · Trash")).color(RED) } else { RichText::new(&name) };
+                        let response = ui.checkbox(&mut selected, title);
                         if response.double_clicked() { self.start_rename(id); }
                         if response.changed() {
                             if selected { self.selected.insert(id); }
@@ -455,6 +495,9 @@ impl Editor {
                         }
                         let response = response.interact(Sense::click_and_drag());
                         response.context_menu(|ui| {
+                            let files = if self.selected.contains(&id) { self.selected.clone() } else { HashSet::from([id]) };
+                            self.trash_menu(ui, Selection { files, ..Default::default() }, decisions);
+                            ui.separator();
                             if ui.add_enabled(self.reset_enabled, egui::Button::new("Reset file destinations")).on_hover_text("Restore the initial grouping for the clicked file, or the selected files when it belongs to the selection. File names stay unchanged.").clicked() {
                                 self.reset_request = Some(Selection { files: if self.selected.contains(&id) { self.selected.clone() } else { HashSet::from([id]) }, ..Default::default() });
                                 ui.close();
@@ -495,16 +538,26 @@ impl Editor {
         self.scroll_drag(ui, &output);
         command
     }
-    fn structure(&mut self, ui: &mut egui::Ui, height: f32) -> Option<Command> {
+    fn structure(
+        &mut self,
+        ui: &mut egui::Ui,
+        height: f32,
+        decisions: &HashMap<MediaId, Decision>,
+    ) -> Option<Command> {
         // Rendered once per frame, either in a column or the compact tab.
         // Global scope preserves egui state when that parent changes.
         ui.scope_builder(
             egui::UiBuilder::new().id(("organize_folder_panel", &self.catalog.root)),
-            |ui| self.folder_contents(ui, height),
+            |ui| self.folder_contents(ui, height, decisions),
         )
         .inner
     }
-    fn folder_contents(&mut self, ui: &mut egui::Ui, height: f32) -> Option<Command> {
+    fn folder_contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        height: f32,
+        decisions: &HashMap<MediaId, Decision>,
+    ) -> Option<Command> {
         let mut command = None;
         let mut expansion_changed = false;
         ui.strong("Destination folders");
@@ -533,6 +586,9 @@ impl Editor {
                             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("test_folder_rect", &path)), response.rect));
                             response.context_menu(|ui| {
                                 expansion_changed |= tree_controls::menu(ui, &self.tree, i, &mut self.collapsed);
+                                let folders = if self.selected_folders.contains(&path) { self.selected_folders.clone() } else { std::collections::BTreeSet::from([path.clone()]) };
+                                self.trash_menu(ui, Selection { folders, ..Default::default() }, decisions);
+                                ui.separator();
                                 if ui.add_enabled(self.reset_enabled, egui::Button::new("Reset file destinations")).on_hover_text("Restore the initial grouping for files inside this folder, or the selected folders. Folder structure edits and file names stay unchanged.").clicked() {
                                     self.reset_request = Some(Selection { folders: if self.selected_folders.contains(&path) { self.selected_folders.clone() } else { std::collections::BTreeSet::from([path.clone()]) }, ..Default::default() });
                                     ui.close();
@@ -884,6 +940,7 @@ impl PhotoSortApp {
             desktop_enabled: self.desktop_available(),
             desktop_pending: None,
             reset_request: None,
+            trash_request: None,
             reset_enabled: self.organize_grouping_ready() && self.analysis_run.is_none(),
             names: self.file_names.clone(),
             renaming: None,
@@ -938,8 +995,8 @@ impl PhotoSortApp {
             ui.separator();
             if width >= 680.0 {
                 ui.columns(2, |columns| {
-                    command = editor.photos(&mut columns[0], height);
-                    command = editor.structure(&mut columns[1], height).or_else(|| command.take());
+                    command = editor.photos(&mut columns[0], height, &self.decisions);
+                    command = editor.structure(&mut columns[1], height, &self.decisions).or_else(|| command.take());
                 });
             } else {
                 ui.horizontal(|ui| {
@@ -951,14 +1008,14 @@ impl PhotoSortApp {
                         editor.compact_folders = true;
                     }
                 });
-                if editor.compact_folders { command = editor.structure(ui, height); }
-                else { command = editor.photos(ui, height); }
+                if editor.compact_folders { command = editor.structure(ui, height, &self.decisions); }
+                else { command = editor.photos(ui, height, &self.decisions); }
             }
             if let Some(error) = &editor.error { ui.colored_label(RED, error); }
             ui.separator();
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Reset folder layout").clicked() { action = 4; }
-                if ui.button("Cancel edits").clicked() { action = 1; }
+                if ui.button("Cancel edits").on_hover_text("Discard folder and name edits. Shared Trash marks remain staged for review.").clicked() { action = 1; }
                 if ui.button("Keep edits").clicked() { action = 2; }
                 if ui.button("Preview moves >").clicked() { action = 3; }
             });
@@ -987,6 +1044,9 @@ impl PhotoSortApp {
                 }
                 Err(error) => editor.error = Some(error.to_string()),
             }
+        }
+        if let Some((ids, marked)) = editor.trash_request.take() {
+            self.stage_manual(ids, crate::core::decisions::Change::Trash(marked));
         }
         if action != 0 {
             egui::DragAndDrop::clear_payload(ctx);
@@ -1039,6 +1099,136 @@ impl PhotoSortApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn organize_trash_menus_share_state_for_mixed_files_and_folder_descendants() {
+        for width in [640.0, 1440.0] {
+            for folder in [false, true] {
+                let mut app = app();
+                app.index = app
+                    .media
+                    .iter()
+                    .enumerate()
+                    .map(|(i, m)| (m.id, i))
+                    .collect();
+                let document = PathBuf::from("/missing/trip/child/notes.txt");
+                let doc = MediaId::for_path(&document);
+                let catalog = Arc::get_mut(app.catalog.as_mut().unwrap()).unwrap();
+                catalog.inventory.push(document);
+                catalog
+                    .supporting_fingerprints
+                    .insert(doc, Fingerprint::default());
+                catalog.directories = vec!["/missing/trip".into(), "/missing/trip/child".into()];
+                app.stage_manual([MediaId(0)], crate::core::decisions::Change::Trash(true));
+                app.open_organize_editor();
+                let editor = app.organize_editor.as_mut().unwrap();
+                editor.selected = HashSet::from([MediaId(0), doc]);
+                editor.compact_folders = folder;
+                editor.draft.create_folder("", "trip-1").unwrap();
+                editor.draft.move_photos(&[MediaId(2)], "trip-1").unwrap();
+                editor.refresh();
+                let labels = editor.draft.labels().clone();
+                let ctx = egui::Context::default();
+                theme_install(&ctx);
+                ctx.enable_accesskit();
+                let frame = |app: &mut PhotoSortApp, events| {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 850.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| app.organize_dialog(ctx),
+                    )
+                };
+                let click = |pos, button| {
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button,
+                            pressed: true,
+                            modifiers: Default::default(),
+                        },
+                        egui::Event::PointerButton {
+                            pos,
+                            button,
+                            pressed: false,
+                            modifiers: Default::default(),
+                        },
+                    ]
+                };
+                for desired in [true, false] {
+                    for _ in 0..3 {
+                        frame(&mut app, vec![]);
+                    }
+                    let key = if folder {
+                        egui::Id::new(("test_folder_rect", "trip"))
+                    } else {
+                        egui::Id::new(("test_file_rect", 0_u64))
+                    };
+                    let pos = ctx
+                        .data(|d| d.get_temp::<egui::Rect>(key))
+                        .unwrap()
+                        .center();
+                    frame(&mut app, click(pos, egui::PointerButton::Secondary));
+                    let output = frame(&mut app, vec![]);
+                    let update = output.platform_output.accesskit_update.unwrap();
+                    let label = if desired {
+                        "Mark for Trash"
+                    } else {
+                        "Unmark from Trash"
+                    };
+                    let node = update
+                        .nodes
+                        .iter()
+                        .find(|(_, n)| n.label() == Some(label))
+                        .expect(label);
+                    let bounds = node.1.bounds().unwrap();
+                    assert!(
+                        bounds.x0 >= 0.0 && bounds.x1 <= f64::from(width) && bounds.y1 <= 850.0
+                    );
+                    frame(
+                        &mut app,
+                        click(
+                            egui::pos2(
+                                ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                                ((bounds.y0 + bounds.y1) / 2.0) as f32,
+                            ),
+                            egui::PointerButton::Primary,
+                        ),
+                    );
+                    assert_eq!(app.decisions[&MediaId(0)].rejected, desired);
+                    assert_eq!(app.decisions[&doc].rejected, desired);
+                    assert!(
+                        !app.decision(MediaId(2)).rejected,
+                        "prefix-like sibling stays untouched"
+                    );
+                    assert_eq!(app.decision(MediaId(1)).rejected, folder && desired);
+                    assert_eq!(
+                        app.organize_editor.as_ref().unwrap().draft.labels(),
+                        &labels
+                    );
+                }
+                app.stage_manual([doc], crate::core::decisions::Change::Trash(true));
+                let editor = app.organize_editor.take().unwrap();
+                app.finish_organize_edit(editor, 1);
+                assert!(
+                    app.decisions[&doc].rejected,
+                    "layout cancel preserves shared marks"
+                );
+                assert!(app.organize_drafts.is_empty());
+                assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+                assert!(
+                    app.requested.is_empty()
+                        && app.analysis_run.is_none()
+                        && app.metadata_run.is_none()
+                );
+            }
+        }
+    }
     #[test]
     fn folder_expansion_editor_controls_persist_without_repeating_image_work() {
         for width in [640.0, 1440.0] {
@@ -1709,9 +1899,9 @@ mod tests {
                             |ctx| {
                                 egui::CentralPanel::default().show(ctx, |ui| {
                                     if folders {
-                                        editor.structure(ui, 380.0);
+                                        editor.structure(ui, 380.0, &HashMap::new());
                                     } else {
-                                        editor.photos(ui, 380.0);
+                                        editor.photos(ui, 380.0, &HashMap::new());
                                     }
                                 });
                             },
@@ -2077,7 +2267,7 @@ mod tests {
         }
     }
     #[test]
-    fn supporting_editor_selection_survives_worker_reload_and_replacement() {
+    fn organize_trash_supporting_selection_and_marks_survive_worker_reload_and_replacement() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.jpg"), b"photo").unwrap();
         std::fs::write(dir.path().join("notes.txt"), b"document").unwrap();
@@ -2101,6 +2291,9 @@ mod tests {
         app.scan_folder(root.clone());
         settle(&mut app);
         let id = MediaId::for_path(&root.join("notes.txt"));
+        app.stage_manual([id], crate::core::decisions::Change::Trash(true));
+        assert!(app.decisions[&id].rejected);
+        app.save_session();
         app.open_organize_editor();
         let mut editor = app.organize_editor.take().unwrap();
         editor.selected.insert(id);
@@ -2114,6 +2307,8 @@ mod tests {
         reopened.scan_folder(root.clone());
         settle(&mut reopened);
         reopened.open_organize_editor();
+        assert!(reopened.decisions[&id].rejected);
+        assert_eq!(reopened.stats.metadata_reads, 0);
         assert!(
             reopened
                 .organize_editor
@@ -2127,6 +2322,7 @@ mod tests {
         std::fs::remove_file(root.join("notes.txt")).unwrap();
         reopened.scan_folder(root);
         settle(&mut reopened);
+        assert!(!reopened.decisions.contains_key(&id));
         reopened.open_organize_editor();
         assert!(
             !reopened

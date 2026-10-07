@@ -141,3 +141,20 @@ until the existing shared review/apply flow is accepted. Guided reviews retain
 their provisional-choice and confirmation rules.
 
 See diagnostics/comparison-actions-2026-10-07/README.md for validation and scope.
+
+
+### Organize Trash marking — 8 October 2026
+
+File and proposed-folder context menus now share application-level Trash marks,
+including supporting documents and current descendants. Mixed selections mark
+all represented files; fully marked selections unmark them. Documents survive
+save/reload, verified moves and recovery without entering image processing.
+The existing reviewed executor applies the marks. On macOS it now uses the
+`trash` library's native NSFileManager backend after a native check reproduced a
+Finder-script failure. Native saved-plan retry succeeded on a generated document,
+with all seven sample photos unchanged and no remaining operation. Some macOS
+systems may omit Finder's Put Back command with this backend; manual recovery
+from Trash remains available. Non-Unicode macOS paths are rejected rather than
+risking the dependency's percent-encoding ambiguity. Immediate whole-folder Trash
+and preserving an in-progress layout during that mutation remain outstanding.
+See diagnostics/organize-trash-2026-10-08/README.md for scope and evidence.

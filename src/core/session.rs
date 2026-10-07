@@ -88,7 +88,13 @@ impl Session {
         self.fingerprints.extend(other.fingerprints);
     }
     pub fn reconcile(&mut self, media: &[Media]) {
-        let fingerprints: HashMap<_, _> = media.iter().map(|m| (m.id, m.fingerprint)).collect();
+        self.reconcile_files(media, &HashMap::new());
+    }
+    pub fn reconcile_catalog(&mut self, catalog: &super::catalog::Catalog) {
+        self.reconcile_files(&catalog.media, &catalog.supporting_fingerprints);
+    }
+    fn reconcile_files(&mut self, media: &[Media], supporting: &HashMap<MediaId, Fingerprint>) {
+        let mut fingerprints: HashMap<_, _> = media.iter().map(|m| (m.id, m.fingerprint)).collect();
         for groups in [&mut self.manual_groups, &mut self.scene_groups] {
             std::sync::Arc::make_mut(groups).retain(|id| {
                 self.fingerprints
@@ -97,7 +103,16 @@ impl Session {
                     .is_some_and(|(a, b)| a == b)
             });
         }
-        self.decisions.retain(|id, _| {
+        fingerprints.extend(
+            supporting
+                .iter()
+                .map(|(id, fingerprint)| (*id, *fingerprint)),
+        );
+        self.decisions.retain(|id, decision| {
+            if supporting.contains_key(id) {
+                decision.rating = None;
+                decision.turns = 0;
+            }
             self.fingerprints
                 .get(id)
                 .zip(fingerprints.get(id))

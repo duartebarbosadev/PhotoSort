@@ -428,6 +428,14 @@ impl PhotoSortApp {
     fn session_snapshot(&self) -> Session {
         let mut session = self.session_intent();
         session.fingerprints = self.media.iter().map(|m| (m.id, m.fingerprint)).collect();
+        if let Some(catalog) = &self.catalog {
+            session.fingerprints.extend(
+                session
+                    .decisions
+                    .keys()
+                    .filter_map(|id| catalog.supporting_fingerprints.get(id).map(|f| (*id, *f))),
+            );
+        }
         session
     }
     fn save_session(&mut self) {

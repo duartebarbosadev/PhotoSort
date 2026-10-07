@@ -331,23 +331,35 @@ pub fn decisions_plan_with_metadata(
     let mut seen = HashSet::new();
     let mut actions = Vec::new();
     let mut writes: HashMap<PathBuf, (Option<u8>, Option<u8>)> = HashMap::new();
-    for media in &catalog.media {
+    let fingerprints: HashMap<_, _> = catalog
+        .media
+        .iter()
+        .map(|m| (m.id, m.fingerprint))
+        .chain(
+            catalog
+                .supporting_fingerprints
+                .iter()
+                .map(|(id, f)| (*id, *f)),
+        )
+        .collect();
+    for (id, path) in catalog.organize_files() {
         anyhow::ensure!(!cancelled(), "File planning cancelled");
-        let Some(d) = decisions.get(&media.id) else {
+        let Some(d) = decisions.get(&id) else {
             continue;
         };
         if d.is_empty() {
             continue;
         }
         if d.rejected {
-            let files = if companions {
+            let photo = MediaKind::from_path(path).is_some_and(|kind| kind != MediaKind::Video);
+            let files = if companions && photo {
                 index
-                    .get(&media.path.with_extension(""))
+                    .get(&path.with_extension(""))
                     .cloned()
-                    .unwrap_or_else(|| vec![media.path.clone()])
+                    .unwrap_or_else(|| vec![path.to_path_buf()])
             } else {
-                let mut f = vec![media.path.clone()];
-                if let Some(pair) = index.get(&media.path.with_extension("")) {
+                let mut f = vec![path.to_path_buf()];
+                if photo && let Some(pair) = index.get(&path.with_extension("")) {
                     f.extend(
                         pair.iter()
                             .filter(|p| {
@@ -361,7 +373,19 @@ pub fn decisions_plan_with_metadata(
             let files = files
                 .into_iter()
                 .filter(|p| seen.insert(p.clone()))
-                .map(Source::capture)
+                .map(|path| {
+                    let source = Source::capture(path)?;
+                    if let Some(expected) = fingerprints.get(&MediaId::for_path(&source.path)) {
+                        anyhow::ensure!(
+                            source.fingerprint == *expected,
+                            "File changed since discovery: {}",
+                            source.path.display()
+                        );
+                    } else if MediaId::for_path(&source.path) == id {
+                        anyhow::bail!("File identity is unavailable: {}", source.path.display());
+                    }
+                    Ok(source)
+                })
                 .collect::<Result<Vec<_>>>()?;
             if !files.is_empty() {
                 actions.push(Action::Trash { files });
@@ -1116,7 +1140,7 @@ fn apply(
                 source.verify()?;
             }
             for source in files {
-                trash::delete(&source.path).with_context(|| {
+                move_to_trash(&source.path).with_context(|| {
                     format!("Could not move {} to OS Trash", source.path.display())
                 })?;
             }
@@ -1299,4 +1323,58 @@ pub fn content_hash(path: &Path, cancelled: impl Fn() -> bool) -> Result<String>
         hash.update(&buffer[..n]);
     }
     Ok(hash.finalize().to_hex().to_string())
+}
+
+// All workflows use this boundary through the reviewed executor. The macOS
+// crate default launches Finder AppleScript and can wait on automation events.
+fn trash_context() -> trash::TrashContext {
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        let mut context = trash::TrashContext::default();
+        context.set_delete_method(DeleteMethod::NsFileManager);
+        context
+    }
+    #[cfg(not(target_os = "macos"))]
+    trash::TrashContext::default()
+}
+fn move_to_trash(path: &Path) -> Result<()> {
+    // trash 5.2.9 percent-encodes non-UTF-8 bytes before fileURLWithPath. That
+    // can name a different literal %-encoded sibling. Refuse rather than target
+    // a file other than the exact identity verified by the executor.
+    #[cfg(target_os = "macos")]
+    anyhow::ensure!(
+        path.to_str().is_some(),
+        "macOS Trash cannot safely represent this file name; rename it to valid Unicode before retrying"
+    );
+    trash_context().delete(path)?;
+    Ok(())
+}
+#[cfg(all(test, target_os = "macos"))]
+mod macos_trash_tests {
+    use super::*;
+    #[test]
+    fn organize_trash_uses_native_backend_and_rejects_ambiguous_byte_names() {
+        use std::os::unix::ffi::OsStringExt;
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        assert!(matches!(
+            trash_context().delete_method(),
+            DeleteMethod::NsFileManager
+        ));
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp
+            .path()
+            .join(std::ffi::OsString::from_vec(b"unsafe-\xff.txt".to_vec()));
+        let encoded = temp.path().join("unsafe-%FF.txt");
+        // APFS can reject creating this name. The boundary must still reject
+        // its bytes before the dependency can reinterpret the encoded sibling.
+        fs::write(&encoded, b"unrelated sibling").unwrap();
+        assert!(
+            move_to_trash(&source)
+                .unwrap_err()
+                .to_string()
+                .contains("safely represent")
+        );
+        assert_eq!(fs::read(&encoded).unwrap(), b"unrelated sibling");
+    }
 }

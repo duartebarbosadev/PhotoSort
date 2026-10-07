@@ -267,16 +267,9 @@ impl Draft {
             );
         }
     }
-    /// Reset only selected file destinations to the generated proposal. Folder
-    /// selections include their current descendants; explicit directory edits
-    /// and file names are separate intent and are not reset here. No I/O.
-    pub fn reset_destinations(
-        &mut self,
-        selection: &Selection,
-        initial: &HashMap<MediaId, String>,
-        media: &[Media],
-        companions: bool,
-    ) -> Result<()> {
+    /// Resolve files represented by the proposed tree, including descendants.
+    /// Shared by destination reset and review actions; never walks the disk.
+    pub fn selection_files(&self, selection: &Selection) -> Result<HashSet<MediaId>> {
         ensure!(
             selection
                 .files
@@ -303,6 +296,19 @@ impl Draft {
                 })
                 .map(|(id, _)| *id),
         );
+        Ok(files)
+    }
+    /// Reset only selected file destinations to the generated proposal. Folder
+    /// selections include their current descendants; explicit directory edits
+    /// and file names are separate intent and are not reset here. No I/O.
+    pub fn reset_destinations(
+        &mut self,
+        selection: &Selection,
+        initial: &HashMap<MediaId, String>,
+        media: &[Media],
+        companions: bool,
+    ) -> Result<()> {
+        let mut files = self.selection_files(selection)?;
         self.expand_companions(&mut files, media, companions);
         ensure!(
             files.iter().all(|id| initial.contains_key(id)),

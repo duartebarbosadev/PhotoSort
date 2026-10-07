@@ -8,7 +8,19 @@ impl PhotoSortApp {
             return;
         }
         self.pending_bookmark = None;
-        let changed = decisions::stage(&self.media, &self.index, &mut self.decisions, ids, change);
+        let empty = HashMap::new();
+        let supporting = self
+            .catalog
+            .as_ref()
+            .map_or(&empty, |c| &c.supporting_fingerprints);
+        let changed = decisions::stage_files(
+            &self.media,
+            &self.index,
+            supporting,
+            &mut self.decisions,
+            ids,
+            change,
+        );
         if changed.is_empty() {
             return;
         }

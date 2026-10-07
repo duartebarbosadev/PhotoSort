@@ -146,6 +146,32 @@ impl Context {
             views,
         }
     }
+    /// Use the same discovered identities for supporting-file review intent.
+    /// Keep journal size proportional to decisions, without rescanning files.
+    pub fn capture_catalog(
+        rotation_only: bool,
+        catalog: &crate::core::catalog::Catalog,
+        index: &HashMap<MediaId, usize>,
+        session: Session,
+        views: views::Saved,
+    ) -> Self {
+        let mut context = Self::capture(
+            catalog.root.clone(),
+            rotation_only,
+            &catalog.media,
+            index,
+            session,
+            views,
+        );
+        context.session.fingerprints.extend(
+            context
+                .session
+                .decisions
+                .keys()
+                .filter_map(|id| catalog.supporting_fingerprints.get(id).map(|f| (*id, *f))),
+        );
+        context
+    }
     fn persist(&self, report: &Report) -> Result<()> {
         let mut session = self.session.clone();
         if self.rotation_only {
