@@ -22,7 +22,7 @@ source directory. This is a locally signed development build, not a notarized re
 
 The current verified development bundle is
 `.tools/native-vips/PhotoSort Rust.app`. It includes the libvips image backend and
-the latest shared move and compact-video fixes. From the repository root:
+the latest shared move, video and comparison fixes. From the repository root:
 
 ```sh
 open ".tools/native-vips/PhotoSort Rust.app"
@@ -30,7 +30,7 @@ open ".tools/native-vips/PhotoSort Rust.app"
 
 The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
 bundle's source/executable hashes, full test results and native interaction checks
-are recorded in [the latest validation report](docs/diagnostics/video-layout-2026-10-07/README.md).
+are recorded in [the latest validation report](docs/diagnostics/comparison-actions-2026-10-07/README.md).
 These checks cover this macOS development build; they do not establish Windows,
 CUDA or DirectML runtime readiness.
 
@@ -217,6 +217,12 @@ review the revised paths before choosing **Retry unfinished changes**.
    shared background metadata reading, cancellable background filtering/sorting,
    ratings, staged Trash marks, and navigation that skips marked photos
    unless Ctrl/Cmd is held.
+
+In Organize and Cull review, right-click a photo or video to mark or unmark the
+other displayed comparison items together. The menu shows the affected count;
+it leaves the clicked item and any selection outside the comparison unchanged.
+These are staged marks: use Review changes before sending files to Trash.
+Guided reviews keep their existing Keep/Trash and confirmation controls.
 
 Cull’s **Groups** menu moves selected photos into a new or existing group. The
 picker shows counts and an example filename. Corrections survive reanalysis,

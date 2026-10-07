@@ -46,6 +46,90 @@ impl PhotoSortApp {
         }
         self.review = true;
     }
+    fn manual_review_ready(&self, id: MediaId) -> bool {
+        self.review
+            && !self.scanning
+            && !self.modal_active()
+            && self.error.is_none()
+            && matches!(self.step, Step::Organize | Step::Cull)
+            && self
+                .index
+                .get(&id)
+                .and_then(|i| self.media.get(*i))
+                .is_some_and(|m| m.id == id)
+            && self.comparison_ids().contains(&id)
+    }
+    fn comparison_others(&self, id: MediaId) -> Vec<MediaId> {
+        if !self.manual_review_ready(id) {
+            return Vec::new();
+        }
+        let mut seen = HashSet::new();
+        self.comparison_ids()
+            .into_iter()
+            .filter(|other| {
+                *other != id
+                    && seen.insert(*other)
+                    && self
+                        .index
+                        .get(other)
+                        .and_then(|i| self.media.get(*i))
+                        .is_some_and(|m| m.id == *other)
+            })
+            .collect()
+    }
+    fn mark_comparison_others(&mut self, id: MediaId, rejected: bool) {
+        let others = self
+            .comparison_others(id)
+            .into_iter()
+            .filter(|other| self.decision(*other).rejected != rejected)
+            .collect::<Vec<_>>();
+        if !others.is_empty() {
+            self.stage_manual(others, crate::core::decisions::Change::Trash(rejected));
+        }
+    }
+    pub(super) fn review_context_menu(&mut self, ui: &mut egui::Ui, id: MediaId) {
+        self.library_path_menu(ui, id);
+        // Guided reviews retain their own provisional choices and confirmation.
+        if !matches!(self.step, Step::Organize | Step::Cull) {
+            return;
+        }
+        ui.separator();
+        let ready = self.manual_review_ready(id);
+        if ui
+            .add_enabled(
+                ready,
+                egui::Button::new(if self.decision(id).rejected {
+                    "Unmark this item"
+                } else {
+                    "Mark this item for Trash"
+                }),
+            )
+            .clicked()
+        {
+            self.reject(id);
+            ui.close();
+        }
+        let others = self.comparison_others(id);
+        if others.is_empty() {
+            return;
+        }
+        let count = others.len();
+        ui.label(format!("Affects {count} other displayed items"));
+        for (rejected, label) in [
+            (true, format!("Mark other {count} for Trash")),
+            (false, format!("Unmark other {count}")),
+        ] {
+            let changes = others
+                .iter()
+                .any(|other| self.decision(*other).rejected != rejected);
+            if ui.add_enabled(changes, egui::Button::new(label)).on_hover_text(
+                "Changes only the other items in this comparison. Review changes before moving anything to Trash."
+            ).clicked() {
+                self.mark_comparison_others(id, rejected);
+                ui.close();
+            }
+        }
+    }
     fn view_for(&self, slot: u64) -> InspectionView {
         if self.sync_views {
             self.inspection_view
@@ -411,6 +495,7 @@ impl PhotoSortApp {
         if !ui.is_rect_visible(rect) {
             return;
         }
+        response.context_menu(|ui| self.review_context_menu(ui, id));
         let pan = self.canvas_drag.take_pan_delta(ui, &response);
         if let Some(delta) = pan {
             self.active = Some(id);
@@ -717,6 +802,145 @@ fn paint_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn comparison_fixture(step: Step) -> (tempfile::TempDir, PhotoSortApp) {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app =
+            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+        app.media = (0..12)
+            .map(|n| Media {
+                id: MediaId(n),
+                path: temp.path().join(format!("{n}.jpg")),
+                kind: if n == 2 {
+                    MediaKind::Video
+                } else {
+                    MediaKind::Photo
+                },
+                fingerprint: Default::default(),
+            })
+            .collect();
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.filtered = (0..12).collect();
+        app.selection.replace(app.media.iter().map(|m| m.id));
+        app.comparison = (0..3).map(MediaId).collect();
+        app.active = Some(MediaId(0));
+        app.review = true;
+        app.step = step;
+        (temp, app)
+    }
+    #[test]
+    fn comparison_others_uses_clicked_pane_not_active_selection_or_library() {
+        for step in [Step::Organize, Step::Cull] {
+            let (_temp, mut app) = comparison_fixture(step);
+            app.decisions.entry(MediaId(1)).or_default().rating = Some(5);
+            app.decisions.entry(MediaId(9)).or_default().rejected = true;
+            app.comparison.extend([MediaId(2), MediaId(99)]);
+            assert_eq!(
+                app.comparison_others(MediaId(1)),
+                vec![MediaId(0), MediaId(2)]
+            );
+            app.mark_comparison_others(MediaId(1), true);
+            assert!(app.decision(MediaId(0)).rejected && app.decision(MediaId(2)).rejected);
+            assert!(!app.decision(MediaId(1)).rejected);
+            assert_eq!(app.decision(MediaId(1)).rating, Some(5));
+            assert!(app.decision(MediaId(9)).rejected);
+            assert_eq!(app.decisions.len(), 4);
+            assert_eq!(app.active, Some(MediaId(0)));
+            assert_eq!(app.selection.len(), 12);
+            app.mark_comparison_others(MediaId(1), false);
+            assert!(!app.decision(MediaId(0)).rejected && !app.decision(MediaId(2)).rejected);
+            assert!(app.decision(MediaId(9)).rejected);
+            assert!(app.requested.is_empty() && app.inspection_wanted.is_empty());
+            assert!(app.analysis_run.is_none() && app.rotation_run.is_none() && !app.busy);
+            assert_eq!(app.stats.decodes, 0);
+            assert!(app.plan.is_none() && app.applying_plan.is_none());
+            app.runtime.shutdown();
+        }
+    }
+    #[test]
+    fn comparison_others_rejects_stale_busy_single_and_guided_contexts() {
+        for step in Step::ALL {
+            let (_temp, mut app) = comparison_fixture(step);
+            if matches!(step, Step::Organize | Step::Cull) {
+                for state in 0..7 {
+                    app.busy = state == 0;
+                    app.scanning = state == 1;
+                    app.review = state != 2;
+                    app.plan_open = state == 3;
+                    app.error = (state == 4).then(|| "error".into());
+                    app.comparison = if state == 5 {
+                        vec![MediaId(0)]
+                    } else if state == 6 {
+                        vec![MediaId(1), MediaId(2)]
+                    } else {
+                        vec![MediaId(0), MediaId(1), MediaId(2)]
+                    };
+                    app.mark_comparison_others(MediaId(0), true);
+                    assert!(app.decisions.is_empty());
+                }
+            } else {
+                app.mark_comparison_others(MediaId(0), true);
+                assert!(app.decisions.is_empty());
+            }
+            assert!(app.requested.is_empty());
+            app.runtime.shutdown();
+        }
+    }
+    #[test]
+    fn comparison_menu_pointer_action_is_bounded_and_compact() {
+        for step in [Step::Organize, Step::Cull] {
+            let (_temp, mut app) = comparison_fixture(step);
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let input = || egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(340.0, 430.0),
+                )),
+                ..Default::default()
+            };
+            let mut draw = |ctx: &egui::Context| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| app.review_context_menu(ui, MediaId(1)));
+            };
+            let output = ctx.run(input(), &mut draw);
+            let tree = output.platform_output.accesskit_update.unwrap();
+            let (_, node) = tree
+                .nodes
+                .iter()
+                .find(|(_, n)| n.label() == Some("Mark other 2 for Trash"))
+                .unwrap();
+            let b = node.bounds().unwrap();
+            assert!(b.x0 >= 0.0 && b.x1 <= 340.0 && b.y0 >= 0.0 && b.y1 <= 430.0);
+            let pos = egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+            let mut raw = input();
+            raw.events = vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ];
+            let _ = ctx.run(raw, &mut draw);
+            assert!(app.decision(MediaId(0)).rejected && app.decision(MediaId(2)).rejected);
+            assert!(!app.decision(MediaId(1)).rejected && !app.decision(MediaId(9)).rejected);
+            assert!(app.requested.is_empty() && app.inspection_wanted.is_empty());
+            assert_eq!(app.stats.decodes, 0);
+            app.runtime.shutdown();
+        }
+    }
     #[test]
     fn zoom_controls_report_the_same_limits_and_values_as_keyboard_and_wheel() {
         for step in Step::ALL {

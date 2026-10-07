@@ -69,6 +69,7 @@ impl PhotoSortApp {
         if !ui.is_rect_visible(rect) {
             return;
         }
+        response.context_menu(|ui| self.review_context_menu(ui, id));
         let active = self.active == Some(id);
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 10.0, BG);

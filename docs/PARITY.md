@@ -125,3 +125,17 @@ reuse during resizing. Full validation and rebuilt native/runtime checks pass.
 The formerly locked native seeking check is complete on disposable macOS video
 fixtures; audio remained muted. See diagnostics/video-layout-2026-10-07/README.md
 and native-checks.json for exact interaction coverage and platform limits.
+
+
+### Comparison mark/unmark others — 7 October 2026
+
+The Python split-view context menu's Mark Others / Unmark Others actions now have
+a shared Rust comparison equivalent in Organize and Cull. Photo and video panes
+reuse the same menu, existing desktop actions and manual decision owner. The
+clicked pane is excluded even when another item has keyboard focus. Counts and
+a scope label make clear that only other displayed comparison items are affected;
+extra browser selections and hidden library items are unchanged. No file is moved
+until the existing shared review/apply flow is accepted. Guided reviews retain
+their provisional-choice and confirmation rules.
+
+See diagnostics/comparison-actions-2026-10-07/README.md for validation and scope.
