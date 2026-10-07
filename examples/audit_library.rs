@@ -1,5 +1,5 @@
 //! Read-only application-worker audit on real folders; all evidence uses a temporary cache.
-//! Usage: audit_library <folder> [technical|quality|visual]
+//! Usage: audit_library <folder> [technical|quality|visual] [threads]
 //! Reports repeatability and reuse, not accuracy without human-reviewed labels.
 use anyhow::{Context, Result, ensure};
 use photosort::core::{
@@ -131,6 +131,15 @@ fn main() -> Result<()> {
         "visual" => AnalysisProfile::Visual,
         _ => anyhow::bail!("Unknown profile"),
     };
+    let threads = std::env::args()
+        .nth(3)
+        .map(|value| value.parse::<usize>().context("Invalid thread count"))
+        .transpose()?
+        .unwrap_or(4);
+    ensure!(
+        (1..=photosort::core::processing::available()).contains(&threads),
+        "Thread count must be between 1 and the available processor count"
+    );
     let catalog = Catalog::scan(&root, || false, |_| {})?;
     ensure!(
         !catalog.media.is_empty() && catalog.warnings.is_empty(),
@@ -144,7 +153,7 @@ fn main() -> Result<()> {
         let mut rt = Runtime::with_cache(|| {}, cache.path().into());
         rt.processing.configure(Preferences {
             mode: Mode::Custom,
-            custom_threads: 4,
+            custom_threads: threads,
             backend: Backend::Cpu,
         });
         let start = Instant::now();
@@ -177,7 +186,7 @@ fn main() -> Result<()> {
     let failures = values["errors"].as_object().unwrap().len();
     println!(
         "{}",
-        json!({"root":root,"profile":mode,"count":media.len(),"native_imaging":cfg!(feature="native-imaging"),"phases":phases,"results":values})
+        json!({"root":root,"profile":mode,"threads":threads,"count":media.len(),"native_imaging":cfg!(feature="native-imaging"),"phases":phases,"results":values})
     );
     ensure!(
         failures == 0,

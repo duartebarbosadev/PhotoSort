@@ -200,3 +200,14 @@ MatMulAddFusion comparison suggests a possible CPU speed improvement that still
 needs real-photo validation. These tensor measurements do not establish app memory
 budgets or photographic accuracy. See diagnostics/model-memory-2026-10-08/README.md
 for raw evidence, reproducibility and follow-up requirements.
+
+### Low-thread CPU aesthetic execution — 8 October 2026
+
+The shared Apple Silicon CPU aesthetic session now retains separate MatMul/Add
+kernels at 2–4 threads. The default Balanced budget on the tested Mac and all
+other budgets/providers retain their prior configuration. Eighty-four real-worker
+runs preserve exact returned scores, metadata and groups with zero repeated work
+after cache reopening. Initial four-thread medians were about 10–11% shorter on
+the larger libraries; later confirmation timings varied, so this is not a
+universal speedup or memory-saving claim. See diagnostics/cpu-aesthetic-2026-10-08/README.md
+for the full measurements, validation and scope.

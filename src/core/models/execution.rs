@@ -79,6 +79,16 @@ fn cached_model(
         root, &key, *budget, cancelled,
     )?))
 }
+// On Apple Silicon at 2–4 CPU threads, separate MatMul/Add kernels are faster
+// for our BeIT aesthetic export. Other budgets/providers retain ORT defaults. See
+// docs/diagnostics/cpu-aesthetic-2026-10-08 for the real-photo comparison.
+fn disabled_optimizers(kind: &str, backend: Backend, threads: usize) -> Option<&'static str> {
+    (cfg!(all(target_os = "macos", target_arch = "aarch64"))
+        && backend == Backend::Cpu
+        && kind == "aesthetic"
+        && (2..=4).contains(&threads))
+    .then_some("MatMulAddFusion")
+}
 fn build(
     path: &Path,
     kind: &str,
@@ -100,6 +110,11 @@ fn build(
         .map_err(|e| anyhow::anyhow!(e.to_string()))?
         .with_inter_op_spinning(false)
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    if let Some(optimizers) = disabled_optimizers(kind, backend, threads) {
+        builder = builder
+            .with_disabled_optimizers(optimizers)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    }
     let provider = match backend {
         Backend::Cpu => None,
         #[cfg(target_os = "macos")]
@@ -171,7 +186,6 @@ fn build(
         }
         _ => anyhow::bail!("{} is not supported on this platform", backend.label()),
     };
-    let _ = kind; // Used by Apple shape specialization; other platforms retain native batches.
     if let Some(provider) = provider {
         builder = builder
             .with_execution_providers([provider])
@@ -364,6 +378,88 @@ mod native_tests {
         pipeline::Pipeline,
         processing::{Control, RunConfig},
     };
+    #[test]
+    #[ignore = "Runs installed CPU aesthetic model on seven read-only samples"]
+    fn cpu_aesthetic_reuses_samples_and_honors_cancellation_and_fallback() -> Result<()> {
+        let sample_root =
+            PathBuf::from(std::env::var_os("PHOTOSORT_SAMPLE_DIR").expect("PHOTOSORT_SAMPLE_DIR"));
+        let catalog = Catalog::scan(&sample_root, || false, |_| {})?;
+        ensure!(catalog.media.len() == 7, "Expected seven samples");
+        let cache = tempfile::tempdir()?;
+        let mut pipeline = Pipeline::new(128 * 1024 * 1024, cache.path().into());
+        let assets = catalog
+            .media
+            .iter()
+            .map(|m| pipeline.analysis(m, || false))
+            .collect::<Result<Vec<_>>>()?;
+        let decodes = pipeline.stats.decodes;
+        let control = Control::default();
+        let mut models = Models::with_processing(control.clone());
+        let config = RunConfig {
+            threads: 4,
+            backend: Backend::Cpu,
+        };
+        models.begin_run(config, || false);
+        let reference = assets
+            .iter()
+            .map(|a| models.aesthetic(a))
+            .collect::<Result<Vec<_>>>()?;
+        ensure!(
+            reference
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+            "Invalid score"
+        );
+        assert_eq!((models.initializations, models.inferences), (1, 7));
+
+        models.begin_run(config, || true);
+        assert!(
+            models
+                .aesthetic(&assets[0])
+                .unwrap_err()
+                .to_string()
+                .contains("cancelled")
+        );
+        assert_eq!((models.initializations, models.inferences), (1, 7));
+        models.begin_run(config, || false);
+        assert_eq!(
+            reference,
+            assets
+                .iter()
+                .map(|a| models.aesthetic(a))
+                .collect::<Result<Vec<_>>>()?
+        );
+        assert_eq!((models.initializations, models.inferences), (1, 14));
+
+        models.begin_run(
+            RunConfig {
+                backend: Backend::Cuda,
+                ..config
+            },
+            || false,
+        );
+        assert_eq!(
+            reference,
+            assets
+                .iter()
+                .map(|a| models.aesthetic(a))
+                .collect::<Result<Vec<_>>>()?
+        );
+        assert_eq!((models.initializations, models.inferences), (2, 21));
+        let status = control.status();
+        assert_eq!(status.len(), 1);
+        assert_eq!(status[0].backend, Backend::Cpu);
+        assert!(status[0].detail.contains("not supported on this platform"));
+        assert_eq!(pipeline.stats.decodes, decodes);
+        println!(
+            "{}",
+            serde_json::json!({"samples":7,"scores":reference,
+            "decodes":decodes,"initializations":models.initializations,
+            "inferences":models.inferences,"cancelled_run_inferences":0,
+            "repeat_and_fallback_scores_exact":true})
+        );
+        Ok(())
+    }
     #[test]
     #[ignore = "Runs installed Core ML with disposable persistent cache and seven read-only samples"]
     fn prepared_coreml_cache_reuses_samples_and_releases_sessions_for_maintenance() -> Result<()> {
