@@ -26,8 +26,10 @@ impl Source {
         Ok(Self { path, fingerprint })
     }
     fn verify(&self) -> Result<()> {
+        let fingerprint = Fingerprint::read(&self.path)
+            .with_context(|| format!("Could not verify reviewed source {}", self.path.display()))?;
         anyhow::ensure!(
-            Fingerprint::read(&self.path)? == self.fingerprint,
+            fingerprint == self.fingerprint,
             "File changed since review: {}",
             self.path.display()
         );
@@ -73,6 +75,10 @@ pub enum Action {
     },
 }
 impl Action {
+    fn failure_message(&self, detail: &str) -> String {
+        format!("{}: {detail}", self.label())
+    }
+
     pub fn label(&self) -> String {
         match self {
             Self::TrashDirectory(folder) => format!(
@@ -93,19 +99,29 @@ impl Action {
                 format!("Remove only if empty: {}", path.display())
             }
             Self::FinishMove { files } => format!("Finish {} staged file move(s)", files.len()),
-            Self::Move { files } => format!(
-                "Move {} file(s) to {}",
-                files.len(),
-                files[0].1.parent().unwrap_or(Path::new("")).display()
+            Self::Move { files } => files.first().map_or_else(
+                || "Move 0 files".into(),
+                |(_, destination)| {
+                    format!(
+                        "Move {} file(s) to {}",
+                        files.len(),
+                        destination.parent().unwrap_or(Path::new("")).display()
+                    )
+                },
             ),
-            Self::Trash { files } => format!(
-                "Trash {} file(s): {}",
-                files.len(),
-                files[0]
-                    .path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
+            Self::Trash { files } => files.first().map_or_else(
+                || "Trash 0 files".into(),
+                |source| {
+                    format!(
+                        "Trash {} file(s): {}",
+                        files.len(),
+                        source
+                            .path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    )
+                },
             ),
             Self::Metadata {
                 source,
@@ -1043,8 +1059,9 @@ fn execute_logged(
                     _ => {}
                 }
                 report.remaining.actions.push(action.clone());
-                report.errors.push(format!("{}: {e:#}", action.label()));
-                write_record(journal, "failed", i, action, &[], Some(&e.to_string()))?;
+                let detail = format!("{e:#}");
+                report.errors.push(action.failure_message(&detail));
+                write_record(journal, "failed", i, action, &[], Some(&detail))?;
                 if matches!(action, Action::RenameDirectory(_)) {
                     // Later sources depend on the reviewed spelling. Never run them
                     // after an unsuccessful prerequisite, including on retry.
@@ -1200,7 +1217,7 @@ fn apply(
                 }
                 anyhow::ensure!(
                     cleanup_errors.is_empty(),
-                    "{e}; could not remove staged destinations: {}",
+                    "{e:#}; could not remove staged destinations: {}",
                     cleanup_errors.join("; ")
                 );
                 return Err(e);

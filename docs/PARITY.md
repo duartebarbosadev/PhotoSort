@@ -170,3 +170,13 @@ files, validates the complete inventory and refuses changed trees or symlinks.
 Kept layouts and file names persist with Session/recovery and survive unrelated
 Trash operations. Both Trash and Organize planning have a Cancel control.
 See diagnostics/folder-trash-2026-10-08/README.md for verification and limits.
+
+### Durable file-operation diagnostics — 8 October 2026
+
+The shared executor now stores the complete underlying failure chain, and recovery
+reconstructs the same operation label after restart. Missing reviewed sources name
+the affected path. Interrupted-operation warnings retain all known failures instead
+of hiding them; subsequent scan warnings append to these diagnostics. Existing
+version-one journals remain readable; details omitted by older builds cannot be
+reconstructed. All five workflows use this application path.
+See diagnostics/recovery-details-2026-10-08/README.md for checks and limits.

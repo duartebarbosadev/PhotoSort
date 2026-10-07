@@ -1319,6 +1319,7 @@ mod organize_departure_tests {
         );
         let destination = failed_saved_plan(&mut app);
         let ticket = app.recovery_ticket.clone();
+        let original_error = app.error.clone();
         app.runtime.shutdown();
         drop(app);
         let mut reopened =
@@ -1326,6 +1327,7 @@ mod organize_departure_tests {
         reopened.scan_folder(root.clone());
         settle(&mut reopened);
         assert_eq!(reopened.recovery_ticket, ticket);
+        assert_eq!(reopened.error, original_error);
         assert_eq!(reopened.decisions[&old].rating, Some(4));
         assert!(
             reopened.retry_plan.is_some() && !reopened.plan_open,
@@ -1351,6 +1353,58 @@ mod organize_departure_tests {
         );
         assert_eq!(reopened.stats.decodes, 0);
     }
+    #[test]
+    fn recovery_details_show_interruption_and_every_failure_in_all_workflows() {
+        for step in Step::ALL {
+            let (_dir, mut app) = fixture();
+            app.step = step;
+            let root = app.root.clone().unwrap();
+            let destination = failed_saved_plan(&mut app);
+            let original = app.error.clone().unwrap();
+            let ticket = app.recovery_ticket.clone().unwrap();
+            app.restore_operations(crate::core::operations::recovery::Restored {
+                ticket: ticket.clone(),
+                plan: app.retry_plan.clone().unwrap(),
+                rotation_only: step == Step::Rotation,
+                uncertain: 1,
+                errors: vec![
+                    original.clone(),
+                    "Second failure: café\nPermission denied".into(),
+                ],
+            });
+            let error = app.error.as_ref().unwrap();
+            assert!(error.starts_with("1 operation(s) were interrupted"));
+            assert!(error.contains(&original));
+            assert!(error.ends_with("Second failure: café\nPermission denied"));
+            let recovered_error = error.clone();
+            app.report_scan_warnings(&["Cannot read café/locked".into()]);
+            assert_eq!(
+                app.error.as_deref(),
+                Some(
+                    format!("{recovered_error}\n1 scan warning(s). Cannot read café/locked")
+                        .as_str()
+                )
+            );
+            let with_warning = app.error.clone();
+            app.report_scan_warnings(&[]);
+            assert_eq!(app.error, with_warning);
+            assert_eq!(app.recovery_ticket, Some(ticket));
+            assert_eq!(app.retry_plan.as_ref().unwrap().actions.len(), 1);
+            assert_eq!(app.rotation_plan, step == Step::Rotation);
+            assert_eq!(app.stats.decodes, 0);
+            assert_eq!(
+                std::fs::read(destination).unwrap(),
+                b"unrelated destination"
+            );
+            assert_eq!(
+                std::fs::read(root.join("Before/a.jpg")).unwrap(),
+                b"original bytes"
+            );
+            app.discard_remaining_operations();
+            settle(&mut app);
+        }
+    }
+
     #[test]
     fn saved_plan_discard_is_worker_owned_and_all_workflows_use_the_same_path() {
         for step in Step::ALL {

@@ -248,6 +248,42 @@ pub struct PhotoSortApp {
     view_started: Instant,
 }
 impl PhotoSortApp {
+    fn report_scan_warnings(&mut self, warnings: &[String]) {
+        if let Some(first) = warnings.first() {
+            let warning = format!("{} scan warning(s). {first}", warnings.len());
+            // Recovery is published before the catalog; discovery must not hide it.
+            match &mut self.error {
+                Some(error) => {
+                    error.push('\n');
+                    error.push_str(&warning);
+                }
+                None => self.error = Some(warning),
+            }
+        }
+    }
+
+    fn restore_operations(&mut self, restored: crate::core::operations::recovery::Restored) {
+        self.rotation_plan = !restored.plan.actions.is_empty() && restored.rotation_only;
+        self.retry_plan = (!restored.plan.actions.is_empty()).then_some(restored.plan);
+        self.recovery_ticket = self.retry_plan.as_ref().map(|_| restored.ticket);
+        if let Some(plan) = &self.retry_plan {
+            self.set_status(format!(
+                "{} saved operations await review",
+                plan.actions.len()
+            ));
+            let mut details = restored.errors;
+            if restored.uncertain > 0 {
+                details.insert(0, format!(
+                    "{} operation(s) were interrupted before a completion record. They may already be partly applied. Check their source and destination files before retrying; the original source and overwrite guards remain active.",
+                    restored.uncertain
+                ));
+            }
+            if !details.is_empty() {
+                self.error = Some(details.join("\n"));
+            }
+        }
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, folder: Option<PathBuf>) -> Self {
         theme_install(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
@@ -796,13 +832,7 @@ impl PhotoSortApp {
                     self.active = self.media.first().map(|m| m.id);
                     self.root = Some(catalog.root.clone());
                     self.set_status(format!("{} items · library ready", self.media.len()));
-                    if !catalog.warnings.is_empty() {
-                        self.error = Some(format!(
-                            "{} scan warning(s). {}",
-                            catalog.warnings.len(),
-                            catalog.warnings[0]
-                        ));
-                    }
+                    self.report_scan_warnings(&catalog.warnings);
                     self.preferences.remember(&catalog.root);
                     self.save_preferences();
                     self.catalog = Some(catalog);
@@ -1122,26 +1152,7 @@ impl PhotoSortApp {
                         self.plan_open = self.organize_departure.is_none();
                     }
                 }
-                Event::OperationsRestored(restored) => {
-                    self.rotation_plan =
-                        !restored.plan.actions.is_empty() && restored.rotation_only;
-                    self.retry_plan = (!restored.plan.actions.is_empty()).then_some(restored.plan);
-                    self.recovery_ticket = self.retry_plan.as_ref().map(|_| restored.ticket);
-                    if let Some(plan) = &self.retry_plan {
-                        self.set_status(format!(
-                            "{} saved operations await review",
-                            plan.actions.len()
-                        ));
-                        if restored.uncertain > 0 {
-                            self.error = Some(format!(
-                                "{} operation(s) were interrupted before a completion record. They may already be partly applied. Check their source and destination files before retrying; the original source and overwrite guards remain active.",
-                                restored.uncertain
-                            ));
-                        } else if !restored.errors.is_empty() {
-                            self.error = Some(restored.errors.join("\n"));
-                        }
-                    }
-                }
+                Event::OperationsRestored(restored) => self.restore_operations(restored),
                 Event::ApplyFailed(error) => {
                     self.applying_plan = None;
                     self.apply_stop = None;
