@@ -1,7 +1,0 @@
--r requirements.txt
-
-# Test & quality tooling
-pytest
-pytest-cov
-ruff
-mypy

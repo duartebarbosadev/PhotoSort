@@ -1,0 +1,5 @@
+# Apply the same pre-initialization policy to test/example executables, whose
+# entry points are supplied by Cargo rather than src/main.rs. The ONNX API alone
+# cannot prevent creation of the POSIX uploader during environment construction.
+[env]
+ORT_DISABLE_TELEMETRY = { value = "1", force = true }

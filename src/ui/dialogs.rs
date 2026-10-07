@@ -1,0 +1,115 @@
+use super::*;
+
+impl PhotoSortApp {
+    pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(error) = self.error.clone()
+            && self.organize_departure.is_none()
+            && !(self.plan_open && self.retry_plan.is_some())
+        {
+            let mut open = true;
+            egui::Window::new("Something needs attention")
+                .open(&mut open)
+                .resizable(true)
+                .default_width(520.0)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(260.0)
+                        .show(ui, |ui| {
+                            ui.colored_label(RED, error);
+                        });
+                    if ui.button("Check AI models…").clicked() {
+                        self.open_model_setup();
+                    }
+                    if ui.button("Dismiss").clicked() {
+                        self.error = None;
+                    }
+                });
+            if !open {
+                self.error = None;
+            }
+        }
+        self.organize_dialog(ctx);
+        self.organize_departure_dialog(ctx);
+        self.review_dialogs(ctx);
+        self.preferences_dialog(ctx);
+        self.updates_dialog(ctx);
+        self.models_dialog(ctx);
+        if self.help {
+            egui::Window::new("A few useful keys")
+                .open(&mut self.help)
+                .default_width(460.0)
+                .max_height((ctx.content_rect().height() - 80.0).max(120.0))
+                .vscroll(true)
+                .show(ctx, |ui| {
+                    let shortcuts = [
+                        ("Ctrl/Cmd + O", "Open a library"),
+                        ("Ctrl/Cmd + F", "Focus library search (except Pick Best)"),
+                        ("Alt + 1 / 2 / 3", "Cull list / icons / grid"),
+                        ("F / S", "Cull folder / similarity-group navigator"),
+                        ("F12", "About PhotoSort"),
+                        (
+                            "Left / Right",
+                            "Cull cycles through visible photos or the current similarity group",
+                        ),
+                        (
+                            "Up / Down",
+                            "Cull follows rating and group navigation preferences",
+                        ),
+                        (
+                            "Ctrl or Cmd + arrows",
+                            "Include Trash marks and bypass Cull movement filters",
+                        ),
+                        (
+                            "Shift + arrows / Shift + click",
+                            "Select a range in Cull browser; extend comparison in Review",
+                        ),
+                        (
+                            "Ctrl/Cmd + click / Ctrl/Cmd + A",
+                            "Toggle browser selection / select all visible",
+                        ),
+                        ("D / Alt + D", "Toggle mark / clear all marks"),
+                        (
+                            "Ctrl or Cmd + 0-5",
+                            "Rate selection; viewer stars rate the focused photo",
+                        ),
+                        (
+                            "R / Shift + R / Alt + R",
+                            "Rotate right / left / 180 degrees",
+                        ),
+                        ("I", "Toggle photo details"),
+                        ("F1 / F2", "Single photo / similar comparison"),
+                        (
+                            "0 / A / Double-click canvas",
+                            "Fit / actual size / toggle actual size",
+                        ),
+                        (
+                            "1-9 / F3",
+                            "Focus comparison photo / toggle synchronized views",
+                        ),
+                        (
+                            "Drag / Scroll canvas",
+                            "Pan / zoom the focused photo or synchronized set",
+                        ),
+                        ("Shift + Enter", "Review staged changes"),
+                    ];
+                    for (key, action) in shortcuts {
+                        ui.horizontal(|ui| {
+                            ui.monospace(key);
+                            ui.label(action);
+                        });
+                    }
+                    ui.separator();
+                    ui.label("Ctrl/Cmd+Alt+1–5 switches to a visible workflow step.");
+                    for step in Step::ALL {
+                        ui.label(format!(
+                            "{}: {}",
+                            step.title(),
+                            preferences::workflow_hint(step)
+                        ));
+                    }
+                    ui.label("All analysis runs on your computer. Nothing is uploaded.");
+                });
+        }
+        self.plan_review_dialog(ctx);
+    }
+}

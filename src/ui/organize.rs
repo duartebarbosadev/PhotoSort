@@ -1,0 +1,1786 @@
+use super::*;
+use crate::core::{
+    operations,
+    organize::{Draft, Selection},
+};
+
+pub(super) struct Editor {
+    catalog: Arc<Catalog>,
+    output: PathBuf,
+    desktop_enabled: bool,
+    desktop_pending: Option<crate::core::desktop::Request>,
+    names: HashMap<MediaId, String>,
+    renaming: Option<(MediaId, String)>,
+    rename_focus: bool,
+    draft: Draft,
+    rows: Vec<PhotoRow>,
+    folders: Vec<(String, usize)>,
+    selected: HashSet<MediaId>,
+    selected_folders: std::collections::BTreeSet<String>,
+    drag_owner: Arc<()>,
+    completed_drag: Option<CompletedDrag>,
+    drag: pointer::DragTracker,
+    folder: String,
+    name: String,
+    parent: String,
+    pub(super) error: Option<String>,
+    compact_folders: bool,
+    photo_scroll: f32,
+    folder_scroll: f32,
+    restore_scroll: [Option<f32>; 2],
+}
+struct PhotoRow {
+    id: MediaId,
+    source: PathBuf,
+    after: String,
+}
+#[derive(Clone)]
+struct FolderDrag {
+    owner: Arc<()>,
+    selection: Selection,
+}
+// A quick press/move/release can arrive between two repaints. egui's persistent
+// drag state has already ended then; resolve that completed gesture using the
+// same visible rows, selection builders and command as a normal drag.
+struct CompletedDrag {
+    start: egui::Pos2,
+    end: egui::Pos2,
+    payload: Option<FolderDrag>,
+    target: Option<String>,
+}
+enum Command {
+    Create,
+    Rename,
+    Parent,
+    Nest,
+    Unnest,
+    Move,
+    Drop(Selection, String),
+    RenameFile(MediaId, String),
+}
+fn folder_title(path: &str) -> &str {
+    if path.is_empty() {
+        "Library root"
+    } else {
+        path
+    }
+}
+impl Editor {
+    fn file_locations(&self, row: &PhotoRow) -> desktop::Locations {
+        let name = self
+            .names
+            .get(&row.id)
+            .map(|stem| crate::core::organize::renamed_file_name(&row.source, stem.as_ref()))
+            .unwrap_or_else(|| row.source.file_name().unwrap_or_default().to_owned());
+        desktop::Locations {
+            source: Some(row.source.clone()),
+            relative: row
+                .source
+                .strip_prefix(&self.catalog.root)
+                .ok()
+                .map(PathBuf::from),
+            proposed: self
+                .output
+                .is_absolute()
+                .then(|| operations::folder_destination(&self.output, &row.after).join(name)),
+        }
+    }
+    fn folder_locations(&self, path: &str) -> desktop::Locations {
+        let source = self.draft.directory_source(path).and_then(|original| {
+            if original.is_empty() {
+                return Some(self.catalog.root.clone());
+            }
+            let mut candidates = self.catalog.directories.iter().filter(|folder| {
+                folder
+                    .strip_prefix(&self.catalog.root)
+                    .is_ok_and(|relative| relative.to_string_lossy().replace('\\', "/") == original)
+            });
+            let first = candidates.next()?;
+            candidates.next().is_none().then(|| first.clone())
+        });
+        desktop::Locations {
+            relative: Some(PathBuf::from(if path.is_empty() { "." } else { path })),
+            source,
+            proposed: self
+                .output
+                .is_absolute()
+                .then(|| operations::folder_destination(&self.output, path)),
+        }
+    }
+    fn bookmark(&self) -> crate::core::views::EditorBookmark {
+        let mut selected: Vec<_> = self.selected.iter().copied().collect();
+        selected.sort_by_key(|id| id.0);
+        crate::core::views::EditorBookmark {
+            selected,
+            folders: self.selected_folders.iter().cloned().collect(),
+            folder: self.folder.clone(),
+            photo_scroll: self.photo_scroll,
+            folder_scroll: self.folder_scroll,
+            compact_folders: self.compact_folders,
+        }
+    }
+    fn restore_bookmark(&mut self, view: &crate::core::views::EditorBookmark) {
+        let rows: HashSet<_> = self.rows.iter().map(|row| row.id).collect();
+        let folders: HashSet<_> = self.folders.iter().map(|(path, _)| path.as_str()).collect();
+        self.selected = view
+            .selected
+            .iter()
+            .copied()
+            .filter(|id| rows.contains(id))
+            .collect();
+        self.selected_folders = view
+            .folders
+            .iter()
+            .filter(|path| folders.contains(path.as_str()))
+            .cloned()
+            .collect();
+        if folders.contains(view.folder.as_str()) {
+            self.folder = view.folder.clone();
+        }
+        self.name = self.folder.rsplit('/').next().unwrap_or_default().into();
+        self.photo_scroll = view.photo_scroll;
+        self.folder_scroll = view.folder_scroll;
+        self.restore_scroll = [Some(view.photo_scroll), Some(view.folder_scroll)];
+        self.compact_folders = view.compact_folders;
+    }
+    fn begin_drag_frame(&mut self, ctx: &egui::Context) {
+        self.completed_drag = None;
+        if !self.drag.begin_frame(ctx, egui::Id::new("organize-drag")) {
+            return;
+        }
+        if self.drag.cancelled {
+            egui::DragAndDrop::clear_payload(ctx);
+        }
+        self.completed_drag = self.drag.completed().map(|motion| CompletedDrag {
+            start: motion.start,
+            end: motion.end,
+            payload: None,
+            target: None,
+        });
+    }
+
+    // egui resolves a frame's hit target at the latest pointer position. When
+    // press and movement arrive together, that can be a different row. Anchor
+    // the payload to the actual press position and keep it until release.
+    fn starts_drag(&self, ui: &egui::Ui, response: &egui::Response) -> bool {
+        let Some(start) = self.drag.start() else {
+            return false;
+        };
+        !egui::DragAndDrop::has_any_payload(ui.ctx())
+            && pointer::contains_pointer(ui, response, start)
+            && ui.input(|i| i.pointer.primary_down() && i.pointer.is_decidedly_dragging())
+    }
+    fn track_completed_drag(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        file: Option<MediaId>,
+        path: &str,
+    ) {
+        let Some(drag) = &self.completed_drag else {
+            return;
+        };
+        let source = pointer::contains_pointer(ui, response, drag.start);
+        let target = pointer::contains_pointer(ui, response, drag.end);
+        let payload = if source {
+            if let Some(id) = file {
+                Some(self.file_drag(id))
+            } else if !path.is_empty() {
+                Some(self.folder_drag(path))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let drag = self.completed_drag.as_mut().unwrap();
+        if payload.is_some() {
+            drag.payload = payload;
+        }
+        if target {
+            drag.target = Some(path.into());
+        }
+    }
+    fn refresh(&mut self) {
+        let mut counts = HashMap::<String, usize>::new();
+        for row in &mut self.rows {
+            row.after = self
+                .draft
+                .labels()
+                .get(&row.id)
+                .cloned()
+                .unwrap_or_default();
+            *counts.entry(row.after.clone()).or_default() += 1;
+        }
+        self.folders = self
+            .draft
+            .folders()
+            .iter()
+            .map(|p| (p.clone(), counts.get(p).copied().unwrap_or_default()))
+            .collect();
+    }
+    fn file_drag(&mut self, id: MediaId) -> FolderDrag {
+        if !self.selected.contains(&id) {
+            self.selected.clear();
+            self.selected.insert(id);
+        }
+        FolderDrag {
+            owner: self.drag_owner.clone(),
+            selection: Selection {
+                files: self.selected.clone(),
+                ..Default::default()
+            },
+        }
+    }
+    fn folder_drag(&mut self, path: &str) -> FolderDrag {
+        if !self.selected_folders.contains(path) {
+            self.selected_folders.clear();
+            self.selected_folders.insert(path.into());
+        }
+        FolderDrag {
+            owner: self.drag_owner.clone(),
+            selection: Selection {
+                folders: self.selected_folders.clone(),
+                ..Default::default()
+            },
+        }
+    }
+    fn drop_target(&self, ui: &egui::Ui, response: &egui::Response, path: &str) -> Option<Command> {
+        let payload = response.dnd_hover_payload::<FolderDrag>()?;
+        if !Arc::ptr_eq(&payload.owner, &self.drag_owner) {
+            return None;
+        }
+        let valid = self.draft.validate_move(&payload.selection, path);
+        ui.painter().rect_stroke(
+            response.rect,
+            3.0,
+            Stroke::new(2.0, if valid.is_ok() { ACCENT } else { RED }),
+            StrokeKind::Inside,
+        );
+        ui.ctx().set_cursor_icon(if valid.is_ok() {
+            egui::CursorIcon::Grabbing
+        } else {
+            egui::CursorIcon::NotAllowed
+        });
+        if let Some(payload) = response.dnd_release_payload::<FolderDrag>() {
+            return Some(Command::Drop(payload.selection.clone(), path.into()));
+        }
+        None
+    }
+    fn scroll_drag<R>(&self, ui: &egui::Ui, output: &egui::scroll_area::ScrollAreaOutput<R>) {
+        let Some(payload) = egui::DragAndDrop::payload::<FolderDrag>(ui.ctx()) else {
+            return;
+        };
+        if !Arc::ptr_eq(&payload.owner, &self.drag_owner) {
+            return;
+        }
+        let Some(pointer) = ui.ctx().pointer_interact_pos() else {
+            return;
+        };
+        let rect = output.inner_rect;
+        if !rect.contains(pointer) {
+            return;
+        }
+        let edge = 24.0_f32.min(rect.height() / 3.0);
+        let direction = if pointer.y < rect.top() + edge {
+            -1.0
+        } else if pointer.y > rect.bottom() - edge {
+            1.0
+        } else {
+            0.0
+        };
+        if direction != 0.0 {
+            let mut state = output.state;
+            state.offset.y = (state.offset.y
+                + direction * 360.0 * ui.input(|i| i.stable_dt.min(0.05)))
+            .clamp(0.0, (output.content_size.y - rect.height()).max(0.0));
+            state.store(ui.ctx(), output.id);
+            ui.ctx().request_repaint();
+        }
+    }
+    pub(super) fn start_rename(&mut self, id: MediaId) {
+        if let Some(row) = self.rows.iter().find(|row| row.id == id) {
+            let stem = self.names.get(&id).cloned().unwrap_or_else(|| {
+                row.source
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            self.renaming = Some((id, stem));
+            self.rename_focus = true;
+            self.compact_folders = false;
+            self.error = None;
+        }
+    }
+    fn file_name_controls(&mut self, ui: &mut egui::Ui) -> Option<Command> {
+        let mut command = None;
+        let mut cancel = false;
+        if let Some((id, name)) = &mut self.renaming {
+            let original = self
+                .rows
+                .iter()
+                .find(|row| row.id == *id)
+                .map(|row| row.source.file_name().unwrap_or_default().to_string_lossy())
+                .unwrap_or_default();
+            ui.add(egui::Label::new(format!("Rename {original}")).truncate());
+            ui.label(
+                RichText::new("Base name only · extension stays unchanged")
+                    .small()
+                    .color(MUTED),
+            );
+            let mut field = egui::TextEdit::singleline(name)
+                .id_salt("organize_file_name")
+                .desired_width(ui.available_width())
+                .hint_text("File name")
+                .show(ui);
+            if self.rename_focus {
+                field.response.request_focus();
+                field
+                    .state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(0),
+                        egui::text::CCursor::new(name.chars().count()),
+                    )));
+                field.state.store(ui.ctx(), field.response.id);
+                self.rename_focus = false;
+            }
+            let field = field.response;
+            let enter = (field.has_focus() || field.lost_focus())
+                && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Stage name").clicked() || enter {
+                    command = Some(Command::RenameFile(*id, name.clone()));
+                }
+                if ui.button("Restore original name").clicked() {
+                    command = Some(Command::RenameFile(*id, String::new()));
+                }
+                if ui.button("Cancel name edit").clicked() {
+                    cancel = true;
+                }
+            });
+        } else if ui
+            .add_enabled(
+                self.selected.len() == 1,
+                egui::Button::new("Rename selected file…"),
+            )
+            .clicked()
+            && let Some(id) = self.selected.iter().next().copied()
+        {
+            self.start_rename(id);
+        }
+        if cancel {
+            self.renaming = None;
+            self.error = None;
+        }
+        command
+    }
+    fn photos(&mut self, ui: &mut egui::Ui, height: f32) -> Option<Command> {
+        let mut command = None;
+        ui.strong("Files · before / after");
+        ui.horizontal(|ui| {
+            if ui.button("Select all").clicked() {
+                self.selected = self.rows.iter().map(|r| r.id).collect();
+            }
+            if ui.button("Clear selection").clicked() {
+                self.selected.clear();
+            }
+            ui.label(format!("{} selected", self.selected.len()));
+        });
+        command = self.file_name_controls(ui).or(command);
+        ui.separator();
+        let name_controls_height = if self.renaming.is_some() { 110.0 } else { 35.0 };
+        let mut scroll = egui::ScrollArea::vertical().id_salt("organize_photos");
+        if let Some(offset) = self.restore_scroll[0].take() {
+            scroll = scroll.vertical_scroll_offset(offset);
+        }
+        let output = scroll
+            .max_height((height - name_controls_height).max(60.0))
+            .show_rows(ui, 58.0, self.rows.len(), |ui, rows| {
+                for i in rows {
+                    let id = self.rows[i].id;
+                    let name = self.rows[i].source.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                    let after_name = self.names.get(&id).map(|stem|
+                        crate::core::organize::renamed_file_name(std::path::Path::new(&name), std::ffi::OsStr::new(stem)).to_string_lossy().into_owned())
+                        .unwrap_or_else(|| name.clone());
+                    let before = self.rows[i].source.parent().and_then(|p| p.strip_prefix(&self.catalog.root).ok()).unwrap_or_else(|| std::path::Path::new("")).to_path_buf();
+                    let after = self.rows[i].after.clone();
+                    let mut selected = self.selected.contains(&id);
+                    ui.push_id(id.0, |ui| {
+                        let response = ui.checkbox(&mut selected, &name);
+                        if response.double_clicked() { self.start_rename(id); }
+                        if response.changed() {
+                            if selected { self.selected.insert(id); }
+                            else { self.selected.remove(&id); }
+                        }
+                        let response = response.interact(Sense::click_and_drag());
+                        response.context_menu(|ui| {
+                            let paths = self.file_locations(&self.rows[i]);
+                            if let Some(request) = desktop::locations_menu(ui, &paths, self.desktop_enabled) {
+                                self.desktop_pending = Some(request);
+                            }
+                        });
+                        #[cfg(test)]
+                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("test_file_rect", id.0)), response.rect));
+                        if self.starts_drag(ui, &response) {
+                            egui::DragAndDrop::set_payload(ui.ctx(), self.file_drag(id));
+                        }
+                        self.track_completed_drag(ui, &response, Some(id), &after);
+                        if let Some(drop) = self.drop_target(ui, &response, &after) { command = Some(drop); }
+                        let before_path = std::path::Path::new(&before).join(&name);
+                        let after_path = std::path::Path::new(&after).join(&after_name);
+                        ui.add(egui::Label::new(RichText::new(format!("{}  >  {}", before_path.display(), after_path.display())).small().color(MUTED)).truncate())
+                            .on_hover_text(format!("Before: {}\nAfter: {}\nDrag selected files onto a destination folder. Double-click a file to rename it.", before_path.display(), after_path.display()));
+                    });
+                }
+            });
+        self.photo_scroll = output.state.offset.y;
+        self.scroll_drag(ui, &output);
+        command
+    }
+    fn structure(&mut self, ui: &mut egui::Ui, height: f32) -> Option<Command> {
+        let mut command = None;
+        ui.strong("Destination folders");
+        let mut scroll = egui::ScrollArea::vertical().id_salt("organize_folders");
+        if let Some(offset) = self.restore_scroll[1].take() {
+            scroll = scroll.vertical_scroll_offset(offset);
+        }
+        let output = scroll
+            .max_height((height - 210.0).max(75.0))
+            .show_rows(ui, 24.0, self.folders.len(), |ui, rows| {
+                for i in rows {
+                    let (path, count) = self.folders[i].clone();
+                    ui.push_id(("folder", &path), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add_space((path.matches('/').count() as f32 * 12.0).min(96.0));
+                            let response = ui.add(egui::Button::selectable(self.folder == path || self.selected_folders.contains(&path), format!("{} · {count}", folder_title(&path)))
+                                .sense(Sense::click_and_drag()));
+                            #[cfg(test)]
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("test_folder_rect", &path)), response.rect));
+                            response.context_menu(|ui| {
+                                let paths = self.folder_locations(&path);
+                                if let Some(request) = desktop::locations_menu(ui, &paths, self.desktop_enabled) {
+                                    self.desktop_pending = Some(request);
+                                }
+                            });
+                            if response.clicked() {
+                                if ui.input(|i| i.modifiers.command || i.modifiers.ctrl) {
+                                    if !self.selected_folders.remove(&path) && !path.is_empty() {
+                                        self.selected_folders.insert(path.clone());
+                                    }
+                                } else {
+                                    self.selected_folders.clear();
+                                    if !path.is_empty() { self.selected_folders.insert(path.clone()); }
+                                }
+                                self.folder = path.clone();
+                                self.name = path.rsplit('/').next().unwrap_or_default().into();
+                            }
+                            if !path.is_empty() && self.starts_drag(ui, &response) {
+                                egui::DragAndDrop::set_payload(ui.ctx(), self.folder_drag(&path));
+                            }
+                            self.track_completed_drag(ui, &response, None, &path);
+                            if let Some(drop) = self.drop_target(ui, &response, &path) { command = Some(drop); }
+                            response.on_hover_text("Drop files here, or drag folders to nest them. Ctrl/Command-click selects multiple folders.");
+                        });
+                    });
+                }
+            });
+        self.folder_scroll = output.state.offset.y;
+        self.scroll_drag(ui, &output);
+        ui.separator();
+        ui.add(egui::Label::new(format!("Selected: {}", folder_title(&self.folder))).truncate());
+        if ui
+            .add_enabled(
+                !self.selected.is_empty(),
+                egui::Button::new("Move selected files here"),
+            )
+            .clicked()
+        {
+            command = Some(Command::Move);
+        }
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.name)
+                    .desired_width(ui.available_width())
+                    .hint_text("Folder name"),
+            );
+        });
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Create folder").clicked() {
+                command = Some(Command::Create);
+            }
+            if ui
+                .add_enabled(!self.folder.is_empty(), egui::Button::new("Rename"))
+                .clicked()
+            {
+                command = Some(Command::Rename);
+            }
+            if ui
+                .add_enabled(!self.folder.is_empty(), egui::Button::new("Create parent"))
+                .clicked()
+            {
+                command = Some(Command::Parent);
+            }
+        });
+        egui::ComboBox::from_id_salt("organize_parent")
+            .selected_text(format!("Into: {}", folder_title(&self.parent)))
+            .width(ui.available_width().min(300.0))
+            .show_ui(ui, |ui| {
+                for (path, _) in &self.folders {
+                    ui.selectable_value(&mut self.parent, path.clone(), folder_title(path));
+                }
+            });
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(!self.folder.is_empty(), egui::Button::new("Nest folder"))
+                .clicked()
+            {
+                command = Some(Command::Nest);
+            }
+            if ui
+                .add_enabled(
+                    self.folder.contains('/'),
+                    egui::Button::new("Move folder to root"),
+                )
+                .clicked()
+            {
+                command = Some(Command::Unnest);
+            }
+        });
+        command
+    }
+    fn apply(&mut self, command: Command, media: &[Media], companions: bool) {
+        let result = match command {
+            Command::RenameFile(id, name) => crate::core::organize::set_file_name(
+                &self.catalog,
+                &mut self.names,
+                id,
+                &name,
+                companions,
+            )
+            .map(|()| {
+                self.renaming = None;
+                self.folder.clone()
+            }),
+            Command::Create => self.draft.create_folder(&self.folder, self.name.trim()),
+            Command::Rename => self.draft.rename_folder(&self.folder, self.name.trim()),
+            Command::Parent => self.draft.create_parent(&self.folder, self.name.trim()),
+            Command::Nest => self.draft.nest_folder(&self.folder, &self.parent),
+            Command::Unnest => self.draft.unnest_folder(&self.folder),
+            Command::Move => self
+                .draft
+                .move_selection(
+                    &Selection {
+                        files: self.selected.clone(),
+                        ..Default::default()
+                    },
+                    &self.folder,
+                    media,
+                    companions,
+                )
+                .map(|()| self.folder.clone()),
+            Command::Drop(selection, target) => self
+                .draft
+                .move_selection(&selection, &target, media, companions)
+                .map(|()| target),
+        };
+        match result {
+            Ok(folder) => {
+                self.folder = folder;
+                self.selected_folders
+                    .retain(|p| self.draft.folders().contains(p));
+                if !self.draft.folders().contains(&self.parent) {
+                    self.parent.clear();
+                }
+                self.error = None;
+                self.refresh();
+            }
+            Err(error) => self.error = Some(error.to_string()),
+        }
+    }
+}
+impl PhotoSortApp {
+    pub(super) fn automatic_organize_mode(&self) -> bool {
+        matches!(
+            self.group_mode,
+            GroupMode::Visual | GroupMode::Mixed | GroupMode::Faces
+        )
+    }
+    pub(super) fn organize_labels(&self) -> HashMap<MediaId, String> {
+        let mut labels = self
+            .media
+            .iter()
+            .filter(|m| {
+                (self.group_mode != GroupMode::Visual
+                    || self
+                        .visual_groups
+                        .as_ref()
+                        .is_some_and(|groups| groups.contains_key(&m.id)))
+                    && (self.group_mode != GroupMode::Faces
+                        || self
+                            .face_groups
+                            .as_ref()
+                            .is_some_and(|groups| groups.groups.contains_key(&m.id)))
+                    && (self.group_mode != GroupMode::Mixed
+                        || self
+                            .mixed_labels
+                            .as_ref()
+                            .is_some_and(|labels| labels.contains_key(&m.id)))
+            })
+            .map(|m| (m.id, self.label_for(m)))
+            .collect();
+        if let Some(catalog) = &self.catalog {
+            crate::core::organize::include_inventory(catalog, &mut labels);
+        }
+        labels
+    }
+    pub(super) fn organize_grouping_ready(&self) -> bool {
+        match self.group_mode {
+            GroupMode::Visual => self.visual_groups.is_some(),
+            GroupMode::Mixed => self.mixed_labels.is_some(),
+            GroupMode::Faces => self.face_groups.is_some(),
+            _ => true,
+        }
+    }
+    pub(super) fn can_edit_folders(&self) -> bool {
+        !self.scanning
+            && self.retry_plan.is_none()
+            && !self.busy
+            && self.analysis_run.is_none()
+            && self.catalog.is_some()
+            && (self.organize_grouping_ready()
+                || self.organize_drafts.contains_key(&self.group_mode))
+    }
+    pub(super) fn open_organize_editor(&mut self) {
+        if !self.can_edit_folders() {
+            return;
+        }
+        let draft = self
+            .organize_drafts
+            .get(&self.group_mode)
+            .cloned()
+            .unwrap_or_else(|| {
+                Draft::from_catalog(self.catalog.as_ref().unwrap(), self.organize_labels())
+            });
+        let rows = self
+            .catalog
+            .as_ref()
+            .unwrap()
+            .organize_files()
+            .into_iter()
+            .filter(|(id, _)| draft.labels().contains_key(id))
+            .map(|(id, path)| PhotoRow {
+                id,
+                source: path.to_owned(),
+                after: String::new(),
+            })
+            .collect();
+        let folder = self
+            .active
+            .and_then(|id| draft.labels().get(&id))
+            .cloned()
+            .unwrap_or_default();
+        let mut editor = Editor {
+            catalog: self.catalog.as_ref().unwrap().clone(),
+            output: self.output.clone().into(),
+            desktop_enabled: self.desktop_available(),
+            desktop_pending: None,
+            names: self.file_names.clone(),
+            renaming: None,
+            rename_focus: false,
+            draft,
+            rows,
+            folders: Vec::new(),
+            selected: HashSet::new(),
+            selected_folders: Default::default(),
+            drag_owner: Arc::new(()),
+            completed_drag: None,
+            drag: Default::default(),
+            folder,
+            name: String::new(),
+            parent: String::new(),
+            error: None,
+            compact_folders: false,
+            photo_scroll: 0.0,
+            folder_scroll: 0.0,
+            restore_scroll: [None; 2],
+        };
+        editor.refresh();
+        if let Some(view) = &self.organize_view {
+            editor.restore_bookmark(view);
+        }
+        self.organize_editor = Some(editor);
+    }
+    pub(super) fn organize_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut editor) = self.organize_editor.take() else {
+            return;
+        };
+        editor.desktop_enabled = self.desktop_available();
+        editor.output = self.output.clone().into();
+        editor.begin_drag_frame(ctx);
+        let mut action = 0;
+        let mut command = None;
+        egui::Modal::new(egui::Id::new("organize_editor")).show(ctx, |ui| {
+            let width = (ctx.content_rect().width() - 64.0).clamp(280.0, 1080.0);
+            let height = (ctx.content_rect().height() - 360.0).clamp(160.0, 560.0);
+            ui.set_width(width);
+            ui.heading("Arrange files and folders");
+            if width >= 680.0 {
+                ui.label("Drag files onto folders, drag folders to nest them, or select a file to rename it.");
+                ui.label(RichText::new("Preview moves, then Apply to change files. Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.").small().color(MUTED));
+            } else {
+                ui.label("Drag files or folders to arrange them. Preview moves before applying.")
+                    .on_hover_text("Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.");
+            }
+            ui.separator();
+            if width >= 680.0 {
+                ui.columns(2, |columns| {
+                    command = editor.photos(&mut columns[0], height);
+                    command = editor.structure(&mut columns[1], height).or_else(|| command.take());
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut editor.compact_folders, false, "Files");
+                    let folders = ui.selectable_value(&mut editor.compact_folders, true, "Folders");
+                    #[cfg(test)]
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("test_folders_tab"), folders.rect));
+                    if folders.dnd_hover_payload::<FolderDrag>().is_some_and(|p| Arc::ptr_eq(&p.owner, &editor.drag_owner)) {
+                        editor.compact_folders = true;
+                    }
+                });
+                if editor.compact_folders { command = editor.structure(ui, height); }
+                else { command = editor.photos(ui, height); }
+            }
+            if let Some(error) = &editor.error { ui.colored_label(RED, error); }
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Reset folder layout").clicked() { action = 4; }
+                if ui.button("Cancel edits").clicked() { action = 1; }
+                if ui.button("Keep edits").clicked() { action = 2; }
+                if ui.button("Preview moves >").clicked() { action = 3; }
+            });
+        });
+        if command.is_none()
+            && let Some(drag) = editor.completed_drag.take()
+            && let (Some(payload), Some(target)) = (drag.payload, drag.target)
+        {
+            command = Some(Command::Drop(payload.selection, target));
+        }
+        if let Some(command) = command {
+            editor.apply(command, &self.media, self.companions);
+        }
+        if action != 0 {
+            egui::DragAndDrop::clear_payload(ctx);
+        }
+        if let Some(request) = editor.desktop_pending.take() {
+            self.dispatch_desktop(request);
+        }
+        self.finish_organize_edit(editor, action);
+    }
+    fn finish_organize_edit(&mut self, mut editor: Editor, action: u8) {
+        // Keep/Preview accepts a currently typed name too; do not silently lose
+        // the field because the user skipped the optional per-file Stage button.
+        if matches!(action, 2 | 3)
+            && let Some((id, name)) = editor.renaming.clone()
+        {
+            editor.apply(Command::RenameFile(id, name), &self.media, self.companions);
+            if editor.error.is_some() {
+                self.organize_editor = Some(editor);
+                return;
+            }
+        }
+        self.organize_view = Some(editor.bookmark());
+        match action {
+            1 => {}
+            2 | 3 => {
+                self.file_names = editor.names;
+                self.organize_drafts.insert(self.group_mode, editor.draft);
+                if action == 3 {
+                    self.organize();
+                }
+            }
+            4 => {
+                editor.draft =
+                    Draft::from_catalog(self.catalog.as_ref().unwrap(), self.organize_labels());
+                editor.folder.clear();
+                editor.parent.clear();
+                editor.name.clear();
+                editor.renaming = None;
+                editor.error = None;
+                editor.selected_folders.clear();
+                editor.refresh();
+                self.organize_editor = Some(editor);
+            }
+            _ => self.organize_editor = Some(editor),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn app() -> PhotoSortApp {
+        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        // Nonexistent paths prove folder editing needs no rescan or image load.
+        let media: Vec<_> = [
+            "/missing/trip/a.jpg",
+            "/missing/trip/a.ARW",
+            "/missing/trip/b.jpg",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, path)| Media {
+            id: MediaId(i as u64),
+            path: path.into(),
+            kind: MediaKind::Photo,
+            fingerprint: Default::default(),
+        })
+        .collect();
+        app.catalog = Some(Arc::new(Catalog {
+            root: "/missing".into(),
+            media: media.clone(),
+            ..Default::default()
+        }));
+        app.media = media;
+        app
+    }
+    #[test]
+    fn path_menus_keep_originals_separate_from_renamed_companions_and_new_folders() {
+        let mut app = app();
+        let root = PathBuf::from("/missing");
+        let document = root.join("trip/notes and café.txt");
+        let catalog = Arc::get_mut(app.catalog.as_mut().unwrap()).unwrap();
+        catalog.inventory.push(document.clone());
+        catalog.directories = vec![root.clone(), root.join("trip")];
+        app.output = "/output".into();
+        app.companions = true;
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        editor.apply(
+            Command::RenameFile(MediaId(0), "Keeper".into()),
+            &app.media,
+            true,
+        );
+        editor.folder = "trip".into();
+        editor.name = "Selected".into();
+        editor.apply(Command::Rename, &app.media, true);
+        for (id, original, destination) in [
+            (
+                MediaId(0),
+                root.join("trip/a.jpg"),
+                PathBuf::from("/output/Selected/Keeper.jpg"),
+            ),
+            (
+                MediaId(1),
+                root.join("trip/a.ARW"),
+                PathBuf::from("/output/Selected/Keeper.ARW"),
+            ),
+            (
+                MediaId::for_path(&document),
+                document.clone(),
+                PathBuf::from("/output/Selected/notes and café.txt"),
+            ),
+        ] {
+            let row = editor.rows.iter().find(|row| row.id == id).unwrap();
+            let paths = editor.file_locations(row);
+            assert_eq!(paths.source.as_deref(), Some(original.as_path()));
+            assert_eq!(paths.relative.as_deref(), original.strip_prefix(&root).ok());
+            assert_eq!(paths.proposed.as_deref(), Some(destination.as_path()));
+        }
+        let renamed = editor.folder_locations("Selected");
+        assert_eq!(renamed.source, Some(root.join("trip")));
+        assert_eq!(renamed.relative, Some(PathBuf::from("Selected")));
+        assert_eq!(renamed.proposed, Some(PathBuf::from("/output/Selected")));
+        editor.draft.create_folder("", "New folder").unwrap();
+        let created = editor.folder_locations("New folder");
+        assert!(created.source.is_none());
+        assert_eq!(created.relative, Some(PathBuf::from("New folder")));
+        assert_eq!(created.proposed, Some(PathBuf::from("/output/New folder")));
+        assert_eq!(editor.folder_locations("").source, Some(root));
+        assert_eq!(
+            editor.folder_locations("").relative,
+            Some(PathBuf::from("."))
+        );
+        assert_eq!(app.stats.decodes, 0);
+        assert!(app.requested.is_empty());
+        assert!(app.decisions.is_empty());
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn editor_context_menu_copies_clicked_source_at_compact_and_wide_sizes() {
+        for size in [egui::vec2(600.0, 650.0), egui::vec2(1200.0, 850.0)] {
+            let mut app = app();
+            app.active = Some(MediaId(0));
+            app.output = "/output".into();
+            app.open_organize_editor();
+            app.organize_editor
+                .as_mut()
+                .unwrap()
+                .selected
+                .insert(MediaId(0));
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            ctx.enable_accesskit();
+            let frame = |app: &mut PhotoSortApp, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| app.organize_dialog(ctx),
+                )
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            let pos = ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_file_rect", 1_u64))))
+                .unwrap()
+                .center();
+            let button = |pos, button, pressed| egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers: Default::default(),
+            };
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    button(pos, egui::PointerButton::Secondary, true),
+                    button(pos, egui::PointerButton::Secondary, false),
+                ],
+            );
+            let output = frame(&mut app, vec![]);
+            let tree = output.platform_output.accesskit_update.unwrap();
+            let node = tree
+                .nodes
+                .iter()
+                .find(|(_, n)| n.label() == Some("Copy full path"))
+                .expect("Organize row context menu");
+            let bounds = node.1.bounds().unwrap();
+            assert!(
+                bounds.x0 >= 0.0
+                    && bounds.y0 >= 0.0
+                    && bounds.x1 <= f64::from(size.x)
+                    && bounds.y1 <= f64::from(size.y)
+            );
+            let pos = egui::pos2(
+                ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                ((bounds.y0 + bounds.y1) / 2.0) as f32,
+            );
+            let output = frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    button(pos, egui::PointerButton::Primary, true),
+                    button(pos, egui::PointerButton::Primary, false),
+                ],
+            );
+            assert!(output.platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(text) if text == "/missing/trip/a.ARW")));
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected,
+                HashSet::from([MediaId(0)])
+            );
+            assert_eq!(app.active, Some(MediaId(0)));
+            assert!(app.decisions.is_empty());
+            assert!(app.requested.is_empty());
+            assert_eq!(app.stats.decodes, 0);
+            app.runtime.shutdown();
+        }
+    }
+
+    #[test]
+    fn file_rename_drafts_cancel_accept_restore_and_preserve_companions_and_decisions() {
+        let mut app = app();
+        app.companions = true;
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        editor.apply(
+            Command::RenameFile(MediaId(1), "Keeper".into()),
+            &app.media,
+            true,
+        );
+        assert_eq!(editor.names.len(), 2);
+        assert_eq!(editor.names[&MediaId(0)], "Keeper");
+        assert!(app.file_names.is_empty());
+        app.finish_organize_edit(editor, 1);
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        assert!(editor.names.is_empty());
+        editor.start_rename(MediaId(1));
+        editor.renaming.as_mut().unwrap().1 = "Kept".into();
+        app.finish_organize_edit(editor, 2);
+        assert_eq!(app.file_names.len(), 2);
+        assert_eq!(app.file_names[&MediaId(0)], "Kept");
+        assert_eq!(app.file_names[&MediaId(1)], "Kept");
+        assert!(app.organize_editor.is_none());
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        editor.start_rename(MediaId(0));
+        editor.renaming.as_mut().unwrap().1 = "bad/name".into();
+        app.finish_organize_edit(editor, 2);
+        let mut editor = app.organize_editor.take().unwrap();
+        assert!(editor.error.is_some());
+        assert_eq!(app.file_names[&MediaId(0)], "Kept");
+        editor.apply(
+            Command::RenameFile(MediaId(0), String::new()),
+            &app.media,
+            true,
+        );
+        app.finish_organize_edit(editor, 2);
+        assert!(app.file_names.is_empty());
+        assert!(app.decisions.is_empty() && app.requested.is_empty());
+        assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+    }
+    #[test]
+    fn enter_commits_a_focused_file_name_after_the_widget_releases_focus() {
+        let mut app = app();
+        app.companions = true;
+        app.open_organize_editor();
+        app.organize_editor
+            .as_mut()
+            .unwrap()
+            .start_rename(MediaId(0));
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let mut frame = |events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 650.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.organize_dialog(ctx),
+            );
+        };
+        for _ in 0..3 {
+            frame(vec![]);
+        }
+        frame(vec![egui::Event::Text("Keyboard name".into())]);
+        frame(vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let editor = app.organize_editor.as_ref().unwrap();
+        assert!(editor.renaming.is_none());
+        assert_eq!(editor.names[&MediaId(0)], "Keyboard name");
+        assert_eq!(editor.names[&MediaId(1)], "Keyboard name");
+        assert!(
+            app.file_names.is_empty(),
+            "Enter stages inside the disposable editor draft"
+        );
+        assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+    }
+    #[test]
+    fn file_name_entry_and_errors_fit_compact_and_wide_editor_windows() {
+        for size in [
+            egui::vec2(640., 600.),
+            egui::vec2(800., 650.),
+            egui::vec2(1280., 800.),
+        ] {
+            let mut app = app();
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_mut().unwrap();
+            editor.start_rename(MediaId(0));
+            editor.apply(
+                Command::RenameFile(MediaId(0), "bad/name".into()),
+                &app.media,
+                app.companions,
+            );
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            for _ in 0..3 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ctx| app.organize_dialog(ctx),
+                );
+            }
+            let rect = ctx
+                .memory(|m| m.area_rect(egui::Id::new("organize_editor")))
+                .unwrap();
+            assert!(
+                rect.width() <= size.x && rect.height() <= size.y,
+                "{size:?}: {rect:?}"
+            );
+            assert!(app.organize_editor.as_ref().unwrap().renaming.is_some());
+            assert_eq!(app.stats.decodes, 0);
+        }
+    }
+    #[test]
+    fn supporting_editor_selection_survives_worker_reload_and_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.jpg"), b"photo").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"document").unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fn settle(app: &mut PhotoSortApp) {
+            let end = Instant::now() + Duration::from_secs(10);
+            while app.scanning
+                || app.pending_bookmark.is_some()
+                || app.filter_dirty
+                || app.browse_run.is_some()
+            {
+                app.poll(&egui::Context::default());
+                app.refilter();
+                app.restore_bookmark();
+                assert!(Instant::now() < end, "{:?}", app.error);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        let mut app =
+            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
+        app.scan_folder(root.clone());
+        settle(&mut app);
+        let id = MediaId::for_path(&root.join("notes.txt"));
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        editor.selected.insert(id);
+        app.organize_view = Some(editor.bookmark());
+        app.view_data_ready.insert(Step::Organize);
+        app.checkpoint_bookmarks();
+        app.runtime.shutdown();
+        drop(app);
+        let mut reopened =
+            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
+        reopened.scan_folder(root.clone());
+        settle(&mut reopened);
+        reopened.open_organize_editor();
+        assert!(
+            reopened
+                .organize_editor
+                .as_ref()
+                .unwrap()
+                .selected
+                .contains(&id)
+        );
+        assert_eq!(reopened.stats.decodes, 0);
+        reopened.organize_editor = None;
+        std::fs::remove_file(root.join("notes.txt")).unwrap();
+        reopened.scan_folder(root);
+        settle(&mut reopened);
+        reopened.open_organize_editor();
+        assert!(
+            !reopened
+                .organize_editor
+                .as_ref()
+                .unwrap()
+                .selected
+                .contains(&id)
+        );
+    }
+
+    #[test]
+    fn large_editor_selection_restores_from_cached_rows() {
+        let mut app = app();
+        app.open_organize_editor();
+        let editor = app.organize_editor.as_mut().unwrap();
+        editor.rows = (0..100_000)
+            .map(|i| PhotoRow {
+                id: MediaId(i),
+                source: PathBuf::new(),
+                after: String::new(),
+            })
+            .collect();
+        editor.folders = (0..10_000).map(|i| (format!("folder-{i}"), 10)).collect();
+        let view = crate::core::views::EditorBookmark {
+            selected: (0..100_001).map(MediaId).collect(),
+            folders: (0..10_001).map(|i| format!("folder-{i}")).collect(),
+            ..Default::default()
+        };
+        editor.restore_bookmark(&view);
+        assert_eq!(editor.selected.len(), 100_000);
+        assert_eq!(editor.selected_folders.len(), 10_000);
+        assert_eq!(app.stats.decodes, 0);
+    }
+
+    #[test]
+    fn editor_restores_presentation_without_restoring_draft_edits() {
+        let mut app = app();
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        editor.selected.insert(MediaId(1));
+        editor.folder = "trip".into();
+        editor.selected_folders.insert("trip".into());
+        editor.photo_scroll = 120.0;
+        editor.folder_scroll = 40.0;
+        editor.compact_folders = true;
+        let before = editor.draft.labels().clone();
+        editor.name = "Changed".into();
+        editor.apply(Command::Rename, &app.media, app.companions);
+        assert_ne!(editor.draft.labels(), &before);
+        app.organize_view = Some(editor.bookmark());
+        // Closing without storing the draft is Cancel; only presentation survives.
+        app.open_organize_editor();
+        let reopened = app.organize_editor.as_ref().unwrap();
+        assert_eq!(reopened.draft.labels(), &before);
+        assert!(reopened.selected.contains(&MediaId(1)));
+        assert_eq!(reopened.restore_scroll, [Some(120.0), Some(40.0)]);
+        assert!(reopened.compact_folders);
+        assert!(
+            !reopened
+                .folders
+                .iter()
+                .any(|(folder, _)| folder == "Changed")
+        );
+        assert!(app.decisions.is_empty() && app.requested.is_empty());
+    }
+    #[test]
+    fn editor_moves_companions_together_without_touching_review_decisions_or_images() {
+        let mut app = app();
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        editor.folder = editor.draft.create_folder("", "keepers").unwrap();
+        editor.selected.insert(MediaId(0));
+        editor.apply(Command::Move, &app.media, true);
+        assert_eq!(editor.draft.labels()[&MediaId(0)], "keepers");
+        assert_eq!(editor.draft.labels()[&MediaId(1)], "keepers");
+        assert_eq!(editor.draft.labels()[&MediaId(2)], "trip");
+        assert!(app.decisions.is_empty());
+        assert_eq!(app.stats.decodes, 0);
+        assert!(!app.scanning && app.analysis_run.is_none());
+    }
+    #[test]
+    fn editor_isolated_draft_can_cancel_and_modes_retain_separate_edits() {
+        let mut app = app();
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        editor.draft.rename_folder("trip", "holiday").unwrap();
+        app.organize_drafts.insert(GroupMode::Current, editor.draft);
+        app.open_organize_editor();
+        app.organize_editor
+            .as_mut()
+            .unwrap()
+            .draft
+            .rename_folder("holiday", "discarded")
+            .unwrap();
+        app.organize_editor = None; // Cancel the working copy.
+        app.group_mode = GroupMode::Camera;
+        app.open_organize_editor();
+        assert!(
+            app.organize_editor
+                .as_ref()
+                .unwrap()
+                .draft
+                .folders()
+                .contains("Unknown camera")
+        );
+        app.organize_editor = None;
+        app.group_mode = GroupMode::Current;
+        app.open_organize_editor();
+        let editor = app.organize_editor.as_ref().unwrap();
+        assert!(editor.draft.folders().contains("holiday"));
+        assert!(!editor.draft.folders().contains("discarded"));
+    }
+    #[test]
+    fn pending_analysis_blocks_editor_and_modal_blocks_workflow_keyboard() {
+        let mut app = app();
+        app.analysis_run = Some(8);
+        app.open_organize_editor();
+        assert!(app.organize_editor.is_none());
+        app.analysis_run = None;
+        app.open_organize_editor();
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::I,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(input, |ctx| app.keyboard(ctx));
+        assert!(
+            app.inspector,
+            "Editor keystrokes must not toggle the underlying inspector"
+        );
+        app.request_departure(Destination::Step(Step::Cull));
+        assert_eq!(app.step, Step::Organize);
+    }
+    #[test]
+    fn editor_and_footer_fit_wide_and_compact_windows() {
+        for size in [
+            egui::vec2(640.0, 600.0),
+            egui::vec2(800.0, 640.0),
+            egui::vec2(1440.0, 960.0),
+        ] {
+            for folders in [false, true] {
+                let mut app = app();
+                app.open_organize_editor();
+                let editor = app.organize_editor.as_mut().unwrap();
+                editor.compact_folders = folders;
+                editor.error = Some("A folder cannot contain itself".into());
+                for n in 0..100 {
+                    editor
+                        .draft
+                        .create_folder("", &format!("folder-{n}"))
+                        .unwrap();
+                }
+                editor.refresh();
+                // Enough rows to exercise scroll limits, not just empty content.
+                for n in 3..100 {
+                    editor.rows.push(PhotoRow {
+                        id: MediaId(n),
+                        source: PathBuf::from(format!("/missing/trip/day1/IMG_{n:04}.jpg")),
+
+                        after: "trip/day1".into(),
+                    });
+                }
+                let ctx = egui::Context::default();
+                theme_install(&ctx);
+                for _ in 0..3 {
+                    let input = egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    };
+                    let _ = ctx.run(input, |ctx| app.organize_dialog(ctx));
+                }
+                let rect = ctx
+                    .memory(|m| m.area_rect(egui::Id::new("organize_editor")))
+                    .unwrap();
+                assert!(
+                    rect.height() <= size.y && rect.width() <= size.x,
+                    "{size:?} folders={folders}: {rect:?}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn editor_includes_documents_from_shared_inventory_in_subtree_edits() {
+        let mut app = app();
+        Arc::get_mut(app.catalog.as_mut().unwrap())
+            .unwrap()
+            .inventory
+            .push("/missing/trip/notes.json".into());
+        app.open_organize_editor();
+        let editor = app.organize_editor.as_mut().unwrap();
+        assert_eq!(editor.rows.len(), 4);
+        editor.draft.rename_folder("trip", "holiday").unwrap();
+        editor.refresh();
+        assert!(editor.rows.iter().all(|row| row.after == "holiday"));
+        assert!(editor.rows.iter().any(|row| {
+            row.source
+                .file_name()
+                .is_some_and(|name| name == "notes.json")
+        }));
+        assert_eq!(app.stats.decodes, 0);
+        assert!(app.analysis_run.is_none());
+    }
+    #[test]
+    fn hidden_inventory_reaches_editor_and_shared_planner_without_decoding() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".before/.empty")).unwrap();
+        for name in [".photo.jpg", ".photo.xmp", ".notes.json"] {
+            std::fs::write(temp.path().join(".before").join(name), b"unchanged").unwrap();
+        }
+        let catalog = Catalog::scan(temp.path(), || false, |_| {}).unwrap();
+        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        app.output = catalog.root.display().to_string();
+        app.media = catalog.media.clone();
+        app.catalog = Some(Arc::new(catalog));
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        assert_eq!(editor.rows.len(), 2);
+        assert!(editor.rows.iter().any(|row| {
+            row.source
+                .file_name()
+                .is_some_and(|name| name == ".photo.jpg")
+        }));
+        assert!(editor.rows.iter().any(|row| {
+            row.source
+                .file_name()
+                .is_some_and(|name| name == ".notes.json")
+        }));
+        assert!(editor.rows.iter().all(|row| {
+            row.source
+                .parent()
+                .is_some_and(|parent| parent == editor.catalog.root.join(".before"))
+        }));
+        assert!(editor.draft.folders().contains(".before/.empty"));
+        editor.draft.rename_folder(".before", ".after").unwrap();
+        editor.refresh();
+        assert!(editor.rows.iter().all(|row| row.after == ".after"));
+        app.organize_drafts.insert(GroupMode::Current, editor.draft);
+        app.organize();
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.busy && Instant::now() < deadline {
+            app.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.plan_open && app.error.is_none(), "{:?}", app.error);
+        let plan = app.plan.as_ref().unwrap();
+        use crate::core::operations::Action;
+        assert_eq!(
+            plan.actions
+                .iter()
+                .filter(|action| matches!(action, Action::Move { .. }))
+                .count(),
+            2
+        );
+        assert!(plan.actions.iter().any(|action| matches!(action, Action::CreateDirectory { path } if path.ends_with(".after/.empty"))));
+        for name in [".photo.jpg", ".photo.xmp", ".notes.json"] {
+            assert_eq!(
+                std::fs::read(temp.path().join(".before").join(name)).unwrap(),
+                b"unchanged"
+            );
+        }
+        assert!(!temp.path().join(".after").exists());
+        assert_eq!(app.stats.decodes, 0);
+        assert!(app.analysis_run.is_none());
+    }
+    #[test]
+    fn empty_folder_editor_intent_reaches_shared_io_worker_without_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("existing/empty")).unwrap();
+        let catalog = Catalog::scan(temp.path(), || false, |_| {}).unwrap();
+        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        app.output = catalog.root.display().to_string();
+        app.catalog = Some(Arc::new(catalog));
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        assert!(editor.draft.folders().contains("existing/empty"));
+        editor.draft.create_folder("", "new-empty").unwrap();
+        app.organize_drafts.insert(GroupMode::Current, editor.draft);
+        app.organize();
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.busy && Instant::now() < deadline {
+            app.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.plan_open && app.error.is_none());
+        let plan = app.plan.as_ref().unwrap();
+        assert_eq!(plan.actions.len(), 1);
+        assert!(
+            matches!(&plan.actions[0], crate::core::operations::Action::CreateDirectory {path} if path.ends_with("new-empty"))
+        );
+        assert!(!temp.path().join("new-empty").exists());
+        assert_eq!(app.stats.decodes, 0);
+    }
+    #[test]
+    fn drag_sources_preserve_multi_selection_and_replace_unselected_sources() {
+        let mut app = app();
+        app.open_organize_editor();
+        let editor = app.organize_editor.as_mut().unwrap();
+        editor.selected.extend([MediaId(0), MediaId(1)]);
+        assert_eq!(editor.file_drag(MediaId(0)).selection.files.len(), 2);
+        assert_eq!(
+            editor.file_drag(MediaId(2)).selection.files,
+            HashSet::from([MediaId(2)])
+        );
+        editor.draft.create_folder("", "target").unwrap();
+        editor
+            .selected_folders
+            .extend(["trip".into(), "target".into()]);
+        assert_eq!(editor.folder_drag("trip").selection.folders.len(), 2);
+        editor.draft.create_folder("", "third").unwrap();
+        assert_eq!(editor.folder_drag("third").selection.folders.len(), 1);
+        assert_eq!(app.stats.decodes, 0);
+    }
+    #[test]
+    fn drop_and_button_share_companion_expansion_and_failed_drop_is_unchanged() {
+        let mut app = app();
+        app.open_organize_editor();
+        let mut button = app.organize_editor.take().unwrap();
+        app.open_organize_editor();
+        let mut dragged = app.organize_editor.take().unwrap();
+        for editor in [&mut button, &mut dragged] {
+            editor.draft.create_folder("", "target").unwrap();
+            editor.selected.insert(MediaId(0));
+        }
+        button.folder = "target".into();
+        button.apply(Command::Move, &app.media, true);
+        let payload = dragged.file_drag(MediaId(0));
+        dragged.apply(
+            Command::Drop(payload.selection, "target".into()),
+            &app.media,
+            true,
+        );
+        assert_eq!(dragged.draft, button.draft);
+        assert_eq!(dragged.draft.labels()[&MediaId(1)], "target");
+        assert_eq!(dragged.rows[1].after, "target");
+        let before = dragged.draft.clone();
+        let payload = dragged.folder_drag("trip");
+        dragged.apply(
+            Command::Drop(payload.selection, "trip".into()),
+            &app.media,
+            true,
+        );
+        assert!(dragged.error.is_some());
+        assert_eq!(dragged.draft, before);
+        assert!(app.decisions.is_empty());
+        assert_eq!(app.stats.decodes, 0);
+    }
+    #[test]
+    fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
+        let mut app = app();
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        editor.draft.create_folder("", "target").unwrap();
+        let ctx = egui::Context::default();
+        let mut rect = egui::Rect::NOTHING;
+        let mut dropped = None;
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                rect = ui.button("target").rect;
+            });
+        });
+        let position = rect.center();
+        let payload = editor.file_drag(MediaId(0));
+        for own in [false, true] {
+            let payload = FolderDrag {
+                owner: if own {
+                    payload.owner.clone()
+                } else {
+                    Arc::new(())
+                },
+                selection: payload.selection.clone(),
+            };
+            egui::DragAndDrop::set_payload(&ctx, payload);
+            let input = egui::RawInput {
+                events: vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let response = ui.button("target");
+                    dropped = editor.drop_target(ui, &response, "target");
+                });
+            });
+            assert_eq!(dropped.is_some(), own);
+        }
+        egui::DragAndDrop::set_payload(&ctx, payload);
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(input, |_| {});
+        assert!(!egui::DragAndDrop::has_any_payload(&ctx));
+        assert_eq!(editor.draft.labels()[&MediaId(0)], "trip");
+        for cancellation in 0..4 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(position),
+                        egui::Event::PointerButton {
+                            pos: position,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| editor.begin_drag_frame(ctx),
+            );
+            assert!(editor.drag.start().is_some());
+            let mut input = egui::RawInput {
+                focused: cancellation != 1,
+                ..Default::default()
+            };
+            if cancellation == 0 {
+                input.events.push(egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                });
+            }
+            if cancellation == 2 {
+                input.events.push(egui::Event::PointerGone);
+            }
+            egui::DragAndDrop::set_payload(&ctx, editor.file_drag(MediaId(0)));
+            if cancellation == 3 {
+                let _ = ctx.run(Default::default(), |_| {});
+            }
+            let _ = ctx.run(input, |ctx| editor.begin_drag_frame(ctx));
+            assert!(editor.drag.start().is_none());
+            assert!(editor.completed_drag.is_none());
+            assert!(
+                !egui::DragAndDrop::has_any_payload(&ctx),
+                "cancellation {cancellation}"
+            );
+        }
+    }
+    #[test]
+    fn pointer_drags_in_scrollable_modal_reach_shared_draft() {
+        for (folder, timing) in [false, true]
+            .into_iter()
+            .flat_map(|folder| (0..4).map(move |timing| (folder, timing)))
+        {
+            let mut app = app();
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_mut().unwrap();
+            editor.draft.create_folder("", "target").unwrap();
+            editor.refresh();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let frame = |app: &mut PhotoSortApp, events: Vec<egui::Event>| {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 960.0),
+                    )),
+                    events,
+                    ..Default::default()
+                };
+                let _ = ctx.run(input, |ctx| app.organize_dialog(ctx));
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            let source = if folder {
+                egui::Id::new(("test_folder_rect", "trip"))
+            } else {
+                egui::Id::new(("test_file_rect", 0_u64))
+            };
+            let source = ctx
+                .data(|d| d.get_temp::<egui::Rect>(source))
+                .unwrap()
+                .center();
+            let target = ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_folder_rect", "target"))))
+                .unwrap()
+                .center();
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: Default::default(),
+            };
+            if timing == 1 {
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(source),
+                        button(source, true),
+                        egui::Event::PointerMoved(target),
+                        button(target, false),
+                    ],
+                );
+            } else if timing == 2 {
+                frame(
+                    &mut app,
+                    vec![egui::Event::PointerMoved(source), button(source, true)],
+                );
+                frame(
+                    &mut app,
+                    vec![egui::Event::PointerMoved(target), button(target, false)],
+                );
+            } else if timing == 3 {
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(source),
+                        button(source, true),
+                        egui::Event::PointerMoved(target),
+                    ],
+                );
+                frame(&mut app, vec![button(target, false)]);
+            } else {
+                frame(
+                    &mut app,
+                    vec![egui::Event::PointerMoved(source), button(source, true)],
+                );
+                frame(
+                    &mut app,
+                    vec![egui::Event::PointerMoved(source + egui::vec2(20.0, 0.0))],
+                );
+                assert!(
+                    egui::DragAndDrop::has_payload_of_type::<FolderDrag>(&ctx),
+                    "Drag did not start: folder={folder}"
+                );
+                frame(&mut app, vec![egui::Event::PointerMoved(target)]);
+                frame(&mut app, vec![button(target, false)]);
+            }
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert!(editor.error.is_none(), "{:?}", editor.error);
+            assert_eq!(
+                editor.draft.labels()[&MediaId(0)],
+                if folder { "target/trip" } else { "target" }
+            );
+            assert_eq!(
+                editor.draft.labels()[&MediaId(1)],
+                if folder { "target/trip" } else { "target" }
+            );
+            assert_eq!(app.stats.decodes, 0);
+        }
+    }
+    #[test]
+    fn compact_drag_can_switch_tabs_without_losing_its_selection() {
+        let mut app = app();
+        app.open_organize_editor();
+        let editor = app.organize_editor.as_mut().unwrap();
+        editor.draft.create_folder("", "target").unwrap();
+        editor.refresh();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let frame = |app: &mut PhotoSortApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(640.0, 600.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| app.organize_dialog(ctx));
+        };
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
+        }
+        let rect = |id| ctx.data(|d| d.get_temp::<egui::Rect>(id)).unwrap();
+        let source = rect(egui::Id::new(("test_file_rect", 0_u64))).center();
+        let tab = rect(egui::Id::new("test_folders_tab")).center();
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: Default::default(),
+        };
+        frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(source), button(source, true)],
+        );
+        frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(source + egui::vec2(20.0, 0.0))],
+        );
+        frame(&mut app, vec![egui::Event::PointerMoved(tab)]);
+        assert!(app.organize_editor.as_ref().unwrap().compact_folders);
+        frame(&mut app, vec![]);
+        let target = rect(egui::Id::new(("test_folder_rect", "target"))).center();
+        frame(&mut app, vec![egui::Event::PointerMoved(target)]);
+        frame(&mut app, vec![button(target, false)]);
+        let editor = app.organize_editor.as_ref().unwrap();
+        assert_eq!(editor.draft.labels()[&MediaId(0)], "target");
+        assert_eq!(editor.draft.labels()[&MediaId(1)], "target");
+        assert_eq!(app.stats.decodes, 0);
+    }
+}
