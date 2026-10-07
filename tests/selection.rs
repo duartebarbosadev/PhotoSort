@@ -139,3 +139,47 @@ fn bookmark_snapshot_retains_range_anchor_independently_of_focus() {
         "Shift selection must extend from the saved anchor, not the first sorted member"
     );
 }
+
+#[test]
+fn file_keyboard_supporting_file_ranges_use_the_browser_selection_rules() {
+    use photosort::core::selection::select_ordered;
+    let order = [MediaId(900), MediaId(20), MediaId(700), MediaId(1)];
+    let mut ids = std::collections::HashSet::new();
+    let mut anchor = None;
+    select_ordered(
+        &mut ids,
+        &mut anchor,
+        order[1],
+        order.into_iter(),
+        true,
+        false,
+    );
+    select_ordered(
+        &mut ids,
+        &mut anchor,
+        order[3],
+        order.into_iter(),
+        false,
+        true,
+    );
+    assert_eq!(ids, order[1..].iter().copied().collect());
+    select_ordered(
+        &mut ids,
+        &mut anchor,
+        order[2],
+        order.into_iter(),
+        false,
+        true,
+    );
+    assert_eq!(ids, order[1..=2].iter().copied().collect());
+    select_ordered(
+        &mut ids,
+        &mut anchor,
+        MediaId(999),
+        order.into_iter(),
+        false,
+        false,
+    );
+    assert_eq!(ids.len(), 2);
+    assert_eq!(anchor, Some(order[1]));
+}

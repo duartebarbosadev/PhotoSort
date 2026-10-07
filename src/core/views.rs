@@ -55,6 +55,8 @@ pub struct Bookmark {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EditorBookmark {
+    pub focused: Option<MediaId>,
+    pub anchor: Option<MediaId>,
     pub selected: Vec<MediaId>,
     pub folders: Vec<String>,
     pub folder: String,
@@ -62,6 +64,21 @@ pub struct EditorBookmark {
     pub folder_scroll: f32,
     pub compact_folders: bool,
     pub collapsed: std::collections::BTreeSet<browsing::tree::Key>,
+}
+impl EditorBookmark {
+    fn ids(&self) -> impl Iterator<Item = MediaId> + '_ {
+        self.selected
+            .iter()
+            .copied()
+            .chain(self.focused)
+            .chain(self.anchor)
+    }
+    fn ids_mut(&mut self) -> impl Iterator<Item = &mut MediaId> {
+        self.selected
+            .iter_mut()
+            .chain(self.focused.iter_mut())
+            .chain(self.anchor.iter_mut())
+    }
 }
 impl Default for Bookmark {
     fn default() -> Self {
@@ -101,7 +118,7 @@ impl Bookmark {
             .chain(self.delete_current)
             .chain(self.group_anchor)
             .chain(self.anchor)
-            .chain(self.editor.iter().flat_map(|e| e.selected.iter().copied()))
+            .chain(self.editor.iter().flat_map(EditorBookmark::ids))
     }
     fn reconcile(
         &mut self,
@@ -112,6 +129,8 @@ impl Bookmark {
         self.active = self.active.filter(|id| valid(*id));
         if let Some(editor) = self.editor.as_mut() {
             editor.selected.retain(|id| valid_file(*id));
+            editor.focused = editor.focused.filter(|id| valid_file(*id));
+            editor.anchor = editor.anchor.filter(|id| valid_file(*id));
             for offset in [&mut editor.photo_scroll, &mut editor.folder_scroll] {
                 if !offset.is_finite() || *offset < 0.0 {
                     *offset = 0.0;
@@ -205,10 +224,10 @@ impl Saved {
             .bookmarks
             .values()
             .flat_map(|view| view.editor.iter())
-            .flat_map(|editor| editor.selected.iter())
+            .flat_map(EditorBookmark::ids)
         {
-            if let Some(fingerprint) = catalog.supporting_fingerprints.get(id) {
-                self.fingerprints.insert(*id, *fingerprint);
+            if let Some(fingerprint) = catalog.supporting_fingerprints.get(&id) {
+                self.fingerprints.insert(id, *fingerprint);
             }
         }
     }
@@ -236,7 +255,7 @@ impl Saved {
                 .chain(view.delete_current.iter_mut())
                 .chain(view.group_anchor.iter_mut())
                 .chain(view.anchor.iter_mut())
-                .chain(view.editor.iter_mut().flat_map(|e| e.selected.iter_mut()))
+                .chain(view.editor.iter_mut().flat_map(EditorBookmark::ids_mut))
             {
                 if let Some((new, _)) = mapping.get(id) {
                     *id = *new;

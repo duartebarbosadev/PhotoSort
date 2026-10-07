@@ -62,31 +62,14 @@ impl Selection {
         toggle: bool,
         extend: bool,
     ) {
-        let Some(target) = order.iter().position(|i| media[*i].id == id) else {
-            return;
-        };
-        if extend {
-            let anchor = self
-                .anchor
-                .and_then(|anchor| order.iter().position(|i| media[*i].id == anchor))
-                .unwrap_or(target);
-            if !toggle {
-                self.ids.clear();
-            }
-            self.ids.extend(
-                order[anchor.min(target)..=anchor.max(target)]
-                    .iter()
-                    .map(|i| media[*i].id),
-            );
-            self.anchor = Some(media[order[anchor]].id);
-        } else if toggle {
-            if !self.ids.remove(&id) {
-                self.ids.insert(id);
-            }
-            self.anchor = Some(id);
-        } else {
-            self.single(id);
-        }
+        select_ordered(
+            &mut self.ids,
+            &mut self.anchor,
+            id,
+            order.iter().map(|i| media[*i].id),
+            toggle,
+            extend,
+        );
     }
     /// Drop hidden/missing items so a bulk action cannot affect another filter's rows.
     pub fn reconcile(&mut self, media: &[Media], order: &[usize]) {
@@ -102,5 +85,44 @@ impl Selection {
         if !anchor_visible {
             self.anchor = None;
         }
+    }
+}
+
+/// Apply the same range/toggle rules to media browsers and supporting-file lists.
+/// The caller supplies its cached display order; no synthetic media or IO is needed.
+pub fn select_ordered(
+    ids: &mut HashSet<MediaId>,
+    anchor: &mut Option<MediaId>,
+    id: MediaId,
+    order: impl Iterator<Item = MediaId> + Clone,
+    toggle: bool,
+    extend: bool,
+) {
+    let Some(target) = order.clone().position(|candidate| candidate == id) else {
+        return;
+    };
+    if extend {
+        let start = anchor
+            .and_then(|a| order.clone().position(|candidate| candidate == a))
+            .unwrap_or(target);
+        if !toggle {
+            ids.clear();
+        }
+        ids.extend(
+            order
+                .clone()
+                .skip(start.min(target))
+                .take(start.abs_diff(target) + 1),
+        );
+        *anchor = order.clone().nth(start);
+    } else if toggle {
+        if !ids.remove(&id) {
+            ids.insert(id);
+        }
+        *anchor = Some(id);
+    } else {
+        ids.clear();
+        ids.insert(id);
+        *anchor = Some(id);
     }
 }

@@ -23,6 +23,9 @@ pub(super) struct Editor {
     visible_folders: Vec<usize>,
     collapsed: std::collections::BTreeSet<Key>,
     selected: HashSet<MediaId>,
+    file_cursor: Option<usize>,
+    file_anchor: Option<MediaId>,
+    reveal_file: bool,
     selected_folders: std::collections::BTreeSet<String>,
     drag_owner: Arc<()>,
     completed_drag: Option<CompletedDrag>,
@@ -169,6 +172,8 @@ impl Editor {
         let mut selected: Vec<_> = self.selected.iter().copied().collect();
         selected.sort_by_key(|id| id.0);
         crate::core::views::EditorBookmark {
+            focused: self.file_cursor.map(|i| self.rows[i].id),
+            anchor: self.file_anchor,
             selected,
             folders: self.selected_folders.iter().cloned().collect(),
             folder: self.folder.clone(),
@@ -187,6 +192,10 @@ impl Editor {
             .copied()
             .filter(|id| rows.contains(id))
             .collect();
+        self.file_cursor = view
+            .focused
+            .and_then(|id| self.rows.iter().position(|row| row.id == id));
+        self.file_anchor = view.anchor.filter(|id| rows.contains(id));
         self.selected_folders = view
             .folders
             .iter()
@@ -291,7 +300,9 @@ impl Editor {
         self.visible_folders = self.tree.visible(&self.collapsed, || false).unwrap();
     }
     fn file_drag(&mut self, id: MediaId) -> FolderDrag {
+        self.file_cursor = self.rows.iter().position(|row| row.id == id);
         if !self.selected.contains(&id) {
+            self.file_anchor = Some(id);
             self.selected.clear();
             self.selected.insert(id);
         }
@@ -463,6 +474,122 @@ impl Editor {
         )
         .inner
     }
+    fn select_file(&mut self, row: usize, toggle: bool, extend: bool) {
+        if extend && self.file_anchor.is_none() {
+            self.file_anchor = self.file_cursor.map(|i| self.rows[i].id);
+        }
+        self.file_cursor = Some(row);
+        crate::core::selection::select_ordered(
+            &mut self.selected,
+            &mut self.file_anchor,
+            self.rows[row].id,
+            self.rows.iter().map(|r| r.id),
+            toggle,
+            extend,
+        );
+    }
+    fn select_all_files(&mut self) {
+        self.selected = self.rows.iter().map(|r| r.id).collect();
+        self.file_cursor = self
+            .file_cursor
+            .or_else(|| (!self.rows.is_empty()).then_some(0));
+        self.file_anchor = self.rows.first().map(|r| r.id);
+    }
+    fn clear_files(&mut self) {
+        self.selected.clear();
+        self.file_anchor = self.file_cursor.map(|i| self.rows[i].id);
+    }
+    fn file_keyboard(
+        &mut self,
+        ui: &egui::Ui,
+        keyboard: &collection_controls::Keyboard,
+        decisions: &HashMap<MediaId, Decision>,
+    ) {
+        let events = keyboard.events(ui, |key, m| {
+            if m.alt {
+                return false;
+            }
+            match key {
+                egui::Key::ArrowUp
+                | egui::Key::ArrowDown
+                | egui::Key::Home
+                | egui::Key::End
+                | egui::Key::PageUp
+                | egui::Key::PageDown
+                | egui::Key::Space => true,
+                egui::Key::A => m.command || m.ctrl,
+                egui::Key::F2 => m.is_none(),
+                _ => false,
+            }
+        });
+        for (key, modifiers, repeat) in events {
+            if repeat && matches!(key, egui::Key::Space | egui::Key::F2) {
+                continue;
+            }
+            if self.rows.is_empty() {
+                break;
+            }
+            let special = modifiers.command || modifiers.ctrl;
+            if key == egui::Key::A {
+                if modifiers.shift {
+                    self.clear_files();
+                } else {
+                    self.select_all_files();
+                }
+                self.reveal_file = true;
+                continue;
+            }
+            if key == egui::Key::F2 {
+                if let Some(row) = self.file_cursor {
+                    self.start_rename(self.rows[row].id);
+                }
+                continue;
+            }
+            if key == egui::Key::Space {
+                let row = self.file_cursor.unwrap_or(0);
+                self.select_file(row, !modifiers.shift || special, modifiers.shift);
+                self.reveal_file = true;
+                continue;
+            }
+            let target = match key {
+                egui::Key::ArrowUp | egui::Key::ArrowDown => {
+                    crate::core::navigation::next_position(
+                        self.rows.len(),
+                        self.file_cursor,
+                        if key == egui::Key::ArrowUp { -1 } else { 1 },
+                        |i| {
+                            special
+                                || modifiers.shift
+                                || !decisions.get(&self.rows[i].id).is_some_and(|d| d.rejected)
+                        },
+                    )
+                }
+                egui::Key::Home => Some(0),
+                egui::Key::End => Some(self.rows.len() - 1),
+                egui::Key::PageUp => Some(
+                    self.file_cursor
+                        .unwrap_or(0)
+                        .saturating_sub(keyboard.page_rows(ui)),
+                ),
+                egui::Key::PageDown => Some(
+                    (self.file_cursor.unwrap_or(0) + keyboard.page_rows(ui))
+                        .min(self.rows.len() - 1),
+                ),
+                _ => None,
+            };
+            if let Some(row) = target {
+                if modifiers.shift {
+                    self.select_file(row, special, true);
+                } else {
+                    // Checkbox-style selection: moving focus does not silently
+                    // replace files already selected for a move. Space toggles.
+                    self.file_cursor = Some(row);
+                    self.file_anchor = Some(self.rows[row].id);
+                }
+                self.reveal_file = true;
+            }
+        }
+    }
     fn photo_contents(
         &mut self,
         ui: &mut egui::Ui,
@@ -473,10 +600,10 @@ impl Editor {
         ui.strong("Files · before / after");
         ui.horizontal(|ui| {
             if ui.button("Select all").clicked() {
-                self.selected = self.rows.iter().map(|r| r.id).collect();
+                self.select_all_files();
             }
             if ui.button("Clear selection").clicked() {
-                self.selected.clear();
+                self.clear_files();
             }
             ui.label(format!("{} selected", self.selected.len()));
         });
@@ -487,17 +614,22 @@ impl Editor {
         if let Some(offset) = self.restore_scroll[0].take() {
             scroll = scroll.vertical_scroll_offset(offset);
         }
-        let row_height = ui
-            .spacing()
-            .interact_size
-            .y
-            .max(ui.spacing().icon_width)
-            .max(ui.text_style_height(&egui::TextStyle::Body))
+        let row_height = button_row_height(ui)
             + ui.spacing().item_spacing.y
             + ui.text_style_height(&egui::TextStyle::Small);
+        let max_height = (height - name_controls_height).max(60.0);
+        let keyboard =
+            collection_controls::Keyboard::new(ui, "organize_photos", max_height, row_height);
+        self.file_keyboard(ui, &keyboard, decisions);
+        if std::mem::take(&mut self.reveal_file)
+            && let Some(row) = self.file_cursor
+        {
+            scroll = keyboard.scroll(ui, scroll, row);
+        }
+        let focused = keyboard.has_focus(ui);
         let output = scroll
             .auto_shrink([false, true])
-            .max_height((height - name_controls_height).max(60.0))
+            .max_height(max_height)
             .show_rows(ui, row_height, self.rows.len(), |ui, rows| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 for i in rows {
@@ -508,17 +640,21 @@ impl Editor {
                         .unwrap_or_else(|| name.clone());
                     let before = self.rows[i].source.parent().and_then(|p| p.strip_prefix(&self.catalog.root).ok()).unwrap_or_else(|| std::path::Path::new("")).to_path_buf();
                     let after = self.rows[i].after.clone();
-                    let mut selected = self.selected.contains(&id);
+                    let selected = self.selected.contains(&id);
                     ui.push_id(id.0, |ui| {
                         let marked = decisions.get(&id).is_some_and(|d| d.rejected);
                         let title = if marked { RichText::new(format!("{name} · Trash")).color(RED) } else { RichText::new(&name) };
-                        let response = ui.checkbox(&mut selected, title);
-                        if response.double_clicked() { self.start_rename(id); }
-                        if response.changed() {
-                            if selected { self.selected.insert(id); }
-                            else { self.selected.remove(&id); }
+                        let response = ui.add_sized([ui.available_width(), button_row_height(ui)],
+                            egui::Button::selectable(selected, title).truncate().sense(collection_controls::pointer_sense(true)));
+                        keyboard.focus_on_click(&response);
+                        if focused && self.file_cursor == Some(i) {
+                            ui.painter().rect_stroke(response.rect, 2., ui.visuals().selection.stroke, StrokeKind::Inside);
                         }
-                        let response = response.interact(Sense::click_and_drag());
+                        if response.clicked() {
+                            let m = ui.input(|i| i.modifiers);
+                            self.select_file(i, !m.shift || m.command || m.ctrl, m.shift);
+                        }
+                        if response.double_clicked() { self.start_rename(id); }
                         response.context_menu(|ui| {
                             let files = if self.selected.contains(&id) { self.selected.clone() } else { HashSet::from([id]) };
                             self.trash_menu(ui, Selection { files, ..Default::default() }, decisions);
@@ -559,6 +695,7 @@ impl Editor {
                 ),
             )
         });
+        keyboard.finish(ui, output.inner_rect, "Files. Arrows move focus; Space selects; Shift extends selection; Control or Command A selects all; F2 renames.");
         self.photo_scroll = output.state.offset.y;
         self.scroll_drag(ui, &output);
         command
@@ -1000,6 +1137,9 @@ impl PhotoSortApp {
             visible_folders: Vec::new(),
             collapsed: Default::default(),
             selected: HashSet::new(),
+            file_cursor: None,
+            file_anchor: None,
+            reveal_file: false,
             selected_folders: Default::default(),
             drag_owner: Arc::new(()),
             completed_drag: None,
@@ -2357,6 +2497,212 @@ mod tests {
             "Enter stages inside the disposable editor draft"
         );
         assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+    }
+    #[test]
+    fn file_keyboard_ranges_marks_rename_and_resume_share_cached_editor_state() {
+        for width in [640., 1200.] {
+            let mut app = app();
+            Arc::get_mut(app.catalog.as_mut().unwrap())
+                .unwrap()
+                .inventory
+                .push("/missing/trip/notes.txt".into());
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_ref().unwrap();
+            let ids: Vec<_> = editor.rows.iter().map(|row| row.id).collect();
+            assert_eq!(ids.len(), 4);
+            let rows = editor.rows.as_ptr();
+            let labels = editor.draft.labels().clone();
+            app.decisions.insert(
+                ids[1],
+                Decision {
+                    rejected: true,
+                    ..Default::default()
+                },
+            );
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let frame = |app: &mut PhotoSortApp, events| {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| app.organize_dialog(ctx),
+                );
+            };
+            let key = |key, shift, command, repeat| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat,
+                modifiers: egui::Modifiers {
+                    shift,
+                    command,
+                    ..Default::default()
+                },
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            let rect = ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_file_rect", ids[0].0))))
+                .unwrap();
+            frame(&mut app, tree_controls::tests::click(rect.center()));
+            frame(
+                &mut app,
+                vec![key(egui::Key::ArrowDown, false, false, false)],
+            );
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert_eq!(editor.file_cursor, Some(2), "plain Down skips a Trash mark");
+            assert_eq!(
+                editor.selected,
+                HashSet::from([ids[0]]),
+                "focus movement retains checked files"
+            );
+            frame(&mut app, vec![key(egui::Key::ArrowUp, true, false, false)]);
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected,
+                ids[1..=2].iter().copied().collect()
+            );
+            frame(&mut app, vec![key(egui::Key::ArrowUp, true, false, false)]);
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected,
+                ids[..=2].iter().copied().collect()
+            );
+            frame(
+                &mut app,
+                vec![key(egui::Key::ArrowDown, true, false, false)],
+            );
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected,
+                ids[1..=2].iter().copied().collect()
+            );
+            frame(
+                &mut app,
+                vec![
+                    key(egui::Key::Space, false, false, false),
+                    key(egui::Key::Space, false, false, true),
+                ],
+            );
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected,
+                HashSet::from([ids[2]])
+            );
+            frame(&mut app, vec![key(egui::Key::A, false, true, false)]);
+            assert_eq!(app.organize_editor.as_ref().unwrap().selected.len(), 4);
+            frame(&mut app, vec![key(egui::Key::A, true, true, false)]);
+            assert!(app.organize_editor.as_ref().unwrap().selected.is_empty());
+            frame(
+                &mut app,
+                vec![
+                    key(egui::Key::Home, false, false, false),
+                    key(egui::Key::End, true, false, false),
+                ],
+            );
+            assert_eq!(app.organize_editor.as_ref().unwrap().selected.len(), 4);
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert_eq!(editor.rows.as_ptr(), rows);
+            assert_eq!(editor.draft.labels(), &labels);
+            let bookmark = editor.bookmark();
+            assert_eq!(bookmark.focused, Some(ids[3]));
+            assert_eq!(bookmark.anchor, Some(ids[0]));
+            let editor = app.organize_editor.take().unwrap();
+            app.finish_organize_edit(editor, 1);
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert_eq!(editor.bookmark(), bookmark);
+            for _ in 0..2 {
+                frame(&mut app, vec![]);
+            }
+            let rect = ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_file_rect", ids[3].0))))
+                .unwrap();
+            frame(&mut app, tree_controls::tests::click(rect.center()));
+            frame(&mut app, vec![key(egui::Key::F2, false, false, false)]);
+            assert_eq!(
+                app.organize_editor
+                    .as_ref()
+                    .unwrap()
+                    .renaming
+                    .as_ref()
+                    .unwrap()
+                    .0,
+                ids[3]
+            );
+            frame(&mut app, vec![]);
+            frame(&mut app, vec![key(egui::Key::Home, false, false, false)]);
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().file_cursor,
+                Some(3),
+                "name field owns Home"
+            );
+            assert!(
+                app.requested.is_empty()
+                    && app.analysis_run.is_none()
+                    && app.metadata_run.is_none()
+                    && !app.scanning
+            );
+            assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+        }
+    }
+    #[test]
+    fn file_keyboard_large_list_reveals_end_home_and_preserves_pointer_toggle_behavior() {
+        for width in [640., 1200.] {
+            let mut app = app();
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_mut().unwrap();
+            editor.rows = (0..100_000)
+                .map(|i| PhotoRow {
+                    id: MediaId(i),
+                    source: format!("/missing/{i:06}.txt").into(),
+                    after: String::new(),
+                })
+                .collect();
+            let rows = editor.rows.as_ptr();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let frame = |app: &mut PhotoSortApp, events| {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| app.organize_dialog(ctx),
+                );
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            let rect = ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_file_rect", 0u64))))
+                .unwrap();
+            frame(&mut app, tree_controls::tests::click(rect.center()));
+            frame(&mut app, vec![tree_controls::tests::key(egui::Key::End)]);
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().file_cursor,
+                Some(99_999)
+            );
+            assert!(app.organize_editor.as_ref().unwrap().photo_scroll > 1_000_000.);
+            frame(&mut app, vec![tree_controls::tests::key(egui::Key::Space)]);
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected,
+                HashSet::from([MediaId(0), MediaId(99_999)])
+            );
+            frame(&mut app, vec![tree_controls::tests::key(egui::Key::PageUp)]);
+            assert!(app.organize_editor.as_ref().unwrap().file_cursor.unwrap() < 99_999);
+            frame(&mut app, vec![tree_controls::tests::key(egui::Key::Home)]);
+            assert_eq!(app.organize_editor.as_ref().unwrap().photo_scroll, 0.);
+            assert_eq!(app.organize_editor.as_ref().unwrap().rows.as_ptr(), rows);
+            assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+        }
     }
     #[test]
     fn file_name_entry_and_errors_fit_compact_and_wide_editor_windows() {

@@ -16,19 +16,30 @@ pub fn next_visible(
         return None;
     }
     let position = current.and_then(|id| order.iter().position(|i| media[*i].id == id));
-    let eligible = |i: &usize| {
-        let id = media[*i].id;
-        (!skip_marked || !decisions.get(&id).is_some_and(|d| d.rejected)).then_some(id)
-    };
+    next_position(order.len(), position, direction, |p| {
+        !skip_marked
+            || !decisions
+                .get(&media[order[p]].id)
+                .is_some_and(|d| d.rejected)
+    })
+    .map(|p| media[order[p]].id)
+}
+
+/// Walk a cached display order without wrapping, stopping at the first eligible
+/// row. A missing cursor begins at the direction's edge. Shared by file and photo lists.
+pub fn next_position(
+    len: usize,
+    current: Option<usize>,
+    direction: isize,
+    eligible: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    let current = current.filter(|p| *p < len);
     if direction > 0 {
-        order[position.map_or(0, |i| i + 1)..]
-            .iter()
-            .find_map(eligible)
+        (current.map_or(0, |p| p + 1)..len).find(|p| eligible(*p))
+    } else if direction < 0 {
+        (0..current.unwrap_or(len)).rev().find(|p| eligible(*p))
     } else {
-        order[..position.unwrap_or(order.len())]
-            .iter()
-            .rev()
-            .find_map(eligible)
+        None
     }
 }
 

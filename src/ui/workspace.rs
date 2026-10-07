@@ -1,5 +1,7 @@
 #[path = "browsing.rs"]
 mod browsing;
+#[path = "collection_controls.rs"]
+mod collection_controls;
 #[path = "delete_review.rs"]
 mod delete_review;
 #[path = "desktop.rs"]

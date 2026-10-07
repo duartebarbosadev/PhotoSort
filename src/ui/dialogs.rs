@@ -49,6 +49,19 @@ impl PhotoSortApp {
                         ("F / S", "Cull folder / similarity-group navigator"),
                         ("F12", "About PhotoSort"),
                         (
+                            "Organize files: arrows / Space",
+                            "Move focus / toggle selection; Ctrl/Cmd+arrows include Trash marks",
+                        ),
+                        (
+                            "Organize files: Shift + click/arrows",
+                            "Select a range; Ctrl/Cmd+Shift adds to the selection",
+                        ),
+                        (
+                            "Organize files: Ctrl/Cmd+A",
+                            "Select all; add Shift to clear selection",
+                        ),
+                        ("Organize files: F2", "Rename the focused file"),
+                        (
                             "Tree: Up / Down",
                             "Select the previous / next visible folder, date or group",
                         ),
