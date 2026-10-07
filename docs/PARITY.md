@@ -190,3 +190,13 @@ implicitly selected by a range. Current destination and selected folders use
 separate outline/fill states. The range anchor survives editor bookmarks and is
 reconciled after structure edits, reset and relocation to another library.
 See diagnostics/folder-ranges-2026-10-08/README.md for checks and scope.
+
+### ONNX session-memory investigation — 8 October 2026
+
+An isolated CPU probe traced a roughly 4.35 GiB startup peak to graph optimization.
+Disabling ConstantFolding reduced the probe peak to 0.90 GiB but more than doubled
+aesthetic inference time, so production settings remain unchanged. A separate
+MatMulAddFusion comparison suggests a possible CPU speed improvement that still
+needs real-photo validation. These tensor measurements do not establish app memory
+budgets or photographic accuracy. See diagnostics/model-memory-2026-10-08/README.md
+for raw evidence, reproducibility and follow-up requirements.
