@@ -282,3 +282,84 @@ fn stop_before_execution_persists_the_exact_plan_without_applying_files() {
     assert!(!source.exists());
     assert_eq!(fs::read(&destination).unwrap(), b"source bytes");
 }
+
+#[test]
+fn fallback_copy_preserves_file_dates_and_contents() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.jpg");
+    let destination = temp.path().join("destination.jpg");
+    fs::write(&source, b"unchanged photo bytes").unwrap();
+    let modified = std::time::UNIX_EPOCH + std::time::Duration::new(1_600_000_000, 123_456_789);
+    let accessed = modified - std::time::Duration::from_secs(60);
+    File::options()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_times(
+            fs::FileTimes::new()
+                .set_modified(modified)
+                .set_accessed(accessed),
+        )
+        .unwrap();
+    let before = fs::metadata(&source).unwrap();
+    copy_contents_exclusive(&source, &destination, &|| false).unwrap();
+    let after = fs::metadata(&destination).unwrap();
+    assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+    assert_eq!(after.accessed().unwrap(), before.accessed().unwrap());
+    assert_eq!(fs::read(&destination).unwrap(), b"unchanged photo bytes");
+    assert_eq!(fs::read(&source).unwrap(), b"unchanged photo bytes");
+}
+
+#[cfg(unix)]
+#[test]
+fn fallback_copy_keeps_partial_files_private_and_preserves_source_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.jpg");
+    let destination = temp.path().join("destination.jpg");
+    fs::write(&source, vec![3u8; 2 * 1024 * 1024]).unwrap();
+    for mode in [0o600, 0o640, 0o444] {
+        fs::set_permissions(&source, fs::Permissions::from_mode(mode)).unwrap();
+        let saw_partial = std::cell::Cell::new(false);
+        let stopped = copy_contents_exclusive(&source, &destination, &|| {
+            if let Ok(metadata) = fs::metadata(&destination) {
+                assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+                if metadata.len() >= 1024 * 1024 {
+                    saw_partial.set(true);
+                    return true;
+                }
+            }
+            false
+        })
+        .unwrap_err();
+        assert!(stopped.is::<MoveCancelled>());
+        assert!(saw_partial.get());
+        assert!(!destination.exists());
+        assert_eq!(
+            fs::metadata(&source).unwrap().permissions().mode() & 0o777,
+            mode
+        );
+        copy_contents_exclusive(&source, &destination, &|| false).unwrap();
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+            mode
+        );
+        assert_eq!(fs::read(&destination).unwrap(), fs::read(&source).unwrap());
+        fs::remove_file(&destination).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn same_volume_move_staging_still_uses_a_hard_link() {
+    use std::os::unix::fs::MetadataExt;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.jpg");
+    let destination = temp.path().join("destination.jpg");
+    fs::write(&source, b"photo bytes").unwrap();
+    copy_exclusive(&source, &destination, &|| false).unwrap();
+    let before = fs::metadata(&source).unwrap();
+    let after = fs::metadata(&destination).unwrap();
+    assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+    assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+}

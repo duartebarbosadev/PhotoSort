@@ -282,3 +282,13 @@ Stop, 19,114 retained and retried, then zero unfinished operations. All hashes
 match; original profiles were restored and fixtures removed. See
 diagnostics/stop-apply-2026-10-07/README.md. This supersedes the earlier statement
 that only worker cancellation existed without a UI control.
+
+
+### Fallback move attributes — 7 October 2026
+
+Shared fallback moves now preserve modification/access times and source
+permissions, with private Unix partial copies and existing cancellable rollback.
+Same-volume hard links retain their fast path. The before/after disposable probe
+and three shared regressions pass, as do the full suite, strict Clippy and rebuilt
+bundle/runtime checks. Actual cross-volume/platform execution and extended
+attributes are not claimed. See diagnostics/copy-attributes-2026-10-07/README.md.

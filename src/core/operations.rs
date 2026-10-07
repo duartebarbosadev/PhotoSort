@@ -1230,7 +1230,20 @@ fn copy_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) -> R
 fn copy_contents_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) -> Result<()> {
     check_move_cancelled(cancelled)?;
     let mut input = File::open(source)?;
-    let mut output = OpenOptions::new().create_new(true).write(true).open(dest)?;
+    let metadata = input.metadata()?;
+    let mut times = fs::FileTimes::new().set_modified(metadata.modified()?);
+    if let Ok(accessed) = metadata.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    // Do not expose a private source while its fallback copy is still partial.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut output = options.open(dest)?;
     let result = (|| -> Result<()> {
         let mut buffer = vec![0u8; 1024 * 1024];
         loop {
@@ -1247,6 +1260,10 @@ fn copy_contents_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> b
             output.write_all(&buffer[..count])?;
         }
         check_move_cancelled(cancelled)?;
+        // Capture times before reading and preserve them before making the copy
+        // read-only. Failure leaves the source intact and rolls back this copy.
+        output.set_times(times)?;
+        output.set_permissions(metadata.permissions())?;
         output.sync_all()?;
         check_move_cancelled(cancelled)?;
         Ok(())
