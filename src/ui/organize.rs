@@ -9,6 +9,8 @@ pub(super) struct Editor {
     output: PathBuf,
     desktop_enabled: bool,
     desktop_pending: Option<crate::core::desktop::Request>,
+    reset_request: Option<Selection>,
+    reset_enabled: bool,
     names: HashMap<MediaId, String>,
     renaming: Option<(MediaId, String)>,
     rename_focus: bool,
@@ -360,15 +362,17 @@ impl Editor {
                     cancel = true;
                 }
             });
-        } else if ui
-            .add_enabled(
-                self.selected.len() == 1,
-                egui::Button::new("Rename selected file…"),
-            )
-            .clicked()
-            && let Some(id) = self.selected.iter().next().copied()
-        {
-            self.start_rename(id);
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                if ui.add_enabled(self.selected.len() == 1, egui::Button::new("Rename selected file…")).clicked()
+                    && let Some(id) = self.selected.iter().next().copied() {
+                    self.start_rename(id);
+                }
+                if ui.add_enabled(self.reset_enabled && !self.selected.is_empty(), egui::Button::new("Reset destinations"))
+                    .on_hover_text("Restore the initial grouping for selected files. Other edits and file names stay unchanged.").clicked() {
+                    self.reset_request = Some(Selection { files: self.selected.clone(), ..Default::default() });
+                }
+            });
         }
         if cancel {
             self.renaming = None;
@@ -416,6 +420,11 @@ impl Editor {
                         }
                         let response = response.interact(Sense::click_and_drag());
                         response.context_menu(|ui| {
+                            if ui.add_enabled(self.reset_enabled, egui::Button::new("Reset file destinations")).on_hover_text("Restore the initial grouping for the clicked file, or the selected files when it belongs to the selection. File names stay unchanged.").clicked() {
+                                self.reset_request = Some(Selection { files: if self.selected.contains(&id) { self.selected.clone() } else { HashSet::from([id]) }, ..Default::default() });
+                                ui.close();
+                            }
+                            ui.separator();
                             let paths = self.file_locations(&self.rows[i]);
                             if let Some(request) = desktop::locations_menu(ui, &paths, self.desktop_enabled) {
                                 self.desktop_pending = Some(request);
@@ -459,6 +468,11 @@ impl Editor {
                             #[cfg(test)]
                             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("test_folder_rect", &path)), response.rect));
                             response.context_menu(|ui| {
+                                if ui.add_enabled(self.reset_enabled, egui::Button::new("Reset file destinations")).on_hover_text("Restore the initial grouping for files inside this folder, or the selected folders. Folder structure edits and file names stay unchanged.").clicked() {
+                                    self.reset_request = Some(Selection { folders: if self.selected_folders.contains(&path) { self.selected_folders.clone() } else { std::collections::BTreeSet::from([path.clone()]) }, ..Default::default() });
+                                    ui.close();
+                                }
+                                ui.separator();
                                 let paths = self.folder_locations(&path);
                                 if let Some(request) = desktop::locations_menu(ui, &paths, self.desktop_enabled) {
                                     self.desktop_pending = Some(request);
@@ -777,6 +791,8 @@ impl PhotoSortApp {
             output: self.output.clone().into(),
             desktop_enabled: self.desktop_available(),
             desktop_pending: None,
+            reset_request: None,
+            reset_enabled: self.organize_grouping_ready() && self.analysis_run.is_none(),
             names: self.file_names.clone(),
             renaming: None,
             rename_focus: false,
@@ -808,6 +824,7 @@ impl PhotoSortApp {
             return;
         };
         editor.desktop_enabled = self.desktop_available();
+        editor.reset_enabled = self.organize_grouping_ready() && self.analysis_run.is_none();
         editor.output = self.output.clone().into();
         editor.begin_drag_frame(ctx);
         let mut action = 0;
@@ -860,6 +877,22 @@ impl PhotoSortApp {
         }
         if let Some(command) = command {
             editor.apply(command, &self.media, self.companions);
+        }
+        if let Some(selection) = editor.reset_request.take()
+            && editor.reset_enabled
+        {
+            match editor.draft.reset_destinations(
+                &selection,
+                &self.organize_labels(),
+                &self.media,
+                self.companions,
+            ) {
+                Ok(()) => {
+                    editor.error = None;
+                    editor.refresh();
+                }
+                Err(error) => editor.error = Some(error.to_string()),
+            }
         }
         if action != 0 {
             egui::DragAndDrop::clear_payload(ctx);
@@ -1131,6 +1164,152 @@ mod tests {
         assert!(app.media.iter().all(|m| m.path.is_file()));
         app.resolve_organize_departure(super::super::transitions::OrganizeResolution::Cancel);
         assert!(app.plan.is_none() && app.file_names.len() == 1);
+    }
+    #[test]
+    fn selective_reset_menu_preserves_other_edits_names_and_selection_at_all_sizes() {
+        for size in [egui::vec2(600.0, 650.0), egui::vec2(1200.0, 850.0)] {
+            for (selected_click, companions) in [(false, false), (true, false), (false, true)] {
+                let mut app = app();
+                app.companions = companions;
+                app.open_organize_editor();
+                let editor = app.organize_editor.as_mut().unwrap();
+                editor.draft.create_folder("", "Custom").unwrap();
+                editor
+                    .draft
+                    .move_photos(&[MediaId(0), MediaId(1), MediaId(2)], "Custom")
+                    .unwrap();
+                editor.names.insert(MediaId(1), "Keeper".into());
+                editor.selected = if selected_click {
+                    HashSet::from([MediaId(1), MediaId(2)])
+                } else {
+                    HashSet::from([MediaId(2)])
+                };
+                let selected = editor.selected.clone();
+                editor.refresh();
+                let ctx = egui::Context::default();
+                theme_install(&ctx);
+                ctx.enable_accesskit();
+                let frame = |app: &mut PhotoSortApp, events| {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| app.organize_dialog(ctx),
+                    )
+                };
+                for _ in 0..3 {
+                    frame(&mut app, vec![]);
+                }
+                let pos = ctx
+                    .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_file_rect", 1_u64))))
+                    .unwrap()
+                    .center();
+                let button = |pos, button, pressed| egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        button(pos, egui::PointerButton::Secondary, true),
+                        button(pos, egui::PointerButton::Secondary, false),
+                    ],
+                );
+                let tree = frame(&mut app, vec![])
+                    .platform_output
+                    .accesskit_update
+                    .unwrap();
+                let node = tree
+                    .nodes
+                    .iter()
+                    .find(|(_, n)| n.label() == Some("Reset file destinations"))
+                    .unwrap();
+                let bounds = node.1.bounds().unwrap();
+                assert!(
+                    bounds.x0 >= 0.0
+                        && bounds.y0 >= 0.0
+                        && bounds.x1 <= f64::from(size.x)
+                        && bounds.y1 <= f64::from(size.y)
+                );
+                let pos = egui::pos2(
+                    ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                    ((bounds.y0 + bounds.y1) / 2.0) as f32,
+                );
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        button(pos, egui::PointerButton::Primary, true),
+                        button(pos, egui::PointerButton::Primary, false),
+                    ],
+                );
+                let editor = app.organize_editor.take().unwrap();
+                assert_eq!(editor.draft.labels()[&MediaId(1)], "trip");
+                assert_eq!(
+                    editor.draft.labels()[&MediaId(0)],
+                    if companions { "trip" } else { "Custom" }
+                );
+                assert_eq!(
+                    editor.draft.labels()[&MediaId(2)],
+                    if selected_click { "trip" } else { "Custom" }
+                );
+                assert_eq!(editor.names[&MediaId(1)], "Keeper");
+                assert_eq!(editor.selected, selected);
+                assert!(editor.draft.folders().contains("Custom"));
+                assert!(
+                    app.requested.is_empty()
+                        && app.analysis_run.is_none()
+                        && app.metadata_run.is_none()
+                );
+                assert_eq!(app.stats.decodes, 0);
+                assert_eq!(app.stats.metadata_reads, 0);
+                app.finish_organize_edit(editor, 1);
+                assert!(app.organize_drafts.is_empty() && app.file_names.is_empty());
+            }
+        }
+    }
+    #[test]
+    fn selective_reset_waits_for_generated_metadata_and_survives_keep_reopen() {
+        let mut app = app();
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        editor.draft.create_folder("", "Custom").unwrap();
+        editor.draft.move_photos(&[MediaId(0)], "Custom").unwrap();
+        app.finish_organize_edit(editor, 2);
+        app.open_organize_editor();
+        app.organize_editor.as_mut().unwrap().reset_request = Some(Selection {
+            files: HashSet::from([MediaId(0)]),
+            ..Default::default()
+        });
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| app.organize_dialog(ctx));
+        let editor = app.organize_editor.take().unwrap();
+        assert_eq!(editor.draft.labels()[&MediaId(0)], "trip");
+        app.finish_organize_edit(editor, 2);
+        app.open_organize_editor();
+        assert_eq!(
+            app.organize_editor.as_ref().unwrap().draft.labels()[&MediaId(0)],
+            "trip"
+        );
+        app.group_mode = GroupMode::Location;
+        app.metadata.clear();
+        let editor = app.organize_editor.as_mut().unwrap();
+        editor.draft.move_photos(&[MediaId(0)], "Custom").unwrap();
+        editor.reset_request = Some(Selection {
+            files: HashSet::from([MediaId(0)]),
+            ..Default::default()
+        });
+        let _ = ctx.run(Default::default(), |ctx| app.organize_dialog(ctx));
+        assert_eq!(
+            app.organize_editor.as_ref().unwrap().draft.labels()[&MediaId(0)],
+            "Custom"
+        );
+        assert!(!app.organize_editor.as_ref().unwrap().reset_enabled);
     }
     fn app() -> PhotoSortApp {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);

@@ -83,3 +83,19 @@ embedded HEIF rotation as a demonstrated working reference capability. Rust's
 sidecar rotation is an intentional working alternative; embedded container edits
 would improve interoperability beyond this broken reference path. Evidence:
 `diagnostics/heif-write-feasibility-2026-10-06/README.md`.
+
+
+## Location fallback and selective reset audit — 7 October 2026
+
+A complete trace through `_build_location_plan`, the preview renderer and
+`execute_grouping_plan` shows that missing GPS enters `unassigned_paths` and then
+moves to `Unassigned`; it is not kept in place. Rust's `No GPS` destination keeps
+that workflow with a more descriptive name. No change to missing-GPS file policy
+is needed.
+
+The reference's Put back in original folder action actually restores each
+selected file's initial generated group label, using source folders only for
+initially unassigned entries. Rust's selective destination reset restores its
+initial generated proposal while preserving unrelated edits and file names.
+Explicit empty-directory edits remain separate intent. Both reset and move use
+the same companion expansion; no image work is repeated.

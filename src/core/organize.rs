@@ -237,6 +237,18 @@ impl Draft {
     ) -> Result<()> {
         self.validate_move(selection, target)?;
         let mut files = selection.files.clone();
+        self.expand_companions(&mut files, media, companions);
+        let mut next = self.clone();
+        // Explicitly selected files move directly to the target, matching the
+        // reference's file-then-folder order for mixed selections.
+        next.move_photos(&files.into_iter().collect::<Vec<_>>(), target)?;
+        for source in selection.roots() {
+            next.nest_folder(source, target)?;
+        }
+        *self = next;
+        Ok(())
+    }
+    fn expand_companions(&self, files: &mut HashSet<MediaId>, media: &[Media], companions: bool) {
         if companions {
             let stems: HashSet<_> = media
                 .iter()
@@ -254,14 +266,54 @@ impl Draft {
                     .map(|m| m.id),
             );
         }
-        let mut next = self.clone();
-        // Explicitly selected files move directly to the target, matching the
-        // reference's file-then-folder order for mixed selections.
-        next.move_photos(&files.into_iter().collect::<Vec<_>>(), target)?;
-        for source in selection.roots() {
-            next.nest_folder(source, target)?;
+    }
+    /// Reset only selected file destinations to the generated proposal. Folder
+    /// selections include their current descendants; explicit directory edits
+    /// and file names are separate intent and are not reset here. No I/O.
+    pub fn reset_destinations(
+        &mut self,
+        selection: &Selection,
+        initial: &HashMap<MediaId, String>,
+        media: &[Media],
+        companions: bool,
+    ) -> Result<()> {
+        ensure!(
+            selection
+                .files
+                .iter()
+                .all(|id| self.labels.contains_key(id)),
+            "Selection contains an unavailable file"
+        );
+        ensure!(
+            selection
+                .folders
+                .iter()
+                .all(|path| self.folders.contains(path)),
+            "Selection contains an unavailable folder"
+        );
+        let mut files = selection.files.clone();
+        files.extend(
+            self.labels
+                .iter()
+                .filter(|(_, label)| {
+                    selection
+                        .folders
+                        .iter()
+                        .any(|folder| folder.is_empty() || within(label, folder))
+                })
+                .map(|(id, _)| *id),
+        );
+        self.expand_companions(&mut files, media, companions);
+        ensure!(
+            files.iter().all(|id| initial.contains_key(id)),
+            "Original grouping is unavailable for a selected file"
+        );
+        // All fallible validation precedes mutation, including expanded companions.
+        for id in files {
+            let label = initial[&id].clone();
+            self.include_parents(&label);
+            self.labels.insert(id, label);
         }
-        *self = next;
         Ok(())
     }
     /// Rewrite the whole subtree atomically. Refuse ambiguous folder merges.

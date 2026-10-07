@@ -30,7 +30,7 @@ open ".tools/native-vips/PhotoSort Rust.app"
 
 The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
 bundle's source/executable hashes, full test results and native interaction checks
-are recorded in [the latest validation report](docs/diagnostics/organize-metadata-2026-10-07/README.md).
+are recorded in [the latest validation report](docs/diagnostics/selective-reset-2026-10-07/README.md).
 These checks cover this macOS development build; they do not establish Windows,
 CUDA or DirectML runtime readiness.
 
@@ -196,7 +196,9 @@ review the revised paths before choosing **Retry unfinished changes**.
    metadata and asks before replacing custom location folder edits. Date, camera and
    location grouping automatically read missing metadata without AI analysis;
    cancel or resume that read while browsing. Generated folder edits and move
-   previews wait for complete metadata, including photos outside the viewport.
+   previews wait for complete metadata, including photos outside the viewport. Reset destinations
+   restores only selected files to their initial grouping proposal, keeping
+   other edits and staged names. File and folder context menus offer the same action.
 2. **Easy Delete:** categorized sharpness/exposure and duplicate reviews, paired
    Keep/Trash choices, confirm/advance/revoke, reset one/all and accept filtered
    defaults. Exact copies are paired without face comparison; near pairs use camera-aligned
