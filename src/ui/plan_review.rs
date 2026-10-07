@@ -336,7 +336,7 @@ impl PhotoSortApp {
             ui.add_enabled_ui(!edit.saving, |ui| {
                 egui::ScrollArea::vertical().id_salt("pending_move_groups")
                     .max_height((ctx.content_rect().height() * 0.22).clamp(50., 150.))
-                    .show_rows(ui, 24., self.plan_rows.movable.len(), |ui, rows| {
+                    .show_rows(ui, button_row_height(ui), self.plan_rows.movable.len(), |ui, rows| {
                         for row in rows {
                             let group = self.plan_rows.movable[row];
                             if let Action::Move { files } = &plan.actions[group] {
@@ -351,7 +351,7 @@ impl PhotoSortApp {
                 ui.label("New base name (optional)");
                 ui.add(egui::TextEdit::singleline(&mut edit.stem).hint_text("Leave empty to keep reviewed names").desired_width(f32::INFINITY));
                 if let Some(Action::Move { files }) = plan.actions.get(edit.group) {
-                    egui::ScrollArea::both().id_salt("pending_names_preview").max_height(48.).show_rows(ui, 18., files.len(), |ui, rows| {
+                    egui::ScrollArea::both().id_salt("pending_names_preview").max_height(48.).show_rows(ui, ui.text_style_height(&egui::TextStyle::Monospace), files.len(), |ui, rows| {
                         for row in rows {
                             let old = &files[row].1;
                             let name = if edit.stem.is_empty() { old.file_name().unwrap_or_default().to_owned() }

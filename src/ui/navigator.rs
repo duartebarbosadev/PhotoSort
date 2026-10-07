@@ -154,11 +154,12 @@ impl PhotoSortApp {
             return;
         }
         ui.add_enabled_ui(!waiting, |ui| {
+            let row_height = button_row_height(ui);
             egui::ScrollArea::vertical()
                 .id_salt(("library_tree", self.navigator.mode))
                 .max_height((height - 78.).max(24.))
                 .auto_shrink([false, false])
-                .show_rows(ui, 24., view.visible.len(), |ui, range| {
+                .show_rows(ui, row_height, view.visible.len(), |ui, range| {
                     for row in range {
                         let i = view.visible[row];
                         let node = &view.tree.nodes[i];
@@ -187,7 +188,7 @@ impl PhotoSortApp {
                             }
                             let label = format!("{}  ·  {}", node.label, node.count);
                             let response = ui.add_sized(
-                                [ui.available_width(), 24.],
+                                [ui.available_width(), row_height],
                                 egui::Button::selectable(
                                     selected.as_ref() == Some(&node.key),
                                     label,
@@ -295,6 +296,7 @@ mod tests {
         app.filter_dirty = false;
         for width in [480., 800., 1200.] {
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let output = ctx.run(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(

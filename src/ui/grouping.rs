@@ -208,7 +208,7 @@ impl PhotoSortApp {
     fn group_targets(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().max_height(240.).show_rows(
             ui,
-            24.,
+            button_row_height(ui),
             if self.scene_editing() {
                 self.scene_choices.len()
             } else {

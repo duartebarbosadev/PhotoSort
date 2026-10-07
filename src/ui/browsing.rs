@@ -229,7 +229,7 @@ impl PhotoSortApp {
                         }
                         egui::ScrollArea::vertical().max_height(220.0).show_rows(
                             ui,
-                            22.0,
+                            button_row_height(ui),
                             self.browse_groups.len(),
                             |ui, range| {
                                 for i in range {
@@ -325,16 +325,17 @@ impl PhotoSortApp {
                         ui.close();
                     }
                     ui.spacing_mut().button_padding.y = 2.0;
+                    let row_height = button_row_height(ui).max(22.0);
                     egui::ScrollArea::vertical().max_height(240.0).show_rows(
                         ui,
-                        22.0,
+                        row_height,
                         self.browse_folders.len(),
                         |ui, range| {
                             for i in range {
                                 let folder = &self.browse_folders[i];
                                 if ui
                                     .add_sized(
-                                        [200.0, 22.0],
+                                        [200.0, row_height],
                                         egui::Button::selectable(
                                             self.browse.folder.path.as_ref() == Some(&folder.path),
                                             &folder.label,

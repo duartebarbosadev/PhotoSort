@@ -399,9 +399,19 @@ impl Editor {
         if let Some(offset) = self.restore_scroll[0].take() {
             scroll = scroll.vertical_scroll_offset(offset);
         }
+        let row_height = ui
+            .spacing()
+            .interact_size
+            .y
+            .max(ui.spacing().icon_width)
+            .max(ui.text_style_height(&egui::TextStyle::Body))
+            + ui.spacing().item_spacing.y
+            + ui.text_style_height(&egui::TextStyle::Small);
         let output = scroll
+            .auto_shrink([false, true])
             .max_height((height - name_controls_height).max(60.0))
-            .show_rows(ui, 58.0, self.rows.len(), |ui, rows| {
+            .show_rows(ui, row_height, self.rows.len(), |ui, rows| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 for i in rows {
                     let id = self.rows[i].id;
                     let name = self.rows[i].source.file_name().unwrap_or_default().to_string_lossy().into_owned();
@@ -444,6 +454,18 @@ impl Editor {
                     });
                 }
             });
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                egui::Id::new("test_organize_photo_scroll"),
+                (
+                    output.inner_rect,
+                    output.content_size,
+                    output.state.offset.y,
+                    row_height,
+                ),
+            )
+        });
         self.photo_scroll = output.state.offset.y;
         self.scroll_drag(ui, &output);
         command
@@ -455,16 +477,18 @@ impl Editor {
         if let Some(offset) = self.restore_scroll[1].take() {
             scroll = scroll.vertical_scroll_offset(offset);
         }
+        let row_height = button_row_height(ui);
         let output = scroll
+            .auto_shrink([false, true])
             .max_height((height - 210.0).max(75.0))
-            .show_rows(ui, 24.0, self.folders.len(), |ui, rows| {
+            .show_rows(ui, row_height, self.folders.len(), |ui, rows| {
                 for i in rows {
                     let (path, count) = self.folders[i].clone();
                     ui.push_id(("folder", &path), |ui| {
                         ui.horizontal(|ui| {
                             ui.add_space((path.matches('/').count() as f32 * 12.0).min(96.0));
-                            let response = ui.add(egui::Button::selectable(self.folder == path || self.selected_folders.contains(&path), format!("{} · {count}", folder_title(&path)))
-                                .sense(Sense::click_and_drag()));
+                            let response = ui.add_sized([ui.available_width(), row_height], egui::Button::selectable(self.folder == path || self.selected_folders.contains(&path), format!("{} · {count}", folder_title(&path)))
+                                .truncate().sense(Sense::click_and_drag()));
                             #[cfg(test)]
                             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("test_folder_rect", &path)), response.rect));
                             response.context_menu(|ui| {
@@ -500,6 +524,18 @@ impl Editor {
                     });
                 }
             });
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                egui::Id::new("test_organize_folder_scroll"),
+                (
+                    output.inner_rect,
+                    output.content_size,
+                    output.state.offset.y,
+                    row_height,
+                ),
+            )
+        });
         self.folder_scroll = output.state.offset.y;
         self.scroll_drag(ui, &output);
         ui.separator();
@@ -1310,6 +1346,108 @@ mod tests {
             "Custom"
         );
         assert!(!app.organize_editor.as_ref().unwrap().reset_enabled);
+    }
+    #[test]
+    fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_work() {
+        for width in [360.0, 800.0] {
+            let mut app = app();
+            app.open_organize_editor();
+            let mut editor = app.organize_editor.take().unwrap();
+            let label = |i| format!("folder-{i:04}-{}", "long-name".repeat(25));
+            editor.rows = (0..1000)
+                .map(|i| PhotoRow {
+                    id: MediaId(i),
+                    source: format!("/missing/photo-{i:04}.jpg").into(),
+                    after: label(i),
+                })
+                .collect();
+            editor.draft = Draft::new((0..1000).map(|i| (MediaId(i), label(i))).collect());
+            editor.refresh();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            ctx.enable_accesskit();
+            for folders in [false, true] {
+                for end in [false, true] {
+                    editor.restore_scroll[usize::from(folders)] =
+                        Some(if end { 1_000_000.0 } else { 0.0 });
+                    for _ in 0..3 {
+                        let _ = ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 650.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                egui::CentralPanel::default().show(ctx, |ui| {
+                                    if folders {
+                                        editor.structure(ui, 380.0);
+                                    } else {
+                                        editor.photos(ui, 380.0);
+                                    }
+                                });
+                            },
+                        );
+                    }
+                    let key = if folders {
+                        "test_organize_folder_scroll"
+                    } else {
+                        "test_organize_photo_scroll"
+                    };
+                    let (viewport, content, offset, height) = ctx
+                        .data(|d| d.get_temp::<(egui::Rect, Vec2, f32, f32)>(egui::Id::new(key)))
+                        .unwrap();
+                    let count = if folders {
+                        editor.folders.len()
+                    } else {
+                        editor.rows.len()
+                    };
+                    assert!(
+                        (content.y - (count as f32 * (height + 10.0) - 10.0)).abs()
+                            <= height + 10.0,
+                        "{key}: content {content:?} height {height}"
+                    );
+                    assert!(
+                        viewport.width() >= width - 30.0,
+                        "Scroll target must cover the available width"
+                    );
+                    let indices = if end { [998, 999] } else { [0, 1] };
+                    let rects: Vec<_> = indices
+                        .into_iter()
+                        .map(|i| {
+                            let key = if folders {
+                                egui::Id::new(("test_folder_rect", label(i)))
+                            } else {
+                                egui::Id::new(("test_file_rect", i))
+                            };
+                            ctx.data(|d| d.get_temp::<egui::Rect>(key)).unwrap()
+                        })
+                        .collect();
+                    assert!(
+                        (rects[1].top() - rects[0].top() - height - 10.0).abs() < 0.6,
+                        "{key}: {rects:?}, height {height}, offset {offset}"
+                    );
+                    if end {
+                        assert!(
+                            rects[1].intersects(viewport),
+                            "Last entry is reachable: {key}, rects {rects:?}, viewport {viewport:?}, offset {offset}"
+                        );
+                    }
+                    assert!(
+                        rects.iter().all(|r| r.right() <= viewport.right() + 1.0),
+                        "Long labels must truncate"
+                    );
+                }
+            }
+            assert!(
+                app.requested.is_empty()
+                    && app.metadata_run.is_none()
+                    && app.analysis_run.is_none()
+            );
+            assert_eq!(app.stats.decodes, 0);
+            assert_eq!(app.stats.metadata_reads, 0);
+        }
     }
     fn app() -> PhotoSortApp {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
@@ -2205,7 +2343,10 @@ mod tests {
                 );
                 assert!(
                     egui::DragAndDrop::has_payload_of_type::<FolderDrag>(&ctx),
-                    "Drag did not start: folder={folder}"
+                    "Drag did not start: folder={folder}, source={source:?}, current={:?}, scroll={:?}, gesture={:?}",
+                    ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_file_rect", 0_u64)))),
+                    ctx.data(|d| d.get_temp::<(egui::Rect, Vec2, f32, f32)>(egui::Id::new("test_organize_photo_scroll"))),
+                    app.organize_editor.as_ref().unwrap().drag.start()
                 );
                 frame(&mut app, vec![egui::Event::PointerMoved(target)]);
                 frame(&mut app, vec![button(target, false)]);
