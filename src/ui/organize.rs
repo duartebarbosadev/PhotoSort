@@ -381,6 +381,15 @@ impl Editor {
         command
     }
     fn photos(&mut self, ui: &mut egui::Ui, height: f32) -> Option<Command> {
+        // Rendered once per frame, either in a column or the compact tab.
+        // Global scope preserves egui state when that parent changes.
+        ui.scope_builder(
+            egui::UiBuilder::new().id(("organize_file_panel", &self.catalog.root)),
+            |ui| self.photo_contents(ui, height),
+        )
+        .inner
+    }
+    fn photo_contents(&mut self, ui: &mut egui::Ui, height: f32) -> Option<Command> {
         let mut command = None;
         ui.strong("Files · before / after");
         ui.horizontal(|ui| {
@@ -471,6 +480,15 @@ impl Editor {
         command
     }
     fn structure(&mut self, ui: &mut egui::Ui, height: f32) -> Option<Command> {
+        // Rendered once per frame, either in a column or the compact tab.
+        // Global scope preserves egui state when that parent changes.
+        ui.scope_builder(
+            egui::UiBuilder::new().id(("organize_folder_panel", &self.catalog.root)),
+            |ui| self.folder_contents(ui, height),
+        )
+        .inner
+    }
+    fn folder_contents(&mut self, ui: &mut egui::Ui, height: f32) -> Option<Command> {
         let mut command = None;
         ui.strong("Destination folders");
         let mut scroll = egui::ScrollArea::vertical().id_salt("organize_folders");
@@ -847,7 +865,7 @@ impl PhotoSortApp {
             compact_folders: false,
             photo_scroll: 0.0,
             folder_scroll: 0.0,
-            restore_scroll: [None; 2],
+            restore_scroll: [Some(0.0); 2],
         };
         editor.refresh();
         if let Some(view) = &self.organize_view {
@@ -1347,6 +1365,126 @@ mod tests {
         );
         assert!(!app.organize_editor.as_ref().unwrap().reset_enabled);
     }
+    #[test]
+    fn responsive_editor_keeps_each_scroll_and_selection_without_repeating_work() {
+        let mut app = app();
+        let seed = |app: &mut PhotoSortApp| {
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_mut().unwrap();
+            editor.rows = (0..1000)
+                .map(|i| PhotoRow {
+                    id: MediaId(i),
+                    source: format!("/missing/photo-{i:04}.jpg").into(),
+                    after: String::new(),
+                })
+                .collect();
+            editor.draft = Draft::new(
+                (0..1000)
+                    .map(|i| (MediaId(i), format!("folder-{i:04}")))
+                    .collect(),
+            );
+            editor.refresh();
+        };
+        seed(&mut app);
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let frame = |app: &mut PhotoSortApp, width, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.organize_dialog(ctx),
+            );
+        };
+        let editor = app.organize_editor.as_mut().unwrap();
+        editor.restore_scroll = [Some(6500.0), Some(9000.0)];
+        editor.selected.insert(MediaId(200));
+        editor.selected_folders.insert("folder-0400".into());
+        editor.folder = "folder-0400".into();
+        let mut expected = [6500.0, 9000.0];
+        for (width, folders) in [
+            (1440.0, false),
+            (640.0, true),
+            (640.0, false),
+            (1440.0, false),
+            (640.0, true),
+        ] {
+            app.organize_editor.as_mut().unwrap().compact_folders = folders;
+            for _ in 0..3 {
+                frame(&mut app, width, vec![]);
+            }
+            let editor = app.organize_editor.as_ref().unwrap();
+            for (actual, wanted) in [editor.photo_scroll, editor.folder_scroll]
+                .into_iter()
+                .zip(expected)
+            {
+                assert!(
+                    (actual - wanted).abs() < 1.0,
+                    "width {width}, folders {folders}: {actual} != {wanted}"
+                );
+            }
+            assert!(
+                editor.selected.contains(&MediaId(200))
+                    && editor.selected_folders.contains("folder-0400")
+            );
+            assert_eq!(editor.folder, "folder-0400");
+            let key = if folders {
+                "test_organize_folder_scroll"
+            } else {
+                "test_organize_photo_scroll"
+            };
+            let viewport = ctx
+                .data(|d| d.get_temp::<(egui::Rect, Vec2, f32, f32)>(egui::Id::new(key)))
+                .unwrap()
+                .0;
+            frame(
+                &mut app,
+                width,
+                vec![
+                    egui::Event::PointerMoved(viewport.center()),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -100.0),
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+            for _ in 0..20 {
+                frame(&mut app, width, vec![]);
+            }
+            let editor = app.organize_editor.as_ref().unwrap();
+            let actual = if folders {
+                editor.folder_scroll
+            } else {
+                editor.photo_scroll
+            };
+            assert!(
+                actual > expected[usize::from(folders)] + 20.0,
+                "Scrolling must still work after a layout change"
+            );
+            expected[usize::from(folders)] = actual;
+        }
+        // A new editor with no saved bookmark must not inherit the previous
+        // editor's egui state, even when it opens the same library and layout.
+        app.organize_editor = None;
+        app.organize_view = None;
+        seed(&mut app);
+        for _ in 0..3 {
+            frame(&mut app, 1440.0, vec![]);
+        }
+        let editor = app.organize_editor.as_ref().unwrap();
+        assert_eq!([editor.photo_scroll, editor.folder_scroll], [0.0, 0.0]);
+        assert!(
+            app.requested.is_empty() && app.metadata_run.is_none() && app.analysis_run.is_none()
+        );
+        assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+    }
+
     #[test]
     fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_work() {
         for width in [360.0, 800.0] {

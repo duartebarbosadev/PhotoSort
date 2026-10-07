@@ -76,6 +76,9 @@ impl PhotoSortApp {
             let response = ui
                 .add(egui::Button::new(label).truncate())
                 .on_hover_text("Browse folders, dates and groups. Counts cover the whole library.");
+            #[cfg(test)]
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new("test_navigator_toggle"), response.rect));
             egui::Popup::from_toggle_button_response(&response)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .width(width)
@@ -87,6 +90,13 @@ impl PhotoSortApp {
         }
     }
     fn navigator_contents(&mut self, ui: &mut egui::Ui, height: f32) {
+        // Only one presentation is rendered: inline panel or compact popup.
+        ui.scope_builder(
+            egui::UiBuilder::new().id(("library_navigator", &self.root)),
+            |ui| self.navigator_body(ui, height),
+        );
+    }
+    fn navigator_body(&mut self, ui: &mut egui::Ui, height: f32) {
         ui.horizontal(|ui| {
             for mode in Mode::ALL {
                 if ui
@@ -155,11 +165,15 @@ impl PhotoSortApp {
         }
         ui.add_enabled_ui(!waiting, |ui| {
             let row_height = button_row_height(ui);
-            egui::ScrollArea::vertical()
+            let output = egui::ScrollArea::vertical()
                 .id_salt(("library_tree", self.navigator.mode))
                 .max_height((height - 78.).max(24.))
                 .auto_shrink([false, false])
                 .show_rows(ui, row_height, view.visible.len(), |ui, range| {
+                    #[cfg(test)]
+                    ui.ctx().data_mut(|d| {
+                        d.insert_temp(egui::Id::new("test_navigator_first_row"), range.start)
+                    });
                     for row in range {
                         let i = view.visible[row];
                         let node = &view.tree.nodes[i];
@@ -214,6 +228,20 @@ impl PhotoSortApp {
                         });
                     }
                 });
+            #[cfg(test)]
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(
+                    egui::Id::new("test_navigator_scroll"),
+                    (
+                        output.id,
+                        output.inner_rect,
+                        output.state.offset.y,
+                        row_height,
+                    ),
+                )
+            });
+            #[cfg(not(test))]
+            let _ = output;
         });
     }
 }
@@ -269,6 +297,144 @@ mod tests {
         assert_eq!(app.stats.decodes, 0);
         assert!(app.requested.is_empty());
     }
+    #[test]
+    fn responsive_navigator_keeps_scroll_across_panel_and_popup_without_image_work() {
+        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        app.root = Some("/absent/one".into());
+        app.step = Step::Cull;
+        app.navigator = tree::State {
+            enabled: true,
+            mode: Mode::Groups,
+            ..Default::default()
+        };
+        let tree = Arc::new(
+            tree::build(
+                Mode::Groups,
+                &[],
+                (0..1000).map(|g| tree::Entry {
+                    path: std::path::Path::new("/absent/photo.jpg"),
+                    date: None,
+                    group: Some(g),
+                }),
+                || false,
+            )
+            .unwrap(),
+        );
+        app.browse_tree = Some(Arc::new(tree.project(&app.navigator, || false).unwrap()));
+        app.filter_dirty = false;
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let frame = |app: &mut PhotoSortApp, width, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.navigator_panel(ui));
+                },
+            );
+        };
+        let scroll = || {
+            ctx.data(|d| {
+                d.get_temp::<(egui::Id, egui::Rect, f32, f32)>(egui::Id::new(
+                    "test_navigator_scroll",
+                ))
+            })
+            .unwrap()
+        };
+        for _ in 0..3 {
+            frame(&mut app, 1200.0, vec![]);
+        }
+        let id = scroll().0;
+        let mut state = egui::scroll_area::State::load(&ctx, id).unwrap();
+        state.offset.y = 4000.0;
+        state.store(&ctx, id);
+        for _ in 0..3 {
+            frame(&mut app, 1200.0, vec![]);
+        }
+        let first = ctx
+            .data(|d| d.get_temp::<usize>(egui::Id::new("test_navigator_first_row")))
+            .unwrap();
+        let row_height = scroll().3;
+        for _ in 0..3 {
+            frame(&mut app, 480.0, vec![]);
+        }
+        let toggle = ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("test_navigator_toggle")))
+            .unwrap()
+            .center();
+        frame(
+            &mut app,
+            480.0,
+            vec![
+                egui::Event::PointerMoved(toggle),
+                egui::Event::PointerButton {
+                    pos: toggle,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+                egui::Event::PointerButton {
+                    pos: toggle,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        for _ in 0..3 {
+            frame(&mut app, 480.0, vec![]);
+        }
+        assert_eq!(scroll().0, id);
+        assert!((scroll().2 - 4000.0).abs() < 1.0);
+        assert_eq!(
+            scroll().3,
+            row_height,
+            "Responsive layout must keep the same row metrics"
+        );
+        assert_eq!(
+            ctx.data(|d| d.get_temp::<usize>(egui::Id::new("test_navigator_first_row")))
+                .unwrap(),
+            first
+        );
+        let viewport = scroll().1;
+        frame(
+            &mut app,
+            480.0,
+            vec![
+                egui::Event::PointerMoved(viewport.center()),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -100.0),
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        for _ in 0..20 {
+            frame(&mut app, 480.0, vec![]);
+        }
+        let moved = scroll().2;
+        assert!(moved > 4020.0);
+        for _ in 0..3 {
+            frame(&mut app, 1200.0, vec![]);
+        }
+        assert_eq!(scroll().0, id);
+        assert!((scroll().2 - moved).abs() < 1.0);
+        app.root = Some("/absent/two".into());
+        for _ in 0..3 {
+            frame(&mut app, 1200.0, vec![]);
+        }
+        assert_ne!(scroll().0, id);
+        assert_eq!(scroll().2, 0.0);
+        assert!(app.requested.is_empty() && app.textures.is_empty() && app.browse_run.is_none());
+        assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+    }
+
     #[test]
     fn large_navigator_renders_only_visible_rows_at_compact_and_wide_sizes() {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
