@@ -14,6 +14,8 @@ pub struct Catalog {
     /// Identity snapshots for Organize's supporting files; never image inputs.
     pub supporting_fingerprints: HashMap<MediaId, Fingerprint>,
     pub directories: Vec<PathBuf>,
+    /// Stable identities from the shared scan; layout restoration never stats on the UI thread.
+    pub directory_identities: HashMap<PathBuf, [u64; 4]>,
     pub warnings: Vec<String>,
 }
 impl Catalog {
@@ -45,6 +47,14 @@ impl Catalog {
             };
             if entry.file_type().is_dir() {
                 catalog.directories.push(entry.path().to_path_buf());
+                match Fingerprint::read_directory(entry.path()) {
+                    Ok(fingerprint) => {
+                        catalog
+                            .directory_identities
+                            .insert(entry.path().to_path_buf(), fingerprint.identity);
+                    }
+                    Err(error) => catalog.warnings.push(error.to_string()),
+                }
             }
             if !entry.file_type().is_file() {
                 continue;

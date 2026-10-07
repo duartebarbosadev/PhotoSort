@@ -24,6 +24,7 @@ impl Rows {
                 end += match action {
                     Action::Move { files } | Action::FinishMove { files } => files.len().max(1),
                     Action::Trash { files } => files.len().max(1),
+                    Action::TrashDirectory(folder) => 1 + folder.inventory.files.len(),
                     _ => 1,
                 };
                 self.ends.push(end);
@@ -92,6 +93,26 @@ fn row_ui(
             ));
             path_label(ui, "From  ", &files[file].path, root);
             ui.add(egui::Label::new("To    System Trash").extend());
+        }
+        Action::TrashDirectory(folder) => {
+            if file == 0 {
+                ui.small(format!(
+                    "Group {} · Trash original folder · {} files, {} subfolders",
+                    group + 1,
+                    folder.inventory.files.len(),
+                    folder.inventory.directory_count().saturating_sub(1)
+                ));
+                path_label(ui, "From  ", &folder.path, root);
+            } else {
+                ui.small(format!(
+                    "Group {} · Included file {} of {}",
+                    group + 1,
+                    file,
+                    folder.inventory.files.len()
+                ));
+                path_label(ui, "File  ", &folder.inventory.files[file - 1].path, root);
+            }
+            ui.add(egui::Label::new("To    System Trash (whole folder)").extend());
         }
         Action::RenameFile { source, to } => {
             ui.small(format!("Group {} · Rename file", group + 1));

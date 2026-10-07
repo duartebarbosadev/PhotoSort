@@ -1,48 +1,36 @@
 //! Explicit spelling changes, planned from shared inventory and executed exclusively.
 use super::*;
-use std::time::UNIX_EPOCH;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct DirectoryStamp {
-    modified_ns: u128,
-    created_ns: Option<u128>,
-    identity: [u64; 2],
-}
-impl DirectoryStamp {
-    fn read(path: &Path) -> Result<Self> {
-        let meta = fs::symlink_metadata(path)?;
-        anyhow::ensure!(
-            meta.is_dir() && !meta.file_type().is_symlink(),
-            "Folder was replaced: {}",
-            path.display()
-        );
-        #[cfg(unix)]
-        let identity = {
-            use std::os::unix::fs::MetadataExt;
-            [meta.dev(), meta.ino()]
-        };
-        #[cfg(not(unix))]
-        let identity = [0, 0];
-        Ok(Self {
-            modified_ns: meta
-                .modified()?
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos(),
-            created_ns: meta
-                .created()
-                .ok()
-                .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()),
-            identity,
-        })
-    }
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct DirectoryRename {
     pub from: PathBuf,
     pub to: PathBuf,
-    pub files: Vec<Source>,
-    directories: Vec<(PathBuf, DirectoryStamp)>,
+    #[serde(flatten)]
+    pub inventory: super::directory::Inventory,
+}
+// Preserve existing recovery records' flat files/directories fields. Serde's
+// flatten deserializer buffers values through Content, which cannot represent
+// the u128 nanosecond timestamps used by our source identities.
+impl<'de> Deserialize<'de> for DirectoryRename {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            from: PathBuf,
+            to: PathBuf,
+            files: Vec<Source>,
+            directories: Vec<(PathBuf, super::directory::DirectoryStamp)>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            from: wire.from,
+            to: wire.to,
+            inventory: super::directory::Inventory {
+                files: wire.files,
+                directories: wire.directories,
+            },
+        })
+    }
 }
 impl DirectoryRename {
     pub(super) fn destination(&self, path: &Path) -> PathBuf {
@@ -56,37 +44,7 @@ impl DirectoryRename {
         );
         reject_symlink_components(&self.from)?;
         reject_symlink_components(&self.to)?;
-        // Mutation preflight, not another catalog/index/metadata scan. Refuse
-        // additions, removals, links and replaced files since the plan was reviewed.
-        let mut expected: HashSet<_> = self
-            .files
-            .iter()
-            .map(|s| s.path.clone())
-            .chain(self.directories.iter().map(|(path, _)| path.clone()))
-            .collect();
-        for entry in walkdir::WalkDir::new(&self.from).follow_links(false) {
-            anyhow::ensure!(!cancelled(), "Folder rename cancelled");
-            let entry = entry?;
-            anyhow::ensure!(
-                !entry.file_type().is_symlink() && expected.remove(entry.path()),
-                "Folder contents changed since review: {}",
-                entry.path().display()
-            );
-        }
-        anyhow::ensure!(expected.is_empty(), "Folder contents changed since review");
-        for (path, stamp) in &self.directories {
-            anyhow::ensure!(!cancelled(), "Folder rename cancelled");
-            anyhow::ensure!(
-                DirectoryStamp::read(path)? == *stamp,
-                "Folder changed since review: {}",
-                path.display()
-            );
-        }
-        for source in &self.files {
-            anyhow::ensure!(!cancelled(), "Folder rename cancelled");
-            source.verify()?;
-        }
-        anyhow::ensure!(!cancelled(), "Folder rename cancelled");
+        self.inventory.verify(&self.from, cancelled)?;
         rename_exclusive(&self.from, &self.to).with_context(|| {
             format!(
                 "Cannot rename {} without overwriting a destination",
@@ -171,33 +129,20 @@ pub(super) fn prepare(
             from.parent() == to.parent(),
             "Folder spelling changes have conflicting parent destinations"
         );
-        let files = catalog
-            .inventory
-            .iter()
-            .filter(|path| path.starts_with(&original))
-            .map(|path| {
-                anyhow::ensure!(!cancelled(), "Planning cancelled");
-                let mut source = Source::capture(path.clone())?;
-                source.path = result.rebase(path);
-                Ok(source)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let directories = catalog
-            .directories
-            .iter()
-            .filter(|path| path.starts_with(&original))
-            .map(|path| {
-                anyhow::ensure!(!cancelled(), "Planning cancelled");
-                Ok((result.rebase(path), DirectoryStamp::read(path)?))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut inventory = super::directory::Inventory::capture(
+            catalog,
+            std::slice::from_ref(&original),
+            cancelled,
+        )?
+        .pop()
+        .unwrap();
+        inventory.rebase(|path| result.rebase(path));
         result
             .actions
             .push(Action::RenameDirectory(DirectoryRename {
                 from: from.clone(),
                 to: to.clone(),
-                files,
-                directories,
+                inventory,
             }));
         result.rewrites.push((from, to));
     }

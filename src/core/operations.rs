@@ -1,4 +1,6 @@
 mod case_rename;
+mod directory;
+pub use directory::TrashDirectory;
 #[cfg(test)]
 mod move_tests;
 pub mod recovery;
@@ -35,6 +37,7 @@ impl Source {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Action {
     RenameDirectory(DirectoryRename),
+    TrashDirectory(TrashDirectory),
     CreateDirectory {
         path: PathBuf,
     },
@@ -72,6 +75,11 @@ pub enum Action {
 impl Action {
     pub fn label(&self) -> String {
         match self {
+            Self::TrashDirectory(folder) => format!(
+                "Trash folder {} ({} files)",
+                folder.path.display(),
+                folder.inventory.files.len()
+            ),
             Self::RenameFile { source, to } => {
                 format!("Rename file {} → {}", source.path.display(), to.display())
             }
@@ -148,9 +156,19 @@ impl Action {
     }
     pub fn sources(&self) -> Vec<&Path> {
         match self {
-            Self::RenameDirectory(rename) => {
-                rename.files.iter().map(|s| s.path.as_path()).collect()
-            }
+            Self::TrashDirectory(folder) => folder
+                .inventory
+                .files
+                .iter()
+                .map(|s| s.path.as_path())
+                .chain(std::iter::once(folder.path.as_path()))
+                .collect(),
+            Self::RenameDirectory(rename) => rename
+                .inventory
+                .files
+                .iter()
+                .map(|s| s.path.as_path())
+                .collect(),
             Self::Move { files } | Self::FinishMove { files } => {
                 files.iter().map(|(s, _)| s.path.as_path()).collect()
             }
@@ -243,6 +261,7 @@ impl Report {
                 Action::RenameDirectory(rename) => {
                     destinations.extend(
                         rename
+                            .inventory
                             .files
                             .iter()
                             .map(|source| rename.destination(&source.path))
@@ -265,7 +284,12 @@ impl Report {
             completed: self
                 .completed
                 .iter()
-                .filter(|a| matches!(a, Action::Trash { .. } | Action::Metadata { .. }))
+                .filter(|a| {
+                    matches!(
+                        a,
+                        Action::Trash { .. } | Action::TrashDirectory(_) | Action::Metadata { .. }
+                    )
+                })
                 .cloned()
                 .collect(),
             ..Default::default()
@@ -303,34 +327,16 @@ impl Report {
     }
 }
 
-pub fn decisions_plan(
+/// Shared Trash expansion for staged decisions and explicit context-menu requests.
+fn trash_actions(
     catalog: &Catalog,
-    decisions: &HashMap<MediaId, Decision>,
+    rejected: &HashSet<MediaId>,
     companions: bool,
-) -> Result<Plan> {
-    decisions_plan_with_metadata(
-        catalog,
-        decisions,
-        companions,
-        metadata::WritePolicy::SidecarOnly,
-        |m| Ok(metadata::read(&m.path)),
-        || false,
-    )
-}
-/// Runtime supplies its shared image actor's metadata cache. Standalone callers
-/// may use decisions_plan for the original sidecar-only plan contract.
-pub fn decisions_plan_with_metadata(
-    catalog: &Catalog,
-    decisions: &HashMap<MediaId, Decision>,
-    companions: bool,
-    policy: metadata::WritePolicy,
-    mut load: impl FnMut(&Media) -> Result<Metadata>,
-    cancelled: impl Fn() -> bool,
-) -> Result<Plan> {
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(Vec<Action>, HashSet<PathBuf>)> {
     let index = catalog.companion_index();
     let mut seen = HashSet::new();
     let mut actions = Vec::new();
-    let mut writes: HashMap<PathBuf, (Option<u8>, Option<u8>)> = HashMap::new();
     let fingerprints: HashMap<_, _> = catalog
         .media
         .iter()
@@ -344,13 +350,7 @@ pub fn decisions_plan_with_metadata(
         .collect();
     for (id, path) in catalog.organize_files() {
         anyhow::ensure!(!cancelled(), "File planning cancelled");
-        let Some(d) = decisions.get(&id) else {
-            continue;
-        };
-        if d.is_empty() {
-            continue;
-        }
-        if d.rejected {
+        if rejected.contains(&id) {
             let photo = MediaKind::from_path(path).is_some_and(|kind| kind != MediaKind::Video);
             let files = if companions && photo {
                 index
@@ -392,6 +392,86 @@ pub fn decisions_plan_with_metadata(
             }
         }
     }
+    Ok((actions, seen))
+}
+#[derive(Clone, Debug, Default)]
+pub struct TrashRequest {
+    pub files: Vec<MediaId>,
+    pub folders: Vec<PathBuf>,
+}
+/// Build one reviewable plan from the shared discovery inventory. No metadata or
+/// image decoding is needed. The executor repeats preflight before OS Trash.
+pub fn trash_plan(
+    catalog: &Catalog,
+    request: &TrashRequest,
+    companions: bool,
+    cancelled: impl Fn() -> bool,
+) -> Result<Plan> {
+    anyhow::ensure!(!cancelled(), "Trash planning cancelled");
+    let mut roots = request.folders.clone();
+    roots.sort();
+    roots.dedup();
+    let selected: HashSet<_> = roots.iter().cloned().collect();
+    roots.retain(|p| !p.ancestors().skip(1).any(|a| selected.contains(a)));
+    let files: HashMap<_, _> = catalog.organize_files().into_iter().collect();
+    let mut rejected = HashSet::new();
+    for id in &request.files {
+        anyhow::ensure!(!cancelled(), "Trash planning cancelled");
+        let path = files
+            .get(id)
+            .context("Selected file is no longer available")?;
+        if !path.ancestors().any(|p| selected.contains(p)) {
+            rejected.insert(*id);
+        }
+    }
+    let inventories = directory::Inventory::capture(catalog, &roots, &cancelled)?;
+    let (mut actions, _) = trash_actions(catalog, &rejected, companions, &cancelled)?;
+    for (path, inventory) in roots.into_iter().zip(inventories) {
+        inventory.verify(&path, &cancelled)?;
+        actions.push(Action::TrashDirectory(TrashDirectory {
+            path,
+            library: catalog.root.clone(),
+            inventory,
+        }));
+    }
+    Ok(Plan {
+        actions,
+        description: "Move the listed files and original folders to system Trash. Folder entries include every discovered file and subfolder. Changed contents stop that operation. Unrelated marks, ratings and Organize edits remain staged.".into(),
+        ..Default::default()
+    })
+}
+
+pub fn decisions_plan(
+    catalog: &Catalog,
+    decisions: &HashMap<MediaId, Decision>,
+    companions: bool,
+) -> Result<Plan> {
+    decisions_plan_with_metadata(
+        catalog,
+        decisions,
+        companions,
+        metadata::WritePolicy::SidecarOnly,
+        |m| Ok(metadata::read(&m.path)),
+        || false,
+    )
+}
+/// Runtime supplies its shared image actor's metadata cache. Standalone callers
+/// may use decisions_plan for the original sidecar-only plan contract.
+pub fn decisions_plan_with_metadata(
+    catalog: &Catalog,
+    decisions: &HashMap<MediaId, Decision>,
+    companions: bool,
+    policy: metadata::WritePolicy,
+    mut load: impl FnMut(&Media) -> Result<Metadata>,
+    cancelled: impl Fn() -> bool,
+) -> Result<Plan> {
+    let rejected = decisions
+        .iter()
+        .filter(|(_, d)| d.rejected)
+        .map(|(id, _)| *id)
+        .collect();
+    let (mut actions, seen) = trash_actions(catalog, &rejected, companions, &cancelled)?;
+    let mut writes: HashMap<PathBuf, (Option<u8>, Option<u8>)> = HashMap::new();
     let mut prepared = Vec::new();
     let mut shared_sidecars = HashSet::new();
     for media in &catalog.media {
@@ -937,7 +1017,9 @@ fn execute_logged(
                 if cancelled()
                     && matches!(
                         action,
-                        Action::RenameDirectory(_) | Action::RenameFile { .. }
+                        Action::RenameDirectory(_)
+                            | Action::TrashDirectory(_)
+                            | Action::RenameFile { .. }
                     ) =>
             {
                 report.cancelled = true;
@@ -1020,7 +1102,7 @@ fn completion_identities(action: &Action) -> Vec<(MediaId, MediaId, Fingerprint)
     };
     match action {
         Action::RenameDirectory(rename) => {
-            for source in &rename.files {
+            for source in &rename.inventory.files {
                 record(&source.path, &rename.destination(&source.path));
             }
         }
@@ -1049,6 +1131,7 @@ fn apply(
     }
     match action {
         Action::RenameDirectory(rename) => rename.apply(cancelled)?,
+        Action::TrashDirectory(folder) => folder.apply(cancelled)?,
         Action::RenameFile { source, to } => {
             case_rename::apply_file(source, to, cancelled, file_names)?
         }

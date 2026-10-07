@@ -24,6 +24,8 @@ pub struct Session {
     /// General scene membership is independent of Cull/Pick Best subject groups.
     #[serde(default)]
     pub scene_groups: std::sync::Arc<super::manual_groups::ManualGroups>,
+    #[serde(default)]
+    pub organize: Option<super::organize::Intent>,
     pub decisions: HashMap<MediaId, Decision>,
     pub fingerprints: HashMap<MediaId, Fingerprint>,
 }
@@ -57,9 +59,15 @@ impl Session {
             self.decisions.remove(&id);
         }
         self.apply_verified_identities(&report.relocated);
+        if report.remaining.output_root.is_some() && report.remaining.actions.is_empty() {
+            self.organize = None;
+        }
     }
     /// Adopt executor-verified identities while retaining unrelated staged edits.
     pub fn apply_verified_identities(&mut self, changes: &[(MediaId, MediaId, Fingerprint)]) {
+        if let Some(intent) = &mut self.organize {
+            intent.relocate(changes);
+        }
         for groups in [&mut self.manual_groups, &mut self.scene_groups] {
             std::sync::Arc::make_mut(groups).relocate(changes);
         }
@@ -92,6 +100,9 @@ impl Session {
     }
     pub fn reconcile_catalog(&mut self, catalog: &super::catalog::Catalog) {
         self.reconcile_files(&catalog.media, &catalog.supporting_fingerprints);
+        if let Some(intent) = &mut self.organize {
+            intent.reconcile(catalog);
+        }
     }
     fn reconcile_files(&mut self, media: &[Media], supporting: &HashMap<MediaId, Fingerprint>) {
         let mut fingerprints: HashMap<_, _> = media.iter().map(|m| (m.id, m.fingerprint)).collect();

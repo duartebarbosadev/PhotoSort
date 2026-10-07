@@ -231,6 +231,7 @@ pub struct PhotoSortApp {
     retry_edit: Option<plan_review::Edit>,
     recovery_ticket: Option<crate::core::operations::recovery::Ticket>,
     applying_plan: Option<Plan>,
+    plan_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     apply_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     plan_open: bool,
     help: bool,
@@ -399,6 +400,7 @@ impl PhotoSortApp {
             retry_edit: None,
             recovery_ticket: None,
             applying_plan: None,
+            plan_stop: None,
             apply_stop: None,
             plan_open: false,
             help: false,
@@ -422,6 +424,14 @@ impl PhotoSortApp {
             manual_groups: self.manual_groups.clone(),
             scene_groups: self.scene_groups.clone(),
             decisions: self.decisions.clone(),
+            organize: self.catalog.as_ref().and_then(|catalog| {
+                crate::core::organize::Intent::capture(
+                    catalog,
+                    self.organize_drafts.clone(),
+                    self.file_names.clone(),
+                    PathBuf::from(&self.output),
+                )
+            }),
             ..Default::default()
         }
     }
@@ -776,6 +786,11 @@ impl PhotoSortApp {
                     self.manual_groups = session.manual_groups;
                     self.scene_groups = session.scene_groups;
                     self.decisions = session.decisions;
+                    if let Some(intent) = session.organize {
+                        self.organize_drafts = intent.drafts;
+                        self.file_names = intent.names;
+                        self.output = intent.output.to_string_lossy().into_owned();
+                    }
                     self.active = self.media.first().map(|m| m.id);
                     self.root = Some(catalog.root.clone());
                     self.set_status(format!("{} items · library ready", self.media.len()));
@@ -1075,7 +1090,23 @@ impl PhotoSortApp {
                         }
                     }
                 }
+                Event::PlanningCancelled => {
+                    self.plan_stop = None;
+                    self.busy = false;
+                    self.organize_departure = None;
+                    self.set_status("File planning cancelled · edits retained".into());
+                }
                 Event::Planned(mut plan) => {
+                    if let Some(stop) = self.plan_stop.take() {
+                        if stop.load(std::sync::atomic::Ordering::Acquire) {
+                            self.busy = false;
+                            self.organize_departure = None;
+                            self.set_status("File planning cancelled · edits retained".into());
+                            continue;
+                        }
+                        self.set_status("File plan ready · review your changes".into());
+                    }
+
                     if self.rotation_plan {
                         plan.description = "Apply confirmed rotation corrections".into();
                     }
@@ -1266,6 +1297,7 @@ impl PhotoSortApp {
                     self.error = Some(error);
                 }
                 Event::Error(e) => {
+                    self.plan_stop = None;
                     self.apply_stop = None;
                     self.group_task = None;
                     self.resume_suspended = self.pending_bookmark.is_some();
@@ -1634,6 +1666,31 @@ impl PhotoSortApp {
                 }),
         }
     }
+    fn review_trash(&mut self, request: crate::core::operations::TrashRequest) {
+        if self.scanning || self.busy || self.review_remaining_operations() {
+            return;
+        }
+        let Some(catalog) = self.catalog.clone() else {
+            return;
+        };
+        self.save_session();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        match self.runtime.io(IoWork::PlanTrash {
+            catalog,
+            request,
+            companions: self.companions,
+            cancelled: cancelled.clone(),
+        }) {
+            Ok(()) => {
+                self.set_review_plan(None);
+                self.rotation_plan = false;
+                self.busy = true;
+                self.plan_stop = Some(cancelled);
+                self.set_status("Checking files and folders for Trash review…".into());
+            }
+            Err(e) => self.error = Some(e),
+        }
+    }
     fn organize(&mut self) {
         if self.review_remaining_operations() {
             return;
@@ -1675,7 +1732,9 @@ impl PhotoSortApp {
                     crate::core::organize::Draft::from_catalog(&catalog, labels.clone())
                         .directory_edits()
                 });
+            let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
             match self.runtime.io(IoWork::PlanOrganize {
+                cancelled: cancelled.clone(),
                 directories,
                 catalog,
                 labels,
@@ -1683,7 +1742,10 @@ impl PhotoSortApp {
                 output: PathBuf::from(&self.output),
                 companions: self.companions,
             }) {
-                Ok(()) => self.busy = true,
+                Ok(()) => {
+                    self.busy = true;
+                    self.plan_stop = Some(cancelled);
+                }
                 Err(e) => self.error = Some(e),
             }
         }
@@ -2498,6 +2560,26 @@ mod organize_tests {
         }
         app.poll(&egui::Context::default());
         app.runtime.events = original;
+    }
+    #[test]
+    fn folder_trash_cancelled_plans_never_open_late_review_or_drop_kept_edits() {
+        let mut app = app();
+        app.file_names.insert(MediaId(1), "Keep".into());
+        app.busy = true;
+        app.plan_stop = Some(Arc::new(std::sync::atomic::AtomicBool::new(true)));
+        deliver(&mut app, vec![Event::Planned(Plan::default())]);
+        assert!(!app.busy && app.plan.is_none() && app.plan_stop.is_none());
+        assert_eq!(app.file_names[&MediaId(1)], "Keep");
+        app.busy = true;
+        app.plan_stop = Some(Arc::new(std::sync::atomic::AtomicBool::new(true)));
+        deliver(&mut app, vec![Event::PlanningCancelled]);
+        assert!(!app.busy && app.plan.is_none() && app.error.is_none());
+        assert_eq!(app.file_names[&MediaId(1)], "Keep");
+        app.busy = true;
+        app.plan_stop = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        deliver(&mut app, vec![Event::Planned(Plan::default())]);
+        assert!(!app.busy && app.plan.is_some() && app.plan_open);
+        assert_eq!(app.status, "File plan ready · review your changes");
     }
     #[test]
     fn regional_results_are_atomic_run_guarded_and_keep_subject_groups_separate() {

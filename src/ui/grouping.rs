@@ -580,6 +580,7 @@ mod tests {
             .map(|m| (m.id, m.fingerprint))
             .collect();
         Session {
+            organize: None,
             manual_groups: manual,
             scene_groups: Default::default(),
             decisions: Default::default(),
@@ -666,6 +667,7 @@ mod tests {
             let subjects = group(vec![catalog.media[0].id, catalog.media[1].id]);
             let scenes = group(vec![catalog.media[1].id, catalog.media[2].id]);
             Session {
+                organize: None,
                 manual_groups: subjects.clone(),
                 scene_groups: scenes.clone(),
                 fingerprints: catalog

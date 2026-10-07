@@ -199,6 +199,12 @@ impl PhotoSortApp {
                 // Reserve controls at the right edge before fitting status text.
                 // Stop must remain reachable even with long paths in small windows.
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                    if let Some(stop) = &self.plan_stop {
+                        let stopping = stop.load(std::sync::atomic::Ordering::Acquire);
+                        if ui.add_enabled(!stopping, egui::Button::new(if stopping { "Cancelling…" } else { "Cancel planning" })).clicked() {
+                            stop.store(true, std::sync::atomic::Ordering::Release);
+                        }
+                    }
                     if let Some(stop) = &self.apply_stop {
                         let stopping = stop.load(std::sync::atomic::Ordering::Acquire);
                         if ui.add_enabled(!stopping, egui::Button::new(if stopping { "Stopping…" } else { "Stop" })

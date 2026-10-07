@@ -158,3 +158,13 @@ from Trash remains available. Non-Unicode macOS paths are rejected rather than
 risking the dependency's percent-encoding ambiguity. Immediate whole-folder Trash
 and preserving an in-progress layout during that mutation remain outstanding.
 See diagnostics/organize-trash-2026-10-08/README.md for scope and evidence.
+
+
+### Reviewed whole-folder Trash — 8 October 2026
+
+Organize now reviews explicitly selected files or whole original folders through
+the shared mutation and recovery pipeline. Folder review includes hidden/supporting
+files, validates the complete inventory and refuses changed trees or symlinks.
+Kept layouts and file names persist with Session/recovery and survive unrelated
+Trash operations. Both Trash and Organize planning have a Cancel control.
+See diagnostics/folder-trash-2026-10-08/README.md for verification and limits.

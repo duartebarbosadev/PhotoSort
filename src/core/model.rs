@@ -63,6 +63,16 @@ impl Fingerprint {
         if !m.is_file() {
             return Err(std::io::Error::other("Not a regular file"));
         }
+        Self::from_metadata(&m)
+    }
+    pub(crate) fn read_directory(path: &Path) -> std::io::Result<Self> {
+        let m = std::fs::symlink_metadata(path)?;
+        if !m.is_dir() || m.file_type().is_symlink() {
+            return Err(std::io::Error::other("Not a regular directory"));
+        }
+        Self::from_metadata(&m)
+    }
+    fn from_metadata(m: &std::fs::Metadata) -> std::io::Result<Self> {
         #[cfg(unix)]
         let identity = {
             use std::os::unix::fs::MetadataExt;

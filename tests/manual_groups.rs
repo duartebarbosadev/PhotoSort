@@ -131,6 +131,7 @@ fn corrections_pin_membership_across_regenerated_numbers_and_split_reset_and_und
 fn session_roundtrip_strict_identity_and_verified_relocation_keep_only_valid_intent() {
     let m = media(4);
     let session = Session {
+        organize: None,
         manual_groups: grouped(&m, vec![MediaId(0), MediaId(1)]),
         fingerprints: m.iter().map(|m| (m.id, m.fingerprint)).collect(),
         ..Default::default()
@@ -157,10 +158,12 @@ fn session_roundtrip_strict_identity_and_verified_relocation_keep_only_valid_int
 fn destination_merge_keeps_unrelated_groups_separate_and_swaps_are_simultaneous() {
     let m = media(4);
     let mut a = Session {
+        organize: None,
         manual_groups: grouped(&m, vec![MediaId(0), MediaId(1)]),
         ..Default::default()
     };
     let b = Session {
+        organize: None,
         manual_groups: grouped(&m, vec![MediaId(2), MediaId(3)]),
         ..Default::default()
     };
@@ -316,6 +319,7 @@ fn hundred_thousand_photos_use_background_membership_without_any_image_work() {
 fn move_and_restore(catalog: Catalog) {
     let selected = catalog.media.iter().map(|m| m.id).collect();
     let mut session = Session {
+        organize: None,
         manual_groups: grouped(&catalog.media, selected),
         scene_groups: grouped(
             &catalog.media,
@@ -409,6 +413,7 @@ fn seven_sample_copies_keep_groups_and_bytes_after_file_moves_and_restart() {
 fn scene_and_subject_namespaces_roundtrip_independently_and_reject_changed_members() {
     let m = media(4);
     let session = Session {
+        organize: None,
         manual_groups: grouped(&m, vec![MediaId(0), MediaId(1)]),
         scene_groups: grouped(&m, vec![MediaId(0), MediaId(2)]),
         fingerprints: m.iter().map(|m| (m.id, m.fingerprint)).collect(),
@@ -437,6 +442,7 @@ fn scene_and_subject_namespaces_roundtrip_independently_and_reject_changed_membe
 fn both_namespaces_merge_and_relocate_without_joining_unrelated_cohorts() {
     let m = media(6);
     let mut destination = Session {
+        organize: None,
         manual_groups: grouped(&m, vec![MediaId(0), MediaId(1)]),
         scene_groups: grouped(&m, vec![MediaId(0), MediaId(2)]),
         decisions: HashMap::from([(
@@ -449,6 +455,7 @@ fn both_namespaces_merge_and_relocate_without_joining_unrelated_cohorts() {
         ..Default::default()
     };
     destination.merge(Session {
+        organize: None,
         manual_groups: grouped(&m, vec![MediaId(3), MediaId(4)]),
         scene_groups: grouped(&m, vec![MediaId(3), MediaId(5)]),
         decisions: HashMap::from([(
@@ -510,6 +517,7 @@ fn both_namespaces_merge_and_relocate_without_joining_unrelated_cohorts() {
 fn identity_chains_and_in_place_updates_preserve_all_intent_and_verified_fingerprints() {
     let m = media(5);
     let mut session = Session {
+        organize: None,
         manual_groups: grouped(&m, vec![MediaId(0), MediaId(1)]),
         scene_groups: grouped(&m, vec![MediaId(1), MediaId(2)]),
         decisions: m

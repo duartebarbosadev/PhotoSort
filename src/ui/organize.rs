@@ -12,6 +12,7 @@ pub(super) struct Editor {
     desktop_pending: Option<crate::core::desktop::Request>,
     reset_request: Option<Selection>,
     trash_request: Option<(Vec<MediaId>, bool)>,
+    trash_now: Option<operations::TrashRequest>,
     reset_enabled: bool,
     names: HashMap<MediaId, String>,
     renaming: Option<(MediaId, String)>,
@@ -93,12 +94,36 @@ impl Editor {
         if ui.add_enabled(!files.is_empty(), egui::Button::new(label))
             .on_hover_text("Mark the represented files, including files in subfolders. Marks are shared across steps. Close this editor and use Review changes to apply them.")
             .clicked() {
-            let mut files: Vec<_> = files.into_iter().collect();
+            let mut files: Vec<_> = files.iter().copied().collect();
             files.sort_by_key(|id| id.0);
             self.trash_request = Some((files, !all_marked));
             ui.close();
         }
+        if ui.add_enabled(!files.is_empty(), egui::Button::new("Move these files to Trash…"))
+            .on_hover_text("Keep your layout edits and review only these files and their companions before applying.").clicked() {
+            let mut files: Vec<_> = files.iter().copied().collect();
+            files.sort_by_key(|id| id.0);
+            self.trash_now = Some(operations::TrashRequest { files, folders: Vec::new() });
+            ui.close();
+        }
+        if !selection.folders.is_empty() {
+            let folders: Option<Vec<_>> = selection
+                .folders
+                .iter()
+                .map(|folder| {
+                    self.folder_locations(folder)
+                        .source
+                        .filter(|path| path != &self.catalog.root)
+                })
+                .collect();
+            if ui.add_enabled(folders.is_some(), egui::Button::new("Move original folders to Trash…"))
+                .on_hover_text("Review whole original folders, including every file and empty subfolder. Unavailable for the library root, new destinations or merged folders.").clicked() {
+                self.trash_now = Some(operations::TrashRequest { files: Vec::new(), folders: folders.unwrap() });
+                ui.close();
+            }
+        }
     }
+
     fn file_locations(&self, row: &PhotoRow) -> desktop::Locations {
         let name = self
             .names
@@ -941,6 +966,7 @@ impl PhotoSortApp {
             desktop_pending: None,
             reset_request: None,
             trash_request: None,
+            trash_now: None,
             reset_enabled: self.organize_grouping_ready() && self.analysis_run.is_none(),
             names: self.file_names.clone(),
             renaming: None,
@@ -1054,7 +1080,13 @@ impl PhotoSortApp {
         if let Some(request) = editor.desktop_pending.take() {
             self.dispatch_desktop(request);
         }
-        self.finish_organize_edit(editor, action);
+        let trash_now = editor.trash_now.take();
+        self.finish_organize_edit(editor, if trash_now.is_some() { 2 } else { action });
+        if self.organize_editor.is_none()
+            && let Some(request) = trash_now
+        {
+            self.review_trash(request);
+        }
     }
     fn finish_organize_edit(&mut self, mut editor: Editor, action: u8) {
         // Keep/Preview accepts a currently typed name too; do not silently lose
@@ -1072,6 +1104,7 @@ impl PhotoSortApp {
         match action {
             1 => {}
             2 | 3 => {
+                self.dirty = Some(Instant::now());
                 self.file_names = editor.names;
                 self.organize_drafts.insert(self.group_mode, editor.draft);
                 if action == 3 {

@@ -75,20 +75,28 @@ impl PhotoSortApp {
             }
             return;
         }
+        let organize = self
+            .retry_plan
+            .as_ref()
+            .or(self.plan.as_ref())
+            .is_some_and(|plan| plan.output_root.is_some());
         self.retry_plan = None;
         self.set_review_plan(None);
         self.plan_open = false;
         self.rotation_plan = false;
         self.error = None;
-        self.group_mode = GroupMode::Current;
-        self.organize_drafts.clear();
-        self.organize_editor = None;
-        self.file_names.clear();
-        self.output = self
-            .root
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
+        if organize {
+            self.group_mode = GroupMode::Current;
+            self.organize_drafts.clear();
+            self.organize_editor = None;
+            self.file_names.clear();
+            self.output = self
+                .root
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+        }
+        self.dirty = Some(Instant::now());
         self.set_status(
             "Unfinished file plan discarded · completed operations remain applied".into(),
         );
@@ -175,7 +183,12 @@ impl PhotoSortApp {
         !unfinished
     }
     pub(super) fn has_unsaved_plan_extras(&self) -> bool {
-        self.rotation_review.pending_count() > 0 || self.organize_changes_pending()
+        self.rotation_review.pending_count() > 0
+            || (self.organize_changes_pending()
+                && self
+                    .retry_plan
+                    .as_ref()
+                    .is_none_or(|plan| plan.output_root.is_some()))
     }
     pub(super) fn save_plan_and_quit(&mut self) {
         if self.has_unsaved_plan_extras()
@@ -376,6 +389,7 @@ impl PhotoSortApp {
                 self.error = None;
             }
             OrganizeResolution::Discard => {
+                self.dirty = Some(Instant::now());
                 self.runtime.cancel_analysis();
                 self.analysis_run = None;
                 self.organize_run = None;
@@ -474,6 +488,21 @@ mod organize_departure_tests {
             assert!(Instant::now() < until, "worker did not finish");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+    #[test]
+    fn folder_trash_discard_preserves_unrelated_organization_intent() {
+        let (_dir, mut app) = fixture();
+        let id = app.media[0].id;
+        app.file_names.insert(id, "Keep".into());
+        app.retry_plan = Some(Plan::default());
+        app.discard_remaining_operations();
+        assert_eq!(app.file_names[&id], "Keep");
+        assert!(app.retry_plan.is_none() && app.dirty.is_some());
+        app.retry_plan = Some(Plan::default());
+        assert!(
+            !app.has_unsaved_plan_extras(),
+            "Trash recovery checkpoints include kept Organize intent"
+        );
     }
     #[cfg(feature = "metadata-native")]
     #[test]
@@ -1104,6 +1133,7 @@ mod organize_departure_tests {
             .media
             .remove(0);
         Session {
+            organize: None,
             manual_groups: Default::default(),
             scene_groups: Default::default(),
             decisions: HashMap::from([(
