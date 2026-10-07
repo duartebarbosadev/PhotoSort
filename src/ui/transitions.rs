@@ -411,6 +411,7 @@ impl PhotoSortApp {
                 ui.label(format!("{} file and folder operations are waiting to be applied.", plan.actions.len()));
             }
             if let Some(error) = &self.error { ui.colored_label(RED, error); }
+            if !self.organize_metadata_ready() { self.metadata_status(ui); }
             ui.label("Keep editing, discard the proposed organization, or review and apply it before leaving this step.");
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Keep editing").clicked() { resolution = Some(OrganizeResolution::Cancel); }
@@ -463,7 +464,7 @@ mod organize_departure_tests {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             app.poll(&egui::Context::default());
-            if !app.busy && !app.scanning {
+            if !app.busy && !app.scanning && app.metadata_run.is_none() {
                 break;
             }
             assert!(Instant::now() < until, "worker did not finish");
@@ -779,7 +780,9 @@ mod organize_departure_tests {
     #[test]
     fn generated_plan_requires_resolution_and_discard_preserves_other_review_marks() {
         let (_dir, mut app) = fixture();
-        app.group_mode = GroupMode::Date;
+        app.set_group_mode(GroupMode::Date);
+        settle(&mut app);
+        assert!(app.organize_grouping_ready());
         let id = app.media[0].id;
         app.decisions.insert(
             id,

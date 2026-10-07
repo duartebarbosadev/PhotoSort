@@ -183,7 +183,7 @@ impl PhotoSortApp {
         } else {
             self.start_ready_pick_analysis();
         }
-        if self.step == Step::Cull {
+        if self.step == Step::Cull || self.metadata_organize_mode() {
             self.start_metadata_index();
         }
     }

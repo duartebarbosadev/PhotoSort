@@ -109,6 +109,11 @@ impl PhotoSortApp {
             self.groups.insert(id, group);
         }
     }
+    pub(super) fn cancel_metadata_index(&mut self) {
+        self.resume_suspended = self.pending_bookmark.is_some();
+        self.runtime.cancel_metadata();
+        self.metadata_run = None;
+    }
     pub(super) fn start_metadata_index(&mut self) {
         if self.scanning || self.busy || self.metadata_run.is_some() {
             return;
@@ -180,7 +185,7 @@ impl PhotoSortApp {
             self.browse_filter_controls(ui);
         }
         // Progress and cancellation remain visible even while filters are closed.
-        self.browse_metadata_status(ui);
+        self.metadata_status(ui);
     }
     fn browse_filter_controls(&mut self, ui: &mut egui::Ui) {
         let columns = ((ui.available_width() / 220.0).floor() as usize).clamp(1, 4);
@@ -365,20 +370,20 @@ impl PhotoSortApp {
             }
         });
     }
-    fn browse_metadata_status(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn metadata_status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if self.browse_run.is_some() { ui.spinner(); ui.label("Updating library view…"); }
             if let Some((done, total)) = self.metadata_progress && self.metadata_run.is_some() {
                 ui.spinner();
-                ui.label(format!("Reading ratings and dates · {done} / {total}"));
-                if ui.button("Cancel metadata reading").clicked() { self.resume_suspended = self.pending_bookmark.is_some(); self.runtime.cancel_metadata(); self.metadata_run = None; }
-            } else if self.metadata.len() < self.media.len() && ui.button("Read remaining ratings and dates").clicked() {
+                ui.label(format!("Reading photo metadata · {done} / {total}"));
+                if ui.button("Cancel metadata reading").clicked() { self.cancel_metadata_index(); }
+            } else if self.metadata.len() < self.media.len() && ui.button("Read remaining metadata").clicked() {
                 self.resume_suspended = false;
                 self.start_metadata_index();
             }
             if !self.metadata_failures.is_empty() {
                 ui.colored_label(RED, format!("{} files have unavailable metadata", self.metadata_failures.len()))
-                    .on_hover_text("They remain available in Any rating. Retry metadata reading after restoring access to the files.");
+                    .on_hover_text("Restore access and retry metadata reading. Folder proposals wait for complete metadata; photos remain browsable.");
             }
         });
     }

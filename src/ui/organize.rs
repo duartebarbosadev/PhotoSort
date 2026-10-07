@@ -677,6 +677,18 @@ impl PhotoSortApp {
             self.accept_location_layout(layout);
         }
     }
+    pub(super) fn metadata_organize_mode(&self) -> bool {
+        self.step == Step::Organize
+            && matches!(
+                self.group_mode,
+                GroupMode::Date | GroupMode::Camera | GroupMode::Location
+            )
+    }
+    pub(super) fn organize_metadata_ready(&self) -> bool {
+        !self.metadata_organize_mode()
+            || self.organize_drafts.contains_key(&self.group_mode)
+            || self.metadata.len() == self.media.len()
+    }
     pub(super) fn automatic_organize_mode(&self) -> bool {
         matches!(
             self.group_mode,
@@ -716,6 +728,9 @@ impl PhotoSortApp {
             GroupMode::Visual => self.visual_groups.is_some(),
             GroupMode::Mixed => self.mixed_labels.is_some(),
             GroupMode::Faces => self.face_groups.is_some(),
+            GroupMode::Date | GroupMode::Camera | GroupMode::Location => {
+                self.metadata.len() == self.media.len()
+            }
             _ => true,
         }
     }
@@ -986,6 +1001,137 @@ mod tests {
             assert_eq!(app.preferences.location_layout, Layout::CountryCity);
         }
     }
+    fn metadata_fixture(count: usize) -> (PhotoSortApp, tempfile::TempDir) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("photos");
+        std::fs::create_dir(&root).unwrap();
+        for i in 0..count {
+            image::RgbImage::new(4, 4)
+                .save(root.join(format!("photo-{i:04}.png")))
+                .unwrap();
+        }
+        let catalog = Arc::new(Catalog::scan(&root, || false, |_| {}).unwrap());
+        let mut app =
+            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+        app.root = Some(catalog.root.clone());
+        app.output = catalog.root.display().to_string();
+        app.media = catalog.media.clone();
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.catalog = Some(catalog);
+        (app, temp)
+    }
+    fn wait_metadata(app: &mut PhotoSortApp) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.metadata_run.is_some() || app.busy {
+            app.poll(&egui::Context::default());
+            assert!(
+                Instant::now() < deadline,
+                "metadata or planning did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    #[test]
+    fn metadata_organize_modes_coalesce_one_read_and_wait_for_offscreen_photos() {
+        let (mut app, _temp) = metadata_fixture(129);
+        let catalog = app.catalog.clone().unwrap();
+        app.set_group_mode(GroupMode::Date);
+        let run = app.metadata_run.unwrap();
+        assert!(!app.organize_grouping_ready() && !app.can_edit_folders());
+        app.open_organize_editor();
+        app.organize();
+        assert!(app.organize_editor.is_none() && app.plan.is_none() && !app.busy);
+        for mode in [GroupMode::Location, GroupMode::Camera] {
+            app.set_group_mode(mode);
+            assert_eq!(app.metadata_run, Some(run));
+        }
+        wait_metadata(&mut app);
+        assert!(app.organize_grouping_ready() && app.can_edit_folders());
+        assert_eq!(app.metadata.len(), 129);
+        assert_eq!(app.stats.metadata_reads, 129);
+        assert_eq!(app.stats.decodes, 0);
+        assert!(app.analysis_run.is_none() && app.analysis.is_empty() && app.requested.is_empty());
+        assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));
+        for mode in [GroupMode::Date, GroupMode::Location, GroupMode::Camera] {
+            app.set_group_mode(mode);
+            assert!(app.metadata_run.is_none());
+        }
+        app.open_organize_editor();
+        let editor = app.organize_editor.take().unwrap();
+        assert_eq!(editor.rows.len(), 129);
+        assert!(editor.rows.iter().all(|row| row.after == "Unknown camera"));
+        app.organize();
+        wait_metadata(&mut app);
+        assert_eq!(app.plan.as_ref().unwrap().actions.len(), 129);
+        assert_eq!(app.stats.metadata_reads, 129);
+        assert!(app.media.iter().all(|m| m.path.is_file()));
+    }
+    #[test]
+    fn metadata_organize_cancel_rejects_late_batches_and_resume_reuses_completed_data() {
+        let (mut app, _temp) = metadata_fixture(129);
+        app.set_group_mode(GroupMode::Date);
+        let old = app.metadata_run.unwrap();
+        app.set_group_mode(GroupMode::Current);
+        assert!(app.metadata_run.is_none());
+        // Drain any already-published old batch. It must not revive the cancelled run.
+        for _ in 0..10 {
+            app.poll(&egui::Context::default());
+        }
+        assert!(app.metadata.is_empty());
+        app.set_group_mode(GroupMode::Camera);
+        assert_ne!(app.metadata_run, Some(old));
+        wait_metadata(&mut app);
+        let reads = app.stats.metadata_reads;
+        app.cancel_metadata_index();
+        app.start_metadata_index();
+        assert!(app.metadata_run.is_none());
+        assert_eq!(app.metadata.len(), 129);
+        assert_eq!(app.stats.metadata_reads, reads);
+        assert_eq!(app.stats.decodes, 0);
+        assert!(app.plan.is_none() && app.analysis.is_empty());
+    }
+    #[test]
+    fn metadata_organize_missing_file_blocks_proposals_until_shared_retry_succeeds() {
+        let (mut app, temp) = metadata_fixture(2);
+        let path = app.media[0].path.clone();
+        let backup = temp.path().join("temporarily-unavailable.png");
+        std::fs::rename(&path, &backup).unwrap();
+        app.set_group_mode(GroupMode::Location);
+        wait_metadata(&mut app);
+        assert_eq!(app.metadata.len(), 1);
+        assert_eq!(app.metadata_failures.len(), 1);
+        assert!(!app.organize_grouping_ready() && !app.can_edit_folders());
+        app.open_organize_editor();
+        assert!(app.organize_editor.is_none() && app.plan.is_none());
+        std::fs::rename(backup, path).unwrap();
+        app.start_metadata_index();
+        wait_metadata(&mut app);
+        assert_eq!(app.metadata.len(), 2);
+        assert_eq!(app.stats.metadata_reads, 2);
+        assert!(app.metadata_failures.is_empty() && app.can_edit_folders());
+        assert_eq!(app.stats.decodes, 0);
+    }
+    #[test]
+    fn metadata_organize_departure_waits_for_complete_metadata_before_reviewing_names() {
+        let (mut app, _temp) = metadata_fixture(2);
+        app.group_mode = GroupMode::Camera;
+        app.file_names.insert(app.media[0].id, "Keeper".into());
+        app.request_departure(Destination::Step(Step::Cull));
+        assert!(app.organize_departure.is_some() && app.metadata_run.is_some());
+        assert!(app.plan.is_none() && !app.busy && app.step == Step::Organize);
+        wait_metadata(&mut app);
+        assert!(app.plan.is_some() && app.organize_departure.is_some());
+        assert_eq!(app.stats.metadata_reads, 2);
+        assert_eq!(app.stats.decodes, 0);
+        assert!(app.media.iter().all(|m| m.path.is_file()));
+        app.resolve_organize_departure(super::super::transitions::OrganizeResolution::Cancel);
+        assert!(app.plan.is_none() && app.file_names.len() == 1);
+    }
     fn app() -> PhotoSortApp {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
         // Nonexistent paths prove folder editing needs no rescan or image load.
@@ -1008,6 +1154,7 @@ mod tests {
             media: media.clone(),
             ..Default::default()
         }));
+        app.metadata = media.iter().map(|m| (m.id, Metadata::default())).collect();
         app.media = media;
         app
     }

@@ -726,6 +726,13 @@ impl PhotoSortApp {
                         self.metadata_progress = Some((done, total));
                         if done == total {
                             self.metadata_run = None;
+                            if self.metadata_organize_mode()
+                                && self.organize_departure.is_some()
+                                && self.plan.is_none()
+                                && self.organize_metadata_ready()
+                            {
+                                self.organize();
+                            }
                         }
                         self.filter_dirty = true;
                     }
@@ -799,7 +806,7 @@ impl PhotoSortApp {
                         );
                     }
                     self.start_ready_pick_analysis();
-                    if self.step == Step::Cull {
+                    if self.step == Step::Cull || self.metadata_organize_mode() {
                         self.start_metadata_index();
                     }
                 }
@@ -1622,6 +1629,10 @@ impl PhotoSortApp {
             return;
         }
         if self.scanning || self.busy {
+            return;
+        }
+        if !self.organize_metadata_ready() {
+            self.start_metadata_index();
             return;
         }
         if self.automatic_organize_mode()
