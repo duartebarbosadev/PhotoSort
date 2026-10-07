@@ -356,6 +356,9 @@ impl PhotoSortApp {
                                 }
                             }
                         });
+                    if self.group_mode == GroupMode::Location {
+                        self.location_layout_controls(ui);
+                    }
                     if self.scene_editing() {
                         self.group_controls(ui);
                         if ui

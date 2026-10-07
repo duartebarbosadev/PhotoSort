@@ -30,7 +30,7 @@ open ".tools/native-vips/PhotoSort Rust.app"
 
 The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
 bundle's source/executable hashes, full test results and native interaction checks
-are recorded in [the latest validation report](docs/diagnostics/comparison-actions-2026-10-07/README.md).
+are recorded in [the latest validation report](docs/diagnostics/location-layout-2026-10-07/README.md).
 These checks cover this macOS development build; they do not establish Windows,
 CUDA or DirectML runtime readiness.
 
@@ -191,7 +191,9 @@ review the revised paths before choosing **Retry unfinished changes**.
 1. **Organize:** preserve folders, capture date, camera, offline location, visual
    similarity, faces, or date followed by similarity. Organize defaults to the selected
    library folder; an alternate destination remains available. Edit folder hierarchies, drag selected files or folders between groups, and edit file stems;
-   review collision-safe moves with RAW/JPEG/XMP companions.
+   review collision-safe moves with RAW/JPEG/XMP companions. Location offers country,
+   country/city or country/region/city folders. Changing levels reuses loaded
+   metadata and asks before replacing custom location folder edits.
 2. **Easy Delete:** categorized sharpness/exposure and duplicate reviews, paired
    Keep/Trash choices, confirm/advance/revoke, reset one/all and accept filtered
    defaults. Exact copies are paired without face comparison; near pairs use camera-aligned

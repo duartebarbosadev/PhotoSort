@@ -206,6 +206,7 @@ pub struct PhotoSortApp {
     was_wide: bool,
     companions: bool,
     group_mode: GroupMode,
+    pending_location_layout: Option<crate::core::geography::Layout>,
     output: String,
     organize_drafts: HashMap<GroupMode, crate::core::organize::Draft>,
     organize_editor: Option<organize::Editor>,
@@ -373,6 +374,7 @@ impl PhotoSortApp {
             was_wide: true,
             companions: true,
             group_mode: GroupMode::Current,
+            pending_location_layout: None,
             output: String::new(),
             organize_drafts: HashMap::new(),
             organize_editor: None,
@@ -534,6 +536,7 @@ impl PhotoSortApp {
         self.applying_plan = None;
         self.apply_stop = None;
         self.plan_open = false;
+        self.pending_location_layout = None;
         self.organize_drafts.clear();
         self.organize_editor = None;
         self.organize_departure = None;
@@ -1570,14 +1573,10 @@ impl PhotoSortApp {
                 .filter(|m| !m.camera.is_empty())
                 .map(|m| m.camera.clone())
                 .unwrap_or_else(|| "Unknown camera".into()),
-            GroupMode::Location => meta
-                .and_then(|m| m.location.as_ref())
-                .map(|l| format!("{} - {}", l.country, l.city))
-                .or_else(|| {
-                    meta.and_then(|m| m.gps)
-                        .map(|(lat, lon)| format!("{lat:.2}, {lon:.2}"))
-                })
-                .unwrap_or_else(|| "No GPS".into()),
+            GroupMode::Location => self
+                .preferences
+                .location_layout
+                .label(meta.unwrap_or(&Metadata::default())),
             GroupMode::Faces => self
                 .face_groups
                 .as_ref()
@@ -1806,6 +1805,7 @@ impl PhotoSortApp {
     fn modal_active(&self) -> bool {
         self.plan_open
             || self.browse_filters_open
+            || self.pending_location_layout.is_some()
             || self.organize_editor.is_some()
             || self.organize_departure.is_some()
             || self.help

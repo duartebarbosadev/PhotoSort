@@ -602,6 +602,81 @@ impl Editor {
     }
 }
 impl PhotoSortApp {
+    fn change_location_layout(&mut self, layout: crate::core::geography::Layout) {
+        if self.step != Step::Organize
+            || self.group_mode != GroupMode::Location
+            || self.modal_active()
+            || self.scanning
+            || self.analysis_run.is_some()
+            || self.retry_plan.is_some()
+            || self.preferences.location_layout == layout
+        {
+            return;
+        }
+        if self.organize_drafts.contains_key(&GroupMode::Location) {
+            self.pending_location_layout = Some(layout);
+        } else {
+            self.accept_location_layout(layout);
+        }
+    }
+    fn accept_location_layout(&mut self, layout: crate::core::geography::Layout) {
+        self.preferences.location_layout = layout;
+        self.organize_drafts.remove(&GroupMode::Location);
+        self.organize_view = None;
+        self.pending_bookmark = None;
+        self.set_review_plan(None);
+        self.save_preferences();
+    }
+    pub(super) fn location_layout_controls(&mut self, ui: &mut egui::Ui) {
+        use crate::core::geography::Layout;
+        let choices = [
+            (Layout::Country, "Country"),
+            (Layout::CountryCity, "Country / City"),
+            (Layout::CountryRegionCity, "Country / Region / City"),
+        ];
+        let selected = choices
+            .iter()
+            .find(|(layout, _)| *layout == self.preferences.location_layout)
+            .unwrap()
+            .1;
+        ui.add_enabled_ui(!self.modal_active() && !self.scanning && self.analysis_run.is_none()
+            && self.retry_plan.is_none(), |ui| {
+            egui::ComboBox::from_id_salt("location_layout").selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for (layout, title) in choices {
+                        if ui.selectable_label(self.preferences.location_layout == layout, title).clicked() {
+                            self.change_location_layout(layout);
+                            ui.close();
+                        }
+                    }
+                }).response.on_hover_text("Choose location folder levels. Reuses cached metadata; no AI analysis needed to change levels.");
+        });
+    }
+    pub(super) fn location_layout_dialog(&mut self, ctx: &egui::Context) {
+        let Some(_) = self.pending_location_layout else {
+            return;
+        };
+        let mut action = None;
+        egui::Modal::new(egui::Id::new("replace_location_layout")).show(ctx, |ui| {
+            ui.set_max_width(400.0_f32.min((ctx.content_rect().width() - 60.0).max(180.0)));
+            ui.heading("Replace location folder edits?");
+            ui.label("The new levels will regenerate location folders and replace their custom folder edits. File names, ratings and other grouping modes keep their edits. Your photos stay unchanged until Apply.");
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Keep current layout").clicked() { action = Some(false); }
+                if ui.button("Replace location layout").clicked() { action = Some(true); }
+            });
+        });
+        if let Some(replace) = action {
+            self.resolve_location_layout(replace);
+        }
+    }
+    fn resolve_location_layout(&mut self, replace: bool) {
+        if let Some(layout) = self.pending_location_layout.take()
+            && replace
+        {
+            self.accept_location_layout(layout);
+        }
+    }
     pub(super) fn automatic_organize_mode(&self) -> bool {
         matches!(
             self.group_mode,
@@ -821,6 +896,96 @@ impl PhotoSortApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn location_layout_reuses_metadata_for_editor_and_inspector_without_image_work() {
+        use crate::core::geography::{Layout, Location};
+        let mut app = app();
+        app.group_mode = GroupMode::Location;
+        for media in &app.media {
+            app.metadata.insert(
+                media.id,
+                Metadata {
+                    location: Some(Location {
+                        country: "Japan".into(),
+                        region: "Shizuoka".into(),
+                        city: "Fuji".into(),
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+        for (layout, expected) in [
+            (Layout::Country, "Japan"),
+            (Layout::CountryCity, "Japan/Fuji"),
+            (Layout::CountryRegionCity, "Japan/Shizuoka/Fuji"),
+        ] {
+            app.change_location_layout(layout);
+            assert_eq!(app.label_for(&app.media[0]), expected);
+            assert!(
+                app.organize_labels()
+                    .values()
+                    .all(|label| label == expected)
+            );
+            app.open_organize_editor();
+            let editor = app.organize_editor.take().unwrap();
+            assert!(editor.rows.iter().all(|row| row.after == expected));
+            assert!(editor.draft.folders().contains(expected));
+            assert!(
+                app.requested.is_empty()
+                    && app.metadata_run.is_none()
+                    && app.analysis_run.is_none()
+                    && !app.scanning
+                    && !app.busy
+            );
+            assert_eq!(app.stats.decodes, 0);
+            assert_eq!(app.metadata.len(), 3);
+        }
+    }
+    #[test]
+    fn location_layout_requires_explicit_replacement_and_preserves_other_intent() {
+        use crate::core::geography::Layout;
+        let mut app = app();
+        app.group_mode = GroupMode::Location;
+        let draft = Draft::new([(MediaId(0), "Custom location".into())].into());
+        app.organize_drafts
+            .insert(GroupMode::Location, draft.clone());
+        app.organize_drafts.insert(GroupMode::Camera, draft.clone());
+        app.file_names.insert(MediaId(0), "Keeper".into());
+        app.decisions.insert(
+            MediaId(0),
+            Decision {
+                rating: Some(4),
+                ..Default::default()
+            },
+        );
+        app.change_location_layout(Layout::Country);
+        assert_eq!(app.preferences.location_layout, Layout::CountryRegionCity);
+        assert!(app.modal_active());
+        app.resolve_location_layout(false);
+        assert_eq!(app.organize_drafts[&GroupMode::Location], draft);
+        assert_eq!(app.preferences.location_layout, Layout::CountryRegionCity);
+        app.change_location_layout(Layout::CountryCity);
+        app.resolve_location_layout(true);
+        assert_eq!(app.preferences.location_layout, Layout::CountryCity);
+        assert!(!app.organize_drafts.contains_key(&GroupMode::Location));
+        assert_eq!(app.organize_drafts[&GroupMode::Camera], draft);
+        assert_eq!(app.file_names[&MediaId(0)], "Keeper");
+        assert_eq!(app.decisions[&MediaId(0)].rating, Some(4));
+        assert!(app.requested.is_empty() && app.analysis_run.is_none() && app.plan.is_none());
+        for state in 0..5 {
+            app.step = if state == 0 {
+                Step::Cull
+            } else {
+                Step::Organize
+            };
+            app.busy = state == 1;
+            app.scanning = state == 2;
+            app.analysis_run = (state == 3).then_some(1);
+            app.plan_open = state == 4;
+            app.change_location_layout(Layout::Country);
+            assert_eq!(app.preferences.location_layout, Layout::CountryCity);
+        }
+    }
     fn app() -> PhotoSortApp {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
         // Nonexistent paths prove folder editing needs no rescan or image load.
