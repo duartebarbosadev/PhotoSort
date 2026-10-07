@@ -31,6 +31,7 @@ pub(super) struct Editor {
     drag_owner: Arc<()>,
     completed_drag: Option<CompletedDrag>,
     drag: pointer::DragTracker,
+    hover_expand: tree_controls::HoverExpand,
     folder: String,
     name: String,
     parent: String,
@@ -279,6 +280,7 @@ impl Editor {
         }
     }
     fn refresh(&mut self) {
+        self.hover_expand = Default::default();
         self.folder_anchor = self
             .folder_anchor
             .take()
@@ -773,6 +775,10 @@ impl Editor {
     ) -> Option<Command> {
         let mut command = None;
         let mut expansion_changed = false;
+        let mut hover_target = None;
+        let owned_drag = egui::DragAndDrop::payload::<FolderDrag>(ui.ctx())
+            .is_some_and(|payload| Arc::ptr_eq(&payload.owner, &self.drag_owner));
+        let pointer = ui.ctx().pointer_interact_pos();
         ui.strong("Destination folders");
         let mut scroll = egui::ScrollArea::vertical().id_salt("organize_folders");
         if let Some(offset) = self.restore_scroll[1].take() {
@@ -807,7 +813,8 @@ impl Editor {
         }
         let scroll = keyboard.scroll(ui, scroll, &self.tree, &self.visible_folders, true);
         let output = scroll
-            .auto_shrink([false, true])
+            // Keep the centered dialog and drop targets still as branches open.
+            .auto_shrink([false, false])
             .max_height(max_height)
             .show_rows(ui, row_height, self.visible_folders.len(), |ui, rows| {
                 for row in rows {
@@ -850,9 +857,12 @@ impl Editor {
                             if !path.is_empty() && self.starts_drag(ui, &response) {
                                 egui::DragAndDrop::set_payload(ui.ctx(), self.folder_drag(&path));
                             }
+                            if owned_drag && pointer.is_some_and(|pos| pointer::contains_pointer(ui, &response, pos)) {
+                                hover_target = Some(i);
+                            }
                             self.track_completed_drag(ui, &response, None, &path);
                             if let Some(drop) = self.drop_target(ui, &response, &path) { command = Some(drop); }
-                            response.on_hover_text("Counts include subfolders. Drop files here, or drag folders to nest them. Shift-click or Shift with Up/Down, Home/End or Page keys selects a visible range; Ctrl/Command adds to it. Use the arrow or context menu to expand/collapse.");
+                            response.on_hover_text("Counts include subfolders. Drop files here, or drag folders to nest them. Shift-click or Shift with Up/Down, Home/End or Page keys selects a visible range; Ctrl/Command adds to it. Pause over a collapsed folder while dragging to open it. Use the arrow or context menu to expand/collapse.");
                         });
                     });
                 }
@@ -869,6 +879,9 @@ impl Editor {
                 ),
             )
         });
+        expansion_changed |=
+            self.hover_expand
+                .update(ui, &self.tree, hover_target, &mut self.collapsed);
         if expansion_changed {
             self.project_folders();
         }
@@ -1197,6 +1210,7 @@ impl PhotoSortApp {
             drag_owner: Arc::new(()),
             completed_drag: None,
             drag: Default::default(),
+            hover_expand: Default::default(),
             folder,
             name: String::new(),
             parent: String::new(),
@@ -3519,6 +3533,265 @@ mod tests {
                 !egui::DragAndDrop::has_any_payload(&ctx),
                 "cancellation {cancellation}"
             );
+        }
+    }
+    fn hover_frame(
+        ctx: &egui::Context,
+        app: &mut PhotoSortApp,
+        time: f64,
+        width: f32,
+        events: Vec<egui::Event>,
+    ) {
+        let _ = ctx.run(
+            egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 960.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.organize_dialog(ctx),
+        );
+    }
+    fn hover_rect(ctx: &egui::Context, path: &str) -> egui::Pos2 {
+        ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_folder_rect", path))))
+            .expect("visible folder row")
+            .center()
+    }
+    fn hover_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+    #[test]
+    fn drag_hover_expansion_reaches_nested_destinations_in_wide_and_compact_layouts() {
+        for (width, folder_drag) in [640., 1440.]
+            .into_iter()
+            .flat_map(|w| [false, true].map(|folder| (w, folder)))
+        {
+            let mut app = app();
+            app.companions = true;
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_mut().unwrap();
+            editor.draft.create_folder("", "target").unwrap();
+            editor.draft.create_folder("target", "nested").unwrap();
+            editor.draft.create_folder("target/nested", "deep").unwrap();
+            editor.refresh();
+            editor.collapsed.extend([
+                Key::Folder("target".into()),
+                Key::Folder("target/nested".into()),
+            ]);
+            editor.project_folders();
+            editor.compact_folders = folder_drag;
+            let original = editor.draft.clone();
+            let nodes = editor.tree.nodes.as_ptr();
+            let catalog = Arc::as_ptr(&editor.catalog);
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            for t in [0., 0.05, 0.1] {
+                hover_frame(&ctx, &mut app, t, width, vec![]);
+            }
+            let source = if folder_drag {
+                hover_rect(&ctx, "trip")
+            } else {
+                ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_file_rect", 0_u64))))
+                    .unwrap()
+                    .center()
+            };
+            hover_frame(
+                &ctx,
+                &mut app,
+                0.2,
+                width,
+                vec![
+                    egui::Event::PointerMoved(source),
+                    hover_button(source, true),
+                ],
+            );
+            hover_frame(
+                &ctx,
+                &mut app,
+                0.3,
+                width,
+                vec![egui::Event::PointerMoved(source + egui::vec2(20., 0.))],
+            );
+            if width < 680. && !folder_drag {
+                let tab = ctx
+                    .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("test_folders_tab")))
+                    .unwrap()
+                    .center();
+                hover_frame(
+                    &ctx,
+                    &mut app,
+                    0.35,
+                    width,
+                    vec![egui::Event::PointerMoved(tab)],
+                );
+                hover_frame(&ctx, &mut app, 0.36, width, vec![]);
+            }
+            let selected = app.organize_editor.as_ref().unwrap().selected.clone();
+            let folders = app
+                .organize_editor
+                .as_ref()
+                .unwrap()
+                .selected_folders
+                .clone();
+            let target = hover_rect(&ctx, "target");
+            hover_frame(
+                &ctx,
+                &mut app,
+                0.4,
+                width,
+                vec![egui::Event::PointerMoved(target)],
+            );
+            hover_frame(&ctx, &mut app, 0.9, width, vec![]);
+            assert!(
+                app.organize_editor
+                    .as_ref()
+                    .unwrap()
+                    .collapsed
+                    .contains(&Key::Folder("target".into()))
+            );
+            hover_frame(&ctx, &mut app, 1.05, width, vec![]);
+            hover_frame(&ctx, &mut app, 1.1, width, vec![]);
+            assert!(
+                !app.organize_editor
+                    .as_ref()
+                    .unwrap()
+                    .collapsed
+                    .contains(&Key::Folder("target".into()))
+            );
+            assert!(hover_rect(&ctx, "target").distance(target) <= 1.0);
+            let nested = hover_rect(&ctx, "target/nested");
+            hover_frame(
+                &ctx,
+                &mut app,
+                1.2,
+                width,
+                vec![egui::Event::PointerMoved(nested)],
+            );
+            hover_frame(&ctx, &mut app, 1.9, width, vec![]);
+            hover_frame(&ctx, &mut app, 1.95, width, vec![]);
+            assert!(hover_rect(&ctx, "target").distance(target) <= 1.0);
+            assert!(hover_rect(&ctx, "target/nested").distance(nested) <= 1.0);
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert!(
+                !editor
+                    .collapsed
+                    .contains(&Key::Folder("target/nested".into())),
+                "width={width} folder_drag={folder_drag} initial={nested:?} current={:?} pointer={:?}",
+                hover_rect(&ctx, "target/nested"),
+                ctx.pointer_interact_pos()
+            );
+            assert_eq!(editor.draft, original);
+            assert_eq!(editor.selected, selected);
+            assert_eq!(editor.selected_folders, folders);
+            assert_eq!(editor.tree.nodes.as_ptr(), nodes);
+            assert_eq!(Arc::as_ptr(&editor.catalog), catalog);
+            let destination = hover_rect(&ctx, "target/nested/deep");
+            hover_frame(
+                &ctx,
+                &mut app,
+                2.,
+                width,
+                vec![
+                    egui::Event::PointerMoved(destination),
+                    hover_button(destination, false),
+                ],
+            );
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert!(editor.error.is_none(), "{:?}", editor.error);
+            let expected = if folder_drag {
+                "target/nested/deep/trip"
+            } else {
+                "target/nested/deep"
+            };
+            assert_eq!(editor.draft.labels()[&MediaId(0)], expected);
+            assert_eq!(editor.draft.labels()[&MediaId(1)], expected);
+            assert_eq!(app.stats.decodes, 0);
+            assert_eq!(app.stats.metadata_reads, 0);
+        }
+    }
+    #[test]
+    fn drag_hover_expansion_ignores_foreign_and_cancelled_gestures() {
+        for interruption in 0..4 {
+            let mut app = app();
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_mut().unwrap();
+            editor.draft.create_folder("", "target").unwrap();
+            editor.draft.create_folder("target", "nested").unwrap();
+            editor.refresh();
+            editor.collapsed.insert(Key::Folder("target".into()));
+            editor.project_folders();
+            let original = editor.draft.clone();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            for t in [0., 0.05, 0.1] {
+                hover_frame(&ctx, &mut app, t, 1440., vec![]);
+            }
+            let source = ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_file_rect", 0_u64))))
+                .unwrap()
+                .center();
+            hover_frame(
+                &ctx,
+                &mut app,
+                0.2,
+                1440.,
+                vec![
+                    egui::Event::PointerMoved(source),
+                    hover_button(source, true),
+                ],
+            );
+            hover_frame(
+                &ctx,
+                &mut app,
+                0.3,
+                1440.,
+                vec![egui::Event::PointerMoved(source + egui::vec2(20., 0.))],
+            );
+            let target = hover_rect(&ctx, "target");
+            hover_frame(
+                &ctx,
+                &mut app,
+                0.4,
+                1440.,
+                vec![egui::Event::PointerMoved(target)],
+            );
+            let events = match interruption {
+                0 => vec![tree_controls::tests::key(egui::Key::Escape)],
+                1 => vec![
+                    egui::Event::WindowFocused(false),
+                    egui::Event::WindowFocused(true),
+                ],
+                2 => vec![egui::Event::PointerGone],
+                _ => {
+                    let mut payload = app.organize_editor.as_mut().unwrap().file_drag(MediaId(0));
+                    payload.owner = Arc::new(());
+                    egui::DragAndDrop::set_payload(&ctx, payload);
+                    vec![]
+                }
+            };
+            hover_frame(&ctx, &mut app, 0.5, 1440., events);
+            hover_frame(
+                &ctx,
+                &mut app,
+                1.5,
+                1440.,
+                vec![egui::Event::PointerMoved(target)],
+            );
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert!(
+                editor.collapsed.contains(&Key::Folder("target".into())),
+                "interruption {interruption}"
+            );
+            assert_eq!(editor.draft, original);
+            assert_eq!(app.stats.decodes, 0);
         }
     }
     #[test]

@@ -62,6 +62,64 @@ pub(super) fn menu(
     changed
 }
 
+/// Transient dwell state for navigating a cached tree during an owned drag.
+/// Call once per rendered tree frame, including with no eligible target.
+#[derive(Default)]
+pub(super) struct HoverExpand {
+    pending: Option<(Key, f64)>,
+    frame: Option<u64>,
+}
+impl HoverExpand {
+    pub(super) fn update(
+        &mut self,
+        ui: &egui::Ui,
+        tree: &Tree,
+        target: Option<usize>,
+        collapsed: &mut BTreeSet<Key>,
+    ) -> bool {
+        let frame = ui.ctx().cumulative_frame_nr();
+        if self
+            .frame
+            .is_some_and(|previous| previous.saturating_add(1) < frame)
+        {
+            self.pending = None;
+        }
+        self.frame = Some(frame);
+        let target = target.filter(|&index| {
+            ui.input(|i| i.raw.focused && i.pointer.primary_down())
+                && tree
+                    .nodes
+                    .get(index)
+                    .is_some_and(|node| node.expandable(index) && collapsed.contains(&node.key))
+        });
+        let Some(index) = target else {
+            self.pending = None;
+            return false;
+        };
+        let key = &tree.nodes[index].key;
+        let now = ui.input(|i| i.time);
+        let started = match &self.pending {
+            Some((previous, started)) if previous == key && now >= *started => *started,
+            _ => {
+                self.pending = Some((key.clone(), now));
+                now
+            }
+        };
+        let remaining = 0.6 - (now - started);
+        if remaining > 0.0 {
+            ui.ctx()
+                .request_repaint_after(Duration::from_secs_f64(remaining));
+            return false;
+        }
+        self.pending = None;
+        let changed = tree.set_expanded(key, Expansion::Node, true, collapsed);
+        if changed {
+            ui.ctx().request_repaint();
+        }
+        changed
+    }
+}
+
 /// Tree policy layered on the same focus/scroll owner as file lists.
 pub(super) struct Keyboard {
     focus: collection_controls::Keyboard,
@@ -213,6 +271,88 @@ pub(super) mod tests {
                 modifiers: Default::default(),
             },
         ]
+    }
+    #[test]
+    fn drag_hover_expansion_requires_continuous_dwell_and_schedules_idle_repaint() {
+        for interruption in 0..5 {
+            let tree = Tree::folders(
+                ["a", "a/child", "b", "b/child"]
+                    .into_iter()
+                    .map(|p| (p.into(), p.into(), 0)),
+                || false,
+            )
+            .unwrap();
+            let a = Key::Folder("a".into());
+            let b = Key::Folder("b".into());
+            let a_index = tree.lookup[&a];
+            let b_index = tree.lookup[&b];
+            let mut collapsed = BTreeSet::from([a.clone(), b.clone()]);
+            let ctx = egui::Context::default();
+            let mut hover = HoverExpand::default();
+            let mut frame = |time, target, pressed: Option<bool>, focused, render| {
+                let events = pressed
+                    .into_iter()
+                    .map(|pressed| egui::Event::PointerButton {
+                        pos: egui::pos2(30., 30.),
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    })
+                    .collect();
+                let mut changed = false;
+                let output = ctx.run(
+                    egui::RawInput {
+                        time: Some(time),
+                        focused,
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            if render {
+                                changed = hover.update(ui, &tree, target, &mut collapsed);
+                            }
+                        });
+                    },
+                );
+                (
+                    changed,
+                    output.viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+                )
+            };
+            assert!(!frame(0., Some(a_index), Some(true), true, true).0);
+            frame(0.1, Some(a_index), None, true, true);
+            frame(0.2, Some(a_index), None, true, true);
+            let (changed, delay) = frame(0.3, Some(a_index), None, true, true);
+            assert!(!changed);
+            assert!(
+                delay > Duration::ZERO && delay <= Duration::from_millis(310),
+                "{delay:?}"
+            );
+            match interruption {
+                0 => {
+                    frame(0.4, None, None, true, true);
+                }
+                1 => {
+                    frame(0.4, Some(b_index), None, true, true);
+                }
+                2 => {
+                    frame(0.4, Some(a_index), Some(false), true, true);
+                }
+                3 => {
+                    frame(0.4, Some(a_index), None, false, true);
+                }
+                _ => {
+                    frame(0.4, Some(a_index), None, true, false);
+                }
+            }
+            assert!(!frame(0.8, Some(a_index), Some(true), true, true).0);
+            assert!(!frame(1.2, Some(a_index), None, true, true).0);
+            assert!(frame(1.5, Some(a_index), None, true, true).0);
+            assert!(!frame(2., Some(a_index), None, true, true).0);
+            assert!(!collapsed.contains(&a));
+            assert!(collapsed.contains(&b));
+        }
     }
     #[test]
     fn tree_keyboard_focus_text_menu_and_page_keys_share_one_container() {
