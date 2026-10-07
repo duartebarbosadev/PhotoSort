@@ -83,8 +83,12 @@ Organize/Cull detail checks now pass; see
 24-megapixel sample JPEG/PNG nearby-pan workload, peak process RSS is 61–63% lower
 and total time 17–38% shorter than the previous full-original allocation, with
 identical native crop pixels. These results do not establish savings for every
-decoder or whole-application performance. Native drag gestures remain unverified;
-shared tests prove nearby-pan reuse, bounds and cancellation.
+decoder or whole-application performance. Subsequent macOS checks verified native
+panning in Organize and Cull on disposable JPEG/PNG and sidecar-rotated samples;
+see [shared canvas gesture evidence](../../docs/diagnostics/canvas-gestures-2026-10-06/README.md).
+All-five-workflow tests cover pointer ownership, completed gestures, nearby-pan
+reuse, bounds and cancellation. The native checks cover the recorded workflows
+and inputs; they do not establish every workflow or platform's interaction.
 
 To run the optional application path after building the private dependency, set
 `PKG_CONFIG_PATH` and `CARGO_TARGET_DIR` as above, then run

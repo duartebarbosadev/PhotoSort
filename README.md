@@ -20,11 +20,40 @@ Packaging creates `target/PhotoSort Rust.app`. The bundle contains its models,
 ONNX Runtime and native image libraries. It can be moved independently of this
 source directory. This is a locally signed development build, not a notarized release.
 
-The verified development bundle is stored at `.tools/native/PhotoSort Rust.app`.
-Build intermediates are cleaned separately. Rebuild with
-`python3 scripts/package_macos.py` when a new macOS bundle is needed.
+The current verified development bundle is
+`.tools/native-vips/PhotoSort Rust.app`. It includes the libvips image backend and
+the latest shared move and compact-video fixes. From the repository root:
 
-From source:
+```sh
+open ".tools/native-vips/PhotoSort Rust.app"
+```
+
+The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
+bundle's source/executable hashes, full test results and native interaction checks
+are recorded in [the latest validation report](docs/diagnostics/video-layout-2026-10-07/README.md).
+These checks cover this macOS development build; they do not establish Windows,
+CUDA or DirectML runtime readiness.
+
+To rebuild the current variant using the existing verified SIMD prefix, keep
+compiler output temporary and clean it after packaging:
+
+```sh
+(
+  build_dir="$(mktemp -d)"
+  trap 'cargo clean --target-dir "$build_dir"' EXIT
+  CARGO_TARGET_DIR="$build_dir" python3 scripts/package_macos.py \
+    --native-imaging --native-prefix .tools/vips-simd \
+    --output ".tools/native-vips/PhotoSort Rust.app"
+)
+```
+
+On a fresh checkout, first follow the [native dependency setup](crates/imaging-vips/README.md)
+and use the prefix it creates (`.tools/vips` by default). Model/runtime assets are
+installed separately as described in [asset provenance](resources/ASSETS.md).
+Running `scripts/package_macos.py` without these options builds the default image
+backend into `target/PhotoSort Rust.app`.
+
+From source with the default image backend:
 
 ```sh
 brew install libraw exiv2 pkg-config

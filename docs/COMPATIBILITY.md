@@ -77,8 +77,13 @@ preview/detail/analysis and persisted proxies. Real system Display P3 and Adobe
 RGB profiles agree with Apple ColorSync within the tested four-level 8-bit bound.
 ICC-tagged Adobe CMYK and YCCK JPEGs retain their original ink channels through
 `jpeg-decoder` before the same cached `moxcms` conversion; ordinary JPEGs retain
-the fast existing decoder. CMYK TIFF and other non-RGB/gray formats remain
-unsupported. Invalid, oversized or mismatched profiles report a preview error. Untagged
+the fast existing decoder. This describes the default Rust image/color backend,
+which does not support CMYK TIFF or other non-RGB/gray profiles outside the JPEG
+fallback. The current macOS bundle enables `native-imaging`: its shared libvips /
+Little CMS adapter also supports profiled CMYK TIFF. Adapter regressions cover
+8/16-bit packed, planar and LZW fixtures; they do not establish every TIFF variant.
+See [native image support and validation](../crates/imaging-vips/README.md).
+Invalid, oversized or mismatched profiles report a preview error. Untagged
 images still assume sRGB; standalone PNG gamma/chromaticity/CICP interpretation,
 HDR/wide-gamut output, monitor calibration, and broader RAW/platform color accuracy
 remain unverified or outside this normalization. The existing ImageIO HEIF and
