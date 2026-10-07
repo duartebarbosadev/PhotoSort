@@ -1,0 +1,120 @@
+{
+  "source_sha256": {
+    "src/core/pyexiv2_wrapper.py": "00a177c161faad22636598e4642fa0218c67fa51670a529aa0e996fbb6e31dd5",
+    "src/workers/easy_delete_worker.py": "949e262a2ff442e90a6d66d0f85cb29db4d6dfcbb7156db542fa187c01a57341"
+  },
+  "cases": [
+    {
+      "name": "20230428_034640_IMG_4658.JPG",
+      "sample": true,
+      "fields": 261,
+      "sha256": "ce0a2c55adba4793dbcc87d6725ffab3e8ed9c54ca9616286114793ba53225d1",
+      "camera": "ILCE-7M3",
+      "lens": "FE 28-70mm F3.5-5.6 OSS",
+      "iso": "4000",
+      "orientation": 1
+    },
+    {
+      "name": "20230428_035435_IMG_4666.JPG",
+      "sample": true,
+      "fields": 252,
+      "sha256": "b4986407c2ad7a51e949805ab8475b6953d22325ef7260fb91aef4cbc9ecc3e5",
+      "camera": "ILCE-7M3",
+      "lens": "FE 28-70mm F3.5-5.6 OSS",
+      "iso": "6400",
+      "orientation": 1
+    },
+    {
+      "name": "20230428_042445_IMG_4667.JPG",
+      "sample": true,
+      "fields": 104,
+      "sha256": "e34394d74bfab23b613699ba2bc26ed99327762280e4a980137a0c7c08808a44",
+      "camera": "ILCE-7M3",
+      "lens": "FE 28-70mm F3.5-5.6 OSS",
+      "iso": "3200",
+      "orientation": 1
+    },
+    {
+      "name": "GAB00915.jpg",
+      "sample": true,
+      "fields": 254,
+      "sha256": "4d2966c2c85c044fc68225cd8ba13f2c416f5a4af09e14e9103f89e596af1ce1",
+      "camera": "ILCE-7M3",
+      "lens": "FE 28-70mm F3.5-5.6 OSS",
+      "iso": "640",
+      "orientation": 1
+    },
+    {
+      "name": "GAB02000-min.png",
+      "sample": true,
+      "fields": 5,
+      "sha256": "454c88aba9c2b4292ddf3355c559b079628134b19013d956f8b23f8d01a2fc8f",
+      "camera": "",
+      "lens": "",
+      "iso": "",
+      "orientation": 1
+    },
+    {
+      "name": "arw_sample.ARW",
+      "sample": true,
+      "fields": 2528,
+      "sha256": "89a58209a998556afd1c90aa82c24ccb9ec70c8b38a270562352706b242d90cf",
+      "camera": "ILCE-7M3",
+      "lens": "FE 28-70mm F3.5-5.6 OSS",
+      "iso": "64",
+      "orientation": 8
+    },
+    {
+      "name": "jpg_sample.jpg",
+      "sample": true,
+      "fields": 251,
+      "sha256": "5d7fdc24558d05baa30ef6acb7824ad70cd04b0ce8e14b9a008a35fcb577d742",
+      "camera": "ILCE-7M3",
+      "lens": "FE 28-70mm F3.5-5.6 OSS",
+      "iso": "100",
+      "orientation": 1
+    },
+    {
+      "name": "empty.jpg",
+      "sample": false,
+      "fields": 5,
+      "sha256": "7d1d897e7da84585c735dd6a994bebcba9a9ed5dc70f38fa7ea7566bdfbe448f",
+      "camera": "",
+      "lens": "",
+      "iso": "",
+      "orientation": 1
+    },
+    {
+      "name": "mixed.jpg",
+      "sample": false,
+      "fields": 18,
+      "sha256": "d39e9c760e1a60771d36241ac72168576191672f7c09f3c3006f0aeeb2ffda51",
+      "camera": "Fixture Camera",
+      "lens": "Fixture Lens",
+      "iso": "200",
+      "orientation": 6
+    },
+    {
+      "name": "empty-values.jpg",
+      "sample": false,
+      "fields": 11,
+      "sha256": "f7fe819b3a4f2c89e7c405c90ac1df57469a46a67584d41e30b92cc8f0fb30d1",
+      "camera": "",
+      "lens": "",
+      "iso": "0",
+      "orientation": 1
+    },
+    {
+      "name": "gps.jpg",
+      "sample": false,
+      "fields": 10,
+      "sha256": "9b00371f247748541dcfe01044b0031279af4ba2946ef1a69b86b7bc3cf71e97",
+      "camera": "",
+      "lens": "",
+      "iso": "",
+      "orientation": 1
+    }
+  ],
+  "pyexiv2_version": "2.16.0",
+  "exiv2_version": "0.28.8"
+}

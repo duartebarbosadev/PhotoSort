@@ -1,0 +1,8 @@
+/target/
+.DS_Store
+*.log
+/resources/models/*.onnx
+/resources/runtime/*.dylib
+/resources/runtime/*.dll
+/resources/runtime/*.so*
+/.tools/

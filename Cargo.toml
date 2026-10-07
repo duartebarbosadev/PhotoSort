@@ -1,0 +1,88 @@
+[package]
+name = "photosort"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "Apache-2.0"
+description = "A native Rust workspace for deliberate photo culling"
+
+[dependencies]
+photosort-imaging-vips = { path = "crates/imaging-vips", optional = true }
+moxcms = "0.8.1"
+# One bounded metadata cache owned by the shared imaging actor.
+lru = { version = "0.18.5", default-features = false }
+# Preserve original ink channels only for ICC-tagged CMYK JPEGs.
+jpeg-decoder = { version = "0.3.2", default-features = false }
+opener = { version = "0.9", features = ["reveal"] }
+anyhow = "1.0"
+semver = "1"
+sha2 = "0.11"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
+tokio = { version = "1", features = ["rt", "time", "macros"], optional = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland", "accesskit"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "webp", "bmp", "gif"] }
+kamadak-exif = "0.6"
+rfd = "0.15.4"
+serde = { version = "1", features = ["derive", "rc"] }
+# Preserve measurement values exactly when evidence is reopened.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+walkdir = "2.5"
+dirs = "6"
+blake3 = "1.8"
+trash = "5.2"
+quick-xml = "0.38"
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "coreml", "cuda", "directml"], optional = true }
+
+tempfile = "3"
+half = { version = "2.7", default-features = false, features = ["std"] }
+rustfft = "6.4.1"
+nalgebra = { version = "0.35", default-features = false, features = ["std"] }
+
+# Keep local development/test output modest across native/minimal feature builds.
+# Tests inherit this profile; retain filename/line backtraces without full type data.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[lints.clippy]
+all = "warn"
+
+[features]
+default = ["raw", "heif", "onnx", "metadata-native", "model-downloads", "updates", "portable-video"]
+native-imaging = ["dep:photosort-imaging-vips"]
+portable-video = ["dep:gst", "dep:gst_app", "dep:gst_video"]
+updates = ["dep:reqwest", "dep:tokio"]
+model-downloads = ["dep:reqwest", "dep:tokio"]
+metadata-native = []
+heif = ["dep:libheif-rs"]
+onnx = ["dep:ort"]
+raw = []
+
+[build-dependencies]
+cc = "1"
+pkg-config = "0.3"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+gst = { package = "gstreamer", version = "0.24", optional = true }
+gst_app = { package = "gstreamer-app", version = "0.24", optional = true }
+gst_video = { package = "gstreamer-video", version = "0.24", optional = true }
+libheif-rs = { version = "3.0", default-features = false, features = ["v1_23"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "27", default-features = false, features = ["metal", "wgsl"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "27", default-features = false, features = ["dx12", "wgsl"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { version = "27", default-features = false, features = ["vulkan", "gles", "wgsl"] }
+
+[dev-dependencies]
+jpeg-encoder = "0.7.1"

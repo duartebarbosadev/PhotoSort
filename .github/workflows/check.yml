@@ -1,0 +1,75 @@
+name: Rust checks
+on: [push, pull_request]
+jobs:
+  core:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo test --locked --no-default-features
+      - run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
+      - run: cargo check --locked --no-default-features --features onnx --all-targets
+  native-macos:
+    strategy:
+      matrix:
+        flags: ['', '--features native-imaging']
+    runs-on: macos-latest
+    env:
+      PKG_CONFIG_PATH: ${{ github.workspace }}/.tools/vips/lib/pkgconfig
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: brew install libraw exiv2 pkg-config
+      - if: matrix.flags != ''
+        run: |
+          brew install glib jpeg-turbo libpng libtiff little-cms2 highway
+          python3 -B scripts/build_vips.py
+      - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
+      - run: cargo test --locked ${{ matrix.flags }}
+      - run: cargo clippy --locked ${{ matrix.flags }} --all-targets -- -D warnings
+      - if: matrix.flags != ''
+        run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+  native-linux:
+    runs-on: ubuntu-latest
+    container:
+      # Debian's security repository supplies libheif >= 1.23, required by the Rust binding.
+      image: rust:1.94.1-slim-trixie@sha256:cf09adf8c3ebaba10779e5c23ff7fe4df4cccdab8a91f199b0c142c53fef3e1a
+    env:
+      CARGO_HOME: /tmp/photosort-cargo
+      CARGO_TARGET_DIR: /tmp/photosort-target
+      CARGO_BUILD_JOBS: '4'
+      PKG_CONFIG_PATH: /tmp/photosort-vips/lib/pkgconfig
+      LD_LIBRARY_PATH: /tmp/photosort-vips/lib
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native development dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config python3 python3-venv curl ca-certificates cmake ninja-build \
+            libglib2.0-dev libexpat1-dev libjpeg-dev libpng-dev libtiff-dev liblcms2-dev libhwy-dev zlib1g-dev \
+            libraw-dev libexiv2-dev libheif-dev libheif-plugin-libde265 \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav \
+            libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libegl1-mesa-dev
+          rustup component add clippy
+          useradd --create-home photosort
+          mkdir -p "$CARGO_HOME" "$CARGO_TARGET_DIR"
+          chown -R photosort:photosort "$GITHUB_WORKSPACE" "$CARGO_HOME" "$CARGO_TARGET_DIR"
+      - name: Build and verify the private image engine without root privileges
+        run: |
+          runuser -u photosort -- python3 -B -m unittest discover -s scripts -p 'test_*.py'
+          runuser -u photosort -- python3 -B scripts/build_vips.py --prefix /tmp/photosort-vips
+      - run: runuser -u photosort -- cargo test --locked --features native-imaging
+      - run: runuser -u photosort -- cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+      - run: runuser -u photosort -- cargo clippy --locked --features native-imaging --all-targets -- -D warnings

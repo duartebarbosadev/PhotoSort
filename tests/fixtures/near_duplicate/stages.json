@@ -1,0 +1,538 @@
+{
+  "first": "08.png",
+  "second": "09.png",
+  "transform": [
+    [
+      0.999996542930603,
+      0.002664580475538969,
+      0.7813572287559509
+    ],
+    [
+      -0.00262726959772408,
+      1.000008463859558,
+      -1.0604891777038574
+    ]
+  ],
+  "width": 1024,
+  "height": 768,
+  "normal_width": 384,
+  "normal_height": 288,
+  "valid_count": 782600,
+  "probes": [
+    {
+      "index": 0,
+      "value": 0.0,
+      "valid": false
+    },
+    {
+      "index": 1023,
+      "value": 0.0,
+      "valid": false
+    },
+    {
+      "index": 7919,
+      "value": 0.4140165448188782,
+      "valid": true
+    },
+    {
+      "index": 15838,
+      "value": 0.4109628200531006,
+      "valid": true
+    },
+    {
+      "index": 23757,
+      "value": 0.39517682790756226,
+      "valid": true
+    },
+    {
+      "index": 31676,
+      "value": 0.16862745583057404,
+      "valid": true
+    },
+    {
+      "index": 39595,
+      "value": 0.4015010893344879,
+      "valid": true
+    },
+    {
+      "index": 47514,
+      "value": 0.4199005365371704,
+      "valid": true
+    },
+    {
+      "index": 55433,
+      "value": 0.42093032598495483,
+      "valid": true
+    },
+    {
+      "index": 63352,
+      "value": 0.6549019813537598,
+      "valid": true
+    },
+    {
+      "index": 71271,
+      "value": 0.16862745583057404,
+      "valid": true
+    },
+    {
+      "index": 79190,
+      "value": 0.3932604491710663,
+      "valid": true
+    },
+    {
+      "index": 87109,
+      "value": 0.42033717036247253,
+      "valid": true
+    },
+    {
+      "index": 95028,
+      "value": 0.4185161590576172,
+      "valid": true
+    },
+    {
+      "index": 102947,
+      "value": 0.41136255860328674,
+      "valid": true
+    },
+    {
+      "index": 110866,
+      "value": 0.17185120284557343,
+      "valid": true
+    },
+    {
+      "index": 118785,
+      "value": 0.39822858572006226,
+      "valid": true
+    },
+    {
+      "index": 126704,
+      "value": 0.41123852133750916,
+      "valid": true
+    },
+    {
+      "index": 134623,
+      "value": 0.41266676783561707,
+      "valid": true
+    },
+    {
+      "index": 142542,
+      "value": 0.41779595613479614,
+      "valid": true
+    },
+    {
+      "index": 150461,
+      "value": 0.6549019813537598,
+      "valid": true
+    },
+    {
+      "index": 158380,
+      "value": 0.40099361538887024,
+      "valid": true
+    },
+    {
+      "index": 166299,
+      "value": 0.41462212800979614,
+      "valid": true
+    },
+    {
+      "index": 174218,
+      "value": 0.41173961758613586,
+      "valid": true
+    },
+    {
+      "index": 182137,
+      "value": 0.40766286849975586,
+      "valid": true
+    },
+    {
+      "index": 190056,
+      "value": 0.40198829770088196,
+      "valid": true
+    },
+    {
+      "index": 197975,
+      "value": 0.4018152952194214,
+      "valid": true
+    },
+    {
+      "index": 205894,
+      "value": 0.4026208519935608,
+      "valid": true
+    },
+    {
+      "index": 213813,
+      "value": 0.4151165783405304,
+      "valid": true
+    },
+    {
+      "index": 221732,
+      "value": 0.4149834215641022,
+      "valid": true
+    },
+    {
+      "index": 229651,
+      "value": 0.40002670884132385,
+      "valid": true
+    },
+    {
+      "index": 237570,
+      "value": 0.6402162313461304,
+      "valid": true
+    },
+    {
+      "index": 245489,
+      "value": 0.4148555099964142,
+      "valid": true
+    },
+    {
+      "index": 253408,
+      "value": 0.4009445607662201,
+      "valid": true
+    },
+    {
+      "index": 261327,
+      "value": 0.4040822982788086,
+      "valid": true
+    },
+    {
+      "index": 269246,
+      "value": 0.3966681957244873,
+      "valid": true
+    },
+    {
+      "index": 277165,
+      "value": 0.4229857623577118,
+      "valid": true
+    },
+    {
+      "index": 285084,
+      "value": 0.4226536154747009,
+      "valid": true
+    },
+    {
+      "index": 293003,
+      "value": 0.405775785446167,
+      "valid": true
+    },
+    {
+      "index": 300922,
+      "value": 0.4156392216682434,
+      "valid": true
+    },
+    {
+      "index": 308841,
+      "value": 0.400299072265625,
+      "valid": true
+    },
+    {
+      "index": 316760,
+      "value": 0.42089298367500305,
+      "valid": true
+    },
+    {
+      "index": 324679,
+      "value": 0.6085959672927856,
+      "valid": true
+    },
+    {
+      "index": 332598,
+      "value": 0.4167855381965637,
+      "valid": true
+    },
+    {
+      "index": 340517,
+      "value": 0.4065262973308563,
+      "valid": true
+    },
+    {
+      "index": 348436,
+      "value": 0.4004994332790375,
+      "valid": true
+    },
+    {
+      "index": 356355,
+      "value": 0.3937515616416931,
+      "valid": true
+    },
+    {
+      "index": 364274,
+      "value": 0.16862745583057404,
+      "valid": true
+    },
+    {
+      "index": 372193,
+      "value": 0.40977609157562256,
+      "valid": true
+    },
+    {
+      "index": 380112,
+      "value": 0.403341680765152,
+      "valid": true
+    },
+    {
+      "index": 388031,
+      "value": 0.4116477370262146,
+      "valid": true
+    },
+    {
+      "index": 393216,
+      "value": 0.4007122814655304,
+      "valid": true
+    },
+    {
+      "index": 395950,
+      "value": 0.4131604731082916,
+      "valid": true
+    },
+    {
+      "index": 403869,
+      "value": 0.16862745583057404,
+      "valid": true
+    },
+    {
+      "index": 411788,
+      "value": 0.59626704454422,
+      "valid": true
+    },
+    {
+      "index": 419707,
+      "value": 0.4109731912612915,
+      "valid": true
+    },
+    {
+      "index": 427626,
+      "value": 0.410019189119339,
+      "valid": true
+    },
+    {
+      "index": 435545,
+      "value": 0.40535658597946167,
+      "valid": true
+    },
+    {
+      "index": 443464,
+      "value": 0.39973872900009155,
+      "valid": true
+    },
+    {
+      "index": 451383,
+      "value": 0.40970438718795776,
+      "valid": true
+    },
+    {
+      "index": 459302,
+      "value": 0.40558579564094543,
+      "valid": true
+    },
+    {
+      "index": 467221,
+      "value": 0.42377039790153503,
+      "valid": true
+    },
+    {
+      "index": 475140,
+      "value": 0.4183337986469269,
+      "valid": true
+    },
+    {
+      "index": 483059,
+      "value": 0.4163113236427307,
+      "valid": true
+    },
+    {
+      "index": 490978,
+      "value": 0.40555593371391296,
+      "valid": true
+    },
+    {
+      "index": 498897,
+      "value": 0.5949252843856812,
+      "valid": true
+    },
+    {
+      "index": 506816,
+      "value": 0.41935253143310547,
+      "valid": true
+    },
+    {
+      "index": 514735,
+      "value": 0.40492314100265503,
+      "valid": true
+    },
+    {
+      "index": 522654,
+      "value": 0.4237409830093384,
+      "valid": true
+    },
+    {
+      "index": 530573,
+      "value": 0.40571531653404236,
+      "valid": true
+    },
+    {
+      "index": 538492,
+      "value": 0.405859112739563,
+      "valid": true
+    },
+    {
+      "index": 546411,
+      "value": 0.40933775901794434,
+      "valid": true
+    },
+    {
+      "index": 554330,
+      "value": 0.4127720594406128,
+      "valid": true
+    },
+    {
+      "index": 562249,
+      "value": 0.41691771149635315,
+      "valid": true
+    },
+    {
+      "index": 570168,
+      "value": 0.4135790169239044,
+      "valid": true
+    },
+    {
+      "index": 578087,
+      "value": 0.3137255012989044,
+      "valid": true
+    },
+    {
+      "index": 586006,
+      "value": 0.6160554885864258,
+      "valid": true
+    },
+    {
+      "index": 593925,
+      "value": 0.42176929116249084,
+      "valid": true
+    },
+    {
+      "index": 601844,
+      "value": 0.40806251764297485,
+      "valid": true
+    },
+    {
+      "index": 609763,
+      "value": 0.3137255012989044,
+      "valid": true
+    },
+    {
+      "index": 617682,
+      "value": 0.4000606834888458,
+      "valid": true
+    },
+    {
+      "index": 625601,
+      "value": 0.41528329253196716,
+      "valid": true
+    },
+    {
+      "index": 633520,
+      "value": 0.40449464321136475,
+      "valid": true
+    },
+    {
+      "index": 641439,
+      "value": 0.4143584072589874,
+      "valid": true
+    },
+    {
+      "index": 649358,
+      "value": 0.4131452739238739,
+      "valid": true
+    },
+    {
+      "index": 657277,
+      "value": 0.3234051465988159,
+      "valid": true
+    },
+    {
+      "index": 665196,
+      "value": 0.4118431806564331,
+      "valid": true
+    },
+    {
+      "index": 673115,
+      "value": 0.6465921998023987,
+      "valid": true
+    },
+    {
+      "index": 681034,
+      "value": 0.403832346200943,
+      "valid": true
+    },
+    {
+      "index": 688953,
+      "value": 0.3267538547515869,
+      "valid": true
+    },
+    {
+      "index": 696872,
+      "value": 0.31373196840286255,
+      "valid": true
+    },
+    {
+      "index": 704791,
+      "value": 0.42099058628082275,
+      "valid": true
+    },
+    {
+      "index": 712710,
+      "value": 0.41676175594329834,
+      "valid": true
+    },
+    {
+      "index": 720629,
+      "value": 0.41812434792518616,
+      "valid": true
+    },
+    {
+      "index": 728548,
+      "value": 0.32407596707344055,
+      "valid": true
+    },
+    {
+      "index": 736467,
+      "value": 0.253988653421402,
+      "valid": true
+    },
+    {
+      "index": 744386,
+      "value": 0.41287723183631897,
+      "valid": true
+    },
+    {
+      "index": 752305,
+      "value": 0.4064357280731201,
+      "valid": true
+    },
+    {
+      "index": 760224,
+      "value": 0.6248015761375427,
+      "valid": true
+    },
+    {
+      "index": 768143,
+      "value": 0.41475629806518555,
+      "valid": true
+    },
+    {
+      "index": 776062,
+      "value": 0.4117937982082367,
+      "valid": true
+    },
+    {
+      "index": 783981,
+      "value": 0.40777498483657837,
+      "valid": true
+    },
+    {
+      "index": 786431,
+      "value": 0.0,
+      "valid": false
+    }
+  ]
+}

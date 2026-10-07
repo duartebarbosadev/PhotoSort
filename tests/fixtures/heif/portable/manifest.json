@@ -1,0 +1,19 @@
+{
+  "generator": "examples/generate_heif_fixtures.rs",
+  "libheif": "1.23.4",
+  "platform": "Linux aarch64",
+  "files": {
+    "invalid-icc.heic": "72a4ecdd2828619610a173f582f0d47632ed06d74e5dabf48a871ef3768373b5",
+    "linear-icc.heic": "da9bb31ff591209784fe5f94e8cc0b7878f2e469f1393aea0f92d53a2c72097a",
+    "linear-nclx.heic": "5c384bf0193fb68288f972980fc3f75d18da6c2464b13e15a25e0fe6e5f2b9a3",
+    "orientation-1.heic": "b2a31e23171fe8ad6b077b5cd86421452c630660ec4d521f283e7e8ff6c775f5",
+    "orientation-2.heic": "682d68d2be4f215fa8f1224462b960f88680fa2cb44d83933bc2ccb661c7ca8f",
+    "orientation-3.heic": "8e3af29d7b8516ebcb6ff45f34c7565ad1856f0d98b9859d333dd26a383303e9",
+    "orientation-4.heic": "13329408359130abd96af13705734ec4505f42acf2e399d2278f639273905f3e",
+    "orientation-5.heic": "1b7683c6f2cf28a0008dce4d0b0b44a6bb8c4998dabacf209330799252671849",
+    "orientation-6.heic": "b0df646a21e41f0a7de32048708a3a63a4de976b32a3ec26e3bba4892dc88786",
+    "orientation-7.heic": "d456181f6b4f78cd0e9474db46b7d7938a29b1526f43fdd1ddcd3592ab03bc55",
+    "orientation-8.heic": "fdb6aff6229a69d742422e5a44b49ae4f939838c67e31f5add4a1c83f2c338fc",
+    "premultiplied.heic": "643fdca9e64d5c99611b241cee5b0c930cbd85b9541b4e21aab9cd285ef4a5ca"
+  }
+}
