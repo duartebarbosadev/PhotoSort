@@ -577,6 +577,20 @@ impl Editor {
         )
         .inner
     }
+    fn select_folder(&mut self, path: &str, toggle: bool) {
+        if toggle {
+            if !self.selected_folders.remove(path) && !path.is_empty() {
+                self.selected_folders.insert(path.into());
+            }
+        } else {
+            self.selected_folders.clear();
+            if !path.is_empty() {
+                self.selected_folders.insert(path.into());
+            }
+        }
+        self.folder = path.into();
+        self.name = path.rsplit('/').next().unwrap_or_default().into();
+    }
     fn folder_contents(
         &mut self,
         ui: &mut egui::Ui,
@@ -591,9 +605,25 @@ impl Editor {
             scroll = scroll.vertical_scroll_offset(offset);
         }
         let row_height = button_row_height(ui);
+        let max_height = (height - 210.0).max(75.0);
+        let keyboard = tree_controls::Keyboard::new(ui, "organize_folders", max_height, row_height);
+        if let Some(result) = keyboard.navigate(
+            ui,
+            &self.tree,
+            Some(&Key::Folder(self.folder.clone().into())),
+            &mut self.collapsed,
+        ) {
+            if let Key::Folder(path) = result.key {
+                self.select_folder(&path.to_string_lossy().replace('\\', "/"), false);
+            }
+            if result.expansion_changed {
+                self.project_folders();
+            }
+        }
+        let scroll = keyboard.scroll(ui, scroll, &self.tree, &self.visible_folders, true);
         let output = scroll
             .auto_shrink([false, true])
-            .max_height((height - 210.0).max(75.0))
+            .max_height(max_height)
             .show_rows(ui, row_height, self.visible_folders.len(), |ui, rows| {
                 for row in rows {
                     let i = self.visible_folders[row];
@@ -604,9 +634,10 @@ impl Editor {
                     ui.push_id(("folder", &path), |ui| {
                         ui.horizontal(|ui| {
                             ui.add_space((depth as f32 * 12.0).min(96.0));
-                            expansion_changed |= tree_controls::expander(ui, &self.tree, i, &mut self.collapsed);
+                            expansion_changed |= tree_controls::expander(ui, &self.tree, i, &mut self.collapsed, &keyboard);
                             let response = ui.add_sized([ui.available_width(), row_height], egui::Button::selectable(self.folder == path || self.selected_folders.contains(&path), format!("{} · {count}", folder_title(&path)))
-                                .truncate().sense(Sense::click_and_drag()));
+                                .truncate().sense(tree_controls::pointer_sense(true)));
+                            keyboard.focus_on_click(&response);
                             #[cfg(test)]
                             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("test_folder_rect", &path)), response.rect));
                             response.context_menu(|ui| {
@@ -625,16 +656,7 @@ impl Editor {
                                 }
                             });
                             if response.clicked() {
-                                if ui.input(|i| i.modifiers.command || i.modifiers.ctrl) {
-                                    if !self.selected_folders.remove(&path) && !path.is_empty() {
-                                        self.selected_folders.insert(path.clone());
-                                    }
-                                } else {
-                                    self.selected_folders.clear();
-                                    if !path.is_empty() { self.selected_folders.insert(path.clone()); }
-                                }
-                                self.folder = path.clone();
-                                self.name = path.rsplit('/').next().unwrap_or_default().into();
+                                self.select_folder(&path, ui.input(|i| i.modifiers.command || i.modifiers.ctrl));
                             }
                             if !path.is_empty() && self.starts_drag(ui, &response) {
                                 egui::DragAndDrop::set_payload(ui.ctx(), self.folder_drag(&path));
@@ -661,6 +683,7 @@ impl Editor {
         if expansion_changed {
             self.project_folders();
         }
+        keyboard.finish(ui, output.inner_rect);
         self.folder_scroll = output.state.offset.y;
         self.scroll_drag(ui, &output);
         ui.separator();
@@ -1408,6 +1431,80 @@ mod tests {
             );
             assert_eq!(app.stats.decodes, 0);
             assert_eq!(app.stats.metadata_reads, 0);
+        }
+    }
+    #[test]
+    fn tree_keyboard_organize_keeps_drafts_and_file_selection_and_reveals_virtual_rows() {
+        for width in [640.0, 1200.0] {
+            let mut app = app();
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_mut().unwrap();
+            for path in ["A", "A/B", "A/B/C", "A-1"] {
+                let (parent, leaf) = path.rsplit_once('/').unwrap_or(("", path));
+                editor.draft.create_folder(parent, leaf).unwrap();
+            }
+            for i in 0..2000 {
+                editor.draft.create_folder("", &format!("z{i:04}")).unwrap();
+            }
+            editor.refresh();
+            editor.compact_folders = true;
+            editor.selected.insert(MediaId(1));
+            let labels = editor.draft.labels().clone();
+            let address = editor.tree.nodes.as_ptr();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let frame = |app: &mut PhotoSortApp, events| {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| app.organize_dialog(ctx),
+                );
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            let rect = ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_folder_rect", "A"))))
+                .unwrap();
+            frame(&mut app, tree_controls::tests::click(rect.center()));
+            for (key, expected) in [
+                (egui::Key::ArrowLeft, "A"),
+                (egui::Key::ArrowDown, "A-1"),
+                (egui::Key::ArrowUp, "A"),
+                (egui::Key::ArrowRight, "A"),
+                (egui::Key::ArrowRight, "A/B"),
+                (egui::Key::End, "z1999"),
+            ] {
+                frame(&mut app, vec![tree_controls::tests::key(key)]);
+                assert_eq!(
+                    app.organize_editor.as_ref().unwrap().folder,
+                    expected,
+                    "width {width}, {key:?}"
+                );
+            }
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert!(editor.folder_scroll > 10_000.);
+            assert_eq!(editor.name, "z1999");
+            assert_eq!(editor.selected_folders, ["z1999".into()].into());
+            assert!(editor.selected.contains(&MediaId(1)));
+            assert_eq!(editor.tree.nodes.as_ptr(), address);
+            assert_eq!(editor.draft.labels(), &labels);
+            frame(&mut app, vec![tree_controls::tests::key(egui::Key::Home)]);
+            assert_eq!(app.organize_editor.as_ref().unwrap().folder, "");
+            assert_eq!(app.organize_editor.as_ref().unwrap().folder_scroll, 0.);
+            assert!(
+                app.requested.is_empty()
+                    && app.metadata_run.is_none()
+                    && app.analysis_run.is_none()
+                    && !app.scanning
+            );
+            assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
         }
     }
     #[test]

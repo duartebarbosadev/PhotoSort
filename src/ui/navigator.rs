@@ -137,7 +137,7 @@ impl PhotoSortApp {
                 .small()
                 .color(MUTED),
         );
-        let selected = self.navigator_key();
+        let mut selected = self.navigator_key();
         let Some(view) = self
             .browse_tree
             .clone()
@@ -187,11 +187,35 @@ impl PhotoSortApp {
             });
             return;
         }
-        ui.add_enabled_ui(!waiting, |ui| {
+        // Navigation only changes the query against this cached tree. Keep it
+        // responsive while the worker replaces an older projection/filter result.
+        ui.scope(|ui| {
             let row_height = button_row_height(ui);
-            let output = egui::ScrollArea::vertical()
-                .id_salt(("library_tree", self.navigator.mode))
-                .max_height((height - 78.).max(24.))
+            let max_height = (height - 78.).max(24.);
+            let salt = ("library_tree", self.navigator.mode);
+            let keyboard = tree_controls::Keyboard::new(ui, salt, max_height, row_height);
+            if let Some(result) = keyboard.navigate(
+                ui,
+                &view.tree,
+                selected.as_ref(),
+                &mut self.navigator.collapsed,
+            ) {
+                if selected.as_ref() != Some(&result.key) {
+                    self.select_navigation_node(result.key.clone());
+                    selected = Some(result.key);
+                } else if result.expansion_changed {
+                    self.navigator_changed();
+                }
+            }
+            let scroll = keyboard.scroll(
+                ui,
+                egui::ScrollArea::vertical().id_salt(salt),
+                &view.tree,
+                &view.visible,
+                !self.filter_dirty && self.browse_run.is_none(),
+            );
+            let output = scroll
+                .max_height(max_height)
                 .auto_shrink([false, false])
                 .show_rows(ui, row_height, view.visible.len(), |ui, range| {
                     #[cfg(test)]
@@ -208,6 +232,7 @@ impl PhotoSortApp {
                                 &view.tree,
                                 i,
                                 &mut self.navigator.collapsed,
+                                &keyboard,
                             ) {
                                 self.navigator_changed();
                             }
@@ -218,8 +243,10 @@ impl PhotoSortApp {
                                     selected.as_ref() == Some(&node.key),
                                     label,
                                 )
-                                .truncate(),
+                                .truncate()
+                                .sense(tree_controls::pointer_sense(false)),
                             );
+                            keyboard.focus_on_click(&response);
                             #[cfg(test)]
                             ui.ctx().data_mut(|d| {
                                 d.insert_temp(
@@ -268,8 +295,7 @@ impl PhotoSortApp {
                     ),
                 )
             });
-            #[cfg(not(test))]
-            let _ = output;
+            keyboard.finish(ui, output.inner_rect);
         });
     }
 }
@@ -417,6 +443,93 @@ mod tests {
                     "Leaving the navigator must dismiss its popup"
                 );
             }
+        }
+    }
+    #[test]
+    fn tree_keyboard_navigator_reuses_worker_tree_and_accepts_input_during_refilter() {
+        for width in [640., 1200.] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(root.path().join("A/B/C")).unwrap();
+            std::fs::create_dir(root.path().join("A-1")).unwrap();
+            std::fs::write(root.path().join("photo.jpg"), b"not decoded").unwrap();
+            let catalog = Arc::new(Catalog::scan(root.path(), || false, |_| {}).unwrap());
+            let library = catalog.root.clone();
+            let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+            app.root = Some(library.clone());
+            app.step = Step::Cull;
+            app.media = catalog.media.clone();
+            app.index = app
+                .media
+                .iter()
+                .enumerate()
+                .map(|(i, m)| (m.id, i))
+                .collect();
+            app.active = Some(app.media[0].id);
+            app.catalog = Some(catalog);
+            app.set_navigator(Mode::Folders, true);
+            settle(&mut app);
+            let tree = app.browse_tree.as_ref().unwrap().tree.clone();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let frame = |app: &mut PhotoSortApp, events| {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.keyboard(ctx);
+                        egui::CentralPanel::default().show(ctx, |ui| app.navigator_panel(ui));
+                    },
+                );
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            if width < 780. {
+                let rect = ctx
+                    .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("test_navigator_toggle")))
+                    .unwrap();
+                frame(&mut app, tree_controls::tests::click(rect.center()));
+                for _ in 0..3 {
+                    frame(&mut app, vec![]);
+                }
+            }
+            let key = Key::Folder(library.join("A"));
+            let rect = ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_navigator_node", &key))))
+                .unwrap();
+            frame(&mut app, tree_controls::tests::click(rect.center()));
+            // Do not settle between inputs: old projection remains on screen.
+            for (key, expected) in [
+                (egui::Key::ArrowLeft, "A"),
+                (egui::Key::ArrowDown, "A-1"),
+                (egui::Key::ArrowUp, "A"),
+                (egui::Key::ArrowRight, "A"),
+                (egui::Key::ArrowRight, "A/B"),
+                (egui::Key::ArrowDown, "A/B/C"),
+            ] {
+                frame(&mut app, vec![tree_controls::tests::key(key)]);
+                assert_eq!(
+                    app.navigator_key(),
+                    Some(Key::Folder(library.join(expected))),
+                    "width {width}, {key:?}"
+                );
+            }
+            frame(&mut app, vec![tree_controls::tests::key(egui::Key::D)]);
+            assert!(
+                app.decisions.is_empty(),
+                "focused tree must shield photo shortcuts"
+            );
+            settle(&mut app);
+            assert!(Arc::ptr_eq(&tree, &app.browse_tree.as_ref().unwrap().tree));
+            assert!(app.filtered.is_empty());
+            assert!(app.decisions.is_empty() && app.plan.is_none() && app.requested.is_empty());
+            assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
         }
     }
     #[test]

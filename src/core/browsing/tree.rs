@@ -59,6 +59,19 @@ pub enum Expansion {
     Subtree,
     Children,
 }
+/// Keyboard movement over the cached hierarchy. Advance is measured in visible rows.
+#[derive(Clone, Copy, Debug)]
+pub enum Navigation {
+    Advance(isize),
+    First,
+    Last,
+    Parent,
+    Child,
+}
+pub struct NavigationResult {
+    pub key: Key,
+    pub expansion_changed: bool,
+}
 #[derive(Default)]
 pub struct Tree {
     pub nodes: Vec<Node>,
@@ -161,6 +174,72 @@ impl Tree {
             }
         }
         changed
+    }
+    /// Resolve movement without rebuilding the visible projection. Descendant spans
+    /// skip collapsed subtrees; only the requested rows and their ancestors are visited.
+    pub fn navigate(
+        &self,
+        current: Option<&Key>,
+        command: Navigation,
+        collapsed: &mut BTreeSet<Key>,
+    ) -> Option<NavigationResult> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let current = current.and_then(|key| self.lookup.get(key)).copied();
+        let mut index = self.visible_ancestor(current.unwrap_or(0), collapsed);
+        let mut expansion_changed = false;
+        match command {
+            Navigation::First => index = 0,
+            Navigation::Last => index = self.visible_ancestor(self.nodes.len() - 1, collapsed),
+            Navigation::Advance(rows) if current.is_some() => {
+                for _ in 0..rows.unsigned_abs() {
+                    let next = if rows < 0 {
+                        self.visible_ancestor(index.saturating_sub(1), collapsed)
+                    } else if collapsed.contains(&self.nodes[index].key) {
+                        self.nodes[index].end
+                    } else {
+                        index + 1
+                    };
+                    if next == index || next >= self.nodes.len() {
+                        break;
+                    }
+                    index = next;
+                }
+            }
+            Navigation::Parent => {
+                let node = &self.nodes[index];
+                if node.expandable(index) && !collapsed.contains(&node.key) {
+                    expansion_changed = collapsed.insert(node.key.clone());
+                } else if let Some(parent) = node.parent {
+                    index = parent;
+                }
+            }
+            Navigation::Child => {
+                let node = &self.nodes[index];
+                if node.expandable(index) {
+                    expansion_changed = collapsed.remove(&node.key);
+                    if !expansion_changed {
+                        index += 1;
+                    }
+                }
+            }
+            Navigation::Advance(_) => {}
+        }
+        Some(NavigationResult {
+            key: self.nodes[index].key.clone(),
+            expansion_changed,
+        })
+    }
+    fn visible_ancestor(&self, mut index: usize, collapsed: &BTreeSet<Key>) -> usize {
+        let mut parent = self.nodes[index].parent;
+        while let Some(i) = parent {
+            if collapsed.contains(&self.nodes[i].key) {
+                index = i;
+            }
+            parent = self.nodes[i].parent;
+        }
+        index
     }
     pub fn retain_branches(&self, collapsed: &mut BTreeSet<Key>) {
         collapsed.retain(|key| {
@@ -397,5 +476,165 @@ mod tests {
             tree.project(&state, || false).unwrap().visible.len(),
             100_001
         );
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    use super::*;
+    fn folders() -> Tree {
+        Tree::folders(
+            ["", "A", "A/B", "A/B/C", "A/D", "A-1", "Z", "Z/X"].map(|p| (p.into(), p.into(), 0)),
+            || false,
+        )
+        .unwrap()
+    }
+    fn key(path: &str) -> Key {
+        Key::Folder(path.into())
+    }
+    #[test]
+    fn tree_keyboard_walk_matches_visible_projection_for_every_collapse_combination() {
+        let tree = folders();
+        let address = tree.nodes.as_ptr();
+        for mask in 0u32..256 {
+            let mut collapsed: BTreeSet<_> = tree
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, n)| n.key.clone())
+                .collect();
+            tree.retain_branches(&mut collapsed);
+            let visible = tree.visible(&collapsed, || false).unwrap();
+            for (row, &i) in visible.iter().enumerate() {
+                for delta in [-100isize, -3, -1, 0, 1, 3, 100] {
+                    let result = tree
+                        .navigate(
+                            Some(&tree.nodes[i].key),
+                            Navigation::Advance(delta),
+                            &mut collapsed,
+                        )
+                        .unwrap();
+                    let expected =
+                        (row as isize + delta).clamp(0, visible.len() as isize - 1) as usize;
+                    assert_eq!(result.key, tree.nodes[visible[expected]].key);
+                    assert!(!result.expansion_changed);
+                }
+            }
+            assert_eq!(
+                tree.navigate(None, Navigation::First, &mut collapsed)
+                    .unwrap()
+                    .key,
+                tree.nodes[visible[0]].key
+            );
+            assert_eq!(
+                tree.navigate(None, Navigation::Last, &mut collapsed)
+                    .unwrap()
+                    .key,
+                tree.nodes[*visible.last().unwrap()].key
+            );
+        }
+        assert_eq!(tree.nodes.as_ptr(), address);
+    }
+    #[test]
+    fn tree_keyboard_parent_child_hidden_selection_and_missing_selection() {
+        let tree = folders();
+        let mut collapsed = BTreeSet::new();
+        let result = tree
+            .navigate(Some(&key("A")), Navigation::Parent, &mut collapsed)
+            .unwrap();
+        assert_eq!(result.key, key("A"));
+        assert!(result.expansion_changed);
+        assert_eq!(
+            tree.navigate(Some(&key("A/B/C")), Navigation::Advance(1), &mut collapsed)
+                .unwrap()
+                .key,
+            key("A-1")
+        );
+        let result = tree
+            .navigate(Some(&key("A")), Navigation::Child, &mut collapsed)
+            .unwrap();
+        assert_eq!(result.key, key("A"));
+        assert!(result.expansion_changed);
+        assert_eq!(
+            tree.navigate(Some(&key("A")), Navigation::Child, &mut collapsed)
+                .unwrap()
+                .key,
+            key("A/B")
+        );
+        assert_eq!(
+            tree.navigate(Some(&key("A/B/C")), Navigation::Parent, &mut collapsed)
+                .unwrap()
+                .key,
+            key("A/B")
+        );
+        assert_eq!(
+            tree.navigate(Some(&key("A/B/C")), Navigation::Child, &mut collapsed)
+                .unwrap()
+                .key,
+            key("A/B/C")
+        );
+        assert_eq!(
+            tree.navigate(
+                Some(&key("missing")),
+                Navigation::Advance(1),
+                &mut collapsed
+            )
+            .unwrap()
+            .key,
+            key("")
+        );
+        assert!(
+            Tree::default()
+                .navigate(None, Navigation::First, &mut collapsed)
+                .is_none()
+        );
+    }
+    #[test]
+    fn tree_keyboard_large_cached_tree_and_flat_date_group_keys() {
+        let tree = Tree::folders(
+            std::iter::once(("".into(), "root".into(), 0))
+                .chain((0..100_000).map(|i| (format!("{i:06}").into(), i.to_string(), 0))),
+            || false,
+        )
+        .unwrap();
+        let address = tree.nodes.as_ptr();
+        let mut collapsed = BTreeSet::new();
+        assert_eq!(
+            tree.navigate(None, Navigation::Last, &mut collapsed)
+                .unwrap()
+                .key,
+            key("099999")
+        );
+        assert_eq!(
+            tree.navigate(
+                Some(&key("050000")),
+                Navigation::Advance(30),
+                &mut collapsed
+            )
+            .unwrap()
+            .key,
+            key("050030")
+        );
+        assert_eq!(tree.nodes.as_ptr(), address);
+        for keys in [
+            vec![
+                Key::Date("2026-01-01".into()),
+                Key::Date("2026-01-02".into()),
+            ],
+            vec![Key::Group(1), Key::Group(2)],
+        ] {
+            let mut tree = Tree::default();
+            for key in &keys {
+                tree.push(key.clone(), String::new(), 0, None);
+            }
+            let tree = tree.finish(&|| false).unwrap();
+            assert_eq!(
+                tree.navigate(Some(&keys[0]), Navigation::Advance(1), &mut collapsed)
+                    .unwrap()
+                    .key,
+                keys[1]
+            );
+        }
     }
 }

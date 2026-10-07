@@ -49,6 +49,18 @@ impl PhotoSortApp {
                         ("F / S", "Cull folder / similarity-group navigator"),
                         ("F12", "About PhotoSort"),
                         (
+                            "Tree: Up / Down",
+                            "Select the previous / next visible folder, date or group",
+                        ),
+                        (
+                            "Tree: Left / Right",
+                            "Collapse or select parent / expand or select child",
+                        ),
+                        (
+                            "Tree: Home / End / Page keys",
+                            "Jump or page through the focused tree",
+                        ),
+                        (
                             "Left / Right",
                             "Cull cycles through visible photos or the current similarity group",
                         ),
