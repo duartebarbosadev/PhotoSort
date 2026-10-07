@@ -180,3 +180,13 @@ of hiding them; subsequent scan warnings append to these diagnostics. Existing
 version-one journals remain readable; details omitted by older builds cannot be
 reconstructed. All five workflows use this application path.
 See diagnostics/recovery-details-2026-10-08/README.md for checks and limits.
+
+### Organize folder ranges — 8 October 2026
+
+Destination folders now support Shift-click and Shift with Up/Down, Home/End and
+Page keys over the cached visible order. Ctrl/Cmd+Shift adds a range; plain Shift
+replaces it and can shrink it. Collapsed descendants and the library root are not
+implicitly selected by a range. Current destination and selected folders use
+separate outline/fill states. The range anchor survives editor bookmarks and is
+reconciled after structure edits, reset and relocation to another library.
+See diagnostics/folder-ranges-2026-10-08/README.md for checks and scope.

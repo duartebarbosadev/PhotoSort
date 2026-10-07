@@ -89,6 +89,28 @@ impl Keyboard {
         current: Option<&Key>,
         collapsed: &mut BTreeSet<Key>,
     ) -> Option<NavigationResult> {
+        let mut selected = current.cloned();
+        let mut changed = false;
+        let mut moved = false;
+        for (command, _) in self.navigation_events(ui, false) {
+            if let Some(result) =
+                self.navigate_once(ui, tree, selected.as_ref(), command, collapsed)
+            {
+                selected = Some(result.key);
+                changed |= result.expansion_changed;
+                moved = true;
+            }
+        }
+        moved.then(|| NavigationResult {
+            key: selected.unwrap(),
+            expansion_changed: changed,
+        })
+    }
+    pub(super) fn navigation_events(
+        &self,
+        ui: &egui::Ui,
+        ranges: bool,
+    ) -> Vec<(Navigation, egui::Modifiers)> {
         let page = self.focus.page_rows(ui) as isize;
         let command = |key| match key {
             egui::Key::ArrowUp => Some(Navigation::Advance(-1)),
@@ -101,28 +123,31 @@ impl Keyboard {
             egui::Key::PageDown => Some(Navigation::Advance(page)),
             _ => None,
         };
-        let events = self
-            .focus
-            .events(ui, |k, m| m.is_none() && command(k).is_some());
-        if events.is_empty() {
-            return None;
-        }
-        let mut selected = current.cloned();
-        let mut changed = false;
-        for (key, _, _) in events {
-            if let Some(result) = tree.navigate(selected.as_ref(), command(key).unwrap(), collapsed)
-            {
-                selected = Some(result.key);
-                changed |= result.expansion_changed;
-            }
-        }
-        let key = selected?;
+        self.focus
+            .events(ui, |k, m| {
+                command(k).is_some()
+                    && (m.is_none()
+                        || (ranges
+                            && m.shift
+                            && !m.alt
+                            && !matches!(k, egui::Key::ArrowLeft | egui::Key::ArrowRight)))
+            })
+            .into_iter()
+            .map(|(key, modifiers, _)| (command(key).unwrap(), modifiers))
+            .collect()
+    }
+    pub(super) fn navigate_once(
+        &self,
+        ui: &egui::Ui,
+        tree: &Tree,
+        current: Option<&Key>,
+        command: Navigation,
+        collapsed: &mut BTreeSet<Key>,
+    ) -> Option<NavigationResult> {
+        let result = tree.navigate(current, command, collapsed)?;
         ui.ctx()
-            .data_mut(|d| d.insert_temp(self.reveal_id(), key.clone()));
-        Some(NavigationResult {
-            key,
-            expansion_changed: changed,
-        })
+            .data_mut(|d| d.insert_temp(self.reveal_id(), result.key.clone()));
+        Some(result)
     }
     pub(super) fn scroll(
         &self,

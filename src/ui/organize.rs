@@ -27,6 +27,7 @@ pub(super) struct Editor {
     file_anchor: Option<MediaId>,
     reveal_file: bool,
     selected_folders: std::collections::BTreeSet<String>,
+    folder_anchor: Option<String>,
     drag_owner: Arc<()>,
     completed_drag: Option<CompletedDrag>,
     drag: pointer::DragTracker,
@@ -176,6 +177,7 @@ impl Editor {
             anchor: self.file_anchor,
             selected,
             folders: self.selected_folders.iter().cloned().collect(),
+            folder_anchor: self.folder_anchor.clone(),
             folder: self.folder.clone(),
             photo_scroll: self.photo_scroll,
             folder_scroll: self.folder_scroll,
@@ -202,6 +204,11 @@ impl Editor {
             .filter(|path| folders.contains(path.as_str()))
             .cloned()
             .collect();
+        self.folder_anchor = view
+            .folder_anchor
+            .as_ref()
+            .filter(|path| folders.contains(path.as_str()))
+            .cloned();
         if folders.contains(view.folder.as_str()) {
             self.folder = view.folder.clone();
         }
@@ -272,6 +279,10 @@ impl Editor {
         }
     }
     fn refresh(&mut self) {
+        self.folder_anchor = self
+            .folder_anchor
+            .take()
+            .filter(|p| self.draft.folders().contains(p));
         let mut counts = HashMap::<String, usize>::new();
         for row in &mut self.rows {
             row.after = self
@@ -318,6 +329,7 @@ impl Editor {
         if !self.selected_folders.contains(path) {
             self.selected_folders.clear();
             self.selected_folders.insert(path.into());
+            self.folder_anchor = Some(path.into());
         }
         FolderDrag {
             owner: self.drag_owner.clone(),
@@ -714,17 +726,42 @@ impl Editor {
         )
         .inner
     }
-    fn select_folder(&mut self, path: &str, toggle: bool) {
-        if toggle {
-            if !self.selected_folders.remove(path) && !path.is_empty() {
-                self.selected_folders.insert(path.into());
-            }
-        } else {
-            self.selected_folders.clear();
-            if !path.is_empty() {
-                self.selected_folders.insert(path.into());
-            }
-        }
+    fn select_folder(&mut self, path: &str, toggle: bool, extend: bool) {
+        let position = |path: &str| {
+            self.tree
+                .lookup
+                .get(&Key::Folder(path.into()))
+                .and_then(|i| self.visible_folders.binary_search(i).ok())
+        };
+        let Some(target) = position(path) else {
+            return;
+        };
+        let anchor = self
+            .folder_anchor
+            .as_deref()
+            .or_else(|| extend.then_some(self.folder.as_str()))
+            .and_then(position);
+        let start = crate::core::selection::select_positions(
+            &mut self.selected_folders,
+            anchor,
+            target,
+            |range| {
+                self.visible_folders[range]
+                    .iter()
+                    .filter_map(|&i| match &self.tree.nodes[i].key {
+                        Key::Folder(path) if !path.as_os_str().is_empty() => {
+                            Some(path.to_string_lossy().replace('\\', "/"))
+                        }
+                        _ => None,
+                    })
+            },
+            toggle,
+            extend,
+        );
+        let Key::Folder(anchor) = &self.tree.nodes[self.visible_folders[start]].key else {
+            unreachable!()
+        };
+        self.folder_anchor = Some(anchor.to_string_lossy().replace('\\', "/"));
         self.folder = path.into();
         self.name = path.rsplit('/').next().unwrap_or_default().into();
     }
@@ -744,17 +781,28 @@ impl Editor {
         let row_height = button_row_height(ui);
         let max_height = (height - 210.0).max(75.0);
         let keyboard = tree_controls::Keyboard::new(ui, "organize_folders", max_height, row_height);
-        if let Some(result) = keyboard.navigate(
-            ui,
-            &self.tree,
-            Some(&Key::Folder(self.folder.clone().into())),
-            &mut self.collapsed,
-        ) {
-            if let Key::Folder(path) = result.key {
-                self.select_folder(&path.to_string_lossy().replace('\\', "/"), false);
-            }
-            if result.expansion_changed {
-                self.project_folders();
+        for (navigation, modifiers) in keyboard.navigation_events(ui, true) {
+            let current = Key::Folder(self.folder.clone().into());
+            if let Some(result) = keyboard.navigate_once(
+                ui,
+                &self.tree,
+                Some(&current),
+                navigation,
+                &mut self.collapsed,
+            ) {
+                if result.expansion_changed {
+                    self.project_folders();
+                }
+                // Expanding the current branch does not replace a prepared selection.
+                if !(result.expansion_changed && result.key == current)
+                    && let Key::Folder(path) = result.key
+                {
+                    self.select_folder(
+                        &path.to_string_lossy().replace('\\', "/"),
+                        modifiers.command || modifiers.ctrl,
+                        modifiers.shift,
+                    );
+                }
             }
         }
         let scroll = keyboard.scroll(ui, scroll, &self.tree, &self.visible_folders, true);
@@ -772,9 +820,12 @@ impl Editor {
                         ui.horizontal(|ui| {
                             ui.add_space((depth as f32 * 12.0).min(96.0));
                             expansion_changed |= tree_controls::expander(ui, &self.tree, i, &mut self.collapsed, &keyboard);
-                            let response = ui.add_sized([ui.available_width(), row_height], egui::Button::selectable(self.folder == path || self.selected_folders.contains(&path), format!("{} · {count}", folder_title(&path)))
+                            let response = ui.add_sized([ui.available_width(), row_height], egui::Button::selectable(self.selected_folders.contains(&path), format!("{} · {count}", folder_title(&path)))
                                 .truncate().sense(tree_controls::pointer_sense(true)));
                             keyboard.focus_on_click(&response);
+                            if self.folder == path {
+                                ui.painter().rect_stroke(response.rect, 2., ui.visuals().selection.stroke, StrokeKind::Inside);
+                            }
                             #[cfg(test)]
                             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("test_folder_rect", &path)), response.rect));
                             response.context_menu(|ui| {
@@ -793,14 +844,15 @@ impl Editor {
                                 }
                             });
                             if response.clicked() {
-                                self.select_folder(&path, ui.input(|i| i.modifiers.command || i.modifiers.ctrl));
+                                let modifiers = ui.input(|i| i.modifiers);
+                                self.select_folder(&path, modifiers.command || modifiers.ctrl, modifiers.shift);
                             }
                             if !path.is_empty() && self.starts_drag(ui, &response) {
                                 egui::DragAndDrop::set_payload(ui.ctx(), self.folder_drag(&path));
                             }
                             self.track_completed_drag(ui, &response, None, &path);
                             if let Some(drop) = self.drop_target(ui, &response, &path) { command = Some(drop); }
-                            response.on_hover_text("Counts include subfolders. Drop files here, or drag folders to nest them. Ctrl/Command-click selects multiple folders. Use the arrow or context menu to expand/collapse.");
+                            response.on_hover_text("Counts include subfolders. Drop files here, or drag folders to nest them. Shift-click or Shift with Up/Down, Home/End or Page keys selects a visible range; Ctrl/Command adds to it. Use the arrow or context menu to expand/collapse.");
                         });
                     });
                 }
@@ -1141,6 +1193,7 @@ impl PhotoSortApp {
             file_anchor: None,
             reveal_file: false,
             selected_folders: Default::default(),
+            folder_anchor: None,
             drag_owner: Arc::new(()),
             completed_drag: None,
             drag: Default::default(),
@@ -1283,6 +1336,7 @@ impl PhotoSortApp {
                 editor.renaming = None;
                 editor.error = None;
                 editor.selected_folders.clear();
+                editor.folder_anchor = None;
                 editor.collapsed.clear();
                 editor.refresh();
                 self.organize_editor = Some(editor);
@@ -1573,6 +1627,217 @@ mod tests {
             assert_eq!(app.stats.metadata_reads, 0);
         }
     }
+    #[test]
+    fn folder_ranges_pointer_keyboard_and_resume_use_visible_order_without_image_work() {
+        for width in [640., 1200.] {
+            let mut app = app();
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_mut().unwrap();
+            for path in ["A", "A/B", "A/B/C", "A-1", "B", "C"] {
+                let (parent, leaf) = path.rsplit_once('/').unwrap_or(("", path));
+                editor.draft.create_folder(parent, leaf).unwrap();
+            }
+            editor.refresh();
+            editor.collapsed.insert(Key::Folder("A".into()));
+            editor.project_folders();
+            editor.compact_folders = true;
+            editor.selected.insert(MediaId(1));
+            let labels = editor.draft.labels().clone();
+            let tree = editor.tree.nodes.as_ptr();
+            let projection = editor.visible_folders.as_ptr();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let frame = |app: &mut PhotoSortApp, events, modifiers| {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.),
+                        )),
+                        events,
+                        modifiers,
+                        ..Default::default()
+                    },
+                    |ctx| app.organize_dialog(ctx),
+                );
+            };
+            let click = |app: &mut PhotoSortApp, path: &str, modifiers: egui::Modifiers| {
+                let rect = ctx
+                    .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_folder_rect", path))))
+                    .unwrap();
+                let mut events = tree_controls::tests::click(rect.center());
+                for event in &mut events {
+                    if let egui::Event::PointerButton { modifiers: m, .. } = event {
+                        *m = modifiers;
+                    }
+                }
+                frame(app, events, modifiers);
+            };
+            let key = |key, modifiers| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
+            let shift = egui::Modifiers::SHIFT;
+            let command = egui::Modifiers::COMMAND;
+            let additive = egui::Modifiers {
+                shift: true,
+                command: true,
+                ..Default::default()
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![], egui::Modifiers::NONE);
+            }
+            click(&mut app, "A", egui::Modifiers::NONE);
+            click(&mut app, "C", shift);
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected_folders,
+                ["A", "A-1", "B", "C"].map(String::from).into()
+            );
+            assert_eq!(
+                app.organize_editor
+                    .as_ref()
+                    .unwrap()
+                    .folder_anchor
+                    .as_deref(),
+                Some("A")
+            );
+            click(&mut app, "A", egui::Modifiers::NONE);
+            frame(
+                &mut app,
+                vec![
+                    key(egui::Key::ArrowDown, shift),
+                    key(egui::Key::ArrowDown, shift),
+                ],
+                shift,
+            );
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected_folders,
+                ["A", "A-1", "B"].map(String::from).into()
+            );
+            frame(&mut app, vec![key(egui::Key::ArrowUp, shift)], shift);
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected_folders,
+                ["A", "A-1"].map(String::from).into()
+            );
+            click(&mut app, "C", command);
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected_folders,
+                ["A", "A-1", "C"].map(String::from).into()
+            );
+            frame(&mut app, vec![key(egui::Key::ArrowUp, additive)], additive);
+            assert_eq!(
+                app.organize_editor.as_ref().unwrap().selected_folders,
+                ["A", "A-1", "B", "C"].map(String::from).into()
+            );
+            frame(&mut app, vec![key(egui::Key::ArrowUp, shift)], shift);
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert_eq!(
+                editor.selected_folders,
+                ["A-1", "B", "C"].map(String::from).into()
+            );
+            assert_eq!(editor.folder_anchor.as_deref(), Some("C"));
+            assert_eq!(editor.tree.nodes.as_ptr(), tree);
+            assert_eq!(editor.visible_folders.as_ptr(), projection);
+            assert_eq!(editor.draft.labels(), &labels);
+            assert_eq!(editor.selected, [MediaId(1)].into());
+            let bookmark = editor.bookmark();
+            assert_eq!(
+                serde_json::from_str::<crate::core::views::EditorBookmark>(
+                    &serde_json::to_string(&bookmark).unwrap()
+                )
+                .unwrap(),
+                bookmark
+            );
+            let editor = app.organize_editor.take().unwrap();
+            app.finish_organize_edit(editor, 2);
+            app.open_organize_editor();
+            assert_eq!(
+                app.organize_editor
+                    .as_ref()
+                    .unwrap()
+                    .folder_anchor
+                    .as_deref(),
+                Some("C")
+            );
+            for _ in 0..3 {
+                frame(&mut app, vec![], egui::Modifiers::NONE);
+            }
+            frame(&mut app, vec![key(egui::Key::Home, shift)], shift);
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert_eq!(
+                editor.selected_folders,
+                ["A", "A-1", "B", "C"].map(String::from).into()
+            );
+            assert!(!editor.selected_folders.contains(""));
+            assert!(!editor.selected_folders.contains("A/B"));
+            assert!(
+                app.requested.is_empty()
+                    && app.metadata_run.is_none()
+                    && app.analysis_run.is_none()
+                    && !app.scanning
+            );
+            assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+            let editor = app.organize_editor.take().unwrap();
+            app.finish_organize_edit(editor, 4);
+            assert!(
+                app.organize_editor
+                    .as_ref()
+                    .unwrap()
+                    .folder_anchor
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn folder_ranges_reconcile_hidden_and_renamed_anchors_and_reuse_large_tree() {
+        let mut app = app();
+        app.open_organize_editor();
+        let mut editor = app.organize_editor.take().unwrap();
+        editor.draft = Draft::new(
+            (0..100_000)
+                .map(|i| (MediaId(i), format!("folder-{i:06}")))
+                .collect(),
+        );
+        editor.refresh();
+        let tree = editor.tree.nodes.as_ptr();
+        let projection = editor.visible_folders.as_ptr();
+        editor.select_folder("folder-099998", false, false);
+        editor.select_folder("folder-099999", false, true);
+        assert_eq!(
+            editor.selected_folders,
+            ["folder-099998", "folder-099999"].map(String::from).into()
+        );
+        assert_eq!(editor.tree.nodes.as_ptr(), tree);
+        assert_eq!(editor.visible_folders.as_ptr(), projection);
+        // Restore drops an obsolete path; the next range starts from current focus.
+        let mut bookmark = editor.bookmark();
+        bookmark.folder_anchor = Some("missing".into());
+        editor.restore_bookmark(&bookmark);
+        assert!(editor.folder_anchor.is_none());
+        editor.select_folder("folder-099998", false, true);
+        assert_eq!(editor.selected_folders.len(), 2);
+        // A hidden anchor is not a range through collapsed descendants.
+        editor.collapsed.insert(Key::Folder("".into()));
+        editor.project_folders();
+        editor.select_folder("", false, true);
+        assert!(editor.selected_folders.is_empty());
+        assert_eq!(editor.folder_anchor.as_deref(), Some(""));
+        editor.draft = Draft::new([(MediaId(1), "A/B".into())].into());
+        editor.refresh();
+        editor.collapsed.clear();
+        editor.project_folders();
+        editor.select_folder("A", false, false);
+        editor.name = "Renamed".into();
+        editor.apply(Command::Rename, &app.media, false);
+        assert!(editor.folder_anchor.is_none());
+        assert_eq!(editor.folder, "Renamed");
+        assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+    }
+
     #[test]
     fn tree_keyboard_organize_keeps_drafts_and_file_selection_and_reveals_virtual_rows() {
         for width in [640.0, 1200.0] {

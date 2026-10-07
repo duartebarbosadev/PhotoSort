@@ -249,6 +249,7 @@ fn destination_import_preserves_all_workflows_and_clears_source_inventory_state(
             folder: "old".into(),
             photo_scroll: 99.0,
             folder_scroll: 12.0,
+            folder_anchor: Some("old".into()),
             compact_folders: true,
             collapsed: [photosort::core::browsing::tree::Key::Folder("old".into())].into(),
             ..Default::default()
@@ -282,7 +283,10 @@ fn destination_import_preserves_all_workflows_and_clears_source_inventory_state(
         let editor = view.editor.as_ref().unwrap();
         assert_eq!(editor.selected, view.selected);
         assert!(
-            editor.folder.is_empty() && editor.folders.is_empty() && editor.collapsed.is_empty()
+            editor.folder.is_empty()
+                && editor.folders.is_empty()
+                && editor.collapsed.is_empty()
+                && editor.folder_anchor.is_none()
         );
         assert!(editor.compact_folders);
     }

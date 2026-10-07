@@ -59,6 +59,7 @@ pub struct EditorBookmark {
     pub anchor: Option<MediaId>,
     pub selected: Vec<MediaId>,
     pub folders: Vec<String>,
+    pub folder_anchor: Option<String>,
     pub folder: String,
     pub photo_scroll: f32,
     pub folder_scroll: f32,
@@ -316,6 +317,7 @@ impl Saved {
             view.scroll = 0.0;
             if let Some(editor) = &mut view.editor {
                 editor.folders.clear();
+                editor.folder_anchor = None;
                 editor.collapsed.clear();
                 editor.folder.clear();
                 editor.photo_scroll = 0.0;
