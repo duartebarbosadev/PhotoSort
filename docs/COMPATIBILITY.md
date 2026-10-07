@@ -292,3 +292,13 @@ Same-volume hard links retain their fast path. The before/after disposable probe
 and three shared regressions pass, as do the full suite, strict Clippy and rebuilt
 bundle/runtime checks. Actual cross-volume/platform execution and extended
 attributes are not claimed. See diagnostics/copy-attributes-2026-10-07/README.md.
+
+
+### Compact video review — 7 October 2026
+
+Short video review slots now use the existing compact controls, preserving
+picture space. A rendered-mesh regression covers all five workflows and texture
+reuse during resizing. Full validation and rebuilt native/runtime checks pass.
+The formerly locked native seeking check is complete on disposable macOS video
+fixtures; audio remained muted. See diagnostics/video-layout-2026-10-07/README.md
+and native-checks.json for exact interaction coverage and platform limits.
