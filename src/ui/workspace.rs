@@ -36,6 +36,8 @@ mod selection;
 mod shortcuts;
 #[path = "status.rs"]
 mod status;
+#[path = "tree_controls.rs"]
+mod tree_controls;
 #[path = "video.rs"]
 mod video;
 use super::theme::*;
@@ -1829,7 +1831,7 @@ impl PhotoSortApp {
             || self.departure.is_some()
     }
     fn keyboard(&mut self, ctx: &egui::Context) {
-        if egui::Popup::is_any_open(ctx) || self.modal_active() {
+        if egui::Popup::is_any_open(ctx) || self.navigator_popup_open(ctx) || self.modal_active() {
             return;
         }
         if self.application_shortcuts(ctx) || ctx.wants_keyboard_input() {

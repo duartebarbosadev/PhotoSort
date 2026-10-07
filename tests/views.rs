@@ -248,6 +248,7 @@ fn destination_import_preserves_all_workflows_and_clears_source_inventory_state(
             photo_scroll: 99.0,
             folder_scroll: 12.0,
             compact_folders: true,
+            collapsed: [photosort::core::browsing::tree::Key::Folder("old".into())].into(),
         });
         source.bookmarks.insert(step, view);
     }
@@ -277,7 +278,9 @@ fn destination_import_preserves_all_workflows_and_clears_source_inventory_state(
         assert_eq!(view.scroll, 0.0);
         let editor = view.editor.as_ref().unwrap();
         assert_eq!(editor.selected, view.selected);
-        assert!(editor.folder.is_empty() && editor.folders.is_empty());
+        assert!(
+            editor.folder.is_empty() && editor.folders.is_empty() && editor.collapsed.is_empty()
+        );
         assert!(editor.compact_folders);
     }
     destination.save(dir.path()).unwrap();

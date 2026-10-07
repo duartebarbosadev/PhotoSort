@@ -300,7 +300,21 @@ fn compact_navigator_selects_scope_and_metadata_cancel_stays_outside_filters() {
         app.browse.folder.path,
         Some(app.root.as_ref().unwrap().join("A"))
     );
-    egui::Popup::close_all(&ctx);
+    // Dismiss through the public UI: the browser and its nested context menu
+    // deliberately have independent popup owners.
+    frame(
+        &mut app,
+        &ctx,
+        size,
+        vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }],
+    );
+    assert!(!app.navigator_popup_open(&ctx));
     app.metadata_run = Some(73);
     app.metadata_progress = Some((1, 9));
     let nodes = rendered(&mut app, &ctx, size);

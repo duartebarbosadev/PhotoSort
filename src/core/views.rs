@@ -61,6 +61,7 @@ pub struct EditorBookmark {
     pub photo_scroll: f32,
     pub folder_scroll: f32,
     pub compact_folders: bool,
+    pub collapsed: std::collections::BTreeSet<browsing::tree::Key>,
 }
 impl Default for Bookmark {
     fn default() -> Self {
@@ -296,6 +297,7 @@ impl Saved {
             view.scroll = 0.0;
             if let Some(editor) = &mut view.editor {
                 editor.folders.clear();
+                editor.collapsed.clear();
                 editor.folder.clear();
                 editor.photo_scroll = 0.0;
                 editor.folder_scroll = 0.0;

@@ -52,6 +52,13 @@ impl Node {
         self.end > index + 1
     }
 }
+/// How an explicit expansion command affects an existing branch.
+#[derive(Clone, Copy)]
+pub enum Expansion {
+    Node,
+    Subtree,
+    Children,
+}
 #[derive(Default)]
 pub struct Tree {
     pub nodes: Vec<Node>,
@@ -101,7 +108,81 @@ impl Tree {
         }
         (!cancelled()).then_some(self)
     }
-    pub fn project(self: &Arc<Self>, state: &State, cancelled: impl Fn() -> bool) -> Option<View> {
+    /// Build proposed or actual folders without filesystem access. Path-component
+    /// ordering keeps descendants contiguous even beside names such as A-1.
+    pub fn folders(
+        folders: impl IntoIterator<Item = (PathBuf, String, usize)>,
+        cancelled: impl Fn() -> bool,
+    ) -> Option<Self> {
+        let mut sorted = BTreeMap::new();
+        for (i, (path, label, count)) in folders.into_iter().enumerate() {
+            if i % 256 == 0 && cancelled() {
+                return None;
+            }
+            sorted.insert(path, (label, count));
+        }
+        let mut tree = Self::default();
+        for (i, (path, (label, count))) in sorted.into_iter().enumerate() {
+            if i % 256 == 0 && cancelled() {
+                return None;
+            }
+            let parent = path
+                .parent()
+                .and_then(|p| tree.lookup.get(&Key::Folder(p.into())))
+                .copied();
+            tree.push(Key::Folder(path), label, count, parent);
+        }
+        tree.finish(&cancelled)
+    }
+    pub fn set_expanded(
+        &self,
+        key: &Key,
+        scope: Expansion,
+        expanded: bool,
+        collapsed: &mut BTreeSet<Key>,
+    ) -> bool {
+        let Some(&index) = self.lookup.get(key) else {
+            return false;
+        };
+        let range = match scope {
+            Expansion::Node => index..index + 1,
+            Expansion::Subtree => index..self.nodes[index].end,
+            Expansion::Children => index + 1..self.nodes[index].end,
+        };
+        let mut changed = false;
+        for i in range {
+            let node = &self.nodes[i];
+            if node.expandable(i) {
+                changed |= if expanded {
+                    collapsed.remove(&node.key)
+                } else {
+                    collapsed.insert(node.key.clone())
+                };
+            }
+        }
+        changed
+    }
+    pub fn retain_branches(&self, collapsed: &mut BTreeSet<Key>) {
+        collapsed.retain(|key| {
+            self.lookup
+                .get(key)
+                .is_some_and(|&i| self.nodes[i].expandable(i))
+        });
+    }
+    /// Reveal the selected destination after a structural edit, without losing
+    /// independent collapsed branches or changing the selection itself.
+    pub fn reveal(&self, key: &Key, collapsed: &mut BTreeSet<Key>) {
+        let mut parent = self.lookup.get(key).and_then(|&i| self.nodes[i].parent);
+        while let Some(i) = parent {
+            collapsed.remove(&self.nodes[i].key);
+            parent = self.nodes[i].parent;
+        }
+    }
+    pub fn visible(
+        &self,
+        collapsed: &BTreeSet<Key>,
+        cancelled: impl Fn() -> bool,
+    ) -> Option<Vec<usize>> {
         let mut visible = Vec::new();
         let mut index = 0;
         while index < self.nodes.len() {
@@ -110,12 +191,16 @@ impl Tree {
             }
             visible.push(index);
             let node = &self.nodes[index];
-            index = if state.collapsed.contains(&node.key) {
+            index = if collapsed.contains(&node.key) {
                 node.end
             } else {
                 index + 1
             };
         }
+        Some(visible)
+    }
+    pub fn project(self: &Arc<Self>, state: &State, cancelled: impl Fn() -> bool) -> Option<View> {
+        let visible = self.visible(&state.collapsed, cancelled)?;
         Some(View {
             mode: state.mode,
             tree: self.clone(),
@@ -151,28 +236,27 @@ pub fn build<'a>(
     let mut tree = Tree::default();
     match mode {
         Mode::Folders => {
-            for (i, folder) in folders.iter().enumerate() {
-                if i % 256 == 0 && cancelled() {
-                    return None;
-                }
-                let key = Key::Folder(folder.path.clone());
-                let parent = folder
-                    .path
-                    .parent()
-                    .and_then(|p| tree.lookup.get(&Key::Folder(p.to_owned())))
-                    .copied();
-                let label = if parent.is_none() {
-                    folder.label.clone()
-                } else {
-                    folder
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
-                };
-                tree.push(key.clone(), label, counts.remove(&key).unwrap_or(0), parent);
-            }
+            return Tree::folders(
+                folders.iter().map(|folder| {
+                    let key = Key::Folder(folder.path.clone());
+                    let label = if folder.path.parent().is_some_and(|parent| {
+                        folders
+                            .first()
+                            .is_some_and(|root| parent.starts_with(&root.path))
+                    }) {
+                        folder
+                            .path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    } else {
+                        folder.label.clone()
+                    };
+                    (folder.path.clone(), label, counts.remove(&key).unwrap_or(0))
+                }),
+                cancelled,
+            );
         }
         Mode::Dates => {
             let mut dates = BTreeSet::new();
@@ -232,4 +316,86 @@ pub fn date_matches(scope: Option<&str>, date: Option<&str>) -> bool {
             })
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn key(path: &str) -> Key {
+        Key::Folder(path.into())
+    }
+    #[test]
+    fn folder_expansion_scopes_preserve_siblings_counts_and_selection_visibility() {
+        let tree = Tree::folders(
+            [
+                ("", 0),
+                ("A-1", 1),
+                ("A/B/C", 2),
+                ("A", 0),
+                ("A/B", 3),
+                ("A/D", 4),
+                ("Z", 5),
+            ]
+            .into_iter()
+            .map(|(p, n)| (p.into(), p.into(), n)),
+            || false,
+        )
+        .unwrap();
+        let names = |visible: Vec<usize>| {
+            visible
+                .into_iter()
+                .map(|i| tree.nodes[i].key.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut collapsed = BTreeSet::new();
+        assert_eq!(
+            names(tree.visible(&collapsed, || false).unwrap()),
+            ["", "A", "A/B", "A/B/C", "A/D", "A-1", "Z"].map(key)
+        );
+        assert_eq!(tree.nodes[0].count, 15);
+        assert_eq!(tree.nodes[tree.lookup[&key("A")]].count, 9);
+        assert!(tree.set_expanded(&key("A"), Expansion::Children, false, &mut collapsed));
+        assert_eq!(collapsed, [key("A/B")].into());
+        assert!(tree.set_expanded(&key("A"), Expansion::Node, false, &mut collapsed));
+        assert_eq!(
+            names(tree.visible(&collapsed, || false).unwrap()),
+            ["", "A", "A-1", "Z"].map(key)
+        );
+        assert!(tree.set_expanded(&key("A"), Expansion::Node, true, &mut collapsed));
+        assert_eq!(
+            names(tree.visible(&collapsed, || false).unwrap()),
+            ["", "A", "A/B", "A/D", "A-1", "Z"].map(key)
+        );
+        assert!(tree.set_expanded(&key("A"), Expansion::Subtree, true, &mut collapsed));
+        tree.set_expanded(&key(""), Expansion::Subtree, false, &mut collapsed);
+        assert_eq!(tree.visible(&collapsed, || false).unwrap(), vec![0]);
+        tree.reveal(&key("A/B/C"), &mut collapsed);
+        assert!(collapsed.is_empty());
+        collapsed.extend([key("A/D"), key("gone"), Key::Date("2026".into())]);
+        tree.retain_branches(&mut collapsed);
+        assert!(collapsed.is_empty());
+        assert!(!tree.set_expanded(&key("gone"), Expansion::Subtree, false, &mut collapsed));
+    }
+    #[test]
+    fn folder_expansion_large_tree_reuses_projection_and_honors_cancellation() {
+        let folders = || {
+            std::iter::once((PathBuf::new(), "Library".into(), 0)).chain(
+                (0..100_000).map(|i| (format!("Folder-{i:06}").into(), format!("Folder {i}"), 1)),
+            )
+        };
+        assert!(Tree::folders(folders(), || true).is_none());
+        let tree = Arc::new(Tree::folders(folders(), || false).unwrap());
+        let mut state = State::default();
+        tree.set_expanded(&key(""), Expansion::Subtree, false, &mut state.collapsed);
+        let view = tree.project(&state, || false).unwrap();
+        assert!(Arc::ptr_eq(&tree, &view.tree));
+        assert_eq!(view.visible, vec![0]);
+        assert_eq!(tree.nodes[0].count, 100_000);
+        assert!(tree.project(&state, || true).is_none());
+        tree.set_expanded(&key(""), Expansion::Subtree, true, &mut state.collapsed);
+        assert_eq!(
+            tree.project(&state, || false).unwrap().visible.len(),
+            100_001
+        );
+    }
 }

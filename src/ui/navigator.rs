@@ -49,11 +49,25 @@ impl PhotoSortApp {
             }
         }
     }
+    fn navigator_popup_id(&self) -> egui::Id {
+        egui::Id::new(("navigator_popup_open", &self.root))
+    }
+    pub(super) fn navigator_popup_open(&self, ctx: &egui::Context) -> bool {
+        ctx.data(|data| data.get_temp::<(bool, u64)>(self.navigator_popup_id()))
+            .is_some_and(|(open, frame)| {
+                open && frame.saturating_add(1) >= ctx.cumulative_frame_nr()
+            })
+    }
     pub(super) fn navigator_panel(&mut self, ui: &mut egui::Ui) {
+        let popup_state = self.navigator_popup_id();
         if self.step != Step::Cull || !self.navigator.enabled || self.review {
+            ui.ctx()
+                .data_mut(|data| data.remove::<(bool, u64)>(popup_state));
             return;
         }
         if ui.available_width() >= 780. {
+            ui.ctx()
+                .data_mut(|data| data.remove::<(bool, u64)>(popup_state));
             egui::SidePanel::left("library_tree_panel")
                 .resizable(true)
                 .default_width(220.)
@@ -79,13 +93,23 @@ impl PhotoSortApp {
             #[cfg(test)]
             ui.ctx()
                 .data_mut(|d| d.insert_temp(egui::Id::new("test_navigator_toggle"), response.rect));
-            egui::Popup::from_toggle_button_response(&response)
+            // Context menus use egui's single memory-owned popup slot. Keep
+            // this enclosing browser independently open so they cannot evict it.
+            let mut open = self.navigator_popup_open(ui.ctx());
+            if response.clicked() {
+                open = !open;
+            }
+            egui::Popup::from_response(&response)
+                .open_bool(&mut open)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .width(width)
                 .show(|ui| {
                     ui.set_width(width);
                     self.navigator_contents(ui, height);
                 });
+            let frame = ui.ctx().cumulative_frame_nr();
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(popup_state, (open, frame)));
             ui.add_space(4.);
         }
     }
@@ -179,26 +203,13 @@ impl PhotoSortApp {
                         let node = &view.tree.nodes[i];
                         ui.horizontal(|ui| {
                             ui.add_space((node.depth.min(12) * 12) as f32);
-                            if node.expandable(i) {
-                                let collapsed = self.navigator.collapsed.contains(&node.key);
-                                if ui
-                                    .add_sized(
-                                        [18., 22.],
-                                        egui::Button::new(if collapsed { ">" } else { "⌄" })
-                                            .frame(false),
-                                    )
-                                    .on_hover_text(if collapsed { "Expand" } else { "Collapse" })
-                                    .clicked()
-                                {
-                                    if collapsed {
-                                        self.navigator.collapsed.remove(&node.key);
-                                    } else {
-                                        self.navigator.collapsed.insert(node.key.clone());
-                                    }
-                                    self.navigator_changed();
-                                }
-                            } else {
-                                ui.add_space(22.);
+                            if tree_controls::expander(
+                                ui,
+                                &view.tree,
+                                i,
+                                &mut self.navigator.collapsed,
+                            ) {
+                                self.navigator_changed();
                             }
                             let label = format!("{}  ·  {}", node.label, node.count);
                             let response = ui.add_sized(
@@ -209,6 +220,23 @@ impl PhotoSortApp {
                                 )
                                 .truncate(),
                             );
+                            #[cfg(test)]
+                            ui.ctx().data_mut(|d| {
+                                d.insert_temp(
+                                    egui::Id::new(("test_navigator_node", &node.key)),
+                                    response.rect,
+                                )
+                            });
+                            response.context_menu(|ui| {
+                                if tree_controls::menu(
+                                    ui,
+                                    &view.tree,
+                                    i,
+                                    &mut self.navigator.collapsed,
+                                ) {
+                                    self.navigator_changed();
+                                }
+                            });
                             if response
                                 .on_hover_text(match &node.key {
                                     Key::Folder(p) => p.display().to_string(),
@@ -259,6 +287,136 @@ mod tests {
             }
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    #[test]
+    fn folder_expansion_navigator_context_menu_survives_compact_popup() {
+        for width in [640.0, 1200.0] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(root.path().join("A/B/C")).unwrap();
+            std::fs::create_dir(root.path().join("A-1")).unwrap();
+            std::fs::write(root.path().join("photo.jpg"), b"not decoded").unwrap();
+            let catalog = Arc::new(Catalog::scan(root.path(), || false, |_| {}).unwrap());
+            let library = catalog.root.clone();
+            let key = Key::Folder(library.join("A"));
+            let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+            app.root = Some(library);
+            app.step = Step::Cull;
+            app.media = catalog.media.clone();
+            app.index = app
+                .media
+                .iter()
+                .enumerate()
+                .map(|(i, m)| (m.id, i))
+                .collect();
+            app.active = Some(app.media[0].id);
+            app.catalog = Some(catalog);
+            app.set_navigator(Mode::Folders, true);
+            settle(&mut app);
+            let tree = app.browse_tree.as_ref().unwrap().tree.clone();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            ctx.enable_accesskit();
+            let frame = |app: &mut PhotoSortApp, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.keyboard(ctx);
+                        egui::CentralPanel::default().show(ctx, |ui| app.navigator_panel(ui));
+                    },
+                )
+            };
+            let click = |pos, button| {
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    egui::Event::PointerButton {
+                        pos,
+                        button,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ]
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            if width < 780.0 {
+                let rect = ctx
+                    .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("test_navigator_toggle")))
+                    .unwrap();
+                frame(&mut app, click(rect.center(), egui::PointerButton::Primary));
+                for _ in 0..3 {
+                    frame(&mut app, vec![]);
+                }
+                assert!(app.navigator_popup_open(&ctx));
+                frame(
+                    &mut app,
+                    vec![egui::Event::Key {
+                        key: egui::Key::D,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    }],
+                );
+                assert!(
+                    app.decisions.is_empty(),
+                    "Photo shortcuts must not run under the navigator"
+                );
+            }
+            let rect = ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_navigator_node", &key))))
+                .unwrap();
+            frame(
+                &mut app,
+                click(rect.center(), egui::PointerButton::Secondary),
+            );
+            // A context menu must not evict its containing tree popup from egui memory.
+            let output = frame(&mut app, vec![]);
+            let update = output.platform_output.accesskit_update.unwrap();
+            let node = update
+                .nodes
+                .iter()
+                .find(|(_, n)| n.label() == Some("Collapse subtree"))
+                .unwrap_or_else(|| panic!("Context menu disappeared at width {width}"));
+            let bounds = node.1.bounds().unwrap();
+            frame(
+                &mut app,
+                click(
+                    egui::pos2(
+                        ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                        ((bounds.y0 + bounds.y1) / 2.0) as f32,
+                    ),
+                    egui::PointerButton::Primary,
+                ),
+            );
+            settle(&mut app);
+            assert!(app.navigator.collapsed.contains(&key));
+            assert_eq!(app.filtered, vec![0]);
+            assert!(Arc::ptr_eq(&tree, &app.browse_tree.as_ref().unwrap().tree));
+            assert!(app.decisions.is_empty() && app.plan.is_none() && app.requested.is_empty());
+            assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+            if width < 780.0 {
+                app.review = true;
+                frame(&mut app, vec![]);
+                assert!(
+                    !app.navigator_popup_open(&ctx),
+                    "Leaving the navigator must dismiss its popup"
+                );
+            }
         }
     }
     #[test]
