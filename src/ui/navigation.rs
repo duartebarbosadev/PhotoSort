@@ -162,6 +162,9 @@ impl PhotoSortApp {
 
     pub(super) fn set_group_mode(&mut self, mode: GroupMode) {
         if self.group_mode != mode {
+            // An explicit choice supersedes deferred view restoration, whether
+            // it came from the dropdown or the workflow's mode shortcuts.
+            self.pending_bookmark = None;
             let was_metadata = self.metadata_organize_mode();
             self.group_mode = mode;
             self.organize_preview_requested = false;

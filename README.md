@@ -30,7 +30,7 @@ open ".tools/native-vips/PhotoSort Rust.app"
 
 The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
 bundle's source/executable hashes, full test results and native interaction checks
-are recorded in [the current validation report](docs/diagnostics/review-space-2026-10-09/README.md).
+are recorded in [the current validation report](docs/diagnostics/organize-modes-2026-10-09/README.md).
 The [completion audit](docs/COMPLETION_AUDIT.md) separates covered workflows,
 intentional redesigns and remaining work. These checks cover this macOS development
 build; they do not establish Windows, CUDA or DirectML runtime readiness.
@@ -145,7 +145,9 @@ Ctrl/Cmd+F focuses its search field (outside Pick Best), and F12 opens About.
 Ctrl/Cmd+S runs the active workflow's analysis, or orientation detection in Fix
 Rotation. It uses the same controls and review guards as the buttons; additional
 presses leave an active analysis running. Use Cancel analysis to stop it.
-In Cull, Alt+1/2/3 selects list/icons/grid; F and S toggle the folder and
+In Organize, Alt+1–5 selects Current folders, Date + similarity, Visual similarity,
+Faces and Location through the same Group by control. Changing mode does not start
+AI or apply files. In Cull, Alt+1/2/3 selects list/icons/grid; F and S toggle the folder and
 similarity-group navigator. Text fields keep ordinary typing and selection keys;
 modal dialogs and active file work keep keyboard ownership. The keyboard guide
 scrolls in small windows. Cull navigation settings can jump

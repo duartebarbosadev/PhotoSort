@@ -85,7 +85,26 @@ impl PhotoSortApp {
         self.pending_bookmark = None;
     }
     pub(super) fn view_shortcut(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> bool {
-        if self.step != Step::Cull || modifiers.command || modifiers.ctrl || modifiers.shift {
+        if modifiers.command || modifiers.ctrl || modifiers.shift {
+            return false;
+        }
+        if self.step == Step::Organize && modifiers.alt {
+            // Retain the workflow's established keys, independently of the
+            // additional Date/Camera choices and their dropdown order.
+            let mode = match key {
+                egui::Key::Num1 => GroupMode::Current,
+                egui::Key::Num2 => GroupMode::Mixed,
+                egui::Key::Num3 => GroupMode::Visual,
+                egui::Key::Num4 => GroupMode::Faces,
+                egui::Key::Num5 => GroupMode::Location,
+                _ => return false,
+            };
+            if self.root.is_some() {
+                self.set_group_mode(mode);
+            }
+            return true;
+        }
+        if self.step != Step::Cull {
             return false;
         }
         if modifiers.alt {
@@ -181,6 +200,184 @@ mod tests {
         );
         assert_eq!(application_key(egui::Key::O, egui::Modifiers::NONE), None);
     }
+    #[test]
+    fn organize_mode_keys_share_toolbar_state_without_repeating_expensive_work() {
+        for width in [640.0, 1440.0] {
+            let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+            app.step = Step::Organize;
+            app.navigator.enabled = false;
+            let catalog = app.catalog.clone().unwrap();
+            let active = app.media[0].id;
+            app.active = Some(active);
+            app.decisions.insert(
+                active,
+                Decision {
+                    rating: Some(4),
+                    ..Default::default()
+                },
+            );
+            let draft =
+                crate::core::organize::Draft::new(HashMap::from([(active, "Chosen".into())]));
+            app.organize_drafts
+                .insert(GroupMode::Current, draft.clone());
+            app.analysis_run = Some(77);
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            for (key, expected) in [
+                (egui::Key::Num2, GroupMode::Mixed),
+                (egui::Key::Num3, GroupMode::Visual),
+                (egui::Key::Num4, GroupMode::Faces),
+                (egui::Key::Num5, GroupMode::Location),
+                (egui::Key::Num1, GroupMode::Current),
+            ] {
+                app.pending_bookmark = Some(Default::default());
+                let mut events = input(&[(key, egui::Modifiers::ALT)]);
+                events.screen_rect = Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 900.0),
+                ));
+                let out = ctx.run(events, |ctx| {
+                    app.keyboard(ctx);
+                    egui::CentralPanel::default().show(ctx, |ui| app.toolbar(ui));
+                });
+                assert_eq!(app.group_mode, expected);
+                assert!(app.pending_bookmark.is_none());
+                assert!(
+                    out.platform_output
+                        .accesskit_update
+                        .unwrap()
+                        .nodes
+                        .iter()
+                        .any(|(_, n)| n.label() == Some(expected.title())
+                            || n.value() == Some(expected.title()))
+                );
+                assert_eq!(app.organize_drafts[&GroupMode::Current], draft);
+                assert_eq!(app.active, Some(active));
+                assert_eq!(app.decisions[&active].rating, Some(4));
+                assert_eq!(app.analysis_run, Some(77));
+                assert!(
+                    app.plan.is_none() && app.requested.is_empty() && app.metadata_run.is_none()
+                );
+                assert_eq!(app.stats.decodes, 0);
+                assert_eq!(app.stats.metadata_reads, 0);
+                assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));
+            }
+            app.runtime.shutdown();
+        }
+    }
+
+    #[test]
+    fn organize_mode_location_reuses_one_metadata_run_and_cached_results() {
+        let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+        app.step = Step::Organize;
+        app.metadata.clear();
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            let _ = ctx.run(input(&[(egui::Key::Num5, egui::Modifiers::ALT)]), |ctx| {
+                app.keyboard(ctx)
+            });
+            assert_eq!(app.group_mode, GroupMode::Location);
+            let run = app.metadata_run.unwrap();
+            assert!(app.view_shortcut(egui::Key::Num5, egui::Modifiers::ALT));
+            assert_eq!(app.metadata_run, Some(run));
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.metadata_run.is_some() {
+            app.poll(&ctx);
+            assert!(Instant::now() < deadline, "Metadata did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(app.stats.metadata_reads, 9);
+        app.view_shortcut(egui::Key::Num1, egui::Modifiers::ALT);
+        app.view_shortcut(egui::Key::Num5, egui::Modifiers::ALT);
+        assert!(app.metadata_run.is_none());
+        assert_eq!(app.stats.metadata_reads, 9);
+        assert_eq!(app.stats.decodes, 0);
+        assert!(app.analysis_run.is_none() && app.analysis.is_empty() && app.plan.is_none());
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
+        for blocker in ["text", "editor", "help", "busy", "plan", "welcome"] {
+            let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+            app.step = Step::Organize;
+            let ctx = egui::Context::default();
+            let field = egui::Id::new("mode_shortcut_text");
+            let mut text = String::new();
+            match blocker {
+                "text" => {
+                    let _ = ctx.run(input(&[]), |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            ui.add(egui::TextEdit::singleline(&mut text).id(field))
+                                .request_focus();
+                        });
+                    });
+                }
+                "editor" => {
+                    app.open_organize_editor();
+                    assert!(app.organize_editor.is_some());
+                }
+                "help" => app.help = true,
+                "busy" => app.busy = true,
+                "plan" => app.plan_open = true,
+                "welcome" => app.root = None,
+                _ => unreachable!(),
+            }
+            let _ = ctx.run(input(&[(egui::Key::Num3, egui::Modifiers::ALT)]), |ctx| {
+                app.keyboard(ctx)
+            });
+            assert_eq!(app.group_mode, GroupMode::Current, "{blocker}");
+            assert!(app.analysis_run.is_none() && app.metadata_run.is_none());
+            app.runtime.shutdown();
+        }
+        for step in Step::ALL {
+            for modifiers in [
+                egui::Modifiers::ALT,
+                egui::Modifiers {
+                    shift: true,
+                    alt: true,
+                    ..Default::default()
+                },
+            ] {
+                let mut app = app(step);
+                app.group_mode = GroupMode::Camera;
+                let ctx = egui::Context::default();
+                let _ = ctx.run(input(&[(egui::Key::Num4, modifiers)]), |ctx| {
+                    app.keyboard(ctx)
+                });
+                assert_eq!(
+                    app.group_mode,
+                    if step == Step::Organize && !modifiers.shift {
+                        GroupMode::Faces
+                    } else {
+                        GroupMode::Camera
+                    }
+                );
+                assert!(app.decisions.is_empty());
+                app.runtime.shutdown();
+            }
+        }
+        for command in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
+            let mut app = app(Step::Organize);
+            let ctx = egui::Context::default();
+            let _ = ctx.run(
+                input(&[(
+                    egui::Key::Num5,
+                    egui::Modifiers {
+                        alt: true,
+                        ..command
+                    },
+                )]),
+                |ctx| app.keyboard(ctx),
+            );
+            assert_eq!(app.step, Step::Cull);
+            assert_eq!(app.group_mode, GroupMode::Current);
+            assert!(app.decisions.is_empty());
+            app.runtime.shutdown();
+        }
+    }
+
     #[test]
     fn view_keys_share_actions_and_never_become_ratings_or_guided_choices() {
         for step in Step::ALL {

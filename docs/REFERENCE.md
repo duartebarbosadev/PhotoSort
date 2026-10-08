@@ -182,9 +182,11 @@ policy; it does not prove that every camera variant or video codec decodes.
 
 Organize installs Alt+1–5 for Current, Mixed, Similarity, Face and Location; the
 handlers select enabled mode buttons and emit the existing mode-change signal.
-Rust currently exposes all those modes through its Group by control, but its
-`view_shortcut` handles Alt+number only in Cull and the general keyboard path
-discards the remaining Alt+number keys. This is a confirmed keyboard gap.
+The audit at `b37d86b` confirmed that Rust exposed all those modes through its
+Group by control, but ignored the Organize Alt+number bindings. The subsequent
+Organize mode task routes those keys through `set_group_mode`, retaining draft
+and metadata ownership. The additional Date/Camera dropdown choices do not change
+the established shortcut mapping. See diagnostics/organize-modes-2026-10-09/README.md.
 
 Ctrl/Cmd+Shift+L in the reference hides the active workflow's content panel, not
 the five-step navigation. Rust uses a different layout: guided review queues are
