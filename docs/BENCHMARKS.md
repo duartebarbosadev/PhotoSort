@@ -1,3 +1,9 @@
+Latest real-photo comparison: [preview and thumbnail preparation, 9 October](diagnostics/review-comparison-2026-10-09/README.md).
+On the authorized samples, median initial Rust preparation was 2.35–2.76× faster
+on mixed folders and 27.26× faster on 100 RAW photos. Rendering recipes and proxy
+sizes differ; this does not establish whole-application speed. The report includes
+cache reuse, RSS ranges and the larger Rust disk-cache footprint.
+
 # File discovery comparison — 2026-09-28
 
 The Rust catalog scanner completed this synthetic 100,000-path workload in
