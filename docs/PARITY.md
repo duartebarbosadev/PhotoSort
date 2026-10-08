@@ -196,6 +196,18 @@ separate outline/fill states. The range anchor survives editor bookmarks and is
 reconciled after structure edits, reset and relocation to another library.
 See diagnostics/folder-ranges-2026-10-08/README.md for checks and scope.
 
+### Exact subject-candidate search — 8 October 2026
+
+Cull and Pick Best now share a symmetric exact top-32 search: each finite
+semantic pair is evaluated once and contributes to both bounded neighbor heaps.
+Candidates below the current cutoff never enter the heap. Temporal retrieval
+merges eight nearest items from sorted equal-time groups rather than scanning
+an entire ten-minute window per photo. Stable path-index ties and the inclusive
+time window remain unchanged; no approximate index or model changes are used.
+Validation and benchmark scope are recorded in
+[the candidate-search report](diagnostics/subject-candidates-2026-10-08/README.md).
+
+
 ### ONNX session-memory investigation — 8 October 2026
 
 An isolated CPU probe traced a roughly 4.35 GiB startup peak to graph optimization.

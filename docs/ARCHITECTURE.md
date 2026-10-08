@@ -251,8 +251,15 @@ chosen score; all cross-pairs must be accepted before two clusters merge. Strict
 can be reapplied to raw pair evidence without decoding, model inference or geometry.
 Semantic candidate search retains 32 nearest neighbors per image and temporal
 search adds eight within ten minutes. Indices must be supplied in stable path order.
-The bounded heaps avoid the Python implementation's full N-by-N similarity matrix;
-search time is still quadratic, and large-library timing has not been measured.
+The shared `subjects::candidates` module uses one bounded heap per photo and
+evaluates each finite semantic pair once for both endpoints. A full heap changes
+only when the new candidate improves its worst member. Temporal retrieval merges
+ordered equal-time groups to preserve stable ties without scanning entire bursts.
+No N-by-N similarity matrix is retained. Semantic search remains quadratic; the
+temporal pass is O(n log n + n*k), k=8. Synthetic descriptor-stage measurements and
+the small additional heap-memory cost are documented in
+`diagnostics/subject-candidates-2026-10-08/README.md`; they do not establish an
+end-to-end application speedup.
 Candidate and cluster operations, plus RANSAC loops, cooperatively check cancellation.
 
 `Models::dense_embedding` uses the existing lazy DINO session and the same input

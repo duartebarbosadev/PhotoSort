@@ -91,7 +91,10 @@ LibRaw rendering recipes are unchanged.
 
 General visual grouping uses six regional DINO descriptors and streaming,
 orientation-aware DBSCAN. Mixed organization partitions by date first. Cull and
-Pick Best use shared subject evidence and complete-link grouping. People Organize
+Pick Best use shared subject evidence and complete-link grouping. Their exact
+neighbor search evaluates each finite semantic pair once with bounded top-32
+heaps; temporal neighbors come from sorted equal-time groups. No approximate
+index is used, so candidate selection and stable tie ordering remain unchanged. People Organize
 uses native SFace identity embeddings after five-point face alignment. Multiple
 main people receive one stable combination destination, such as People 001 + 002;
 small background faces do not create extra destinations. Unclear, very small or
