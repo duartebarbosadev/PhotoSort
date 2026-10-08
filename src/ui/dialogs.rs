@@ -60,7 +60,22 @@ impl PhotoSortApp {
                             "Organize files: Ctrl/Cmd+A",
                             "Select all; add Shift to clear selection",
                         ),
-                        ("Organize files: F2", "Rename the focused file"),
+                        (
+                            "Organize: F2",
+                            "Rename the focused file or folder; Enter stages the name",
+                        ),
+                        (
+                            "Organize: Ctrl/Cmd+Shift+N",
+                            "Name a new folder inside the focused destination",
+                        ),
+                        (
+                            "Organize: D / Delete",
+                            "Toggle selection marks / review selected files for Trash",
+                        ),
+                        (
+                            "Organize: Shift+Enter or Ctrl/Cmd+Enter",
+                            "Preview moves; applying still requires review",
+                        ),
                         (
                             "Tree: Up / Down",
                             "Select the previous / next visible folder, date or group",

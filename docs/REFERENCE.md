@@ -117,3 +117,18 @@ owned keyboard routes, including guided workflows. A regression reproduced Reset
 restoring old marks from Keep-all reviews after the earlier Alt+D implementation.
 Review owners now clear those mark baselines before normal reconciliation, while
 retaining applicable current choices and cached analysis.
+
+
+## Organize keyboard editing audit — 8 October 2026
+
+`ORGANIZE_SHORTCUTS` reaches `_shortcut_item`, then the existing rename,
+subgroup, mark, Trash and apply handlers. Tree selection expands represented
+paths and controller signals retain the shared deletion/file-operation owners.
+The reference can request a validated original directory for immediate Trash.
+
+Rust now routes focused file/folder keyboard actions through the same selection
+and command helpers as its existing controls. Delete previews represented files
+and companions; whole-original-folder removal remains an explicit named menu
+action. This keeps the available workflow while making shortcut scope predictable
+for generated or merged destinations. Folder rename/create remains draft-only,
+and both move and Trash execution require a separately reviewed Apply action.

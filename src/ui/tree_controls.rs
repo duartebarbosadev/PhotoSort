@@ -120,6 +120,25 @@ impl HoverExpand {
     }
 }
 
+/// Pure predicate lets editors preserve event order when mixing navigation and actions.
+pub(super) fn navigation_key(key: egui::Key, modifiers: egui::Modifiers, ranges: bool) -> bool {
+    matches!(
+        key,
+        egui::Key::ArrowUp
+            | egui::Key::ArrowDown
+            | egui::Key::ArrowLeft
+            | egui::Key::ArrowRight
+            | egui::Key::Home
+            | egui::Key::End
+            | egui::Key::PageUp
+            | egui::Key::PageDown
+    ) && (modifiers.is_none()
+        || (ranges
+            && modifiers.shift
+            && !modifiers.alt
+            && !matches!(key, egui::Key::ArrowLeft | egui::Key::ArrowRight)))
+}
+
 /// Tree policy layered on the same focus/scroll owner as file lists.
 pub(super) struct Keyboard {
     focus: collection_controls::Keyboard,
@@ -173,8 +192,15 @@ impl Keyboard {
         ui: &egui::Ui,
         ranges: bool,
     ) -> Vec<(Navigation, egui::Modifiers)> {
+        self.focus
+            .events(ui, |key, modifiers| navigation_key(key, modifiers, ranges))
+            .into_iter()
+            .map(|(key, modifiers, _)| (self.navigation_command(ui, key).unwrap(), modifiers))
+            .collect()
+    }
+    pub(super) fn navigation_command(&self, ui: &egui::Ui, key: egui::Key) -> Option<Navigation> {
         let page = self.focus.page_rows(ui) as isize;
-        let command = |key| match key {
+        match key {
             egui::Key::ArrowUp => Some(Navigation::Advance(-1)),
             egui::Key::ArrowDown => Some(Navigation::Advance(1)),
             egui::Key::ArrowLeft => Some(Navigation::Parent),
@@ -184,19 +210,7 @@ impl Keyboard {
             egui::Key::PageUp => Some(Navigation::Advance(-page)),
             egui::Key::PageDown => Some(Navigation::Advance(page)),
             _ => None,
-        };
-        self.focus
-            .events(ui, |k, m| {
-                command(k).is_some()
-                    && (m.is_none()
-                        || (ranges
-                            && m.shift
-                            && !m.alt
-                            && !matches!(k, egui::Key::ArrowLeft | egui::Key::ArrowRight)))
-            })
-            .into_iter()
-            .map(|(key, modifiers, _)| (command(key).unwrap(), modifiers))
-            .collect()
+        }
     }
     pub(super) fn navigate_once(
         &self,

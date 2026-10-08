@@ -21,8 +21,10 @@ pub(super) struct Editor {
     desktop_enabled: bool,
     desktop_pending: Option<crate::core::desktop::Request>,
     reset_request: Option<Selection>,
-    trash_request: Option<(Vec<MediaId>, bool)>,
-    clear_trash_requested: bool,
+    mark_requests: Vec<MarkRequest>,
+    preview_moves_requested: bool,
+    folder_edit: Option<FolderEdit>,
+    folder_name_focus: bool,
     trash_now: Option<operations::TrashRequest>,
     reset_enabled: bool,
     names: HashMap<MediaId, String>,
@@ -71,6 +73,40 @@ struct CompletedDrag {
     payload: Option<FolderDrag>,
     target: Option<String>,
 }
+enum MarkRequest {
+    Toggle(Vec<MediaId>),
+    Clear,
+}
+#[derive(Clone, Copy)]
+enum FolderEdit {
+    Create,
+    Rename,
+}
+#[derive(Clone, Copy)]
+enum EditAction {
+    Mark,
+    ClearMarks,
+    TrashFiles,
+    Rename,
+    NewFolder,
+    PreviewMoves,
+}
+impl EditAction {
+    fn from_key(key: egui::Key, m: egui::Modifiers) -> Option<Self> {
+        if super::selection::clear_trash_shortcut(key, m) {
+            return Some(Self::ClearMarks);
+        }
+        let command = m.command || m.ctrl;
+        match key {
+            egui::Key::D if m.is_none() => Some(Self::Mark),
+            egui::Key::Delete | egui::Key::Backspace if m.is_none() => Some(Self::TrashFiles),
+            egui::Key::F2 if m.is_none() => Some(Self::Rename),
+            egui::Key::N if command && m.shift && !m.alt => Some(Self::NewFolder),
+            egui::Key::Enter if !m.alt && (m.shift != command) => Some(Self::PreviewMoves),
+            _ => None,
+        }
+    }
+}
 enum Command {
     Create,
     Rename,
@@ -89,6 +125,100 @@ fn folder_title(path: &str) -> &str {
     }
 }
 impl Editor {
+    fn file_selection(&self, id: MediaId) -> Selection {
+        Selection {
+            files: if self.selected.contains(&id) {
+                self.selected.clone()
+            } else {
+                HashSet::from([id])
+            },
+            ..Default::default()
+        }
+    }
+    fn folder_selection(&self, path: &str) -> Selection {
+        Selection {
+            folders: if self.selected_folders.contains(path) {
+                self.selected_folders.clone()
+            } else {
+                std::collections::BTreeSet::from([path.to_owned()])
+            },
+            ..Default::default()
+        }
+    }
+    fn queue_marks(&mut self, files: HashSet<MediaId>) {
+        if files.is_empty() {
+            return;
+        }
+        let mut files: Vec<_> = files.into_iter().collect();
+        files.sort_by_key(|id| id.0);
+        self.mark_requests.push(MarkRequest::Toggle(files));
+    }
+    fn queue_file_trash(&mut self, files: HashSet<MediaId>) {
+        if files.is_empty() {
+            return;
+        }
+        let mut files: Vec<_> = files.into_iter().collect();
+        files.sort_by_key(|id| id.0);
+        self.trash_now = Some(operations::TrashRequest {
+            files,
+            folders: Vec::new(),
+        });
+    }
+    // Returns true when subsequent collection keys belong to a new editor/review context.
+    fn edit_action(&mut self, action: EditAction, folders: bool) -> bool {
+        match action {
+            EditAction::ClearMarks => self.mark_requests.push(MarkRequest::Clear),
+            EditAction::Mark | EditAction::TrashFiles => {
+                let selection = if folders {
+                    Some(self.folder_selection(&self.folder))
+                } else {
+                    self.file_cursor
+                        .map(|i| self.file_selection(self.rows[i].id))
+                };
+                if let Some(selection) = selection
+                    && let Ok(files) = self.draft.selection_files(&selection)
+                {
+                    if matches!(action, EditAction::Mark) {
+                        self.queue_marks(files);
+                    } else {
+                        self.queue_file_trash(files);
+                        return self.trash_now.is_some();
+                    }
+                }
+            }
+            EditAction::Rename if !folders => {
+                if let Some(row) = self.file_cursor {
+                    self.start_rename(self.rows[row].id);
+                    return true;
+                }
+            }
+            EditAction::Rename if !self.folder.is_empty() => {
+                self.name = self.folder.rsplit('/').next().unwrap_or_default().into();
+                self.folder_edit = Some(FolderEdit::Rename);
+                self.folder_name_focus = true;
+                self.compact_folders = true;
+                self.error = None;
+                return true;
+            }
+            EditAction::Rename => {}
+            EditAction::NewFolder => {
+                if !folders && let Some(row) = self.file_cursor {
+                    self.folder = self.rows[row].after.clone();
+                }
+                self.name.clear();
+                self.folder_edit = Some(FolderEdit::Create);
+                self.folder_name_focus = true;
+                self.compact_folders = true;
+                self.error = None;
+                return true;
+            }
+            EditAction::PreviewMoves => {
+                self.preview_moves_requested = true;
+                return true;
+            }
+        }
+        false
+    }
     fn trash_menu(
         &mut self,
         ui: &mut egui::Ui,
@@ -110,16 +240,12 @@ impl Editor {
         if ui.add_enabled(!files.is_empty(), egui::Button::new(label))
             .on_hover_text("Mark the represented files, including files in subfolders. Marks are shared across steps. Close this editor and use Review changes to apply them.")
             .clicked() {
-            let mut files: Vec<_> = files.iter().copied().collect();
-            files.sort_by_key(|id| id.0);
-            self.trash_request = Some((files, !all_marked));
+            self.queue_marks(files.clone());
             ui.close();
         }
         if ui.add_enabled(!files.is_empty(), egui::Button::new("Move these files to Trash…"))
             .on_hover_text("Keep your layout edits and review only these files and their companions before applying.").clicked() {
-            let mut files: Vec<_> = files.iter().copied().collect();
-            files.sort_by_key(|id| id.0);
-            self.trash_now = Some(operations::TrashRequest { files, folders: Vec::new() });
+            self.queue_file_trash(files.clone());
             ui.close();
         }
         if !selection.folders.is_empty() {
@@ -524,23 +650,16 @@ impl Editor {
         self.selected.clear();
         self.file_anchor = self.file_cursor.map(|i| self.rows[i].id);
     }
-    fn clear_trash_key(&mut self, ui: &egui::Ui, keyboard: &collection_controls::Keyboard) {
-        if keyboard
-            .events(ui, super::selection::clear_trash_shortcut)
-            .iter()
-            .any(|(_, _, repeat)| !repeat)
-        {
-            self.clear_trash_requested = true;
-        }
-    }
     fn file_keyboard(
         &mut self,
         ui: &egui::Ui,
         keyboard: &collection_controls::Keyboard,
         decisions: &HashMap<MediaId, Decision>,
     ) {
-        self.clear_trash_key(ui, keyboard);
         let events = keyboard.events(ui, |key, m| {
+            if EditAction::from_key(key, m).is_some() {
+                return true;
+            }
             if m.alt {
                 return false;
             }
@@ -553,12 +672,17 @@ impl Editor {
                 | egui::Key::PageDown
                 | egui::Key::Space => true,
                 egui::Key::A => m.command || m.ctrl,
-                egui::Key::F2 => m.is_none(),
                 _ => false,
             }
         });
         for (key, modifiers, repeat) in events {
-            if repeat && matches!(key, egui::Key::Space | egui::Key::F2) {
+            if let Some(action) = EditAction::from_key(key, modifiers) {
+                if !repeat && self.edit_action(action, false) {
+                    break;
+                }
+                continue;
+            }
+            if repeat && key == egui::Key::Space {
                 continue;
             }
             if self.rows.is_empty() {
@@ -572,12 +696,6 @@ impl Editor {
                     self.select_all_files();
                 }
                 self.reveal_file = true;
-                continue;
-            }
-            if key == egui::Key::F2 {
-                if let Some(row) = self.file_cursor {
-                    self.start_rename(self.rows[row].id);
-                }
                 continue;
             }
             if key == egui::Key::Space {
@@ -691,8 +809,7 @@ impl Editor {
                         }
                         if response.double_clicked() { self.start_rename(id); }
                         response.context_menu(|ui| {
-                            let files = if self.selected.contains(&id) { self.selected.clone() } else { HashSet::from([id]) };
-                            self.trash_menu(ui, Selection { files, ..Default::default() }, decisions);
+                            self.trash_menu(ui, self.file_selection(id), decisions);
                             ui.separator();
                             if ui.add_enabled(self.reset_enabled, egui::Button::new("Reset file destinations")).on_hover_text("Restore the initial grouping for the clicked file, or the selected files when it belongs to the selection. File names stay unchanged.").clicked() {
                                 self.reset_request = Some(Selection { files: if self.selected.contains(&id) { self.selected.clone() } else { HashSet::from([id]) }, ..Default::default() });
@@ -730,7 +847,7 @@ impl Editor {
                 ),
             )
         });
-        keyboard.finish(ui, output.inner_rect, "Files. Arrows move focus; Space selects; Shift extends selection; Control or Command A selects all; F2 renames.");
+        keyboard.finish(ui, output.inner_rect, "Files. Arrows move focus; Space selects; Shift extends selection; Control or Command A selects all; F2 renames; D marks; Delete reviews Trash; Control or Command Shift N creates a folder.");
         self.photo_scroll = output.state.offset.y;
         self.scroll_drag(ui, &output);
         command
@@ -786,6 +903,8 @@ impl Editor {
         };
         self.folder_anchor = Some(anchor.to_string_lossy().replace('\\', "/"));
         self.folder = path.into();
+        self.folder_edit = None;
+        self.folder_name_focus = false;
         self.name = path.rsplit('/').next().unwrap_or_default().into();
     }
     fn folder_contents(
@@ -808,8 +927,20 @@ impl Editor {
         let row_height = button_row_height(ui);
         let max_height = (height - 210.0).max(75.0);
         let keyboard = tree_controls::Keyboard::new(ui, "organize_folders", max_height, row_height);
-        self.clear_trash_key(ui, keyboard.collection());
-        for (navigation, modifiers) in keyboard.navigation_events(ui, true) {
+        let events = keyboard.collection().events(ui, |key, modifiers| {
+            EditAction::from_key(key, modifiers).is_some()
+                || tree_controls::navigation_key(key, modifiers, true)
+        });
+        for (key, modifiers, repeat) in events {
+            if let Some(action) = EditAction::from_key(key, modifiers) {
+                if !repeat && self.edit_action(action, true) {
+                    break;
+                }
+                continue;
+            }
+            let Some(navigation) = keyboard.navigation_command(ui, key) else {
+                continue;
+            };
             let current = Key::Folder(self.folder.clone().into());
             if let Some(result) = keyboard.navigate_once(
                 ui,
@@ -859,8 +990,7 @@ impl Editor {
                             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("test_folder_rect", &path)), response.rect));
                             response.context_menu(|ui| {
                                 expansion_changed |= tree_controls::menu(ui, &self.tree, i, &mut self.collapsed);
-                                let folders = if self.selected_folders.contains(&path) { self.selected_folders.clone() } else { std::collections::BTreeSet::from([path.clone()]) };
-                                self.trash_menu(ui, Selection { folders, ..Default::default() }, decisions);
+                                self.trash_menu(ui, self.folder_selection(&path), decisions);
                                 ui.separator();
                                 if ui.add_enabled(self.reset_enabled, egui::Button::new("Reset file destinations")).on_hover_text("Restore the initial grouping for files inside this folder, or the selected folders. Folder structure edits and file names stay unchanged.").clicked() {
                                     self.reset_request = Some(Selection { folders: if self.selected_folders.contains(&path) { self.selected_folders.clone() } else { std::collections::BTreeSet::from([path.clone()]) }, ..Default::default() });
@@ -922,12 +1052,35 @@ impl Editor {
             command = Some(Command::Move);
         }
         ui.horizontal(|ui| {
-            ui.label("Name");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.name)
-                    .desired_width(ui.available_width())
-                    .hint_text("Folder name"),
-            );
+            ui.label(match self.folder_edit {
+                Some(FolderEdit::Create) => "New folder",
+                Some(FolderEdit::Rename) => "Rename folder",
+                None => "Name",
+            });
+            let mut field = egui::TextEdit::singleline(&mut self.name)
+                .id_salt("organize_folder_name")
+                .desired_width(ui.available_width())
+                .hint_text("Folder name")
+                .show(ui);
+            if std::mem::take(&mut self.folder_name_focus) {
+                field.response.request_focus();
+                field
+                    .state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(0),
+                        egui::text::CCursor::new(self.name.chars().count()),
+                    )));
+                field.state.store(ui.ctx(), field.response.id);
+            }
+            if (field.response.has_focus() || field.response.lost_focus())
+                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+            {
+                command = self.folder_edit.map(|edit| match edit {
+                    FolderEdit::Create => Command::Create,
+                    FolderEdit::Rename => Command::Rename,
+                });
+            }
         });
         ui.horizontal_wrapped(|ui| {
             if ui.button("Create folder").clicked() {
@@ -1017,6 +1170,8 @@ impl Editor {
         };
         match result {
             Ok(folder) => {
+                self.folder_edit = None;
+                self.folder_name_focus = false;
                 self.folder = folder;
                 self.selected_folders
                     .retain(|p| self.draft.folders().contains(p));
@@ -1213,8 +1368,10 @@ impl PhotoSortApp {
             desktop_enabled: self.desktop_available(),
             desktop_pending: None,
             reset_request: None,
-            trash_request: None,
-            clear_trash_requested: false,
+            mark_requests: Vec::new(),
+            preview_moves_requested: false,
+            folder_edit: None,
+            folder_name_focus: false,
             trash_now: None,
             reset_enabled: self.organize_grouping_ready() && self.analysis_run.is_none(),
             names: self.file_names.clone(),
@@ -1411,11 +1568,17 @@ impl PhotoSortApp {
                 Err(error) => editor.error = Some(error.to_string()),
             }
         }
-        if let Some((ids, marked)) = editor.trash_request.take() {
-            self.stage_manual(ids, crate::core::decisions::Change::Trash(marked));
+        for request in std::mem::take(&mut editor.mark_requests) {
+            match request {
+                MarkRequest::Toggle(ids) => {
+                    let marked = !ids.iter().all(|id| self.decision(*id).rejected);
+                    self.stage_manual(ids, crate::core::decisions::Change::Trash(marked));
+                }
+                MarkRequest::Clear => self.clear_all_trash_marks(),
+            }
         }
-        if std::mem::take(&mut editor.clear_trash_requested) {
-            self.clear_all_trash_marks();
+        if std::mem::take(&mut editor.preview_moves_requested) && action == 0 {
+            action = 3;
         }
         if action != 0 {
             egui::DragAndDrop::clear_payload(ctx);
@@ -1464,6 +1627,8 @@ impl PhotoSortApp {
                 editor.folder.clear();
                 editor.parent.clear();
                 editor.name.clear();
+                editor.folder_edit = None;
+                editor.folder_name_focus = false;
                 editor.renaming = None;
                 editor.error = None;
                 editor.selected_folders.clear();
@@ -4509,6 +4674,516 @@ mod tests {
             );
             assert!(!app.decision(id).rejected, "folders={folders}");
             assert!(app.organize_editor.is_some() && app.plan.is_none());
+            app.runtime.shutdown();
+        }
+    }
+    fn action_frame(
+        app: &mut PhotoSortApp,
+        ctx: &egui::Context,
+        width: f32,
+        events: Vec<egui::Event>,
+    ) {
+        let events = events
+            .into_iter()
+            .flat_map(|event| {
+                let release = match &event {
+                    egui::Event::Key {
+                        key,
+                        physical_key,
+                        modifiers,
+                        pressed: true,
+                        ..
+                    } => Some(egui::Event::Key {
+                        key: *key,
+                        physical_key: *physical_key,
+                        modifiers: *modifiers,
+                        pressed: false,
+                        repeat: false,
+                    }),
+                    _ => None,
+                };
+                std::iter::once(event).chain(release)
+            })
+            .collect();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 900.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.organize_dialog(ctx),
+        );
+    }
+    fn action_key(key: egui::Key, modifiers: egui::Modifiers, repeat: bool) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat,
+            modifiers,
+        }
+    }
+    fn action_focus(app: &mut PhotoSortApp, ctx: &egui::Context, width: f32, folders: bool) {
+        app.organize_editor.as_mut().unwrap().compact_folders = folders;
+        for _ in 0..3 {
+            action_frame(app, ctx, width, vec![]);
+        }
+        let id = if folders {
+            egui::Id::new(("test_folder_rect", "trip"))
+        } else {
+            egui::Id::new(("test_file_rect", 0_u64))
+        };
+        let pos = ctx
+            .data(|d| d.get_temp::<egui::Rect>(id))
+            .expect("visible fixture row")
+            .center();
+        action_frame(app, ctx, width, tree_controls::tests::click(pos));
+        action_frame(app, ctx, width, vec![]);
+    }
+    #[test]
+    fn organize_action_mark_shortcuts_share_selection_and_preserve_draft() {
+        for width in [640., 1440.] {
+            for folders in [false, true] {
+                let mut app = app();
+                app.root = Some("/missing".into());
+                app.index = app
+                    .media
+                    .iter()
+                    .enumerate()
+                    .map(|(i, m)| (m.id, i))
+                    .collect();
+                let doc = PathBuf::from("/missing/trip/child/notes.txt");
+                let doc_id = MediaId::for_path(&doc);
+                let catalog = Arc::get_mut(app.catalog.as_mut().unwrap()).unwrap();
+                catalog.inventory.push(doc);
+                catalog
+                    .supporting_fingerprints
+                    .insert(doc_id, Fingerprint::default());
+                app.open_organize_editor();
+                let ctx = egui::Context::default();
+                theme_install(&ctx);
+                action_focus(&mut app, &ctx, width, folders);
+                let editor = app.organize_editor.as_mut().unwrap();
+                editor.selected = HashSet::from([MediaId(0), doc_id]);
+                editor.draft.create_folder("", "Pending").unwrap();
+                editor.renaming = Some((MediaId(0), "unfinished".into()));
+                editor.rename_focus = false;
+                let labels = editor.draft.labels().clone();
+                let rows = editor.rows.as_ptr();
+                app.decisions.insert(
+                    MediaId(0),
+                    Decision {
+                        rejected: true,
+                        rating: Some(5),
+                        turns: 1,
+                    },
+                );
+                let expected = if folders {
+                    vec![MediaId(0), MediaId(1), MediaId(2), doc_id]
+                } else {
+                    vec![MediaId(0), doc_id]
+                };
+                for marked in [true, false] {
+                    action_frame(
+                        &mut app,
+                        &ctx,
+                        width,
+                        vec![action_key(egui::Key::D, egui::Modifiers::NONE, false)],
+                    );
+                    for id in &expected {
+                        assert_eq!(
+                            app.decision(*id).rejected,
+                            marked,
+                            "width={width} folders={folders} id={id:?}"
+                        );
+                    }
+                }
+                let editor = app.organize_editor.as_ref().unwrap();
+                assert_eq!(editor.draft.labels(), &labels);
+                assert_eq!(editor.rows.as_ptr(), rows);
+                assert!(editor.draft.folders().contains("Pending"));
+                assert_eq!(editor.renaming, Some((MediaId(0), "unfinished".into())));
+                assert_eq!(editor.selected, HashSet::from([MediaId(0), doc_id]));
+                assert_eq!(app.decision(MediaId(0)).rating, Some(5));
+                assert_eq!(app.decision(MediaId(0)).turns, 1);
+                assert!(
+                    !app.busy
+                        && app.plan.is_none()
+                        && app.analysis_run.is_none()
+                        && app.requested.is_empty()
+                );
+                assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+                app.runtime.shutdown();
+            }
+        }
+    }
+    #[test]
+    fn organize_action_order_fallback_and_repeat_guards_share_navigation() {
+        let mut app = app();
+        app.root = Some("/missing".into());
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.open_organize_editor();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        action_focus(&mut app, &ctx, 640., false);
+        app.organize_editor.as_mut().unwrap().selected.clear();
+        let key = |key| action_key(key, egui::Modifiers::NONE, false);
+        action_frame(
+            &mut app,
+            &ctx,
+            640.,
+            vec![key(egui::Key::ArrowDown), key(egui::Key::D)],
+        );
+        assert!(!app.decision(MediaId(0)).rejected && app.decision(MediaId(1)).rejected);
+        action_frame(
+            &mut app,
+            &ctx,
+            640.,
+            vec![
+                action_key(egui::Key::D, egui::Modifiers::ALT, false),
+                key(egui::Key::D),
+            ],
+        );
+        assert!(
+            app.decision(MediaId(1)).rejected,
+            "clear then mark lost event ordering"
+        );
+        action_frame(
+            &mut app,
+            &ctx,
+            640.,
+            vec![
+                key(egui::Key::D),
+                action_key(egui::Key::D, egui::Modifiers::ALT, false),
+            ],
+        );
+        assert!(app.decisions.values().all(|d| !d.rejected));
+        action_frame(
+            &mut app,
+            &ctx,
+            640.,
+            vec![key(egui::Key::D), key(egui::Key::D)],
+        );
+        assert!(app.decisions.values().all(|d| !d.rejected));
+        ctx.input_mut(|input| {
+            input.keys_down.insert(egui::Key::D);
+        });
+        action_frame(
+            &mut app,
+            &ctx,
+            640.,
+            vec![
+                action_key(egui::Key::D, egui::Modifiers::NONE, true),
+                action_key(egui::Key::D, egui::Modifiers::CTRL, false),
+            ],
+        );
+        assert!(app.decisions.values().all(|d| !d.rejected));
+        action_focus(&mut app, &ctx, 640., true);
+        action_frame(
+            &mut app,
+            &ctx,
+            640.,
+            vec![key(egui::Key::ArrowUp), key(egui::Key::D)],
+        );
+        assert!(app.decisions.values().all(|d| d.rejected));
+        assert_eq!(app.organize_editor.as_ref().unwrap().folder, "");
+        assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+        app.runtime.shutdown();
+    }
+    #[test]
+    fn organize_action_create_and_rename_folder_use_the_existing_draft_commands() {
+        for width in [640., 1440.] {
+            for folders in [false, true] {
+                let mut app = app();
+                app.open_organize_editor();
+                let ctx = egui::Context::default();
+                theme_install(&ctx);
+                action_focus(&mut app, &ctx, width, folders);
+                let selected = app.organize_editor.as_ref().unwrap().selected.clone();
+                action_frame(
+                    &mut app,
+                    &ctx,
+                    width,
+                    vec![action_key(
+                        egui::Key::N,
+                        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                        false,
+                    )],
+                );
+                action_frame(&mut app, &ctx, width, vec![]);
+                assert!(app.organize_editor.as_ref().unwrap().compact_folders);
+                assert!(ctx.wants_keyboard_input());
+                action_frame(
+                    &mut app,
+                    &ctx,
+                    width,
+                    vec![egui::Event::Text("Child".into())],
+                );
+                action_frame(
+                    &mut app,
+                    &ctx,
+                    width,
+                    vec![action_key(egui::Key::Enter, egui::Modifiers::NONE, false)],
+                );
+                assert!(
+                    app.organize_editor
+                        .as_ref()
+                        .unwrap()
+                        .draft
+                        .folders()
+                        .contains("trip/Child")
+                );
+                action_focus(&mut app, &ctx, width, true);
+                action_frame(
+                    &mut app,
+                    &ctx,
+                    width,
+                    vec![action_key(egui::Key::F2, egui::Modifiers::NONE, false)],
+                );
+                action_frame(&mut app, &ctx, width, vec![]);
+                action_frame(
+                    &mut app,
+                    &ctx,
+                    width,
+                    vec![egui::Event::Text("Journey".into())],
+                );
+                action_frame(
+                    &mut app,
+                    &ctx,
+                    width,
+                    vec![action_key(egui::Key::Enter, egui::Modifiers::NONE, false)],
+                );
+                let editor = app.organize_editor.as_ref().unwrap();
+                assert!(editor.draft.folders().contains("Journey/Child"));
+                assert!(
+                    editor
+                        .draft
+                        .labels()
+                        .values()
+                        .all(|label| label == "Journey")
+                );
+                assert_eq!(editor.selected, selected);
+                assert!(editor.folder_edit.is_none());
+                assert!(
+                    app.organize_drafts.is_empty()
+                        && app.file_names.is_empty()
+                        && app.plan.is_none()
+                );
+                assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+                app.runtime.shutdown();
+            }
+        }
+    }
+    #[test]
+    fn organize_action_text_popup_drag_and_modified_keys_keep_input_ownership() {
+        for guard in 0..3 {
+            let mut app = app();
+            app.index = app
+                .media
+                .iter()
+                .enumerate()
+                .map(|(i, m)| (m.id, i))
+                .collect();
+            app.open_organize_editor();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            action_focus(&mut app, &ctx, 640., false);
+            match guard {
+                0 => {
+                    app.organize_editor
+                        .as_mut()
+                        .unwrap()
+                        .start_rename(MediaId(0));
+                    action_frame(&mut app, &ctx, 640., vec![]);
+                }
+                1 => egui::Popup::open_id(&ctx, egui::Id::new("action-guard-popup")),
+                _ => egui::DragAndDrop::set_payload(&ctx, 42_u8),
+            }
+            action_frame(
+                &mut app,
+                &ctx,
+                640.,
+                vec![
+                    action_key(egui::Key::D, egui::Modifiers::NONE, false),
+                    action_key(egui::Key::Delete, egui::Modifiers::NONE, false),
+                    action_key(
+                        egui::Key::N,
+                        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                        false,
+                    ),
+                ],
+            );
+            assert!(
+                app.decisions.is_empty() && !app.busy && app.plan.is_none(),
+                "guard={guard}"
+            );
+            assert!(app.organize_editor.as_ref().unwrap().folder_edit.is_none());
+            assert!(app.organize_drafts.is_empty());
+            app.runtime.shutdown();
+        }
+        for (key, modifiers) in [
+            (egui::Key::D, egui::Modifiers::SHIFT),
+            (egui::Key::Delete, egui::Modifiers::COMMAND),
+            (egui::Key::F2, egui::Modifiers::ALT),
+            (egui::Key::N, egui::Modifiers::COMMAND),
+            (
+                egui::Key::Enter,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        ] {
+            assert!(EditAction::from_key(key, modifiers).is_none());
+        }
+    }
+    fn action_settle(app: &mut PhotoSortApp, ctx: &egui::Context) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.busy {
+            app.poll(ctx);
+            assert!(Instant::now() < deadline, "{:?}", app.error);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(app.error.is_none(), "{:?}", app.error);
+    }
+    fn real_action_focus(
+        app: &mut PhotoSortApp,
+        ctx: &egui::Context,
+        width: f32,
+        folders: bool,
+    ) -> MediaId {
+        let id = app
+            .media
+            .iter()
+            .find(|m| m.path.file_name().unwrap() == "photo-0.png")
+            .unwrap()
+            .id;
+        app.organize_editor.as_mut().unwrap().compact_folders = folders;
+        for _ in 0..3 {
+            action_frame(app, ctx, width, vec![]);
+        }
+        let key = if folders {
+            egui::Id::new(("test_folder_rect", "A"))
+        } else {
+            egui::Id::new(("test_file_rect", id.0))
+        };
+        let pos = ctx
+            .data(|d| d.get_temp::<egui::Rect>(key))
+            .unwrap()
+            .center();
+        action_frame(app, ctx, width, tree_controls::tests::click(pos));
+        action_frame(app, ctx, width, vec![]);
+        id
+    }
+    #[test]
+    fn organize_action_delete_reviews_only_selected_sources_and_keeps_pending_edits() {
+        for (width, folders, key) in [
+            (640., false, egui::Key::Delete),
+            (1440., true, egui::Key::Backspace),
+        ] {
+            let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+            app.step = Step::Organize;
+            app.output = app.root.as_ref().unwrap().display().to_string();
+            app.companions = true;
+            app.open_organize_editor();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let id = real_action_focus(&mut app, &ctx, width, folders);
+            let source = app.media[app.index[&id]].path.clone();
+            let original = std::fs::read(&source).unwrap();
+            let unrelated = app
+                .media
+                .iter()
+                .find(|m| m.path.file_name().unwrap() == "photo-8.png")
+                .unwrap()
+                .id;
+            app.stage_manual([unrelated], crate::core::decisions::Change::Trash(true));
+            let editor = app.organize_editor.as_mut().unwrap();
+            editor.draft.create_folder("", "Pending").unwrap();
+            editor.renaming = Some((id, "pending-name".into()));
+            editor.rename_focus = false;
+            action_frame(
+                &mut app,
+                &ctx,
+                width,
+                vec![action_key(key, egui::Modifiers::NONE, false)],
+            );
+            assert!(app.organize_editor.is_none());
+            action_settle(&mut app, &ctx);
+            assert!(app.plan_open);
+            let plan = app.plan.as_ref().unwrap();
+            let mut paths = Vec::new();
+            for action in &plan.actions {
+                if let operations::Action::Trash { files } = action {
+                    paths.extend(files.iter().map(|s| s.path.clone()));
+                } else {
+                    panic!("Unexpected non-Trash action: {}", action.label());
+                }
+            }
+            assert_eq!(paths.len(), if folders { 8 } else { 2 });
+            assert!(
+                paths.contains(&source) && paths.contains(&source.with_extension("xmp")),
+                "folders={folders} source={source:?} paths={paths:?}"
+            );
+            assert!(!paths.contains(&app.media[app.index[&unrelated]].path));
+            assert!(app.decision(unrelated).rejected);
+            assert_eq!(
+                app.file_names.get(&id).map(String::as_str),
+                Some("pending-name")
+            );
+            assert!(
+                app.organize_drafts[&GroupMode::Current]
+                    .folders()
+                    .contains("Pending")
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            assert!(!app.root.as_ref().unwrap().join("Pending").exists());
+            assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+            app.runtime.shutdown();
+        }
+    }
+    #[test]
+    fn organize_action_preview_shortcuts_accept_names_then_review_without_mutation() {
+        for modifiers in [
+            egui::Modifiers::SHIFT,
+            egui::Modifiers::COMMAND,
+            egui::Modifiers::CTRL,
+        ] {
+            let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+            app.step = Step::Organize;
+            app.output = app.root.as_ref().unwrap().display().to_string();
+            app.open_organize_editor();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let id = real_action_focus(&mut app, &ctx, 640., false);
+            let source = app.media[app.index[&id]].path.clone();
+            let original = std::fs::read(&source).unwrap();
+            let editor = app.organize_editor.as_mut().unwrap();
+            editor.draft.create_folder("", "Pending").unwrap();
+            editor.renaming = Some((id, "renamed".into()));
+            editor.rename_focus = false;
+            action_frame(
+                &mut app,
+                &ctx,
+                640.,
+                vec![action_key(egui::Key::Enter, modifiers, false)],
+            );
+            assert!(app.organize_editor.is_none());
+            action_settle(&mut app, &ctx);
+            assert!(app.plan_open && !app.plan.as_ref().unwrap().actions.is_empty());
+            assert!(app.plan.as_ref().unwrap().actions.iter().all(|a| !matches!(
+                a,
+                operations::Action::Trash { .. } | operations::Action::TrashDirectory(_)
+            )));
+            assert_eq!(app.file_names.get(&id).map(String::as_str), Some("renamed"));
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            assert!(!app.root.as_ref().unwrap().join("Pending").exists());
+            assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
             app.runtime.shutdown();
         }
     }
