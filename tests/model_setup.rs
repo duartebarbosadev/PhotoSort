@@ -92,24 +92,65 @@ fn prepared_bundle_verifies_once_and_import_reuses_the_streamed_checksum() {
 #[cfg(feature = "model-downloads")]
 #[ignore = "Downloads the pinned 38.7 MB SFace model into a disposable directory"]
 fn pinned_native_model_download_verifies_and_never_changes_bundled_assets() {
+    pinned_download(Id::People);
+}
+
+#[test]
+#[cfg(feature = "model-downloads")]
+#[ignore = "Downloads the pinned 80.6 MB orientation model into a disposable directory"]
+fn pinned_orientation_download_installs_without_a_bundle_and_reuses_verification() {
+    pinned_download(Id::Rotation);
+}
+
+#[cfg(feature = "model-downloads")]
+fn pinned_download(id: Id) {
     let dir = tempfile::tempdir().unwrap();
     let mut worker = Worker::new(vec![dir.path().into()], Arc::new(|| {}));
-    worker.start(Work::Download(Id::People)).unwrap();
+    worker.start(Work::Inspect).unwrap();
+    let before = wait(&worker);
+    assert!(before.error.is_none(), "{:?}", before.error);
+    assert!(matches!(
+        before
+            .snapshot
+            .unwrap()
+            .rows
+            .iter()
+            .find(|r| r.id == id)
+            .unwrap()
+            .health,
+        Health::Missing
+    ));
+    worker.start(Work::Download(id)).unwrap();
     let state = wait(&worker);
     assert!(state.error.is_none(), "{:?}", state.error);
     let snapshot = state.snapshot.unwrap();
+    let destination = dir.path().join("models").join(id.asset().name);
     assert!(matches!(
-        snapshot
-            .rows
-            .iter()
-            .find(|r| r.id == Id::People)
-            .unwrap()
-            .health,
-        Health::Verified(_)
+        &snapshot.rows.iter().find(|r| r.id == id).unwrap().health,
+        Health::Verified(path) if path == &destination
     ));
+    assert_eq!(
+        std::fs::metadata(&destination).unwrap().len(),
+        id.asset().bytes
+    );
     assert_eq!(
         snapshot.hash_reads, 0,
         "The download stream already verified SHA-256"
+    );
+    worker.start(Work::Inspect).unwrap();
+    let refreshed = wait(&worker);
+    assert!(refreshed.error.is_none(), "{:?}", refreshed.error);
+    assert_eq!(
+        refreshed.snapshot.unwrap().hash_reads,
+        0,
+        "Refresh must reuse installation verification"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("models"))
+            .unwrap()
+            .count(),
+        1,
+        "Only the requested model is installed; partial files are removed"
     );
     worker.shutdown();
 }

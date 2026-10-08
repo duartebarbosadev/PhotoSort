@@ -245,9 +245,10 @@ before using the new app on an existing editing workflow.
 ## Local AI setup
 
 **Menu → AI models** verifies installed models, reports missing or damaged files,
-and repairs them from the app bundle or a prepared ONNX file. DINOv2 and SFace can
-also be downloaded directly from pinned upstream revisions. Transfers show their
-size and progress, can be canceled, and verify exact size and SHA-256 before
+and repairs them from the app bundle or a prepared ONNX file. DINOv2, SFace and the
+orientation model can also be downloaded directly from pinned upstream releases
+or revisions. Transfers show their size and progress, can be canceled, and verify
+exact size and SHA-256 before
 replacing any installed file. Existing models survive failed transfers.
 
 Missing prerequisites stop analysis before image decoding and preserve current
@@ -256,7 +257,7 @@ Model setup has its own lazy worker, so browsing and photo operations stay
 independent of slow downloads. Closing the panel leaves a transfer running;
 quitting cancels it. No downloads occur automatically and no photos are uploaded.
 
-The other four prepared models come with the full bundle and support verified
+The other three prepared models come with the full bundle and support verified
 import/restore. Public native export downloads for them are not yet published.
 The model manager does not download executable ONNX Runtime libraries; restore
 the full application if its native runtime is missing. Minimal builds keep manual

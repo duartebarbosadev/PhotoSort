@@ -87,8 +87,10 @@ pub const ALL: [Asset; 6] = [
         title: "Orientation detection",
         purpose: "Fix Rotation suggestions",
         bytes: 80_578_424,
-        url: None,
-        license: "Local prepared asset; redistribution provenance pending",
+        url: Some(
+            "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/download/v2/orientation_model_v2_0.9882.onnx",
+        ),
+        license: "MIT (upstream repository)",
     },
 ];
 impl Id {

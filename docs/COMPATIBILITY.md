@@ -123,8 +123,8 @@ execution, broader accelerator performance and other-model batching remain to be
 validated. CPU stays the default because cold Apple compilation and memory costs
 are substantial; see [ACCELERATION.md](ACCELERATION.md).
 Menu → AI models now provides verified inventory, import, bundled-copy repair and
-pinned DINOv2/SFace downloads. The other four prepared models require the full
-bundle or a prepared import until native exports are published. Missing models or
+pinned DINOv2/SFace/orientation downloads. The other three prepared models require
+the full bundle or a prepared import until native exports are published. Missing models or
 runtime prerequisites pause analysis and preserve reviews; retry is explicit.
 Transfers are cancellable during network waits and remove incomplete temporary
 files. Native model inference calls may finish their current unit before analysis
