@@ -4,6 +4,7 @@ use crate::core::{
     face_groups, faces,
     models::{self, Models},
     pipeline::Asset,
+    processing::{Backend, Control, ModelStatus, RunConfig},
 };
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
@@ -52,6 +53,11 @@ pub struct RuntimeReport {
     pub initializations: usize,
     pub inferences: u64,
     pub cpu_threads: usize,
+    pub requested_backend: Backend,
+    /// Configured providers, not per-operator hardware placement.
+    pub model_providers: Vec<ModelStatus>,
+    pub accelerated_models: usize,
+    pub cpu_models: usize,
     pub steps: Vec<Step>,
     pub fixture: &'static str,
     pub note: &'static str,
@@ -62,6 +68,15 @@ struct Outcome {
     inferences: u64,
 }
 pub fn check_runtime(cancelled: &impl Fn() -> bool) -> Result<RuntimeReport> {
+    check_runtime_with_backend(Backend::Cpu, cancelled)
+}
+/// Exercise the selected provider through the same per-model fallback policy as
+/// interactive analysis. A passing report can contain CPU fallback; inspect the
+/// provider records before treating this as evidence of accelerator readiness.
+pub fn check_runtime_with_backend(
+    backend: Backend,
+    cancelled: &impl Fn() -> bool,
+) -> Result<RuntimeReport> {
     ensure!(!cancelled(), "Runtime check cancelled");
     let mut report = RuntimeReport {
         diagnostics: collect_cancellable(cancelled)?,
@@ -71,9 +86,13 @@ pub fn check_runtime(cancelled: &impl Fn() -> bool) -> Result<RuntimeReport> {
         initializations: 0,
         inferences: 0,
         cpu_threads: 1,
+        requested_backend: backend,
+        model_providers: Vec::new(),
+        accelerated_models: 0,
+        cpu_models: 0,
         steps: Vec::new(),
         fixture: include_str!("../../../tests/fixtures/recognition/SOURCE.md"),
-        note: "Two native CPU inference passes using one decoded fixture and shared production services. Does not validate graphics, video/audio, all photo formats, GPU execution or photographic accuracy.",
+        note: "Two native inference passes using one decoded fixture and shared production services. Passing validates inference and session reuse, including CPU fallback. Model providers report session configuration, not per-operator hardware placement. Does not validate graphics, video/audio, all photo formats or photographic accuracy. PhotoSort does not persist prepared-model caches here; native runtimes may use OS temporary caches.",
     };
     if !report.diagnostics.capabilities.neural_inference || !report.diagnostics.files_ready {
         report.steps.push(Step {
@@ -87,12 +106,10 @@ pub fn check_runtime(cancelled: &impl Fn() -> bool) -> Result<RuntimeReport> {
         return Ok(report);
     }
     report.diagnostics.note = "File inventory was checked before native execution. Runtime and selected orientation compatibility flags reflect the outer runtime-check result. Paths use display text for non-UTF-8 names.";
-    let mut engine = Engine::new()?;
-    Ok(run(
-        report,
-        |check| engine.check(check, cancelled),
-        cancelled,
-    ))
+    let mut engine = Engine::new(backend)?;
+    let mut report = run(report, |check| engine.check(check, cancelled), cancelled);
+    report.record_providers(engine.control.status());
+    Ok(report)
 }
 fn run(
     mut report: RuntimeReport,
@@ -130,11 +147,11 @@ fn run(
         }
     }
     report.sessions_reused =
-        first_initializations == 6 && report.initializations == first_initializations;
+        first_initializations >= 6 && report.initializations == first_initializations;
     report.passed = report.sessions_reused && report.inferences >= 12;
     if !report.passed {
         report.steps.push(Step { name: "session_reuse", pass: 2, passed: false,
-            detail: format!("Expected six reused sessions and at least twelve inferences; got {} initializations and {} inferences", report.initializations, report.inferences), elapsed_ms: 0 });
+            detail: format!("Expected at least six initializations with no second-pass reinitialization and at least twelve inferences; got {} initializations and {} inferences", report.initializations, report.inferences), elapsed_ms: 0 });
     }
     if report.passed {
         report.diagnostics.runtime.load_verified = true;
@@ -145,22 +162,45 @@ fn run(
     }
     report
 }
+impl RuntimeReport {
+    fn record_providers(&mut self, providers: Vec<ModelStatus>) {
+        // Failed or unfinished preparation is diagnostic evidence, not proof of
+        // an exercised provider. Only a complete successful check publishes counts.
+        if self.passed {
+            self.accelerated_models = providers
+                .iter()
+                .filter(|s| !s.preparing && s.backend != Backend::Cpu && s.backend != Backend::Auto)
+                .count();
+            self.cpu_models = providers
+                .iter()
+                .filter(|s| !s.preparing && s.backend == Backend::Cpu)
+                .count();
+        }
+        self.model_providers = providers;
+    }
+}
 struct Engine {
     models: Models,
+    control: Control,
     asset: Asset,
     faces: Option<faces::Faces>,
 }
 impl Engine {
-    fn new() -> Result<Self> {
+    fn new(backend: Backend) -> Result<Self> {
         let demo = image::load_from_memory(include_bytes!(
             "../../../tests/fixtures/recognition/sface-demo.jpg"
         ))?
         .to_rgba8();
         let pixels = Arc::new(image::imageops::crop_imm(&demo, 0, 12, 512, 488).to_image());
-        let mut models = Models::default();
-        models.configure_threads(1);
+        let control = Control::default();
+        let mut models = Models::with_processing(control.clone());
+        models.configure(RunConfig {
+            threads: 1,
+            backend,
+        });
         Ok(Self {
             models,
+            control,
             asset: Asset {
                 decoder_warning: None,
                 pixels: pixels.clone(),
@@ -258,6 +298,10 @@ mod tests {
             initializations: 0,
             inferences: 0,
             cpu_threads: 1,
+            requested_backend: Backend::Cpu,
+            model_providers: Vec::new(),
+            accelerated_models: 0,
+            cpu_models: 0,
             steps: Vec::new(),
             fixture: "fake",
             note: "test",
@@ -350,38 +394,104 @@ mod acceleration_probe {
     #[test]
     #[ignore = "Exercises all six installed models with Apple Core ML, including two-pass session reuse"]
     fn all_models_coreml_runtime_check() -> Result<()> {
-        use crate::core::processing::{Backend, Control, RunConfig};
-        let mut engine = Engine::new()?;
-        let control = Control::default();
-        engine.models = Models::with_processing(control.clone());
-        engine.models.configure(RunConfig {
-            threads: 1,
-            backend: Backend::CoreMl,
-        });
-        let mut initializations = 0;
-        for pass in 1..=2 {
-            for check in CHECKS {
-                let start = Instant::now();
-                let outcome = engine.check(check, &|| false);
-                println!(
-                    "{}",
-                    serde_json::json!({"pass":pass,"check":check.name(),"elapsed_ms":start.elapsed().as_secs_f64()*1000.,"result":format!("{:?}",outcome.result),"providers":format!("{:?}",control.status())})
+        let report = check_runtime_with_backend(Backend::CoreMl, &|| false)?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        ensure!(
+            report.passed && report.sessions_reused,
+            "Runtime check failed"
+        );
+        ensure!(
+            report.model_providers.len() == 6,
+            "Expected six model provider records"
+        );
+        ensure!(report.accelerated_models > 0, "No model selected Core ML");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod backend_checks {
+    use super::*;
+
+    #[test]
+    fn runtime_backend_configuration_is_lazy_and_uses_one_shared_registry() {
+        for backend in Backend::ALL {
+            let engine = Engine::new(backend).unwrap();
+            assert_eq!(
+                (engine.models.initializations, engine.models.inferences),
+                (0, 0)
+            );
+            assert_eq!(engine.models.cpu_threads(), 1);
+            assert!(engine.control.status().is_empty());
+            assert!(Arc::ptr_eq(&engine.asset.pixels, &engine.asset.thumbnail));
+        }
+    }
+
+    #[test]
+    fn runtime_backend_fallback_in_first_pass_must_be_reused_in_second() {
+        for reinitialize in [false, true] {
+            let mut calls = 0;
+            let report = run(
+                super::tests::report(),
+                |_| {
+                    calls += 1;
+                    Outcome {
+                        result: Ok("valid after CPU fallback".into()),
+                        // Six models plus replacement of one failed accelerator.
+                        initializations: if reinitialize && calls > 5 { 8 } else { 7 },
+                        inferences: calls * 2 + 1,
+                    }
+                },
+                &|| false,
+            );
+            assert_eq!(report.passed, !reinitialize);
+            assert_eq!(report.sessions_reused, !reinitialize);
+        }
+    }
+
+    #[test]
+    fn runtime_backend_report_separates_functional_success_from_provider_selection() {
+        for requested in Backend::ALL {
+            for success in [false, true] {
+                let mut report = super::tests::report();
+                report.requested_backend = requested;
+                report.passed = success;
+                report.record_providers(vec![
+                    ModelStatus {
+                        model: "dinov2",
+                        backend: Backend::CoreMl,
+                        preparing: false,
+                        detail: "Configured provider; graph operators may remain on CPU".into(),
+                    },
+                    ModelStatus {
+                        model: "face_landmarks",
+                        backend: Backend::Cpu,
+                        preparing: false,
+                        detail: "CPU fallback after compilation failure".into(),
+                    },
+                    ModelStatus {
+                        model: "aesthetic",
+                        backend: requested,
+                        preparing: true,
+                        detail: "Preparing model…".into(),
+                    },
+                ]);
+                assert_eq!(report.accelerated_models, usize::from(success));
+                assert_eq!(report.cpu_models, usize::from(success));
+                let json = serde_json::to_value(&report).unwrap();
+                assert_eq!(
+                    json["requested_backend"],
+                    serde_json::to_value(requested).unwrap()
                 );
-                outcome.result?;
-            }
-            if pass == 1 {
-                initializations = engine.models.initializations;
-            } else {
-                ensure!(
-                    engine.models.initializations == initializations,
-                    "Repeated native model initialization"
+                assert_eq!(json["model_providers"][1]["backend"], "Cpu");
+                assert!(
+                    json["model_providers"][1]["detail"]
+                        .as_str()
+                        .unwrap()
+                        .contains("fallback")
                 );
+                assert_eq!(json["passed"], success);
             }
         }
-        ensure!(
-            control.status().len() == 6,
-            "Expected all six shared model sessions"
-        );
-        Ok(())
     }
 }

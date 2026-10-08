@@ -197,8 +197,11 @@ loads ONNX Runtime. `files_ready` is file readiness for the enabled build, not
 proof of ABI compatibility, successful inference or UI health. A minimal build
 reports AI as disabled rather than requiring AI files. `--check-runtime` additionally exercises all six native AI sessions through the
 shared production services on an embedded licensed fixture, then repeats the work
-to check session reuse. It reports per-stage failures and rejects unsupported
-minimal builds. It tests the configured orientation override's input/output
+to check session reuse. The default is CPU; `--runtime-backend` selects cpu,
+auto, coreml, cuda or directml without changing saved preferences. Per-model JSON
+provider records explain CPU fallback. Passing/exit status establish functional
+inference and reuse, not accelerator selection or per-operator hardware placement.
+It reports per-stage failures and rejects unsupported minimal builds. It tests the configured orientation override's input/output
 contract when present. Automatic GUI smoke exit, codec/video/package relocation
 checks and wider photographic accuracy remain separate work.
 

@@ -1,4 +1,5 @@
 //! Parse startup arguments before initializing graphics, workers or models.
+use super::processing::Backend;
 use std::{ffi::OsString, path::PathBuf};
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Options {
@@ -8,6 +9,7 @@ pub struct Options {
     pub clear_models: bool,
     pub diagnostics: bool,
     pub check_runtime: bool,
+    pub runtime_backend: Option<Backend>,
     pub smoke_test: bool,
     pub smoke_delay_ms: Option<u64>,
     pub help: bool,
@@ -61,6 +63,26 @@ impl Options {
                 result.check_runtime = true;
                 continue;
             }
+            if !positional && arg == "--runtime-backend" {
+                if result.runtime_backend.is_some() {
+                    return Err("Specify --runtime-backend only once.".into());
+                }
+                result.runtime_backend =
+                    Some(match args.next().as_deref().and_then(|s| s.to_str()) {
+                        Some("cpu") => Backend::Cpu,
+                        Some("auto") => Backend::Auto,
+                        Some("coreml") => Backend::CoreMl,
+                        Some("cuda") => Backend::Cuda,
+                        Some("directml") => Backend::DirectMl,
+                        _ => {
+                            return Err(
+                                "--runtime-backend requires cpu, auto, coreml, cuda or directml."
+                                    .into(),
+                            );
+                        }
+                    });
+                continue;
+            }
             if !positional && arg == "--diagnostics" {
                 result.diagnostics = true;
                 continue;
@@ -96,6 +118,9 @@ impl Options {
             }
             result.folder = Some(folder.into());
         }
+        if result.runtime_backend.is_some() && !result.check_runtime {
+            return Err("--runtime-backend requires --check-runtime.".into());
+        }
         if result.smoke_delay_ms.is_some() && !result.smoke_test {
             return Err("--smoke-delay-ms requires --smoke-test.".into());
         }
@@ -114,4 +139,4 @@ impl Options {
         Ok(result)
     }
 }
-pub const HELP: &str = "PhotoSort Rust\n\nUsage: photosort [--folder PATH | --last-folder]\n       photosort [PATH]\n\n  --folder PATH   Open a photo folder\n  --last-folder   Open the most recent folder that still exists\n  --clear-cache   Clear regenerable previews and analysis evidence before startup\n  --clear-models  Remove managed model copies before startup; keep bundled models\n  --diagnostics   Print JSON file/readiness diagnostics and exit without a window\n  --check-runtime Run native inference checks, print JSON and exit without a window\n  --smoke-test    Request normal guarded quit after the first UI frame and delay\n  --smoke-delay-ms N  Delay of 200–60000 ms (default 2000; requires --smoke-test)\n  --help, -h      Show this help\n  --version, -V   Show the version\n\nAnalysis stays local. File changes require a reviewed plan.";
+pub const HELP: &str = "PhotoSort Rust\n\nUsage: photosort [--folder PATH | --last-folder]\n       photosort [PATH]\n\n  --folder PATH   Open a photo folder\n  --last-folder   Open the most recent folder that still exists\n  --clear-cache   Clear regenerable previews and analysis evidence before startup\n  --clear-models  Remove managed model copies before startup; keep bundled models\n  --diagnostics   Print JSON file/readiness diagnostics and exit without a window\n  --check-runtime Run native inference checks, print JSON and exit without a window\n  --runtime-backend NAME  cpu (default), auto, coreml, cuda or directml; requires --check-runtime\n  --smoke-test    Request normal guarded quit after the first UI frame and delay\n  --smoke-delay-ms N  Delay of 200–60000 ms (default 2000; requires --smoke-test)\n  --help, -h      Show this help\n  --version, -V   Show the version\n\nAnalysis stays local. File changes require a reviewed plan.";

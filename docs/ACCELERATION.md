@@ -99,9 +99,24 @@ CPU fallback remains available. See [DirectML requirements](https://onnxruntime.
 
 Use `ORT_DYLIB_PATH` to select a compatible native runtime. Models and runtime must
 match the app's ONNX API requirements. Selecting a backend in Settings cannot add
-providers missing from that library. The existing `--check-runtime` deliberately
-retains its documented CPU baseline; use the ignored acceleration fixtures for
-Apple verification, with `PHOTOSORT_SAMPLE_DIR` pointing to the seven sample files.
+providers missing from that library. `--check-runtime` retains its CPU baseline;
+`--check-runtime --runtime-backend coreml` (or `auto`, `cuda`, `directml`, `cpu`)
+selects a diagnostic backend through the same production registry and fallback
+policy. This uses the embedded licensed fixture and does not require a photo
+library or change the saved backend preference.
+
+Inspect `requested_backend` and all six `model_providers` records in its JSON,
+including fallback details. Native compiler/runtime output is routed to stderr
+for the command lifetime, including shutdown, so stdout remains JSON. `passed` and exit status describe successful inference
+and session reuse, allowing CPU fallback. `accelerated_models` and `cpu_models`
+count configured sessions only after a complete passing check; they do not prove
+per-operator GPU/NPU placement. A first-pass execution failure may replace one
+accelerated session with CPU; no further session initialization is allowed during
+the second pass. Partial or cancelled checks retain available provider diagnostics
+but publish no successful provider counts. No prepared-model cache is configured
+by this command; the native runtime may use OS temporary caches. Cold compilation
+can take minutes, and a synchronous native compilation/inference call cannot be
+interrupted. CUDA/DirectML hardware validation is still required on those devices.
 
 ## Persistent Core ML cache evaluation
 

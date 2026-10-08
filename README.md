@@ -72,13 +72,32 @@ cannot be combined with folder-opening or clearing options.
 `--check-runtime` goes further: it verifies the files, loads the native inference
 engine and runs two CPU passes on an embedded licensed fixture through the shared
 scene, aesthetic, face geometry, recognition and orientation services. Its JSON
-reports each stage, counters and session reuse. Six sessions must be initialized
-once and reused on the second pass. It uses one inference thread, never opens a
+reports each stage, counters and session reuse. All six model sessions must be
+reused on the second pass; replacing a failed accelerator during the first pass
+is allowed. It uses one inference thread, never opens a
 window or a photo library, and writes no analysis cache. It exits with failure in
 minimal builds or when any prerequisite, inference contract or reuse check fails.
 This checks native AI execution; it is not a graphics/video smoke test or an
 accuracy/speed benchmark. A custom orientation override is exercised in place of
 the default orientation model, whose inventory row is marked unselected.
+Add `--runtime-backend cpu|auto|coreml|cuda|directml` to exercise another backend
+through the same registry and fallback policy as Settings. Omitting it keeps the
+CPU baseline. For example:
+
+```sh
+photosort --check-runtime --runtime-backend coreml
+```
+
+The JSON includes `requested_backend`, `model_providers` (with fallback reasons),
+`accelerated_models` and `cpu_models`. **A successful exit validates inference,
+including CPU fallback; it does not prove the requested accelerator was selected.**
+Check all six provider records. Native compiler/runtime messages go to stderr,
+keeping stdout valid JSON even during native shutdown. The two counts summarize configured sessions only
+after a complete successful check, not individual operator placement. This command
+does not change Settings or persist PhotoSort prepared-model caches; native
+runtimes may create their own OS temporary caches. Cold accelerator compilation
+can take minutes and individual native calls cannot be interrupted.
+
 Diagnostic JSON uses display text for paths containing non-UTF-8 bytes; actual
 filesystem/model paths retain their original bytes.
 

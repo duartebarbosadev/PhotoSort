@@ -48,7 +48,7 @@ pub struct RunConfig {
     pub threads: usize,
     pub backend: Backend,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ModelStatus {
     pub model: &'static str,
     pub backend: Backend,
