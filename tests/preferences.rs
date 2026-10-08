@@ -191,3 +191,22 @@ fn smoke_startup_validates_delay_and_preserves_folder_selection() {
         assert!(parse(&["--smoke-test", "--smoke-delay-ms", value]).is_ok());
     }
 }
+
+#[test]
+fn location_layout_defaults_for_old_preferences_and_round_trips_all_levels() {
+    use photosort::core::geography::Layout;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("preferences.json");
+    std::fs::write(&path, b"[1, {}]").unwrap();
+    let mut preferences = Preferences::load(&path).unwrap();
+    assert_eq!(preferences.location_layout, Layout::CountryRegionCity);
+    for layout in [
+        Layout::Country,
+        Layout::CountryCity,
+        Layout::CountryRegionCity,
+    ] {
+        preferences.location_layout = layout;
+        preferences.save(&path).unwrap();
+        assert_eq!(Preferences::load(&path).unwrap().location_layout, layout);
+    }
+}

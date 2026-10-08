@@ -219,6 +219,15 @@ impl Review {
         }
         self.confirmation_order.retain(|id| !stale.contains(id));
     }
+    /// An explicit library-wide clear also supersedes marks saved before a
+    /// Keep-all confirmation. Preserve choices, but never undo back to old marks.
+    pub fn clear_prior_trash_marks(&mut self) {
+        for state in self.states.values_mut() {
+            if let Some(prior) = &mut state.prior {
+                prior.fill(false);
+            }
+        }
+    }
     /// Called after the application explicitly discards all shared Trash marks.
     pub fn discard_confirmations(&mut self) {
         self.confirmation_order.clear();

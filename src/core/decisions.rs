@@ -16,22 +16,34 @@ pub fn stage(
     ids: impl IntoIterator<Item = MediaId>,
     change: Change,
 ) -> Vec<MediaId> {
+    stage_files(media, index, &HashMap::new(), decisions, ids, change)
+}
+
+/// Supporting files share Trash intent, but never enter image-only operations.
+/// Both indexes come from discovery; staging performs no filesystem work.
+pub fn stage_files(
+    media: &[Media],
+    index: &HashMap<MediaId, usize>,
+    supporting: &HashMap<MediaId, Fingerprint>,
+    decisions: &mut HashMap<MediaId, Decision>,
+    ids: impl IntoIterator<Item = MediaId>,
+    change: Change,
+) -> Vec<MediaId> {
     if matches!(change, Change::Rating(n) if n > 5) {
         return Vec::new();
     }
     let mut changed = Vec::new();
     let mut seen = HashSet::new();
     for id in ids {
-        let Some(item) = index
+        let item = index
             .get(&id)
             .and_then(|i| media.get(*i))
-            .filter(|m| m.id == id)
-        else {
-            continue;
-        };
-        if !seen.insert(id)
-            || (item.kind == MediaKind::Video
-                && matches!(change, Change::Rating(_) | Change::Rotate(_)))
+            .filter(|m| m.id == id);
+        let valid = item.is_some() || supporting.contains_key(&id);
+        let image = item.is_some_and(|m| m.kind != MediaKind::Video);
+        if !valid
+            || !seen.insert(id)
+            || (!image && matches!(change, Change::Rating(_) | Change::Rotate(_)))
         {
             continue;
         }
@@ -45,4 +57,19 @@ pub fn stage(
         changed.push(id);
     }
     changed
+}
+
+/// Clear library-wide staged Trash intent without requiring visible media or
+/// touching ratings/rotations. Supporting and filtered-out files are included.
+pub fn clear_trash_marks(decisions: &mut HashMap<MediaId, Decision>) -> Vec<MediaId> {
+    decisions
+        .iter_mut()
+        .filter_map(|(id, decision)| {
+            if !decision.rejected {
+                return None;
+            }
+            decision.rejected = false;
+            Some(*id)
+        })
+        .collect()
 }

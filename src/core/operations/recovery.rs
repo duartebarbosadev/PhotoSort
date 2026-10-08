@@ -146,6 +146,32 @@ impl Context {
             views,
         }
     }
+    /// Use the same discovered identities for supporting-file review intent.
+    /// Keep journal size proportional to decisions, without rescanning files.
+    pub fn capture_catalog(
+        rotation_only: bool,
+        catalog: &crate::core::catalog::Catalog,
+        index: &HashMap<MediaId, usize>,
+        session: Session,
+        views: views::Saved,
+    ) -> Self {
+        let mut context = Self::capture(
+            catalog.root.clone(),
+            rotation_only,
+            &catalog.media,
+            index,
+            session,
+            views,
+        );
+        context.session.fingerprints.extend(
+            context
+                .session
+                .decisions
+                .keys()
+                .filter_map(|id| catalog.supporting_fingerprints.get(id).map(|f| (*id, *f))),
+        );
+        context
+    }
     fn persist(&self, report: &Report) -> Result<()> {
         let mut session = self.session.clone();
         if self.rotation_only {
@@ -391,7 +417,9 @@ impl Store {
                         "Failure without a pending action"
                     );
                     if !entry.error.is_empty() {
-                        report.errors.push(entry.error);
+                        report
+                            .errors
+                            .push(plan.actions[entry.index].failure_message(&entry.error));
                     }
                 }
                 "skipped" => {
@@ -740,6 +768,136 @@ mod tests {
         };
         (temp, Store::new(base.join("journals")), context, plan)
     }
+    #[test]
+    fn recovery_details_preserve_source_failure_chain_through_restart_and_retry() {
+        for kind in 0..5 {
+            let (temp, store, context, mut plan) = fixture();
+            let source = Source::capture(context.root.join("a.jpg")).unwrap();
+            let destination = context
+                .root
+                .join(if kind == 4 { "A.jpg" } else { "Sorted/a.jpg" });
+            let action = match kind {
+                0 => Action::Move {
+                    files: vec![(source.clone(), destination.clone())],
+                },
+                1 => Action::Trash {
+                    files: vec![source.clone()],
+                },
+                2 | 3 => Action::Metadata {
+                    source: source.clone(),
+                    sidecar_before: None,
+                    target: if kind == 2 {
+                        crate::core::metadata::WriteTarget::Sidecar
+                    } else {
+                        crate::core::metadata::WriteTarget::Embedded
+                    },
+                    rating: Some(4),
+                    orientation: None,
+                },
+                _ => Action::RenameFile {
+                    source: source.clone(),
+                    to: destination.clone(),
+                },
+            };
+            let label = action.label();
+            plan.actions = vec![action];
+            let held = temp.path().join("held.jpg");
+            fs::rename(&source.path, &held).unwrap();
+            let cause = fs::metadata(&source.path).unwrap_err().to_string();
+            let report = store
+                .execute(&context, &plan, None, || false, |_, _| {})
+                .unwrap();
+            assert_eq!(report.errors.len(), 1);
+            assert!(report.errors[0].starts_with(&format!("{label}: ")));
+            assert!(report.errors[0].contains(&format!(
+                "Could not verify reviewed source {}",
+                source.path.display()
+            )));
+            assert!(report.errors[0].contains(&cause));
+            let ticket = report.recovery.as_ref().unwrap();
+            let journal = fs::read_to_string(store.directory.join(&ticket.journal)).unwrap();
+            let failed: serde_json::Value =
+                serde_json::from_str(journal.lines().last().unwrap()).unwrap();
+            let detail = failed["error"].as_str().unwrap();
+            assert!(detail.contains(&cause));
+            assert!(
+                !detail.starts_with(&label),
+                "The journal stores detail, not a duplicated action label"
+            );
+            let reopened = Store::new(store.directory.clone());
+            for _ in 0..2 {
+                let restored = reopened.restore(&context.root, &|| false).unwrap().unwrap();
+                assert_eq!(restored.errors, report.errors);
+                assert_eq!(restored.uncertain, 0);
+                assert_eq!(restored.plan.actions.len(), 1);
+            }
+            let restored = reopened.restore(&context.root, &|| false).unwrap().unwrap();
+            let retry = reopened
+                .execute(
+                    &context,
+                    &restored.plan,
+                    Some(&restored.ticket),
+                    || false,
+                    |_, _| {},
+                )
+                .unwrap();
+            assert_eq!(retry.errors, report.errors);
+            assert!(!destination.exists());
+            assert!(!crate::core::metadata::sidecar(&source.path).exists());
+            assert_eq!(fs::read(&held).unwrap(), b"first photo");
+            reopened
+                .discard(&context.root, retry.recovery.as_ref().unwrap())
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn recovery_details_read_legacy_multiline_errors_and_empty_actions_without_panicking() {
+        for action in [
+            Action::Move { files: vec![] },
+            Action::Trash { files: vec![] },
+        ] {
+            let (_temp, store, context, mut plan) = fixture();
+            let detail = "Could not open café\nUnderlying failure: permission denied";
+            let expected = format!("{}: {detail}", action.label());
+            plan.actions = vec![action];
+            let tail = format!(
+                "{}\n{}\n",
+                serde_json::json!({"status":"pending","index":0}),
+                serde_json::json!({"status":"failed","index":0,"error":detail})
+            );
+            prepared(&store, &context, &plan, tail.as_bytes());
+            let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+            assert_eq!(restored.errors, vec![expected]);
+            assert_eq!(restored.uncertain, 0);
+            store.discard(&context.root, &restored.ticket).unwrap();
+        }
+    }
+
+    #[test]
+    fn recovery_details_keep_known_failures_beside_an_interrupted_action() {
+        let (_temp, store, context, plan) = fixture();
+        let detail = "Destination already exists: café/a.jpg";
+        let tail = format!(
+            "{}\n{}\n{}\n",
+            serde_json::json!({"status":"pending","index":0}),
+            serde_json::json!({"status":"failed","index":0,"error":detail}),
+            serde_json::json!({"status":"pending","index":1})
+        );
+        prepared(&store, &context, &plan, tail.as_bytes());
+        let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+        assert_eq!(
+            restored.errors,
+            vec![format!("{}: {detail}", plan.actions[0].label())]
+        );
+        assert_eq!(restored.uncertain, 1);
+        assert_eq!(restored.plan.actions.len(), 2);
+        assert!(context.root.join("a.jpg").exists());
+        assert!(context.root.join("b.jpg").exists());
+        assert!(!context.root.join("Sorted").exists());
+        store.discard(&context.root, &restored.ticket).unwrap();
+    }
+
     #[test]
     fn interrupted_external_move_settles_destination_views_once_and_retry_preserves_them() {
         let (temp, store, context, mut plan) = fixture();

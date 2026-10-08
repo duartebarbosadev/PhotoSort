@@ -8,6 +8,40 @@ pub struct Location {
     pub region: String,
     pub city: String,
 }
+/// Folder hierarchy built from the shared, already-resolved metadata snapshot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Layout {
+    Country,
+    CountryCity,
+    #[default]
+    CountryRegionCity,
+}
+impl Layout {
+    pub fn label(self, metadata: &super::model::Metadata) -> String {
+        if let Some(location) = &metadata.location {
+            let parts: &[&str] = match self {
+                Self::Country => &[&location.country],
+                Self::CountryCity => &[&location.country, &location.city],
+                Self::CountryRegionCity => &[&location.country, &location.region, &location.city],
+            };
+            let parts: Vec<_> = parts
+                .iter()
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| super::operations::safe_component(s))
+                .collect();
+            if !parts.is_empty() {
+                return parts.join("/");
+            }
+        }
+        metadata
+            .gps
+            .filter(|(lat, lon)| {
+                lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0
+            })
+            .map(|(lat, lon)| format!("{lat:.2}, {lon:.2}"))
+            .unwrap_or_else(|| "No GPS".into())
+    }
+}
 struct Place {
     point: [f64; 3],
     location: Location,

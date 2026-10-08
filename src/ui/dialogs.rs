@@ -28,6 +28,7 @@ impl PhotoSortApp {
                 self.error = None;
             }
         }
+        self.location_layout_dialog(ctx);
         self.organize_dialog(ctx);
         self.organize_departure_dialog(ctx);
         self.review_dialogs(ctx);
@@ -44,9 +45,52 @@ impl PhotoSortApp {
                     let shortcuts = [
                         ("Ctrl/Cmd + O", "Open a library"),
                         ("Ctrl/Cmd + F", "Focus library search (except Pick Best)"),
+                        ("Ctrl/Cmd + S", "Analyze this step; detect in Fix Rotation"),
                         ("Alt + 1 / 2 / 3", "Cull list / icons / grid"),
                         ("F / S", "Cull folder / similarity-group navigator"),
+                        ("F9", "Open cache usage and controls"),
+                        ("F10 / Ctrl/Cmd + ,", "Open Settings"),
                         ("F12", "About PhotoSort"),
+                        (
+                            "Organize files: arrows / Space",
+                            "Move focus / toggle selection; Ctrl/Cmd+arrows include Trash marks",
+                        ),
+                        (
+                            "Organize files: Shift + click/arrows",
+                            "Select a range; Ctrl/Cmd+Shift adds to the selection",
+                        ),
+                        (
+                            "Organize files: Ctrl/Cmd+A",
+                            "Select all; add Shift to clear selection",
+                        ),
+                        (
+                            "Organize: F2",
+                            "Rename the focused file or folder; Enter stages the name",
+                        ),
+                        (
+                            "Organize: Ctrl/Cmd+Shift+N",
+                            "Name a new folder inside the focused destination",
+                        ),
+                        (
+                            "Organize: D / Delete",
+                            "Toggle selection marks / review selected files for Trash",
+                        ),
+                        (
+                            "Organize: Shift+Enter or Ctrl/Cmd+Enter",
+                            "Preview moves; applying still requires review",
+                        ),
+                        (
+                            "Tree: Up / Down",
+                            "Select the previous / next visible folder, date or group",
+                        ),
+                        (
+                            "Tree: Left / Right",
+                            "Collapse or select parent / expand or select child",
+                        ),
+                        (
+                            "Tree: Home / End / Page keys",
+                            "Jump or page through the focused tree",
+                        ),
                         (
                             "Left / Right",
                             "Cull cycles through visible photos or the current similarity group",
@@ -67,7 +111,7 @@ impl PhotoSortApp {
                             "Ctrl/Cmd + click / Ctrl/Cmd + A",
                             "Toggle browser selection / select all visible",
                         ),
-                        ("D / Alt + D", "Toggle mark / clear all marks"),
+                        ("D / Alt + D", "Toggle mark / clear library Trash marks"),
                         (
                             "Ctrl or Cmd + 0-5",
                             "Rate selection; viewer stars rate the focused photo",

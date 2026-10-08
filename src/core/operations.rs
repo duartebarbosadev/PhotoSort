@@ -1,4 +1,8 @@
 mod case_rename;
+mod directory;
+#[cfg(target_os = "macos")]
+mod macos_attributes;
+pub use directory::TrashDirectory;
 #[cfg(test)]
 mod move_tests;
 pub mod recovery;
@@ -24,8 +28,10 @@ impl Source {
         Ok(Self { path, fingerprint })
     }
     fn verify(&self) -> Result<()> {
+        let fingerprint = Fingerprint::read(&self.path)
+            .with_context(|| format!("Could not verify reviewed source {}", self.path.display()))?;
         anyhow::ensure!(
-            Fingerprint::read(&self.path)? == self.fingerprint,
+            fingerprint == self.fingerprint,
             "File changed since review: {}",
             self.path.display()
         );
@@ -35,6 +41,7 @@ impl Source {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Action {
     RenameDirectory(DirectoryRename),
+    TrashDirectory(TrashDirectory),
     CreateDirectory {
         path: PathBuf,
     },
@@ -70,8 +77,17 @@ pub enum Action {
     },
 }
 impl Action {
+    fn failure_message(&self, detail: &str) -> String {
+        format!("{}: {detail}", self.label())
+    }
+
     pub fn label(&self) -> String {
         match self {
+            Self::TrashDirectory(folder) => format!(
+                "Trash folder {} ({} files)",
+                folder.path.display(),
+                folder.inventory.files.len()
+            ),
             Self::RenameFile { source, to } => {
                 format!("Rename file {} → {}", source.path.display(), to.display())
             }
@@ -85,19 +101,29 @@ impl Action {
                 format!("Remove only if empty: {}", path.display())
             }
             Self::FinishMove { files } => format!("Finish {} staged file move(s)", files.len()),
-            Self::Move { files } => format!(
-                "Move {} file(s) to {}",
-                files.len(),
-                files[0].1.parent().unwrap_or(Path::new("")).display()
+            Self::Move { files } => files.first().map_or_else(
+                || "Move 0 files".into(),
+                |(_, destination)| {
+                    format!(
+                        "Move {} file(s) to {}",
+                        files.len(),
+                        destination.parent().unwrap_or(Path::new("")).display()
+                    )
+                },
             ),
-            Self::Trash { files } => format!(
-                "Trash {} file(s): {}",
-                files.len(),
-                files[0]
-                    .path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
+            Self::Trash { files } => files.first().map_or_else(
+                || "Trash 0 files".into(),
+                |source| {
+                    format!(
+                        "Trash {} file(s): {}",
+                        files.len(),
+                        source
+                            .path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    )
+                },
             ),
             Self::Metadata {
                 source,
@@ -148,9 +174,19 @@ impl Action {
     }
     pub fn sources(&self) -> Vec<&Path> {
         match self {
-            Self::RenameDirectory(rename) => {
-                rename.files.iter().map(|s| s.path.as_path()).collect()
-            }
+            Self::TrashDirectory(folder) => folder
+                .inventory
+                .files
+                .iter()
+                .map(|s| s.path.as_path())
+                .chain(std::iter::once(folder.path.as_path()))
+                .collect(),
+            Self::RenameDirectory(rename) => rename
+                .inventory
+                .files
+                .iter()
+                .map(|s| s.path.as_path())
+                .collect(),
             Self::Move { files } | Self::FinishMove { files } => {
                 files.iter().map(|(s, _)| s.path.as_path()).collect()
             }
@@ -243,6 +279,7 @@ impl Report {
                 Action::RenameDirectory(rename) => {
                     destinations.extend(
                         rename
+                            .inventory
                             .files
                             .iter()
                             .map(|source| rename.destination(&source.path))
@@ -265,7 +302,12 @@ impl Report {
             completed: self
                 .completed
                 .iter()
-                .filter(|a| matches!(a, Action::Trash { .. } | Action::Metadata { .. }))
+                .filter(|a| {
+                    matches!(
+                        a,
+                        Action::Trash { .. } | Action::TrashDirectory(_) | Action::Metadata { .. }
+                    )
+                })
                 .cloned()
                 .collect(),
             ..Default::default()
@@ -303,6 +345,120 @@ impl Report {
     }
 }
 
+/// Shared Trash expansion for staged decisions and explicit context-menu requests.
+fn trash_actions(
+    catalog: &Catalog,
+    rejected: &HashSet<MediaId>,
+    companions: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(Vec<Action>, HashSet<PathBuf>)> {
+    let index = catalog.companion_index();
+    let mut seen = HashSet::new();
+    let mut actions = Vec::new();
+    let fingerprints: HashMap<_, _> = catalog
+        .media
+        .iter()
+        .map(|m| (m.id, m.fingerprint))
+        .chain(
+            catalog
+                .supporting_fingerprints
+                .iter()
+                .map(|(id, f)| (*id, *f)),
+        )
+        .collect();
+    for (id, path) in catalog.organize_files() {
+        anyhow::ensure!(!cancelled(), "File planning cancelled");
+        if rejected.contains(&id) {
+            let photo = MediaKind::from_path(path).is_some_and(|kind| kind != MediaKind::Video);
+            let files = if companions && photo {
+                index
+                    .get(&path.with_extension(""))
+                    .cloned()
+                    .unwrap_or_else(|| vec![path.to_path_buf()])
+            } else {
+                let mut f = vec![path.to_path_buf()];
+                if photo && let Some(pair) = index.get(&path.with_extension("")) {
+                    f.extend(
+                        pair.iter()
+                            .filter(|p| {
+                                p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
+                            })
+                            .cloned(),
+                    );
+                }
+                f
+            };
+            let files = files
+                .into_iter()
+                .filter(|p| seen.insert(p.clone()))
+                .map(|path| {
+                    let source = Source::capture(path)?;
+                    if let Some(expected) = fingerprints.get(&MediaId::for_path(&source.path)) {
+                        anyhow::ensure!(
+                            source.fingerprint == *expected,
+                            "File changed since discovery: {}",
+                            source.path.display()
+                        );
+                    } else if MediaId::for_path(&source.path) == id {
+                        anyhow::bail!("File identity is unavailable: {}", source.path.display());
+                    }
+                    Ok(source)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if !files.is_empty() {
+                actions.push(Action::Trash { files });
+            }
+        }
+    }
+    Ok((actions, seen))
+}
+#[derive(Clone, Debug, Default)]
+pub struct TrashRequest {
+    pub files: Vec<MediaId>,
+    pub folders: Vec<PathBuf>,
+}
+/// Build one reviewable plan from the shared discovery inventory. No metadata or
+/// image decoding is needed. The executor repeats preflight before OS Trash.
+pub fn trash_plan(
+    catalog: &Catalog,
+    request: &TrashRequest,
+    companions: bool,
+    cancelled: impl Fn() -> bool,
+) -> Result<Plan> {
+    anyhow::ensure!(!cancelled(), "Trash planning cancelled");
+    let mut roots = request.folders.clone();
+    roots.sort();
+    roots.dedup();
+    let selected: HashSet<_> = roots.iter().cloned().collect();
+    roots.retain(|p| !p.ancestors().skip(1).any(|a| selected.contains(a)));
+    let files: HashMap<_, _> = catalog.organize_files().into_iter().collect();
+    let mut rejected = HashSet::new();
+    for id in &request.files {
+        anyhow::ensure!(!cancelled(), "Trash planning cancelled");
+        let path = files
+            .get(id)
+            .context("Selected file is no longer available")?;
+        if !path.ancestors().any(|p| selected.contains(p)) {
+            rejected.insert(*id);
+        }
+    }
+    let inventories = directory::Inventory::capture(catalog, &roots, &cancelled)?;
+    let (mut actions, _) = trash_actions(catalog, &rejected, companions, &cancelled)?;
+    for (path, inventory) in roots.into_iter().zip(inventories) {
+        inventory.verify(&path, &cancelled)?;
+        actions.push(Action::TrashDirectory(TrashDirectory {
+            path,
+            library: catalog.root.clone(),
+            inventory,
+        }));
+    }
+    Ok(Plan {
+        actions,
+        description: "Move the listed files and original folders to system Trash. Folder entries include every discovered file and subfolder. Changed contents stop that operation. Unrelated marks, ratings and Organize edits remain staged.".into(),
+        ..Default::default()
+    })
+}
+
 pub fn decisions_plan(
     catalog: &Catalog,
     decisions: &HashMap<MediaId, Decision>,
@@ -327,47 +483,13 @@ pub fn decisions_plan_with_metadata(
     mut load: impl FnMut(&Media) -> Result<Metadata>,
     cancelled: impl Fn() -> bool,
 ) -> Result<Plan> {
-    let index = catalog.companion_index();
-    let mut seen = HashSet::new();
-    let mut actions = Vec::new();
+    let rejected = decisions
+        .iter()
+        .filter(|(_, d)| d.rejected)
+        .map(|(id, _)| *id)
+        .collect();
+    let (mut actions, seen) = trash_actions(catalog, &rejected, companions, &cancelled)?;
     let mut writes: HashMap<PathBuf, (Option<u8>, Option<u8>)> = HashMap::new();
-    for media in &catalog.media {
-        anyhow::ensure!(!cancelled(), "File planning cancelled");
-        let Some(d) = decisions.get(&media.id) else {
-            continue;
-        };
-        if d.is_empty() {
-            continue;
-        }
-        if d.rejected {
-            let files = if companions {
-                index
-                    .get(&media.path.with_extension(""))
-                    .cloned()
-                    .unwrap_or_else(|| vec![media.path.clone()])
-            } else {
-                let mut f = vec![media.path.clone()];
-                if let Some(pair) = index.get(&media.path.with_extension("")) {
-                    f.extend(
-                        pair.iter()
-                            .filter(|p| {
-                                p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
-                            })
-                            .cloned(),
-                    );
-                }
-                f
-            };
-            let files = files
-                .into_iter()
-                .filter(|p| seen.insert(p.clone()))
-                .map(Source::capture)
-                .collect::<Result<Vec<_>>>()?;
-            if !files.is_empty() {
-                actions.push(Action::Trash { files });
-            }
-        }
-    }
     let mut prepared = Vec::new();
     let mut shared_sidecars = HashSet::new();
     for media in &catalog.media {
@@ -913,7 +1035,9 @@ fn execute_logged(
                 if cancelled()
                     && matches!(
                         action,
-                        Action::RenameDirectory(_) | Action::RenameFile { .. }
+                        Action::RenameDirectory(_)
+                            | Action::TrashDirectory(_)
+                            | Action::RenameFile { .. }
                     ) =>
             {
                 report.cancelled = true;
@@ -937,8 +1061,9 @@ fn execute_logged(
                     _ => {}
                 }
                 report.remaining.actions.push(action.clone());
-                report.errors.push(format!("{}: {e:#}", action.label()));
-                write_record(journal, "failed", i, action, &[], Some(&e.to_string()))?;
+                let detail = format!("{e:#}");
+                report.errors.push(action.failure_message(&detail));
+                write_record(journal, "failed", i, action, &[], Some(&detail))?;
                 if matches!(action, Action::RenameDirectory(_)) {
                     // Later sources depend on the reviewed spelling. Never run them
                     // after an unsuccessful prerequisite, including on retry.
@@ -996,7 +1121,7 @@ fn completion_identities(action: &Action) -> Vec<(MediaId, MediaId, Fingerprint)
     };
     match action {
         Action::RenameDirectory(rename) => {
-            for source in &rename.files {
+            for source in &rename.inventory.files {
                 record(&source.path, &rename.destination(&source.path));
             }
         }
@@ -1025,6 +1150,7 @@ fn apply(
     }
     match action {
         Action::RenameDirectory(rename) => rename.apply(cancelled)?,
+        Action::TrashDirectory(folder) => folder.apply(cancelled)?,
         Action::RenameFile { source, to } => {
             case_rename::apply_file(source, to, cancelled, file_names)?
         }
@@ -1093,7 +1219,7 @@ fn apply(
                 }
                 anyhow::ensure!(
                     cleanup_errors.is_empty(),
-                    "{e}; could not remove staged destinations: {}",
+                    "{e:#}; could not remove staged destinations: {}",
                     cleanup_errors.join("; ")
                 );
                 return Err(e);
@@ -1116,7 +1242,7 @@ fn apply(
                 source.verify()?;
             }
             for source in files {
-                trash::delete(&source.path).with_context(|| {
+                move_to_trash(&source.path).with_context(|| {
                     format!("Could not move {} to OS Trash", source.path.display())
                 })?;
             }
@@ -1230,7 +1356,20 @@ fn copy_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) -> R
 fn copy_contents_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) -> Result<()> {
     check_move_cancelled(cancelled)?;
     let mut input = File::open(source)?;
-    let mut output = OpenOptions::new().create_new(true).write(true).open(dest)?;
+    let metadata = input.metadata()?;
+    let mut times = fs::FileTimes::new().set_modified(metadata.modified()?);
+    if let Ok(accessed) = metadata.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    // Do not expose a private source while its fallback copy is still partial.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut output = options.open(dest)?;
     let result = (|| -> Result<()> {
         let mut buffer = vec![0u8; 1024 * 1024];
         loop {
@@ -1247,6 +1386,12 @@ fn copy_contents_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> b
             output.write_all(&buffer[..count])?;
         }
         check_move_cancelled(cancelled)?;
+        #[cfg(target_os = "macos")]
+        macos_attributes::copy(&input, &output, cancelled)?;
+        // Capture times before reading and preserve them before making the copy
+        // read-only. Failure leaves the source intact and rolls back this copy.
+        output.set_times(times)?;
+        output.set_permissions(metadata.permissions())?;
         output.sync_all()?;
         check_move_cancelled(cancelled)?;
         Ok(())
@@ -1282,4 +1427,58 @@ pub fn content_hash(path: &Path, cancelled: impl Fn() -> bool) -> Result<String>
         hash.update(&buffer[..n]);
     }
     Ok(hash.finalize().to_hex().to_string())
+}
+
+// All workflows use this boundary through the reviewed executor. The macOS
+// crate default launches Finder AppleScript and can wait on automation events.
+fn trash_context() -> trash::TrashContext {
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        let mut context = trash::TrashContext::default();
+        context.set_delete_method(DeleteMethod::NsFileManager);
+        context
+    }
+    #[cfg(not(target_os = "macos"))]
+    trash::TrashContext::default()
+}
+fn move_to_trash(path: &Path) -> Result<()> {
+    // trash 5.2.9 percent-encodes non-UTF-8 bytes before fileURLWithPath. That
+    // can name a different literal %-encoded sibling. Refuse rather than target
+    // a file other than the exact identity verified by the executor.
+    #[cfg(target_os = "macos")]
+    anyhow::ensure!(
+        path.to_str().is_some(),
+        "macOS Trash cannot safely represent this file name; rename it to valid Unicode before retrying"
+    );
+    trash_context().delete(path)?;
+    Ok(())
+}
+#[cfg(all(test, target_os = "macos"))]
+mod macos_trash_tests {
+    use super::*;
+    #[test]
+    fn organize_trash_uses_native_backend_and_rejects_ambiguous_byte_names() {
+        use std::os::unix::ffi::OsStringExt;
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        assert!(matches!(
+            trash_context().delete_method(),
+            DeleteMethod::NsFileManager
+        ));
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp
+            .path()
+            .join(std::ffi::OsString::from_vec(b"unsafe-\xff.txt".to_vec()));
+        let encoded = temp.path().join("unsafe-%FF.txt");
+        // APFS can reject creating this name. The boundary must still reject
+        // its bytes before the dependency can reinterpret the encoded sibling.
+        fs::write(&encoded, b"unrelated sibling").unwrap();
+        assert!(
+            move_to_trash(&source)
+                .unwrap_err()
+                .to_string()
+                .contains("safely represent")
+        );
+        assert_eq!(fs::read(&encoded).unwrap(), b"unrelated sibling");
+    }
 }

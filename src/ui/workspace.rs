@@ -1,5 +1,7 @@
 #[path = "browsing.rs"]
 mod browsing;
+#[path = "collection_controls.rs"]
+mod collection_controls;
 #[path = "delete_review.rs"]
 mod delete_review;
 #[path = "desktop.rs"]
@@ -36,6 +38,8 @@ mod selection;
 mod shortcuts;
 #[path = "status.rs"]
 mod status;
+#[path = "tree_controls.rs"]
+mod tree_controls;
 #[path = "video.rs"]
 mod video;
 use super::theme::*;
@@ -111,6 +115,7 @@ pub struct PhotoSortApp {
     preferences: crate::core::preferences::Preferences,
     preferences_path: Option<PathBuf>,
     preferences_draft: Option<crate::core::preferences::Preferences>,
+    preferences_section: Option<preferences::Section>,
     browse_filters_open: bool,
     about: bool,
     update_dialog: bool,
@@ -206,6 +211,7 @@ pub struct PhotoSortApp {
     was_wide: bool,
     companions: bool,
     group_mode: GroupMode,
+    pending_location_layout: Option<crate::core::geography::Layout>,
     output: String,
     organize_drafts: HashMap<GroupMode, crate::core::organize::Draft>,
     organize_editor: Option<organize::Editor>,
@@ -228,6 +234,7 @@ pub struct PhotoSortApp {
     retry_edit: Option<plan_review::Edit>,
     recovery_ticket: Option<crate::core::operations::recovery::Ticket>,
     applying_plan: Option<Plan>,
+    plan_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     apply_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     plan_open: bool,
     help: bool,
@@ -242,6 +249,42 @@ pub struct PhotoSortApp {
     view_started: Instant,
 }
 impl PhotoSortApp {
+    fn report_scan_warnings(&mut self, warnings: &[String]) {
+        if let Some(first) = warnings.first() {
+            let warning = format!("{} scan warning(s). {first}", warnings.len());
+            // Recovery is published before the catalog; discovery must not hide it.
+            match &mut self.error {
+                Some(error) => {
+                    error.push('\n');
+                    error.push_str(&warning);
+                }
+                None => self.error = Some(warning),
+            }
+        }
+    }
+
+    fn restore_operations(&mut self, restored: crate::core::operations::recovery::Restored) {
+        self.rotation_plan = !restored.plan.actions.is_empty() && restored.rotation_only;
+        self.retry_plan = (!restored.plan.actions.is_empty()).then_some(restored.plan);
+        self.recovery_ticket = self.retry_plan.as_ref().map(|_| restored.ticket);
+        if let Some(plan) = &self.retry_plan {
+            self.set_status(format!(
+                "{} saved operations await review",
+                plan.actions.len()
+            ));
+            let mut details = restored.errors;
+            if restored.uncertain > 0 {
+                details.insert(0, format!(
+                    "{} operation(s) were interrupted before a completion record. They may already be partly applied. Check their source and destination files before retrying; the original source and overwrite guards remain active.",
+                    restored.uncertain
+                ));
+            }
+            if !details.is_empty() {
+                self.error = Some(details.join("\n"));
+            }
+        }
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, folder: Option<PathBuf>) -> Self {
         theme_install(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
@@ -274,6 +317,7 @@ impl PhotoSortApp {
             preferences: Default::default(),
             preferences_path: None,
             preferences_draft: None,
+            preferences_section: None,
             browse_filters_open: false,
             about: false,
             update_dialog: false,
@@ -373,6 +417,7 @@ impl PhotoSortApp {
             was_wide: true,
             companions: true,
             group_mode: GroupMode::Current,
+            pending_location_layout: None,
             output: String::new(),
             organize_drafts: HashMap::new(),
             organize_editor: None,
@@ -395,6 +440,7 @@ impl PhotoSortApp {
             retry_edit: None,
             recovery_ticket: None,
             applying_plan: None,
+            plan_stop: None,
             apply_stop: None,
             plan_open: false,
             help: false,
@@ -418,12 +464,28 @@ impl PhotoSortApp {
             manual_groups: self.manual_groups.clone(),
             scene_groups: self.scene_groups.clone(),
             decisions: self.decisions.clone(),
+            organize: self.catalog.as_ref().and_then(|catalog| {
+                crate::core::organize::Intent::capture(
+                    catalog,
+                    self.organize_drafts.clone(),
+                    self.file_names.clone(),
+                    PathBuf::from(&self.output),
+                )
+            }),
             ..Default::default()
         }
     }
     fn session_snapshot(&self) -> Session {
         let mut session = self.session_intent();
         session.fingerprints = self.media.iter().map(|m| (m.id, m.fingerprint)).collect();
+        if let Some(catalog) = &self.catalog {
+            session.fingerprints.extend(
+                session
+                    .decisions
+                    .keys()
+                    .filter_map(|id| catalog.supporting_fingerprints.get(id).map(|f| (*id, *f))),
+            );
+        }
         session
     }
     fn save_session(&mut self) {
@@ -534,6 +596,7 @@ impl PhotoSortApp {
         self.applying_plan = None;
         self.apply_stop = None;
         self.plan_open = false;
+        self.pending_location_layout = None;
         self.organize_drafts.clear();
         self.organize_editor = None;
         self.organize_departure = None;
@@ -723,6 +786,13 @@ impl PhotoSortApp {
                         self.metadata_progress = Some((done, total));
                         if done == total {
                             self.metadata_run = None;
+                            if self.metadata_organize_mode()
+                                && self.organize_departure.is_some()
+                                && self.plan.is_none()
+                                && self.organize_metadata_ready()
+                            {
+                                self.organize();
+                            }
                         }
                         self.filter_dirty = true;
                     }
@@ -756,16 +826,15 @@ impl PhotoSortApp {
                     self.manual_groups = session.manual_groups;
                     self.scene_groups = session.scene_groups;
                     self.decisions = session.decisions;
+                    if let Some(intent) = session.organize {
+                        self.organize_drafts = intent.drafts;
+                        self.file_names = intent.names;
+                        self.output = intent.output.to_string_lossy().into_owned();
+                    }
                     self.active = self.media.first().map(|m| m.id);
                     self.root = Some(catalog.root.clone());
                     self.set_status(format!("{} items · library ready", self.media.len()));
-                    if !catalog.warnings.is_empty() {
-                        self.error = Some(format!(
-                            "{} scan warning(s). {}",
-                            catalog.warnings.len(),
-                            catalog.warnings[0]
-                        ));
-                    }
+                    self.report_scan_warnings(&catalog.warnings);
                     self.preferences.remember(&catalog.root);
                     self.save_preferences();
                     self.catalog = Some(catalog);
@@ -796,7 +865,7 @@ impl PhotoSortApp {
                         );
                     }
                     self.start_ready_pick_analysis();
-                    if self.step == Step::Cull {
+                    if self.step == Step::Cull || self.metadata_organize_mode() {
                         self.start_metadata_index();
                     }
                 }
@@ -1055,7 +1124,23 @@ impl PhotoSortApp {
                         }
                     }
                 }
+                Event::PlanningCancelled => {
+                    self.plan_stop = None;
+                    self.busy = false;
+                    self.organize_departure = None;
+                    self.set_status("File planning cancelled · edits retained".into());
+                }
                 Event::Planned(mut plan) => {
+                    if let Some(stop) = self.plan_stop.take() {
+                        if stop.load(std::sync::atomic::Ordering::Acquire) {
+                            self.busy = false;
+                            self.organize_departure = None;
+                            self.set_status("File planning cancelled · edits retained".into());
+                            continue;
+                        }
+                        self.set_status("File plan ready · review your changes".into());
+                    }
+
                     if self.rotation_plan {
                         plan.description = "Apply confirmed rotation corrections".into();
                     }
@@ -1069,26 +1154,7 @@ impl PhotoSortApp {
                         self.plan_open = self.organize_departure.is_none();
                     }
                 }
-                Event::OperationsRestored(restored) => {
-                    self.rotation_plan =
-                        !restored.plan.actions.is_empty() && restored.rotation_only;
-                    self.retry_plan = (!restored.plan.actions.is_empty()).then_some(restored.plan);
-                    self.recovery_ticket = self.retry_plan.as_ref().map(|_| restored.ticket);
-                    if let Some(plan) = &self.retry_plan {
-                        self.set_status(format!(
-                            "{} saved operations await review",
-                            plan.actions.len()
-                        ));
-                        if restored.uncertain > 0 {
-                            self.error = Some(format!(
-                                "{} operation(s) were interrupted before a completion record. They may already be partly applied. Check their source and destination files before retrying; the original source and overwrite guards remain active.",
-                                restored.uncertain
-                            ));
-                        } else if !restored.errors.is_empty() {
-                            self.error = Some(restored.errors.join("\n"));
-                        }
-                    }
-                }
+                Event::OperationsRestored(restored) => self.restore_operations(restored),
                 Event::ApplyFailed(error) => {
                     self.applying_plan = None;
                     self.apply_stop = None;
@@ -1246,6 +1312,7 @@ impl PhotoSortApp {
                     self.error = Some(error);
                 }
                 Event::Error(e) => {
+                    self.plan_stop = None;
                     self.apply_stop = None;
                     self.group_task = None;
                     self.resume_suspended = self.pending_bookmark.is_some();
@@ -1439,11 +1506,21 @@ impl PhotoSortApp {
         self.progress = None;
         self.set_status("Analysis cancelled · completed results retained".into());
     }
+    pub(super) fn can_start_analysis(&self) -> bool {
+        !self.media.is_empty() && !self.scanning && !self.busy && self.analysis_run.is_none()
+    }
+    pub(super) fn analyze_current_workflow(&mut self) {
+        if self.step == Step::Rotation {
+            self.detect_rotations();
+        } else {
+            self.analyze();
+        }
+    }
     fn analyze(&mut self) {
-        if !self.model_install_ready() {
+        if !self.can_start_analysis() || !self.model_install_ready() {
             return;
         }
-        if self.scanning || self.busy || !self.allow_review_departure() {
+        if !self.allow_review_departure() {
             return;
         }
         self.resume_suspended = false;
@@ -1570,14 +1647,10 @@ impl PhotoSortApp {
                 .filter(|m| !m.camera.is_empty())
                 .map(|m| m.camera.clone())
                 .unwrap_or_else(|| "Unknown camera".into()),
-            GroupMode::Location => meta
-                .and_then(|m| m.location.as_ref())
-                .map(|l| format!("{} - {}", l.country, l.city))
-                .or_else(|| {
-                    meta.and_then(|m| m.gps)
-                        .map(|(lat, lon)| format!("{lat:.2}, {lon:.2}"))
-                })
-                .unwrap_or_else(|| "No GPS".into()),
+            GroupMode::Location => self
+                .preferences
+                .location_layout
+                .label(meta.unwrap_or(&Metadata::default())),
             GroupMode::Faces => self
                 .face_groups
                 .as_ref()
@@ -1618,11 +1691,40 @@ impl PhotoSortApp {
                 }),
         }
     }
+    fn review_trash(&mut self, request: crate::core::operations::TrashRequest) {
+        if self.scanning || self.busy || self.review_remaining_operations() {
+            return;
+        }
+        let Some(catalog) = self.catalog.clone() else {
+            return;
+        };
+        self.save_session();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        match self.runtime.io(IoWork::PlanTrash {
+            catalog,
+            request,
+            companions: self.companions,
+            cancelled: cancelled.clone(),
+        }) {
+            Ok(()) => {
+                self.set_review_plan(None);
+                self.rotation_plan = false;
+                self.busy = true;
+                self.plan_stop = Some(cancelled);
+                self.set_status("Checking files and folders for Trash review…".into());
+            }
+            Err(e) => self.error = Some(e),
+        }
+    }
     fn organize(&mut self) {
         if self.review_remaining_operations() {
             return;
         }
         if self.scanning || self.busy {
+            return;
+        }
+        if !self.organize_metadata_ready() {
+            self.start_metadata_index();
             return;
         }
         if self.automatic_organize_mode()
@@ -1655,7 +1757,9 @@ impl PhotoSortApp {
                     crate::core::organize::Draft::from_catalog(&catalog, labels.clone())
                         .directory_edits()
                 });
+            let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
             match self.runtime.io(IoWork::PlanOrganize {
+                cancelled: cancelled.clone(),
                 directories,
                 catalog,
                 labels,
@@ -1663,7 +1767,10 @@ impl PhotoSortApp {
                 output: PathBuf::from(&self.output),
                 companions: self.companions,
             }) {
-                Ok(()) => self.busy = true,
+                Ok(()) => {
+                    self.busy = true;
+                    self.plan_stop = Some(cancelled);
+                }
                 Err(e) => self.error = Some(e),
             }
         }
@@ -1804,9 +1911,12 @@ impl PhotoSortApp {
         self.set_active(id);
     }
     fn modal_active(&self) -> bool {
+        self.organize_editor.is_some() || self.other_modal_active()
+    }
+    fn other_modal_active(&self) -> bool {
         self.plan_open
             || self.browse_filters_open
-            || self.organize_editor.is_some()
+            || self.pending_location_layout.is_some()
             || self.organize_departure.is_some()
             || self.help
             || self.update_dialog
@@ -1818,7 +1928,7 @@ impl PhotoSortApp {
             || self.departure.is_some()
     }
     fn keyboard(&mut self, ctx: &egui::Context) {
-        if egui::Popup::is_any_open(ctx) || self.modal_active() {
+        if egui::Popup::is_any_open(ctx) || self.navigator_popup_open(ctx) || self.modal_active() {
             return;
         }
         if self.application_shortcuts(ctx) || ctx.wants_keyboard_input() {
@@ -1842,6 +1952,10 @@ impl PhotoSortApp {
                 continue;
             }
             let command = modifiers.command || modifiers.ctrl;
+            if selection::clear_trash_shortcut(pressed, modifiers) {
+                self.clear_all_trash_marks();
+                continue;
+            }
             if command
                 && (modifiers.alt
                     || !matches!(
@@ -1864,7 +1978,7 @@ impl PhotoSortApp {
             {
                 continue;
             }
-            if modifiers.alt && !matches!(pressed, egui::Key::R | egui::Key::D) {
+            if modifiers.alt && pressed != egui::Key::R {
                 continue;
             }
             self.pending_bookmark = None;
@@ -2016,15 +2130,11 @@ impl PhotoSortApp {
                     pressed == egui::Key::ArrowLeft,
                 );
             }
-            if pressed == egui::Key::D && !matches!(self.step, Step::EasyDelete | Step::PickBest) {
-                if modifiers.alt {
-                    for d in self.decisions.values_mut() {
-                        d.rejected = false;
-                    }
-                    self.changed();
-                } else if let Some(id) = self.active {
-                    self.reject(id);
-                }
+            if pressed == egui::Key::D
+                && !matches!(self.step, Step::EasyDelete | Step::PickBest)
+                && let Some(id) = self.active
+            {
+                self.reject(id);
             }
             if pressed == egui::Key::R
                 && let Some(id) = self.active
@@ -2253,6 +2363,9 @@ impl PhotoSortApp {
                         ui.label(if self.step == Step::Rotation && self.rotation_queue_only {
                             "No rotation suggestions remain. Turn off Suggestions only to review any photo manually."
                         } else if self.step == Step::PickBest { "No comparable clusters. Analyze the library to find similar photos." } else if self.step == Step::EasyDelete { "No reviews match. Analyze the library or enable more categories." } else { "No photos match these filters." });
+                    } else if self.organize_editor.is_some() {
+                        // The editor owns the visible content. Do not render or
+                        // submit hidden image/detail requests behind its modal.
                     } else if self.review {
                         self.review_canvas(ui);
                     } else {
@@ -2272,12 +2385,6 @@ impl PhotoSortApp {
                 });
             self.inspector = open;
         }
-        self.runtime.inspect(self.inspection_wanted.clone());
-        self.inspection_frames.retain(|slot, _| {
-            self.inspection_wanted
-                .iter()
-                .any(|request| request.slot == *slot)
-        });
         let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
         if let Some(path) = dropped {
             self.open(if path.is_dir() {
@@ -2291,6 +2398,13 @@ impl PhotoSortApp {
         let smoke_requested = self.smoke_close_requested(ctx);
         self.handle_close_request(ctx, native_requested || smoke_requested);
         self.dialogs(ctx);
+        // Include detail requested by the folder editor's shared preview canvas.
+        self.runtime.inspect(self.inspection_wanted.clone());
+        self.inspection_frames.retain(|slot, _| {
+            self.inspection_wanted
+                .iter()
+                .any(|request| request.slot == *slot)
+        });
         self.sync_playback(ctx);
         if self.view_checkpoint.elapsed() >= Duration::from_secs(1) {
             self.checkpoint_bookmarks();
@@ -2477,6 +2591,26 @@ mod organize_tests {
         }
         app.poll(&egui::Context::default());
         app.runtime.events = original;
+    }
+    #[test]
+    fn folder_trash_cancelled_plans_never_open_late_review_or_drop_kept_edits() {
+        let mut app = app();
+        app.file_names.insert(MediaId(1), "Keep".into());
+        app.busy = true;
+        app.plan_stop = Some(Arc::new(std::sync::atomic::AtomicBool::new(true)));
+        deliver(&mut app, vec![Event::Planned(Plan::default())]);
+        assert!(!app.busy && app.plan.is_none() && app.plan_stop.is_none());
+        assert_eq!(app.file_names[&MediaId(1)], "Keep");
+        app.busy = true;
+        app.plan_stop = Some(Arc::new(std::sync::atomic::AtomicBool::new(true)));
+        deliver(&mut app, vec![Event::PlanningCancelled]);
+        assert!(!app.busy && app.plan.is_none() && app.error.is_none());
+        assert_eq!(app.file_names[&MediaId(1)], "Keep");
+        app.busy = true;
+        app.plan_stop = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        deliver(&mut app, vec![Event::Planned(Plan::default())]);
+        assert!(!app.busy && app.plan.is_some() && app.plan_open);
+        assert_eq!(app.status, "File plan ready · review your changes");
     }
     #[test]
     fn regional_results_are_atomic_run_guarded_and_keep_subject_groups_separate() {
@@ -2848,7 +2982,6 @@ mod organize_tests {
     fn preview_starts_the_matching_mode_once_and_manual_drafts_need_no_model_work() {
         for mode in [GroupMode::Visual, GroupMode::Faces, GroupMode::Mixed] {
             let (_dir, mut app) = visual_fixture();
-            app.media.clear();
             app.group_mode = mode;
             app.analysis_run = None;
             app.organize_run = None;

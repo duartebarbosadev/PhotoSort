@@ -4,15 +4,168 @@ use super::{
     operations::safe_component,
 };
 use anyhow::{Result, ensure};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Draft {
     labels: HashMap<MediaId, String>,
     folders: BTreeSet<String>,
     explicit: BTreeSet<String>,
     empty_origins: BTreeMap<String, String>,
     directory_origins: BTreeMap<String, String>,
+}
+/// Kept organization intent, persisted with review decisions and recovery.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Intent {
+    pub drafts: HashMap<super::views::GroupMode, Draft>,
+    pub names: HashMap<MediaId, String>,
+    pub output: std::path::PathBuf,
+    fingerprints: HashMap<MediaId, super::model::Fingerprint>,
+    directory_identities: HashMap<String, [u64; 4]>,
+}
+impl Intent {
+    pub fn capture(
+        catalog: &super::catalog::Catalog,
+        drafts: HashMap<super::views::GroupMode, Draft>,
+        names: HashMap<MediaId, String>,
+        output: std::path::PathBuf,
+    ) -> Option<Self> {
+        if drafts.is_empty() && names.is_empty() {
+            return None;
+        }
+        let fingerprints = catalog
+            .media
+            .iter()
+            .map(|m| (m.id, m.fingerprint))
+            .chain(
+                catalog
+                    .supporting_fingerprints
+                    .iter()
+                    .map(|(id, f)| (*id, *f)),
+            )
+            .collect();
+        Some(Self {
+            drafts,
+            names,
+            output,
+            fingerprints,
+            directory_identities: Self::directory_identities(catalog),
+        })
+    }
+    pub fn relocate(&mut self, changes: &[(MediaId, MediaId, super::model::Fingerprint)]) {
+        super::model::remap_media_ids(&mut self.names, changes);
+        for draft in self.drafts.values_mut() {
+            super::model::remap_media_ids(&mut draft.labels, changes);
+        }
+        for (old, _, _) in changes {
+            self.fingerprints.remove(old);
+        }
+        self.fingerprints
+            .extend(changes.iter().map(|(_, new, f)| (*new, *f)));
+    }
+    fn directory_identities(catalog: &super::catalog::Catalog) -> HashMap<String, [u64; 4]> {
+        catalog
+            .directory_identities
+            .iter()
+            .filter_map(|(p, id)| {
+                p.strip_prefix(&catalog.root)
+                    .ok()
+                    .map(|relative| (relative.to_string_lossy().replace('\\', "/"), *id))
+            })
+            .collect()
+    }
+    pub fn reconcile(&mut self, catalog: &super::catalog::Catalog) {
+        let current: HashMap<_, _> = catalog
+            .media
+            .iter()
+            .map(|m| (m.id, m.fingerprint))
+            .chain(
+                catalog
+                    .supporting_fingerprints
+                    .iter()
+                    .map(|(id, f)| (*id, *f)),
+            )
+            .collect();
+        let valid = |id: &MediaId| {
+            self.fingerprints
+                .get(id)
+                .zip(current.get(id))
+                .is_some_and(|(a, b)| a == b)
+        };
+        self.names.retain(|id, _| valid(id));
+        let directory_identities = Self::directory_identities(catalog);
+        let same_directory = |source: &String| {
+            self.directory_identities
+                .get(source)
+                .zip(directory_identities.get(source))
+                .is_some_and(|(old, current)| old == current && *old != [0; 4])
+        };
+        let current_labels = catalog
+            .organize_files()
+            .into_iter()
+            .map(|(id, path)| {
+                (
+                    id,
+                    path.parent()
+                        .and_then(|p| p.strip_prefix(&catalog.root).ok())
+                        .unwrap_or_else(|| std::path::Path::new(""))
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                )
+            })
+            .collect();
+        let baseline = Draft::from_catalog(catalog, current_labels);
+        for (mode, draft) in &mut self.drafts {
+            draft.labels.retain(|id, _| valid(id));
+            // New or replaced files have no accepted destination. Keep them at
+            // their current location in manual/metadata layouts. AI layouts keep
+            // their reviewed membership until a new grouping pass is requested.
+            if matches!(
+                mode,
+                super::views::GroupMode::Current
+                    | super::views::GroupMode::Date
+                    | super::views::GroupMode::Camera
+                    | super::views::GroupMode::Location
+            ) {
+                for (id, label) in &baseline.labels {
+                    draft.labels.entry(*id).or_insert_with(|| label.clone());
+                }
+            }
+            draft
+                .empty_origins
+                .retain(|source, _| same_directory(source));
+            draft
+                .directory_origins
+                .retain(|source, _| same_directory(source));
+            for (source, target) in &baseline.directory_origins {
+                draft
+                    .directory_origins
+                    .entry(source.clone())
+                    .or_insert_with(|| target.clone());
+            }
+            for (source, target) in &baseline.empty_origins {
+                draft
+                    .empty_origins
+                    .entry(source.clone())
+                    .or_insert_with(|| target.clone());
+            }
+            draft.folders = BTreeSet::from([String::new()]);
+            let destinations: Vec<_> = draft
+                .labels
+                .values()
+                .chain(draft.explicit.iter())
+                .chain(draft.empty_origins.values())
+                .chain(draft.directory_origins.values())
+                .cloned()
+                .collect();
+            for path in destinations {
+                draft.include_parents(&path);
+            }
+        }
+        self.fingerprints = current;
+        self.directory_identities = directory_identities;
+    }
 }
 /// A staged selection shared by drag/drop and explicit move controls.
 #[derive(Clone, Debug, Default)]
@@ -237,6 +390,18 @@ impl Draft {
     ) -> Result<()> {
         self.validate_move(selection, target)?;
         let mut files = selection.files.clone();
+        self.expand_companions(&mut files, media, companions);
+        let mut next = self.clone();
+        // Explicitly selected files move directly to the target, matching the
+        // reference's file-then-folder order for mixed selections.
+        next.move_photos(&files.into_iter().collect::<Vec<_>>(), target)?;
+        for source in selection.roots() {
+            next.nest_folder(source, target)?;
+        }
+        *self = next;
+        Ok(())
+    }
+    fn expand_companions(&self, files: &mut HashSet<MediaId>, media: &[Media], companions: bool) {
         if companions {
             let stems: HashSet<_> = media
                 .iter()
@@ -254,14 +419,60 @@ impl Draft {
                     .map(|m| m.id),
             );
         }
-        let mut next = self.clone();
-        // Explicitly selected files move directly to the target, matching the
-        // reference's file-then-folder order for mixed selections.
-        next.move_photos(&files.into_iter().collect::<Vec<_>>(), target)?;
-        for source in selection.roots() {
-            next.nest_folder(source, target)?;
+    }
+    /// Resolve files represented by the proposed tree, including descendants.
+    /// Shared by destination reset and review actions; never walks the disk.
+    pub fn selection_files(&self, selection: &Selection) -> Result<HashSet<MediaId>> {
+        ensure!(
+            selection
+                .files
+                .iter()
+                .all(|id| self.labels.contains_key(id)),
+            "Selection contains an unavailable file"
+        );
+        ensure!(
+            selection
+                .folders
+                .iter()
+                .all(|path| self.folders.contains(path)),
+            "Selection contains an unavailable folder"
+        );
+        let mut files = selection.files.clone();
+        files.extend(
+            self.labels
+                .iter()
+                .filter(|(_, label)| {
+                    selection
+                        .folders
+                        .iter()
+                        .any(|folder| folder.is_empty() || within(label, folder))
+                })
+                .map(|(id, _)| *id),
+        );
+        Ok(files)
+    }
+    /// Reset only selected file destinations to the generated proposal. Folder
+    /// selections include their current descendants; explicit directory edits
+    /// and file names are separate intent and are not reset here. No I/O.
+    pub fn reset_destinations(
+        &mut self,
+        selection: &Selection,
+        initial: &HashMap<MediaId, String>,
+        media: &[Media],
+        companions: bool,
+    ) -> Result<()> {
+        let mut files = self.selection_files(selection)?;
+        self.expand_companions(&mut files, media, companions);
+        ensure!(
+            files.iter().all(|id| initial.contains_key(id)),
+            "Original grouping is unavailable for a selected file"
+        );
+        // All fallible validation precedes mutation, including expanded companions.
+        for id in files {
+            let label = initial[&id].clone();
+            self.include_parents(&label);
+            self.labels.insert(id, label);
         }
-        *self = next;
         Ok(())
     }
     /// Rewrite the whole subtree atomically. Refuse ambiguous folder merges.

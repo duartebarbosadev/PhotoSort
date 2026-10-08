@@ -145,6 +145,7 @@ pub enum Event {
         suggestion: super::models::RotationSuggestion,
     },
     Planned(Plan),
+    PlanningCancelled,
     Applied(Report),
     OperationsRestored(operations::recovery::Restored),
     OperationsDiscarded,
@@ -184,7 +185,14 @@ pub enum IoWork {
         views: super::views::Saved,
     },
     Scan(PathBuf),
+    PlanTrash {
+        catalog: Arc<Catalog>,
+        request: operations::TrashRequest,
+        companions: bool,
+        cancelled: Arc<AtomicBool>,
+    },
     PlanOrganize {
+        cancelled: Arc<AtomicBool>,
         directories: super::organize::DirectoryEdits,
         catalog: Arc<Catalog>,
         labels: HashMap<MediaId, String>,
@@ -570,7 +578,7 @@ impl Runtime {
                                     |batch| io_pub.send(epoch, Event::Batch(batch)),
                                 )?;
                                 let mut session = Session::load(&catalog.root)?;
-                                session.reconcile(&catalog.media);
+                                session.reconcile_catalog(&catalog);
                                 let mut views = super::views::Saved::load(&catalog.root)
                                     .unwrap_or_else(|e| {
                                         io_pub.send(
@@ -588,25 +596,46 @@ impl Runtime {
                                 io_pub
                                     .send(epoch, Event::Opened(Arc::new(catalog), session, views));
                             }
+                            IoWork::PlanTrash {
+                                catalog,
+                                request,
+                                companions,
+                                cancelled,
+                            } => {
+                                let result =
+                                    operations::trash_plan(&catalog, &request, companions, || {
+                                        io_pub.cancelled(epoch) || cancelled.load(Ordering::Acquire)
+                                    });
+                                if cancelled.load(Ordering::Acquire) {
+                                    io_pub.send(epoch, Event::PlanningCancelled);
+                                } else {
+                                    io_pub.send(epoch, Event::Planned(result?));
+                                }
+                            }
                             IoWork::PlanOrganize {
+                                cancelled,
                                 directories,
                                 catalog,
                                 labels,
                                 names,
                                 output,
                                 companions,
-                            } => io_pub.send(
-                                epoch,
-                                Event::Planned(operations::organize_plan_with_layout_cancellable(
+                            } => {
+                                let result = operations::organize_plan_with_layout_cancellable(
                                     &catalog,
                                     &labels,
                                     &names,
                                     &output,
                                     companions,
                                     &directories,
-                                    || io_pub.cancelled(epoch),
-                                )?),
-                            ),
+                                    || io_pub.cancelled(epoch) || cancelled.load(Ordering::Acquire),
+                                );
+                                if cancelled.load(Ordering::Acquire) {
+                                    io_pub.send(epoch, Event::PlanningCancelled);
+                                } else {
+                                    io_pub.send(epoch, Event::Planned(result?));
+                                }
+                            }
                             IoWork::ApplyRecoverable {
                                 context,
                                 plan,

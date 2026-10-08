@@ -199,3 +199,138 @@ fn selection_moves_feed_one_companion_safe_plan_with_documents_and_empty_trees()
         2
     );
 }
+
+#[test]
+fn selective_reset_expands_descendants_companions_and_validates_atomically() {
+    let media: Vec<_> = [
+        (1, "pair.jpg", MediaKind::Photo),
+        (2, "pair.ARW", MediaKind::Raw),
+        (3, "pair.mov", MediaKind::Video),
+    ]
+    .into_iter()
+    .map(|(id, path, kind)| Media {
+        id: MediaId(id),
+        path: format!("/missing/{path}").into(),
+        kind,
+        fingerprint: Default::default(),
+    })
+    .collect();
+    let initial: HashMap<_, _> = [
+        (1, "Japan"),
+        (2, "Japan"),
+        (3, "videos"),
+        (4, "notes"),
+        (5, "untouched"),
+    ]
+    .into_iter()
+    .map(|(id, p)| (MediaId(id), p.into()))
+    .collect();
+    let mut draft = Draft::new(
+        [
+            (1, "edited/sub"),
+            (2, "elsewhere"),
+            (3, "other"),
+            (4, "edited"),
+            (5, "edited-sibling"),
+        ]
+        .into_iter()
+        .map(|(id, p)| (MediaId(id), p.into()))
+        .collect(),
+    );
+    draft.create_folder("edited", "empty").unwrap();
+    let before = draft.clone();
+    let mut incomplete = initial.clone();
+    incomplete.remove(&MediaId(2));
+    assert!(
+        draft
+            .reset_destinations(&folders(&["edited"]), &incomplete, &media, true)
+            .is_err()
+    );
+    assert_eq!(draft, before);
+    assert!(
+        draft
+            .reset_destinations(&files(&[1, 99]), &initial, &media, true)
+            .is_err()
+    );
+    assert!(
+        draft
+            .reset_destinations(&folders(&["missing"]), &initial, &media, true)
+            .is_err()
+    );
+    assert_eq!(draft, before);
+    draft
+        .reset_destinations(&folders(&["edited", "edited/sub"]), &initial, &media, true)
+        .unwrap();
+    for (id, expected) in [
+        (1, "Japan"),
+        (2, "Japan"),
+        (3, "other"),
+        (4, "notes"),
+        (5, "edited-sibling"),
+    ] {
+        assert_eq!(draft.labels()[&MediaId(id)], expected);
+    }
+    assert!(draft.folders().contains("edited/empty"));
+    let mut independent = before;
+    independent
+        .reset_destinations(&files(&[1]), &initial, &media, false)
+        .unwrap();
+    assert_eq!(independent.labels()[&MediaId(2)], "elsewhere");
+}
+#[test]
+fn selective_reset_feeds_shared_plan_and_keeps_unrelated_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    fs::create_dir(root.join("trip")).unwrap();
+    for name in ["a.jpg", "a.ARW", "a.xmp", "notes.txt", "b.jpg"] {
+        fs::write(root.join("trip").join(name), name).unwrap();
+    }
+    let catalog = Catalog::scan(&root, || false, |_| {}).unwrap();
+    let initial: HashMap<_, _> = catalog
+        .organize_files()
+        .iter()
+        .map(|(id, _)| (*id, "trip".into()))
+        .collect();
+    let mut draft = Draft::from_catalog(&catalog, initial.clone());
+    draft.rename_folder("trip", "Edited").unwrap();
+    let id = catalog
+        .media
+        .iter()
+        .find(|m| m.name() == "a.ARW")
+        .unwrap()
+        .id;
+    draft
+        .reset_destinations(
+            &Selection {
+                files: HashSet::from([id]),
+                ..Default::default()
+            },
+            &initial,
+            &catalog.media,
+            true,
+        )
+        .unwrap();
+    let plan = operations::organize_plan_with_layout(
+        &catalog,
+        draft.labels(),
+        &HashMap::new(),
+        &root,
+        true,
+        &draft.directory_edits(),
+    )
+    .unwrap();
+    let result = operations::execute(&plan, &root.join("journal"), || false, |_, _| {}).unwrap();
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    for name in ["a.jpg", "a.ARW", "a.xmp"] {
+        assert_eq!(
+            fs::read(root.join("trip").join(name)).unwrap(),
+            name.as_bytes()
+        );
+    }
+    for name in ["notes.txt", "b.jpg"] {
+        assert_eq!(
+            fs::read(root.join("Edited").join(name)).unwrap(),
+            name.as_bytes()
+        );
+    }
+}

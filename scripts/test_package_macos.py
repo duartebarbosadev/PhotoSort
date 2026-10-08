@@ -4,6 +4,8 @@ import hashlib
 import io
 from pathlib import Path
 import sys
+import os
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -74,6 +76,99 @@ class BundleIntegrityTests(unittest.TestCase):
             self.assertEqual(package_macos.bundle_manifest(contents), before)
             resource.write_bytes(b"damaged model")
             self.assertNotEqual(package_macos.bundle_manifest(contents), before)
+
+    def test_signing_seals_final_nested_code_and_never_falls_back(self):
+        for identity in ('-', 'Apple Development: Explicit Name (TEAMID)'):
+            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
+                app = Path(directory)/'PhotoSort.app'
+                contents = app/'Contents'
+                for name in ('MacOS', 'Resources/runtime', 'Frameworks'):
+                    (contents/name).mkdir(parents=True)
+                executable = contents/'MacOS/photosort'
+                runtime = contents/'Resources/runtime/onnx.dylib'
+                dependency = contents/'Frameworks/image.dylib'
+                binaries = [executable, runtime, dependency]
+                for binary in binaries:
+                    binary.write_bytes(b'unsigned')
+                def signing(command, **kwargs):
+                    if '--sign' in command:
+                        self.assertEqual(command[3], identity)
+                        path = Path(command[-1])
+                        if path == app:
+                            # Every nested binary is finalized before resources are sealed.
+                            self.assertTrue(all(p.read_bytes() == b'signed' for p in binaries))
+                            self.assertEqual((contents/'Resources/BUNDLE-SHA256SUMS').read_text(),
+                                             package_macos.bundle_manifest(contents))
+                        else:
+                            path.write_bytes(b'signed')
+                with patch.object(package_macos.subprocess, 'run', side_effect=signing) as run:
+                    package_macos.sign_bundle(app, binaries, identity)
+                signed = [Path(c.args[0][-1]) for c in run.call_args_list if '--sign' in c.args[0]]
+                self.assertEqual(set(signed[:-2]), {runtime, dependency})
+                self.assertEqual(signed[-2:], [executable, app])
+                self.assertEqual(run.call_args_list[-1].args[0],
+                                 ['codesign', '--verify', '--deep', '--strict', str(app)])
+                failure = subprocess.CalledProcessError(1, 'codesign')
+                with patch.object(package_macos.subprocess, 'run', side_effect=failure) as run:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        package_macos.sign_bundle(app, binaries, identity)
+                self.assertEqual(run.call_count, 1)
+
+    def test_final_verification_or_resource_change_stops_packaging(self):
+        for mode in ('verification-failure', 'resource-change'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                app = Path(directory)/'PhotoSort.app'
+                resources = app/'Contents/Resources'
+                resources.mkdir(parents=True)
+                resource = resources/'model.onnx'
+                resource.write_bytes(b'model')
+                def signing(command, **kwargs):
+                    if '--verify' in command:
+                        if mode == 'verification-failure':
+                            raise subprocess.CalledProcessError(1, command)
+                        resource.write_bytes(b'changed while signing')
+                with patch.object(package_macos.subprocess, 'run', side_effect=signing):
+                    with self.assertRaises((subprocess.CalledProcessError, RuntimeError)):
+                        package_macos.sign_bundle(app, [], '-')
+
+    def test_cli_identity_is_forwarded_and_failed_signing_preserves_old_bundle(self):
+        for flag in ([], ['--sign-identity', 'Apple Development: Explicit Name (TEAMID)']):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root/'resources').mkdir()
+                (root/'resources/model.onnx').write_bytes(b'model')
+                (root/'LICENSE').write_text('license')
+                target = root/'build'
+                (target/'release').mkdir(parents=True)
+                (target/'release/photosort').write_bytes(b'fixture executable')
+                output = root/'PhotoSort.app'
+                (output/'Contents').mkdir(parents=True)
+                (output/'Contents/Info.plist').write_bytes(b'old bundle sentinel')
+                def otool(command, **kwargs):
+                    return str(command[-1]) + ':\n'
+                failure = subprocess.CalledProcessError(1, 'codesign')
+                with patch.object(package_macos, 'ROOT', root), \
+                        patch.dict(os.environ, {'CARGO_TARGET_DIR': str(target)}), \
+                        patch.object(sys, 'argv', ['package_macos.py', '--output', str(output), *flag]), \
+                        patch.object(package_macos.subprocess, 'run'), \
+                        patch.object(package_macos.subprocess, 'check_output', side_effect=otool), \
+                        patch.object(package_macos, 'sign_bundle', side_effect=failure) as sign:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        package_macos.main()
+                self.assertEqual(sign.call_args.args[2], flag[-1] if flag else '-')
+                self.assertEqual((output/'Contents/Info.plist').read_bytes(), b'old bundle sentinel')
+                self.assertEqual((target/'release/photosort').read_bytes(), b'fixture executable')
+                self.assertEqual((root/'resources/model.onnx').read_bytes(), b'model')
+                self.assertEqual(list(root.glob('photosort-bundle-*')), [])
+
+    def test_empty_signing_identity_is_rejected_before_building(self):
+        with patch.object(sys, 'argv', ['package_macos.py', '--sign-identity', '  ']), \
+                patch.object(package_macos.subprocess, 'run') as run, \
+                contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                package_macos.main()
+            self.assertEqual(raised.exception.code, 2)
+            run.assert_not_called()
 
     def test_invalid_output_is_rejected_before_building(self):
         with tempfile.TemporaryDirectory() as directory:

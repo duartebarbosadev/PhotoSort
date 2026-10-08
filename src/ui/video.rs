@@ -21,7 +21,11 @@ fn time(seconds: f64) -> String {
 }
 impl PhotoSortApp {
     fn video_target(&self) -> Option<&Media> {
-        if !self.review || self.busy || self.scanning || !playback::supported() {
+        if (!self.review && self.organize_preview().is_none())
+            || self.busy
+            || self.scanning
+            || !playback::supported()
+        {
             return None;
         }
         self.active
@@ -35,7 +39,8 @@ impl PhotoSortApp {
         self.runtime.playback.select(target);
         if context != self.video_context
             || !ctx.input(|i| i.raw.focused)
-            || self.modal_active()
+            || (self.modal_active() && self.organize_preview().is_none())
+            || self.other_modal_active()
             || self.error.is_some()
         {
             self.runtime.playback.pause();
@@ -69,13 +74,16 @@ impl PhotoSortApp {
         if !ui.is_rect_visible(rect) {
             return;
         }
+        response.context_menu(|ui| self.review_context_menu(ui, id));
         let active = self.active == Some(id);
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 10.0, BG);
         if active {
             painter.rect_stroke(rect, 10.0, Stroke::new(1.0, ACCENT), StrokeKind::Inside);
         }
-        let compact = size.y < 120.0 || size.x < 280.0;
+        // Full transport controls reserve 80 points plus the title. Collapse
+        // them before they consume most of a short review slot's picture area.
+        let compact = size.y < 220.0 || size.x < 280.0;
         let title_height = if size.y < 80.0 { 0.0 } else { 26.0 };
         if title_height > 0.0 {
             painter.text(
@@ -461,12 +469,14 @@ mod tests {
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(2));
         }
-        for size in [
-            egui::vec2(220.0, 100.0),
-            egui::vec2(260.0, 160.0),
-            egui::vec2(280.0, 160.0),
-            egui::vec2(640.0, 320.0),
-            egui::vec2(1000.0, 500.0),
+        for (size, compact) in [
+            (egui::vec2(220.0, 100.0), true),
+            (egui::vec2(260.0, 160.0), true),
+            (egui::vec2(280.0, 160.0), true),
+            (egui::vec2(640.0, 131.0), true),
+            (egui::vec2(640.0, 220.0), false),
+            (egui::vec2(640.0, 320.0), false),
+            (egui::vec2(1000.0, 500.0), false),
         ] {
             let mut slot = egui::Rect::NOTHING;
             let mut output = None;
@@ -482,7 +492,6 @@ mod tests {
                 }));
             }
             let tree = output.unwrap().platform_output.accesskit_update.unwrap();
-            let compact = size.x < 280.0;
             for label in if compact {
                 vec!["Play", "Controls"]
             } else {
@@ -528,6 +537,61 @@ mod tests {
             }
         }
         assert!(app.requested.is_empty());
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn short_video_slots_reserve_picture_space_across_workflows_without_reuploading() {
+        let (mut app, _root) = app();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
+            app.sync_playback(ctx)
+        });
+        let until = Instant::now() + Duration::from_secs(2);
+        while app.runtime.playback.snapshot().frame.is_none() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        for step in Step::ALL {
+            app.step = step;
+            // Workflow changes intentionally pause/reset presentation; resizing
+            // within that workflow must retain its existing frame texture.
+            let mut texture = None;
+            for height in [120.0, 131.0, 160.0, 200.0, 220.0, 320.0] {
+                let size = egui::vec2(640.0, height);
+                let output = ctx.run(input(true, size + egui::vec2(40.0, 40.0)), |ctx| {
+                    app.sync_playback(ctx);
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        app.video_canvas(ui, MediaId(1), 0, size);
+                    });
+                });
+                let current = app.video_texture.as_ref().unwrap().2.id();
+                if let Some(previous) = texture {
+                    assert_eq!(previous, current, "Resizing must reuse the video texture");
+                }
+                texture = Some(current);
+                let picture = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Mesh(mesh) if mesh.texture_id == current => {
+                            Some(mesh.calc_bounds())
+                        }
+                        _ => None,
+                    })
+                    .expect("rendered video picture");
+                assert!(
+                    picture.height() >= height * 0.5,
+                    "Video picture {:?} consumes less than half the {height}-point slot",
+                    picture
+                );
+            }
+        }
+        assert!(
+            app.requested.is_empty(),
+            "Layout must not request photo processing"
+        );
         app.runtime.shutdown();
     }
 

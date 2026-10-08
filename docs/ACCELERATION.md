@@ -99,9 +99,24 @@ CPU fallback remains available. See [DirectML requirements](https://onnxruntime.
 
 Use `ORT_DYLIB_PATH` to select a compatible native runtime. Models and runtime must
 match the app's ONNX API requirements. Selecting a backend in Settings cannot add
-providers missing from that library. The existing `--check-runtime` deliberately
-retains its documented CPU baseline; use the ignored acceleration fixtures for
-Apple verification, with `PHOTOSORT_SAMPLE_DIR` pointing to the seven sample files.
+providers missing from that library. `--check-runtime` retains its CPU baseline;
+`--check-runtime --runtime-backend coreml` (or `auto`, `cuda`, `directml`, `cpu`)
+selects a diagnostic backend through the same production registry and fallback
+policy. This uses the embedded licensed fixture and does not require a photo
+library or change the saved backend preference.
+
+Inspect `requested_backend` and all six `model_providers` records in its JSON,
+including fallback details. Native compiler/runtime output is routed to stderr
+for the command lifetime, including shutdown, so stdout remains JSON. `passed` and exit status describe successful inference
+and session reuse, allowing CPU fallback. `accelerated_models` and `cpu_models`
+count configured sessions only after a complete passing check; they do not prove
+per-operator GPU/NPU placement. A first-pass execution failure may replace one
+accelerated session with CPU; no further session initialization is allowed during
+the second pass. Partial or cancelled checks retain available provider diagnostics
+but publish no successful provider counts. No prepared-model cache is configured
+by this command; the native runtime may use OS temporary caches. Cold compilation
+can take minutes, and a synchronous native compilation/inference call cannot be
+interrupted. CUDA/DirectML hardware validation is still required on those devices.
 
 ## Persistent Core ML cache evaluation
 
@@ -114,3 +129,21 @@ model/runtime/recipe invalidation and integration with the shared disk budget
 are therefore prerequisites. The source integration now uses these safeguards;
 the probe's performance numbers remain isolated measurements, not integrated-app
 benchmarks. See `diagnostics/coreml-cache-evaluation-2026-10-06/README.md`.
+
+
+## Apple Silicon CPU preparation reuse
+
+The shared cache also retains the verified aesthetic model's CPU-optimized ONNX
+graph when the disk budget can cover twice its source size. Subsequent sessions
+skip graph optimization, using runtime/source/OS/hardware/thread/policy identity
+and verified cache contents. The artifact is about 510 MiB within the existing
+photo-cache budget. Small/disabled caches and custom exports use the source model.
+Cache failures fall back to ordinary CPU initialization; clearing prepared files
+releases their sessions while retaining ordinary CPU sessions.
+
+First preparation still has a large memory peak. Fresh-process Quality runs with
+uncached photos reduced peak RSS about 56–76% after preparing the aesthetic model,
+with unchanged results across all 263 authorized photo paths. This is measured on
+the local Apple Silicon machine, not CUDA/DirectML or broad accuracy validation.
+See [the preparation report](diagnostics/offline-model-2026-10-08/README.md) for
+measurements, storage costs and verification limits.

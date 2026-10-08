@@ -48,12 +48,18 @@ impl NativeSession {
 fn cached_model(
     path: &Path,
     kind: &str,
+    backend: Backend,
+    threads: usize,
     config: Option<&(PathBuf, u64)>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<crate::core::cache::compiled::Lease>> {
     let Some((root, budget)) = config.filter(|(_, b)| *b > 0) else {
         return Ok(None);
     };
+    use crate::core::cache::compiled::Format;
+    if backend == Backend::Cpu && !cpu_cache_eligible(kind) {
+        return Ok(None);
+    }
     // Only the verified, self-contained catalog exports are cacheable. An
     // arbitrary ONNX override may reference external weights outside this file.
     let Some(asset) = crate::core::model_assets::ALL
@@ -62,22 +68,70 @@ fn cached_model(
     else {
         return Ok(None);
     };
+    // Avoid repeatedly preparing an artifact that a small cache cannot retain.
+    // The pinned CPU aesthetic export grows during folding; reserve twice its
+    // source size before attempting offline serialization.
+    if backend == Backend::Cpu
+        && (asset.name != "aesthetic.onnx" || *budget < asset.bytes.saturating_mul(2))
+    {
+        return Ok(None);
+    }
     ensure!(
         crate::core::model_assets::Inspector::default().verify(asset, path, &|| cancelled())?,
         "Custom model is not eligible for prepared-model caching"
     );
     let runtime = super::runtime_path().ok_or_else(|| anyhow::anyhow!("Missing native runtime"))?;
     let system = std::fs::read("/System/Library/CoreServices/SystemVersion.plist")?;
-    let recipe = format!(
-        "mlprogram-all-fp32-v1:{kind}:{}:{}:{}",
-        std::env::consts::ARCH,
-        ort::info(),
-        blake3::hash(&system)
-    );
+    let (format, recipe) = if backend == Backend::Cpu {
+        // Offline ORT graphs are hardware-specific. This worker-only query and
+        // the runtime/OS hashes prevent reuse after moving a cache to another Mac.
+        let hardware = std::process::Command::new("/usr/sbin/sysctl")
+            .args(["-n", "hw.model", "machdep.cpu.brand_string"])
+            .output()?;
+        ensure!(
+            hardware.status.success() && !hardware.stdout.is_empty(),
+            "Cannot identify CPU for prepared-model cache"
+        );
+        (
+            Format::Onnx,
+            format!(
+                "cpu-onnx-fp32-v1:{kind}:{threads}:{:?}:{}:{}:{}:{}",
+                disabled_optimizers(kind, backend, threads),
+                std::env::consts::ARCH,
+                ort::info(),
+                blake3::hash(&system),
+                blake3::hash(&hardware.stdout)
+            ),
+        )
+    } else {
+        (
+            Format::CoreMl,
+            format!(
+                "mlprogram-all-fp32-v1:{kind}:{}:{}:{}",
+                std::env::consts::ARCH,
+                ort::info(),
+                blake3::hash(&system)
+            ),
+        )
+    };
     let key = crate::core::cache::compiled::key(path, &runtime, &recipe, cancelled)?;
     Ok(Some(crate::core::cache::compiled::Lease::acquire(
-        root, &key, *budget, cancelled,
+        format, root, &key, *budget, cancelled,
     )?))
+}
+#[cfg(target_os = "macos")]
+fn cpu_cache_eligible(kind: &str) -> bool {
+    cfg!(target_arch = "aarch64") && kind == "aesthetic"
+}
+// On Apple Silicon at 2–4 CPU threads, separate MatMul/Add kernels are faster
+// for our BeIT aesthetic export. Other budgets/providers retain ORT defaults. See
+// docs/diagnostics/cpu-aesthetic-2026-10-08 for the real-photo comparison.
+fn disabled_optimizers(kind: &str, backend: Backend, threads: usize) -> Option<&'static str> {
+    (cfg!(all(target_os = "macos", target_arch = "aarch64"))
+        && backend == Backend::Cpu
+        && kind == "aesthetic"
+        && (2..=4).contains(&threads))
+    .then_some("MatMulAddFusion")
 }
 fn build(
     path: &Path,
@@ -100,8 +154,22 @@ fn build(
         .map_err(|e| anyhow::anyhow!(e.to_string()))?
         .with_inter_op_spinning(false)
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    if let Some(optimizers) = disabled_optimizers(kind, backend, threads) {
+        builder = builder
+            .with_disabled_optimizers(optimizers)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    }
     let provider = match backend {
-        Backend::Cpu => None,
+        Backend::Cpu => {
+            #[cfg(target_os = "macos")]
+            match cached_model(path, kind, backend, threads, cache_config, cancelled) {
+                Ok(value) => cache = value,
+                Err(error) => {
+                    cache_detail = format!(" · Prepared-model cache unavailable: {error}")
+                }
+            }
+            None
+        }
         #[cfg(target_os = "macos")]
         Backend::CoreMl => {
             let mut provider = ep::CoreML::default()
@@ -111,7 +179,7 @@ fn build(
                 provider.is_available()?,
                 "Core ML is not included in this runtime"
             );
-            match cached_model(path, kind, cache_config, cancelled) {
+            match cached_model(path, kind, backend, threads, cache_config, cancelled) {
                 Ok(value) => cache = value,
                 Err(error) => {
                     cache_detail = format!(" · Prepared-model cache unavailable: {error}")
@@ -171,18 +239,49 @@ fn build(
         }
         _ => anyhow::bail!("{} is not supported on this platform", backend.label()),
     };
-    let _ = kind; // Used by Apple shape specialization; other platforms retain native batches.
     if let Some(provider) = provider {
         builder = builder
             .with_execution_providers([provider])
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     }
-    let session = match builder.commit_from_file(path) {
+    #[cfg(target_os = "macos")]
+    let mut input = path.to_path_buf();
+    #[cfg(not(target_os = "macos"))]
+    let input = path.to_path_buf();
+    #[cfg(target_os = "macos")]
+    if backend == Backend::Cpu
+        && let Some(entry) = &cache
+    {
+        let prepared = entry.path.join("optimized.onnx");
+        builder = if entry.reused {
+            input = prepared;
+            builder.with_optimization_level(ort::session::builder::GraphOptimizationLevel::Disable)
+        } else {
+            builder.with_optimized_model_path(prepared)
+        }
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        cache_detail = if entry.reused {
+            " · Prepared CPU model reused"
+        } else {
+            " · Prepared CPU model cached"
+        }
+        .into();
+    }
+    ensure!(!cancelled(), "Model preparation cancelled");
+    let session = match builder.commit_from_file(&input) {
         Ok(session) => session,
         Err(error) => {
             #[cfg(target_os = "macos")]
             if let Some(entry) = &mut cache {
                 entry.invalidate();
+                if backend == Backend::Cpu && !cancelled() {
+                    // A cache/storage failure must not make a valid source model
+                    // unusable. Retry the same shared CPU builder without a cache.
+                    drop(cache.take());
+                    let mut fallback = build(path, kind, threads, backend, None, cancelled)?;
+                    fallback.cache_detail = format!(" · Prepared-model cache unavailable: {error}");
+                    return Ok(fallback);
+                }
             }
             return Err(error.into());
         }
@@ -193,6 +292,7 @@ fn build(
     );
     #[cfg(target_os = "macos")]
     if let Some(entry) = &mut cache
+        && !(backend == Backend::Cpu && entry.reused)
         && let Err(error) = entry.complete(cancelled)
     {
         if !entry.reused || !cancelled() {
@@ -286,6 +386,33 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cpu_cache_admission_skips_other_models_custom_paths_and_small_budgets() {
+        for (path, kind, bytes) in [
+            ("/missing/dinov2-small.onnx", "dinov2", u64::MAX),
+            ("/missing/custom.onnx", "aesthetic", u64::MAX),
+            ("/missing/aesthetic.onnx", "aesthetic", 0),
+            (
+                "/missing/aesthetic.onnx",
+                "aesthetic",
+                512 * crate::core::cache::MIB,
+            ),
+        ] {
+            assert!(
+                cached_model(
+                    Path::new(path),
+                    kind,
+                    Backend::Cpu,
+                    4,
+                    Some(&(PathBuf::from("/missing/cache"), bytes)),
+                    &|| false
+                )
+                .unwrap()
+                .is_none()
+            );
+        }
+    }
     #[test]
     fn accepted_run_cancellation_reaches_plain_inference_before_model_io() {
         use crate::core::{models::Models, processing::RunConfig};
@@ -364,6 +491,257 @@ mod native_tests {
         pipeline::Pipeline,
         processing::{Control, RunConfig},
     };
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    #[ignore = "Runs CPU preparation, restart, corruption and maintenance on seven samples"]
+    fn prepared_cpu_aesthetic_reuses_samples_and_recovers_cache() -> Result<()> {
+        use crate::core::cache::{
+            self,
+            compiled::{Format, Lease},
+        };
+        let samples =
+            PathBuf::from(std::env::var_os("PHOTOSORT_SAMPLE_DIR").expect("PHOTOSORT_SAMPLE_DIR"));
+        let catalog = Catalog::scan(&samples, || false, |_| {})?;
+        ensure!(catalog.media.len() == 7, "Expected seven samples");
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let model_cache = root.join("prepared");
+        let mut pipeline = Pipeline::new(128 * 1024 * 1024, root.join("photos"));
+        let assets = catalog
+            .media
+            .iter()
+            .map(|m| pipeline.analysis(m, || false))
+            .collect::<Result<Vec<_>>>()?;
+        let decodes = pipeline.stats.decodes;
+        let control = Control::default();
+        let config = RunConfig {
+            threads: 11.min(crate::core::processing::available()),
+            backend: Backend::Cpu,
+        };
+        let mut baseline = Models::default();
+        baseline.configure(config);
+        let expected = assets
+            .iter()
+            .map(|a| baseline.aesthetic(a))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(baseline.initializations, 1);
+        drop(baseline);
+        let budget = 1024 * cache::MIB;
+        let make = || {
+            let mut models = Models::with_processing(control.clone());
+            models.configure(config);
+            models.configure_compiled_cache(model_cache.clone(), budget, false);
+            models
+        };
+        let mut first = make();
+        assert_eq!(
+            assets
+                .iter()
+                .map(|a| first.aesthetic(a))
+                .collect::<Result<Vec<_>>>()?,
+            expected
+        );
+        assert_eq!((first.initializations, first.inferences), (1, 7));
+        assert!(
+            control.status()[0]
+                .detail
+                .contains("Prepared CPU model cached")
+        );
+        let path = first.sessions["aesthetic"]
+            .2
+            .cache
+            .as_ref()
+            .unwrap()
+            .path
+            .clone();
+        let file = path.join("optimized.onnx");
+        let fingerprint = crate::core::model::Fingerprint::read(&file)?;
+        let held = cache::maintain(&model_cache, Some(0), || false)?;
+        assert!(held.disk_bytes > 0 && held.disk_bytes == held.pinned_disk_bytes);
+        first.configure_compiled_cache(model_cache.clone(), budget * 2, false);
+        assert_eq!(first.aesthetic(&assets[0])?, expected[0]);
+        assert_eq!(first.initializations, 1);
+        drop(first);
+        assert_eq!(
+            cache::maintain(&model_cache, None, || false)?.pinned_disk_bytes,
+            0
+        );
+        let mut reused = make();
+        assert_eq!(
+            assets
+                .iter()
+                .map(|a| reused.aesthetic(a))
+                .collect::<Result<Vec<_>>>()?,
+            expected
+        );
+        assert_eq!((reused.initializations, reused.inferences), (1, 7));
+        assert!(
+            control.status()[0]
+                .detail
+                .contains("Prepared CPU model reused")
+        );
+        assert_eq!(crate::core::model::Fingerprint::read(&file)?, fingerprint);
+        let original = reused.sessions["aesthetic"].0.clone();
+        let other = cached_model(
+            &original,
+            "aesthetic",
+            Backend::Cpu,
+            1,
+            Some(&(model_cache.clone(), budget)),
+            &|| false,
+        )?
+        .unwrap();
+        assert!(!other.reused && other.path != path);
+        drop(other);
+        reused.begin_run(config, || true);
+        assert!(reused.aesthetic(&assets[0]).is_err());
+        assert_eq!((reused.initializations, reused.inferences), (1, 7));
+        reused.begin_run(config, || false);
+        assert_eq!(reused.aesthetic(&assets[0])?, expected[0]);
+        assert_eq!(reused.initializations, 1);
+        drop(reused);
+        std::fs::write(&file, b"torn")?;
+        let mut repaired = make();
+        assert_eq!(repaired.aesthetic(&assets[0])?, expected[0]);
+        assert!(
+            control.status()[0]
+                .detail
+                .contains("Prepared CPU model cached")
+        );
+        assert_eq!(std::fs::metadata(&file)?.len(), fingerprint.bytes);
+        drop(repaired);
+        // A checksummed but unloadable native artifact must fall back to the source.
+        let key = path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .strip_suffix(".onnx-cache")
+            .unwrap();
+        let mut invalid = Lease::acquire(Format::Onnx, &model_cache, key, budget, &|| false)?;
+        std::fs::write(&file, b"invalid native model")?;
+        invalid.complete(&|| false)?;
+        drop(invalid);
+        let mut fallback = make();
+        assert_eq!(fallback.aesthetic(&assets[0])?, expected[0]);
+        assert!(
+            control.status()[0]
+                .detail
+                .contains("Prepared-model cache unavailable")
+        );
+        assert!(!fallback.sessions["aesthetic"].2.cached());
+        assert!(!path.exists());
+        assert_eq!(fallback.aesthetic(&assets[1])?, expected[1]);
+        assert_eq!((fallback.initializations, fallback.inferences), (1, 2));
+        drop(fallback);
+        let mut maintenance = make();
+        assert_eq!(maintenance.aesthetic(&assets[0])?, expected[0]);
+        let embedding = maintenance.embedding(&assets[0])?;
+        let initializations = maintenance.initializations;
+        maintenance.configure_compiled_cache(model_cache.clone(), 0, true);
+        assert!(!maintenance.sessions.contains_key("aesthetic"));
+        assert!(maintenance.sessions.contains_key("dinov2"));
+        assert_eq!(
+            cache::maintain(&model_cache, Some(0), || false)?.disk_bytes,
+            0
+        );
+        assert_eq!(maintenance.embedding(&assets[0])?, embedding);
+        assert_eq!(maintenance.initializations, initializations);
+        assert_eq!(maintenance.aesthetic(&assets[0])?, expected[0]);
+        assert!(!maintenance.sessions["aesthetic"].2.cached());
+        assert_eq!(cache::maintain(&model_cache, None, || false)?.disk_bytes, 0);
+        assert_eq!(pipeline.stats.decodes, decodes);
+        println!(
+            "{}",
+            serde_json::json!({"samples":7,"exact_scores":true,"decodes":decodes,
+            "prepared_bytes":fingerprint.bytes,"restart_reuse":true,"corruption_repaired":true,
+            "unloadable_cache_falls_back_once":true,"cancellation_reuses_session":true,
+            "clear_releases_cached_cpu_only":true,"zero_budget_creates_no_artifact":true})
+        );
+        Ok(())
+    }
+    #[test]
+    #[ignore = "Runs installed CPU aesthetic model on seven read-only samples"]
+    fn cpu_aesthetic_reuses_samples_and_honors_cancellation_and_fallback() -> Result<()> {
+        let sample_root =
+            PathBuf::from(std::env::var_os("PHOTOSORT_SAMPLE_DIR").expect("PHOTOSORT_SAMPLE_DIR"));
+        let catalog = Catalog::scan(&sample_root, || false, |_| {})?;
+        ensure!(catalog.media.len() == 7, "Expected seven samples");
+        let cache = tempfile::tempdir()?;
+        let mut pipeline = Pipeline::new(128 * 1024 * 1024, cache.path().into());
+        let assets = catalog
+            .media
+            .iter()
+            .map(|m| pipeline.analysis(m, || false))
+            .collect::<Result<Vec<_>>>()?;
+        let decodes = pipeline.stats.decodes;
+        let control = Control::default();
+        let mut models = Models::with_processing(control.clone());
+        let config = RunConfig {
+            threads: 4,
+            backend: Backend::Cpu,
+        };
+        models.begin_run(config, || false);
+        let reference = assets
+            .iter()
+            .map(|a| models.aesthetic(a))
+            .collect::<Result<Vec<_>>>()?;
+        ensure!(
+            reference
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+            "Invalid score"
+        );
+        assert_eq!((models.initializations, models.inferences), (1, 7));
+
+        models.begin_run(config, || true);
+        assert!(
+            models
+                .aesthetic(&assets[0])
+                .unwrap_err()
+                .to_string()
+                .contains("cancelled")
+        );
+        assert_eq!((models.initializations, models.inferences), (1, 7));
+        models.begin_run(config, || false);
+        assert_eq!(
+            reference,
+            assets
+                .iter()
+                .map(|a| models.aesthetic(a))
+                .collect::<Result<Vec<_>>>()?
+        );
+        assert_eq!((models.initializations, models.inferences), (1, 14));
+
+        models.begin_run(
+            RunConfig {
+                backend: Backend::Cuda,
+                ..config
+            },
+            || false,
+        );
+        assert_eq!(
+            reference,
+            assets
+                .iter()
+                .map(|a| models.aesthetic(a))
+                .collect::<Result<Vec<_>>>()?
+        );
+        assert_eq!((models.initializations, models.inferences), (2, 21));
+        let status = control.status();
+        assert_eq!(status.len(), 1);
+        assert_eq!(status[0].backend, Backend::Cpu);
+        assert!(status[0].detail.contains("not supported on this platform"));
+        assert_eq!(pipeline.stats.decodes, decodes);
+        println!(
+            "{}",
+            serde_json::json!({"samples":7,"scores":reference,
+            "decodes":decodes,"initializations":models.initializations,
+            "inferences":models.inferences,"cancelled_run_inferences":0,
+            "repeat_and_fallback_scores_exact":true})
+        );
+        Ok(())
+    }
     #[test]
     #[ignore = "Runs installed Core ML with disposable persistent cache and seven read-only samples"]
     fn prepared_coreml_cache_reuses_samples_and_releases_sessions_for_maintenance() -> Result<()> {

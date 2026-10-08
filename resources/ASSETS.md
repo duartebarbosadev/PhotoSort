@@ -2,7 +2,7 @@
 
 These assets were prepared for this local working copy on 27 September 2026.
 `SHA256SUMS` records exact content. Downloads are user-initiated through Menu → AI models. The app downloads only
-the pinned native DINOv2 and SFace ONNX files, streaming into private temporary
+the pinned native DINOv2, SFace and orientation ONNX files, streaming into private temporary
 files and verifying exact size and SHA-256 before atomic installation. The other
 prepared exports support bundled-copy restore and verified import. No Python
 export/conversion tools run in the app, and runtime libraries are not downloaded.
@@ -11,7 +11,7 @@ restore these files when making a fresh checkout or distributing a local bundle.
 
 | File | Source / conversion | Upstream terms |
 | --- | --- | --- |
-| `models/orientation.onnx` | Independent copy of the reference project's `models/orientation_model_v2_0.9882.onnx`; RGB 416 resize, center crop 384 | Reference project asset; confirm its training/redistribution provenance before public release |
+| `models/orientation.onnx` | Unmodified upstream `v2` release asset `orientation_model_v2_0.9882.onnx`; identical to the reference copy; RGB 416 resize, center crop 384 | MIT upstream repository; notice retained in `licenses/ORIENTATION-MIT.txt` |
 | `models/dinov2-small.onnx` | `onnx-community/dinov2-small`, revision `8b1f705a3a7f6f062f6bdd21986c1583d3ef105d`, `onnx/model.onnx` | Apache-2.0 model repository |
 | `models/aesthetic.onnx` | `cafeai/cafe_aesthetic`, revision `48a343764f786abc1ca8aaddfcd60a688a70da9b`; exported using `scripts/export_aesthetic.py`, opset 17 | AGPL-3.0 model card; original model card retained below |
 | `models/face_detector.onnx`, `models/face_landmarks_detector.onnx` | Reference `assets/models/face_landmarker.task`, Google MediaPipe face detector and Face Mesh V2; `scripts/normalize_faces.py` folds float16 constants, then tflite2onnx 0.4.1 exports opset 11 | Google MediaPipe assets, Apache-2.0 project; model cards upstream |
@@ -67,3 +67,18 @@ alignment is implemented in Rust; the model consumes RGB 0..255 at 112 square.
 Restore the exact pinned asset from
 https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
 and verify SHA256SUMS before packaging.
+
+## Native orientation model
+
+Fix Rotation can download the unmodified [v2 ONNX release](https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/tag/v2)
+through the same shared installer as DINOv2 and SFace. Release asset `272536092`
+is 80,578,424 bytes, SHA-256
+`cffe911c1dff47fbfbbd90110aaab9c07134645c460d35b3ae8832079bea91ba`.
+The published GitHub asset size and digest were verified on 8 October 2026;
+these match the existing bundled model. A changed asset at that URL fails the
+pinned content checks rather than silently changing inference behavior.
+
+The [upstream MIT notice](https://github.com/duartebarbosadev/deep-image-orientation-detection/blob/675bb69662bd65d58da8fa4b55eef87d8c3f859b/LICENSE)
+is retained verbatim. The release does not require a Python runtime or local
+conversion. This provenance record does not establish PhotoSort accuracy across
+arbitrary libraries; preprocessing and inference behavior remain unchanged.

@@ -7,6 +7,12 @@ pub const INK: Color32 = Color32::from_rgb(233, 236, 236);
 pub const MUTED: Color32 = Color32::from_rgb(145, 157, 165);
 pub const ACCENT: Color32 = Color32::from_rgb(165, 222, 195);
 pub const RED: Color32 = Color32::from_rgb(238, 139, 136);
+/// Height of a one-line framed button, shared with virtualized list geometry.
+/// show_rows adds item spacing itself; its row height must match the widget.
+pub(super) fn button_row_height(ui: &egui::Ui) -> f32 {
+    (ui.text_style_height(&TextStyle::Button) + 2.0 * ui.spacing().button_padding.y)
+        .max(ui.spacing().interact_size.y)
+}
 pub fn install(ctx: &egui::Context) {
     // Egui's proportional defaults omit the bundled monospace symbol glyphs.
     // Append those existing fonts only as fallbacks, keeping the normal typeface
@@ -58,6 +64,74 @@ pub fn install(ctx: &egui::Context) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn virtual_button_rows_match_themed_widgets_and_reach_last_item() {
+        for padding in [2.0, 9.0] {
+            for font_size in [13.0, 18.0] {
+                let ctx = egui::Context::default();
+                install(&ctx);
+                ctx.style_mut(|s| {
+                    s.spacing.button_padding.y = padding;
+                    s.text_styles
+                        .insert(TextStyle::Button, FontId::proportional(font_size));
+                });
+                for position in [0, 50_000, 99_999] {
+                    for _ in 0..3 {
+                        let _ = ctx.run(Default::default(), |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                let height = button_row_height(ui);
+                                let pitch = height + ui.spacing().item_spacing.y;
+                                let mut painted = Vec::new();
+                                let output = egui::ScrollArea::vertical()
+                                    .id_salt("button_geometry")
+                                    .max_height(180.0)
+                                    .vertical_scroll_offset(position as f32 * pitch)
+                                    .show_rows(ui, height, 100_000, |ui, rows| {
+                                        for i in rows {
+                                            let response = ui.add(
+                                                egui::Button::selectable(
+                                                    false,
+                                                    format!(
+                                                        "Folder {i:05} {}",
+                                                        "a long name ".repeat(20)
+                                                    ),
+                                                )
+                                                .truncate(),
+                                            );
+                                            painted.push((i, response.rect));
+                                        }
+                                    });
+                                assert!(painted.len() <= 12, "Only viewport rows should render");
+                                for pair in painted.windows(2) {
+                                    assert!(
+                                        (pair[1].1.top() - pair[0].1.top() - pitch).abs() < 0.6
+                                    );
+                                }
+                                assert!(
+                                    painted
+                                        .iter()
+                                        .all(|(_, r)| (r.height() - height).abs() < 0.6)
+                                );
+                                assert!(
+                                    (output.content_size.y
+                                        - (100_000.0 * pitch - ui.spacing().item_spacing.y))
+                                        .abs()
+                                        <= pitch,
+                                    "content {:?}, pitch {pitch}, position {position}, padding {padding}, font {font_size}", output.content_size
+                                );
+                                if position == 99_999 {
+                                    assert!(
+                                        painted.iter().any(|(i, r)| *i == 99_999
+                                            && r.intersects(output.inner_rect))
+                                    );
+                                }
+                            });
+                        });
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn shared_ui_fonts_cover_workflow_controls_without_replacement_glyphs() {
         let ctx = egui::Context::default();

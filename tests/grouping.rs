@@ -387,3 +387,42 @@ fn visual_and_mixed_reanalysis_after_moves_propose_no_second_moves() {
         assert_eq!(std::fs::read_to_string(companion).unwrap(), "companion");
     }
 }
+
+#[test]
+fn location_levels_preserve_hierarchy_and_sanitize_each_place_independently() {
+    use photosort::core::geography::{Layout, Location};
+    let mut meta = Metadata {
+        location: Some(Location {
+            country: "Japan".into(),
+            region: "Shizuoka".into(),
+            city: "Fuji".into(),
+        }),
+        gps: Some((35.16, 138.68)),
+        ..Default::default()
+    };
+    assert_eq!(Layout::Country.label(&meta), "Japan");
+    assert_eq!(Layout::CountryCity.label(&meta), "Japan/Fuji");
+    assert_eq!(
+        Layout::CountryRegionCity.label(&meta),
+        "Japan/Shizuoka/Fuji"
+    );
+    let place = meta.location.as_mut().unwrap();
+    place.region.clear();
+    place.city = " São/A\\B:Town ".into();
+    assert_eq!(Layout::CountryRegionCity.label(&meta), "Japan/São_A_B_Town");
+    meta.location.as_mut().unwrap().country = "..".into();
+    assert_eq!(Layout::Country.label(&meta), "Unsorted");
+    meta.location = Some(Location::default());
+    assert_eq!(Layout::CountryRegionCity.label(&meta), "35.16, 138.68");
+    meta.location = None;
+    assert_eq!(Layout::CountryCity.label(&meta), "35.16, 138.68");
+    for gps in [
+        None,
+        Some((f64::NAN, 1.0)),
+        Some((91.0, 0.0)),
+        Some((0.0, -181.0)),
+    ] {
+        meta.gps = gps;
+        assert_eq!(Layout::Country.label(&meta), "No GPS");
+    }
+}

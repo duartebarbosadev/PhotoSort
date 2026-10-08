@@ -113,6 +113,7 @@ fn retries_keep_original_source_fingerprints_and_companions_together() {
 fn move_migrates_decisions_and_new_fingerprints_without_marking_them_applied() {
     let (_dir, c, plan) = fixture();
     let mut session = Session {
+        organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
         decisions: c
@@ -162,6 +163,7 @@ fn session_merge_preserves_preexisting_destination_decisions() {
     let (_dir, c, plan) = fixture();
     let report = run(&plan, &c.root.join("journal"));
     let mut moved = Session {
+        organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
         decisions: HashMap::from([(
@@ -176,6 +178,7 @@ fn session_merge_preserves_preexisting_destination_decisions() {
     moved.apply_report(&report, &c.media);
     let existing = MediaId(900);
     let mut destination = Session {
+        organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
         decisions: HashMap::from([(
@@ -198,6 +201,7 @@ fn equivalent_folder_spellings_share_a_session() {
     let root = dir.path().canonicalize().unwrap();
     let id = MediaId(7);
     let session = Session {
+        organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
         decisions: HashMap::from([(
@@ -242,6 +246,7 @@ fn shutdown_drains_accepted_source_and_destination_session_saves() {
     let target = tempfile::tempdir().unwrap();
     let id = MediaId(88);
     let session = Session {
+        organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
         decisions: HashMap::from([(

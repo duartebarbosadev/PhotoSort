@@ -39,6 +39,7 @@ tempfile = "3"
 half = { version = "2.7", default-features = false, features = ["std"] }
 rustfft = "6.4.1"
 nalgebra = { version = "0.35", default-features = false, features = ["std"] }
+filedescriptor = "0.8.3"
 
 # Keep local development/test output modest across native/minimal feature builds.
 # Tests inherit this profile; retain filename/line backtraces without full type data.
@@ -79,6 +80,7 @@ libheif-rs = { version = "3.0", default-features = false, features = ["v1_23"], 
 wgpu = { version = "27", default-features = false, features = ["metal", "wgsl"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+libc = "0.2"
 wgpu = { version = "27", default-features = false, features = ["dx12", "wgsl"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

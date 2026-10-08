@@ -1,3 +1,5 @@
+mod diagnostic_output;
+
 fn main() -> eframe::Result {
     // The bundled ONNX Runtime uploader can race its own C++ static teardown.
     // Suppress it before runtime loading; the session API is too late to prevent
@@ -24,13 +26,19 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     if options.check_runtime {
-        let report = photosort::core::diagnostics::check_runtime(&|| false)
+        use std::io::Write;
+        let mut output =
+            diagnostic_output::writer().map_err(|e| eframe::Error::AppCreation(e.into()))?;
+        let report = photosort::core::diagnostics::check_runtime_with_backend(
+            options.runtime_backend.unwrap_or_default(),
+            &|| false,
+        )
+        .map_err(|e| eframe::Error::AppCreation(e.into()))?;
+        serde_json::to_writer_pretty(&mut output, &report)
             .map_err(|e| eframe::Error::AppCreation(e.into()))?;
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|e| eframe::Error::AppCreation(e.into()))?
-        );
+        writeln!(output)
+            .and_then(|_| output.flush())
+            .map_err(|e| eframe::Error::AppCreation(e.into()))?;
         if !report.passed {
             return Err(eframe::Error::AppCreation(
                 std::io::Error::other("Native runtime check did not pass; see JSON report").into(),

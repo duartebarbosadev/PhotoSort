@@ -75,20 +75,28 @@ impl PhotoSortApp {
             }
             return;
         }
+        let organize = self
+            .retry_plan
+            .as_ref()
+            .or(self.plan.as_ref())
+            .is_some_and(|plan| plan.output_root.is_some());
         self.retry_plan = None;
         self.set_review_plan(None);
         self.plan_open = false;
         self.rotation_plan = false;
         self.error = None;
-        self.group_mode = GroupMode::Current;
-        self.organize_drafts.clear();
-        self.organize_editor = None;
-        self.file_names.clear();
-        self.output = self
-            .root
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
+        if organize {
+            self.group_mode = GroupMode::Current;
+            self.organize_drafts.clear();
+            self.organize_editor = None;
+            self.file_names.clear();
+            self.output = self
+                .root
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+        }
+        self.dirty = Some(Instant::now());
         self.set_status(
             "Unfinished file plan discarded · completed operations remain applied".into(),
         );
@@ -103,7 +111,7 @@ impl PhotoSortApp {
         if let Some(plan) = self.plan.take() {
             self.runtime.cancel_analysis();
             self.analysis_run = None;
-            let Some(root) = self.root.clone() else {
+            let Some(_) = &self.root else {
                 self.set_review_plan(Some(plan));
                 self.error = Some("Open a library before applying a file plan".into());
                 return;
@@ -116,10 +124,14 @@ impl PhotoSortApp {
                     views.capture_catalog_fingerprints(catalog, &self.index);
                 }
             }
-            let context = crate::core::operations::recovery::Context::capture(
-                root,
+            let Some(catalog) = &self.catalog else {
+                self.set_review_plan(Some(plan));
+                self.error = Some("Wait for library discovery before applying changes".into());
+                return;
+            };
+            let context = crate::core::operations::recovery::Context::capture_catalog(
                 self.rotation_plan,
-                &self.media,
+                catalog,
                 &self.index,
                 self.session_intent(),
                 views.clone(),
@@ -171,7 +183,12 @@ impl PhotoSortApp {
         !unfinished
     }
     pub(super) fn has_unsaved_plan_extras(&self) -> bool {
-        self.rotation_review.pending_count() > 0 || self.organize_changes_pending()
+        self.rotation_review.pending_count() > 0
+            || (self.organize_changes_pending()
+                && self
+                    .retry_plan
+                    .as_ref()
+                    .is_none_or(|plan| plan.output_root.is_some()))
     }
     pub(super) fn save_plan_and_quit(&mut self) {
         if self.has_unsaved_plan_extras()
@@ -372,6 +389,7 @@ impl PhotoSortApp {
                 self.error = None;
             }
             OrganizeResolution::Discard => {
+                self.dirty = Some(Instant::now());
                 self.runtime.cancel_analysis();
                 self.analysis_run = None;
                 self.organize_run = None;
@@ -411,6 +429,7 @@ impl PhotoSortApp {
                 ui.label(format!("{} file and folder operations are waiting to be applied.", plan.actions.len()));
             }
             if let Some(error) = &self.error { ui.colored_label(RED, error); }
+            if !self.organize_metadata_ready() { self.metadata_status(ui); }
             ui.label("Keep editing, discard the proposed organization, or review and apply it before leaving this step.");
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Keep editing").clicked() { resolution = Some(OrganizeResolution::Cancel); }
@@ -463,12 +482,27 @@ mod organize_departure_tests {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             app.poll(&egui::Context::default());
-            if !app.busy && !app.scanning {
+            if !app.busy && !app.scanning && app.metadata_run.is_none() {
                 break;
             }
             assert!(Instant::now() < until, "worker did not finish");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+    #[test]
+    fn folder_trash_discard_preserves_unrelated_organization_intent() {
+        let (_dir, mut app) = fixture();
+        let id = app.media[0].id;
+        app.file_names.insert(id, "Keep".into());
+        app.retry_plan = Some(Plan::default());
+        app.discard_remaining_operations();
+        assert_eq!(app.file_names[&id], "Keep");
+        assert!(app.retry_plan.is_none() && app.dirty.is_some());
+        app.retry_plan = Some(Plan::default());
+        assert!(
+            !app.has_unsaved_plan_extras(),
+            "Trash recovery checkpoints include kept Organize intent"
+        );
     }
     #[cfg(feature = "metadata-native")]
     #[test]
@@ -779,7 +813,9 @@ mod organize_departure_tests {
     #[test]
     fn generated_plan_requires_resolution_and_discard_preserves_other_review_marks() {
         let (_dir, mut app) = fixture();
-        app.group_mode = GroupMode::Date;
+        app.set_group_mode(GroupMode::Date);
+        settle(&mut app);
+        assert!(app.organize_grouping_ready());
         let id = app.media[0].id;
         app.decisions.insert(
             id,
@@ -1097,6 +1133,7 @@ mod organize_departure_tests {
             .media
             .remove(0);
         Session {
+            organize: None,
             manual_groups: Default::default(),
             scene_groups: Default::default(),
             decisions: HashMap::from([(
@@ -1282,6 +1319,7 @@ mod organize_departure_tests {
         );
         let destination = failed_saved_plan(&mut app);
         let ticket = app.recovery_ticket.clone();
+        let original_error = app.error.clone();
         app.runtime.shutdown();
         drop(app);
         let mut reopened =
@@ -1289,6 +1327,7 @@ mod organize_departure_tests {
         reopened.scan_folder(root.clone());
         settle(&mut reopened);
         assert_eq!(reopened.recovery_ticket, ticket);
+        assert_eq!(reopened.error, original_error);
         assert_eq!(reopened.decisions[&old].rating, Some(4));
         assert!(
             reopened.retry_plan.is_some() && !reopened.plan_open,
@@ -1314,6 +1353,58 @@ mod organize_departure_tests {
         );
         assert_eq!(reopened.stats.decodes, 0);
     }
+    #[test]
+    fn recovery_details_show_interruption_and_every_failure_in_all_workflows() {
+        for step in Step::ALL {
+            let (_dir, mut app) = fixture();
+            app.step = step;
+            let root = app.root.clone().unwrap();
+            let destination = failed_saved_plan(&mut app);
+            let original = app.error.clone().unwrap();
+            let ticket = app.recovery_ticket.clone().unwrap();
+            app.restore_operations(crate::core::operations::recovery::Restored {
+                ticket: ticket.clone(),
+                plan: app.retry_plan.clone().unwrap(),
+                rotation_only: step == Step::Rotation,
+                uncertain: 1,
+                errors: vec![
+                    original.clone(),
+                    "Second failure: café\nPermission denied".into(),
+                ],
+            });
+            let error = app.error.as_ref().unwrap();
+            assert!(error.starts_with("1 operation(s) were interrupted"));
+            assert!(error.contains(&original));
+            assert!(error.ends_with("Second failure: café\nPermission denied"));
+            let recovered_error = error.clone();
+            app.report_scan_warnings(&["Cannot read café/locked".into()]);
+            assert_eq!(
+                app.error.as_deref(),
+                Some(
+                    format!("{recovered_error}\n1 scan warning(s). Cannot read café/locked")
+                        .as_str()
+                )
+            );
+            let with_warning = app.error.clone();
+            app.report_scan_warnings(&[]);
+            assert_eq!(app.error, with_warning);
+            assert_eq!(app.recovery_ticket, Some(ticket));
+            assert_eq!(app.retry_plan.as_ref().unwrap().actions.len(), 1);
+            assert_eq!(app.rotation_plan, step == Step::Rotation);
+            assert_eq!(app.stats.decodes, 0);
+            assert_eq!(
+                std::fs::read(destination).unwrap(),
+                b"unrelated destination"
+            );
+            assert_eq!(
+                std::fs::read(root.join("Before/a.jpg")).unwrap(),
+                b"original bytes"
+            );
+            app.discard_remaining_operations();
+            settle(&mut app);
+        }
+    }
+
     #[test]
     fn saved_plan_discard_is_worker_owned_and_all_workflows_use_the_same_path() {
         for step in Step::ALL {

@@ -45,6 +45,7 @@ fn fixture() -> (tempfile::TempDir, Catalog, Saved) {
 fn views_round_trip_separately_from_decisions_and_drain_across_navigation() {
     let (dir, catalog, saved) = fixture();
     let session = Session {
+        organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
         decisions: [(
@@ -193,6 +194,7 @@ fn older_decision_sessions_migrate_without_losing_user_choices() {
     let mut old = m.fingerprint;
     old.identity = [0; 4];
     let mut session = Session {
+        organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
         decisions: [(
@@ -247,7 +249,10 @@ fn destination_import_preserves_all_workflows_and_clears_source_inventory_state(
             folder: "old".into(),
             photo_scroll: 99.0,
             folder_scroll: 12.0,
+            folder_anchor: Some("old".into()),
             compact_folders: true,
+            collapsed: [photosort::core::browsing::tree::Key::Folder("old".into())].into(),
+            ..Default::default()
         });
         source.bookmarks.insert(step, view);
     }
@@ -277,7 +282,12 @@ fn destination_import_preserves_all_workflows_and_clears_source_inventory_state(
         assert_eq!(view.scroll, 0.0);
         let editor = view.editor.as_ref().unwrap();
         assert_eq!(editor.selected, view.selected);
-        assert!(editor.folder.is_empty() && editor.folders.is_empty());
+        assert!(
+            editor.folder.is_empty()
+                && editor.folders.is_empty()
+                && editor.collapsed.is_empty()
+                && editor.folder_anchor.is_none()
+        );
         assert!(editor.compact_folders);
     }
     destination.save(dir.path()).unwrap();
@@ -570,6 +580,8 @@ fn replaced_supporting_file_does_not_inherit_selection_at_same_size_and_mtime() 
     let id = MediaId::for_path(&catalog.root.join("notes.txt"));
     saved.bookmarks.get_mut(&Step::Cull).unwrap().editor = Some(EditorBookmark {
         selected: vec![id],
+        focused: Some(id),
+        anchor: Some(id),
         ..Default::default()
     });
     saved.capture_catalog_fingerprints(
@@ -606,6 +618,8 @@ fn replaced_supporting_file_does_not_inherit_selection_at_same_size_and_mtime() 
         catalog.supporting_fingerprints[&id].identity
     );
     saved.reconcile_catalog(&fresh);
+    let editor = saved.bookmarks[&Step::Cull].editor.as_ref().unwrap();
+    assert!(editor.focused.is_none() && editor.anchor.is_none());
     assert!(
         saved.bookmarks[&Step::Cull]
             .editor
@@ -644,4 +658,51 @@ fn restored_shared_and_independent_views_use_the_live_zoom_limits() {
     let view = &saved.bookmarks[&Step::Cull];
     assert_eq!(view.view.zoom, View::MAX_ZOOM);
     assert_eq!(view.independent_views[&0].zoom, View::MIN_ZOOM);
+}
+
+#[test]
+fn file_keyboard_unselected_document_focus_and_anchor_follow_verified_identity() {
+    use photosort::core::views::EditorBookmark;
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("photo.jpg"), b"photo").unwrap();
+    fs::write(dir.path().join("notes.txt"), b"notes").unwrap();
+    let catalog = Catalog::scan(dir.path(), || false, |_| {}).unwrap();
+    let id = MediaId::for_path(&catalog.root.join("notes.txt"));
+    let mut saved = Saved::default();
+    saved.bookmarks.insert(
+        Step::Organize,
+        Bookmark {
+            editor: Some(EditorBookmark {
+                focused: Some(id),
+                anchor: Some(id),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    saved.capture_catalog_fingerprints(
+        &catalog,
+        &catalog
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect(),
+    );
+    saved.reconcile_catalog(&catalog);
+    assert_eq!(
+        saved.fingerprints.get(&id),
+        catalog.supporting_fingerprints.get(&id)
+    );
+    saved.save(dir.path()).unwrap();
+    let mut loaded = Saved::load(dir.path()).unwrap();
+    let new = MediaId(123456789);
+    loaded.relocate(&[(id, new, catalog.supporting_fingerprints[&id])]);
+    let editor = loaded.bookmarks[&Step::Organize].editor.as_ref().unwrap();
+    assert!(editor.selected.is_empty());
+    assert_eq!((editor.focused, editor.anchor), (Some(new), Some(new)));
+    fs::remove_file(catalog.root.join("notes.txt")).unwrap();
+    saved.reconcile_catalog(&Catalog::scan(dir.path(), || false, |_| {}).unwrap());
+    let editor = saved.bookmarks[&Step::Organize].editor.as_ref().unwrap();
+    assert!(editor.focused.is_none() && editor.anchor.is_none());
 }

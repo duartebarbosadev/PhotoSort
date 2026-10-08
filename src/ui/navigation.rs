@@ -138,16 +138,12 @@ impl PhotoSortApp {
         self.checkpoint_bookmarks();
         self.runtime.browsing.cancel();
         self.browse_run = None;
-        self.runtime.cancel_metadata();
-        self.metadata_run = None;
+        self.cancel_metadata_index();
         self.step = step;
         self.discard_stale_model_retry();
         self.navigation_notice = None;
         self.selection.clear();
         self.library_reveal = true;
-        if step == Step::Cull {
-            self.start_metadata_index();
-        }
         self.comparison.clear();
         self.filter = Filter::All;
         self.filter_dirty = true;
@@ -159,13 +155,22 @@ impl PhotoSortApp {
             self.start_ready_pick_analysis();
         }
         self.prepare_bookmark();
+        if step == Step::Cull || self.metadata_organize_mode() {
+            self.start_metadata_index();
+        }
     }
 
     pub(super) fn set_group_mode(&mut self, mode: GroupMode) {
         if self.group_mode != mode {
+            let was_metadata = self.metadata_organize_mode();
             self.group_mode = mode;
             self.organize_preview_requested = false;
             self.discard_stale_model_retry();
+            if self.metadata_organize_mode() {
+                self.start_metadata_index();
+            } else if was_metadata {
+                self.cancel_metadata_index();
+            }
         }
     }
 
@@ -194,6 +199,12 @@ impl PhotoSortApp {
                 // Reserve controls at the right edge before fitting status text.
                 // Stop must remain reachable even with long paths in small windows.
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                    if let Some(stop) = &self.plan_stop {
+                        let stopping = stop.load(std::sync::atomic::Ordering::Acquire);
+                        if ui.add_enabled(!stopping, egui::Button::new(if stopping { "Cancelling…" } else { "Cancel planning" })).clicked() {
+                            stop.store(true, std::sync::atomic::Ordering::Release);
+                        }
+                    }
                     if let Some(stop) = &self.apply_stop {
                         let stopping = stop.load(std::sync::atomic::Ordering::Acquire);
                         if ui.add_enabled(!stopping, egui::Button::new(if stopping { "Stopping…" } else { "Stop" })
@@ -329,13 +340,13 @@ impl PhotoSortApp {
             } else if self.step != Step::Rotation
                 && ui
                     .add_enabled(
-                        !self.scanning && !self.busy && !self.media.is_empty(),
+                        self.can_start_analysis(),
                         egui::Button::new("Analyze library"),
                     )
-                    .on_hover_text("Local sharpness, exposure, exact duplicates and visual groups")
+                    .on_hover_text("Analyze this workflow locally · Ctrl/Cmd+S")
                     .clicked()
             {
-                self.analyze();
+                self.analyze_current_workflow();
             }
         });
         ui.add_space(4.0);
@@ -356,6 +367,9 @@ impl PhotoSortApp {
                                 }
                             }
                         });
+                    if self.group_mode == GroupMode::Location {
+                        self.location_layout_controls(ui);
+                    }
                     if self.scene_editing() {
                         self.group_controls(ui);
                         if ui
@@ -377,7 +391,7 @@ impl PhotoSortApp {
                     }
                     if ui
                         .add_enabled(
-                            !self.scanning && !self.busy,
+                            !self.scanning && !self.busy && self.organize_metadata_ready(),
                             egui::Button::new("Preview moves >"),
                         )
                         .clicked()
@@ -405,8 +419,9 @@ impl PhotoSortApp {
                     ui.label(RichText::new("Groups photos by the main people. Group portraits get one shared folder, such as People 001 + 003. Unclear matches stay unassigned. Preview moves analyzes first; Apply moves the files.").small().color(MUTED));
                 } else if self.group_mode == GroupMode::Visual {
                     ui.label(RichText::new("Select photos with Cmd/Ctrl-click or Shift-click, then use Scenes to correct groups. Preview moves analyzes first. Ungrouped photos and videos stay in place.").small().color(MUTED));
-                } else if self.group_mode != GroupMode::Current {
-                    ui.label(RichText::new("Analyze first to populate capture metadata and visual groups. Location names are resolved offline.").small().color(MUTED));
+                } else if self.metadata_organize_mode() {
+                    ui.label(RichText::new("Folder proposals use photo metadata. Location names are resolved offline; AI analysis is not needed.").small().color(MUTED));
+                    self.metadata_status(ui);
                 }
             }
             Step::EasyDelete => self.delete_controls(ui),

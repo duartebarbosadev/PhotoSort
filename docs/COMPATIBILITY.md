@@ -77,8 +77,13 @@ preview/detail/analysis and persisted proxies. Real system Display P3 and Adobe
 RGB profiles agree with Apple ColorSync within the tested four-level 8-bit bound.
 ICC-tagged Adobe CMYK and YCCK JPEGs retain their original ink channels through
 `jpeg-decoder` before the same cached `moxcms` conversion; ordinary JPEGs retain
-the fast existing decoder. CMYK TIFF and other non-RGB/gray formats remain
-unsupported. Invalid, oversized or mismatched profiles report a preview error. Untagged
+the fast existing decoder. This describes the default Rust image/color backend,
+which does not support CMYK TIFF or other non-RGB/gray profiles outside the JPEG
+fallback. The current macOS bundle enables `native-imaging`: its shared libvips /
+Little CMS adapter also supports profiled CMYK TIFF. Adapter regressions cover
+8/16-bit packed, planar and LZW fixtures; they do not establish every TIFF variant.
+See [native image support and validation](../crates/imaging-vips/README.md).
+Invalid, oversized or mismatched profiles report a preview error. Untagged
 images still assume sRGB; standalone PNG gamma/chromaticity/CICP interpretation,
 HDR/wide-gamut output, monitor calibration, and broader RAW/platform color accuracy
 remain unverified or outside this normalization. The existing ImageIO HEIF and
@@ -118,8 +123,8 @@ execution, broader accelerator performance and other-model batching remain to be
 validated. CPU stays the default because cold Apple compilation and memory costs
 are substantial; see [ACCELERATION.md](ACCELERATION.md).
 Menu → AI models now provides verified inventory, import, bundled-copy repair and
-pinned DINOv2/SFace downloads. The other four prepared models require the full
-bundle or a prepared import until native exports are published. Missing models or
+pinned DINOv2/SFace/orientation downloads. The other three prepared models require
+the full bundle or a prepared import until native exports are published. Missing models or
 runtime prerequisites pause analysis and preserve reviews; retry is explicit.
 Transfers are cancellable during network waits and remove incomplete temporary
 files. Native model inference calls may finish their current unit before analysis
@@ -192,8 +197,11 @@ loads ONNX Runtime. `files_ready` is file readiness for the enabled build, not
 proof of ABI compatibility, successful inference or UI health. A minimal build
 reports AI as disabled rather than requiring AI files. `--check-runtime` additionally exercises all six native AI sessions through the
 shared production services on an embedded licensed fixture, then repeats the work
-to check session reuse. It reports per-stage failures and rejects unsupported
-minimal builds. It tests the configured orientation override's input/output
+to check session reuse. The default is CPU; `--runtime-backend` selects cpu,
+auto, coreml, cuda or directml without changing saved preferences. Per-model JSON
+provider records explain CPU fallback. Passing/exit status establish functional
+inference and reuse, not accelerator selection or per-operator hardware placement.
+It reports per-stage failures and rejects unsupported minimal builds. It tests the configured orientation override's input/output
 contract when present. Automatic GUI smoke exit, codec/video/package relocation
 checks and wider photographic accuracy remain separate work.
 
@@ -282,3 +290,23 @@ Stop, 19,114 retained and retried, then zero unfinished operations. All hashes
 match; original profiles were restored and fixtures removed. See
 diagnostics/stop-apply-2026-10-07/README.md. This supersedes the earlier statement
 that only worker cancellation existed without a UI control.
+
+
+### Fallback move attributes — 7 October 2026
+
+Shared fallback moves now preserve modification/access times and source
+permissions, with private Unix partial copies and existing cancellable rollback.
+Same-volume hard links retain their fast path. The before/after disposable probe
+and three shared regressions pass, as do the full suite, strict Clippy and rebuilt
+bundle/runtime checks. Actual cross-volume/platform execution and extended
+attributes are not claimed. See diagnostics/copy-attributes-2026-10-07/README.md.
+
+
+### Compact video review — 7 October 2026
+
+Short video review slots now use the existing compact controls, preserving
+picture space. A rendered-mesh regression covers all five workflows and texture
+reuse during resizing. Full validation and rebuilt native/runtime checks pass.
+The formerly locked native seeking check is complete on disposable macOS video
+fixtures; audio remained muted. See diagnostics/video-layout-2026-10-07/README.md
+and native-checks.json for exact interaction coverage and platform limits.

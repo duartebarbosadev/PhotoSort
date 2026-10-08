@@ -9,8 +9,10 @@ const OWNER: &[u8] = b"PhotoSort compiled models v1\n";
 
 pub(super) fn named(path: &Path) -> bool {
     path.file_name().and_then(|p| p.to_str()).is_some_and(|n| {
-        n.strip_suffix(".coreml")
-            .is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+        [".coreml", ".onnx-cache"].iter().any(|suffix| {
+            n.strip_suffix(suffix)
+                .is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+        })
     })
 }
 pub(super) struct Lock(File);
@@ -94,7 +96,7 @@ pub(super) fn remove(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<()> {
 #[cfg(any(test, all(feature = "onnx", target_os = "macos")))]
 mod writer;
 #[cfg(all(feature = "onnx", target_os = "macos"))]
-pub(crate) use writer::{Lease, key};
+pub(crate) use writer::{Format, Lease, key};
 
 #[cfg(test)]
 mod tests {

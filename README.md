@@ -20,11 +20,40 @@ Packaging creates `target/PhotoSort Rust.app`. The bundle contains its models,
 ONNX Runtime and native image libraries. It can be moved independently of this
 source directory. This is a locally signed development build, not a notarized release.
 
-The verified development bundle is stored at `.tools/native/PhotoSort Rust.app`.
-Build intermediates are cleaned separately. Rebuild with
-`python3 scripts/package_macos.py` when a new macOS bundle is needed.
+The current verified development bundle is
+`.tools/native-vips/PhotoSort Rust.app`. It includes the libvips image backend and
+the latest shared move, video and comparison fixes. From the repository root:
 
-From source:
+```sh
+open ".tools/native-vips/PhotoSort Rust.app"
+```
+
+The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
+bundle's source/executable hashes, full test results and native interaction checks
+are recorded in [the latest validation report](docs/diagnostics/settings-access-2026-10-08/README.md).
+These checks cover this macOS development build; they do not establish Windows,
+CUDA or DirectML runtime readiness.
+
+To rebuild the current variant using the existing verified SIMD prefix, keep
+compiler output temporary and clean it after packaging:
+
+```sh
+(
+  build_dir="$(mktemp -d)"
+  trap 'cargo clean --target-dir "$build_dir"' EXIT
+  CARGO_TARGET_DIR="$build_dir" python3 scripts/package_macos.py \
+    --native-imaging --native-prefix .tools/vips-simd \
+    --output ".tools/native-vips/PhotoSort Rust.app"
+)
+```
+
+On a fresh checkout, first follow the [native dependency setup](crates/imaging-vips/README.md)
+and use the prefix it creates (`.tools/vips` by default). Model/runtime assets are
+installed separately as described in [asset provenance](resources/ASSETS.md).
+Running `scripts/package_macos.py` without these options builds the default image
+backend into `target/PhotoSort Rust.app`.
+
+From source with the default image backend:
 
 ```sh
 brew install libraw exiv2 pkg-config
@@ -43,13 +72,32 @@ cannot be combined with folder-opening or clearing options.
 `--check-runtime` goes further: it verifies the files, loads the native inference
 engine and runs two CPU passes on an embedded licensed fixture through the shared
 scene, aesthetic, face geometry, recognition and orientation services. Its JSON
-reports each stage, counters and session reuse. Six sessions must be initialized
-once and reused on the second pass. It uses one inference thread, never opens a
+reports each stage, counters and session reuse. All six model sessions must be
+reused on the second pass; replacing a failed accelerator during the first pass
+is allowed. It uses one inference thread, never opens a
 window or a photo library, and writes no analysis cache. It exits with failure in
 minimal builds or when any prerequisite, inference contract or reuse check fails.
 This checks native AI execution; it is not a graphics/video smoke test or an
 accuracy/speed benchmark. A custom orientation override is exercised in place of
 the default orientation model, whose inventory row is marked unselected.
+Add `--runtime-backend cpu|auto|coreml|cuda|directml` to exercise another backend
+through the same registry and fallback policy as Settings. Omitting it keeps the
+CPU baseline. For example:
+
+```sh
+photosort --check-runtime --runtime-backend coreml
+```
+
+The JSON includes `requested_backend`, `model_providers` (with fallback reasons),
+`accelerated_models` and `cpu_models`. **A successful exit validates inference,
+including CPU fallback; it does not prove the requested accelerator was selected.**
+Check all six provider records. Native compiler/runtime messages go to stderr,
+keeping stdout valid JSON even during native shutdown. The two counts summarize configured sessions only
+after a complete successful check, not individual operator placement. This command
+does not change Settings or persist PhotoSort prepared-model caches; native
+runtimes may create their own OS temporary caches. Cold accelerator compilation
+can take minutes and individual native calls cannot be interrupted.
+
 Diagnostic JSON uses display text for paths containing non-UTF-8 bytes; actual
 filesystem/model paths retain their original bytes.
 
@@ -79,6 +127,9 @@ hints; Organize and Cull remain available. Easy Delete blur, near-black and
 overexposed thresholds apply to future analyses and preserve current reviews. Ctrl/Cmd+Alt+1–5 and Previous/Next use
 the same workflow guards as clicking a step. Ctrl/Cmd+O opens a library,
 Ctrl/Cmd+F focuses its search field (outside Pick Best), and F12 opens About.
+Ctrl/Cmd+S runs the active workflow's analysis, or orientation detection in Fix
+Rotation. It uses the same controls and review guards as the buttons; additional
+presses leave an active analysis running. Use Cancel analysis to stop it.
 In Cull, Alt+1/2/3 selects list/icons/grid; F and S toggle the folder and
 similarity-group navigator. Text fields keep ordinary typing and selection keys;
 modal dialogs and active file work keep keyboard ownership. The keyboard guide
@@ -162,7 +213,14 @@ review the revised paths before choosing **Retry unfinished changes**.
 1. **Organize:** preserve folders, capture date, camera, offline location, visual
    similarity, faces, or date followed by similarity. Organize defaults to the selected
    library folder; an alternate destination remains available. Edit folder hierarchies, drag selected files or folders between groups, and edit file stems;
-   review collision-safe moves with RAW/JPEG/XMP companions.
+   review collision-safe moves with RAW/JPEG/XMP companions. Location offers country,
+   country/city or country/region/city folders. Changing levels reuses loaded
+   metadata and asks before replacing custom location folder edits. Date, camera and
+   location grouping automatically read missing metadata without AI analysis;
+   cancel or resume that read while browsing. Generated folder edits and move
+   previews wait for complete metadata, including photos outside the viewport. Reset destinations
+   restores only selected files to their initial grouping proposal, keeping
+   other edits and staged names. File and folder context menus offer the same action.
 2. **Easy Delete:** categorized sharpness/exposure and duplicate reviews, paired
    Keep/Trash choices, confirm/advance/revoke, reset one/all and accept filtered
    defaults. Exact copies are paired without face comparison; near pairs use camera-aligned
@@ -189,6 +247,12 @@ review the revised paths before choosing **Retry unfinished changes**.
    ratings, staged Trash marks, and navigation that skips marked photos
    unless Ctrl/Cmd is held.
 
+In Organize and Cull review, right-click a photo or video to mark or unmark the
+other displayed comparison items together. The menu shows the affected count;
+it leaves the clicked item and any selection outside the comparison unchanged.
+These are staged marks: use Review changes before sending files to Trash.
+Guided reviews keep their existing Keep/Trash and confirmation controls.
+
 Cull’s **Groups** menu moves selected photos into a new or existing group. The
 picker shows counts and an example filename. Corrections survive reanalysis,
 restart and verified file moves; Undo and Restore automatic grouping are available.
@@ -203,9 +267,10 @@ before using the new app on an existing editing workflow.
 ## Local AI setup
 
 **Menu → AI models** verifies installed models, reports missing or damaged files,
-and repairs them from the app bundle or a prepared ONNX file. DINOv2 and SFace can
-also be downloaded directly from pinned upstream revisions. Transfers show their
-size and progress, can be canceled, and verify exact size and SHA-256 before
+and repairs them from the app bundle or a prepared ONNX file. DINOv2, SFace and the
+orientation model can also be downloaded directly from pinned upstream releases
+or revisions. Transfers show their size and progress, can be canceled, and verify
+exact size and SHA-256 before
 replacing any installed file. Existing models survive failed transfers.
 
 Missing prerequisites stop analysis before image decoding and preserve current
@@ -214,7 +279,7 @@ Model setup has its own lazy worker, so browsing and photo operations stay
 independent of slow downloads. Closing the panel leaves a transfer running;
 quitting cancels it. No downloads occur automatically and no photos are uploaded.
 
-The other four prepared models come with the full bundle and support verified
+The other three prepared models come with the full bundle and support verified
 import/restore. Public native export downloads for them are not yet published.
 The model manager does not download executable ONNX Runtime libraries; restore
 the full application if its native runtime is missing. Minimal builds keep manual
@@ -259,7 +324,10 @@ packaging (including failed builds):
 
 The bundle contains its models and runtime. Packaging verifies the local code
 signature and a streamed resource manifest before replacing the output bundle.
-This is an ad-hoc signed local build, not a notarized distribution. The packager's
+By default this is an ad-hoc signed local build, not a notarized distribution.
+Use `--sign-identity` with an existing certificate name or SHA-1 for consistent
+development signing; see [macOS signing and folder access](docs/MACOS_SIGNING.md).
+Ad-hoc rebuilds can trigger a new macOS folder-access prompt. The packager's
 integrity and output-safety regressions run without compiling Rust:
 
 ```sh

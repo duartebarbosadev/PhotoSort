@@ -287,6 +287,7 @@ fn session_drops_stale_decisions() {
     let d = TempDir::new().unwrap();
     let m = photo(d.path(), "a.png");
     let mut s = Session {
+        organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
         decisions: HashMap::from([(

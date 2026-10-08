@@ -83,3 +83,76 @@ embedded HEIF rotation as a demonstrated working reference capability. Rust's
 sidecar rotation is an intentional working alternative; embedded container edits
 would improve interoperability beyond this broken reference path. Evidence:
 `diagnostics/heif-write-feasibility-2026-10-06/README.md`.
+
+
+## Location fallback and selective reset audit — 7 October 2026
+
+A complete trace through `_build_location_plan`, the preview renderer and
+`execute_grouping_plan` shows that missing GPS enters `unassigned_paths` and then
+moves to `Unassigned`; it is not kept in place. Rust's `No GPS` destination keeps
+that workflow with a more descriptive name. No change to missing-GPS file policy
+is needed.
+
+The reference's Put back in original folder action actually restores each
+selected file's initial generated group label, using source folders only for
+initially unassigned entries. Rust's selective destination reset restores its
+initial generated proposal while preserving unrelated edits and file names.
+Explicit empty-directory edits remain separate intent. Both reset and move use
+the same companion expansion; no image work is repeated.
+
+
+## Library-wide mark clearing audit — 8 October 2026
+
+`MenuManager.clear_marked_deletions_action` and Organize's `clear_deletions`
+shortcut both reach `MainWindow._clear_all_deletion_marks`, then the shared
+`DeletionMarkController.clear_all_and_update` and `AppState`. This clears the
+entire marked set, rather than just the filtered view, and refreshes workflow
+presentation. It does not clear ratings or rotate files. Organize binds Alt+D
+inside its own widget; general Cull shortcuts are suspended in guided workflows.
+
+Rust already had a direct Alt+D mutation in Organize, Rotation and Cull. This
+was keyboard-only and did not supersede every saved pre-confirmation Trash mark.
+The new shared action backs Menu, the Organize editor's Actions menu and their
+owned keyboard routes, including guided workflows. A regression reproduced Reset
+restoring old marks from Keep-all reviews after the earlier Alt+D implementation.
+Review owners now clear those mark baselines before normal reconciliation, while
+retaining applicable current choices and cached analysis.
+
+
+## Organize keyboard editing audit — 8 October 2026
+
+`ORGANIZE_SHORTCUTS` reaches `_shortcut_item`, then the existing rename,
+subgroup, mark, Trash and apply handlers. Tree selection expands represented
+paths and controller signals retain the shared deletion/file-operation owners.
+The reference can request a validated original directory for immediate Trash.
+
+Rust now routes focused file/folder keyboard actions through the same selection
+and command helpers as its existing controls. Delete previews represented files
+and companions; whole-original-folder removal remains an explicit named menu
+action. This keeps the available workflow while making shortcut scope predictable
+for generated or merged destinations. Folder rename/create remains draft-only,
+and both move and Trash execution require a separately reviewed Apply action.
+
+
+## Settings and cache entry points — 8 October 2026
+
+The reference MenuManager binds F10 to DialogManager.show_preferences_dialog and F9
+to DialogManager.show_cache_management_dialog. CacheController owns the actual cache
+maintenance. Rust retains its shared background cache owner and one Settings
+draft, adding direct keyboard/menu entry points and in-dialog section links.
+F9 opens usage and controls; it does not clear caches. Ctrl/Cmd+, is an additional
+standard Settings shortcut. Existing modal, busy and held-key guards are reused.
+
+## Analysis keyboard entry point — 8 October 2026
+
+The reference MenuManager binds Ctrl/Cmd+S to Analyze Similarity across workflows.
+Rust instead makes this shortcut perform the visible step's existing analysis:
+Organize's configured grouping, Easy Delete's duplicate/technical pass, Pick
+Best's ranking, Cull's subject grouping, and Fix Rotation's orientation detection.
+This is an intentional UX change: the shortcut agrees with the current task's
+button, including model setup, unfinished-review guards and cancellation.
+
+One application-level availability check serves both buttons and their action
+owners. Empty libraries, discovery, file work and an already active analysis
+prevent admission. Repeated presses cannot replace the running generation or
+queue a second image/model pass. The shortcut never applies file changes.

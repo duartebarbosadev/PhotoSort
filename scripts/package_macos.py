@@ -99,12 +99,29 @@ def resolve_dependency(source, binary, executable, rpaths):
     raise RuntimeError(f'Cannot resolve dependency in {binary}: {source}')
 
 
+def sign_bundle(app, binaries, identity):
+    """Sign nested code and seal finalized resources with one explicit identity."""
+    contents = app/'Contents'
+    executable = contents/'MacOS/photosort'
+    for binary in sorted(binaries, key=lambda p: p == executable):
+        subprocess.run(['codesign', '--force', '--sign', identity, str(binary)], check=True)
+    checksums = bundle_manifest(contents)
+    (contents/'Resources'/'BUNDLE-SHA256SUMS').write_text(checksums)
+    subprocess.run(['codesign', '--force', '--sign', identity, str(app)], check=True)
+    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
+    if bundle_manifest(contents) != checksums:
+        raise RuntimeError('Bundle resources changed while signing')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, help='Destination .app bundle (default: target/PhotoSort Rust.app)')
     parser.add_argument('--native-imaging', action='store_true', help='Include the opt-in libvips backend built by scripts/build_vips.py')
     parser.add_argument('--native-prefix', type=Path, help='Private libvips prefix to bundle with --native-imaging (default: .tools/vips)')
+    parser.add_argument('--sign-identity', default='-', help='Existing codesign identity name or SHA-1; default: ad-hoc (-). No notarization is performed.')
     args = parser.parse_args()
+    if not args.sign_identity.strip():
+        parser.error('--sign-identity must name an existing identity, or - for ad-hoc signing')
     if args.native_prefix and not args.native_imaging:
         parser.error('--native-prefix requires --native-imaging')
     target = Path(os.environ.get('CARGO_TARGET_DIR', str(ROOT/'target'))).expanduser()
@@ -126,77 +143,69 @@ def main():
         env['PKG_CONFIG_PATH'] = str(native_prefix/'lib/pkgconfig') + os.pathsep + env.get('PKG_CONFIG_PATH', '')
     subprocess.run(command, cwd=ROOT, env=env, check=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = tempfile.TemporaryDirectory(dir=destination.parent, prefix='photosort-bundle-')
-    app = Path(staging.name) / 'PhotoSort Rust.app'
-    contents = app / 'Contents'
-    for name in ('MacOS', 'Resources', 'Frameworks'):
-        (contents/name).mkdir(parents=True, exist_ok=True)
-    exe = contents/'MacOS'/'photosort'
-    shutil.copy2(target/'release/photosort', exe)
-    shutil.copytree(ROOT/'resources', contents/'Resources', dirs_exist_ok=True)
-    shutil.copy2(ROOT/'LICENSE', contents/'Resources/LICENSE')
-    plist = dict(CFBundleExecutable='photosort', CFBundleIdentifier='dev.duartebarbosa.photosort.rust',
-                 CFBundleName='PhotoSort Rust', CFBundleDisplayName='PhotoSort Rust',
-                 CFBundleVersion='1', CFBundleShortVersionString='0.1.0', CFBundlePackageType='APPL',
-                 NSHighResolutionCapable=True, LSMinimumSystemVersion='13.0')
-    (contents/'Info.plist').write_bytes(plistlib.dumps(plist))
-    visited = set()
-    library_sources = {}
-    executable_source = target/'release/photosort'
-    def bundle(binary, original, inherited_rpaths=()):
-        if binary in visited:
-            return
-        visited.add(binary)
-        rpaths = [*loader_paths(original, executable_source), *inherited_rpaths]
-        own_id = library_id(original)
-        lines = subprocess.check_output(['otool', '-L', str(original)], text=True).splitlines()[1:]
-        for line in lines:
-            source = line.strip().split(' (', 1)[0]
-            if source == own_id:
-                continue
-            resolved = resolve_dependency(source, original, executable_source, rpaths)
-            if dependency_is_external(str(resolved), native_prefix):
-                canonical = resolved.resolve()
-                resolved = canonical
-                previous = library_sources.setdefault(resolved.name, canonical)
-                if previous != canonical:
-                    raise RuntimeError(f'Conflicting libraries share a filename: {resolved} and {previous}')
-                copy_dependency_notices(resolved, contents, native_prefix)
-                destination = contents/'Frameworks'/resolved.name
-                if not destination.exists():
-                    shutil.copy2(resolved, destination)
-                subprocess.run(['install_name_tool', '-change', source,
-                                '@executable_path/../Frameworks/'+destination.name, str(binary)], check=True)
-                bundle(destination, resolved, rpaths)
-        if binary.suffix == '.dylib':
-            subprocess.run(['install_name_tool', '-id', '@executable_path/../Frameworks/'+binary.name, str(binary)], check=True)
-    bundle(exe, executable_source)
-    for binary in contents.glob('Resources/runtime/*.dylib'):
-        bundle(binary, ROOT/'resources/runtime'/binary.name, loader_paths(executable_source, executable_source))
-    # Resolve every non-system dependency against the finished bundle. Signing
-    # alone cannot detect missing @rpath libraries or dependencies on the host.
-    for binary in visited:
-        own_id = library_id(binary)
-        lines = subprocess.check_output(['otool', '-L', str(binary)], text=True).splitlines()[1:]
-        for line in lines:
-            dependency = line.strip().split(' (', 1)[0]
-            if dependency == own_id or dependency.startswith(('/usr/lib/', '/System/Library/')):
-                continue
-            resolved = resolve_dependency(dependency, binary, exe, loader_paths(binary, exe))
-            if not resolved.is_relative_to(contents.resolve()) or not resolved.is_file():
-                raise RuntimeError(f'Bundle still depends on host or missing file: {dependency}')
-    for binary in sorted(visited, key=lambda p: p == exe):
-        subprocess.run(['codesign', '--force', '--sign', '-', str(binary)], check=True)
-    checksums = bundle_manifest(contents)
-    (contents/'Resources'/'BUNDLE-SHA256SUMS').write_text(checksums)
-    subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True)
-    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
-    if bundle_manifest(contents) != checksums:
-        raise RuntimeError('Bundle resources changed while signing')
-    if destination.exists():
-        shutil.rmtree(destination)
-    shutil.move(str(app), destination)
-    staging.cleanup()
+    with tempfile.TemporaryDirectory(dir=destination.parent, prefix='photosort-bundle-') as staging:
+        app = Path(staging) / 'PhotoSort Rust.app'
+        contents = app / 'Contents'
+        for name in ('MacOS', 'Resources', 'Frameworks'):
+            (contents/name).mkdir(parents=True, exist_ok=True)
+        exe = contents/'MacOS'/'photosort'
+        shutil.copy2(target/'release/photosort', exe)
+        shutil.copytree(ROOT/'resources', contents/'Resources', dirs_exist_ok=True)
+        shutil.copy2(ROOT/'LICENSE', contents/'Resources/LICENSE')
+        plist = dict(CFBundleExecutable='photosort', CFBundleIdentifier='dev.duartebarbosa.photosort.rust',
+                     CFBundleName='PhotoSort Rust', CFBundleDisplayName='PhotoSort Rust',
+                     CFBundleVersion='1', CFBundleShortVersionString='0.1.0', CFBundlePackageType='APPL',
+                     NSHighResolutionCapable=True, LSMinimumSystemVersion='13.0')
+        (contents/'Info.plist').write_bytes(plistlib.dumps(plist))
+        visited = set()
+        library_sources = {}
+        executable_source = target/'release/photosort'
+        def bundle(binary, original, inherited_rpaths=()):
+            if binary in visited:
+                return
+            visited.add(binary)
+            rpaths = [*loader_paths(original, executable_source), *inherited_rpaths]
+            own_id = library_id(original)
+            lines = subprocess.check_output(['otool', '-L', str(original)], text=True).splitlines()[1:]
+            for line in lines:
+                source = line.strip().split(' (', 1)[0]
+                if source == own_id:
+                    continue
+                resolved = resolve_dependency(source, original, executable_source, rpaths)
+                if dependency_is_external(str(resolved), native_prefix):
+                    canonical = resolved.resolve()
+                    resolved = canonical
+                    previous = library_sources.setdefault(resolved.name, canonical)
+                    if previous != canonical:
+                        raise RuntimeError(f'Conflicting libraries share a filename: {resolved} and {previous}')
+                    copy_dependency_notices(resolved, contents, native_prefix)
+                    destination = contents/'Frameworks'/resolved.name
+                    if not destination.exists():
+                        shutil.copy2(resolved, destination)
+                    subprocess.run(['install_name_tool', '-change', source,
+                                    '@executable_path/../Frameworks/'+destination.name, str(binary)], check=True)
+                    bundle(destination, resolved, rpaths)
+            if binary.suffix == '.dylib':
+                subprocess.run(['install_name_tool', '-id', '@executable_path/../Frameworks/'+binary.name, str(binary)], check=True)
+        bundle(exe, executable_source)
+        for binary in contents.glob('Resources/runtime/*.dylib'):
+            bundle(binary, ROOT/'resources/runtime'/binary.name, loader_paths(executable_source, executable_source))
+        # Resolve every non-system dependency against the finished bundle. Signing
+        # alone cannot detect missing @rpath libraries or dependencies on the host.
+        for binary in visited:
+            own_id = library_id(binary)
+            lines = subprocess.check_output(['otool', '-L', str(binary)], text=True).splitlines()[1:]
+            for line in lines:
+                dependency = line.strip().split(' (', 1)[0]
+                if dependency == own_id or dependency.startswith(('/usr/lib/', '/System/Library/')):
+                    continue
+                resolved = resolve_dependency(dependency, binary, exe, loader_paths(binary, exe))
+                if not resolved.is_relative_to(contents.resolve()) or not resolved.is_file():
+                    raise RuntimeError(f'Bundle still depends on host or missing file: {dependency}')
+        sign_bundle(app, visited, args.sign_identity)
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.move(str(app), destination)
     print(destination)
 
 

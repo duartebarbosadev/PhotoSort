@@ -159,3 +159,56 @@ fn runtime_checks_are_standalone_and_cannot_clear_files_or_open_folders() {
         Some("--check-runtime".into())
     );
 }
+
+#[test]
+fn runtime_backend_selection_is_explicit_validated_and_never_changes_startup_preferences() {
+    use photosort::core::processing::Backend;
+    assert_eq!(options(&["--check-runtime"]).unwrap().runtime_backend, None);
+    for (name, backend) in [
+        ("cpu", Backend::Cpu),
+        ("auto", Backend::Auto),
+        ("coreml", Backend::CoreMl),
+        ("cuda", Backend::Cuda),
+        ("directml", Backend::DirectMl),
+    ] {
+        for args in [
+            vec!["--check-runtime", "--runtime-backend", name],
+            vec!["--runtime-backend", name, "--check-runtime"],
+        ] {
+            let parsed = options(&args).unwrap();
+            assert!(parsed.check_runtime);
+            assert_eq!(parsed.runtime_backend, Some(backend));
+            assert!(!parsed.clear_cache && !parsed.clear_models && parsed.folder.is_none());
+        }
+        for other in [
+            "--diagnostics",
+            "--clear-models",
+            "--clear-cache",
+            "--smoke-test",
+            "--last-folder",
+            "/photos",
+        ] {
+            assert!(options(&["--runtime-backend", name, other]).is_err());
+            assert!(options(&["--check-runtime", "--runtime-backend", name, other]).is_err());
+        }
+        assert!(options(&["--runtime-backend", name]).is_err());
+    }
+    for args in [
+        vec!["--check-runtime", "--runtime-backend"],
+        vec!["--check-runtime", "--runtime-backend", "metal"],
+        vec!["--check-runtime", "--runtime-backend", ""],
+        vec![
+            "--check-runtime",
+            "--runtime-backend",
+            "cpu",
+            "--runtime-backend",
+            "cuda",
+        ],
+    ] {
+        assert!(options(&args).is_err(), "{args:?}");
+    }
+    assert_eq!(
+        options(&["--", "--runtime-backend"]).unwrap().folder,
+        Some("--runtime-backend".into())
+    );
+}

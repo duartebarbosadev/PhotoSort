@@ -183,7 +183,7 @@ impl PhotoSortApp {
         } else {
             self.start_ready_pick_analysis();
         }
-        if self.step == Step::Cull {
+        if self.step == Step::Cull || self.metadata_organize_mode() {
             self.start_metadata_index();
         }
     }
@@ -208,7 +208,7 @@ impl PhotoSortApp {
     fn group_targets(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().max_height(240.).show_rows(
             ui,
-            24.,
+            button_row_height(ui),
             if self.scene_editing() {
                 self.scene_choices.len()
             } else {
@@ -580,6 +580,7 @@ mod tests {
             .map(|m| (m.id, m.fingerprint))
             .collect();
         Session {
+            organize: None,
             manual_groups: manual,
             scene_groups: Default::default(),
             decisions: Default::default(),
@@ -666,6 +667,7 @@ mod tests {
             let subjects = group(vec![catalog.media[0].id, catalog.media[1].id]);
             let scenes = group(vec![catalog.media[1].id, catalog.media[2].id]);
             Session {
+                organize: None,
                 manual_groups: subjects.clone(),
                 scene_groups: scenes.clone(),
                 fingerprints: catalog

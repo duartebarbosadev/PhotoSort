@@ -1,6 +1,6 @@
 use super::*;
 
-fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
+pub(super) fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("photos");
     std::fs::create_dir_all(root.join("A/Day1")).unwrap();
@@ -63,7 +63,7 @@ fn settle(app: &mut PhotoSortApp) {
         std::thread::sleep(Duration::from_millis(1));
     }
 }
-fn frame(
+pub(super) fn frame(
     app: &mut PhotoSortApp,
     ctx: &egui::Context,
     size: Vec2,
@@ -95,7 +95,11 @@ fn frame(
         })
         .collect()
 }
-fn rendered(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2) -> Vec<(String, egui::Rect)> {
+pub(super) fn rendered(
+    app: &mut PhotoSortApp,
+    ctx: &egui::Context,
+    size: Vec2,
+) -> Vec<(String, egui::Rect)> {
     let mut nodes = Vec::new();
     for _ in 0..3 {
         nodes = frame(app, ctx, size, Vec::new());
@@ -141,7 +145,7 @@ fn compact_cull_workspace_keeps_photos_visible_with_navigator_and_filters() {
     assert_eq!(app.media.len(), 9);
 }
 
-fn click_label(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2, label: &str) {
+pub(super) fn click_label(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2, label: &str) {
     let nodes = rendered(app, ctx, size);
     let pos = nodes
         .iter()
@@ -300,7 +304,21 @@ fn compact_navigator_selects_scope_and_metadata_cancel_stays_outside_filters() {
         app.browse.folder.path,
         Some(app.root.as_ref().unwrap().join("A"))
     );
-    egui::Popup::close_all(&ctx);
+    // Dismiss through the public UI: the browser and its nested context menu
+    // deliberately have independent popup owners.
+    frame(
+        &mut app,
+        &ctx,
+        size,
+        vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }],
+    );
+    assert!(!app.navigator_popup_open(&ctx));
     app.metadata_run = Some(73);
     app.metadata_progress = Some((1, 9));
     let nodes = rendered(&mut app, &ctx, size);
@@ -325,4 +343,58 @@ fn compact_navigator_selects_scope_and_metadata_cancel_stays_outside_filters() {
     assert_eq!(app.filtered.len(), 4);
     assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));
     assert!(app.decisions.is_empty());
+}
+
+#[test]
+fn navigator_activation_checkbox_reveals_browser_from_review_at_both_sizes() {
+    for size in [egui::vec2(640., 600.), egui::vec2(1440., 960.)] {
+        let (_temp, mut app) = fixture();
+        app.review = true;
+        app.navigator.enabled = false;
+        let active = app.media[0].id;
+        app.active = Some(active);
+        app.comparison = vec![active, app.media[1].id];
+        let comparison = app.comparison.clone();
+        app.decisions.insert(
+            active,
+            Decision {
+                rating: Some(4),
+                ..Default::default()
+            },
+        );
+        let catalog = app.catalog.clone().unwrap();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        click_label(&mut app, &ctx, size, "Library navigator");
+        assert!(
+            app.navigator.enabled && !app.review,
+            "Navigator remained hidden in Review at {size:?}"
+        );
+        let nodes = rendered(&mut app, &ctx, size);
+        let expected = if size.x < 1000. {
+            "Browse folders"
+        } else {
+            "Counts cover the whole library"
+        };
+        assert!(
+            nodes.iter().any(|(label, _)| label == expected),
+            "Missing visible navigator at {size:?}"
+        );
+        assert_eq!(app.active, Some(active));
+        assert_eq!(app.comparison, comparison);
+        assert_eq!(app.decisions[&active].rating, Some(4));
+        assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));
+        let saved = app.capture_bookmark();
+        assert!(saved.navigator.enabled && !saved.review);
+        click_label(&mut app, &ctx, size, "Library navigator");
+        assert!(!app.navigator.enabled && !app.review);
+        // Returning to Review hides the tree but retains its saved enabled state.
+        // The checkbox reflects visibility and opens it again in one click.
+        app.navigator.enabled = true;
+        app.review = true;
+        click_label(&mut app, &ctx, size, "Library navigator");
+        assert!(app.navigator.enabled && !app.review);
+        assert_eq!(app.decisions[&active].rating, Some(4));
+    }
 }

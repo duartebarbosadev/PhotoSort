@@ -7,7 +7,7 @@ use anyhow::Result;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 mod runtime_check;
-pub use runtime_check::{RuntimeReport, check_runtime};
+pub use runtime_check::{RuntimeReport, check_runtime, check_runtime_with_backend};
 
 #[derive(Serialize)]
 pub struct Capabilities {

@@ -281,3 +281,19 @@ fn index_build_is_cancellable_and_large_navigation_uses_only_cached_rows() {
         );
     }
 }
+
+#[test]
+fn file_keyboard_position_navigation_checks_only_traversed_cached_rows() {
+    use photosort::core::navigation::next_position;
+    let visits = std::cell::Cell::new(0);
+    let next = next_position(100_000, Some(50_000), 1, |i| {
+        visits.set(visits.get() + 1);
+        i != 50_001
+    });
+    assert_eq!(next, Some(50_002));
+    assert_eq!(visits.get(), 2);
+    assert_eq!(next_position(3, Some(0), -1, |_| true), None);
+    assert_eq!(next_position(3, Some(2), 1, |_| true), None);
+    assert_eq!(next_position(3, None, -1, |_| true), Some(2));
+    assert_eq!(next_position(0, None, 1, |_| true), None);
+}

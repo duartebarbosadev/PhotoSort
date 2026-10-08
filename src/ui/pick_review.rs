@@ -143,12 +143,13 @@ impl PhotoSortApp {
                     t.cluster.ordered.len()
                 ))
                 .show_ui(ui, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                     egui::ScrollArea::vertical()
                         .id_salt("pick_clusters_scroll")
                         .max_height(240.0)
                         .show_rows(
                             ui,
-                            ui.spacing().interact_size.y,
+                            button_row_height(ui),
                             self.pick_review.tournaments().len(),
                             |ui, rows| {
                                 for i in rows {
@@ -197,7 +198,7 @@ impl PhotoSortApp {
                         .max_height(240.0)
                         .show_rows(
                             ui,
-                            ui.spacing().interact_size.y,
+                            button_row_height(ui),
                             t.comparisons.len() + t.upcoming().len(),
                             |ui, rows| {
                                 for i in rows {
@@ -440,7 +441,10 @@ mod tests {
             .send(crate::core::jobs::Envelope {
                 epoch: app.runtime.epoch(),
                 event: Event::Opened(
-                    Arc::new(Catalog::default()),
+                    Arc::new(Catalog {
+                        media: app.media.clone(),
+                        ..Default::default()
+                    }),
                     Session::default(),
                     Default::default(),
                 ),
