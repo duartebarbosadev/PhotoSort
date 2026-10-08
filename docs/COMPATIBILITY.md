@@ -159,7 +159,8 @@ retain external playback and FFmpeg posters. The Linux aarch64 backend has passe
 its portable-feature suite, while Windows runtime and Linux desktop interaction
 remain unverified; see `diagnostics/portable-video-2026-10-06/README.md`. Muted macOS
 fixtures and native playback controls passed; audible A/V synchronization,
-HDR/color fidelity and native compact resizing still need validation. Finder/
+HDR/color fidelity still need validation. Native compact resizing and controls
+passed the later `diagnostics/video-layout-2026-10-07/README.md` check. Finder/
 Explorer reveal and external-player launch now share one lazy bounded desktop
 service. Service and all-workflow routing tests pass. Packaged macOS checks passed
 for Organize/Cull reveal, the exact context-clicked file without changing review

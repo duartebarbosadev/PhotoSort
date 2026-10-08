@@ -7,6 +7,10 @@ algorithms, numerical quirks and appearance are not compatibility requirements.
 Reference fixtures are regression evidence, not a requirement to retain inferior
 behavior. Remaining workflow gaps and validation limits stay explicit below.
 
+The [completion audit](COMPLETION_AUDIT.md) records the current evidence boundary
+and confirmed open items. The detailed rows below include historical results;
+a later report may supersede an earlier limitation or timing.
+
 | Requirement | Status / remaining implementation and verification |
 | --- | --- |
 | Photo space in Cull Review | Review uses the existing Filters & sort panel at every width, with an active-filter count and metadata cancellation outside the panel. Wide browsing retains inline filters. The same controls, worker, cached catalog and bookmarks serve both presentations. A real-frame regression measures a 57% taller photo canvas at 1440×990 with Details open, while nested filtering, mode changes and cancellation remain usable. See diagnostics/review-space-2026-10-09/README.md for scope and native checks. |

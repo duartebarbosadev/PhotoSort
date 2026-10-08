@@ -30,9 +30,10 @@ open ".tools/native-vips/PhotoSort Rust.app"
 
 The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
 bundle's source/executable hashes, full test results and native interaction checks
-are recorded in [the latest validation report](docs/diagnostics/settings-access-2026-10-08/README.md).
-These checks cover this macOS development build; they do not establish Windows,
-CUDA or DirectML runtime readiness.
+are recorded in [the current validation report](docs/diagnostics/review-space-2026-10-09/README.md).
+The [completion audit](docs/COMPLETION_AUDIT.md) separates covered workflows,
+intentional redesigns and remaining work. These checks cover this macOS development
+build; they do not establish Windows, CUDA or DirectML runtime readiness.
 
 To rebuild the current variant using the existing verified SIMD prefix, keep
 compiler output temporary and clean it after packaging:

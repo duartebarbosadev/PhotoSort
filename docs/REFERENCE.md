@@ -34,7 +34,7 @@ metadata access. The canonical RAW rendering path is `RawImageProcessor.render_d
 render as previews. There are generation locks and separate high-memory decode
 limits. Preview appearance must not change when resolution improves.
 
-Analysis is local. DINOv2 small/base uses pinned Hugging Face weights; aesthetic
+Analysis is local. DINOv2 small uses pinned Hugging Face weights; aesthetic
 scoring uses cafeai/cafe_aesthetic; orientation uses a four-class ONNX model
 (0, 90, 180, -90), RGB resize to 416, center crop to 384, ImageNet normalization.
 No cloud photo APIs. Heavy model initialization is lazy and shared.
@@ -166,3 +166,29 @@ appended. The shared application shortcut now selects the current query through
 egui's character-indexed text state before focusing it. Unicode is counted as
 characters, existing edit history is retained, and filtering still flows through
 the same toolbar and review-departure guard. No new search worker is introduced.
+
+## Runtime claims checked against source — 9 October 2026
+
+The reference README still advertises a selectable DINOv2-base model. Its current
+`similarity_embedding_model.normalize_similarity_model_name` explicitly ignores
+legacy overrides and returns `model_provisioning.EMBEDDING_MODEL.repo_id`, pinned
+to `facebook/dinov2-small`. Base selection is not a working capability in this
+reference revision. Rust's small-only model catalog does not remove that feature.
+
+The reference README also advertises WebP, but `media_utils.py` omits it from
+`SUPPORTED_STANDARD_IMAGE_EXTENSIONS`. Rust recognizes WebP, BMP and GIF in
+addition to every extension in the reference scanner. This compares discovery
+policy; it does not prove that every camera variant or video codec decodes.
+
+Organize installs Alt+1–5 for Current, Mixed, Similarity, Face and Location; the
+handlers select enabled mode buttons and emit the existing mode-change signal.
+Rust currently exposes all those modes through its Group by control, but its
+`view_shortcut` handles Alt+number only in Cull and the general keyboard path
+discards the remaining Alt+number keys. This is a confirmed keyboard gap.
+
+Ctrl/Cmd+Shift+L in the reference hides the active workflow's content panel, not
+the five-step navigation. Rust uses a different layout: guided review queues are
+choosers, Details is independently collapsible, and Cull's navigator is optional.
+Do not map this shortcut to hiding workflow navigation without assessing that
+functional intent. The original intro video also describes the old interface;
+Rust has a new welcome screen and keyboard guide, not that playback action.
