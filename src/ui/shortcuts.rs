@@ -58,7 +58,17 @@ impl PhotoSortApp {
             ApplicationKey::Open => self.select_folder(),
             ApplicationKey::Find => {
                 if self.root.is_some() && self.step != Step::PickBest {
-                    ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("library_search")));
+                    let search = egui::Id::new("library_search");
+                    let mut state =
+                        egui::text_edit::TextEditState::load(ctx, search).unwrap_or_default();
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(0),
+                            egui::text::CCursor::new(self.query.chars().count()),
+                        )));
+                    state.store(ctx, search);
+                    ctx.memory_mut(|memory| memory.request_focus(search));
                 }
             }
             ApplicationKey::About => self.about = true,
@@ -265,6 +275,84 @@ mod tests {
                 });
                 assert_eq!(app.inspection_view.zoom, 1.0);
             }
+        }
+    }
+    #[test]
+    fn find_shortcut_replaces_existing_query_in_the_real_toolbar() {
+        for step in Step::ALL.into_iter().filter(|step| *step != Step::PickBest) {
+            for width in [640.0, 1280.0] {
+                for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
+                    let mut app = app(step);
+                    app.query = "A café/東京📷 e\u{301}".into();
+                    let ctx = egui::Context::default();
+                    let mut frame = |mut events: egui::RawInput| {
+                        events.screen_rect = Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 700.0),
+                        ));
+                        let _ = ctx.run(events, |ctx| {
+                            app.keyboard(ctx);
+                            egui::CentralPanel::default().show(ctx, |ui| app.toolbar(ui));
+                        });
+                    };
+                    frame(input(&[]));
+                    frame(input(&[(egui::Key::F, modifiers)]));
+                    let mut typing = input(&[]);
+                    typing.events.push(egui::Event::Key {
+                        key: egui::Key::F,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers,
+                    });
+                    typing.events.push(egui::Event::Text("new search".into()));
+                    frame(typing);
+                    assert_eq!(app.query, "new search", "{step:?}, width={width}");
+                    assert!(app.filter_dirty);
+                    assert_eq!(app.active, Some(MediaId(7)));
+                    assert!(app.decisions.is_empty());
+                    assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+                    assert!(app.analysis_run.is_none() && app.requested.is_empty());
+                    app.runtime.shutdown();
+                }
+            }
+        }
+    }
+    #[test]
+    fn find_does_not_replace_selection_when_another_owner_blocks_it() {
+        let search = egui::Id::new("library_search");
+        for guard in 0..6 {
+            let mut app = app(Step::Cull);
+            app.query = "existing query".into();
+            let ctx = egui::Context::default();
+            let range = egui::text::CCursorRange::one(egui::text::CCursor::new(3));
+            let mut state = egui::text_edit::TextEditState::default();
+            state.cursor.set_char_range(Some(range));
+            state.store(&ctx, search);
+            match guard {
+                0 => app.busy = true,
+                1 => app.help = true,
+                2 => egui::Popup::open_id(&ctx, egui::Id::new("find-guard")),
+                3 => app.step = Step::PickBest,
+                4 => app.root = None,
+                _ => ctx.input_mut(|input| {
+                    input.keys_down.insert(egui::Key::F);
+                }),
+            }
+            let _ = ctx.run(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ctx| {
+                app.keyboard(ctx)
+            });
+            assert_eq!(
+                egui::text_edit::TextEditState::load(&ctx, search)
+                    .unwrap()
+                    .cursor
+                    .char_range(),
+                Some(range),
+                "guard={guard}"
+            );
+            assert_eq!(app.query, "existing query");
+            assert!(ctx.memory(|memory| memory.focused()).is_none());
+            app.runtime.shutdown();
         }
     }
     #[test]

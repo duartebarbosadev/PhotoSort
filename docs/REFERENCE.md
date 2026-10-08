@@ -156,3 +156,13 @@ One application-level availability check serves both buttons and their action
 owners. Empty libraries, discovery, file work and an already active analysis
 prevent admission. Repeated presses cannot replace the running generation or
 queue a second image/model pass. The shortcut never applies file changes.
+
+## Replace-search interaction — 9 October 2026
+
+The reference's `MainWindow._focus_search_input` focuses the search field and
+selects its text. Rust previously requested focus only, leaving the caret at the
+end of an existing query. A real-toolbar regression reproduced new text being
+appended. The shared application shortcut now selects the current query through
+egui's character-indexed text state before focusing it. Unicode is counted as
+characters, existing edit history is retained, and filtering still flows through
+the same toolbar and review-departure guard. No new search worker is introduced.
