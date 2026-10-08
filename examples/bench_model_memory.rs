@@ -1,6 +1,8 @@
 //! Isolated ONNX session-memory experiment, not another application model registry.
-//! Usage: bench_model_memory <models-directory> <policy> [init-only]
-//! Policies: default, no-arena, device-initializers, no-prepacking, basic, no-optimization,
+//! Usage: bench_model_memory <models-directory> <policy> [init-only | export <new-directory> | reuse-aesthetic <directory>]
+//! Set PHOTOSORT_PROBE_THREADS to override the default four CPU threads.
+//! Reload exported models with no-optimization in a separate process.
+//! Policies: production, default, no-arena, device-initializers, no-prepacking, basic, no-optimization,
 //! no-constant-folding, no-transpose, no-matmul-add.
 //! Uses deterministic tensors and keeps both sessions alive to measure combined use.
 #[cfg(feature = "onnx")]
@@ -52,6 +54,7 @@ mod probe {
         let policy = std::env::args().nth(2).context("Policy required")?;
         ensure!(
             [
+                "production",
                 "default",
                 "no-arena",
                 "device-initializers",
@@ -65,11 +68,43 @@ mod probe {
             .contains(&policy.as_str()),
             "Unknown policy"
         );
-        let init_only = match std::env::args().nth(3).as_deref() {
-            None => false,
-            Some("init-only") => true,
-            Some(_) => anyhow::bail!("Expected init-only or no fourth argument"),
+        let mut extra = std::env::args_os().skip(3);
+        let (init_only, export, reuse) = match extra.next().as_deref() {
+            None => (false, None, None),
+            Some(mode) if mode == "init-only" => (true, None, None),
+            Some(mode) if mode == "export" => (
+                false,
+                Some(PathBuf::from(
+                    extra.next().context("Export directory required")?,
+                )),
+                None,
+            ),
+            Some(mode) if mode == "reuse-aesthetic" => (
+                false,
+                None,
+                Some(PathBuf::from(
+                    extra.next().context("Prepared directory required")?,
+                )),
+            ),
+            Some(_) => anyhow::bail!(
+                "Expected init-only, export <new-directory> or reuse-aesthetic <directory>"
+            ),
         };
+        ensure!(extra.next().is_none(), "Unexpected argument");
+        let threads = std::env::var("PHOTOSORT_PROBE_THREADS")
+            .ok()
+            .map(|value| value.parse::<usize>())
+            .transpose()
+            .context("Invalid PHOTOSORT_PROBE_THREADS")?
+            .unwrap_or(4);
+        ensure!(
+            threads > 0 && threads <= std::thread::available_parallelism()?.get(),
+            "Invalid CPU thread count"
+        );
+        if let Some(path) = &export {
+            // Diagnostic output must never replace the supplied model directory.
+            std::fs::create_dir(path).context("Export requires a new directory")?;
+        }
         let runtime = photosort::core::models::runtime_path().context("Native runtime required")?;
         ort::init_from(&runtime)?
             .with_name("PhotoSort session-memory experiment")
@@ -83,10 +118,10 @@ mod probe {
             ("dinov2-small.onnx", 224usize, vec![1usize, 5usize]),
         ] {
             let start = Instant::now();
-            // Match the production registry's sequential, four-thread CPU configuration.
+            // Match the registry's sequential, non-spinning CPU configuration.
             // These isolated alternatives intentionally do not alter application state.
             let mut builder = Session::builder()?
-                .with_intra_threads(4)
+                .with_intra_threads(threads)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?
                 .with_parallel_execution(false)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?
@@ -107,6 +142,13 @@ mod probe {
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             }
             builder = match policy.as_str() {
+                "production"
+                    if cfg!(all(target_os = "macos", target_arch = "aarch64"))
+                        && name == "aesthetic.onnx"
+                        && (2..=4).contains(&threads) =>
+                {
+                    builder.with_disabled_optimizers("MatMulAddFusion")
+                }
                 "no-prepacking" => builder.with_prepacking(false),
                 "no-constant-folding" => builder.with_disabled_optimizers("ConstantFolding"),
                 "no-transpose" => builder.with_disabled_optimizers("TransposeOptimizer"),
@@ -118,7 +160,20 @@ mod probe {
                 _ => Ok(builder),
             }
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            let mut session = builder.commit_from_file(directory.join(name))?;
+            if let Some(path) = &export {
+                builder = builder
+                    .with_optimized_model_path(path.join(name))
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            }
+            let input = if let Some(path) = reuse.as_ref().filter(|_| name == "aesthetic.onnx") {
+                builder = builder
+                    .with_optimization_level(GraphOptimizationLevel::Disable)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                path.join(name)
+            } else {
+                directory.join(name)
+            };
+            let mut session = builder.commit_from_file(input)?;
             let init_ms = start.elapsed().as_secs_f64() * 1000.;
             stages.push(
                 json!({"stage":"initialized","model":name,"ms":init_ms,"rss_kib":resident_kib()}),
@@ -160,7 +215,7 @@ mod probe {
         stages.push(json!({"stage":"after_drop","rss_kib":resident_kib()}));
         println!(
             "{}",
-            json!({"policy":policy,"init_only":init_only,"threads":4,"runtime":runtime,"stages":stages,
+            json!({"policy":policy,"init_only":init_only,"threads":threads,"export":export,"reuse_aesthetic":reuse,"runtime":runtime,"stages":stages,
             "note":"Session-memory diagnostic with deterministic tensors; not an application memory budget or photographic accuracy result."})
         );
         Ok(())

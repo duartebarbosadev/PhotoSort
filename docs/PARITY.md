@@ -211,3 +211,15 @@ after cache reopening. Initial four-thread medians were about 10–11% shorter o
 the larger libraries; later confirmation timings varied, so this is not a
 universal speedup or memory-saving claim. See diagnostics/cpu-aesthetic-2026-10-08/README.md
 for the full measurements, validation and scope.
+
+
+### Prepared CPU aesthetic models — 8 October 2026
+
+Apple Silicon CPU aesthetic sessions now reuse an optimized ONNX graph through
+the shared prepared-model cache. Integrity, leases, budgets, invalidation and
+maintenance remain shared with Core ML. Cold-photo application runs after model
+preparation reduce peak RSS about 56–76% on the authorized corpus, preserving exact
+prior scores, metadata and groups. First preparation retains its high peak, and
+the approximately 510 MiB artifact shares the existing disk budget. Small/disabled
+caches, custom models and other platforms keep the ordinary source path. See
+[the evidence and limits](diagnostics/offline-model-2026-10-08/README.md).

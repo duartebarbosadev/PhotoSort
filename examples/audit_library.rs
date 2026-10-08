@@ -1,5 +1,6 @@
 //! Read-only application-worker audit on real folders; all evidence uses a temporary cache.
-//! Usage: audit_library <folder> [technical|quality|visual] [threads]
+//! Usage: audit_library <folder> [technical|quality|visual] [threads] [--cache <audit-directory>]
+//! Explicit caches must be new or already marked as owned by this diagnostic.
 //! Reports repeatability and reuse, not accuracy without human-reviewed labels.
 use anyhow::{Context, Result, ensure};
 use photosort::core::{
@@ -146,11 +147,37 @@ fn main() -> Result<()> {
         "Empty library or scan warnings"
     );
     let media = Arc::new(catalog.media);
-    let cache = tempfile::tempdir()?;
+    let mut extra = std::env::args_os().skip(4);
+    let temporary;
+    let cache = if let Some(flag) = extra.next() {
+        ensure!(flag == "--cache", "Expected --cache <audit-directory>");
+        let path = PathBuf::from(extra.next().context("Audit cache directory required")?);
+        ensure!(extra.next().is_none(), "Unexpected argument");
+        let marker = path.join(".photosort-audit-cache");
+        let owner = b"PhotoSort library audit cache v1\n";
+        if path.exists() {
+            let metadata = std::fs::symlink_metadata(&path)?;
+            ensure!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "Invalid audit cache directory"
+            );
+            ensure!(
+                std::fs::read(&marker).is_ok_and(|bytes| bytes == owner),
+                "Existing directory is not an audit cache"
+            );
+        } else {
+            std::fs::create_dir(&path)?;
+            std::fs::write(marker, owner)?;
+        }
+        path.canonicalize()?
+    } else {
+        temporary = tempfile::tempdir()?;
+        temporary.path().to_path_buf()
+    };
     let mut phases = Vec::new();
     let mut expected = None;
     for phase in ["cold", "reopened"] {
-        let mut rt = Runtime::with_cache(|| {}, cache.path().into());
+        let mut rt = Runtime::with_cache(|| {}, cache.clone());
         rt.processing.configure(Preferences {
             mode: Mode::Custom,
             custom_threads: threads,

@@ -114,3 +114,21 @@ model/runtime/recipe invalidation and integration with the shared disk budget
 are therefore prerequisites. The source integration now uses these safeguards;
 the probe's performance numbers remain isolated measurements, not integrated-app
 benchmarks. See `diagnostics/coreml-cache-evaluation-2026-10-06/README.md`.
+
+
+## Apple Silicon CPU preparation reuse
+
+The shared cache also retains the verified aesthetic model's CPU-optimized ONNX
+graph when the disk budget can cover twice its source size. Subsequent sessions
+skip graph optimization, using runtime/source/OS/hardware/thread/policy identity
+and verified cache contents. The artifact is about 510 MiB within the existing
+photo-cache budget. Small/disabled caches and custom exports use the source model.
+Cache failures fall back to ordinary CPU initialization; clearing prepared files
+releases their sessions while retaining ordinary CPU sessions.
+
+First preparation still has a large memory peak. Fresh-process Quality runs with
+uncached photos reduced peak RSS about 56–76% after preparing the aesthetic model,
+with unchanged results across all 263 authorized photo paths. This is measured on
+the local Apple Silicon machine, not CUDA/DirectML or broad accuracy validation.
+See [the preparation report](diagnostics/offline-model-2026-10-08/README.md) for
+measurements, storage costs and verification limits.
