@@ -245,3 +245,16 @@ when Review temporarily hides a remembered navigator. Two regressions cover
 shared modes and full wide/compact frames with preserved ratings, comparison,
 active photo and catalog. Native wide/compact activation and repeated reopening
 pass. See [the report](diagnostics/navigator-activation-2026-10-08/README.md).
+
+
+### macOS extended attributes in fallback moves — 8 October 2026
+
+The shared cancellable move fallback now preserves Finder tags, Finder information,
+resource forks and custom attributes through Apple's descriptor-based copy API.
+Native errors and cancellation retain the source and use existing rollback/retry.
+The seven-sample production executor passes on a disposable second APFS volume,
+with exact bytes, tags, forks, dates and permissions and unchanged originals.
+The full 68-command suite passes. This supersedes the earlier macOS extended-
+attribute/cross-volume limitation for the tested APFS path; it does not establish
+network/other-filesystem, ACL, ownership, creation-time or BSD-flag preservation.
+See [evidence and limits](diagnostics/copy-xattrs-2026-10-08/README.md).

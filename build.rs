@@ -16,6 +16,10 @@ fn main() {
     }
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rerun-if-changed=native/file_attributes.c");
+        cc::Build::new()
+            .file("native/file_attributes.c")
+            .compile("photosort_file_attributes");
         println!("cargo:rerun-if-changed=native/application.m");
         cc::Build::new()
             .file("native/application.m")

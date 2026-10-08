@@ -1,5 +1,7 @@
 mod case_rename;
 mod directory;
+#[cfg(target_os = "macos")]
+mod macos_attributes;
 pub use directory::TrashDirectory;
 #[cfg(test)]
 mod move_tests;
@@ -1384,6 +1386,8 @@ fn copy_contents_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> b
             output.write_all(&buffer[..count])?;
         }
         check_move_cancelled(cancelled)?;
+        #[cfg(target_os = "macos")]
+        macos_attributes::copy(&input, &output, cancelled)?;
         // Capture times before reading and preserve them before making the copy
         // read-only. Failure leaves the source intact and rolls back this copy.
         output.set_times(times)?;
