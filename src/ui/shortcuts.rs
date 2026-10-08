@@ -84,7 +84,6 @@ impl PhotoSortApp {
             _ => return false,
         };
         let enabled = !self.navigator.enabled || self.navigator.mode != mode || self.review;
-        self.review = false;
         self.set_navigator(mode, enabled);
         true
     }
@@ -199,6 +198,35 @@ mod tests {
             assert!(!app.navigator.enabled);
         }
         assert!(app.analysis_run.is_none() && app.requested.is_empty());
+    }
+    #[test]
+    fn navigator_activation_shares_review_transition_without_image_or_model_work() {
+        for mode in Mode::ALL {
+            let mut app = app(Step::Cull);
+            app.review = true;
+            app.comparison = vec![MediaId(7)];
+            app.decisions.insert(
+                MediaId(7),
+                Decision {
+                    rating: Some(4),
+                    ..Default::default()
+                },
+            );
+            app.set_navigator(mode, true);
+            assert!(!app.review && app.navigator.enabled);
+            assert_eq!(app.navigator.mode, mode);
+            assert_eq!(app.active, Some(MediaId(7)));
+            assert_eq!(app.comparison, vec![MediaId(7)]);
+            assert_eq!(app.decisions[&MediaId(7)].rating, Some(4));
+            assert_eq!(app.stats.decodes, 0);
+            assert_eq!(app.stats.metadata_reads, 0);
+            assert!(
+                app.requested.is_empty()
+                    && app.analysis_run.is_none()
+                    && app.metadata_run.is_none()
+            );
+            app.runtime.shutdown();
+        }
     }
     #[test]
     fn modified_unbound_keys_do_not_change_photos_in_any_workflow() {

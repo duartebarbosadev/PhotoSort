@@ -5,6 +5,9 @@ impl PhotoSortApp {
     pub(super) fn set_navigator(&mut self, mode: Mode, enabled: bool) {
         self.navigator.mode = mode;
         self.navigator.enabled = enabled;
+        if enabled {
+            self.review = false;
+        }
         self.navigator_changed();
     }
     fn navigator_changed(&mut self) {
@@ -28,14 +31,17 @@ impl PhotoSortApp {
         self.navigator_changed();
     }
     pub(super) fn navigator_controls(&mut self, ui: &mut egui::Ui) {
+        // Review temporarily hides the tree but keeps its presentation bookmark.
+        // Show actual visibility here so one click always opens the navigator.
+        let mut visible = self.navigator.enabled && !self.review;
         if ui
-            .checkbox(&mut self.navigator.enabled, "Library navigator")
+            .checkbox(&mut visible, "Library navigator")
             .on_hover_text(
                 "Browse folders, capture dates and similarity groups without moving files.",
             )
             .changed()
         {
-            self.set_navigator(self.navigator.mode, self.navigator.enabled);
+            self.set_navigator(self.navigator.mode, visible);
         }
         if let Some(date) = self.browse.date.clone() {
             let label = if date.is_empty() {
