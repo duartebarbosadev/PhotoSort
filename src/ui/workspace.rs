@@ -1940,6 +1940,10 @@ impl PhotoSortApp {
                 continue;
             }
             let command = modifiers.command || modifiers.ctrl;
+            if selection::clear_trash_shortcut(pressed, modifiers) {
+                self.clear_all_trash_marks();
+                continue;
+            }
             if command
                 && (modifiers.alt
                     || !matches!(
@@ -1962,7 +1966,7 @@ impl PhotoSortApp {
             {
                 continue;
             }
-            if modifiers.alt && !matches!(pressed, egui::Key::R | egui::Key::D) {
+            if modifiers.alt && pressed != egui::Key::R {
                 continue;
             }
             self.pending_bookmark = None;
@@ -2114,15 +2118,11 @@ impl PhotoSortApp {
                     pressed == egui::Key::ArrowLeft,
                 );
             }
-            if pressed == egui::Key::D && !matches!(self.step, Step::EasyDelete | Step::PickBest) {
-                if modifiers.alt {
-                    for d in self.decisions.values_mut() {
-                        d.rejected = false;
-                    }
-                    self.changed();
-                } else if let Some(id) = self.active {
-                    self.reject(id);
-                }
+            if pressed == egui::Key::D
+                && !matches!(self.step, Step::EasyDelete | Step::PickBest)
+                && let Some(id) = self.active
+            {
+                self.reject(id);
             }
             if pressed == egui::Key::R
                 && let Some(id) = self.active

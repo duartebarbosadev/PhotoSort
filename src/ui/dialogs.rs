@@ -93,7 +93,7 @@ impl PhotoSortApp {
                             "Ctrl/Cmd + click / Ctrl/Cmd + A",
                             "Toggle browser selection / select all visible",
                         ),
-                        ("D / Alt + D", "Toggle mark / clear all marks"),
+                        ("D / Alt + D", "Toggle mark / clear library Trash marks"),
                         (
                             "Ctrl or Cmd + 0-5",
                             "Rate selection; viewer stars rate the focused photo",

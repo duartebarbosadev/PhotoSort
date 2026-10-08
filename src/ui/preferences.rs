@@ -88,6 +88,9 @@ impl PhotoSortApp {
                     }
                     ui.close();
                 }
+                ui.separator();
+                self.clear_trash_menu_item(ui);
+                ui.separator();
                 if ui.button("Settings…").clicked() {
                     self.runtime.cache.request(false);
                     self.preferences_draft = Some(self.preferences.clone());

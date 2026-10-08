@@ -58,3 +58,18 @@ pub fn stage_files(
     }
     changed
 }
+
+/// Clear library-wide staged Trash intent without requiring visible media or
+/// touching ratings/rotations. Supporting and filtered-out files are included.
+pub fn clear_trash_marks(decisions: &mut HashMap<MediaId, Decision>) -> Vec<MediaId> {
+    decisions
+        .iter_mut()
+        .filter_map(|(id, decision)| {
+            if !decision.rejected {
+                return None;
+            }
+            decision.rejected = false;
+            Some(*id)
+        })
+        .collect()
+}

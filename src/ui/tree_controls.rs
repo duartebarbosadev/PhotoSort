@@ -137,6 +137,10 @@ impl Keyboard {
         let id = focus.id;
         Self { focus, id }
     }
+    /// Workflow shortcuts use the same focus and popup guards as navigation.
+    pub(super) fn collection(&self) -> &collection_controls::Keyboard {
+        &self.focus
+    }
     fn reveal_id(&self) -> egui::Id {
         self.id.with("tree_reveal")
     }

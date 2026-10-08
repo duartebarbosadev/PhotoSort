@@ -284,6 +284,17 @@ impl Review {
         self.restore_all(decisions);
         self.discard_confirmations();
     }
+    /// Keep the current choices and rounds, but remove marks from the rollback
+    /// baseline after an explicit library-wide clear.
+    pub fn clear_prior_trash_marks(&mut self) {
+        for tournament in &mut self.tournaments {
+            if let Some(prior) = &mut tournament.prior {
+                for marked in prior.values_mut() {
+                    *marked = false;
+                }
+            }
+        }
+    }
     /// Shared application discard already cleared marks; never replay old snapshots.
     pub fn discard_confirmations(&mut self) {
         for t in &mut self.tournaments {

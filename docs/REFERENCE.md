@@ -99,3 +99,21 @@ initially unassigned entries. Rust's selective destination reset restores its
 initial generated proposal while preserving unrelated edits and file names.
 Explicit empty-directory edits remain separate intent. Both reset and move use
 the same companion expansion; no image work is repeated.
+
+
+## Library-wide mark clearing audit — 8 October 2026
+
+`MenuManager.clear_marked_deletions_action` and Organize's `clear_deletions`
+shortcut both reach `MainWindow._clear_all_deletion_marks`, then the shared
+`DeletionMarkController.clear_all_and_update` and `AppState`. This clears the
+entire marked set, rather than just the filtered view, and refreshes workflow
+presentation. It does not clear ratings or rotate files. Organize binds Alt+D
+inside its own widget; general Cull shortcuts are suspended in guided workflows.
+
+Rust already had a direct Alt+D mutation in Organize, Rotation and Cull. This
+was keyboard-only and did not supersede every saved pre-confirmation Trash mark.
+The new shared action backs Menu, the Organize editor's Actions menu and their
+owned keyboard routes, including guided workflows. A regression reproduced Reset
+restoring old marks from Keep-all reviews after the earlier Alt+D implementation.
+Review owners now clear those mark baselines before normal reconciliation, while
+retaining applicable current choices and cached analysis.
